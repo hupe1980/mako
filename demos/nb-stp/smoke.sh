@@ -26,13 +26,13 @@
 #
 # Usage:
 #   # Full stack (default — requires docker compose up -d):
-#   MARKTD_URL=http://localhost:8180 WEBHOOK_URL=http://localhost:8000 bash smoke.sh
+#   bash smoke.sh
 #
 #   # With netzbilanzd:
 #   MARKTD_URL=http://localhost:8180 NETZBILANZD_URL=http://localhost:8680 bash smoke.sh
 #
 #   # makod-only (no marktd/processd — manual bestaetigen fallback at step 7):
-#   BASE_URL=http://localhost:8080 AUTH_TOKEN=mytoken bash smoke.sh
+#   MARKTD_URL= WEBHOOK_URL= BASE_URL=http://localhost:8080 bash smoke.sh
 #
 # Prerequisites: curl, jq
 
@@ -40,8 +40,12 @@ set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8080}"
 AUTH_TOKEN="${AUTH_TOKEN:-demo-secret-change-me}"
-MARKTD_URL="${MARKTD_URL:-}"
-WEBHOOK_URL="${WEBHOOK_URL:-}"
+# Both default to what `docker-compose.yml` publishes. They used to default to
+# empty, which made a bare `bash smoke.sh` **skip** the outbox assertions — the
+# APERAK and the 55002 Bestätigung, which are the entire point of this demo —
+# and still exit 0. Set either to the empty string to opt out deliberately.
+MARKTD_URL="${MARKTD_URL-http://localhost:8180}"
+WEBHOOK_URL="${WEBHOOK_URL-http://localhost:8000}"
 # processd REST API — used to assert the NB decision is Accept (not merely that
 # *some* UTILMD came back; an Ablehnung is a UTILMD too).
 PROCESSD_URL="${PROCESSD_URL:-http://localhost:8580}"
@@ -77,6 +81,12 @@ for (( _i=0; _i<10; _i++ )); do
 done
 SMOKE_MALO_ID="${_BDEW_BASE}$(( (10 - _BDEW_SUM % 10) % 10 ))"
 unset _BDEW_BASE _BDEW_SUM _i
+
+# The Messlokation behind it. A MeLo-ID is a **Zählpunktbezeichnung**: exactly
+# 33 characters, `DE` + a 6-digit Netzbetreibernummer + 25 alphanumerics. It
+# carries no check digit, so the run's epoch goes in verbatim and the rest is
+# padded — two runs never collide, and the ID is the right shape.
+SMOKE_MELO_ID="DE0005626680$(printf '%021d' "$(( _SMOKE_EPOCH % 1000000000 ))")"
 EDI_TMP=$(mktemp --suffix=.edi 2>/dev/null || mktemp)
 trap 'rm -f "$EDI_TMP"' EXIT
 
@@ -282,6 +292,44 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
         fail "PUT /api/v1/malos/$SMOKE_MALO_ID/grid returned $code: $(body "$resp")"
     pass "PUT /api/v1/malos/$SMOKE_MALO_ID/grid → $code  (grid record ready for mako-pruefung)"
 
+    # ── P2c. The Messlokation behind the MaLo, and its MSB ───────────────────
+    #
+    # `SG5 LOC+Z17` and the `SG8 SEQ+Z98`/`SEQ+ZF3` Datenblöcke are **Muss** on
+    # the 55002 Bestätigung: the answer tells the LFN which Messlokationen the
+    # Marktlokation's Energiemenge is computed from and who meters each of them,
+    # and the LFN has no other source for either. `processd` reads them from the
+    # NB's own Lokationszuordnung when it dispatches the Bestätigung.
+    #
+    # Without them the answer is still conformant — it says `ZW6` „Pauschale
+    # Marktlokation" instead of `ZW7` „Gemessene", which is what a MaLo with no
+    # Messlokation *is*. Seeding them is what makes this demo show the ordinary
+    # case rather than the degenerate one.
+    info "[P2c] PUT Messlokation $SMOKE_MELO_ID + Lokationszuordnung + MSB"
+    resp=$(marktd_put_json "/api/v1/melos/$SMOKE_MELO_ID" "$(jq -n \
+        --arg melo "$SMOKE_MELO_ID" --arg malo "$SMOKE_MALO_ID" \
+        '{"malo_id": $malo,
+          "data": {"_typ": "MESSLOKATION", "messlokationsId": $melo, "sparte": "STROM"}}')")
+    code=$(status "$resp")
+    [[ "$code" == "200" || "$code" == "201" ]] || \
+        fail "PUT /api/v1/melos/$SMOKE_MELO_ID returned $code: $(body "$resp")"
+    pass "PUT /api/v1/melos/$SMOKE_MELO_ID → $code"
+
+    resp=$(marktd_put_json "/api/v1/lokationszuordnungen" "$(jq -n \
+        --arg malo "$SMOKE_MALO_ID" --arg melo "$SMOKE_MELO_ID" \
+        '{"von_id": $malo, "von_typ": "MALO", "nach_id": $melo, "nach_typ": "MELO",
+          "valid_from": "2020-01-01", "data": {}}')")
+    code=$(status "$resp")
+    [[ "$code" == "200" || "$code" == "201" || "$code" == "204" ]] || \
+        fail "PUT /api/v1/lokationszuordnungen returned $code: $(body "$resp")"
+    pass "PUT /api/v1/lokationszuordnungen → $code  (MaLo → MeLo edge)"
+
+    resp=$(marktd_put_json "/api/v1/melos/$SMOKE_MELO_ID/msb" "$(jq -n \
+        '{"msb_mp_id": "9903456000009", "valid_from": "2020-01-01"}')")
+    code=$(status "$resp")
+    [[ "$code" == "200" || "$code" == "201" || "$code" == "204" ]] || \
+        fail "PUT /api/v1/melos/$SMOKE_MELO_ID/msb returned $code: $(body "$resp")"
+    pass "PUT /api/v1/melos/$SMOKE_MELO_ID/msb → $code  (gMSB 9903456000009)"
+
     # ── P3. Register ERP subscription for process events → Python webhook ─────
     #
     # makod pushes process lifecycle events to marktd's ingest endpoint.
@@ -466,15 +514,19 @@ else
         if [[ "$AUTO_COUNT" -gt 0 ]]; then
             # An *Ablehnung* is also a UTILMD — assert the PID so a Reject can
             # never be mistaken for the 55002 Bestätigung this demo is about.
-            # The PID lives in BGM DE1004. Inbound fixtures use the zero-padded
-            # composite form (`BGM+E01:::+00055001::+9`); makod renders outbound
-            # unpadded (`BGM+E01+55002+9`) — so match both.
+            #
+            # The Prüfidentifikator rides `SG6 RFF+Z13`, „genau einmal je SG4
+            # IDE (Vorgang) anzugeben". **Not `BGM` DE 1004**, which every row
+            # of UTILMD AHB Strom 2.1/2.2 names the *Dokumentennummer* — the
+            # inbound fixture happens to carry `BGM+E01+00055001` because a
+            # sender may use the PID as its document number, and reading that
+            # as the PID is a coincidence, not a rule.
             AUTO_EDI=$(printf '%s' "$AUTO_UTILMD" | jq -r '[.[].body.data.edifact] | join(" ")')
-            if printf '%s' "$AUTO_EDI" | grep -qE 'BGM\+[^+]*\+0*55003'; then
+            if printf '%s' "$AUTO_EDI" | grep -qE 'RFF\+Z13:0*55003'; then
                 fail "auto-responder dispatched UTILMD 55003 (Ablehnung), expected 55002 (Bestätigung). \
 Check: curl -s $PROCESSD_URL/api/v1/decisions | jq '.[0]'"
             fi
-            printf '%s' "$AUTO_EDI" | grep -qE 'BGM\+[^+]*\+0*55002' || \
+            printf '%s' "$AUTO_EDI" | grep -qE 'RFF\+Z13:0*55002' || \
                 fail "outbound UTILMD carries neither PID 55002 nor 55003: $AUTO_EDI"
             pass "processd NB auto-responder dispatched bestaetigen → UTILMD 55002 already arrived:"
             echo
@@ -523,7 +575,18 @@ fi
 # Without processd: this is the primary ERP bestaetigen call (returns 202).
 
 info "[7/9] NB ERP: bestaetigen (manual fallback / duplicate-command guard)"
-CMD_PAYLOAD=$(jq -n --arg mid "$SMOKE_MALO_ID" '{"command":"gpke.lieferbeginn.bestaetigen","payload":{"malo_id":$mid}}')
+# `antwort_code` is not optional: `SG4 STS+E01` is Muss on every Antwortnachricht,
+# and makod validates the code against its EBD before anything is rendered.
+# `A51` is `E_0623` Prüfschritt 60 — "Zustimmung" — which is the same code the
+# processd auto-responder reaches in step 6c.
+#
+# A command missing it is answered `422 invalid_payload`. That used to count as
+# a pass on the full stack, so a smoke test sending a malformed command reported
+# the duplicate guard as confirmed. The two are now told apart by the response
+# body, not by the status code alone.
+CMD_PAYLOAD=$(jq -n --arg mid "$SMOKE_MALO_ID" \
+    '{"command":"gpke.lieferbeginn.bestaetigen",
+      "payload":{"malo_id":$mid,"antwort_code":"A51","antwort_codeliste":"E_0623"}}')
 resp=$(post_command "$CMD_PAYLOAD")
 code=$(status "$resp")
 BODY=$(body "$resp")
@@ -532,7 +595,7 @@ if [[ "$code" == "202" ]]; then
     pass "POST /api/v1/commands → HTTP 202  process_id=$PROCESS_ID"
     echo "$BODY" | jq '.'
     echo
-elif [[ -n "${MARKTD_URL:-}" && ("$code" == "409" || "$code" == "422") ]]; then
+elif [[ -n "${MARKTD_URL:-}" ]] && grep -qiE 'antwort.?gesendet|bereits|duplicate|already' <<<"$BODY"; then
     pass "POST /api/v1/commands → HTTP $code (duplicate bestaetigen correctly rejected — AntwortGesendet guard confirmed)"
     echo "      $BODY"
     echo

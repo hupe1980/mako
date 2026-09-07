@@ -157,8 +157,8 @@ Content-Type: application/json
     "bezeichnung": "Strom Zuhause Classic 2026",
     "zeitlicheGueltigkeit": { "startdatum": "2026-01-01" },
     "tarifpreise": [
-      { "preistyp": "GRUNDPREIS",          "preisstaffeln": [{ "preis": "0.20" }] },
-      { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": "0.32" }] }
+      { "preistyp": "GRUNDPREIS",            "preisstaffeln": [{ "preis": "20" }] },
+      { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": "32" }] }
     ]
   }
 }
@@ -166,6 +166,11 @@ Content-Type: application/json
 
 `billingd` extracts `grundpreis_ct_per_day` (20 ct/day) and `arbeitspreis_ct_per_kwh`
 (32 ct/kWh) by traversing `data.tarifpreise` keyed on `preistyp`.
+
+**A `preis` is read verbatim into those fields, so it is in cents.** 20 ct a day
+is `"20"`, not `"0.20"` — the latter prices the tariff at a fifth of a cent a
+day and bills without complaint, because nothing downstream can tell an
+implausible price from a cheap one.
 
 What a `PUT` stores is the **canonical round-trip** through `rubo4e`, not the
 request body — which is why the gate's strict-enum stage matters here. A

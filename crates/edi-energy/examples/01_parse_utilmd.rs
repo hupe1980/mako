@@ -16,30 +16,59 @@
 
 use edi_energy::{AnyMessage, EdiEnergyMessage, Platform};
 
-/// A minimal UTILMD 55001 "Lieferbeginn Strom" interchange.
+/// A UTILMD **55001 Anmeldung Lieferbeginn Strom** (LFN → NB), release S2.1.
 ///
-/// UNB  — interchange header
-/// UNH  — message header (UTILMD release S2.1, `fv20251001` Strom)
-/// BGM  — "E01" document type, Pruefidentifikator 55001
-/// DTM  — document date 2024-01-15
-/// RFF  — Z13 reference (SG1, mandatory for PID 55001)
-/// NAD+MS — sender (market-participant ID + qualifier 293)
-/// NAD+MR — receiver
-/// IDE  — metering-point / process identifier (SG4, qualifier Z19)
-/// UNT  — message trailer (8 segments)
-/// UNZ  — interchange trailer
+/// It is a complete Anwendungsfall, not an abbreviation of one: the AHB's
+/// Prüfschablone for 55001 makes `SG8` (Produktpaket, Priorisierung, Daten des
+/// Kunden) and `SG12` (Kunde des Lieferanten, Korrespondenzanschrift) **Muss**,
+/// so a message that stops after `LOC+Z16` is not a small 55001 — it is a
+/// rejected one. `main` asserts the validator finds nothing, which is what
+/// makes this fixture safe to copy.
+///
+/// ```text
+/// UNB            interchange header — DE 0004/0010 equal the NAD MP-IDs
+/// UNH            UTILMD:D:11A:UN:S2.1 (fv20251001)
+/// BGM+E01        Anmeldung; DE 1004 is the Dokumentennummer
+/// DTM+137        Dokumentendatum, DE 2379 = 303 (CCYYMMDDHHMMZZZ)
+/// NAD+MS/MR      sender / receiver, DE 3055 = 9 (GS1)
+/// IDE+24         SG4 — the sender's Vorgangsnummer, not the MaLo
+/// DTM+92         „Beginn zum" — the Lieferbeginn
+/// STS+7          Transaktionsgrund E01, verbrauchende MaLo (ZW4)
+/// LOC+Z16        SG5 — the Marktlokation
+/// RFF+Z13        SG6 — the Prüfidentifikator, per Vorgang
+/// SEQ+Z79 …      SG8 — Produktpaket with the Bilanzkreis in CAV+ZV4
+/// SEQ+ZH0 …      SG8 — Priorisierung
+/// SEQ+Z01/Z75    SG8 — Daten der Marktlokation / des Kunden des LF
+/// NAD+Z09/Z04    SG12 — Kunde des LF and his Korrespondenzanschrift
+/// UNT / UNZ      trailers
+/// ```
 const UTILMD_BYTES: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+240115:0800+INTER-2024-001'\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+260701:0800+INTER-2026-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
-BGM+E01:::+00055001::+9'\
-DTM+137:202401150800?+00:303'\
-RFF+Z13:REF-2024-001'\
-NAD+MS+4012345000023::293'\
-NAD+MR+9900357000004::293'\
-IDE+24+VORGANG-0001'
-LOC+Z16+51238696781'
-UNT+9+MSG-001'\
-UNZ+1+INTER-2024-001'";
+BGM+E01+00055001'\
+DTM+137:202607010800?+00:303'\
+NAD+MS+4012345000023::9'\
+NAD+MR+9900357000004::9'\
+IDE+24+VORGANG0001'\
+DTM+92:202610010000?+00:303'\
+STS+7++E01+ZW4'\
+LOC+Z16+51238696012'\
+RFF+Z13:55001'\
+SEQ+Z79+1'\
+PIA+5+9991000002082:Z11'\
+CCI+Z66'\
+CAV+ZV4:::11XBK-STD-----9'\
+SEQ+ZH0+1'\
+CCI+Z65+++Z01'\
+SEQ+Z01'\
+CCI+++Z15'\
+SEQ+Z75'\
+CCI+Z61++ZF9'\
+CAV+ZU5'\
+NAD+Z09+++Mustermann:::::Z01'\
+NAD+Z04+++Mustermann:::::Z01+Musterstr. 1+Berlin+++DE'\
+UNT+24+MSG-001'\
+UNZ+1+INTER-2026-001'";
 
 fn main() -> Result<(), edi_energy::Error> {
     let msg = Platform::with_all_profiles().parse(UTILMD_BYTES)?;
@@ -110,16 +139,23 @@ fn main() -> Result<(), edi_energy::Error> {
     }
 
     // ── Validation ───────────────────────────────────────────────────────────
+    //
+    // Asserted, not printed. `cargo check` compiles an example without running
+    // it, and a run that prints its own findings and exits `0` is a fixture
+    // nobody notices going stale — which is how this one shipped for months
+    // with ten AHB errors in it.
     let report = msg.validate()?;
-    if report.is_valid() {
-        println!("\nValidation   : OK ({report})");
-    } else {
-        println!("\nValidation   : {} finding(s)", report.errors().len());
-        for err in report.errors() {
-            let rule = err.rule_id.as_deref().unwrap_or("-");
-            println!("  [{}] {}", rule, err.message);
-        }
-    }
+    assert!(
+        report.is_valid(),
+        "the fixture in this example must pass the AHB:\n{}",
+        report
+            .errors()
+            .iter()
+            .map(|e| format!("  [{}] {}", e.rule_id.as_deref().unwrap_or("-"), e.message))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    println!("\nValidation   : OK ({report})");
 
     // ── Serialization round-trip ─────────────────────────────────────────────
     let bytes = msg.serialize()?;

@@ -665,33 +665,26 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
                         reason: reason.clone(),
                     });
                     let outbox = vec![
-                        PendingOutbox::new(
-                            "APERAK",
+                        PendingOutbox::aperak_fehler(
+                            receiver_gln.as_str(),
                             sender_mp_id.as_str(),
-                            serde_json::json!({
-                                "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_mp_id.as_str(),
-                                "pid":        29001_u32,
-                                "error_code": mako_engine::erc::codes::Z29,
-                                "reason":     reason,
-                            }),
+                            message_ref.as_str(),
+                            mako_engine::erc::codes::Z29,
+                            reason,
                         )
                         .caused_by(0),
                     ];
                     return Ok(WorkflowOutput::with_outbox(events, outbox));
                 }
 
-                events.push(GasStammdatenEvent::ValidationPassed { message_ref });
+                events.push(GasStammdatenEvent::ValidationPassed {
+                    message_ref: message_ref.clone(),
+                });
                 let outbox = vec![
-                    PendingOutbox::new(
-                        "APERAK",
+                    PendingOutbox::aperak_anerkennung(
+                        receiver_gln.as_str(),
                         sender_mp_id.as_str(),
-                        serde_json::json!({
-                            "sender":        receiver_gln.as_str(),
-                            "receiver":      sender_mp_id.as_str(),
-                            "pid":           29001_u32,
-                            "document_code": "312",
-                        }),
+                        message_ref.as_str(),
                     )
                     .caused_by(1),
                 ];
@@ -720,7 +713,7 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
                 sender,
                 receiver,
                 location_id,
-                message_ref: _,
+                message_ref,
                 validation_passed,
                 validation_errors,
                 received_at: _,
@@ -745,16 +738,12 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
                         validation_errors.join("; ")
                     };
                     let outbox = vec![
-                        PendingOutbox::new(
-                            "APERAK",
+                        PendingOutbox::aperak_fehler(
+                            owner.as_str(),
                             requester.as_str(),
-                            serde_json::json!({
-                                "sender":     owner.as_str(),
-                                "receiver":   requester.as_str(),
-                                "pid":        29001_u32,
-                                "error_code": mako_engine::erc::codes::Z29,
-                                "reason":     reason.clone(),
-                            }),
+                            message_ref.as_str(),
+                            mako_engine::erc::codes::Z29,
+                            reason.clone(),
                         )
                         .caused_by(0),
                     ];
@@ -768,15 +757,10 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
                 // the requested Marktlokation's current master data (rendered by
                 // makod's outbox worker from marktd).
                 let outbox = vec![
-                    PendingOutbox::new(
-                        "APERAK",
+                    PendingOutbox::aperak_anerkennung(
+                        owner.as_str(),
                         requester.as_str(),
-                        serde_json::json!({
-                            "sender":        owner.as_str(),
-                            "receiver":      requester.as_str(),
-                            "pid":           29001_u32,
-                            "document_code": "312",
-                        }),
+                        message_ref.as_str(),
                     )
                     .caused_by(0),
                     PendingOutbox::new(
@@ -1216,10 +1200,13 @@ mod tests {
             [GasStammdatenEvent::AnfrageBeantwortet { antwort_pid, .. }]
                 if antwort_pid.as_u32() == 44142
         ));
-        // Outbox: APERAK 312 receipt + the UTILMD data-return (Antwort PID 44142).
+        // Outbox: APERAK 29002 Anerkennung + the UTILMD data-return (Antwort PID
+        // 44142). `BGM+312` is not in the payload: it follows from 29002 having
+        // no Fehlerbeschreibung and is derived by the renderer.
         assert_eq!(out.outbox.len(), 2);
         assert_eq!(out.outbox[0].message_type.as_ref(), "APERAK");
-        assert_eq!(out.outbox[0].payload["document_code"], "312");
+        assert_eq!(out.outbox[0].payload["pid"], 29002);
+        assert_eq!(out.outbox[0].payload["orig_message_ref"], "GSA-001");
         assert_eq!(out.outbox[1].message_type.as_ref(), "UTILMD");
         assert_eq!(out.outbox[1].payload["pid"], 44142);
         assert_eq!(out.outbox[1].payload["data_return"], true);

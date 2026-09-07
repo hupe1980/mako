@@ -431,7 +431,9 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                     vorgangsnummer: vorgang.vorgangsnummer.clone(),
                 }];
                 if validation_passed {
-                    events.push(LfAbmeldungEvent::ValidationPassed { message_ref });
+                    events.push(LfAbmeldungEvent::ValidationPassed {
+                        message_ref: message_ref.clone(),
+                    });
                     // F-038: APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.0 §2.4.
                     // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
                     let outbox = vec![
@@ -449,15 +451,10 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                                 &serde_json::Value::Null,
                             )
                             .caused_by(1),
-                        PendingOutbox::new(
-                            "APERAK",
+                        PendingOutbox::aperak_anerkennung(
+                            receiver_gln.as_str(),
                             sender_mp_id.as_str(),
-                            serde_json::json!({
-                                "sender":        receiver_gln.as_str(),
-                                "receiver":      sender_mp_id.as_str(),
-                                "pid":           29001_u32,
-                                "document_code": "312",
-                            }),
+                            message_ref.as_str(),
                         )
                         .caused_by(1),
                     ];
@@ -470,16 +467,12 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                     // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
                     // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
                     let outbox = vec![
-                        PendingOutbox::new(
-                            "APERAK",
+                        PendingOutbox::aperak_fehler(
+                            receiver_gln.as_str(),
                             sender_mp_id.as_str(),
-                            serde_json::json!({
-                                "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_mp_id.as_str(),
-                                "pid":        29001_u32,
-                                "error_code": mako_engine::erc::codes::Z29,
-                                "reason":     reason,
-                            }),
+                            message_ref.as_str(),
+                            mako_engine::erc::codes::Z29,
+                            reason,
                         )
                         .caused_by(0),
                     ];

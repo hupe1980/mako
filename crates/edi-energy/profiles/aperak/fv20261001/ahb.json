@@ -312,6 +312,38 @@
             {
               "code": "Z29",
               "operand": "X"
+            },
+            {
+              "code": "Z31",
+              "operand": "X"
+            },
+            {
+              "code": "Z34",
+              "operand": "X"
+            },
+            {
+              "code": "Z35",
+              "operand": "X"
+            },
+            {
+              "code": "Z37",
+              "operand": "X"
+            },
+            {
+              "code": "Z38",
+              "operand": "X"
+            },
+            {
+              "code": "Z39",
+              "operand": "X"
+            },
+            {
+              "code": "Z40",
+              "operand": "X"
+            },
+            {
+              "code": "Z41",
+              "operand": "X"
             }
           ]
         },

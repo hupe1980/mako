@@ -74,7 +74,7 @@ pub async fn get_malo_lokationen(
     Extension(repo): Extension<LzRepoExt>,
     claims: Claims,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Extension(enforcer): Extension<CedarEnforcer>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Path(malo_id): Path<String>,
     Query(q): Query<GraphQuery>,
 ) -> impl IntoResponse {
@@ -116,7 +116,7 @@ pub async fn get_malo_buendel(
     Extension(repo): Extension<LzRepoExt>,
     claims: Claims,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Extension(enforcer): Extension<CedarEnforcer>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Path(malo_id): Path<String>,
     Query(q): Query<GraphQuery>,
 ) -> impl IntoResponse {
@@ -153,7 +153,7 @@ pub async fn get_melo_lokationen(
     Extension(repo): Extension<LzRepoExt>,
     claims: Claims,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Extension(enforcer): Extension<CedarEnforcer>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Path(melo_id): Path<String>,
     Query(q): Query<GraphQuery>,
 ) -> impl IntoResponse {
@@ -178,7 +178,7 @@ pub async fn put_lokationszuordnung(
     Extension(repo): Extension<LzRepoExt>,
     claims: Claims,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Extension(enforcer): Extension<CedarEnforcer>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Json(req): Json<UpsertEdgeRequest>,
 ) -> impl IntoResponse {
     if enforcer
@@ -216,7 +216,7 @@ pub async fn delete_lokationszuordnung(
     Extension(repo): Extension<LzRepoExt>,
     claims: Claims,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Extension(enforcer): Extension<CedarEnforcer>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Path((von_id, nach_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
     if enforcer

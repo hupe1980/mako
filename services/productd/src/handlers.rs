@@ -2180,6 +2180,8 @@ pub async fn post_angebot_annehmen(
     };
 
     // Emit de.tarif.angebot.angenommen CloudEvent.
+    let mut erp_dispatch = "not_configured";
+    let mut rahmenvertrag_id: Option<uuid::Uuid> = None;
     if let Some(ref webhook_url) = cfg.erp_webhook_url {
         let ce = mako_service::CloudEvent::new(
             mako_service::source("productd", &cfg.tenant),
@@ -2225,15 +2227,47 @@ pub async fn post_angebot_annehmen(
                 builder = builder.header(name, value);
             }
         }
-        if let Ok(resp) = builder.body(body_bytes).send().await
-            && resp.status().is_success()
-            && let Ok(body) = resp.json::<serde_json::Value>().await
-            && let Some(rid) = body
-                .get("rahmenvertrag_id")
-                .and_then(|v: &serde_json::Value| v.as_str())
-                .and_then(|s: &str| s.parse::<uuid::Uuid>().ok())
-        {
-            let _ = link_angebot_rahmenvertrag(&pool, id, rid).await;
+        // What actually happened downstream, reported rather than assumed. The
+        // acceptance itself stands either way — the customer accepted — but a
+        // caller told the event was dispatched when the POST failed has no
+        // reason to look for the missing Rahmenvertrag.
+        match builder.body(body_bytes).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                erp_dispatch = "delivered";
+                match resp.json::<serde_json::Value>().await {
+                    Ok(body) => {
+                        rahmenvertrag_id = body
+                            .get("rahmenvertrag_id")
+                            .and_then(|v: &serde_json::Value| v.as_str())
+                            .and_then(|s: &str| s.parse::<uuid::Uuid>().ok());
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, angebot_id = %id,
+                            "productd: ERP accepted the Angebot event but its body was unreadable");
+                    }
+                }
+                if let Some(rid) = rahmenvertrag_id
+                    && let Err(e) = link_angebot_rahmenvertrag(&pool, id, rid).await
+                {
+                    // The Rahmenvertrag exists; only the back-reference is
+                    // missing. Saying so beats an Angebot that silently never
+                    // names the contract it became.
+                    tracing::error!(error = %e, angebot_id = %id, rahmenvertrag_id = %rid,
+                        "productd: Rahmenvertrag created but the link back to the Angebot FAILED");
+                    erp_dispatch = "delivered_but_unlinked";
+                }
+            }
+            Ok(resp) => {
+                let status = resp.status();
+                tracing::error!(angebot_id = %id, %status,
+                    "productd: ERP refused the de.tarif.angebot.angenommen event");
+                erp_dispatch = "refused";
+            }
+            Err(e) => {
+                tracing::error!(error = %e, angebot_id = %id,
+                    "productd: de.tarif.angebot.angenommen could not be delivered");
+                erp_dispatch = "undelivered";
+            }
         }
     }
 
@@ -2244,7 +2278,20 @@ pub async fn post_angebot_annehmen(
             "angebotsnummer": angebot.angebotsnummer,
             "status": "ANGENOMMEN",
             "gewaehlte_variante": angebot.gewaehlte_variante,
-            "message": "Angebot angenommen — de.tarif.angebot.angenommen CloudEvent dispatched",
+            // Whether the Rahmenvertrag exists yet, and if not, why not.
+            "erp_dispatch": erp_dispatch,
+            "rahmenvertrag_id": rahmenvertrag_id,
+            "message": match erp_dispatch {
+                "delivered" => "Angebot angenommen — de.tarif.angebot.angenommen delivered",
+                "delivered_but_unlinked" =>
+                    "Angebot angenommen and the Rahmenvertrag was created, but linking it back to \
+                     the Angebot failed — reconcile by angebotsnummer",
+                "not_configured" =>
+                    "Angebot angenommen — no erp_webhook_url is configured, so NO Rahmenvertrag \
+                     was requested",
+                _ => "Angebot angenommen, but de.tarif.angebot.angenommen was NOT delivered — \
+                      no Rahmenvertrag exists yet",
+            },
         })),
     )
         .into_response()

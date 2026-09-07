@@ -300,9 +300,9 @@ pub async fn put_preisblatt(
     let bo4e_version = req.bo4e_version;
 
     // The durable price sheet, its PRICAT version snapshot and the
-    // de.markt.pricat.published event commit in ONE transaction: a detached
-    // best-effort task let the two stores diverge and silently dropped the
-    // PRICAT 27003 dispatch to the LFs while the operator still saw 204.
+    // de.markt.pricat.published event commit in ONE transaction. A detached
+    // best-effort task would let the two stores diverge and drop the PRICAT
+    // 27003 dispatch to the LFs while the operator still saw 204.
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),

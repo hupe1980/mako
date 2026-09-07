@@ -704,6 +704,32 @@ impl<'a, 'd> Ctx<'a, 'd> {
         match ConditionKind::of(id) {
             ConditionKind::Voraussetzung => {}
             ConditionKind::Paket => return self.paket_truth(id, instance),
+            // A Wiederholbarkeit is normally not a Voraussetzung — it says how
+            // often a place repeats, not whether it applies. The exception is
+            // the „für jede X" family, where the count is *per occurrence of
+            // another segment*: zero of those and the place is owed zero
+            // times, so a `Muss [2284]` on a Vorgang with no `LOC+Z17` is
+            // satisfied by absence. Treating it as unconditional rejected
+            // every GPKE answer mako sends.
+            ConditionKind::Wiederholbarkeit => {
+                let Some(text) = self.conditions.get(id) else {
+                    return Ok(Truth::Neutral);
+                };
+                let Some(per) = super::conditions::ProSegment::parse(text) else {
+                    return Ok(Truth::Neutral);
+                };
+                let range = match self.res.enclosing(self.structure, instance, "SG4") {
+                    Some(i) => self.res.instances[i].first..self.res.instances[i].last,
+                    None => 0..self.segments.len(),
+                };
+                let found = self.segments[range].iter().any(|s| per.pattern.matches(s));
+                // Present → the place is owed and `Muss` binds. Absent →
+                // `Unknown`, which permits without requiring: a
+                // Wiederholbarkeit says *how often*, never *whether it is
+                // allowed*, and the AHB's own 55002 Beispiel carries the
+                // `SEQ+ZF3` block with no `LOC+Z17` above it.
+                return Ok(if found { Truth::True } else { Truth::Unknown });
+            }
             _ => return Ok(Truth::Neutral),
         }
         let Some(text) = self.conditions.get(id) else {

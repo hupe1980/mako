@@ -1,0 +1,20 @@
+# outputd.toml — order-to-cash demo (auth disabled)
+# DO NOT use in production.
+
+# Demo only. Without this, outputd refuses to start when no [oidc] section is
+# present: an unauthenticated deployment lets anyone publish the layout every
+# customer document renders with.
+allow_insecure_no_auth = true
+
+port   = 9880
+tenant = "9912345000005"
+
+[database]
+url = "postgres://demo:demo-secret@postgres/outputd"
+
+# outputd embeds no SMTP client and no print driver: each channel is an HTTP
+# relay pointed at whatever the operator already runs. None is configured here,
+# so documents are stored and served — the **portal** channel, which is what
+# § 41 Abs. 5 EnWG and § 126b BGB actually ask for — and nothing is pushed.
+[delivery]
+enabled = true

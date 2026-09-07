@@ -111,7 +111,17 @@ impl Daemon for Outputd {
         Ok(Router::new()
             .route("/api/v1/render/{kind}", post(handlers::post_render))
             // ── Issued documents and their delivery ───────────────────────────
-            .route("/api/v1/documents/{kind}", post(handlers::post_document))
+            //
+            // `issue/` is a real path segment, not decoration: axum matches a
+            // capture by position, so `POST /documents/{kind}` and
+            // `GET /documents/{document_id}` are the *same* place under two
+            // names, and registering both panics the router at startup. They
+            // are also different resources — one names a document kind, the
+            // other one stored document — so the verb belongs in the path.
+            .route(
+                "/api/v1/documents/issue/{kind}",
+                post(handlers::post_document),
+            )
             .route("/api/v1/documents", get(handlers::list_documents))
             .route(
                 "/api/v1/documents/{document_id}",

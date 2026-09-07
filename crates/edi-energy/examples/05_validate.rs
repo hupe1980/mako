@@ -69,6 +69,16 @@ LOC+Z16+51238696781'\
 UNT+9+MSG-002'\
 UNZ+1+INTER-I-001'";
 
+/// Declares that this example prints validation findings on its happy path.
+///
+/// `just examples` scans an example's output for findings, because an example
+/// that reports „FAILED" and exits `0` passes a run gate while shipping a
+/// message no counterparty accepts. This one's *subject* is an invalid
+/// message — showing what a rejection looks like is the point — so it opts out
+/// of that scan by name. The gate greps for this symbol; nothing else grants
+/// the exemption, and the valid half above still asserts.
+const _EXAMPLE_EXPECTS_VALIDATION_FINDINGS: () = ();
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Valid UTILMD ===\n");
     check_valid()?;

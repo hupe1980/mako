@@ -1041,7 +1041,7 @@ pub async fn put_technische_ressource(
     Extension(repo): Extension<TrRepoExt>,
     claims: Claims,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Extension(enforcer): Extension<CedarEnforcer>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Path(tr_id): Path<String>,
     Json(req): Json<UpsertTrRequest>,
 ) -> impl IntoResponse {
@@ -1112,7 +1112,7 @@ pub async fn get_technische_ressource(
     Extension(repo): Extension<TrRepoExt>,
     claims: Claims,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Extension(enforcer): Extension<CedarEnforcer>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Path(tr_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
@@ -1144,7 +1144,7 @@ pub async fn list_technische_ressourcen_by_malo(
     Extension(repo): Extension<TrRepoExt>,
     claims: Claims,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Extension(enforcer): Extension<CedarEnforcer>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Path(malo_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
@@ -1176,7 +1176,7 @@ pub async fn put_zaehler_register(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Extension(enforcer): Extension<CedarEnforcer>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Path(zaehler_id): Path<String>,
     Json(mut rec): Json<ZaehlzeitRegisterRecord>,
 ) -> impl IntoResponse {
@@ -1205,7 +1205,7 @@ pub async fn list_zaehler_register(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Extension(enforcer): Extension<CedarEnforcer>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Path(zaehler_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
@@ -1228,7 +1228,7 @@ pub async fn put_zaehler_saison(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Extension(enforcer): Extension<CedarEnforcer>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Path(register_id): Path<uuid::Uuid>,
     Json(mut rec): Json<ZaehlzeitSaisonRecord>,
 ) -> impl IntoResponse {
@@ -1256,7 +1256,7 @@ pub async fn list_zaehler_saisons(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Extension(enforcer): Extension<CedarEnforcer>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Path(register_id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
     if enforcer
@@ -1324,7 +1324,7 @@ pub async fn get_zaehlzeitdefinitionen(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Extension(enforcer): Extension<CedarEnforcer>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Path(zaehler_id): Path<String>,
     axum::extract::Query(q): axum::extract::Query<ZaehlzeitdefinitionQuery>,
 ) -> impl IntoResponse {
@@ -1506,7 +1506,7 @@ pub async fn get_tariff_zone(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Extension(enforcer): Extension<CedarEnforcer>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Path(zaehler_id): Path<String>,
     axum::extract::Query(q): axum::extract::Query<TariffZoneQuery>,
 ) -> impl IntoResponse {

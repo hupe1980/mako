@@ -245,17 +245,21 @@ is [mako docs · Services](https://hupe1980.github.io/mako/docs/services/).
 
 ## 🚀 Quick Start — run a demo
 
-Two runnable stacks under [`demos/`](demos/), each with a `docker compose` file
-and a `smoke.sh` that asserts every step.
+Three runnable stacks under [`demos/`](demos/), each with a `docker compose`
+file and a `smoke.sh` that asserts every step.
 
 | Demo | Services | What it proves |
 |---|---|---|
 | [`demos/nb-stp`](demos/nb-stp/) | `makod` · `marktd` · `processd` | A UTILMD **55001** Anmeldung arrives over the EDIFACT door, `mako-pruefung` walks `E_0622`, and the **55002** Bestätigung goes back — automatically, inside the Frist |
 | [`demos/eeg-billing`](demos/eeg-billing/) | `marktd` · `edmd` · `einsd` | A month of quarter-hour Einspeisemengen settles into a § 21 EEG 2023 Vergütung and a § 14 Abs. 2 UStG Gutschrift |
+| [`demos/o2c`](demos/o2c/) | `productd` · `vertragd` · `billingd` · `outputd` · `accountingd` | The retail money path: a Tarifpreisblatt prices a Vertrag, the invoice becomes a stored document and an Offener Posten, and a payment closes it |
 
 ```bash
 just build-demo                 # makod, marktd, processd
 cd demos/nb-stp && docker compose up -d && bash smoke.sh
+
+just build-demo-o2c             # productd, vertragd, billingd, outputd, accountingd
+cd demos/o2c    && docker compose up -d && bash smoke.sh
 ```
 
 The [Getting Started guide](https://hupe1980.github.io/mako/docs/guide/getting-started/)

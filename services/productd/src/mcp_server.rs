@@ -58,6 +58,16 @@ pub struct ProductdMcpState {
 
 // ── Parameter types ───────────────────────────────────────────────────────────
 
+/// A tool that takes no arguments.
+///
+/// **Not `serde_json::Value`.** Its JSON Schema is the empty schema — no
+/// `type` — and the MCP specification requires a tool's `inputSchema` to have
+/// root type `object`. `rmcp` asserts that while building the router, so a
+/// single argument-less tool declared as `Parameters<serde_json::Value>`
+/// panics the whole service at startup. Nothing else catches it: the router is
+/// built in `main`, and no test starts the binary.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct NoParams {}
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListProductsParams {
     /// LF MP-ID (BDEW-Codenummer, 13 digits).
@@ -447,7 +457,7 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
     )]
     async fn check_41a_epex_status(
         &self,
-        Parameters(_): Parameters<serde_json::Value>,
+        Parameters(_): Parameters<NoParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::fetch_epex_latest_date;
 

@@ -733,7 +733,10 @@ pub async fn evaluate_and_decide(
                 )
                 .await?;
             } else if config.auto_accept {
-                dispatch(makod, pid, &malo_id, process_id, &result, None, None).await?;
+                dispatch(
+                    makod, reader, pid, &malo_id, process_id, &result, None, None,
+                )
+                .await?;
                 info!(%process_id, pid, %malo_id, antwortcode = result.antwortcode(),
                       "processd NB: dispatched bestaetigen");
             } else {
@@ -749,7 +752,10 @@ pub async fn evaluate_and_decide(
             }
         }
         NbEntscheidung::Reject(reason) => {
-            dispatch(makod, pid, &malo_id, process_id, &result, None, None).await?;
+            dispatch(
+                makod, reader, pid, &malo_id, process_id, &result, None, None,
+            )
+            .await?;
             info!(%process_id, pid, %malo_id, antwortcode = %reason.antwort.antwortcode,
                   "processd NB: dispatched ablehnen");
         }
@@ -1039,9 +1045,11 @@ fn lfa_antwort(v: &serde_json::Value) -> Option<mako_pruefung::LfaAntwort> {
 }
 
 /// Propagates store and transport failures so the fan-out redelivers.
+#[allow(clippy::too_many_arguments)]
 pub async fn resume_after_lfa_antwort(
     event: &serde_json::Value,
     config: &NbModuleConfig,
+    reader: &mako_markt::marktd_client::MarktdClient,
     makod: &MakodClient,
     repo: &PgAnmeldungRepository,
     queue: &PgApprovalQueue,
@@ -1262,6 +1270,7 @@ pub async fn resume_after_lfa_antwort(
             } else if config.auto_accept {
                 dispatch(
                     makod,
+                    reader,
                     pid,
                     &malo_id,
                     anmeldung_process_id,
@@ -1292,6 +1301,7 @@ pub async fn resume_after_lfa_antwort(
                   "processd NB: the LFA refused, so the Anmeldung is refused");
             dispatch(
                 makod,
+                reader,
                 pid,
                 &malo_id,
                 anmeldung_process_id,
@@ -1848,7 +1858,10 @@ async fn decide_abmeldung(
                 )
                 .await?;
             } else if config.auto_accept {
-                dispatch(makod, pid, &malo_id, process_id, &result, None, None).await?;
+                dispatch(
+                    makod, reader, pid, &malo_id, process_id, &result, None, None,
+                )
+                .await?;
                 info!(%process_id, pid, %malo_id, antwortcode = result.antwortcode(),
                       "processd NB: dispatched Bestätigung Abmeldung");
             } else {
@@ -1863,7 +1876,10 @@ async fn decide_abmeldung(
             }
         }
         NbEntscheidung::Reject(reason) => {
-            dispatch(makod, pid, &malo_id, process_id, &result, None, None).await?;
+            dispatch(
+                makod, reader, pid, &malo_id, process_id, &result, None, None,
+            )
+            .await?;
             info!(%process_id, pid, %malo_id, antwortcode = %reason.antwort.antwortcode,
                   "processd NB: dispatched Ablehnung Abmeldung");
         }
@@ -1958,8 +1974,10 @@ fn classify(
 ///
 /// The Gas Codelisten are not named in `STS` DE 1131, so a Gas answer sends
 /// `zustimmung` alongside the code instead of an EBD id.
+#[allow(clippy::too_many_arguments)]
 async fn dispatch(
     makod: &MakodClient,
+    marktd: &mako_markt::marktd_client::MarktdClient,
     pid: u32,
     malo_id: &str,
     process_id: Uuid,
@@ -2012,6 +2030,54 @@ async fn dispatch(
     // every date on this payload uses.
     if accept && let Some(ende) = lfa_lieferende {
         payload["lfa_lieferende"] = serde_json::json!(civil_date(ende));
+    }
+
+    // `SG5 LOC+Z17` and the `SG8 SEQ+Z98`/`SEQ+ZF3` Datenblöcke — Muss on a
+    // Bestätigung Anmeldung, and facts the **NB** holds: which Messlokationen
+    // the Marktlokation's Energiemenge is computed from, and who meters each.
+    // The Bestätigung is the LFN's only source for them.
+    //
+    // Read from the NB's own Lokationszuordnung rather than asked of the ERP.
+    // An empty result is an answer, not a gap: a pauschale Marktlokation has no
+    // Messlokation, and `makod` then states `ZW6` instead of `ZW7`.
+    if accept {
+        let at = mako_fristen::heute();
+        match marktd.buendel_messlokationen_mit_msb(malo_id, at).await {
+            Ok(melos) if !melos.is_empty() => {
+                let msb = |mp_id: &str| {
+                    serde_json::json!({
+                        "mp_id": mp_id,
+                        // The NB records the assignment, not its legal shape.
+                        // `Z39`/`Z19` is the ordinary case; an operator that
+                        // tracks wettbewerblicher Messstellenbetrieb states it
+                        // through the command payload instead.
+                        "rolle": "Z39",
+                        "grundlage": "Z19",
+                        "gmsb_mp_id": mp_id,
+                    })
+                };
+                payload["messlokationen"] = serde_json::json!(
+                    melos
+                        .iter()
+                        .map(|(melo, mp)| serde_json::json!({
+                            "melo_id": melo,
+                            "msb": msb(mp),
+                        }))
+                        .collect::<Vec<_>>()
+                );
+                payload["malo_msb"] = msb(&melos[0].1);
+            }
+            Ok(_) => {}
+            // A transport failure must not read as „pauschale Marktlokation":
+            // that would send the LFN a factual statement about the
+            // Marktlokation derived from a network error.
+            Err(e) => {
+                return Err(format!(
+                    "cannot state the Messlokationen of {malo_id} on the Bestätigung: {e}"
+                )
+                .into());
+            }
+        }
     }
 
     let cmd = ForwardCommand {

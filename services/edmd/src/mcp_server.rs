@@ -1688,10 +1688,9 @@ impl EdmdMcpHandler {
         // must not depend on which surface asked for it. Hand-rolling a UTC
         // month-start here diverged from resample's DST-aware Berlin months at
         // every month boundary.
-        // …including the register projection and the billable-quality filter. The
-        // tool used to map every read straight through, so a MaLo whose data the
-        // REST surface reported as one Bezug series answered here with its
-        // Einspeisung and its Faulty intervals summed in as well.
+        // …including the register projection and the billable-quality filter.
+        // Mapping every read straight through would answer a Bezug question
+        // with the Einspeisung and the Faulty intervals summed in as well.
         let intervals =
             crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
         let buckets = metering::resample(&intervals, &metering::ResampleConfig::to_monthly());

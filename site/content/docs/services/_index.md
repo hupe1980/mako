@@ -219,6 +219,10 @@ docker compose up
 # EEG billing demo — solar plant registration + §21 EEG 2023 settlement
 cd mako/demos/eeg-billing
 docker compose up
+
+# Order-to-cash demo — Tarif → Vertrag → Rechnung → Dokument → Offener Posten
+cd mako/demos/o2c
+docker compose up
 ```
 
 See the [Getting Started](@/docs/guide/getting-started.md) guide for the full deployment walkthrough.

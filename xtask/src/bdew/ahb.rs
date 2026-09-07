@@ -114,6 +114,9 @@ struct Table {
     pending: Vec<String>,
     /// The `Prüfidentifikator` line, when the table has one.
     pid_line: Option<String>,
+    /// This header repeats one a page break interrupted, so the running
+    /// segment / data-element context survives it.
+    page_break: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -306,6 +309,7 @@ pub fn parse(lines: &[Line], mig: &MigDoc) -> Result<AhbDoc, String> {
                 header_done: false,
                 pending: vec![line.to_owned()],
                 pid_line: None,
+                page_break,
             });
             continue;
         }
@@ -389,7 +393,32 @@ pub fn parse(lines: &[Line], mig: &MigDoc) -> Result<AhbDoc, String> {
                 // with a code row, or with the second half of a status cell
                 // the break cut in two, and waiting for a segment row would
                 // read both as more header.
-                .or_else(|| tb.pid_line.is_some().then_some(0));
+                .or_else(|| tb.pid_line.is_some().then_some(0))
+                // A message type published without Prüfidentifikatoren has no
+                // such line, and a page break can fall inside a *code list* —
+                // the codes of one data element printed over two pages, with
+                // no segment, group or DE row before the next one. None of the
+                // shapes above matches a code row, so those codes were read as
+                // header text and dropped: APERAK AHB 1.0 breaks `SG4 ERC` DE
+                // 9321 between `Z14` and `Z15` and lost eleven of the
+                // Fehlermeldung's twenty-seven codes that way, `Z29` „Erforder-
+                // liche Angabe für diesen Anwendungsfall fehlt" among them —
+                // the one every AHB rejection mako sends carries.
+                .or_else(|| {
+                    if !tb.page_break {
+                        return None;
+                    }
+                    let toks = tokens(line);
+                    let first = toks.first()?;
+                    if first.x + 8 < tb.desc_x || first.x >= tb.desc_x + 8 {
+                        return None;
+                    }
+                    let nr = cur_nr.as_deref()?;
+                    let (de, occ) = cur_de.as_ref()?;
+                    let seg = by_nr.get(nr)?;
+                    admits_code(seg, de, *occ, first.text)
+                        .then(|| byte_end(line, first.x + first.text.chars().count()))
+                });
             if let Some(rest) = first_row_end {
                 let base = line[..rest].chars().count();
                 let mut xs: Vec<usize> = tokens(&line[rest..])
@@ -1847,6 +1876,7 @@ mod tests {
             header_done: true,
             pending: Vec::new(),
             pid_line: None,
+            page_break: false,
         }
     }
 

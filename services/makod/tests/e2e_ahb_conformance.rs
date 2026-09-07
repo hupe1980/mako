@@ -261,6 +261,7 @@ async fn ahb_55001_lieferbeginn_validates_and_dispatches() {
         veraeusserungsform: None,
         tranchengroesse_prozent: None,
         vorgangsnummer: None,
+        produktpaket_id: Some("1".to_owned()),
         kunde_name: None,
         kunde_namensformat: None,
         message_ref: cmd_ref,

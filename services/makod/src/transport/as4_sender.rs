@@ -140,6 +140,14 @@ impl WebhookEdifactSender {
 }
 
 impl As4Sender for WebhookEdifactSender {
+    /// Wire transport: everything except the ERP notifier's own messages.
+    ///
+    /// See [`crate::core::erp_adapter::is_erp_notification`] — both consumers of
+    /// the shared outbox read the rule from there.
+    fn handles(&self, msg: &OutboxMessage) -> bool {
+        !crate::core::erp_adapter::is_erp_notification(&msg.message_type)
+    }
+
     fn send(
         &self,
         msg: &OutboxMessage,
@@ -422,6 +430,14 @@ impl BdewAs4Sender {
 // action_uri_for is now bdew_action_from_str() in mako-as4.
 
 impl As4Sender for BdewAs4Sender {
+    /// Wire transport: everything except the ERP notifier's own messages.
+    ///
+    /// See [`crate::core::erp_adapter::is_erp_notification`] — both consumers of
+    /// the shared outbox read the rule from there.
+    fn handles(&self, msg: &OutboxMessage) -> bool {
+        !crate::core::erp_adapter::is_erp_notification(&msg.message_type)
+    }
+
     fn send(
         &self,
         msg: &OutboxMessage,

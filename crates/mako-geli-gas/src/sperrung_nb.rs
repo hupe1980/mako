@@ -457,7 +457,9 @@ impl Workflow for GeliGasSperrungNbWorkflow {
                     pruefidentifikator: pid,
                 }];
                 if validation_passed {
-                    events.push(GasSperrungNbEvent::ValidationPassed { message_ref });
+                    events.push(GasSperrungNbEvent::ValidationPassed {
+                        message_ref: message_ref.clone(),
+                    });
                     Ok(events.into())
                 } else {
                     let reason = validation_errors.join("; ");
@@ -468,16 +470,12 @@ impl Workflow for GeliGasSperrungNbWorkflow {
                     // APERAK Frist (Gas Folgeprozess): nächster Werktag 12 Uhr (APERAK AHB 1.0 §2.3.1).
                     // Note: the business answer window is per-PID, NOT the APERAK sending deadline.
                     let outbox = vec![
-                        PendingOutbox::new(
-                            "APERAK",
+                        PendingOutbox::aperak_fehler(
+                            receiver_gln.as_str(),
                             sender_mp_id.as_str(),
-                            serde_json::json!({
-                                "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_mp_id.as_str(),
-                                "pid":        29001_u32,
-                                "error_code": mako_engine::erc::codes::Z29,
-                                "reason":     reason,
-                            }),
+                            message_ref.as_str(),
+                            mako_engine::erc::codes::Z29,
+                            reason,
                         )
                         .caused_by(0),
                     ];

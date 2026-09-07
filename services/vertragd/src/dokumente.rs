@@ -104,7 +104,7 @@ impl OutputdClient {
         }
     }
 
-    /// `POST /api/v1/documents/PREISANPASSUNG` — render, record and queue.
+    /// `POST /api/v1/documents/issue/PREISANPASSUNG` — render, record and queue.
     ///
     /// Idempotent on the slice id: announcing the same change twice would
     /// leave the customer with two Sonderkündigungsfristen and no way to tell
@@ -143,7 +143,11 @@ impl OutputdClient {
             "ident":       format!("{subject_ref}:{wirksam}"),
         });
         self.up
-            .json(self.up.post("/api/v1/documents/PREISANPASSUNG").json(&body))
+            .json(
+                self.up
+                    .post("/api/v1/documents/issue/PREISANPASSUNG")
+                    .json(&body),
+            )
             .await
             .context("outputd POST document PREISANPASSUNG")?
             .context("outputd answered 404 for the document endpoint — is it on this version?")

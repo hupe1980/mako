@@ -15,6 +15,14 @@
 //!    the §36 Abs. 2 Grundversorger endpoints and the whole `/admin/fanout/dlq`
 //!    surface were dead this way. The reverse (a policy action nothing checks)
 //!    is a dead grant and is pinned too.
+//!
+//! 3. **A handler asking for the enforcer by the wrong type gets a 500.** The
+//!    router layers `Extension(Arc<CedarEnforcer>)`; a handler declaring
+//!    `Extension<CedarEnforcer>` compiles, because axum resolves extensions by
+//!    type at *run* time, and then fails every request with „Missing request
+//!    extension". Fourteen endpoints across `device` and `lokationszuordnung`
+//!    shipped that way — including `PUT /api/v1/lokationszuordnungen`, which is
+//!    how a Marktlokation learns which Messlokationen sit behind it.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -237,5 +245,36 @@ fn no_request_type_carries_a_tenant_field() {
         offenders.is_empty(),
         "these request types deserialise a `tenant` the caller supplies, which overrides the \
          one Cedar authorised: {offenders:?} — take it from the `Tenant` extension"
+    );
+}
+
+/// The enforcer is layered as `Arc<CedarEnforcer>`, so every handler has to ask
+/// for it that way.
+///
+/// A bare `Extension<CedarEnforcer>` is a different type. It compiles, it looks
+/// identical in review, and it answers `500 Missing request extension` on every
+/// request — an endpoint that is neither authorised nor refused, just broken.
+/// Nothing else notices: a handler with no test is served, and the failure is a
+/// runtime lookup rather than a type error.
+#[test]
+fn every_handler_asks_for_the_enforcer_by_its_layered_type() {
+    let mut offenders = Vec::new();
+    for (name, src) in handler_sources() {
+        for (i, line) in src.lines().enumerate() {
+            // `Extension<CedarEnforcer>` — the bare form. The `Arc` form
+            // contains it as a substring, so the closing `>>` is what
+            // separates them.
+            if line.contains("Extension<CedarEnforcer>") {
+                offenders.push(format!("{name}.rs:{}: {}", i + 1, line.trim()));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "{} handler(s) extract the Cedar enforcer as `Extension<CedarEnforcer>`; the router \
+         layers `Extension<Arc<CedarEnforcer>>`, so each of these answers 500 on every \
+         request:\n  {}",
+        offenders.len(),
+        offenders.join("\n  "),
     );
 }

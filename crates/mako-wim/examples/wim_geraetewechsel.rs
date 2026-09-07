@@ -66,8 +66,13 @@ use mako_wim::{DeviceChangeCommand, DeviceChangeProjection, WimDeviceChangeWorkf
 // BGM+E01 is used for WiM Anmeldung in UTILMD S2.x.
 // NAD+MS = neuer Messstellenbetreiber (nMSB, sender)
 // NAD+MR = Netzbetreiber (NB, receiver)
-// - IDE+24 = Messlokation identifier (24 qualifier for WiM MSB, per AHB-55042)
-// - MeLo ID: 51238696781 (11-char format, [A-Z0-9]{11})
+// - IDE+24 DE 7402 = the sender's **Vorgangsnummer**, not a Lokations-ID. The
+//   MIG has exactly two DE 7495 values (`24` Vorgang, `Z01` Liste) and the
+//   Lokation lives in `SG5 LOC`.
+// - LOC+Z16 = the Marktlokation, 11 characters.
+// - LOC+Z17 = the **Messlokation**, 33 characters — the object a WiM
+//   MSB-Wechsel is about („Der MSB ist ausschließlich dem Objekt Messlokation
+//   zugeordnet", WiM Strom Teil 1 Kap. 2.1.2 d).
 
 const UTILMD_GERAETEWECHSEL: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+WIM-2025-001'\
@@ -146,13 +151,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .and_then(|n| n.party_id.as_deref())
                     .unwrap_or_default(),
             ),
+            // `SG5 LOC+Z17`, not `IDE+24`: the Vorgangsnummer identifies the
+            // *Geschäftsvorfall*, and reading it as a MeLo puts
+            // „VORGANG-0001" into a field that must be 33 characters.
             MeLo::new(
                 u.transactions()
                     .first()
-                    .and_then(|tx| tx.ide.object_id.as_deref())
+                    .and_then(|tx| {
+                        tx.locations
+                            .iter()
+                            .find(|l| l.qualifier == "Z17")
+                            .and_then(|l| l.location_id.as_deref())
+                    })
                     .unwrap_or_default(),
             ),
-            // device_id from LOC+172 — use a fallback if not parsed
+            // The Zähler being replaced. A WiM Anmeldung MSB does not name it —
+            // the Gerätewechsel that follows does — so the example states it.
             DeviceId::new("ZHR-12345678"),
             u.dtm()
                 .iter()

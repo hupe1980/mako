@@ -181,16 +181,30 @@ impl<S, R> ContrlBuilder<S, R> {
         );
         // `S002`/`S003` carry the MP-ID with its DE 0007 Verzeichnis, as the
         // `UNB` they answer does (`14` GS1, `500` BDEW, `502` DVGW).
-        let syntax_error = self.inner.syntax_error.as_deref().unwrap_or("");
-        emit_comp!(
-            w,
-            "UCI",
-            [&self.inner.interchange_ref],
-            [sender, super::interchange::unb_qualifier(sender)],
-            [receiver, super::interchange::unb_qualifier(receiver)],
-            [&self.inner.action_code],
-            [syntax_error]
-        );
+        // DE 0085 „Syntaxfehler, Code" belongs to a Syntaxfehlermeldung. An
+        // Empfangsbestätigung reports no error, and an empty trailing element
+        // is not the same as an absent one: it says „a code was transmitted and
+        // it is blank".
+        if let Some(code) = self.inner.syntax_error.as_deref() {
+            emit_comp!(
+                w,
+                "UCI",
+                [&self.inner.interchange_ref],
+                [sender, super::interchange::unb_qualifier(sender)],
+                [receiver, super::interchange::unb_qualifier(receiver)],
+                [&self.inner.action_code],
+                [code]
+            );
+        } else {
+            emit_comp!(
+                w,
+                "UCI",
+                [&self.inner.interchange_ref],
+                [sender, super::interchange::unb_qualifier(sender)],
+                [receiver, super::interchange::unb_qualifier(receiver)],
+                [&self.inner.action_code]
+            );
+        }
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;
         Ok(buf)

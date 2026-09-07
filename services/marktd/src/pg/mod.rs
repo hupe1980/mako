@@ -16,6 +16,15 @@ use mako_markt::error::MdmError;
 /// the former left every overlap answering `500`.
 const EXCLUSION_VIOLATION: &str = "23P01";
 
+/// PostgreSQL `foreign_key_violation`.
+///
+/// A row referencing a parent that is not there: an MSB assigned to a
+/// Messlokation nobody has created, a Lokationszuordnung naming a MaLo the
+/// tenant does not hold. That is the caller naming the wrong id, not an outage
+/// — and answering `500` with the constraint name both misleads them and leaks
+/// the schema.
+const FOREIGN_KEY_VIOLATION: &str = "23503";
+
 /// PostgreSQL `check_violation`.
 ///
 /// Column bounds — the `prozent` range on `lf_zuordnung`, the GPKE Teil 1
@@ -29,8 +38,9 @@ const CHECK_VIOLATION: &str = "23514";
 /// share outside „> 0 % und < 100 %", a Marktlokation split beyond the whole, a
 /// price sheet whose validity window overlaps the one already stored, a
 /// backdated MSB assignment that would leave two Messstellenbetreiber valid on
-/// the same day. None of them is an outage, and answering `500` tells the caller
-/// the server broke when what it needs to hear is which of its own dates to move.
+/// the same day, a Messlokation-ID that names nothing. None of them is an
+/// outage, and answering `500` tells the caller the server broke when what it
+/// needs to hear is which of its own values to change.
 ///
 /// Matched on the SQLSTATE rather than on a constraint name, so a constraint
 /// added to the schema is classified correctly without being listed here — the
@@ -51,6 +61,14 @@ pub fn write_error(e: sqlx::Error) -> MdmError {
         },
         Some(CHECK_VIOLATION) => MdmError::Unprocessable {
             reason: db.message().to_owned(),
+        },
+        Some(FOREIGN_KEY_VIOLATION) => MdmError::Unprocessable {
+            reason: format!(
+                "the row references a record that does not exist ({}). Create the referenced \
+                 Lokation first — an MSB is assigned to a Messlokation, and a \
+                 Lokationszuordnung joins two that are already stored.",
+                db.constraint().unwrap_or("foreign key"),
+            ),
         },
         _ => MdmError::Internal(e.to_string()),
     }

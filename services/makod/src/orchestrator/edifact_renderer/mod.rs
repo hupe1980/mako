@@ -1384,11 +1384,10 @@ mod tests {
             //                 E_0257 …                        X          X
             //
             // 19011/19012 carry E_0254/E_0256 under a Bedingung; 19013/19014
-            // carry E_0257 unconditionally. This assertion used to expect
-            // `AJT+{code}'` for 19013/19014 — it only passed because the AHB
-            // reader was losing that `X`, which sat past a mis-measured column
-            // boundary, so the profile listed no DE 1082 operand for them at
-            // all and the renderer had nothing to emit.
+            // carry E_0257 unconditionally. All four therefore state the EBD in
+            // DE 1082 — a bare `AJT+{code}'` for 19013/19014 means the AHB
+            // reader lost that `X` past a mis-measured column boundary and the
+            // renderer had no operand to emit.
             assert!(
                 wire.contains(&format!("AJT+{code}+{ebd}'")),
                 "SG2 AJT states the Prüfschritt code and its EBD: {wire}"

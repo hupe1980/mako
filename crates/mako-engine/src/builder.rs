@@ -601,6 +601,25 @@ pub trait As4Sender: Send + Sync + 'static {
         &self,
         msg: &OutboxMessage,
     ) -> impl std::future::Future<Output = Result<(), EngineError>> + Send;
+
+    /// Whether this sender owns `msg`.
+    ///
+    /// One outbox can feed more than one consumer — a wire transport and an ERP
+    /// notifier, say — and nothing else in the store says which message belongs
+    /// to which. Without an ownership rule every consumer picks up every
+    /// message: the ERP notifier skipped what it did not recognise, but the
+    /// transport had no such filter and put internal lifecycle notifications on
+    /// the wire to the market partner, as raw JSON, because they have no
+    /// EDIFACT renderer.
+    ///
+    /// Returning `false` makes the worker leave the message untouched — not
+    /// rescheduled, not dead-lettered, not counted as an attempt — for whichever
+    /// consumer does own it. The default claims everything, which is right for
+    /// the single-consumer deployments this trait started with.
+    fn handles(&self, msg: &OutboxMessage) -> bool {
+        let _ = msg;
+        true
+    }
 }
 
 // ── OutboxWorker ──────────────────────────────────────────────────────────────
@@ -784,6 +803,11 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                 continue;
             }
 
+            // A batch of nothing but other consumers' messages must still sleep.
+            // Polling a queue that is full of another worker's traffic and
+            // looping straight back is a busy spin that burns a core and starves
+            // the runtime — the exact opposite of what the ownership rule is for.
+            let mut handled_any = false;
             for msg in batch {
                 // Between messages, not inside one: a `send` that is already in
                 // flight must run to its `acknowledge`, or the counterparty
@@ -800,6 +824,15 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                     );
                     return;
                 }
+                // ── Ownership ─────────────────────────────────────────
+                // Not this sender's message. Leave it exactly as it is:
+                // another consumer of the same outbox owns it, and touching
+                // its attempt count or dead-lettering it here would consume a
+                // retry budget that is not ours to spend.
+                if !self.sender.handles(&msg) {
+                    continue;
+                }
+                handled_any = true;
                 // ── Retry budget ──────────────────────────────────────
                 // `attempt_count` starts at 0 and is incremented on each
                 // `reschedule` call. The message is permanently undeliverable
@@ -974,6 +1007,12 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                         }
                     }
                 }
+            }
+
+            // Nothing in this batch was ours: sleep before polling again, or a
+            // queue held by the other consumer turns this loop into a spin.
+            if !handled_any && !sleep_or_cancel(self.poll_interval, self.shutdown.as_ref()).await {
+                return;
             }
         }
     }

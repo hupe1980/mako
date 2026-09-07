@@ -18,6 +18,7 @@ use super::*;
 /// | `malo` / `melo` | yes*     | Lokations-ID → `SG5 LOC+Z16` / `LOC+Z17`      |
 /// | `vorgangsnummer`| no       | `IDE+24` DE 7402 (defaults to the message ref) |
 /// | `referenz_vorgangsnummer` | on answers | `SG4 SG6 RFF+TN` — the **request's** `IDE+24` |
+/// | `geplantes_produktpaket` | on a Bestätigung Anmeldung | `SG4 SG6 RFF+Z60` — the Produktpaket-ID the NB will implement |
 /// | `process_date`  | yes      | Process date (`YYYYMMDD` or `YYYY-MM-DD`)     |
 /// | `document_date` | no       | Document date (defaults to today at dispatch time) |
 /// | `message_ref`   | no       | Derived from `causation_event_id` when absent  |
@@ -84,6 +85,17 @@ pub(super) fn render_utilmd(
         .and_then(|v| v.as_str())
         .unwrap_or(msg.recipient.as_ref());
 
+    // Determine UTILMD release track from PID: 44xxx = Gas, everything else = Strom.
+    let track = if (44_000..=44_999).contains(&pid) {
+        ReleaseTrack::Gas
+    } else {
+        ReleaseTrack::Strom
+    };
+    let release =
+        active_release(MessageType::Utilmd, track).ok_or_else(|| RenderError::NoActiveProfile {
+            message_type: mt.into(),
+        })?;
+
     // The MSB is assigned to the **Messlokation**, never to the Marktlokation
     // („Der MSB ist ausschließlich dem Objekt Messlokation zugeordnet" — WiM
     // Strom Teil 1 Kap. 2.1.2 d, AWH WiM Gas 2.0 Kap. 3.1.2 d), so every WiM
@@ -101,7 +113,7 @@ pub(super) fn render_utilmd(
         Some(id) if !id.is_empty() => Some(id),
         _ => match p.get("mabis_zaehlpunkt").and_then(|v| v.as_str()) {
             Some(zp) if !zp.is_empty() => Some(zp),
-            _ if utilmd_carries_sg5_loc(pid) => {
+            _ if utilmd_carries_sg5_loc(&release, pid) => {
                 return Err(RenderError::MissingField {
                     message_type: mt.into(),
                     field: format!("{location_id_key} or mabis_zaehlpunkt").into(),
@@ -124,7 +136,12 @@ pub(super) fn render_utilmd(
     // and the Vorgang it refers to, and no date of its own. Emitting one there
     // is an unlisted segment, so the field is required everywhere else and
     // refused here.
-    let carries_process_date = utilmd_carries_sg4_date(pid);
+    let dtm_qualifier = p
+        .get("dtm_qualifier")
+        .and_then(|v| v.as_str())
+        .filter(|q| !q.is_empty())
+        .unwrap_or_else(|| utilmd_dtm_qualifier(pid));
+    let carries_process_date = utilmd_carries_sg4_date(&release, pid, dtm_qualifier);
     let process_date = if carries_process_date {
         Some(require_str(p, mt, "process_date")?)
     } else {
@@ -141,17 +158,6 @@ pub(super) fn render_utilmd(
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
-    // Determine UTILMD release track from PID: 44xxx = Gas, everything else = Strom.
-    let track = if (44_000..=44_999).contains(&pid) {
-        ReleaseTrack::Gas
-    } else {
-        ReleaseTrack::Strom
-    };
-    let release =
-        active_release(MessageType::Utilmd, track).ok_or_else(|| RenderError::NoActiveProfile {
-            message_type: mt.into(),
-        })?;
-
     let edifact_pid = Pruefidentifikator::new(pid).map_err(|e| RenderError::MissingField {
         message_type: mt.into(),
         field: format!("pid value {pid} is invalid: {e}").into(),
@@ -162,11 +168,6 @@ pub(super) fn render_utilmd(
     // `STS+7++ZH1` and „Ende zum" under `ZC8` (UTILMD AHB Strom Kap. 8.11
     // Bedingungen `[475]` / `[474]`), so the qualifier follows the **Grund** and
     // only the workflow knows it. An explicit value therefore wins.
-    let dtm_qualifier = p
-        .get("dtm_qualifier")
-        .and_then(|v| v.as_str())
-        .filter(|q| !q.is_empty())
-        .unwrap_or_else(|| utilmd_dtm_qualifier(pid));
     let process_date_yyyymmdd = process_date.map(normalise_date);
 
     // `SG4 SG6 RFF+Z13` carries the Prüfidentifikator and the builder emits it
@@ -252,6 +253,17 @@ pub(super) fn render_utilmd(
         .filter(|s| !s.is_empty())
     {
         tx = tx.referenz_vorgangsnummer(referenz);
+    }
+
+    // `SG6 RFF+Z60` — Muss on a Bestätigung Anmeldung. Without it the LFN is
+    // told its Anmeldung was accepted but not which of the Produktpakete it
+    // offered the NB is going to implement.
+    if let Some(paket) = p
+        .get("geplantes_produktpaket")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        tx = tx.geplantes_produktpaket(paket);
     }
 
     // `SG4 STS+7` — Transaktionsgrund, and in the GPKE/GeLi Gas processes its
@@ -522,7 +534,98 @@ pub(super) fn render_utilmd(
         None => tx,
     };
 
+    // `SG5 LOC+Z17` — every Messlokation the Marktlokation's Energiemenge is
+    // computed from (Bedingung `[623]`), and with them the `SG8 SEQ+Z98`
+    // „Daten der Marktlokation" and `SEQ+ZF3` „Daten der Messlokation" blocks.
+    // Every Bestätigung Anmeldung makes all three Muss; behind `ZW7`
+    // „Gemessene Marktlokation" the AHB says so explicitly (`[483]`), which is
+    // why an answer that classifies the MaLo as gemessen and names no
+    // Messlokation is refused here rather than at the counterparty.
+    let melos: Vec<&serde_json::Value> = p
+        .get("messlokationen")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().collect())
+        .unwrap_or_default();
+    let gemessen = p
+        .get("transaktionsgrund_ergaenzung")
+        .and_then(|v| v.as_str())
+        == Some(edi_energy::utilmd_codes::ergaenzung::GEMESSENE_MALO);
+    if gemessen && melos.is_empty() && !names_messlokation {
+        return Err(RenderError::MissingField {
+            message_type: mt.into(),
+            field: "messlokationen — a ZW7 \u{201e}Gemessene Marktlokation\u{201c} answer must \
+                    name the Messlokationen its Energiemenge is computed from, each with its \
+                    Messstellenbetreiber (UTILMD AHB Strom Bedingungen [483] and [623])"
+                .into(),
+        });
+    }
+    let mut tx = tx;
+    for melo in &melos {
+        if let Some(id) = melo.get("melo_id").and_then(|v| v.as_str()) {
+            tx = tx.messlokation(id);
+        }
+    }
+    if !melos.is_empty() {
+        // `SG8 SEQ+Z98` — Daten der Marktlokation, carrying the MSB the NB has
+        // assigned to it. „Zugeordneter Marktpartner" is Muss inside it.
+        let msb = msb_of(p.get("malo_msb")).ok_or_else(|| RenderError::MissingField {
+            message_type: mt.into(),
+            field: "malo_msb \u{2014} the SG8 SEQ+Z98 block a ZW7 answer opens makes \
+                        SG10 CCI+++ZB3 \u{201e}Zugeordneter Marktpartner\u{201c} Muss"
+                .into(),
+        })?;
+        tx = tx
+            .stammdaten(edi_energy::utilmd_codes::SEQ_DATEN_DER_MARKTLOKATION_ANTWORT)
+            .zugeordneter_msb(msb.mp_id, msb.rolle, msb.grundlage)
+            .done();
+        // `SG8 SEQ+ZF3` — one Datenblock per Messlokation (Bedingung [2284]),
+        // referencing it by `RFF+Z19` and naming its own MSB.
+        for melo in &melos {
+            let Some(id) = melo.get("melo_id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let msb = msb_of(melo.get("msb")).ok_or_else(|| RenderError::MissingField {
+                message_type: mt.into(),
+                field: format!(
+                    "messlokationen[{id}].msb \u{2014} SG8 SEQ+ZF3 makes SG10 CCI+++ZB3 Muss"
+                )
+                .into(),
+            })?;
+            tx = tx
+                .stammdaten(edi_energy::utilmd_codes::seq_antwort::DATEN_DER_MESSLOKATION)
+                .rff(edi_energy::utilmd_codes::rff_lokation::MESSLOKATION, id)
+                .zugeordneter_msb(msb.mp_id, msb.rolle, msb.grundlage)
+                .grundzustaendiger_msb(msb.gmsb_mp_id)
+                .done();
+        }
+    }
+
     finish_interchange(tx.done().serialize(), sender, receiver, msg)
+}
+
+/// `{ "mp_id", "rolle", "grundlage", "gmsb_mp_id" }` as an answer payload
+/// carries a `ZugeordneterMsb` — the four codes `SG10 CCI+++ZB3` needs.
+struct Msb<'a> {
+    mp_id: &'a str,
+    rolle: &'a str,
+    grundlage: &'a str,
+    gmsb_mp_id: &'a str,
+}
+
+fn msb_of(v: Option<&serde_json::Value>) -> Option<Msb<'_>> {
+    let v = v?;
+    let field = |k: &str| {
+        v.get(k)
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+    };
+    let mp_id = field("mp_id")?;
+    Some(Msb {
+        mp_id,
+        rolle: field("rolle").unwrap_or(edi_energy::utilmd_codes::msb::GRUNDZUSTAENDIG),
+        grundlage: field("grundlage").unwrap_or(edi_energy::utilmd_codes::msb::GRUNDLAGE_VERTRAG),
+        gmsb_mp_id: field("gmsb_mp_id").unwrap_or(mp_id),
+    })
 }
 
 /// Whether this PID's Anwendungsfall carries an `SG4 DTM` process date at all.
@@ -675,34 +778,95 @@ fn render_utilmd_liste(
     finish_interchange(builder.serialize(), sender, receiver, msg)
 }
 
-/// Whether this PID's Anwendungsfall names a Lokation at all.
+/// Whether the Prüfschablone of `pid` lists an `SG5 LOC` at all.
 ///
-/// Almost every UTILMD Vorgang is about one, so this answers `true` by default
-/// and names the exceptions. The **MaBiS Korrekturlisten** (55066, 55196,
-/// 55202, 55224) are the ones that are not: they answer a whole Clearingliste,
-/// and their Ablehnungs-Cluster refuses it outright — the Abonnement was never
-/// ordered, the version is not admitted, the Zeitraum is implausible. There is
-/// no Marktlokation such an answer is about, and the AHB marks `SG5 LOC` Kann
-/// on the family accordingly.
+/// Almost every UTILMD Vorgang is about a Lokation, and the exceptions are not
+/// a list anyone should keep by hand: the **MaBiS Korrekturlisten** (55066,
+/// 55196, 55202, 55224) answer a whole Clearingliste rather than a
+/// Marktlokation, and every **Ablehnung** (55003, 55006, 55080) states that the
+/// Anfrage failed and nothing about the Lokation it named. The AHB says which
+/// is which, so this asks it instead of restating it.
 ///
-/// Requiring one there refuses the whole message, and a UTILMD that does not
-/// render leaves raw JSON on the AS4 leg.
-pub(super) const fn utilmd_carries_sg5_loc(pid: u32) -> bool {
-    !matches!(pid, 55_066 | 55_196 | 55_202 | 55_224)
+/// Requiring a Lokation where the column lists none refuses the whole message,
+/// and a UTILMD that does not render leaves raw JSON on the AS4 leg. Emitting
+/// one anyway is `AHB-…-00050-LOC-NOT-PERMITTED` at the counterparty.
+fn utilmd_carries_sg5_loc(release: &edi_energy::Release, pid: u32) -> bool {
+    column_lists_segment(release, pid, "LOC")
 }
 
-pub(super) const fn utilmd_carries_sg4_date(pid: u32) -> bool {
-    !matches!(
-        pid,
-        55_036
-            | 44_036
-            | 44_022..=44_024
-            | 55_062..=55_064
-            | 55_066
-            | 55_196
-            | 55_202
-            | 55_224
-    )
+/// Whether the Prüfschablone of `pid` lists the `SG4 DTM` place `qualifier`
+/// would ride.
+///
+/// Not „does the column have any `SG4 DTM`": 55003 lists Nr 00033
+/// „Lieferbeginndatum in Bearbeitung" and Nr 00034 „Datum für nächste
+/// Bearbeitung" while refusing Nr 00023 „Beginn zum", so the question is about
+/// the one place, not the group. The Information über existierende Zuordnung
+/// (55036 / 44036) lists none at all: it names the LFA and the Vorgang it
+/// refers to and no date of its own.
+///
+/// Emitting a date the column does not list is `AHB-…-DTM-NOT-PERMITTED`;
+/// demanding one it does not list refuses the whole message, and a UTILMD that
+/// does not render leaves raw JSON on the AS4 leg.
+fn utilmd_carries_sg4_date(release: &edi_energy::Release, pid: u32, qualifier: &str) -> bool {
+    let Some((profile, af)) = utilmd_column(release, pid) else {
+        return true;
+    };
+    profile
+        .structure
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(id, node)| match &node.kind {
+            edi_energy::profile::structure::Kind::Segment {
+                nr,
+                tag,
+                discriminators,
+                ..
+            } if tag == "DTM"
+                && discriminators
+                    .iter()
+                    .any(|d| d.codes.iter().any(|c| c == qualifier)) =>
+            {
+                Some((id, nr))
+            }
+            _ => None,
+        })
+        .filter(|(id, _)| profile.structure.path(*id).contains(&"SG4"))
+        .any(|(_, nr)| af.segment_status(nr).is_some())
+}
+
+/// Whether the Prüfschablone of `pid` lists any place with the given tag.
+fn column_lists_segment(release: &edi_energy::Release, pid: u32, tag: &str) -> bool {
+    let Some((profile, af)) = utilmd_column(release, pid) else {
+        return true;
+    };
+    profile
+        .structure
+        .nodes
+        .iter()
+        .filter_map(|node| match &node.kind {
+            edi_energy::profile::structure::Kind::Segment { nr, tag: t, .. } if t == tag => {
+                Some(nr)
+            }
+            _ => None,
+        })
+        .any(|nr| af.segment_status(nr).is_some())
+}
+
+/// The UTILMD profile of `release` and the column of `pid` inside it.
+fn utilmd_column(
+    release: &edi_energy::Release,
+    pid: u32,
+) -> Option<(
+    &'static edi_energy::Profile,
+    &'static edi_energy::profile::model::Anwendungsfall,
+)> {
+    let code = edi_energy::Pruefidentifikator::new(pid).ok()?;
+    let profile = edi_energy::ReleaseRegistry::global()
+        .profiles_for(MessageType::Utilmd)
+        .find(|p| p.release() == release)?;
+    let af = profile.anwendungsfall(code.as_u32())?;
+    Some((profile, af))
 }
 
 /// The `SG4 DTM` DE 2005 qualifier for the process date of a given PID.

@@ -72,6 +72,179 @@ pub struct LfAntwort {
     /// `A31`, and the Gas `Z01` „Zustimmung mit Terminänderung". `None` echoes
     /// the requested date.
     pub termin: Option<String>,
+    /// `SG4 STS+7` DE 9013 element 3 — the Transaktionsgrundergänzung of the
+    /// **answer**, which is not the Anfrage's.
+    ///
+    /// A 55001 Anmeldung says `ZW4` „verbrauchende Marktlokation"; the 55002
+    /// Bestätigung's Prüfschablone admits only `ZW6` „Pauschale
+    /// Marktlokation", `ZW7` „Gemessene Marktlokation" and `ZAP` „Ruhende
+    /// Marktlokation". The NB is the party that knows which of the three the
+    /// Marktlokation is, so the classification is part of its answer rather
+    /// than an echo of the request. Echoing `ZW4` is refused at the LFN with
+    /// `AHB-55002-00036-STS-9013-CODE`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub malo_art: Option<String>,
+    /// `SG6 RFF+Z60` DE 1154 — „Informativ zur Umsetzung geplantes
+    /// Produktpaket", Muss on a Bestätigung Anmeldung.
+    ///
+    /// The `SG8 SEQ+Z79` DE 1050 Produktpaket-ID from the Anmeldung that the
+    /// NB will actually implement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geplantes_produktpaket: Option<String>,
+    /// `SG8 SEQ+Z98` `SG10 CCI+++ZB3` / `CAV+Z91` — the Messstellenbetreiber
+    /// the NB has assigned to the Marktlokation.
+    ///
+    /// Muss inside the „Daten der Marktlokation" block a `ZW7` answer opens:
+    /// the Bestätigung is where the LFN learns who meters the point it is about
+    /// to supply, and it cannot look it up anywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub malo_msb: Option<ZugeordneterMsb>,
+    /// `SG5 LOC+Z17` — the Messlokationen behind the Marktlokation.
+    ///
+    /// Muss whenever [`malo_art`](Self::malo_art) is `ZW7` „Gemessene
+    /// Marktlokation" (UTILMD AHB Strom Bedingung `[483]`), which is also what
+    /// opens the `SG8 SEQ+Z98` „Daten der Marktlokation" block. Bedingung
+    /// `[623]`: „Es sind alle Identifikatoren der Messlokationen anzugeben, die
+    /// zur Ermittlung der Energiemenge der im Vorgang genannten Marktlokation
+    /// benötigt werden" — so a MaLo fed by two Messlokationen names both.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub messlokationen: Vec<AntwortMesslokation>,
+}
+
+/// What a GPKE Antwort-PID's Prüfschablone admits, beyond the Antwortcode.
+///
+/// The Bestätigung and the Ablehnung of the same Anfrage are **not** the same
+/// message with one code changed. UTILMD AHB Strom 2.1:
+///
+/// | | 55002 | 55003 | 55005 | 55006 | 55078 | 55080 |
+/// |---|---|---|---|---|---|---|
+/// | `BGM` DE 1001 | `E01` | `E01` | `E02` | `E02` | `E01` | `E01` |
+/// | `STS+7` Ergänzung | `ZW6`/`ZW7`/`ZAP` | `ZW4` | — | — | `ZW0`/`ZW1`/`ZW2` | `ZW3` |
+/// | `SG4 DTM` | `92` | — | `93` | — | `92` | — |
+/// | `SG5 LOC`, `SG8` Lokationsdaten | ✓ | — | — | — | ✓ | — |
+/// | `SG6 RFF+Z60` | ✓ | — | — | — | ✓ | — |
+///
+/// An Ablehnung states no Lokation and no date: it says the Anfrage failed, and
+/// everything the NB would have told the LFN about the Marktlokation is
+/// something it is not going to supply. Sending the Bestätigung's blocks on an
+/// Ablehnung is refused with eleven `NOT-PERMITTED` findings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AntwortForm {
+    /// `BGM` DE 1001 — `E01` „Anmeldungen" or `E02` „Abmeldungen".
+    ///
+    /// Follows the Anfrage: the answer to an Abmeldung is itself an Abmeldung
+    /// document. The renderer defaults to `E01`, so leaving it out sent both
+    /// Abmeldungs-Antworten under the wrong Dokumentenname.
+    pub document_code: &'static str,
+    /// `SG4 STS+7` DE 9013 element 3, or `None` where the column lists none.
+    ///
+    /// `Some(None)` is not a case: a column either admits an Ergänzung or does
+    /// not. Where it does and the value is the NB's own classification (55002),
+    /// this is `None` and [`LfAntwort::malo_art`] supplies it.
+    pub ergaenzung: Option<&'static str>,
+    /// Whether the answer states the NB's classification of the Marktlokation
+    /// itself — 55002 only, where the column admits three codes.
+    pub klassifiziert_malo: bool,
+    /// Whether `SG5 LOC`, the `SG8` Lokations-Datenblöcke and `SG6 RFF+Z60` are
+    /// part of the Prüfschablone.
+    pub lokationsdaten: bool,
+}
+
+impl AntwortForm {
+    /// The form of one GPKE Antwort-PID, or `None` for a PID outside the family.
+    #[must_use]
+    pub const fn of(pid: u32) -> Option<Self> {
+        let (document_code, ergaenzung, klassifiziert_malo, lokationsdaten) = match pid {
+            // Bestätigung Anmeldung verb. MaLo — the NB says whether the
+            // Marktlokation is pauschal, gemessen or ruhend.
+            55002 => ("E01", None, true, true),
+            // Ablehnung Anmeldung verb. MaLo — `ZW4` and nothing else.
+            55003 => ("E01", Some("ZW4"), false, false),
+            // Bestätigung / Ablehnung Abmeldung — `E02`, and no Ergänzung.
+            55005 | 55006 => ("E02", None, false, false),
+            // Bestätigung Anmeldung erz. MaLo — echoes the 55077's `ZW0`/`ZW1`/
+            // `ZW2`, which says what kind of Erzeugung it is.
+            55078 => ("E01", None, false, true),
+            // Ablehnung Anmeldung erz. MaLo.
+            55080 => ("E01", Some("ZW3"), false, false),
+            _ => return None,
+        };
+        Some(Self {
+            document_code,
+            ergaenzung,
+            klassifiziert_malo,
+            lokationsdaten,
+        })
+    }
+}
+
+/// The Messstellenbetreiber of one Lokation, as a Bestätigung names it.
+///
+/// `SG10 CCI+++ZB3` „Zugeordneter Marktpartner", then
+/// `CAV+Z91:<mp_id>::<rolle>:<grundlage>` and `CAV+ZF0:<gmsb_mp_id>`. All three
+/// codes are Muss on a Bestätigung Anmeldung: the acting MSB, on what basis it
+/// acts, and which grundzuständiger MSB stands behind the Messstelle.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ZugeordneterMsb {
+    /// `CAV+Z91` DE 1131 — the MSB that operates the Messstelle.
+    pub mp_id: String,
+    /// `CAV+Z91` DE 7110, first occurrence — `Z39` grundzuständig, `Z40`
+    /// wettbewerblich, `Z41` Auffang.
+    ///
+    /// Not cosmetic: it decides who the LF settles the Messentgelt with.
+    pub rolle: String,
+    /// `CAV+Z91` DE 7110, second occurrence — `Z19` „auf vertraglicher
+    /// Grundlage gegenüber Anschlussnutzer / Anschlussnehmer" or `Z20` „in der
+    /// Ausübung der Weiterverpflichtung durch den gMSB".
+    pub grundlage: String,
+    /// `CAV+ZF0` DE 1131 — the grundzuständiger MSB of this Lokation.
+    ///
+    /// Equal to [`mp_id`](Self::mp_id) when `rolle` is `Z39`, and a different
+    /// party otherwise; the LFN has no other way to learn who it is.
+    pub gmsb_mp_id: String,
+}
+
+impl ZugeordneterMsb {
+    /// The grundzuständige Messstellenbetreiber of a Lokation, acting on a
+    /// contract with the Anschlussnutzer — `Z39` + `Z19`, the ordinary case.
+    #[must_use]
+    pub fn grundzustaendig(mp_id: impl Into<String>) -> Self {
+        let mp_id = mp_id.into();
+        Self {
+            rolle: "Z39".to_owned(),
+            grundlage: "Z19".to_owned(),
+            gmsb_mp_id: mp_id.clone(),
+            mp_id,
+        }
+    }
+
+    /// A wettbewerblicher Messstellenbetreiber — `Z40` — with the gMSB it
+    /// displaced, which the LFN has no other way to learn.
+    #[must_use]
+    pub fn wettbewerblich(mp_id: impl Into<String>, gmsb_mp_id: impl Into<String>) -> Self {
+        Self {
+            mp_id: mp_id.into(),
+            rolle: "Z40".to_owned(),
+            grundlage: "Z19".to_owned(),
+            gmsb_mp_id: gmsb_mp_id.into(),
+        }
+    }
+}
+
+/// One Messlokation a `ZW7` answer names, with the MSB assigned to it.
+///
+/// Bedingung `[623]`: „Es sind alle Identifikatoren der Messlokationen
+/// anzugeben, die zur Ermittlung der Energiemenge der im Vorgang genannten
+/// Marktlokation benötigt werden" — a MaLo fed by two Messlokationen names
+/// both, and they can have different Messstellenbetreiber.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AntwortMesslokation {
+    /// `SG5 LOC+Z17` DE 3225 and `SG8 RFF+Z19` DE 1154 — 33 characters.
+    pub melo_id: String,
+    /// The Messstellenbetreiber of *this* Messlokation.
+    pub msb: ZugeordneterMsb,
 }
 
 impl LfAntwort {
@@ -85,6 +258,10 @@ impl LfAntwort {
             bemerkung: None,
             bilanzkreis: None,
             termin: None,
+            malo_art: None,
+            geplantes_produktpaket: None,
+            malo_msb: None,
+            messlokationen: Vec::new(),
         }
     }
 
@@ -98,7 +275,45 @@ impl LfAntwort {
             bemerkung: None,
             bilanzkreis: None,
             termin: None,
+            malo_art: None,
+            geplantes_produktpaket: None,
+            malo_msb: None,
+            messlokationen: Vec::new(),
         }
+    }
+
+    /// State the NB's classification of the Marktlokation —
+    /// [`malo_art`](Self::malo_art), `ZW6` / `ZW7` / `ZAP`.
+    #[must_use]
+    pub fn with_klassifizierung(mut self, malo_art: impl Into<String>) -> Self {
+        self.malo_art = Some(malo_art.into());
+        self
+    }
+
+    /// State which Produktpaket-ID the NB will implement —
+    /// [`geplantes_produktpaket`](Self::geplantes_produktpaket), `SG6 RFF+Z60`.
+    #[must_use]
+    pub fn with_produktpaket(mut self, paket_id: impl Into<String>) -> Self {
+        self.geplantes_produktpaket = Some(paket_id.into());
+        self
+    }
+
+    /// Name one Messlokation behind the Marktlokation and its
+    /// Messstellenbetreiber, and assign the same MSB to the Marktlokation.
+    ///
+    /// The ordinary case: one MaLo, one MeLo, one MSB. A MaLo fed by several
+    /// Messlokationen calls this once per MeLo; one whose MaLo-MSB differs sets
+    /// [`malo_msb`](Self::malo_msb) afterwards.
+    #[must_use]
+    pub fn with_messlokation(mut self, melo_id: impl Into<String>, msb: ZugeordneterMsb) -> Self {
+        if self.malo_msb.is_none() {
+            self.malo_msb = Some(msb.clone());
+        }
+        self.messlokationen.push(AntwortMesslokation {
+            melo_id: melo_id.into(),
+            msb,
+        });
+        self
     }
 
     /// Attach the `FTX+ACB` Erläuterung.
@@ -230,6 +445,7 @@ mod tests {
             bemerkung: None,
             bilanzkreis: None,
             termin: None,
+            ..LfAntwort::ablehnung("", "")
         };
         assert!(outbox_for(&antwort).get("antwort_codeliste").is_none());
     }

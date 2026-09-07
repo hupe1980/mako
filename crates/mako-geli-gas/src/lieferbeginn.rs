@@ -806,7 +806,9 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     pruefidentifikator: pid,
                 }];
                 if validation_passed {
-                    events.push(GasSupplierChangeEvent::ValidationPassed { message_ref });
+                    events.push(GasSupplierChangeEvent::ValidationPassed {
+                        message_ref: message_ref.clone(),
+                    });
                     // Register two deadlines atomically with the events:
                     //   1. APERAK Gas *sending* deadline (APERAK AHB 1.0 \u00a72.3.1):
                     //      Initialprozess (44001): 3 Werktage; Folgeprozess: n\u00e4chster Werktag 12:00.
@@ -888,16 +890,12 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                         )
                     };
                     let outbox = vec![
-                        PendingOutbox::new(
-                            "APERAK",
+                        PendingOutbox::aperak_fehler(
+                            receiver_gln.as_str(),
                             sender_mp_id.as_str(),
-                            serde_json::json!({
-                                "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_mp_id.as_str(),
-                                "pid":        29001_u32,
-                                "error_code": mako_engine::erc::codes::Z29,
-                                "reason":     reason,
-                            }),
+                            message_ref.as_str(),
+                            mako_engine::erc::codes::Z29,
+                            reason,
                         )
                         .caused_by(0),
                     ];

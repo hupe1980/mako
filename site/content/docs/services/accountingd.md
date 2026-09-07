@@ -894,7 +894,18 @@ curl -X POST "http://accountingd:9380/api/v1/payments/import" \
           "bank_transaction_id": "NTRY-REF-20260710-001" }]'
 ```
 
-Response: `{ "accepted": 1, "deduplicated": 0, "skipped": 0, "batches_matched": 0, "total": 1 }`
+Response: `{ "accepted": 1, "deduplicated": 0, "skipped": 0, "unmatched": 0, "malformed": 0, "failed": 0, "total": 1 }`
+
+`skipped` is a **total**; the three fields beside it say what it was made of,
+because each calls for a different response:
+
+| | What happened | What to do | Logged |
+|---|---|---|---|
+| `malformed` | the row could not be read — bad IBAN, amount or date | fix the export | `warn` |
+| `unmatched` | well-formed, but no account claims it | reconcile by hand; `resolve_account_for_payment` names the rungs it tried | `warn` |
+| `failed` | the lookup or the ledger write errored | the money is **not** applied — retry once the database is healthy | `error` |
+
+Each log line carries the bank transaction id.
 
 ### One sign convention
 

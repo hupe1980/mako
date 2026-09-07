@@ -716,6 +716,47 @@ fn extract_lf_antwort(
             .get("termin")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned),
+        // `SG4 STS+7` DE 9013 element 3 on the *answer*. The Anmeldung's `ZW4`
+        // is not admitted there — 55002 takes `ZW6` (pauschal), `ZW7`
+        // (gemessen) or `ZAP` (ruhend), and only the NB knows which. Left
+        // unset, the workflow states `ZW7`, the ordinary case.
+        malo_art: payload
+            .get("malo_art")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned),
+        // `SG6 RFF+Z60` — the Produktpaket-ID from the Anmeldung the NB will
+        // implement. Muss on a Bestätigung.
+        geplantes_produktpaket: payload
+            .get("geplantes_produktpaket")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned),
+        // `SG8 SEQ+Z98 SG10 CCI+++ZB3` — the MaLo's Messstellenbetreiber.
+        malo_msb: payload
+            .get("malo_msb")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|e| {
+                DispatchError::InvalidPayload(format!(
+                    "\"malo_msb\" must be {{\"mp_id\": …, \"grundzustaendig\": bool}}: {e}"
+                ))
+            })?,
+        // `SG5 LOC+Z17` + `SG8 SEQ+ZF3` — the Messlokationen behind a gemessene
+        // Marktlokation, each with its own Messstellenbetreiber.
+        messlokationen: payload
+            .get("messlokationen")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|e| {
+                DispatchError::InvalidPayload(format!(
+                    "\"messlokationen\" must be a list of {{\"melo_id\": …, \"msb\": \
+                     {{\"mp_id\": …, \"grundzustaendig\": bool}}}}: {e}"
+                ))
+            })?
+            .unwrap_or_default(),
     })
 }
 
@@ -843,10 +884,8 @@ pub(super) async fn dispatch_gpke_zuordnung_lf_antwort(
     // NB's Ankündigung — `E_0603` EEG, `E_0604` EEG mit DV-Pflicht, `E_0605`
     // KWKG, `E_0606`. They publish the same two codes (`A01` Zustimmung, `A99`
     // Sonstiges) and differ only in which case they belong to, so the caller
-    // names the one the inbound message carried in `SG4 STS+E01` DE 1131.
-    //
-    // This previously passed `None` on the belief that the family had no
-    // published EBD, which sent every answer with an empty DE 1131.
+    // names the one the inbound message carried in `SG4 STS+E01` DE 1131. A
+    // `None` default here would send every answer with an empty DE 1131.
     let antwort = extract_lf_antwort(payload, Some(mako_pruefung::codes::EBD_ZUORDNUNG_LF[0]))?;
 
     dispatch_to_process::<GpkeAnkuendigungZuordnungLfWorkflow, _>(

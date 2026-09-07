@@ -126,30 +126,61 @@ impl PortaldMcpHandler {
     ) -> Result<CallToolResult, McpError> {
         let malo_id = &p.malo_id;
         let mut result = serde_json::json!({ "malo_id": malo_id });
+        // A 360° view assembled from three services has to say which of them
+        // answered. Dropping a failed call left "no invoice" and "the invoice
+        // service is down" looking identical, and an agent reading that told a
+        // customer they owe nothing.
+        let mut unavailable = serde_json::Map::new();
 
-        // Supply status from marktd — use direct marktd path, NOT portald's own route
-        if let Some(ref client) = self.state.clients.marktd
-            && let Ok(Some(v)) = client
-                .get_json(&format!("/api/v1/versorgung/{malo_id}"))
-                .await
-        {
-            result["versorgung"] = v;
+        for (field, service, client, path) in [
+            (
+                "versorgung",
+                "marktd",
+                self.state.clients.marktd.as_ref(),
+                format!("/api/v1/versorgung/{malo_id}"),
+            ),
+            (
+                "latest_invoice",
+                "billingd",
+                self.state.clients.billingd.as_ref(),
+                format!("/api/v1/billing?malo_id={malo_id}&limit=1"),
+            ),
+            (
+                "balance",
+                "accountingd",
+                self.state.clients.accountingd.as_ref(),
+                format!("/api/v1/accounts/{malo_id}/balance"),
+            ),
+        ] {
+            let Some(client) = client else {
+                unavailable.insert(
+                    field.to_owned(),
+                    serde_json::json!(format!("{service} is not configured on this portald")),
+                );
+                continue;
+            };
+            match client.get_json(&path).await {
+                Ok(Some(v)) => {
+                    result[field] = v;
+                }
+                // A 404 is an answer: there is genuinely nothing to show.
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, service, %malo_id, "portald mcp: 360° source failed");
+                    unavailable.insert(
+                        field.to_owned(),
+                        serde_json::json!(format!("{service} did not answer: {e}")),
+                    );
+                }
+            }
         }
-        // Latest invoice from billingd
-        if let Some(ref client) = self.state.clients.billingd
-            && let Ok(Some(v)) = client
-                .get_json(&format!("/api/v1/billing?malo_id={malo_id}&limit=1"))
-                .await
-        {
-            result["latest_invoice"] = v;
-        }
-        // Balance from accountingd
-        if let Some(ref client) = self.state.clients.accountingd
-            && let Ok(Some(v)) = client
-                .get_json(&format!("/api/v1/accounts/{malo_id}/balance"))
-                .await
-        {
-            result["balance"] = v;
+
+        if !unavailable.is_empty() {
+            result["unavailable"] = serde_json::Value::Object(unavailable);
+            result["note"] = serde_json::json!(
+                "This view is INCOMPLETE — the services listed in `unavailable` did not answer. \
+                 Absence of a field there means unknown, not zero and not none."
+            );
         }
 
         ContentBlock::json(result)

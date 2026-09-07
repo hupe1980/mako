@@ -1,0 +1,48 @@
+# vertragd.toml — order-to-cash demo (auth disabled)
+# DO NOT use in production.
+
+# Demo only. Without this, vertragd refuses to start with neither [oidc] nor an
+# `inbound_secret`: `POST /api/v1/events` and `/api/v1/webhooks/angebot` carry
+# no operator token, so a forged event would move supply and create contracts.
+allow_insecure_no_auth = true
+
+port     = 9780
+tenant   = "9912345000005"
+
+# The Lieferant this deployment registers supply under. The same string as
+# `tenant` here; a shared platform would differ.
+lf_mp_id = "9912345000005"
+
+# The outbound worker dispatches `start-supply` per Vertragskomponente. No
+# processd runs in this demo — the O2C path is the money path and carries no
+# market message — so those tasks stay queued and visible in
+# `GET /api/v1/outbound/dead` rather than silently succeeding.
+# `demos/nb-stp` is where the Lieferbeginn actually goes out.
+processd_url = "http://processd.not-run.invalid:8580"
+
+# The Massenkontokorrent a contract opens its billing account in.
+accountingd_url = "http://accountingd:9380"
+
+# The Beginn-/Schlussablesung reading orders. Not run here; `demos/eeg-billing`
+# is where edmd is exercised.
+edmd_url = "http://edmd.not-run.invalid:8380"
+
+# The § 41 Abs. 5 EnWG Preisänderungsanzeige is rendered and delivered here.
+outputd_url = "http://outputd:9880"
+
+erp_webhook_url = "http://webhook:8000/events"
+
+[database]
+url = "postgres://demo:demo-secret@postgres/vertragd"
+
+# The operator as § 126b BGB's declarant — printed on every customer notice
+# this service issues.
+[absender]
+name         = "Demo Energie GmbH"
+line1        = "Musterstr. 1"
+post_code    = "10115"
+city         = "Berlin"
+vat_id       = "DE123456789"
+contact_name = "Kundenservice"
+phone        = "+49 30 123456"
+email        = "service@demo-energie.example"

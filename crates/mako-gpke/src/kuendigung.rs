@@ -413,7 +413,9 @@ impl Workflow for GpkeKuendigungWorkflow {
                     vorgangsnummer: vorgang.vorgangsnummer.clone(),
                 }];
                 if validation_passed {
-                    events.push(KuendigungEvent::ValidationPassed { message_ref });
+                    events.push(KuendigungEvent::ValidationPassed {
+                        message_ref: message_ref.clone(),
+                    });
                     // F-038: APERAK BGM+312 (Anerkennungsmeldung) — APERAK AHB 1.0 §2.4.
                     let outbox = vec![
                         // The business notification. `processd`'s LF module
@@ -430,15 +432,10 @@ impl Workflow for GpkeKuendigungWorkflow {
                                 &serde_json::Value::Null,
                             )
                             .caused_by(1),
-                        PendingOutbox::new(
-                            "APERAK",
+                        PendingOutbox::aperak_anerkennung(
+                            receiver_gln.as_str(),
                             sender_mp_id.as_str(),
-                            serde_json::json!({
-                                "sender":        receiver_gln.as_str(),
-                                "receiver":      sender_mp_id.as_str(),
-                                "pid":           29001_u32,
-                                "document_code": "312",
-                            }),
+                            message_ref.as_str(),
                         )
                         .caused_by(1),
                     ];
@@ -450,16 +447,12 @@ impl Workflow for GpkeKuendigungWorkflow {
                     });
                     // F-035: APERAK BGM+313 — APERAK AHB 1.0 §2.1.1.
                     let outbox = vec![
-                        PendingOutbox::new(
-                            "APERAK",
+                        PendingOutbox::aperak_fehler(
+                            receiver_gln.as_str(),
                             sender_mp_id.as_str(),
-                            serde_json::json!({
-                                "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_mp_id.as_str(),
-                                "pid":        29001_u32,
-                                "error_code": mako_engine::erc::codes::Z29,
-                                "reason":     reason,
-                            }),
+                            message_ref.as_str(),
+                            mako_engine::erc::codes::Z29,
+                            reason,
                         )
                         .caused_by(0),
                     ];
@@ -605,7 +598,14 @@ mod tests {
         assert_eq!(out.events.len(), 2);
         assert_eq!(out.outbox.len(), 2);
         assert_eq!(out.outbox[0].message_type.as_ref(), "ProcessInitiated");
-        assert_eq!(out.outbox[1].payload["document_code"], "312");
+        // Anwendungsfall 29002 — `BGM+312` follows from it and is derived by
+        // the renderer, so the payload names the PID, not the code.
+        assert_eq!(out.outbox[1].payload["pid"], 29002);
+        assert!(
+            out.outbox[1].payload["orig_message_ref"].is_string(),
+            "SG2 RFF+ACE is Muss on 29002 — an APERAK without the reference \
+             cannot be rendered",
+        );
         let state = apply_all(KuendigungState::New, &out.events);
         assert!(matches!(state, KuendigungState::ValidationPassed(_)));
 

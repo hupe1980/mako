@@ -54,6 +54,17 @@ pub struct AccountingdMcpState {
     pub pain008_schema: crate::sepa::DirectDebitSchema,
 }
 
+/// A tool that takes no arguments.
+///
+/// **Not `serde_json::Value`.** Its JSON Schema is the empty schema — no
+/// `type` — and the MCP specification requires a tool's `inputSchema` to have
+/// root type `object`. `rmcp` asserts that while building the router, so a
+/// single argument-less tool declared as `Parameters<serde_json::Value>`
+/// panics the whole service at startup. Nothing else catches it: the router is
+/// built in `main`, and no test starts the binary.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct NoParams {}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MaloParams {
     pub malo_id: String,
@@ -256,7 +267,7 @@ impl AccountingdMcpHandler {
     )]
     async fn list_dunning(
         &self,
-        Parameters(_): Parameters<serde_json::Value>,
+        Parameters(_): Parameters<NoParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::list_open_dunning;
         match list_open_dunning(&self.state.pool, &self.state.tenant, 100).await {
@@ -387,16 +398,22 @@ Also sets the SEPA billing_day (day of month for direct debit).",
 
     #[tool(
         description = "Import CAMT.054 bank statement entries to match incoming payments against open items. \
-Each entry requires: iban, amount_ct (positive = credit), value_date (YYYY-MM-DD), and reference. \
-Returns count of matched and unmatched entries.",
+Each entry requires: malo_id, amount_ct (positive = credit) and reference. \
+Returns `booked` (written to the ledger), `unmatched` (no such account) and `failed` \
+(the write errored — the money is NOT applied), with the per-entry reasons in `errors`.",
         annotations(idempotent_hint = false, open_world_hint = false)
     )]
     async fn import_payments(
         &self,
         Parameters(p): Parameters<ImportPaymentsParams>,
     ) -> Result<CallToolResult, McpError> {
-        let mut matched = 0usize;
+        let mut booked = 0usize;
         let mut unmatched = 0usize;
+        // A ledger write that failed is not a booked payment. Counting it as
+        // one told the agent the money was applied and left the receivable
+        // open — the worst of both answers.
+        let mut failed = 0usize;
+        let mut errors: Vec<String> = Vec::new();
         for entry in &p.entries {
             let malo_id = entry.get("malo_id").and_then(|v| v.as_str());
             let amount_ct = entry.get("amount_ct").and_then(|v| v.as_i64());
@@ -404,50 +421,68 @@ Returns count of matched and unmatched entries.",
                 .get("reference")
                 .and_then(|v| v.as_str())
                 .unwrap_or("CAMT.054 import");
-            if let (Some(malo), Some(amt)) = (malo_id, amount_ct) {
-                use crate::pg::{fetch_account, post_entry};
-                if let Ok(Some(acct)) = fetch_account(
-                    &self.state.pool,
-                    malo,
-                    &self.state.tenant,
-                    &self.state.tenant,
-                )
-                .await
-                {
-                    let today = mako_fristen::heute();
-                    let _ = post_entry(
-                        &self.state.ledger,
-                        &self.state.pool,
-                        &self.state.tenant,
-                        &acct.malo_id,
-                        &acct.lf_mp_id,
-                        "ZAHLUNG",
-                        -amt,
-                        &format!("mcp-camt:{reference}"),
-                        None,
-                        Some(reference),
-                        today,
-                        today,
-                        Some("CAMT.054 Zahlungseingang"),
-                        None,
-                    )
-                    .await;
-                    matched += 1;
-                } else {
-                    unmatched += 1;
-                }
-            } else {
+            let (Some(malo), Some(amt)) = (malo_id, amount_ct) else {
                 unmatched += 1;
+                continue;
+            };
+            use crate::pg::{fetch_account, post_entry};
+            let acct = match fetch_account(
+                &self.state.pool,
+                malo,
+                &self.state.tenant,
+                &self.state.tenant,
+            )
+            .await
+            {
+                Ok(Some(acct)) => acct,
+                Ok(None) => {
+                    unmatched += 1;
+                    continue;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, malo_id = %malo, "accountingd mcp: account lookup FAILED");
+                    failed += 1;
+                    errors.push(format!("{malo}: account lookup failed: {e}"));
+                    continue;
+                }
+            };
+            let today = mako_fristen::heute();
+            match post_entry(
+                &self.state.ledger,
+                &self.state.pool,
+                &self.state.tenant,
+                &acct.malo_id,
+                &acct.lf_mp_id,
+                "ZAHLUNG",
+                -amt,
+                &format!("mcp-camt:{reference}"),
+                None,
+                Some(reference),
+                today,
+                today,
+                Some("CAMT.054 Zahlungseingang"),
+                None,
+            )
+            .await
+            {
+                Ok(_) => booked += 1,
+                Err(e) => {
+                    tracing::error!(error = %e, malo_id = %malo, "accountingd mcp: ledger write FAILED");
+                    failed += 1;
+                    errors.push(format!("{malo}: ledger write failed: {e}"));
+                }
             }
         }
         ContentBlock::json(serde_json::json!({
-            "matched": matched,
+            "booked": booked,
             "unmatched": unmatched,
+            "failed": failed,
+            "errors": errors,
             "total": p.entries.len(),
-            "hint": if unmatched > 0 {
-                "Some entries could not be matched. Check malo_id values against accountingd accounts."
-            } else {
-                "All entries matched successfully."
+            "hint": match (unmatched, failed) {
+                (0, 0) => "Every entry was booked.".to_owned(),
+                (_, 0) => format!("{unmatched} entry/entries name no known account — check malo_id against accountingd accounts."),
+                _ => format!("{failed} entry/entries were NOT booked because the write failed — see `errors`. The money is still outstanding; do not report it as received."),
             },
         }))
         .map(|b| CallToolResult::success(vec![b]))
@@ -759,7 +794,11 @@ Confirm with post_manual_booking or by importing the bank file.",
             .iban
             .as_deref()
             .map(|iban| crate::ledger::iban_hash(self.state.iban_key.as_ref(), iban));
-        if let Ok(Some(hit)) = crate::pg::resolve_account_for_payment(
+        // An `Err` here is a database fault, not "the reference names nobody".
+        // Falling through to the fuzzy rung would answer with amount proximity
+        // under a reference-matching label — exactly the dishonesty this rung
+        // exists to prevent.
+        let exact = crate::pg::resolve_account_for_payment(
             &self.state.pool,
             &self.state.tenant,
             crate::pg::PaymentClues {
@@ -769,7 +808,10 @@ Confirm with post_manual_booking or by importing the bank file.",
             },
         )
         .await
-        {
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        if let Some(hit) = exact {
+            // `residual_ct` is the answer the caller acts on, so a balance that
+            // could not be read is an error, not a zero.
             let balance_ct: i64 = sqlx::query_scalar(
                 "SELECT balance_ct FROM accounts WHERE account_id = $1 AND tenant = $2",
             )
@@ -777,8 +819,7 @@ Confirm with post_manual_booking or by importing the bank file.",
             .bind(&self.state.tenant)
             .fetch_optional(&self.state.pool)
             .await
-            .ok()
-            .flatten()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
             .unwrap_or(0);
             return ContentBlock::json(serde_json::json!({
                 "payment_amount_ct":  p.amount_ct,

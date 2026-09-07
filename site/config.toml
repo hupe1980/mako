@@ -20,9 +20,8 @@ taxonomies = []
 
 [markdown]
 render_emoji = true
-# Deep-linkable headings. The anchor markup comes from `templates/anchor-link.html`
-# (a `#`, not Zola's default 🔗) and is styled by `a.zola-anchor`, which the
-# stylesheet already carried while nothing emitted it.
+# Deep-linkable headings; the markup comes from `templates/anchor-link.html`
+# (a `#`, not Zola's default 🔗), styled as `a.zola-anchor`.
 insert_anchor_links = "right"
 external_links_target_blank = true
 external_links_no_follow = false
@@ -41,10 +40,9 @@ internal_level = "error"
 external_level = "warn"
 
 [search]
-# `fuse_json` rather than `elasticlunr_json`: `static/js/search.js` scans the
-# documents itself, so elasticlunr's inverted index is downloaded and never
-# read. Same fields, same results — 7.5 MB → 1.3 MB, fetched lazily on first
-# focus of the search box.
+# `fuse_json`, not `elasticlunr_json`: `static/js/search.js` scans the documents
+# itself, so an inverted index would be downloaded and never read. 1.3 MB,
+# fetched lazily on first focus of the search box.
 index_format = "fuse_json"
 include_title = true
 include_description = true
@@ -52,11 +50,9 @@ include_path = true
 include_content = true
 
 [extra]
-# Every key here must be read by a template. Three were not — `mermaid_version`,
-# `tagline` and `repo_name` — and a config value nothing reads is worse than no
-# value: it reads as the source of truth while the real one drifts elsewhere.
-# The Mermaid major is pinned where it is actually used, in the import URL at
-# the top of `static/js/mermaid-init.js`; the hero copy lives in
+# Every key here must be read by a template: a value nothing reads still looks
+# like the source of truth while the real one drifts elsewhere. The Mermaid
+# major is pinned in `static/js/mermaid-init.js`; the hero copy lives in
 # `templates/index.html`.
 #
 # ── Branding ──────────────────────────────────────────────────────────────────
@@ -70,9 +66,8 @@ crates = [
 format_versions = "FV2025-04-01 → FV2026-10-01"
 # ── SEO / social ─────────────────────────────────────────────────────────────
 author = "hupe1980"
-# `static/img/og-card.png`, verified 1200 × 630 (`file static/img/og-card.png`).
-# Declaring the dimensions lets Slack/X/LinkedIn reserve the card before the
-# image loads, which is what makes a summary_large_image render on first paste.
+# 1200 × 630. Declaring the dimensions lets Slack/X/LinkedIn reserve the card
+# before the image loads, so summary_large_image renders on first paste.
 og_image = "img/og-card.png"
 og_image_width = "1200"
 og_image_height = "630"
@@ -82,6 +77,5 @@ og_locale = "en_US"
 # chrome so the sticky header does not sit against a white bar in dark mode.
 theme_color_light = "#ffffff"
 theme_color_dark = "#0d1117"
-# Pre-1.0, as the repository README states. Said on the landing page too, so a
-# reader sizes the project honestly before the feature list.
+# Shown on the landing page, so a reader sizes the project before the features.
 status = "Experimental · pre-1.0"

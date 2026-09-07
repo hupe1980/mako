@@ -152,6 +152,7 @@ pub async fn handle_webhook(
             return match nb_module::resume_after_lfa_antwort(
                 &event,
                 &nb.config,
+                &nb.reader,
                 &nb.makod,
                 &nb.repo,
                 &nb.queue,

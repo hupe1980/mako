@@ -862,7 +862,9 @@ impl Workflow for GpkeEogWorkflow {
                     haushaltskunde,
                 }];
                 if validation_passed {
-                    events.push(EogEvent::ValidationPassed { message_ref });
+                    events.push(EogEvent::ValidationPassed {
+                        message_ref: message_ref.clone(),
+                    });
                     // APERAK BGM+312 (Anerkennung) — Strom UTILMD 45-min Frist
                     // (APERAK AHB 1.0 §2.4.1).
                     let outbox = vec![
@@ -884,15 +886,10 @@ impl Workflow for GpkeEogWorkflow {
                             &serde_json::json!({ "haushaltskunde": haushaltskunde }),
                         )
                         .caused_by(1),
-                        PendingOutbox::new(
-                            "APERAK",
+                        PendingOutbox::aperak_anerkennung(
+                            receiver_gln.as_str(),
                             sender_mp_id.as_str(),
-                            serde_json::json!({
-                                "sender":        receiver_gln.as_str(),
-                                "receiver":      sender_mp_id.as_str(),
-                                "pid":           29001_u32,
-                                "document_code": "312",
-                            }),
+                            message_ref.as_str(),
                         )
                         .caused_by(1),
                     ];
@@ -919,16 +916,12 @@ impl Workflow for GpkeEogWorkflow {
                     });
                     // APERAK BGM+313 (Verarbeitbarkeitsfehler).
                     let outbox = vec![
-                        PendingOutbox::new(
-                            "APERAK",
+                        PendingOutbox::aperak_fehler(
+                            receiver_gln.as_str(),
                             sender_mp_id.as_str(),
-                            serde_json::json!({
-                                "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_mp_id.as_str(),
-                                "pid":        29001_u32,
-                                "error_code": mako_engine::erc::codes::Z29,
-                                "reason":     reason,
-                            }),
+                            message_ref.as_str(),
+                            mako_engine::erc::codes::Z29,
+                            reason,
                         )
                         .caused_by(0),
                     ];

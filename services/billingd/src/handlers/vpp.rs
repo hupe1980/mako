@@ -94,6 +94,26 @@ pub struct VppBillingRequest {
 /// oder Letztverbrauchern), transposing Art. 17 RL (EU) 2019/944 (demand response
 /// through aggregation). The remuneration itself is contractual; §41e governs the
 /// contract's form and the data the provider may demand.
+/// Record a dispatch this webhook deliberately does **not** settle.
+///
+/// The row is this endpoint's idempotency guard, so a write that failed cannot
+/// be answered `202 Accepted`: the peer would never resend, and the dispatch
+/// would be neither recorded nor billed. `500` keeps it in the sender's retry
+/// queue — the same reasoning the Aggregatorvertrag lookup already applies.
+async fn record_seen(
+    pool: &sqlx::PgPool,
+    tx_id: &str,
+    tenant: &str,
+) -> Result<(), axum::response::Response> {
+    match crate::pg::record_vpp_dispatch(pool, tx_id, tenant, None).await {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            tracing::error!(tx_id, error = %e, "billingd: vpp_dispatch_ledger write FAILED");
+            Err(StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        }
+    }
+}
+
 pub async fn post_vpp_billing(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -525,7 +545,9 @@ pub async fn post_vpp_webhook(
             location_type,
             "billingd: vpp-dispatch webhook — skipping non-SR location"
         );
-        let _ = crate::pg::record_vpp_dispatch(&pool, &tx_id, &cfg.tenant, None).await;
+        if let Err(e) = record_seen(&pool, &tx_id, &cfg.tenant).await {
+            return e;
+        }
         return StatusCode::ACCEPTED.into_response();
     }
 
@@ -547,7 +569,9 @@ pub async fn post_vpp_webhook(
                 sr_id = %location_id,
                 "billingd: vpp-dispatch — no Aggregatorvertrag in force; cannot auto-bill"
             );
-            let _ = crate::pg::record_vpp_dispatch(&pool, &tx_id, &cfg.tenant, None).await;
+            if let Err(e) = record_seen(&pool, &tx_id, &cfg.tenant).await {
+                return e;
+            }
             return StatusCode::ACCEPTED.into_response();
         }
         Err(e) => {
@@ -588,7 +612,9 @@ pub async fn post_vpp_webhook(
             "billingd: vpp-dispatch — sender is not the contracted Aggregator; \
              recording as a § 14a Steuerung, not settling it under § 41e"
         );
-        let _ = crate::pg::record_vpp_dispatch(&pool, &tx_id, &cfg.tenant, None).await;
+        if let Err(e) = record_seen(&pool, &tx_id, &cfg.tenant).await {
+            return e;
+        }
         return StatusCode::ACCEPTED.into_response();
     }
 
@@ -599,7 +625,9 @@ pub async fn post_vpp_webhook(
             vpp_id = %contract.vpp_id,
             "billingd: vpp-dispatch — auto-billing disabled; recording dispatch only"
         );
-        let _ = crate::pg::record_vpp_dispatch(&pool, &tx_id, &cfg.tenant, None).await;
+        if let Err(e) = record_seen(&pool, &tx_id, &cfg.tenant).await {
+            return e;
+        }
         return StatusCode::ACCEPTED.into_response();
     }
 
@@ -618,7 +646,9 @@ pub async fn post_vpp_webhook(
             tx_id,
             "billingd: vpp-dispatch — zero flexibility; no billing"
         );
-        let _ = crate::pg::record_vpp_dispatch(&pool, &tx_id, &cfg.tenant, None).await;
+        if let Err(e) = record_seen(&pool, &tx_id, &cfg.tenant).await {
+            return e;
+        }
         return StatusCode::ACCEPTED.into_response();
     }
 

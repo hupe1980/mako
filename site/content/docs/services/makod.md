@@ -1224,6 +1224,29 @@ type **`de.mako.edifact.outbound`**, carrying `message_type`, `recipient` and th
 production `BdewAs4Sender` emits no such event — and `MaloIdentCallback` messages
 still go to the MaLo-ID sender unchanged.
 
+### Who owns an outbox message
+
+`makod` runs **two consumers over one outbox**: the wire transport
+(`BdewAs4Sender`, or `WebhookEdifactSender` in dev) and the ERP notifier
+(`OutboxErpWorker`). The store has no per-message ownership column, so the rule
+lives in `core::erp_adapter::is_erp_notification` and **both sides read it from
+there**:
+
+| Owner | Claims | Examples |
+|---|---|---|
+| ERP notifier | message types that map to an `ErpEventType`, plus the `ERP_` prefix | `ProcessInitiated`, `AperakAccepted`, `MaloIdentified` |
+| Wire transport | everything else | `UTILMD`, `APERAK`, `MSCONS`, `MaloIdentCallback` |
+
+The transport answers with `As4Sender::handles`. A worker leaves a message it
+does not own **untouched** — not rescheduled, not dead-lettered, not counted as
+an attempt — so no worker spends another's retry budget, and a batch that is
+entirely the other consumer's makes it sleep for its poll interval rather than
+poll again immediately.
+
+`the_transport_and_the_erp_worker_claim_disjoint_message_types` asserts the
+split from both directions: every ERP type must be declined by the transport,
+every wire type claimed by it.
+
 ### AS4 security test coverage
 
 `makod` ships **12 automated tests** in `services/makod/tests/as4_security.rs` that
@@ -1858,6 +1881,49 @@ The MaLo cache is populated by the ERP via `PUT /admin/malo/{malo_id}` using
 the NB's `MaloIdentResultPositive` response from the API-Webdienste Strom
 endpoint.  If the MaLo is not in the cache, the engine returns
 `422 malo_not_found`.
+
+### What a GPKE Bestätigung has to say
+
+A Bestätigung is not the Anmeldung with a code appended, and the Bestätigung and
+the Ablehnung of one Anfrage are different Anwendungsfälle. `mako_gpke::AntwortForm`
+holds the table and the workflow gates on it, so the ERP states only the facts
+it owns:
+
+| | 55002 | 55003 | 55005 | 55006 | 55078 | 55080 |
+|---|---|---|---|---|---|---|
+| `BGM` DE 1001 | `E01` | `E01` | `E02` | `E02` | `E01` | `E01` |
+| `STS+7` Ergänzung | `ZW6`/`ZW7`/`ZAP` | `ZW4` | — | — | `ZW0`/`ZW1`/`ZW2` | `ZW3` |
+| `SG4 DTM` | `92` | — | `93` | — | `92` | — |
+| `SG5 LOC` + `SG8` Lokationsdaten | ✓ | — | — | — | ✓ | — |
+| `SG6 RFF+Z60` geplantes Produktpaket | ✓ | — | — | — | ✓ | — |
+
+Three of those are facts **only the NB holds**, and the LFN has no other source
+for them:
+
+| Payload field | Segment | What it says |
+|---|---|---|
+| `malo_art` | `SG4 STS+7` DE 9013 el. 3 | `ZW6` pauschale, `ZW7` gemessene or `ZAP` ruhende Marktlokation. The Anmeldung's own `ZW4` is **not admitted** on the answer. Left unset, the workflow derives it: naming Messlokationen *is* saying the MaLo is gemessen, naming none is saying it is not |
+| `geplantes_produktpaket` | `SG6 RFF+Z60` | which Produktpaket-ID the NB will implement. Defaults to the one the Anmeldung offered (`SG8 SEQ+Z79` DE 1050), which the ingest adapter carries forward |
+| `messlokationen` / `malo_msb` | `SG5 LOC+Z17`, `SG8 SEQ+Z98`/`SEQ+ZF3` | every Messlokation the Energiemenge is computed from (Bedingung `[623]`), each with its Messstellenbetreiber: `CAV+Z91:<MP-ID>::<Z39\|Z40\|Z41>:<Z19\|Z20>` and `CAV+ZF0` for the grundzuständiger MSB |
+
+```json
+{
+  "antwort_code": "A51",
+  "antwort_codeliste": "E_0623",
+  "malo_art": "ZW7",
+  "messlokationen": [{
+    "melo_id": "DE00056266802AO6G56M11SN51G21M24S",
+    "msb": { "mp_id": "9903456000009", "rolle": "Z39",
+             "grundlage": "Z19", "gmsb_mp_id": "9903456000009" }
+  }],
+  "malo_msb": { "mp_id": "9903456000009", "rolle": "Z39",
+                "grundlage": "Z19", "gmsb_mp_id": "9903456000009" }
+}
+```
+
+A `ZW7` answer naming no Messlokation, or a Messlokation with no MSB, is refused
+at render time rather than sent — `services/makod/tests/e2e_gpke_antwort_conformance.rs`
+renders each of the six PIDs and holds it against the AHB.
 
 ### Command registry
 
@@ -2662,20 +2728,25 @@ across both sectors — so a Gas NN-Rechnung (31002), MMM (31005) or MSB-Rechnun
 (31009) is only recognised as Gas via the recipient MP-ID.
 
 When the recipient is a sparte-neutral party or not one of our own MP-IDs, makod
-falls back to a conservative message-level heuristic: an unambiguous Gas-only PID
-(UTILMD G 44xxx, IFTSTA 21028, INVOIC 31007/31008/31010) or a Gas UTILMD release
-track. A PID qualifies only when **every** row the BDEW *Anwendungsübersicht
-Prüfidentifikatoren* 4.0 carries for it is Gas. INVOIC **31004** is the familiar
-case — the Stornorechnung is the Sparte-neutral universal Storno of any INVOIC
-(INVOIC AHB §3.1.2) — and four more carry both Sparten in the overview: INVOIC
-**31003** (WiM-Rechnung, also WiM Strom Teil 1 MSBA → MSBN), INVOIC **31011**
-(Rechnung sonstige Leistung, also GPKE Teil 2 NB → LF) and INSRPT
-**23005**/**23009** (Informationsmeldung, also WiM Strom Teil 2). Calling any of
-the five Gas-only would send a Gas CONTRL into a Strom interchange, which expects
-none, so all five resolve by recipient MP-ID. In the other direction, INVOIC
-**31009** (MSB-Rechnung) is Strom in all seven of its rows — the Gas MSB bills on
-31003 — and IFTSTA **21028** is a GeLi Gas Informationsmeldung inside an
-otherwise Strom IFTSTA range.
+falls back to a message-level heuristic: an unambiguous Gas-only PID (UTILMD G
+44xxx, IFTSTA 21028, INVOIC 31007/31008/31010) or a Gas UTILMD release track. A
+PID qualifies only when **every** row the BDEW *Anwendungsübersicht
+Prüfidentifikatoren* 4.0 carries for it is Gas.
+
+Five PIDs look Gas-only and are not. Calling any of them Gas would send a Gas
+CONTRL into a Strom interchange, which expects none, so all five resolve by
+recipient MP-ID instead:
+
+| PID | | Also |
+|---|---|---|
+| INVOIC **31004** | Stornorechnung | the Sparte-neutral universal Storno of any INVOIC (INVOIC AHB §3.1.2) |
+| INVOIC **31003** | WiM-Rechnung | WiM Strom Teil 1, MSBA → MSBN |
+| INVOIC **31011** | Rechnung sonstige Leistung | GPKE Teil 2, NB → LF |
+| INSRPT **23005** / **23009** | Informationsmeldung | WiM Strom Teil 2 |
+
+In the other direction, INVOIC **31009** (MSB-Rechnung) is Strom in all seven of
+its rows — the Gas MSB bills on 31003 — and IFTSTA **21028** is a GeLi Gas
+Informationsmeldung inside an otherwise Strom IFTSTA range.
 
 The CONTRL and its 6 h escalation deadline are written in one transaction
 (`enqueue_outbox_with_deadlines`), so a crash cannot queue the acknowledgement
@@ -2851,25 +2922,35 @@ The same scrape carries seven unlabelled gauges, sampled per request:
 | `makod_volatile_mode_active` | `1` when storage is in-memory | **Alert on `1`** in production — see the volatile-mode warning above |
 | `makod_build_info` | Constant `1`, labelled `version` | Rollout verification |
 
-`family` is a domain prefix, and all three counters derive it from **one table**
-(`orchestrator::process_family`): `gpke`, `wim`, `esa`, `geli-gas`, `gabi-gas`,
-`mabis`, `emob`, `redispatch`, `netzzugang`, and `other` for anything unclaimed.
-Each row owns the label, the workflow-name prefix that produces it and the
-command-name prefixes that initiate it, so an initiated-vs-completed dashboard
-joins on the label with no hand-matching. Deriving each side's label by cutting
-its own identifier at the first hyphen would not: `family="geli-gas"` initiations
-would never meet `family="geli"` completions, and both Gas families would read as
-processes that start and never finish.
-An `invoic.*` command is labelled with the family of the workflow it enters
-(`gpke`, `wim` or `geli-gas`) rather than with the message type, because the
-completion side has only the workflow name to label with. `netzzugang` is the one
-family with no workflow: those commands enqueue an outbound message directly, so
-they are counted as initiated and never as completed. `result` is `accepted`
-(terminal success), `rejected` (negative APERAK), `timeout` (a regulatory window
-expired unanswered) or `cancelled` (permanent failure). Completions are counted
-as the ERP outbox drains each terminal event, the one point that sees every
-process ending regardless of family. An accepted APERAK is **not** a completion —
-it acknowledges that the interchange parsed, not that the process finished.
+`family` is a domain prefix — `gpke`, `wim`, `esa`, `geli-gas`, `gabi-gas`,
+`mabis`, `emob`, `redispatch`, `netzzugang`, or `other` — and all three counters
+derive it from **one table** (`orchestrator::process_family`). Each row owns the
+label, the workflow-name prefix that produces it and the command-name prefixes
+that initiate it, so an initiated-vs-completed dashboard joins on the label
+directly. Cutting each identifier at its own first hyphen would not join:
+`family="geli-gas"` initiations would never meet `family="geli"` completions.
+
+Two labelling rules follow from it:
+
+- An `invoic.*` command carries the family of the workflow it enters (`gpke`,
+  `wim` or `geli-gas`), not the message type — the completion side has only the
+  workflow name to label with.
+- `netzzugang` has no workflow: those commands enqueue an outbound message
+  directly, so they are counted as initiated and never as completed.
+
+`result` is one of:
+
+| | |
+|---|---|
+| `accepted` | terminal success |
+| `rejected` | negative APERAK |
+| `timeout` | a regulatory window expired unanswered |
+| `cancelled` | permanent failure |
+
+Completions are counted as the ERP outbox drains each terminal event — the one
+point that sees every process ending, whatever family it belongs to. An accepted
+APERAK is **not** a completion: it acknowledges that the interchange parsed, not
+that the process finished.
 
 `makod_validation_failed_total` counts **inbound messages**, once each, at the
 ingest boundary — not adapter invocations, and not parse failures. Only about

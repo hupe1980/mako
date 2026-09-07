@@ -3,7 +3,9 @@
 //! BDEW ERC codes appear in:
 //! - **APERAK** `ERC` segments: processability errors returned by the receiving
 //!   party when it cannot process a message (BGM+313).
-//! - **CONTRL** `ERC` segments: syntax and data-validation errors.
+//!
+//! `CONTRL` carries no `ERC`: it reports a syntax failure in `UCI`/`UCM`
+//! DE 0085, which is a different vocabulary and not this module's.
 //!
 //! This module provides a validated [`ErcCode`] newtype, a catalogue of
 //! standard code string constants in [`codes`], and [`ErcAction`] — a
@@ -22,8 +24,9 @@
 //!
 //! # Regulatory sources
 //!
-//! - APERAK AHB 1.0 (FV2025-10-01 / FV2026-10-01) — ERC segment, §2.2/§2.3
-//! - CONTRL AHB 1.0 (FV2025-10-01 / FV2026-10-01) — ERC segment, §2.2
+//! - APERAK MIG 2.1i / 2.2 — `SG4 ERC` C901 DE 9321, the code table
+//! - APERAK AHB 1.0 / 1.1 — which codes each Anwendungsfall admits, and the
+//!   Bedingungen that oblige the `SG5 FTX+Z02` Ortsangabe
 //! - Allgemeine Festlegungen V6.1d (01.04.2026) — §4 rejection handling
 //!
 //! # Example
@@ -31,10 +34,10 @@
 //! ```rust
 //! use mako_engine::erc::{ErcCode, ErcAction, codes, recommended_action};
 //!
-//! let code = ErcCode::new(codes::E02);
+//! let code = ErcCode::new(codes::Z39);
 //! assert!(matches!(
 //!     recommended_action(&code),
-//!     ErcAction::RetryWithCorrection { field: "address" }
+//!     ErcAction::RetryWithCorrection { field: "message" }
 //! ));
 //! ```
 
@@ -42,7 +45,7 @@ use serde::{Deserialize, Serialize};
 
 // ── ErcCode ───────────────────────────────────────────────────────────────────
 
-/// A BDEW ERC error code from an inbound APERAK or CONTRL.
+/// A BDEW `ERC` DE 9321 error code from an inbound APERAK.
 ///
 /// Wraps an arbitrary string.  Use [`codes`] for known BDEW constants.
 /// Use [`ErcCode::new`] for codes parsed from inbound EDIFACT that may not
@@ -121,7 +124,15 @@ pub enum ErcAction {
 
 // ── Standard BDEW ERC code string constants ───────────────────────────────────
 
-/// Standard BDEW ERC error code string constants.
+/// The `ERC` DE 9321 „Anwendungsfehler, Code" values, verbatim from the
+/// APERAK MIG 2.1i code table. There is no second vocabulary: `CONTRL`
+/// reports syntax failures in `UCI`/`UCM` DE 0085, not in an `ERC`, and a
+/// code outside this list is refused by the receiving Marktpartner's own
+/// Prüfschablone.
+///
+/// Which of them a given Anwendungsfall admits is narrower still and is
+/// decided by the profile, not here — APERAK AHB 1.0 admits 27 for 29001
+/// and none for 29002 (an Anerkennungsmeldung opens no `SG4`).
 ///
 /// These are `&'static str` values so they can be used directly inside
 /// `serde_json::json!` macro expressions:
@@ -136,112 +147,195 @@ pub enum ErcAction {
 /// Use [`ErcCode::new(codes::Z29)`][ErcCode::new] when a rich typed value is
 /// needed (e.g. for storing in workflow state or `ErpEventType::AperakRejected`).
 pub mod codes {
-    // ── APERAK ERC codes (BGM+313 processability errors) ─────────────────────
 
-    /// Ablehnung — Prozess nicht gefunden / sonstiger Fehler.
+    /// ID unbekannt.
+    pub const Z10: &str = "Z10";
+
+    /// Objekt im IT-System nicht gefunden.
+    pub const Z14: &str = "Z14";
+
+    /// Objekt im IT-System nicht eindeutig.
+    pub const Z15: &str = "Z15";
+
+    /// Objekt nicht mehr im Netzgebiet.
+    pub const Z16: &str = "Z16";
+
+    /// Absender ist zum angegebenen Zeitintervall / Zeitpunkt dem Objekt nicht
+    /// zugeordnet.
+    pub const Z17: &str = "Z17";
+
+    /// Empfänger ist zum angegebenen Zeitintervall / Zeitpunkt dem Objekt nicht
+    /// zugeordnet.
+    pub const Z18: &str = "Z18";
+
+    /// Gerätenummer zum angegebenen Zeitintervall / Zeitpunkt an der
+    /// Messlokation nicht bekannt.
+    pub const Z19: &str = "Z19";
+
+    /// OBIS-Kennzahl zum angegebenen Zeitintervall / Zeitpunkt am Objekt nicht
+    /// bekannt.
+    pub const Z20: &str = "Z20";
+
+    /// Geschäftsvorfallinterne Referenzierung fehlerhaft.
+    pub const Z21: &str = "Z21";
+
+    /// Zuordnungs-Tupel unbekannt.
+    pub const Z24: &str = "Z24";
+
+    /// Absender ist zum angegebenen Zeitintervall / Zeitpunkt dem durch das
+    /// Zuordnungs-Tupel identifizierten Objekt nicht zugeordnet.
+    pub const Z25: &str = "Z25";
+
+    /// Empfänger ist zum angegebenen Zeitintervall / Zeitpunkt dem durch das
+    /// Zuordnungs-Tupel identifizierten Objekt nicht zugeordnet.
+    pub const Z26: &str = "Z26";
+
+    /// Vorkomma-Stellenzahl des Zählwertes ist zu lang.
+    pub const Z27: &str = "Z27";
+
+    /// Erforderliche Angabe für diesen Anwendungsfall fehlt.
     ///
-    /// Catchall code for messages that cannot be routed to any active process.
-    /// Source: APERAK AHB 1.0.
+    /// The code for a message that does not satisfy its own Prüfschablone —
+    /// what `edi_energy` reports as an `AHB-…-MISSING` finding. Obliges an
+    /// `SG5 FTX+Z02` Ortsangabe; see
+    /// [`super::requires_ortsangabe`].
     pub const Z29: &str = "Z29";
 
-    /// Marktlokation / Identifikationsnummer nicht gefunden.
-    ///
-    /// The MaLo-ID in the message is not registered with the receiver.
-    /// Source: CONTRL AHB 1.0 / APERAK AHB 1.0.
-    pub const Z43: &str = "Z43";
-
-    /// Ablehnung — Zähler in Betrieb (Sperrung nicht ausführbar).
-    ///
-    /// NB cannot execute a Sperrung because the meter is currently live.
-    /// Process terminates; no retry is appropriate.
-    /// Source: ORDERS/ORDRSP Sperrung AHB.
-    pub const ZB3: &str = "ZB3";
-
-    /// Ablehnung — Lieferstelle gesperrt.
-    pub const Z28: &str = "Z28";
-
-    /// Ablehnung — kein aktiver Prozess vorhanden.
+    /// Zeitreihe unvollständig.
     pub const Z30: &str = "Z30";
 
-    /// Ablehnung — Zeitraum nicht plausibel.
-    pub const Z04: &str = "Z04";
-
-    /// Ablehnung — nicht autorisiert.
-    pub const Z07: &str = "Z07";
-
-    /// Ablehnung — Zählernummer nicht plausibel.
-    pub const Z08: &str = "Z08";
-
-    /// Ablehnung — Messlokation ungültig.
-    pub const Z09: &str = "Z09";
-
-    // ── CONTRL ERC codes (syntax / data validation errors) ────────────────────
-
-    /// MaLo / Identifikationsnummer unbekannt.
+    /// Geschäftsvorfall wird vom Empfänger zurückgewiesen.
     ///
-    /// Source: BDEW CONTRL AHB 1.0; Allgemeine Festlegungen V6.1d.
-    pub const E01: &str = "E01";
+    /// The business rejection: the message is well-formed and the receiver
+    /// declines it anyway.
+    pub const Z31: &str = "Z31";
 
-    /// Adresse stimmt nicht überein.
-    pub const E02: &str = "E02";
+    /// Referenziertes Geschäftsvorfall-Tupel nicht vorhanden.
+    pub const Z33: &str = "Z33";
 
-    /// Kein gültiger Lieferant für diese Marktlokation.
-    pub const E03: &str = "E03";
+    /// Zeitintervall negativ oder Null.
+    pub const Z34: &str = "Z34";
 
-    /// Datum liegt in der Vergangenheit / Datum nicht plausibel.
-    pub const E04: &str = "E04";
+    /// Format nicht eingehalten. Obliges an Ortsangabe.
+    pub const Z35: &str = "Z35";
 
-    /// Wechsel nicht möglich — laufender Prozess bereits vorhanden.
-    pub const E05: &str = "E05";
+    /// Geschäftsvorfall darf vom Sender nicht gesendet werden.
+    pub const Z37: &str = "Z37";
 
-    /// Ungültige Prüfidentifikatornummer.
-    pub const E06: &str = "E06";
+    /// Anzahl der übermittelten Codes überschreitet Paketdefinition. Obliges an
+    /// Ortsangabe.
+    pub const Z38: &str = "Z38";
+
+    /// Code nicht aus erlaubtem Wertebereich. Obliges an Ortsangabe.
+    pub const Z39: &str = "Z39";
+
+    /// Segment- bzw. Segmentgruppenwiederholbarkeit überschritten. Obliges an
+    /// Ortsangabe.
+    pub const Z40: &str = "Z40";
+
+    /// Zeitangabe unplausibel. Obliges an Ortsangabe.
+    pub const Z41: &str = "Z41";
+
+    /// Konfigurations-ID zum angegebenen Zeitintervall / Zeitpunkt nicht
+    /// bekannt.
+    pub const Z42: &str = "Z42";
+
+    /// Geschäftsvorfall für Objekt mit der Eigenschaft nicht erlaubt.
+    pub const Z43: &str = "Z43";
+
+    /// Eigenschaft des Objekts weicht von der im Geschäftsvorfall codierten
+    /// Eigenschaft ab.
+    pub const Z44: &str = "Z44";
+
+    /// Every code above, for exhaustiveness checks.
+    pub const ALL: [&str; 27] = [
+        Z10, Z14, Z15, Z16, Z17, Z18, Z19, Z20, Z21, Z24, Z25, Z26, Z27, Z29, Z30, Z31, Z33, Z34,
+        Z35, Z37, Z38, Z39, Z40, Z41, Z42, Z43, Z44,
+    ];
+}
+
+/// Whether an ERC code obliges the `SG5 FTX+Z02` Ortsangabe des AHB-Fehlers.
+///
+/// Re-exported from `edi_energy` so a workflow can decide without depending on
+/// the wire crate; the list itself is an APERAK AHB fact and lives there.
+#[must_use]
+pub fn requires_ortsangabe(code: &str) -> bool {
+    matches!(
+        code,
+        codes::Z29 | codes::Z35 | codes::Z38 | codes::Z39 | codes::Z40 | codes::Z41
+    )
 }
 
 // ── recommended_action ────────────────────────────────────────────────────────
 
 /// Return the recommended automated ERP action for a received ERC code.
 ///
-/// The table covers the common LF-relevant codes defined in APERAK AHB 1.0
-/// and CONTRL AHB 1.0.  Unknown codes default to
+/// The codes are DE 9321's; an unlisted or proprietary one defaults to
 /// [`ErcAction::EscalateToOperator`] so nothing is silently swallowed.
+///
+/// This is **advice**. What the sender can actually do follows from what the
+/// code says is wrong: a code naming a field it can correct is a retry, a code
+/// saying the receiver declines is not, and a code about an ID or an assignment
+/// it believes to be right is a question for an operator.
 ///
 /// # Example
 ///
 /// ```rust
 /// use mako_engine::erc::{ErcCode, ErcAction, codes, recommended_action};
 ///
-/// let code = ErcCode::new(codes::E05);
-/// assert!(matches!(recommended_action(&code), ErcAction::WaitAndRetry { .. }));
+/// let code = ErcCode::new(codes::Z31);
+/// assert_eq!(recommended_action(&code), ErcAction::AbortProcess);
 /// ```
 #[must_use]
 pub fn recommended_action(code: &ErcCode) -> ErcAction {
     match code.as_str() {
-        // CONTRL codes
-        codes::E01 | codes::Z43 => ErcAction::RetryWithCorrection { field: "malo_id" },
-        codes::E02 => ErcAction::RetryWithCorrection { field: "address" },
-        codes::E03 => ErcAction::EscalateToOperator {
-            reason: "LF GLN not recognised by NB — check Marktteilnehmerverzeichnis",
+        // The message itself is wrong and the sender can correct it: the code
+        // names the segment, the format or the value that failed.
+        codes::Z29 | codes::Z35 | codes::Z38 | codes::Z39 | codes::Z40 => {
+            ErcAction::RetryWithCorrection { field: "message" }
+        }
+        codes::Z21 => ErcAction::RetryWithCorrection {
+            field: "vorgangsnummer",
         },
-        codes::E04 | codes::Z04 => ErcAction::RetryWithCorrection {
-            field: "process_date",
+        codes::Z27 => ErcAction::RetryWithCorrection { field: "zaehlwert" },
+        codes::Z34 | codes::Z41 => ErcAction::RetryWithCorrection {
+            field: "zeitintervall",
         },
-        codes::E05 => ErcAction::WaitAndRetry {
-            reason: "concurrent in-flight process present; wait for completion then retry",
+        codes::Z30 => ErcAction::RetryWithCorrection { field: "zeitreihe" },
+        codes::Z19 => ErcAction::RetryWithCorrection {
+            field: "geraetenummer",
         },
-        codes::E06 => ErcAction::EscalateToOperator {
-            reason: "invalid Prüfidentifikator in outbound message — engineering alert",
+        codes::Z20 => ErcAction::RetryWithCorrection { field: "obis" },
+
+        // The receiver has decided. Nothing the sender resends changes it.
+        codes::Z31 | codes::Z37 | codes::Z43 => ErcAction::AbortProcess,
+
+        // The referenced Vorgang is not there yet — a correlation the receiver
+        // may still be processing.
+        codes::Z33 => ErcAction::WaitAndRetry {
+            reason: "referenced Geschäftsvorfall-Tupel not present at the receiver yet",
         },
-        // APERAK codes
-        codes::Z07 => ErcAction::EscalateToOperator {
-            reason: "not authorised for this supply point",
+
+        // An identity or an assignment the two sides disagree about: master
+        // data, not message content, so a person has to look.
+        codes::Z10 | codes::Z14 | codes::Z15 => ErcAction::EscalateToOperator {
+            reason: "the receiver does not know this ID — check the Marktpartner master data",
         },
-        codes::Z08 => ErcAction::RetryWithCorrection { field: "meter_id" },
-        codes::Z09 => ErcAction::RetryWithCorrection { field: "melo_id" },
-        codes::Z28 | codes::Z30 | codes::ZB3 => ErcAction::AbortProcess,
-        codes::Z29 => ErcAction::EscalateToOperator {
-            reason: "process not found or unclassified error",
+        codes::Z16 => ErcAction::EscalateToOperator {
+            reason: "object has left the Netzgebiet — the receiving NB is no longer responsible",
         },
+        codes::Z17 | codes::Z18 | codes::Z24 | codes::Z25 | codes::Z26 => {
+            ErcAction::EscalateToOperator {
+                reason: "party is not assigned to the object at that time — check the Zuordnung",
+            }
+        }
+        codes::Z42 => ErcAction::EscalateToOperator {
+            reason: "Konfigurations-ID unknown at the receiver",
+        },
+        codes::Z44 => ErcAction::EscalateToOperator {
+            reason: "the object's property differs from the one the Geschäftsvorfall codes",
+        },
+
         _ => ErcAction::EscalateToOperator {
             reason: "unknown ERC code — manual review required",
         },
@@ -265,9 +359,9 @@ mod tests {
 
     #[test]
     fn erc_code_display_matches_inner() {
-        let code = ErcCode::new(codes::E02);
-        assert_eq!(code.to_string(), "E02");
-        assert_eq!(code.as_str(), "E02");
+        let code = ErcCode::new(codes::Z39);
+        assert_eq!(code.to_string(), "Z39");
+        assert_eq!(code.as_str(), "Z39");
     }
 
     #[test]
@@ -278,98 +372,40 @@ mod tests {
 
     #[test]
     fn erc_code_as_ref() {
-        let code = ErcCode::new(codes::ZB3);
+        let code = ErcCode::new(codes::Z31);
         let s: &str = code.as_ref();
-        assert_eq!(s, "ZB3");
+        assert_eq!(s, "Z31");
     }
 
     #[test]
-    fn recommended_action_e01_retry_malo() {
-        assert!(matches!(
-            recommended_action(&ErcCode::new(codes::E01)),
-            ErcAction::RetryWithCorrection { field: "malo_id" }
-        ));
+    fn a_message_level_defect_is_a_retry() {
+        for c in [codes::Z29, codes::Z35, codes::Z38, codes::Z39, codes::Z40] {
+            assert!(
+                matches!(
+                    recommended_action(&ErcCode::new(c)),
+                    ErcAction::RetryWithCorrection { field: "message" }
+                ),
+                "{c}",
+            );
+        }
     }
 
     #[test]
-    fn recommended_action_e02_retry_address() {
-        assert!(matches!(
-            recommended_action(&ErcCode::new(codes::E02)),
-            ErcAction::RetryWithCorrection { field: "address" }
-        ));
+    fn a_receiver_decision_is_not_retried() {
+        for c in [codes::Z31, codes::Z37, codes::Z43] {
+            assert_eq!(
+                recommended_action(&ErcCode::new(c)),
+                ErcAction::AbortProcess,
+                "{c}",
+            );
+        }
     }
 
     #[test]
-    fn recommended_action_e04_retry_date() {
+    fn an_unknown_correlation_waits() {
         assert!(matches!(
-            recommended_action(&ErcCode::new(codes::E04)),
-            ErcAction::RetryWithCorrection {
-                field: "process_date"
-            }
-        ));
-    }
-
-    #[test]
-    fn recommended_action_e05_wait_and_retry() {
-        assert!(matches!(
-            recommended_action(&ErcCode::new(codes::E05)),
+            recommended_action(&ErcCode::new(codes::Z33)),
             ErcAction::WaitAndRetry { .. }
-        ));
-    }
-
-    #[test]
-    fn recommended_action_e03_escalate() {
-        assert!(matches!(
-            recommended_action(&ErcCode::new(codes::E03)),
-            ErcAction::EscalateToOperator { .. }
-        ));
-    }
-
-    #[test]
-    fn recommended_action_e06_escalate() {
-        assert!(matches!(
-            recommended_action(&ErcCode::new(codes::E06)),
-            ErcAction::EscalateToOperator { .. }
-        ));
-    }
-
-    #[test]
-    fn recommended_action_z29_escalate() {
-        assert!(matches!(
-            recommended_action(&ErcCode::new(codes::Z29)),
-            ErcAction::EscalateToOperator { .. }
-        ));
-    }
-
-    #[test]
-    fn recommended_action_zb3_abort() {
-        assert_eq!(
-            recommended_action(&ErcCode::new(codes::ZB3)),
-            ErcAction::AbortProcess
-        );
-    }
-
-    #[test]
-    fn recommended_action_z28_abort() {
-        assert_eq!(
-            recommended_action(&ErcCode::new(codes::Z28)),
-            ErcAction::AbortProcess
-        );
-    }
-
-    #[test]
-    fn recommended_action_z30_abort() {
-        assert_eq!(
-            recommended_action(&ErcCode::new(codes::Z30)),
-            ErcAction::AbortProcess
-        );
-    }
-
-    #[test]
-    fn recommended_action_z43_retry_malo() {
-        assert!(matches!(
-            recommended_action(&ErcCode::new(codes::Z43)),
-            ErcAction::RetryWithCorrection { field: "malo_id" }
         ));
     }
 
@@ -381,41 +417,35 @@ mod tests {
         ));
     }
 
+    /// A constant added without a `recommended_action` arm falls through to the
+    /// „unknown ERC code" escalation, which reads as a deliberate decision and
+    /// is not one.
     #[test]
-    fn all_standard_codes_have_recommendations() {
-        // Every code in the `codes` module must return a non-default action
-        // (i.e. not fall through to the catch-all EscalateToOperator for
-        // "unknown ERC code").  This test guards against adding a constant
-        // without updating the match table.
-        for (code_str, expected_variant) in [
-            (codes::E01, "RetryWithCorrection"),
-            (codes::E02, "RetryWithCorrection"),
-            (codes::E03, "EscalateToOperator"),
-            (codes::E04, "RetryWithCorrection"),
-            (codes::E05, "WaitAndRetry"),
-            (codes::E06, "EscalateToOperator"),
-            (codes::Z04, "RetryWithCorrection"),
-            (codes::Z07, "EscalateToOperator"),
-            (codes::Z08, "RetryWithCorrection"),
-            (codes::Z09, "RetryWithCorrection"),
-            (codes::Z28, "AbortProcess"),
-            (codes::Z29, "EscalateToOperator"),
-            (codes::Z30, "AbortProcess"),
-            (codes::Z43, "RetryWithCorrection"),
-            (codes::ZB3, "AbortProcess"),
-        ] {
-            let action = recommended_action(&ErcCode::new(code_str));
-            let variant_name = match &action {
-                ErcAction::RetryWithCorrection { .. } => "RetryWithCorrection",
-                ErcAction::EscalateToOperator { .. } => "EscalateToOperator",
-                ErcAction::AbortProcess => "AbortProcess",
-                ErcAction::WaitAndRetry { .. } => "WaitAndRetry",
-            };
-            assert_eq!(
-                variant_name, expected_variant,
-                "ERC code {code_str}: expected {expected_variant}, got {variant_name}"
+    fn every_code_has_its_own_recommendation() {
+        for c in codes::ALL {
+            let action = recommended_action(&ErcCode::new(c));
+            assert!(
+                !matches!(
+                    action,
+                    ErcAction::EscalateToOperator {
+                        reason: "unknown ERC code — manual review required"
+                    }
+                ),
+                "{c} falls through to the catch-all",
             );
         }
+    }
+
+    /// The six codes the APERAK AHB conditions [5] and [9]–[13] name, and only
+    /// those. `edi_energy`'s builder emits the `SG5 FTX+Z02` for exactly this
+    /// set, so the two lists must not drift.
+    #[test]
+    fn the_ortsangabe_codes_match_the_ahb_conditions() {
+        let obliged: Vec<&str> = codes::ALL
+            .into_iter()
+            .filter(|c| requires_ortsangabe(c))
+            .collect();
+        assert_eq!(obliged, ["Z29", "Z35", "Z38", "Z39", "Z40", "Z41"]);
     }
 
     #[test]

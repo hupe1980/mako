@@ -816,8 +816,8 @@ mod ingest_contract_tests {
 
     #[test]
     fn an_unknown_quality_flag_is_refused_rather_than_coerced() {
-        // Binding an unrecognised flag raw would violate the column CHECK; the
-        // bulk path used to swallow that error and still count the row stored.
+        // Binding an unrecognised flag raw violates the column CHECK, which
+        // the bulk path must surface rather than count as a stored row.
         assert!(quality_flag_from_wire("SUBSTITUTION_VALUE").is_none());
         assert!(quality_flag_from_wire("").is_none());
         assert!(quality_flag_from_wire("banana").is_none());

@@ -346,21 +346,20 @@ not the basis for keeping an audit trail; that is § 147 Abs. 1 AO (retention) a
 ### Queries are tenant-scoped
 
 `tenant` is the store's **identity column**, so a MaLo is unique only within a
-tenant. Every typed read binds it: the repository scopes each `series` read with
-`.column_eq("tenant", …)`, so two tenants' readings for one MaLo can never fold
-into a single series even in a store that holds both. The GDPR erasure subject is
-qualified the same way (`tenant:malo`), so erasing one tenant's MaLo cannot unlink
-another's. The structured archive endpoints inherit that scoping;
-`/api/v1/archive/portfolio` binds `tenant` in its `GROUP BY` too. Even the ad-hoc
-`POST /api/v1/query/sql` is scoped, and it has to be by a different mechanism:
-the caller writes the `WHERE`, so `store.scoped(...)` injects the tenant
-predicate into the plan **below the projection**, where no statement can omit it,
-alias around it or `UNION` past it. Three relations are rejected there with
-`403`: the raw, every-version table, because
-summing it double-counts every correction, and **both ESA Typ-2 relations**,
-because that store's separation from billing is otherwise a naming convention on
-this one surface — every table shares a DataFusion session, so a free-form
-`SELECT * FROM esa_typ2_reads` walked straight around it.
+tenant, and every surface binds it:
+
+| Surface | How |
+|---|---|
+| Typed reads | the repository scopes each `series` read with `.column_eq("tenant", …)`, so two tenants' readings for one MaLo never fold into one series |
+| GDPR erasure | the subject is qualified `tenant:malo`, so erasing one tenant's MaLo cannot unlink another's |
+| Structured archive | inherited; `/api/v1/archive/portfolio` binds `tenant` in its `GROUP BY` too |
+| `POST /api/v1/query/sql` | the caller writes the `WHERE`, so `store.scoped(...)` injects the predicate **below the projection**, where no statement can omit it, alias around it or `UNION` past it |
+
+The SQL surface rejects three relations with `403`: the raw every-version table,
+because summing it double-counts every correction, and **both ESA Typ-2
+relations** — every table shares one DataFusion session, so their separation
+from billing is otherwise only a naming convention that
+`SELECT * FROM esa_typ2_reads` walks straight around.
 
 ### GDPR erasure is one transaction
 

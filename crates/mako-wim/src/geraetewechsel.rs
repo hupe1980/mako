@@ -1583,7 +1583,9 @@ impl Workflow for WimDeviceChangeWorkflow {
                     transaktionsgrund,
                 }];
                 if validation_passed {
-                    events.push(DeviceChangeEvent::ValidationPassed { message_ref });
+                    events.push(DeviceChangeEvent::ValidationPassed {
+                        message_ref: message_ref.clone(),
+                    });
                     // The APERAK is dispatched by the ERP, never auto-emitted here:
                     // DispatchAperak is the single decision point for both the
                     // positive (BGM+312) and the negative (BGM+313) one.
@@ -1618,17 +1620,12 @@ impl Workflow for WimDeviceChangeWorkflow {
                     // *sending* deadline so the OutboxWorker is monitored (APERAK AHB 1.0 \u00a72.4.1).
                     let aperak_send_dl = aperak_deadline(sparte, pid.as_u32(), received_at);
                     let outbox = vec![
-                        PendingOutbox::new(
-                            "APERAK",
+                        PendingOutbox::aperak_fehler(
+                            receiver_gln.as_str(),
                             sender_mp_id.as_str(),
-                            serde_json::json!({
-                                "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_mp_id.as_str(),
-                                "pid":        29001_u32,
-                                "positive":   false,
-                                "error_code": mako_engine::erc::codes::Z29,
-                                "reason":     reason,
-                            }),
+                            message_ref.as_str(),
+                            mako_engine::erc::codes::Z29,
+                            reason,
                         )
                         .caused_by(0),
                     ];

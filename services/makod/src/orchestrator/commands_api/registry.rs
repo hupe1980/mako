@@ -335,10 +335,9 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         dispatch: cmd_invoic_nne_abschlag_stellen,
     },
     // PID 31002 is the NN-Rechnung in **both** Sparten (INVOIC AHB), so it is
-    // one command permitted to both roles — not two identical ones split by a
-    // name. The Strom and Gas variants used to differ only in `permitted_roles`,
-    // which meant a `GNB` deployment was refused the Strom-named command on role
-    // grounds while dispatching the exact same PID through the same function.
+    // one command permitted to both roles. Splitting it by name would refuse a
+    // `GNB` the Strom-named command on role grounds while dispatching the same
+    // PID through the same function.
     CommandDescriptor {
         name: "invoic.nne.stellen",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],

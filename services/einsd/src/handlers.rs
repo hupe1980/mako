@@ -325,12 +325,10 @@ impl Negativpreis {
     }
 }
 
-// A hand-rolled `days_in_month` used to stand here, for the calendar-date bounds
-// the `/billing-period` fetch needed. Both are gone: the Einspeisemenge is read
-// over an instant range from `billing_month_range`, which takes the month in
-// German local time through the `time` crate's own calendar — the one that
-// already knows about leap years and does not silently answer 28 for a month
-// number outside 1..=12.
+// The Einspeisemenge is read over an instant range from `billing_month_range`,
+// which takes the month in German local time through the `time` crate's own
+// calendar. Nothing here hand-rolls `days_in_month`: that answers 28 for a
+// month number outside 1..=12 instead of refusing it.
 
 // ── CloudEvent emission ───────────────────────────────────────────────────────
 

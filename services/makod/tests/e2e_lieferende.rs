@@ -266,6 +266,7 @@ impl MockNb {
                     veraeusserungsform: None,
                     tranchengroesse_prozent: None,
                     vorgangsnummer: None,
+                    produktpaket_id: Some("1".to_owned()),
                     kunde_name: None,
                     kunde_namensformat: None,
                     validation_passed: true, // bypass AHB profile check
@@ -445,12 +446,24 @@ fn nb_antwort(accepted: bool, reason: Option<&str>) -> mako_gpke::LfAntwort {
         (true, _) => ("A51", "E_0623"),
         (false, _) => ("A07", "E_0622"),
     };
-    mako_gpke::LfAntwort {
-        antwort_code: code.to_owned(),
-        ebd: Some(ebd.to_owned()),
-        zustimmung: accepted,
-        bemerkung: reason.map(ToOwned::to_owned),
-        bilanzkreis: None,
-        termin: None,
+    {
+        let antwort = if accepted {
+            mako_gpke::LfAntwort::zustimmung(code, ebd)
+                // Muss on a Bestätigung Anmeldung: the Klassifizierung, the
+                // Produktpaket-ID the NB will implement, and the Messlokation
+                // with its Messstellenbetreiber.
+                .with_klassifizierung("ZW7")
+                .with_produktpaket("1")
+                .with_messlokation(
+                    "DE00056266802AO6G56M11SN51G21M24S",
+                    mako_gpke::ZugeordneterMsb::grundzustaendig("9903456000009"),
+                )
+        } else {
+            mako_gpke::LfAntwort::ablehnung(code, ebd)
+        };
+        match reason {
+            Some(r) => antwort.with_bemerkung(r),
+            None => antwort,
+        }
     }
 }

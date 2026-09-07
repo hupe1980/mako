@@ -92,6 +92,7 @@ async fn spawn_supplier_change(
             veraeusserungsform: None,
             tranchengroesse_prozent: None,
             vorgangsnummer: None,
+            produktpaket_id: Some("1".to_owned()),
             kunde_name: None,
             kunde_namensformat: None,
             message_ref: mako_engine::types::MessageRef::new("MSG-001"),

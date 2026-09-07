@@ -98,8 +98,13 @@ pub struct Sg8Block {
 enum Sg8Item {
     /// `CCI+<Klassentyp>++<Merkmal>`
     Cci { klassentyp: String, merkmal: String },
-    /// `CAV+<Code>:::<Wert>`
-    Cav { code: String, wert: String },
+    /// `CAV+<Code>:<Wert1>::<Wert2>` — DE 7111, DE 1131, DE 3055, DE 7110.
+    Cav {
+        code: String,
+        wert: String,
+        beschreibung: String,
+        zusatz: String,
+    },
     /// `QTY+<Qualifier>:<Menge>:<Einheit>`
     Qty {
         qualifier: String,
@@ -370,6 +375,14 @@ fn emit_sg6<W: std::io::Write>(
         emit_comp!(w, "RFF", ["TN", referenz]);
     }
     for (rff_q, rff_ref) in &tx.references {
+        // The Prüfidentifikator is „genau einmal je SG4 IDE (Vorgang)
+        // anzugeben" and `pruefidentifikator()` already placed it. A caller
+        // that also spells it out here would otherwise emit a second
+        // `RFF+Z13`, which no place of the Nachrichtenstruktur admits —
+        // `MIG-STRUCTURE` on a message that is otherwise correct.
+        if carries_pid && rff_q == "Z13" && rff_ref == pid_str {
+            continue;
+        }
         emit_comp!(w, "RFF", [rff_q, rff_ref]);
     }
     for (rff_q, rff_ref, dtm_q, value, format) in &tx.dated_references {
@@ -390,8 +403,42 @@ fn emit_sg8_block<W: std::io::Write>(w: &mut Writer<W>, block: &Sg8Block) -> Res
                 klassentyp,
                 merkmal,
             } => emit_seg!(w, "CCI", klassentyp, "", merkmal),
-            Sg8Item::Cav { code, wert } if wert.is_empty() => emit_seg!(w, "CAV", code),
-            Sg8Item::Cav { code, wert } => emit_comp!(w, "CAV", [code, "", "", wert]),
+            Sg8Item::Cav {
+                code,
+                wert,
+                beschreibung,
+                zusatz,
+            } if wert.is_empty() && beschreibung.is_empty() && zusatz.is_empty() => {
+                emit_seg!(w, "CAV", code);
+            }
+            Sg8Item::Cav {
+                code,
+                wert,
+                beschreibung,
+                zusatz,
+            } if wert.is_empty() && zusatz.is_empty() => {
+                emit_comp!(w, "CAV", [code, "", "", beschreibung]);
+            }
+            Sg8Item::Cav {
+                code,
+                wert,
+                beschreibung,
+                zusatz,
+            } if beschreibung.is_empty() && zusatz.is_empty() => {
+                emit_comp!(w, "CAV", [code, wert]);
+            }
+            Sg8Item::Cav {
+                code,
+                wert,
+                beschreibung,
+                zusatz,
+            } if zusatz.is_empty() => emit_comp!(w, "CAV", [code, wert, "", beschreibung]),
+            Sg8Item::Cav {
+                code,
+                wert,
+                beschreibung,
+                zusatz,
+            } => emit_comp!(w, "CAV", [code, wert, "", beschreibung, zusatz]),
             Sg8Item::Qty {
                 qualifier,
                 menge,
@@ -1117,6 +1164,17 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
         self
     }
 
+    /// `SG6 RFF+Z60` — „Informativ zur Umsetzung geplantes Produktpaket".
+    ///
+    /// Muss on the Bestätigung Anmeldung (55002 and its siblings): the NB says
+    /// which Produktpaket-ID from the Anmeldung it will actually implement, so
+    /// the LFN learns whether the package it asked for is the one it gets.
+    /// DE 1154 is the `SG8 SEQ+Z79` DE 1050 Produktpaket-ID and Bedingung
+    /// `[914]` fixes it to a value greater than zero.
+    pub fn geplantes_produktpaket(self, paket_id: impl Into<String>) -> Self {
+        self.reference(crate::utilmd_codes::rff::GEPLANTES_PRODUKTPAKET, paket_id)
+    }
+
     /// Add a SG6/RFF reference segment.
     pub fn reference(mut self, qualifier: impl Into<String>, ref_id: impl Into<String>) -> Self {
         self.spec.references.push((qualifier.into(), ref_id.into()));
@@ -1271,11 +1329,95 @@ impl<S, R> Sg8Builder<S, R> {
         self.cav_wert(code, "")
     }
 
+    /// `CCI+++ZB3` + `CAV+Z91:<MP-ID>::<Rolle>:<Grundlage>` — the
+    /// Messstellenbetreiber the NB has assigned to this Lokation.
+    ///
+    /// „Zugeordneter Marktpartner" is Muss inside both answer blocks
+    /// (`SEQ+Z98` Daten der Marktlokation, `SEQ+ZF3` Daten der Messlokation):
+    /// the Bestätigung is where the LFN learns who meters the point it is about
+    /// to supply, and it has no other source for it.
+    ///
+    /// Two codes, not one. `rolle` is DE 7110 first occurrence —
+    /// [`GRUNDZUSTAENDIG`](crate::utilmd_codes::msb::GRUNDZUSTAENDIG),
+    /// [`WETTBEWERBLICH`](crate::utilmd_codes::msb::WETTBEWERBLICH) or
+    /// [`AUFFANG`](crate::utilmd_codes::msb::AUFFANG); `grundlage` is DE 7110
+    /// second occurrence, `Z19` or `Z20`. Both are Muss wherever the block is.
+    ///
+    /// The grundzuständiger MSB is a *third* fact and rides
+    /// [`grundzustaendiger_msb`](Self::grundzustaendiger_msb), which the MIG
+    /// admits in the Messlokations-Datenblock (`SEQ+ZF3`, Nr 00298) and not in
+    /// the Marktlokations one.
+    pub fn zugeordneter_msb(
+        self,
+        mp_id: impl Into<String>,
+        rolle: impl Into<String>,
+        grundlage: impl Into<String>,
+    ) -> Self {
+        self.cci("", crate::utilmd_codes::cci::ZUGEORDNETER_MARKTPARTNER)
+            .cav_msb(crate::utilmd_codes::cav::MSB, mp_id, rolle, grundlage)
+    }
+
+    /// `SG10 CAV+ZF0:<MP-ID>` — the grundzuständiger Messstellenbetreiber of
+    /// this Messlokation (Nr 00298, Muss inside `SEQ+ZF3`).
+    ///
+    /// Equal to the acting MSB when that one is grundzuständig, and a different
+    /// party otherwise: the LFN has no other source for who the gMSB behind a
+    /// wettbewerblich operated Messstelle is.
+    pub fn grundzustaendiger_msb(self, mp_id: impl Into<String>) -> Self {
+        self.cav_wert_de1131(crate::utilmd_codes::cav::GMSB, mp_id)
+    }
+
+    /// `SG10 CAV+<Code>:<MP-ID>::<Wert1>:<Wert2>` — DE 7111, 1131, 3055, 7110×2.
+    pub fn cav_msb(
+        mut self,
+        code: impl Into<String>,
+        mp_id: impl Into<String>,
+        wert1: impl Into<String>,
+        wert2: impl Into<String>,
+    ) -> Self {
+        self.block.items.push(Sg8Item::Cav {
+            code: code.into(),
+            wert: mp_id.into(),
+            beschreibung: wert1.into(),
+            zusatz: wert2.into(),
+        });
+        self
+    }
+
+    /// `SG10 CAV+<Code>:<Wert>` — DE 7111 and DE 1131 only.
+    pub fn cav_wert_de1131(mut self, code: impl Into<String>, wert: impl Into<String>) -> Self {
+        self.block.items.push(Sg8Item::Cav {
+            code: code.into(),
+            wert: wert.into(),
+            beschreibung: String::new(),
+            zusatz: String::new(),
+        });
+        self
+    }
+
+    /// `SG10 CAV+<Code>:<Wert>::<Beschreibung>` — DE 7111, DE 1131, DE 7110.
+    pub fn cav_components(
+        mut self,
+        code: impl Into<String>,
+        wert: impl Into<String>,
+        beschreibung: impl Into<String>,
+    ) -> Self {
+        self.block.items.push(Sg8Item::Cav {
+            code: code.into(),
+            wert: wert.into(),
+            beschreibung: beschreibung.into(),
+            zusatz: String::new(),
+        });
+        self
+    }
+
     /// `SG10 CAV+<Code>:::<Wert>`.
     pub fn cav_wert(mut self, code: impl Into<String>, wert: impl Into<String>) -> Self {
         self.block.items.push(Sg8Item::Cav {
             code: code.into(),
-            wert: wert.into(),
+            wert: String::new(),
+            beschreibung: wert.into(),
+            zusatz: String::new(),
         });
         self
     }

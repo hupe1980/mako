@@ -746,6 +746,97 @@ pub enum Scope {
     Group(String),
 }
 
+/// A Wiederholbarkeit that ties how often a place occurs to how many of *some
+/// other* segment the Vorgang carries.
+///
+/// „Für jede Messlokations-ID im SG5 LOC+Z17 (Messlokation) DE3225 genau einmal
+/// anzugeben" (`\[2284\]`) does not make its `Muss` unconditional: it makes it one
+/// occurrence **per** `LOC+Z17`. A Vorgang naming no Messlokation owes none,
+/// and reporting the group missing there rejects a conformant message.
+///
+/// The distinction matters because the counted segment is often optional:
+/// `LOC+Z17` on a Lieferbeginn, `SEQ+Z79` on an answer. Where the text counts
+/// something that always exists — „genau einmal je SG4 IDE (Vorgang)" — this
+/// parses to `None` and the status stays unconditionally required, which is
+/// what it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProSegment {
+    /// The segment each occurrence is owed for.
+    pub pattern: SegmentPattern,
+}
+
+impl ProSegment {
+    /// Parse a „für jede … `SG<n> TAG+code`" Wiederholbarkeit.
+    ///
+    /// Returns `None` when the text states no per-segment multiplicity, or
+    /// when what it counts is the Vorgang itself.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        let lower = text.to_lowercase();
+        // „so oft zu wiederholen, wie …" counts by a criterion rather than by
+        // a segment („wie Tranchen zu der Marktlokation vorhanden sind"), so
+        // it is deliberately not in this list: the thing counted is not on the
+        // wire of this message.
+        let per_each = [
+            "für jede",
+            "für jeden",
+            "für jedes",
+            "je sg",
+            "einmal für jede",
+        ]
+        .iter()
+        .any(|m| lower.contains(m));
+        if !per_each {
+            return None;
+        }
+        let pattern = first_group_segment(text)?;
+        // `IDE` is the Vorgang. „genau einmal je SG4 IDE" is a multiplicity of
+        // one per Vorgang, and a Vorgang is always there.
+        if pattern.tag == "IDE" {
+            return None;
+        }
+        Some(Self { pattern })
+    }
+}
+
+/// The first `SG<n> TAG+code…` a Bedingung text names.
+fn first_group_segment(text: &str) -> Option<SegmentPattern> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i + 3 < chars.len() {
+        // `SG` followed by digits, whitespace, then a three-letter tag.
+        if chars[i] == 'S' && chars[i + 1] == 'G' && chars[i + 2].is_ascii_digit() {
+            let mut j = i + 2;
+            while j < chars.len() && chars[j].is_ascii_digit() {
+                j += 1;
+            }
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            let start = j;
+            while j < chars.len() && !chars[j].is_whitespace() && chars[j] != '(' && chars[j] != ','
+            {
+                j += 1;
+            }
+            let token: String = chars[start..j].iter().collect();
+            if let Some(p) = SegmentPattern::parse(&token) {
+                return Some(p);
+            }
+            // A bare tag with no `+code` still names the segment.
+            if token.len() == 3 && token.chars().all(|c| c.is_ascii_uppercase()) {
+                return Some(SegmentPattern {
+                    tag: token,
+                    elements: Vec::new(),
+                });
+            }
+            i = j;
+            continue;
+        }
+        i += 1;
+    }
+    None
+}
+
 /// A receiver-checkable Voraussetzung.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Voraussetzung {

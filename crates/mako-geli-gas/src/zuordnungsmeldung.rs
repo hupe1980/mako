@@ -507,16 +507,12 @@ impl Workflow for GeliGasZuordnungsmeldungWorkflow {
                 // AHB does not ask for.
                 let mut outbox = Vec::new();
                 if !validation_passed {
-                    outbox.push(PendingOutbox::new(
-                        "APERAK",
+                    outbox.push(PendingOutbox::aperak_fehler(
+                        receiver.as_str(),
                         sender.as_str(),
-                        serde_json::json!({
-                            "sender":     receiver.as_str(),
-                            "receiver":   sender.as_str(),
-                            "pid":        29002_u32,
-                            "error_code": mako_engine::erc::codes::Z29,
-                            "reason":     validation_errors.join("; "),
-                        }),
+                        message_ref.as_str(),
+                        mako_engine::erc::codes::Z29,
+                        validation_errors.join("; "),
                     ));
                 }
                 outbox.push(PendingOutbox::new(
@@ -760,7 +756,10 @@ mod tests {
             validation_errors: vec!["missing SG12".to_owned()],
         });
         assert_eq!(&*out.outbox[0].message_type, "APERAK");
-        assert_eq!(out.outbox[0].payload["pid"], 29002);
+        // A rejection is Anwendungsfall 29001 (`BGM+313`, `SG4`
+        // Fehlerbeschreibung) — 29002 admits neither.
+        assert_eq!(out.outbox[0].payload["pid"], 29001);
+        assert_eq!(out.outbox[0].payload["orig_message_ref"], "MSG-2");
     }
 
     /// The catalogue and the workflow are edited in different crates and must

@@ -663,14 +663,12 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
                     // body is dropped by serde on arrival, silently, because the
                     // DTO does not deny unknown fields.
                     //
-                    // edmd used to send `MSCONS_PIDS` here, which read as
-                    // server-side narrowing and was not. It also would have been
-                    // the *wrong* set if it ever started working: `handler.rs`
-                    // branches on `ALL_MSCONS_PIDS`, a strict superset that adds
-                    // the Redispatch MSCONS PIDs 13020–13023/13026 — so switching
-                    // the filter on would have stopped exactly those deliveries.
-                    // The narrowing that actually runs is in `handler.rs`, on
-                    // every event marktd fans out.
+                    // Sending `MSCONS_PIDS` here would read as server-side
+                    // narrowing without being it, and would be the wrong set if
+                    // it ever started working: `handler.rs` branches on
+                    // `ALL_MSCONS_PIDS`, a strict superset adding the Redispatch
+                    // PIDs 13020–13023/13026. The narrowing that actually runs
+                    // is there, on every event marktd fans out.
                     makopid_filter: &[],
                     active: true,
                 },

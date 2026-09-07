@@ -51,6 +51,7 @@ fn answer_with(
         veraeusserungsform: None,
         tranchengroesse_prozent: None,
         vorgangsnummer: None,
+        produktpaket_id: Some("1".to_owned()),
         kunde_name: None,
         kunde_namensformat: None,
         message_ref: MessageRef::new("ANM-001"),

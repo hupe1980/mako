@@ -14,10 +14,11 @@ use super::*;
 /// |-------------------|----------|----------------------------------------------|
 /// | `sender`          | yes      | Sender MP-ID                                   |
 /// | `receiver`        | no       | Receiver MP-ID (falls back to `msg.recipient`) |
-/// | `pid`             | no       | APERAK Prüfidentifikator (e.g. 29001)        |
-/// | `orig_message_ref`| no       | ACW reference to the message being acked     |
+/// | `pid`             | no       | APERAK Prüfidentifikator (29001 or 29002)    |
+/// | `orig_message_ref`| **yes**  | `UNH` DE 0062 of the message being acked     |
 /// | `error_code`      | no       | ERC error code (e.g. `"E01"`)                |
-/// | `reason`          | no       | FTX free-text error description              |
+/// | `reason`          | no       | `FTX+ABO` free-text error description        |
+/// | `ortsangabe`      | no       | `FTX+Z02` — where the AHB is violated; Muss for the six AHB-error codes, defaulting to `reason` |
 /// | `document_date`   | no       | Document date (`YYYYMMDD` or `YYYY-MM-DD`)                  |
 /// | `message_ref`     | no       | Derived from `causation_event_id` when absent               |
 pub(super) fn render_aperak(
@@ -52,7 +53,13 @@ pub(super) fn render_aperak(
     })?;
 
     let pid = p.get("pid").and_then(|v| v.as_u64()).map(|n| n as u32);
-    let acw_ref = p.get("orig_message_ref").and_then(|v| v.as_str());
+    // `SG2` (`RFF+ACE` + `DTM+171`, and `RFF+AGO` on an Anerkennungsmeldung) is
+    // **Muss** in both APERAK Anwendungsfälle, and the builder emits the whole
+    // group only when this reference is present. Rendering without it produces
+    // a message that fails the receiving Marktpartner's own AHB check with
+    // three findings — better to dead-letter the outbox entry, where an
+    // operator sees it, than to put that on the wire.
+    let acw_ref = require_str(p, mt, "orig_message_ref")?;
     let error_code = p.get("error_code").and_then(|v| v.as_str());
     let reason = p.get("reason").and_then(|v| v.as_str());
     let doc_date = p
@@ -70,16 +77,12 @@ pub(super) fn render_aperak(
         .receiver(receiver)
         .message_ref(message_ref);
 
-    // BGM+313 (Verarbeitbarkeitsfehlermeldung) is mandatory when an error code
-    // is present; BGM+312 (Anerkennungsmeldung) would be used for positive acks.
-    // The BDEW APERAK AHB 1.0 §2.1.1 requires BGM+313 for all APERAK rejections.
-    // The `document_code` payload field allows an explicit override when needed.
-    let document_code = p.get("document_code").and_then(|v| v.as_str());
-    if let Some(code) = document_code {
+    // `BGM` DE 1001 follows from the presence of an error code — `313`
+    // Verarbeitbarkeitsfehlermeldung, `312` Anerkennungsmeldung — and
+    // `AperakBuilder` derives it. Only an explicit `document_code` overrides
+    // that, and nothing in mako sets one.
+    if let Some(code) = p.get("document_code").and_then(|v| v.as_str()) {
         builder = builder.document_code(code);
-    } else if error_code.is_some() {
-        // Auto-select BGM+313: error APERAK (Verarbeitbarkeitsfehlermeldung).
-        builder = builder.document_code("313");
     }
 
     if let Some(pv) = pid
@@ -87,14 +90,15 @@ pub(super) fn render_aperak(
     {
         builder = builder.pruefidentifikator(ep);
     }
-    if let Some(r) = acw_ref {
-        builder = builder.acw_ref(r);
-    }
+    builder = builder.acw_ref(acw_ref);
     if let Some(c) = error_code {
         builder = builder.error_code(c);
     }
     if let Some(t) = reason {
         builder = builder.error_text(t);
+    }
+    if let Some(o) = p.get("ortsangabe").and_then(|v| v.as_str()) {
+        builder = builder.ortsangabe(o);
     }
     if let Some(d) = doc_date.as_deref() {
         builder = builder.document_date(d);

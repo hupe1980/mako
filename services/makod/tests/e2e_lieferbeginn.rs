@@ -261,6 +261,7 @@ impl MockNb {
                     veraeusserungsform: None,
                     tranchengroesse_prozent: None,
                     vorgangsnummer: None,
+                    produktpaket_id: Some("1".to_owned()),
                     kunde_name: None,
                     kunde_namensformat: None,
                     validation_passed: true, // bypass AHB profile check
@@ -447,12 +448,25 @@ fn nb_antwort(accepted: bool, reason: Option<&str>) -> mako_gpke::LfAntwort {
     } else {
         ("A07", "E_0622")
     };
-    mako_gpke::LfAntwort {
-        antwort_code: code.to_owned(),
-        ebd: Some(ebd.to_owned()),
-        zustimmung: accepted,
-        bemerkung: reason.map(ToOwned::to_owned),
-        bilanzkreis: None,
-        termin: None,
+    // Built through the constructors, not as a literal: a field added to
+    // `LfAntwort` for a Muss place — the Marktlokations-Klassifizierung, the
+    // Produktpaket-ID, the Messstellenbetreiber — should reach every answer
+    // that opts into it, and a literal here would silently stay at `None`.
+    let antwort = if accepted {
+        mako_gpke::LfAntwort::zustimmung(code, ebd)
+            // `SG4 STS+7` `ZW7`, `SG6 RFF+Z60`, `SG5 LOC+Z17` and the two `SG8`
+            // Datenblöcke — all Muss on a Bestätigung Anmeldung.
+            .with_klassifizierung("ZW7")
+            .with_produktpaket("1")
+            .with_messlokation(
+                "DE00056266802AO6G56M11SN51G21M24S",
+                mako_gpke::ZugeordneterMsb::grundzustaendig("9903456000009"),
+            )
+    } else {
+        mako_gpke::LfAntwort::ablehnung(code, ebd)
+    };
+    match reason {
+        Some(r) => antwort.with_bemerkung(r),
+        None => antwort,
     }
 }

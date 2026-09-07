@@ -171,7 +171,70 @@ impl PendingOutbox {
         self.payload_schema = Some(schema_url.into());
         self
     }
+
+    /// APERAK **29002 Anerkennungsmeldung** (`BGM+312`) for a message that
+    /// parsed and was accepted for processing.
+    ///
+    /// `from` is this deployment's MP-ID, `to` the Marktpartner that sent the
+    /// acknowledged message, and `orig_message_ref` its `UNH` DE 0062.
+    ///
+    /// The reference is a parameter rather than an option because `SG2
+    /// RFF+ACE`/`DTM+171`/`RFF+AGO` are **Muss** in both APERAK
+    /// Anwendungsfälle: an acknowledgement that does not say what it
+    /// acknowledges is refused by the receiving Marktpartner, and there is no
+    /// second field it could be recovered from. The two Anwendungsfälle also
+    /// take different `BGM` codes — 29001 admits only `313`, 29002 only `312`
+    /// — so the pairing lives here rather than in each workflow.
+    #[must_use]
+    pub fn aperak_anerkennung(from: &str, to: &str, orig_message_ref: &str) -> Self {
+        Self::new(
+            "APERAK",
+            to,
+            serde_json::json!({
+                "sender":           from,
+                "receiver":         to,
+                "pid":              APERAK_PID_ANERKENNUNG,
+                "orig_message_ref": orig_message_ref,
+            }),
+        )
+    }
+
+    /// APERAK **29001 Verarbeitbarkeitsfehlermeldung** (`BGM+313`) for a
+    /// message that could not be processed.
+    ///
+    /// `error_code` is an `ERC` DE 9321 code from [`crate::erc::codes`];
+    /// `reason` becomes the `FTX+ABO` free text. See
+    /// [`aperak_anerkennung`](Self::aperak_anerkennung) for the other three
+    /// arguments.
+    #[must_use]
+    pub fn aperak_fehler(
+        from: &str,
+        to: &str,
+        orig_message_ref: &str,
+        error_code: &str,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self::new(
+            "APERAK",
+            to,
+            serde_json::json!({
+                "sender":           from,
+                "receiver":         to,
+                "pid":              APERAK_PID_FEHLER,
+                "orig_message_ref": orig_message_ref,
+                "error_code":       error_code,
+                "reason":           reason.into(),
+            }),
+        )
+    }
 }
+
+/// APERAK Anwendungsfall **29001 Fehlermeldung** — `BGM+313`, `SG4`
+/// Fehlerbeschreibung present.
+pub const APERAK_PID_FEHLER: u32 = 29001;
+
+/// APERAK Anwendungsfall **29002 Anerkennungsmeldung** — `BGM+312`, no `SG4`.
+pub const APERAK_PID_ANERKENNUNG: u32 = 29002;
 
 // ── OutboxMessage ─────────────────────────────────────────────────────────────
 

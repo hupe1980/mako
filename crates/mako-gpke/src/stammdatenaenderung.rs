@@ -655,35 +655,28 @@ impl Workflow for GpkeStammdatenaenderungWorkflow {
                         reason: reason.clone(),
                     });
                     let outbox = vec![
-                        PendingOutbox::new(
-                            "APERAK",
+                        PendingOutbox::aperak_fehler(
+                            receiver_gln.as_str(),
                             sender_mp_id.as_str(),
-                            serde_json::json!({
-                                "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_mp_id.as_str(),
-                                "pid":        29001_u32,
-                                "error_code": mako_engine::erc::codes::Z29,
-                                "reason":     reason,
-                            }),
+                            message_ref.as_str(),
+                            mako_engine::erc::codes::Z29,
+                            reason,
                         )
                         .caused_by(0),
                     ];
                     return Ok(WorkflowOutput::with_outbox(events, outbox));
                 }
 
-                events.push(StammdatenEvent::ValidationPassed { message_ref });
+                events.push(StammdatenEvent::ValidationPassed {
+                    message_ref: message_ref.clone(),
+                });
 
                 // APERAK 312 (Anerkennung).
                 let mut outbox = vec![
-                    PendingOutbox::new(
-                        "APERAK",
+                    PendingOutbox::aperak_anerkennung(
+                        receiver_gln.as_str(),
                         sender_mp_id.as_str(),
-                        serde_json::json!({
-                            "sender":        receiver_gln.as_str(),
-                            "receiver":      sender_mp_id.as_str(),
-                            "pid":           29001_u32,
-                            "document_code": "312",
-                        }),
+                        message_ref.as_str(),
                     )
                     .caused_by(1),
                 ];

@@ -1,0 +1,153 @@
+# Order-to-cash demo — Docker Compose
+#
+# The retail money path, end to end: what the LF sells, who bought it, what
+# they owe, the document that says so, and the receivable behind it.
+#
+#   productd    → the Tarifpreisblatt the price comes from
+#   vertragd    → the Kunde and the Versorgungsvertrag on a Marktlokation
+#   billingd    → the invoice, computed against that tariff and that reading
+#   outputd     → the issued document, stored for the § 147 AO retention
+#   accountingd → the Offener Posten, and its settlement on payment
+#
+# Services:
+#   postgres         — PostgreSQL (one database per service)
+#   webhook     :8001 — ERP CloudEvent receiver (Python, in-memory; 8000 inside)
+#   productd    :9080 — LF product and tariff catalogue
+#   vertragd    :9780 — Kunden, Verträge, Kündigungsfristen
+#   billingd    :9280 — multi-product billing engine (EN 16931)
+#   outputd     :9880 — document store and delivery
+#   accountingd :9380 — Massenkontokorrent (double-entry ledger)
+#
+# Build images first, from the workspace root:
+#   just build-demo-o2c
+#
+# Run:
+#   cd demos/o2c
+#   docker compose up -d
+#   bash smoke.sh
+#   docker compose down -v
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER:     demo
+      POSTGRES_PASSWORD: demo-secret
+      # POSTGRES_DB is intentionally unset; init-db.sh creates per-service DBs.
+    volumes:
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    healthcheck:
+      # CMD, not CMD-SHELL — compatible with distroless images too.
+      test: ["CMD", "pg_isready", "-U", "demo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ── ERP webhook receiver ────────────────────────────────────────────────────
+  # Receives the de.billing.* / de.accounting.* / de.vertrag.* CloudEvents.
+  # View them: curl http://localhost:8001/events | jq '.[].body.type'
+  webhook:
+    image: python:3.12-alpine
+    volumes:
+      - ./webhook-receiver.py:/app/webhook-receiver.py:ro
+    working_dir: /app
+    command: python webhook-receiver.py
+    ports:
+      # 8001 on the host: `demos/nb-stp` binds 8000, and the two stacks are
+      # meant to be runnable side by side. Inside the network it is still 8000,
+      # so every service's `erp_webhook_url` is unchanged.
+      - "8001:8000"
+    restart: unless-stopped
+
+  # ── productd — Product and tariff catalogue ─────────────────────────────────
+  productd:
+    image: productd:dev
+    volumes:
+      - ./productd.toml:/etc/productd/productd.toml:ro
+    environment:
+      PRODUCTD_CONFIG: /etc/productd/productd.toml
+    ports:
+      - "9080:9080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  # ── vertragd — Kunden and Verträge ──────────────────────────────────────────
+  vertragd:
+    image: vertragd:dev
+    volumes:
+      - ./vertragd.toml:/etc/vertragd/vertragd.toml:ro
+    environment:
+      VERTRAGD_CONFIG: /etc/vertragd/vertragd.toml
+    ports:
+      - "9780:9780"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      accountingd:
+        condition: service_started
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  # ── billingd — Billing engine ───────────────────────────────────────────────
+  # Prices against productd, records the document in outputd and posts the
+  # receivable to accountingd. Each of those is a separate service call, and
+  # the smoke test asserts all three landed.
+  billingd:
+    image: billingd:dev
+    volumes:
+      - ./billingd.toml:/etc/billingd/billingd.toml:ro
+    environment:
+      BILLINGD_CONFIG: /etc/billingd/billingd.toml
+    ports:
+      - "9280:9280"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      productd:
+        condition: service_started
+      outputd:
+        condition: service_started
+      accountingd:
+        condition: service_started
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  # ── outputd — Document store and delivery ───────────────────────────────────
+  outputd:
+    image: outputd:dev
+    volumes:
+      - ./outputd.toml:/etc/outputd/outputd.toml:ro
+    environment:
+      OUTPUTD_CONFIG: /etc/outputd/outputd.toml
+    ports:
+      - "9880:9880"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  # ── accountingd — Massenkontokorrent ────────────────────────────────────────
+  accountingd:
+    image: accountingd:dev
+    volumes:
+      - ./accountingd.toml:/etc/accountingd/accountingd.toml:ro
+    environment:
+      ACCOUNTINGD_CONFIG: /etc/accountingd/accountingd.toml
+    ports:
+      - "9380:9380"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: unless-stopped

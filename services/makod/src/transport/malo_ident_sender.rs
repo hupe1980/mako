@@ -135,6 +135,14 @@ impl MaloIdentSender {
 }
 
 impl As4Sender for MaloIdentSender {
+    /// Wire transport: everything except the ERP notifier's own messages.
+    ///
+    /// See [`crate::core::erp_adapter::is_erp_notification`] — both consumers of
+    /// the shared outbox read the rule from there.
+    fn handles(&self, msg: &OutboxMessage) -> bool {
+        !crate::core::erp_adapter::is_erp_notification(&msg.message_type)
+    }
+
     fn send(
         &self,
         msg: &OutboxMessage,

@@ -1699,15 +1699,31 @@ impl OutboxStore for SlateDbStore {
     ///
     /// Uses a snapshot-isolation transaction to keep the counter consistent
     /// with the `om/` key space under concurrent acknowledgers.
+    ///
+    /// Retries on a write conflict, exactly as [`reschedule`][Self::reschedule]
+    /// does. Every acknowledgement writes the same `_count/om` key, so under two
+    /// concurrent workers conflicts are routine, not exceptional. Returning the
+    /// conflict made the caller read a delivered message as undelivered: it
+    /// stayed in the outbox, came back on the next poll, and was sent again —
+    /// a live loop that delivers duplicates for as long as the contention
+    /// lasts, which is what a busy queue guarantees.
     async fn acknowledge(&self, id: OutboxMessageId) -> Result<(), EngineError> {
+        const MAX_ACK_RETRIES: usize = 8;
         let msg_key = om_key(&id);
-        //  always use SSI — never IsolationLevel::default().
-        let txn = self
-            .db
-            .begin(IsolationLevel::SerializableSnapshot)
-            .await
-            .map_err(to_outbox_err)?;
-        if let Some(msg_bytes) = txn.get(msg_key.as_bytes()).await.map_err(to_outbox_err)? {
+        for _attempt in 0..MAX_ACK_RETRIES {
+            //  always use SSI — never IsolationLevel::default().
+            let txn = self
+                .db
+                .begin(IsolationLevel::SerializableSnapshot)
+                .await
+                .map_err(to_outbox_err)?;
+            let Some(msg_bytes) = txn.get(msg_key.as_bytes()).await.map_err(to_outbox_err)? else {
+                // Already acknowledged — by an earlier attempt of this call, or
+                // by another worker. Either way the message is gone, which is
+                // what the caller asked for.
+                txn.rollback();
+                return Ok(());
+            };
             let msg: OutboxMessage = serde_json::from_slice(&msg_bytes)
                 .map_err(|e| EngineError::outbox(e.to_string()))?;
             let ts_key = ot_key(msg.deliver_after.unwrap_or(msg.created_at), &id);
@@ -1717,9 +1733,17 @@ impl OutboxStore for SlateDbStore {
             txn.delete(ts_key.as_bytes()).map_err(to_outbox_err)?;
             txn.put(OM_COUNT_KEY, new_count.to_le_bytes().as_slice())
                 .map_err(to_outbox_err)?;
-            txn.commit().await.map_err(to_outbox_err)?;
+            match txn.commit().await {
+                Ok(_) => return Ok(()),
+                Err(e) if e.kind() == ErrorKind::Transaction => {
+                    // Conflict: retry against the freshly-read state.
+                }
+                Err(e) => return Err(to_outbox_err(e)),
+            }
         }
-        Ok(())
+        Err(EngineError::outbox(
+            "acknowledge conflict: too many retries",
+        ))
     }
 
     async fn reschedule(
@@ -3352,6 +3376,44 @@ mod tests {
             "message must not be visible after acknowledge"
         );
         assert_eq!(store.len().await.unwrap(), 0, "om/ entry must be deleted");
+    }
+
+    /// Two workers acknowledging at the same time must both succeed.
+    ///
+    /// Every acknowledgement writes `_count/om`, so concurrent acks conflict
+    /// under SSI as a matter of course. Surfacing that conflict to the caller
+    /// made a delivered message look undelivered — it stayed in the outbox and
+    /// was sent again on the next poll, which is duplicate delivery on the
+    /// healthy path, not a rare race.
+    #[tokio::test]
+    async fn concurrent_acknowledges_all_succeed() {
+        let store = std::sync::Arc::new(make_store().await);
+        let msgs: Vec<_> = (0..8)
+            .map(|_| make_outbox_msg(Duration::hours(-1)))
+            .collect();
+        let ids: Vec<_> = msgs.iter().map(|m| m.message_id).collect();
+        store.enqueue(&msgs).await.unwrap();
+
+        let acks = ids.into_iter().map(|id| {
+            let store = std::sync::Arc::clone(&store);
+            tokio::spawn(async move { store.acknowledge(id).await })
+        });
+        for ack in acks {
+            ack.await
+                .expect("ack task panicked")
+                .expect("a conflicting acknowledge must retry, not fail");
+        }
+
+        assert_eq!(
+            store
+                .pending(10, OffsetDateTime::now_utc())
+                .await
+                .unwrap()
+                .len(),
+            0,
+            "every acknowledged message must be gone from the outbox",
+        );
+        assert_eq!(store.len().await.unwrap(), 0, "the counter must reach zero");
     }
 
     #[tokio::test]

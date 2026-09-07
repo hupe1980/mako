@@ -55,7 +55,10 @@
 #  RUST_VERSION     Rust toolchain channel (default: matches rust-toolchain.toml)
 #  DEBIAN_CODENAME  Debian release for builder base (default: bookworm)
 #  PROFILE          Cargo profile: release (default) or dev
-#  OCI_VERSION      Image version label
+#  OCI_VERSION      Image version label. Defaults to `dev`, matching
+#                   `docker-bake.hcl`: a plain `docker build` produces an
+#                   unreleased image and must not label it with a released
+#                   version. CI passes the workspace version.
 #  OCI_REVISION     Git commit SHA (set at CI time)
 #  OCI_CREATED      ISO-8601 build timestamp (set at CI time)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -256,7 +259,7 @@ ENTRYPOINT ["/usr/local/bin/makod"]
 #   docker build \
 #     --build-arg OCI_REVISION=$(git rev-parse HEAD) \
 #     --build-arg OCI_CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ) …
-ARG OCI_VERSION=0.8.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="makod" \
@@ -295,7 +298,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
 
 ENTRYPOINT ["/usr/local/bin/marktd"]
 
-ARG OCI_VERSION=0.8.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="marktd" \
@@ -331,7 +334,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
 
 ENTRYPOINT ["/usr/local/bin/processd"]
 
-ARG OCI_VERSION=0.8.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="processd" \
@@ -367,7 +370,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
 
 ENTRYPOINT ["/usr/local/bin/invoicd"]
 
-ARG OCI_VERSION=0.8.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="invoicd" \
@@ -403,7 +406,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
 
 ENTRYPOINT ["/usr/local/bin/edmd"]
 
-ARG OCI_VERSION=0.8.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="edmd" \
@@ -439,7 +442,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
 
 ENTRYPOINT ["/usr/local/bin/obsd"]
 
-ARG OCI_VERSION=0.8.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="obsd" \
@@ -468,7 +471,7 @@ ENV NETZBILANZD_LOG_FORMAT=json \
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/netzbilanzd", "--check"]
 ENTRYPOINT ["/usr/local/bin/netzbilanzd"]
-ARG OCI_VERSION=0.11.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="netzbilanzd" \
@@ -497,7 +500,7 @@ ENV SPERRD_LOG_FORMAT=json \
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/sperrd", "--check"]
 ENTRYPOINT ["/usr/local/bin/sperrd"]
-ARG OCI_VERSION=0.11.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="sperrd" \
@@ -526,7 +529,7 @@ ENV EINSD_LOG_FORMAT=json \
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
     CMD ["/usr/local/bin/einsd", "--check"]
 ENTRYPOINT ["/usr/local/bin/einsd"]
-ARG OCI_VERSION=0.11.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="einsd" \
@@ -555,7 +558,7 @@ ENV PRODUCTD_LOG_FORMAT=json \
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/productd", "--check"]
 ENTRYPOINT ["/usr/local/bin/productd"]
-ARG OCI_VERSION=0.11.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="productd" \
@@ -584,7 +587,7 @@ ENV BILLINGD_LOG_FORMAT=json \
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/billingd", "--check"]
 ENTRYPOINT ["/usr/local/bin/billingd"]
-ARG OCI_VERSION=0.11.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="billingd" \
@@ -613,7 +616,7 @@ ENV OUTPUTD_LOG_FORMAT=json \
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/outputd", "--check"]
 ENTRYPOINT ["/usr/local/bin/outputd"]
-ARG OCI_VERSION=0.11.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="outputd" \
@@ -642,7 +645,7 @@ ENV ACCOUNTINGD_LOG_FORMAT=json \
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/accountingd", "--check"]
 ENTRYPOINT ["/usr/local/bin/accountingd"]
-ARG OCI_VERSION=0.11.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="accountingd" \
@@ -671,7 +674,7 @@ ENV VERTRAGD_LOG_FORMAT=json \
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/vertragd", "--check"]
 ENTRYPOINT ["/usr/local/bin/vertragd"]
-ARG OCI_VERSION=0.11.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="vertragd" \
@@ -700,7 +703,7 @@ ENV PORTALD_LOG_FORMAT=json \
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/portald", "--check"]
 ENTRYPOINT ["/usr/local/bin/portald"]
-ARG OCI_VERSION=0.11.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="portald" \
@@ -729,7 +732,7 @@ ENV AGENTD_LOG_FORMAT=json \
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
     CMD ["/usr/local/bin/agentd", "--check"]
 ENTRYPOINT ["/usr/local/bin/agentd"]
-ARG OCI_VERSION=0.11.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="agentd" \
@@ -758,7 +761,7 @@ ENV MABIS_SYNCD_LOG_FORMAT=json \
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["/usr/local/bin/mabis-syncd", "--check"]
 ENTRYPOINT ["/usr/local/bin/mabis-syncd"]
-ARG OCI_VERSION=0.11.0
+ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="mabis-syncd" \

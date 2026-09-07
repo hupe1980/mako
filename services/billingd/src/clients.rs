@@ -1460,7 +1460,7 @@ impl OutputdClient {
         Ok(RenderedDocument { pdf, template_hash })
     }
 
-    /// `POST /api/v1/documents/INVOICE` — render, **record** and queue for
+    /// `POST /api/v1/documents/issue/INVOICE` — render, **record** and queue for
     /// delivery.
     ///
     /// The difference from [`Self::render_invoice`] is not the bytes but that
@@ -1485,7 +1485,7 @@ impl OutputdClient {
             "channels":    req.channels,
         });
         self.up
-            .json(self.up.post("/api/v1/documents/INVOICE").json(&body))
+            .json(self.up.post("/api/v1/documents/issue/INVOICE").json(&body))
             .await
             .context("outputd POST document INVOICE")?
             .context("outputd answered 404 for the document endpoint — is it on this version?")

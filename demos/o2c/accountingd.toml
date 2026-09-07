@@ -1,0 +1,15 @@
+# accountingd.toml — order-to-cash demo (auth disabled)
+# DO NOT use in production.
+
+port   = 9380
+tenant = "9912345000005"
+
+# Receives de.accounting.payment.due and the Jahresabschluss refund events.
+erp_webhook_url = "http://webhook:8000/events"
+
+[database]
+url = "postgres://demo:demo-secret@postgres/accountingd"
+
+# No [oidc] section: the verifier starts disabled and every request is admitted
+# with dev claims. accountingd says so loudly at startup. Demo only — these are
+# the endpoints that move money.

@@ -14,9 +14,8 @@
 addr = "0.0.0.0:8580"
 
 [database]
-# Each service owns its own database (microservices DB autonomy).
-# The `processd` database is created by demo/init-db.sh on first boot.
-# url is injected via PROCESSD_DATABASE__URL env var
+# Created by init-db.sh on first boot; docker-compose.yml overrides this with
+# PROCESSD_DATABASE__URL.
 url       = "postgres://demo:demo-secret@postgres/processd"
 pool_size = 10
 
@@ -36,26 +35,21 @@ url     = "http://marktd:8180"
 api_key = "demo-processd-key"  # any value accepted (OIDC disabled)
 
 [webhook]
-# inbound_secret is intentionally absent in demo — processd accepts all events
-# without HMAC verification.  In production, set to match marktd subscription secret.
+# No inbound_secret: events are accepted without HMAC verification. In
+# production this must match the marktd subscription secret.
 
 [subscription]
-# processd self-registers this subscription with marktd on startup.
-# No manual curl required — topology is fully config-driven.
+# processd self-registers with marktd on startup, authenticating with
+# `[marktd] api_key`.
 webhook_url   = "http://processd:8580/webhook"
 subscriber_id = "processd-demo"
-# event_types is left at the code default, which is the full set the compiled
-# modules need: de.mako.process.initiated for the NB/LF/MSB STP modules plus
-# de.markt.versorgung.gap-detected / .eog-begonnen / .changed for the §36/§38
-# EoG gap closure. Narrowing it here disables a module without any other signal.
-# marktd requires a bearer on subscription writes and treats subscription
-# management as an operator capability; processd sends `[marktd] api_key`.
+# event_types stays at the code default — the full set the compiled modules
+# need. Narrowing it here disables a module with no other signal.
 
 [nb]
-# NB Anmeldung STP: automatically dispatch bestaetigen when every mako-pruefung
-# checks pass.  In production, verify grid record + partner coverage first
-# (STP target ≥ 95 %).  Safe to enable in the demo because all master data is
-# pre-seeded by smoke.sh.
+# Dispatch bestaetigen automatically when every mako-pruefung check passes.
+# Safe here because smoke.sh pre-seeds all master data; in production, verify
+# grid record and partner coverage first.
 auto_accept = true
 
 [lf]
@@ -78,8 +72,8 @@ auto_accept = true
 # its 5-Werktage Frist, never as a bare log line.
 auto_preisanfrage = true
 
-# [oidc] — intentionally absent: authentication is disabled in demo mode.
-# All API requests are accepted with synthetic dev-admin claims.
+# No [oidc]: authentication is disabled and every request is admitted with
+# synthetic dev-admin claims.
 #
 # [oidc]
 # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"

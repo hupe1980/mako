@@ -1002,6 +1002,11 @@ pub async fn ingest_webhook(
 /// and counted as `deduplicated` — no duplicate ledger entries are created.
 /// When `bank_transaction_id` is absent, a stable hash of (iban+amount+date+reference)
 /// is used as the deduplication key.
+///
+/// `skipped` is a total; the summary breaks it down into `malformed` (the row
+/// could not be read), `unmatched` (no account claims it) and `failed` (the
+/// lookup or the ledger write errored). They call for different responses, and
+/// a single number cannot tell a quiet day from a broken database.
 pub async fn import_payments(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -1017,6 +1022,12 @@ pub async fn import_payments(
     let mut accepted = 0usize;
     let mut deduplicated = 0usize;
     let mut skipped = 0usize;
+    // `skipped` is the total; these say which kind, because "nobody paid",
+    // "the bank sent us nonsense" and "the ledger is down" need different
+    // answers from whoever reads the import summary.
+    let mut malformed = 0usize;
+    let mut unmatched = 0usize;
+    let mut failed = 0usize;
 
     for raw in &entries {
         // Every rejection names the field and the reason, so a skipped bank row
@@ -1025,6 +1036,7 @@ pub async fn import_payments(
             Ok(entry) => entry,
             Err(e) => {
                 tracing::warn!(error = %e, "accountingd: bank export row rejected — skipping");
+                malformed += 1;
                 skipped += 1;
                 continue;
             }
@@ -1084,7 +1096,36 @@ pub async fn import_payments(
         )
         .await;
 
-        if let Ok(Some(matched)) = matched {
+        // Three outcomes, and they are not the same thing: a match, a row no
+        // account claims, and a lookup that never ran. Collapsing the last two
+        // into one silent `skipped` is how a database fault reads as "nobody
+        // paid" — the count is identical and nothing is logged.
+        let matched = match matched {
+            Ok(Some(matched)) => matched,
+            Ok(None) => {
+                tracing::warn!(
+                    bank_txn_id = %bank_txn_id,
+                    amount_ct = entry.ledger_ct(),
+                    reference = %entry.reference,
+                    has_end_to_end_id = entry.end_to_end_id.is_some(),
+                    "accountingd: no account claims this payment — skipping (unmatched)"
+                );
+                unmatched += 1;
+                skipped += 1;
+                continue;
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    bank_txn_id = %bank_txn_id,
+                    "accountingd: account resolution FAILED — entry discarded; investigate DB health"
+                );
+                failed += 1;
+                skipped += 1;
+                continue;
+            }
+        };
+        {
             let malo_id = matched.malo_id.clone();
             let lf_mp_id = matched.lf_mp_id.clone();
             {
@@ -1134,9 +1175,8 @@ pub async fn import_payments(
                         }
 
                         // Announce the booking. `de.accounting.bankruecklast`
-                        // drives agentd's payment-reconciliation agent, which
-                        // never ran because nothing emitted it — a returned
-                        // direct debit is precisely what it exists for.
+                        // is what drives agentd's payment-reconciliation agent,
+                        // and a returned direct debit is what that exists for.
                         let ce_type = if is_return {
                             mako_events::accounting::BANKRUECKLAST
                         } else {
@@ -1174,18 +1214,22 @@ pub async fn import_payments(
                             error = %e,
                             "accountingd: ledger write FAILED — entry discarded; investigate DB health"
                         );
+                        failed += 1;
                         skipped += 1;
                     }
                 }
             }
-        } else {
-            skipped += 1;
         }
     }
     Json(serde_json::json!({
         "accepted": accepted,
         "deduplicated": deduplicated,
         "skipped": skipped,
+        // Why a row was skipped, so a caller can tell a payment nobody
+        // recognises from one the ledger refused to book.
+        "unmatched": unmatched,
+        "malformed": malformed,
+        "failed": failed,
         "total": entries.len(),
     }))
     .into_response()
@@ -1390,6 +1434,10 @@ async fn import_cash_entries(
                 .or_else(|| entry.booking_date())
                 .and_then(|iso| time::Date::try_from(iso).ok())
             else {
+                tracing::warn!(
+                    account_servicer_ref = ?entry.account_servicer_ref,
+                    "accountingd: camt entry carries neither a value nor a booking date — skipping"
+                );
                 out.skipped += 1;
                 continue;
             };
@@ -1440,10 +1488,31 @@ async fn import_cash_entries(
                 },
             )
             .await;
-            let Ok(Some(matched)) = matched else {
-                out.unresolved += 1;
-                out.skipped += 1;
-                continue;
+            // As in the flat import: a row nobody claims and a lookup that
+            // errored are different facts, and only one of them means the
+            // payment is unattributable.
+            let matched = match matched {
+                Ok(Some(matched)) => matched,
+                Ok(None) => {
+                    tracing::warn!(
+                        bank_txn_id = %bank_txn_id,
+                        amount_ct = signed_ct,
+                        reference = %reference,
+                        "accountingd: no account claims this camt entry — skipping (unresolved)"
+                    );
+                    out.unresolved += 1;
+                    out.skipped += 1;
+                    continue;
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        bank_txn_id = %bank_txn_id,
+                        "accountingd: account resolution FAILED — camt entry discarded; investigate DB health"
+                    );
+                    out.skipped += 1;
+                    continue;
+                }
             };
             let malo_id = matched.malo_id.clone();
             let lf_mp_id = matched.lf_mp_id.clone();
@@ -2175,10 +2244,13 @@ pub async fn abwendung_angebot(
     if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
         return forbidden(&e);
     }
-    let Ok(Some((_, malo_id, lf_mp_id))) =
-        crate::pg::dunning_case_account(&pool, id, &cfg.tenant).await
-    else {
-        return StatusCode::NOT_FOUND.into_response();
+    // `Err` is not "no such case": a database fault answered 404, and a client
+    // told the Mahnfall does not exist stops retrying instead of backing off.
+    let (_, malo_id, lf_mp_id) = match crate::pg::dunning_case_account(&pool, id, &cfg.tenant).await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return internal(&e),
     };
     // Re-derived, not read: the instalment band depends on the arrears, and an
     // offer quoting the wrong band is a §41g Abs. 1 S. 7-9 defect.
@@ -2514,11 +2586,12 @@ pub async fn place_einwand(
         )
             .into_response();
     }
-    let Ok(Some((account_id, malo_id, lf_mp_id))) =
-        crate::pg::dunning_case_account(&pool, id, &cfg.tenant).await
-    else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
+    let (account_id, malo_id, lf_mp_id) =
+        match crate::pg::dunning_case_account(&pool, id, &cfg.tenant).await {
+            Ok(Some(row)) => row,
+            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Err(e) => return internal(&e),
+        };
 
     let done = async {
         let mut tx = pool.begin().await?;
@@ -2569,10 +2642,10 @@ pub async fn get_einwaende(
     if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
         return forbidden(&e);
     }
-    let Ok(Some((account_id, _, _))) =
-        crate::pg::dunning_case_account(&pool, id, &cfg.tenant).await
-    else {
-        return StatusCode::NOT_FOUND.into_response();
+    let (account_id, _, _) = match crate::pg::dunning_case_account(&pool, id, &cfg.tenant).await {
+        Ok(Some(row)) => row,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return internal(&e),
     };
     match crate::pg::list_einwaende(&pool, account_id, &cfg.tenant).await {
         Ok(rows) => Json(rows).into_response(),

@@ -608,6 +608,10 @@ fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bo
             format!("agent plane over the platform's {total} MCP tools"),
         ),
         (
+            "site/content/docs/services/agentd.md",
+            format!("MCP Tools — {serving} services, {total} tools"),
+        ),
+        (
             "concepts/MARKET_LANDSCAPE.md",
             format!(
                 "over the {total} MCP tools the other services expose ({serving} of {all_services})"

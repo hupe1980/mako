@@ -93,6 +93,20 @@ use mako_engine::{
 };
 use mako_fristen::{APERAK_STROM_WINDOW_LABEL, aperak_strom_due_at};
 
+/// `ZW7` „Gemessene Marktlokation" — the `SG4 STS+7` DE 9013 Ergänzung of a
+/// Bestätigung that names the Messlokationen behind the Marktlokation.
+const GEMESSENE_MALO: &str = "ZW7";
+
+/// `ZW6` „Pauschale Marktlokation".
+///
+/// What a Bestätigung naming no Messlokation says, and the only thing it *can*
+/// say: `ZW7` obliges an `SG5 LOC+Z17` for every Messlokation the Energiemenge
+/// is computed from (Bedingung `[483]` ∧ `[623]`), so an answer with none is
+/// not a gemessene Marktlokation as far as the wire is concerned. `ZAP`
+/// „Ruhende Marktlokation" is the third code and the NB states it explicitly
+/// through [`crate::LfAntwort::malo_art`].
+const PAUSCHALE_MALO: &str = "ZW6";
+
 // ── PID set ───────────────────────────────────────────────────────────────────
 
 /// Workflow name used for PID routing and `WorkflowId` construction.
@@ -193,8 +207,18 @@ pub enum SupplierChangeEvent {
         /// SG4 STS Transaktionsgrund (DE9013), when transmitted.
         #[serde(default)]
         transaktionsgrund: Option<String>,
+        /// SG4 STS Transaktionsgrundergänzung (DE9013 element 3).
+        #[serde(default)]
+        transaktionsgrund_ergaenzung: Option<String>,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// `IDE+24` DE 7402 — the sender's Vorgangsnummer, echoed by the
+        /// answer in `SG6 RFF+TN`.
+        #[serde(default)]
+        vorgangsnummer: String,
+        /// `SG8 SEQ+Z79` DE 1050 — the Produktpaket-ID, echoed in `RFF+Z60`.
+        #[serde(default)]
+        produktpaket_id: Option<String>,
         /// BDEW Prüfidentifikator.
         pruefidentifikator: Pruefidentifikator,
     },
@@ -307,6 +331,39 @@ pub struct InitiatedData {
     pub transaktionsgrund: Option<String>,
     /// BDEW Prüfidentifikator — identifies the process family and step.
     pub pruefidentifikator: Pruefidentifikator,
+    /// `SG4 STS+7` DE 9013 element 3 of the **Anfrage**.
+    ///
+    /// Echoed by the Bestätigung Anmeldung erzeugende MaLo (55078), whose
+    /// column admits the same `ZW0`/`ZW1`/`ZW2` as the 55077 it answers: what
+    /// kind of Erzeugung the Marktlokation is has not changed between the two.
+    /// The verbrauchende pair does *not* echo it — 55002 admits `ZW6`/`ZW7`/
+    /// `ZAP` and the Anmeldung says `ZW4`.
+    #[serde(default)]
+    pub transaktionsgrund_ergaenzung: Option<String>,
+    /// `SG8 SEQ+Z79` DE 1050 of the **Anfrage** — the Produktpaket-ID it
+    /// offers.
+    ///
+    /// `SG6 RFF+Z60` „Informativ zur Umsetzung geplantes Produktpaket" is Muss
+    /// on a Bestätigung Anmeldung, and unless the NB names a different package
+    /// it is implementing the one it was asked for. Carrying it here is what
+    /// lets the answer state it without the ERP having to repeat it.
+    #[serde(default)]
+    pub produktpaket_id: Option<String>,
+    /// `IDE+24` DE 7402 of the inbound Vorgang.
+    ///
+    /// `SG6 RFF+TN` „Referenz Vorgangsnummer (aus Anfragenachricht)" is Muss on
+    /// every Antwortnachricht, and the answer's own `IDE+24` must be a *fresh*
+    /// number — so this is the only thing that ties the two together.
+    #[serde(default)]
+    pub vorgangsnummer: String,
+    /// `UNH` DE 0062 of the inbound UTILMD.
+    ///
+    /// Carried into the state because the APERAK that answers it can be
+    /// dispatched by a *later* command (`DispatchAperakFehler`), long after the
+    /// command that parsed the message is gone. `SG2 RFF+ACE` is Muss in both
+    /// APERAK Anwendungsfälle, so without it the acknowledgement cannot be
+    /// rendered at all.
+    pub message_ref: MessageRef,
 }
 
 /// Current state of a GPKE supplier-change process stream.
@@ -480,6 +537,11 @@ pub enum SupplierChangeCommand {
         /// only thing tying the Information über existierende Zuordnung to the
         /// Anmeldung that triggered it.
         vorgangsnummer: Option<String>,
+        /// `SG8 SEQ+Z79` DE 1050 — the Produktpaket-ID the Anmeldung offers.
+        ///
+        /// Echoed by the Bestätigung in `SG6 RFF+Z60`, where the AHB marks it
+        /// Muss. `None` on an Anwendungsfall that carries no Produktpaket.
+        produktpaket_id: Option<String>,
         /// `SG12 NAD+Z09` — the Letztverbraucher the LFN named in its Anmeldung.
         ///
         /// Carried through because the NB copies it into the Anfrage zur
@@ -750,7 +812,11 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 document_date,
                 process_date,
                 transaktionsgrund,
+                transaktionsgrund_ergaenzung,
                 pruefidentifikator,
+                message_ref,
+                vorgangsnummer,
+                produktpaket_id,
                 ..
             } => SupplierChangeState::Initiated(InitiatedData {
                 location_id: location_id.clone(),
@@ -759,7 +825,11 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 document_date: document_date.clone(),
                 process_date: process_date.clone(),
                 transaktionsgrund: transaktionsgrund.clone(),
+                transaktionsgrund_ergaenzung: transaktionsgrund_ergaenzung.clone(),
                 pruefidentifikator: *pruefidentifikator,
+                vorgangsnummer: vorgangsnummer.clone(),
+                produktpaket_id: produktpaket_id.clone(),
+                message_ref: message_ref.clone(),
             }),
             SupplierChangeEvent::ValidationPassed { .. } => {
                 // Transition to ValidationPassed, carrying forward InitiatedData.
@@ -841,6 +911,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 veraeusserungsform,
                 tranchengroesse_prozent,
                 vorgangsnummer,
+                produktpaket_id,
                 kunde_name,
                 kunde_namensformat,
                 message_ref,
@@ -875,11 +946,16 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                     document_date,
                     process_date: process_date.clone(),
                     transaktionsgrund: transaktionsgrund.clone(),
+                    transaktionsgrund_ergaenzung: transaktionsgrund_ergaenzung.clone(),
                     message_ref: message_ref.clone(),
+                    vorgangsnummer: vorgangsnummer.clone().unwrap_or_default(),
+                    produktpaket_id: produktpaket_id.clone(),
                     pruefidentifikator: pid,
                 }];
                 if validation_passed {
-                    events.push(SupplierChangeEvent::ValidationPassed { message_ref });
+                    events.push(SupplierChangeEvent::ValidationPassed {
+                        message_ref: message_ref.clone(),
+                    });
                 } else {
                     events.push(SupplierChangeEvent::Rejected {
                         reason: validation_errors.join("; "),
@@ -947,15 +1023,10 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                         // be sent for Strom (unlike Gas, where silence = acceptance).
                         // Frist (UTILMD/ORDERS weekday): 45 Min (APERAK AHB 1.0 §2.4.1).
                         // Saturday UTILMD/ORDERS: Sonntag 12 Uhr; other: nächster Werktag 12 Uhr.
-                        PendingOutbox::new(
-                            "APERAK",
+                        PendingOutbox::aperak_anerkennung(
+                            receiver.as_str(),
                             sender.as_str(),
-                            serde_json::json!({
-                                "sender":        receiver.as_str(),
-                                "receiver":      sender.as_str(),
-                                "pid":           29001_u32,
-                                "document_code": "312",
-                            }),
+                            message_ref.as_str(),
                         )
                         .caused_by(1),
                     ]
@@ -965,16 +1036,12 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                     // APERAK AHB 1.0 §2.1.1: mandatory rejection APERAK on validation failure.
                     // Caused by Initiated (index 0) — no ValidationPassed event in this path.
                     vec![
-                        PendingOutbox::new(
-                            "APERAK",
+                        PendingOutbox::aperak_fehler(
+                            receiver.as_str(),
                             sender.as_str(),
-                            serde_json::json!({
-                                "sender":     receiver.as_str(),
-                                "receiver":   sender.as_str(),
-                                "pid":        29001_u32,
-                                "error_code": mako_engine::erc::codes::Z29,
-                                "reason":     validation_errors.join("; "),
-                            }),
+                            message_ref.as_str(),
+                            mako_engine::erc::codes::Z29,
+                            validation_errors.join("; "),
                         )
                         .caused_by(0),
                     ]
@@ -1019,21 +1086,94 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 // (55002/55003/55005/55006/55078/55080).
                 let mut outbox: Vec<PendingOutbox> = vec![];
                 if let Some(rpid) = response_pid {
+                    // The Bestätigung and the Ablehnung of one Anfrage are
+                    // different Anwendungsfälle, not one message with a
+                    // different code: an Ablehnung's Prüfschablone admits no
+                    // Lokation, no date and no Produktpaket, and sending them
+                    // anyway is eleven `NOT-PERMITTED` findings at the LFN.
+                    let form = crate::AntwortForm::of(rpid.as_u32());
+                    let lokationsdaten = form.is_some_and(|f| f.lokationsdaten);
                     let mut payload = serde_json::json!({
                         "pid":          rpid.as_u32(),
                         "sender":       data.grid_operator.as_str(),
                         "receiver":     data.new_supplier.as_str(),
-                        "malo":         data.location_id.as_str(),
-                        "process_date": data.process_date,
                         // `SG4 STS+E01++<code>:<ebd>` — Muss on every
                         // Antwortnachricht. Without it the renderer emits a
                         // well-formed UTILMD that states no Grund at all.
                         "antwort_code": antwort.antwort_code,
                         "antwort_codeliste":  antwort.ebd,
+                        // `SG6 RFF+TN` — Muss on every Antwortnachricht: the
+                        // answer's own `IDE+24` is a fresh number, so this is
+                        // the only thing that ties it to the Anfrage.
+                        "referenz_vorgangsnummer": data.vorgangsnummer,
+                        // `SG4 DTM` — the renderer drops it where the column
+                        // lists no place for the qualifier this PID rides
+                        // (every Ablehnung), so it is stated unconditionally
+                        // rather than gated by a second copy of that table.
+                        "process_date": data.process_date,
+                        // `SG4 STS+7` — the Anfrage's Transaktionsgrund. Its
+                        // Ergänzung is decided below, per Anwendungsfall.
+                        "transaktionsgrund": data.transaktionsgrund,
                         // `FTX+ACB` — the Erläuterung the catch-all codes
                         // require and every Ablehnung benefits from.
                         "bemerkung":    antwort.bemerkung,
+                        // `BGM` DE 1001 — `E02` on the Abmeldungs-Antworten.
+                        "document_code": form.map_or("E01", |f| f.document_code),
                     });
+                    // `SG4 STS+7` DE 9013 element 3. Three cases, and only one
+                    // of them is the NB's own judgement:
+                    //   • 55002 — the NB classifies the Marktlokation
+                    //     (`ZW6` pauschal / `ZW7` gemessen / `ZAP` ruhend);
+                    //   • 55003 / 55080 — the column fixes one code;
+                    //   • 55078 — the erzeugende Anmeldung's own `ZW0`/`ZW1`/
+                    //     `ZW2` is echoed, because it says what kind of
+                    //     Erzeugung it is and that has not changed;
+                    //   • 55005 / 55006 — the column admits none at all.
+                    let ergaenzung = match form {
+                        // The NB's classification, and it follows the data the
+                        // answer actually carries: naming the Messlokationen
+                        // *is* saying the Marktlokation is gemessen, and naming
+                        // none is saying it is not. An explicit `malo_art`
+                        // overrides — `ZAP` „Ruhende Marktlokation" has no
+                        // other spelling.
+                        Some(f) if f.klassifiziert_malo => {
+                            Some(antwort.malo_art.clone().unwrap_or_else(|| {
+                                if antwort.messlokationen.is_empty() {
+                                    PAUSCHALE_MALO.to_owned()
+                                } else {
+                                    GEMESSENE_MALO.to_owned()
+                                }
+                            }))
+                        }
+                        Some(f) => f.ergaenzung.map(ToOwned::to_owned).or_else(|| {
+                            f.lokationsdaten
+                                .then(|| data.transaktionsgrund_ergaenzung.clone())
+                                .flatten()
+                        }),
+                        None => None,
+                    };
+                    if let Some(erg) = ergaenzung {
+                        payload["transaktionsgrund_ergaenzung"] = serde_json::json!(erg);
+                    }
+                    if lokationsdaten {
+                        // `SG5 LOC+Z16` — the Marktlokation the NB confirms.
+                        payload["malo"] = serde_json::json!(data.location_id.as_str());
+                        // `SG6 RFF+Z60` — which Produktpaket-ID the NB will
+                        // implement.
+                        // The NB names a package only when it is implementing
+                        // a different one; otherwise it is the one the
+                        // Anmeldung offered.
+                        payload["geplantes_produktpaket"] = serde_json::json!(
+                            antwort
+                                .geplantes_produktpaket
+                                .clone()
+                                .or_else(|| data.produktpaket_id.clone())
+                        );
+                        // `SG5 LOC+Z17` + `SG8 SEQ+Z98`/`SEQ+ZF3` — the
+                        // Messlokationen and the Messstellenbetreiber of each.
+                        payload["messlokationen"] = serde_json::json!(antwort.messlokationen);
+                        payload["malo_msb"] = serde_json::json!(antwort.malo_msb);
+                    }
                     // Fall b, and only on a Bestätigung: an Ablehnung leaves the
                     // Altlieferant where it was, so no interval opens.
                     if accepted && let Some(ende) = lfa_lieferende.as_deref() {
@@ -1097,16 +1237,12 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 // APERAK AHB 1.0 § 2.4.1: 45 Minuten on a weekday for a UTILMD.
                 let outbox = if let Some(data) = state.initiated_data() {
                     vec![
-                        PendingOutbox::new(
-                            "APERAK",
+                        PendingOutbox::aperak_fehler(
+                            data.grid_operator.as_str(),
                             data.new_supplier.as_str(),
-                            serde_json::json!({
-                                "sender":     data.grid_operator.as_str(),
-                                "receiver":   data.new_supplier.as_str(),
-                                "pid":        29001_u32,
-                                "error_code": mako_engine::erc::codes::Z29,
-                                "reason":     reason,
-                            }),
+                            data.message_ref.as_str(),
+                            mako_engine::erc::codes::Z29,
+                            reason,
                         )
                         .caused_by(0),
                     ]

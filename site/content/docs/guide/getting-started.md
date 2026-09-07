@@ -241,8 +241,11 @@ The demo ships `smoke.sh` which runs all of the above automatically and asserts
 every step passes, including the auto-accept timing:
 
 ```bash
-MARKTD_URL=http://localhost:8180 WEBHOOK_URL=http://localhost:8000 bash smoke.sh
+bash smoke.sh
 ```
+
+`MARKTD_URL` and `WEBHOOK_URL` default to what `docker-compose.yml` publishes.
+Set either to the empty string to exercise `makod` alone.
 
 Output ends with:
 
@@ -323,6 +326,49 @@ receives. The amount alone is not a legal document: under the Gutschriftverfahre
 renders it as a BO4E `Rechnung` whose VAT follows the operator's declared
 `ust_status` — the fixture is a Kleinunternehmer (§ 19 UStG), so it carries 0 %
 USt.
+
+---
+
+## The third demo — order-to-cash
+
+`demos/o2c` runs the retail money path: what the supplier sells, who bought it,
+what they owe, the document that says so, and the receivable behind it. No
+EDIFACT at all — `demos/nb-stp` is where a market message goes out; this is what
+happens on the supplier's own books once supply is running.
+
+| Service | Port | Role |
+|---|---|---|
+| `productd` | `9080` | Product and tariff catalogue — the only price source |
+| `vertragd` | `9780` | Kunden, Verträge, Kündigungsfristen |
+| `billingd` | `9280` | Multi-product billing engine (EN 16931) |
+| `outputd` | `9880` | Document store and delivery |
+| `accountingd` | `9380` | Massenkontokorrent — the double-entry ledger |
+| `webhook` | `8001` | ERP CloudEvent receiver, so this stack runs beside `demos/nb-stp` |
+
+`marktd`, `edmd` and `makod` are deliberately absent — the smoke test names the
+Netzbetreiber and supplies the meter reading, so no lookup happens. Their URLs
+are configured to hostnames that do **not** resolve, so an override that is ever
+dropped fails loudly instead of quietly billing zero.
+
+```bash
+# from the repo root
+just build-demo-o2c
+
+cd demos/o2c
+docker compose up -d
+bash smoke.sh
+```
+
+It publishes a Tarifpreisblatt, creates a Kunde and a Versorgungsvertrag on a
+Marktlokation, bills one month against that tariff, records the document in
+`outputd` for the § 147 AO eight years, watches the invoice land in
+`accountingd` as an Offener Posten, and closes it with a payment import.
+
+The expected amount is computed by the smoke test itself — `20 ct/Tag × 31
+Tage`, `32 ct/kWh × 250 kWh` and the § 3 StromStG Stromsteuer at `2.05 ct/kWh`
+come to `91.325` netto and `108.675` gross at 19 % USt — so a run that priced
+from the wrong tariff version, or rounded the tax the other way, fails at the
+assertion rather than reporting a green invoice for a different amount.
 
 ---
 

@@ -98,6 +98,11 @@ struct MeteringPointSpec {
     /// (BK6-24-174 Anlage 3 §3.8.2). It is the only thing distinguishing a
     /// correction from the original, since `BGM` DE 1225 is always `9`.
     version: Option<String>,
+    /// `SG7 RFF+MG` Gerätenummer — the Zähler the values were read from.
+    geraetenummer: Option<String>,
+    /// `SG6 DTM+163`/`DTM+164` — the period the whole Übertragung covers, as
+    /// EDIFACT format 303.
+    messperiode: Option<(String, String)>,
     line_items: Vec<LineItemSpec>,
 }
 
@@ -275,6 +280,8 @@ impl<S, R> MsconsBuilder<S, R> {
                 location_id: None,
                 balancing_period: None,
                 version: None,
+                geraetenummer: None,
+                messperiode: None,
                 line_items: Vec::new(),
             },
             current_item: None,
@@ -360,11 +367,25 @@ impl<S, R> MsconsBuilder<S, R> {
                     // a message the profile rejects for a missing segment.
                     let loc_id = mp.location_id.as_deref().unwrap_or(mp.malo_id.as_str());
                     emit_seg!(w, "LOC", "172", loc_id);
+                    // `SG6 DTM+163`/`+164` — the period of the *Übertragung*,
+                    // distinct from the per-`QTY` pair in `SG10`: the first
+                    // says what the message covers, the second where each
+                    // value sits inside it. Both are Muss on a Lastgang.
+                    if let Some((start, end)) = &mp.messperiode {
+                        emit_comp!(w, "DTM", ["163", &super::ccyymmddhhmm_utc(start), "303"]);
+                        emit_comp!(w, "DTM", ["164", &super::ccyymmddhhmm_utc(end), "303"]);
+                    }
                     if let Some(period) = &mp.balancing_period {
                         emit_comp!(w, "DTM", ["492", period, "610"]);
                     }
                     if let Some(version) = &mp.version {
                         emit_comp!(w, "DTM", ["293", version, "304"]);
+                    }
+                    // `SG7 RFF+MG` — Muss on the Prozessdatenbericht (13002),
+                    // where the reading is attributed to a Zähler rather than
+                    // to the Messlokation alone.
+                    if let Some(geraet) = &mp.geraetenummer {
+                        emit_comp!(w, "RFF", ["MG", geraet]);
                     }
                     for item in &mp.line_items {
                         let ln = item.line_number.to_string();
@@ -477,6 +498,27 @@ pub struct MeteringPointBuilder<S = Unset, R = Unset> {
 }
 
 impl<S, R> MeteringPointBuilder<S, R> {
+    /// `SG6 DTM+163`/`DTM+164` — „Beginn / Ende Messperiode Übertragung".
+    ///
+    /// Muss on every Lastgang Anwendungsfall (13018, 13025, 13008): the
+    /// receiver has to know what window the message covers before it reads the
+    /// values, so a gap in the series can be told from a short transmission.
+    /// Both bounds are EDIFACT format 303 (`CCYYMMDDHHMMZZZ`).
+    pub fn messperiode(mut self, start: impl Into<String>, end: impl Into<String>) -> Self {
+        self.spec.messperiode = Some((start.into(), end.into()));
+        self
+    }
+
+    /// `SG7 RFF+MG` — the Gerätenummer of the Zähler the values come from.
+    ///
+    /// Muss on MSCONS 13002 „Prozessdatenbericht": the reading is attributed
+    /// to a device, not to the Messlokation alone. The Summenzeitreihen and
+    /// Energiemengen-Anwendungsfälle carry no device and leave it unset.
+    pub fn geraetenummer(mut self, id: impl Into<String>) -> Self {
+        self.spec.geraetenummer = Some(id.into());
+        self
+    }
+
     /// Set the grid location / Messlokation ID (LOC+172).
     pub fn location_id(mut self, id: impl Into<String>) -> Self {
         self.flush_item();

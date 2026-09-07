@@ -391,7 +391,9 @@ impl Workflow for GeliGasStornierungWorkflow {
                     message_ref: message_ref.clone(),
                 }];
                 if validation_passed {
-                    events.push(GeliGasStornierungEvent::ValidationPassed { message_ref });
+                    events.push(GeliGasStornierungEvent::ValidationPassed {
+                        message_ref: message_ref.clone(),
+                    });
                     Ok(WorkflowOutput::events(events))
                 } else {
                     let reason = validation_errors.join("; ");
@@ -404,16 +406,12 @@ impl Workflow for GeliGasStornierungWorkflow {
                     // convention — see STORNIERUNG_RESPONSE_WINDOW_LABEL), not
                     // the APERAK sending deadline, which is a separate clock.
                     let outbox = vec![
-                        PendingOutbox::new(
-                            "APERAK",
+                        PendingOutbox::aperak_fehler(
+                            receiver_gln.as_str(),
                             sender_mp_id.as_str(),
-                            serde_json::json!({
-                                "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_mp_id.as_str(),
-                                "pid":        29001_u32,
-                                "error_code": mako_engine::erc::codes::Z29,
-                                "reason":     reason,
-                            }),
+                            message_ref.as_str(),
+                            mako_engine::erc::codes::Z29,
+                            reason,
                         )
                         .caused_by(0),
                     ];

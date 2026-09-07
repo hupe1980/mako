@@ -1,11 +1,18 @@
 //! Show where every segment of a message sits in the MIG's Nachrichtenstruktur
 //! and what the MIG/AHB checks say about it — the "why is this rejected" view.
 //!
+//! With no argument it walks the shipped profiles and builds a **skeleton** for
+//! every Anwendungsfall — the minimal message its Prüfschablone admits — then
+//! validates each one against that same Prüfschablone. That is the tool's own
+//! proof: a profile whose Muss places cannot be satisfied by any message is a
+//! profile no counterparty can send to, and the loop finds it.
+//!
 //! ```text
+//! cargo run --example 07_resolve --all-features
 //! cargo run --example 07_resolve --all-features -- path/to/message.edi
-//! cargo run --example 07_resolve --all-features -- --structure UTILMD S2.2
-//! cargo run --example 07_resolve --all-features -- --pruefschablone UTILMD S2.2 55001
-//! cargo run --example 07_resolve --all-features -- --skeleton UTILMD S2.2 55001
+//! cargo run --example 07_resolve --all-features -- --structure UTILMD S2.1
+//! cargo run --example 07_resolve --all-features -- --pruefschablone UTILMD S2.1 55001
+//! cargo run --example 07_resolve --all-features -- --skeleton UTILMD S2.1 55001
 //! cargo run --example 07_resolve --all-features -- --skeleton CONTRL 2.0b '#1'
 //! ```
 
@@ -151,11 +158,65 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         None => {
             eprintln!(
-                "usage: 07_resolve <message.edi> | --structure <TYPE> <RELEASE> | --pruefschablone <TYPE> <RELEASE> <PID> | --skeleton <TYPE> <RELEASE> [PID]"
+                "usage: 07_resolve <message.edi> | --structure <TYPE> <RELEASE> \
+                 | --pruefschablone <TYPE> <RELEASE> <PID> | --skeleton <TYPE> <RELEASE> [PID]\n\
+                 no argument: build and validate a skeleton for every shipped Anwendungsfall\n"
             );
-            Ok(())
+            skeleton_sweep()
         }
     }
+}
+
+/// Build the skeleton of every Anwendungsfall of every shipped profile and hold
+/// each against its own Prüfschablone.
+///
+/// The skeleton is derived from the profile — it emits exactly the places the
+/// column marks Muss — so a skeleton that does not validate means the profile
+/// contradicts itself: a Muss place whose own Voraussetzung the rest of the
+/// message cannot satisfy. That is a defect nothing else finds, because every
+/// other check starts from a message somebody wrote.
+fn skeleton_sweep() -> Result<(), Box<dyn std::error::Error>> {
+    let reg = ReleaseRegistry::global();
+    let mut checked = 0_usize;
+    let mut failed = 0_usize;
+    let mut by_type: std::collections::BTreeMap<String, (usize, usize)> =
+        std::collections::BTreeMap::new();
+
+    for profile in reg.all_profiles() {
+        let key = format!("{} {}", profile.message_type(), profile.release().as_str());
+        for af in profile.anwendungsfaelle() {
+            let segs = profile.skeleton(af, &edi_energy::profile::SkeletonParties::default());
+            let pid = af
+                .pid
+                .and_then(|p| edi_energy::Pruefidentifikator::new(p).ok());
+            let issues = profile.validate(&segs, pid);
+            checked += 1;
+            let entry = by_type.entry(key.clone()).or_insert((0, 0));
+            entry.0 += 1;
+            if !issues.is_empty() {
+                failed += 1;
+                entry.1 += 1;
+                let name = af
+                    .pid
+                    .map_or_else(|| af.name.clone(), |p: u32| p.to_string());
+                println!("  FAIL {key} {name} — {} issue(s)", issues.len());
+                for i in &issues {
+                    println!("       [{}] {}", i.rule_id().unwrap_or("-"), i.message);
+                }
+            }
+        }
+    }
+
+    for (key, (n, bad)) in &by_type {
+        println!("  {key:<18} {n:>4} Anwendungsfälle, {bad} failing");
+    }
+    println!("\n{checked} Anwendungsfälle checked, {failed} failing");
+    assert_eq!(
+        failed, 0,
+        "a profile whose own skeleton does not satisfy its own Prüfschablone \
+         cannot be answered by any message",
+    );
+    Ok(())
 }
 
 fn profile(

@@ -28,6 +28,9 @@ fn response_pid(anfrage: u32, accepted: bool) -> Option<u32> {
             document_date: "20261001".to_owned(),
             process_date: "20261001".to_owned(),
             transaktionsgrund: None,
+            transaktionsgrund_ergaenzung: None,
+            vorgangsnummer: "VORGANG0001".to_owned(),
+            produktpaket_id: Some("1".to_owned()),
             message_ref: MessageRef::new("MSG-1"),
         },
     );
@@ -104,12 +107,9 @@ fn nb_antwort(accepted: bool) -> mako_gpke::LfAntwort {
     } else {
         ("A07", "E_0622")
     };
-    mako_gpke::LfAntwort {
-        antwort_code: code.to_owned(),
-        ebd: Some(ebd.to_owned()),
-        zustimmung: accepted,
-        bemerkung: None,
-        bilanzkreis: None,
-        termin: None,
+    if accepted {
+        mako_gpke::LfAntwort::zustimmung(code, ebd)
+    } else {
+        mako_gpke::LfAntwort::ablehnung(code, ebd)
     }
 }

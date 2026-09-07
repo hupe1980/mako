@@ -271,6 +271,18 @@ regulatories:
 # group, compiles clean. An example that exits non-zero is a broken promise to
 # whoever pastes it, so the gate is a real run.
 #
+# The exit code is only half of it: an example that *prints* its findings and
+# returns `Ok(())` passes a run gate while shipping a message no counterparty
+# accepts — which is how a 55001 with ten AHB errors and an MSCONS with twelve
+# stayed in `crates/edi-energy/examples/` unnoticed. The examples now assert
+# what they claim, and the output is scanned here as a second net: an example
+# may not report a failure, a validation error or a panic on the happy path.
+#
+# An example whose *subject* is an invalid message — `05_validate` shows what a
+# rejection looks like — opts out by declaring
+# `_EXAMPLE_EXPECTS_VALIDATION_FINDINGS` in its source. Nothing else grants the
+# exemption, so the opt-out is greppable and cannot be reached by accident.
+#
 # The list comes from `cargo metadata`, not from this file: a hand-kept list is
 # a list a new example is forgotten from.
 examples:
@@ -278,12 +290,30 @@ examples:
     set -uo pipefail
     fail=0
     while read -r crate ex; do
-        if cargo run -q -p "$crate" --all-features --example "$ex" >/dev/null 2>&1; then
-            echo "  ok   $crate/$ex"
-        else
+        src=$(cargo metadata --no-deps --format-version 1 | \
+            python3 -c "import json,sys;m=json.load(sys.stdin);print(next(t['src_path'] for p in m['packages'] if p['name']=='$crate' for t in p['targets'] if t['name']=='$ex' and 'example' in t['kind']))")
+        out=$(cargo run -q -p "$crate" --all-features --example "$ex" 2>&1)
+        code=$?
+        if grep -q '_EXAMPLE_EXPECTS_VALIDATION_FINDINGS' "$src"; then
+            if [ $code -ne 0 ]; then
+                echo "  FAIL $crate/$ex"
+                tail -25 <<<"$out" | sed 's/^/       /'
+                fail=1
+            else
+                echo "  ok   $crate/$ex  (findings expected)"
+            fi
+            continue
+        fi
+        # `FAILED`/`panicked` catch an assertion; `error(s)` with a non-zero
+        # count catches a report an example prints instead of asserting on.
+        if [ $code -ne 0 ] \
+           || grep -qE 'FAILED|panicked at|\[(ERROR|MIG-|AHB-|SEM-)' <<<"$out" \
+           || grep -qE '[1-9][0-9]* (error|finding)\(s\)' <<<"$out"; then
             echo "  FAIL $crate/$ex"
-            cargo run -q -p "$crate" --all-features --example "$ex" 2>&1 | tail -20 | sed 's/^/       /'
+            tail -25 <<<"$out" | sed 's/^/       /'
             fail=1
+        else
+            echo "  ok   $crate/$ex"
         fi
     done < <(cargo metadata --no-deps --format-version 1 | \
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
@@ -402,6 +432,19 @@ build-demo-eeg profile="dev":
     docker build --target marktd-runtime      --build-arg PROFILE={{ profile }} -t marktd:dev    .
     docker build --target edmd-runtime        --build-arg PROFILE={{ profile }} -t edmd:dev      .
     docker build --target einsd-runtime       --build-arg PROFILE={{ profile }} -t einsd:dev     .
+
+# `demos/o2c` runs the retail money path — productd → vertragd → billingd →
+# outputd → accountingd. All five come out of the full `builder` stage, so the
+# first build is the slow one and the rest are a copy.
+# Expected cold build: ~20-45 min; a warm BuildKit cache, a few minutes.
+
+# Build the order-to-cash demo images (productd, vertragd, billingd, outputd, accountingd)
+build-demo-o2c profile="dev":
+    docker build --target productd-runtime    --build-arg PROFILE={{ profile }} -t productd:dev    .
+    docker build --target vertragd-runtime    --build-arg PROFILE={{ profile }} -t vertragd:dev    .
+    docker build --target billingd-runtime    --build-arg PROFILE={{ profile }} -t billingd:dev    .
+    docker build --target outputd-runtime     --build-arg PROFILE={{ profile }} -t outputd:dev     .
+    docker build --target accountingd-runtime --build-arg PROFILE={{ profile }} -t accountingd:dev .
 
 # Build xtask (needed after changing xtask commands)
 build-xtask:

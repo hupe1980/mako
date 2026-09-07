@@ -292,7 +292,9 @@ pub use lf_anmeldung::{
     LfAnmeldungEvent, LfAnmeldungState, NB_RESPONSE_WINDOW_LABEL,
     WORKFLOW_NAME as LF_ANMELDUNG_WORKFLOW_NAME,
 };
-pub use lf_antwort::{LfAntwort, LfVorgangsdaten, antwort_outbox};
+pub use lf_antwort::{
+    AntwortForm, AntwortMesslokation, LfAntwort, LfVorgangsdaten, ZugeordneterMsb, antwort_outbox,
+};
 pub use messwerte::{
     GpkeMesswerteLieferungWorkflow, MSCONS_PIDS, MesswerteLieferungCommand, MesswerteLieferungData,
     MesswerteLieferungEvent, MesswerteLieferungState, WORKFLOW_NAME as MESSWERTE_WORKFLOW_NAME,

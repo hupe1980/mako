@@ -107,8 +107,9 @@ The clean separation of concerns:
 
 ### With Docker Compose (full stack)
 
-See `demos/nb-stp/docker-compose.yml` for the complete 8-service stack (postgres + webhook +
-marktd + processd + makod + invoicd + edmd + obsd).
+See `demos/nb-stp/docker-compose.yml` for the NB STP stack — five services
+(postgres + webhook + marktd + processd + makod), which is what the Lieferbeginn
+path needs.
 
 Minimal compose snippet for marktd alone:
 

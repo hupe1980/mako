@@ -1359,11 +1359,11 @@ compliance reporting.",
 // ── Prompts ───────────────────────────────────────────────────────────────────
 //
 // These are instructions a model acts on, so a wrong one is worse than none.
-// They previously taught an additive Managementprämie of 0,4 ct/kWh (Anlage 1
-// defines `MP = AW − MW` and nothing else; §20 EEG 2023 has no Absätze at all),
-// a 20-year clock reset under "§22" (that is the Ausschreibung provision), a
-// twelve-month advance-notice duty under "§21 Abs. 1" that no such provision
-// contains, and MaStR maintenance under "§28a". All of it is gone.
+// Every statutory claim below is anchored: Anlage 1 defines the
+// Managementprämie as `MP = AW − MW` and nothing else (§20 EEG 2023 has no
+// Absätze), §22 is the Ausschreibung provision and resets no 20-year clock,
+// §21 Abs. 1 imposes no twelve-month advance notice, and §28a is not about
+// MaStR maintenance.
 
 #[prompt_router]
 impl EinsdMcpHandler {

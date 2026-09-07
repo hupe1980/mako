@@ -6,8 +6,8 @@ use uuid::Uuid;
 // ── Canonical types re-exported from `metering` ───────────────────────────────
 //
 // `metering` is the single source of truth for `QualityFlag` and `Sparte`.
-// Re-exporting here eliminates the duplicate definitions that previously required
-// an 8-arm identity match (`map_quality_flag`) in every service that used both crates.
+// Re-exporting here keeps a service that uses both crates from needing an
+// 8-arm identity match between two definitions of the same thing.
 pub use metering::{QualityFlag, Sparte};
 
 /// Parse a Sparte off the wire, or `None` when it names no known commodity.

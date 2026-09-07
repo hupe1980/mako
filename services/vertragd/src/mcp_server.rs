@@ -26,6 +26,40 @@ pub struct VertragdMcpState {
     pub auth: mako_service::mcp_auth::McpAuth,
 }
 
+/// A tool that takes no arguments.
+///
+/// **Not `serde_json::Value`.** Its JSON Schema is the empty schema — no
+/// `type` — and the MCP specification requires a tool's `inputSchema` to have
+/// root type `object`. `rmcp` asserts that while building the router, so a
+/// single argument-less tool declared as `Parameters<serde_json::Value>`
+/// panics the whole service at startup. Nothing else catches it: the router is
+/// built in `main`, and no test starts the binary.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct NoParams {}
+
+/// How far ahead to look, in days.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct LookAheadDaysParams {
+    /// Days ahead. Defaults to 30 and is clamped to the tool's own range.
+    pub days: Option<i64>,
+}
+
+/// How long a Vertragskomponente may sit unregistered before it counts as stuck.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StuckWorkflowParams {
+    /// Threshold in days. Defaults to 5 — GPKE §20 EnWG's Strom answer window.
+    pub threshold_days: Option<i64>,
+}
+
+/// Filters for the customer listing.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListKundenParams {
+    /// `PRIVAT` or `GEWERBE`; unset lists both.
+    pub kundentyp: Option<String>,
+    /// Page size. Defaults to 100, clamped to 500.
+    pub limit: Option<i64>,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct VertragIdParams {
     pub id: String,
@@ -175,14 +209,10 @@ impl VertragdMcpHandler {
     )]
     async fn list_expiring_contracts(
         &self,
-        Parameters(p): Parameters<serde_json::Value>,
+        Parameters(p): Parameters<LookAheadDaysParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::find_expiring_vertraege;
-        let days = p
-            .get("days")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(30)
-            .clamp(1, 365);
+        let days = p.days.unwrap_or(30).clamp(1, 365);
         match find_expiring_vertraege(&self.state.pool, &self.state.tenant, days, false).await {
             Ok(rows) => ContentBlock::json(serde_json::json!({
                 "count": rows.len(),
@@ -210,7 +240,7 @@ impl VertragdMcpHandler {
     )]
     async fn list_pending_tarifwechsel(
         &self,
-        Parameters(_): Parameters<serde_json::Value>,
+        Parameters(_): Parameters<NoParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::domain::{Vertragsart, preisanpassungsregime};
         let today = mako_fristen::heute();
@@ -307,13 +337,10 @@ impl VertragdMcpHandler {
     )]
     async fn find_stuck_workflows(
         &self,
-        Parameters(p): Parameters<serde_json::Value>,
+        Parameters(p): Parameters<StuckWorkflowParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::find_stuck_komponents;
-        let threshold = p
-            .get("threshold_days")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(5);
+        let threshold = p.threshold_days.unwrap_or(5);
         match find_stuck_komponents(&self.state.pool, &self.state.tenant, threshold).await {
             Ok(rows) => ContentBlock::json(serde_json::json!({
                 "stuck_count": rows.len(),
@@ -365,15 +392,11 @@ impl VertragdMcpHandler {
     )]
     async fn list_alle_kunden(
         &self,
-        Parameters(p): Parameters<serde_json::Value>,
+        Parameters(p): Parameters<ListKundenParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::list_kunden;
-        let kundentyp = p.get("kundentyp").and_then(|v| v.as_str());
-        let limit = p
-            .get("limit")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(100)
-            .clamp(1, 500);
+        let kundentyp = p.kundentyp.as_deref();
+        let limit = p.limit.unwrap_or(100).clamp(1, 500);
         match list_kunden(&self.state.pool, &self.state.tenant, kundentyp, limit).await {
             Ok(rows) => ContentBlock::json(serde_json::json!({
                 "count": rows.len(),
@@ -631,14 +654,10 @@ impl VertragdMcpHandler {
     )]
     async fn list_auto_renewal_due(
         &self,
-        Parameters(p): Parameters<serde_json::Value>,
+        Parameters(p): Parameters<LookAheadDaysParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::find_auto_renewal_due;
-        let days = p
-            .get("days")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(30)
-            .clamp(1, 90);
+        let days = p.days.unwrap_or(30).clamp(1, 90);
         match find_auto_renewal_due(&self.state.pool, &self.state.tenant, days).await {
             Ok(rows) => ContentBlock::json(serde_json::json!({
                 "count": rows.len(),

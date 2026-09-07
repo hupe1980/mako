@@ -1052,7 +1052,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
 
     // makod is single-tenant: the primary Marktpartner-ID *is* the tenant, and
     // this UUID scopes every event stream, outbox entry and cache key. Derived
-    // once here rather than at each of the dozen sites that used to re-derive it.
+    // once here, never re-derived at the call sites.
     let tenant_id = mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id());
 
     info!(

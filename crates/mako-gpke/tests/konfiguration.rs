@@ -247,6 +247,10 @@ fn send_antwort_lieferbeginn_accepted_emits_mscons_13015_outbox() {
         document_date: "20250115".to_owned(),
         process_date: "20251001".to_owned(),
         pruefidentifikator: Pruefidentifikator::new(55001).unwrap(),
+        message_ref: mako_engine::types::MessageRef::new("MSG-001"),
+        transaktionsgrund_ergaenzung: None,
+        vorgangsnummer: "VORGANG0001".to_owned(),
+        produktpaket_id: Some("1".to_owned()),
     };
     let state = SupplierChangeState::ValidationPassed(data);
     let obligations = post_acceptance::lieferbeginn_obligations(55001, &malo, &new_supplier, None);
@@ -307,6 +311,10 @@ fn send_antwort_lieferbeginn_with_msb_emits_orders_17134_outbox() {
         document_date: "20250115".to_owned(),
         process_date: "20251001".to_owned(),
         pruefidentifikator: Pruefidentifikator::new(55001).unwrap(),
+        message_ref: mako_engine::types::MessageRef::new("MSG-001"),
+        transaktionsgrund_ergaenzung: None,
+        vorgangsnummer: "VORGANG0001".to_owned(),
+        produktpaket_id: Some("1".to_owned()),
     };
     let state = SupplierChangeState::ValidationPassed(data);
     let obligations =
@@ -365,6 +373,10 @@ fn send_antwort_abmeldung_accepted_no_cross_domain_outbox() {
         document_date: "20250115".to_owned(),
         process_date: "20261001".to_owned(),
         pruefidentifikator: Pruefidentifikator::new(55004).unwrap(), // Abmeldung
+        message_ref: mako_engine::types::MessageRef::new("MSG-001"),
+        transaktionsgrund_ergaenzung: None,
+        vorgangsnummer: "VORGANG0001".to_owned(),
+        produktpaket_id: Some("1".to_owned()),
     };
     let state = SupplierChangeState::ValidationPassed(data);
     // lieferbeginn_obligations returns empty vec for non-55001 PIDs.
@@ -401,12 +413,25 @@ fn nb_antwort(accepted: bool, reason: Option<&str>) -> mako_gpke::LfAntwort {
     } else {
         ("A07", "E_0622")
     };
-    mako_gpke::LfAntwort {
-        antwort_code: code.to_owned(),
-        ebd: Some(ebd.to_owned()),
-        zustimmung: accepted,
-        bemerkung: reason.map(ToOwned::to_owned),
-        bilanzkreis: None,
-        termin: None,
+    // Built through the constructors, not as a literal: a field added to
+    // `LfAntwort` for a Muss place — the Marktlokations-Klassifizierung, the
+    // Produktpaket-ID, the Messstellenbetreiber — should reach every answer
+    // that opts into it, and a literal here would silently stay at `None`.
+    let antwort = if accepted {
+        mako_gpke::LfAntwort::zustimmung(code, ebd)
+            // `SG4 STS+7` `ZW7`, `SG6 RFF+Z60`, `SG5 LOC+Z17` and the two `SG8`
+            // Datenblöcke — all Muss on a Bestätigung Anmeldung.
+            .with_klassifizierung("ZW7")
+            .with_produktpaket("1")
+            .with_messlokation(
+                "DE00056266802AO6G56M11SN51G21M24S",
+                mako_gpke::ZugeordneterMsb::grundzustaendig("9903456000009"),
+            )
+    } else {
+        mako_gpke::LfAntwort::ablehnung(code, ebd)
+    };
+    match reason {
+        Some(r) => antwort.with_bemerkung(r),
+        None => antwort,
     }
 }

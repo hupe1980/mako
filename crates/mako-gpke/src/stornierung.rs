@@ -412,22 +412,22 @@ impl Workflow for GpkeStornierungWorkflow {
                 };
                 // APERAK AHB 1.0 §2.4: Strom UTILMD always requires APERAK (BGM+312 or BGM+313).
                 // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
-                let mut aperak_payload = serde_json::json!({
-                    "sender":        data.receiver.as_str(),
-                    "receiver":      data.sender.as_str(),
-                    "pid":           29001_u32,
-                    "document_code": if positive { "312" } else { "313" },
-                });
-                if !positive {
-                    aperak_payload["error_code"] =
-                        serde_json::Value::String(mako_engine::erc::codes::Z29.to_owned());
-                }
-                if let Some(ref r) = reason {
-                    aperak_payload["reason"] = serde_json::Value::String(r.clone());
-                }
-                let outbox = vec![
-                    PendingOutbox::new("APERAK", data.sender.as_str(), aperak_payload).caused_by(0),
-                ];
+                let aperak = if positive {
+                    PendingOutbox::aperak_anerkennung(
+                        data.receiver.as_str(),
+                        data.sender.as_str(),
+                        data.message_ref.as_str(),
+                    )
+                } else {
+                    PendingOutbox::aperak_fehler(
+                        data.receiver.as_str(),
+                        data.sender.as_str(),
+                        data.message_ref.as_str(),
+                        mako_engine::erc::codes::Z29,
+                        reason.clone().unwrap_or_default(),
+                    )
+                };
+                let outbox = vec![aperak.caused_by(0)];
                 Ok(WorkflowOutput::with_outbox(
                     vec![GpkeStornierungEvent::AperakDispatched { positive, reason }],
                     outbox,

@@ -50,8 +50,10 @@ use mako_geli_gas::{
 // BGM+E01 is used for GeLi Gas Anmeldung in UTILMD G.
 // NAD+MS = neuer Gaslieferant (sender)
 // NAD+MR = Gasnetzbetreiber (receiver)
-// SG5 LOC+Z16 = Marktlokation identifier (MaLo, not MeLo — key gas/electricity difference)
-// - MaLo ID: 52695662076 (11-char format, [A-Z0-9]{11})
+// - IDE+24 DE 7402 = the sender's **Vorgangsnummer**, not a Lokations-ID.
+// - SG5 LOC+172 = the Marktlokation. Gas files it under the `172` Meldepunkt
+//   qualifier where Strom uses `Z16`; both name a MaLo, not a MeLo.
+// - MaLo ID: 52695662076 (11 characters, BDEW check digit)
 const UTILMD_LIEFERBEGINN_GAS: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9800357000004:14+250115:0800+GELI-2025-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:G1.1'\
@@ -136,10 +138,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .and_then(|n| n.party_id.as_deref())
                     .unwrap_or_default(),
             ),
+            // `SG5 LOC+172`, not `IDE+24`. DE 7402 carries the sender's
+            // **Vorgangsnummer** — the Geschäftsvorfall's own reference — and
+            // reading it as the Lokation puts „VORGANG-0001" wherever a MaLo-ID
+            // belongs. Gas names the Marktlokation under the `172` Meldepunkt
+            // qualifier, not the `Z16` Strom uses.
             MaLo::new(
                 u.transactions()
                     .first()
-                    .and_then(|tx| tx.ide.object_id.as_deref())
+                    .and_then(|tx| tx.lokation())
                     .unwrap_or_default(),
             ),
             u.dtm()

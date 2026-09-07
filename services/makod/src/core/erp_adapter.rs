@@ -474,6 +474,11 @@ where
                 continue;
             }
 
+            // Whether this poll found work of its own. A batch made entirely of
+            // the transport's messages must still sleep before the next poll,
+            // or one un-owned EDIFACT message turns this into a tight loop that
+            // pins a core and starves the runtime.
+            let mut handled_any = false;
             for msg in batch {
                 if self
                     .shutdown
@@ -486,18 +491,14 @@ where
                     );
                     return;
                 }
-                // Only deliver messages that carry a BO4E payload, are
-                // explicitly ERP-targeted, OR have a recognised ERP message
-                // type.  AS4-only EDIFACT messages (message_type = "UTILMD",
-                // "MSCONS", etc., no payload_schema) are skipped — they are
-                // handled by the AS4 OutboxWorker.
-                let is_erp_relevant = msg.payload_schema.is_some()
-                    || msg.message_type.starts_with("ERP_")
-                    || map_message_type_to_erp_event(&msg.message_type).is_some();
-
-                if !is_erp_relevant {
+                // Ownership, read from the one place that defines it: the AS4
+                // worker declines exactly what this claims, so no message has
+                // two owners and none has none. A `payload_schema` is not an
+                // ERP marker — a UTILMD carrying BO4E has one.
+                if !is_erp_notification(&msg.message_type) {
                     continue;
                 }
+                handled_any = true;
 
                 // Map message type to semantic ERP event type.  Skip messages
                 // with unrecognised types rather than misclassifying them as
@@ -545,14 +546,12 @@ where
                 // Terminal-outcome counter. The ERP outbox is the one place
                 // that sees every process ending, whatever family it belongs
                 // to, so `makod_process_completed_total{family,result}` is
-                // emitted here. It had no emitter at all: the metric was
-                // documented, exported and permanently zero, which made the
-                // obvious "initiated vs completed" dashboard read as though no
-                // process had ever finished.
+                // emitted here — this is its only emitter, and the
+                // "initiated vs completed" dashboard reads zero without it.
                 if let Some(outcome) = terminal_outcome(&event.event_type) {
-                    // One derivation, shared with the initiation counter — the
-                    // two used to cut the workflow name differently and their
-                    // series never joined.
+                    // One derivation, shared with the initiation counter: cut
+                    // the workflow name differently and the two series never
+                    // join.
                     let family =
                         crate::orchestrator::process_family::from_workflow(&event.workflow_name);
                     EngineMetrics::global().process_completed(family, outcome);
@@ -660,6 +659,17 @@ where
                     }
                 }
             }
+
+            // Nothing in this batch was ours — sleep before polling again.
+            if !handled_any
+                && !mako_engine::builder::sleep_or_cancel(
+                    self.poll_interval,
+                    self.shutdown.as_ref(),
+                )
+                .await
+            {
+                return;
+            }
         }
     }
 }
@@ -677,6 +687,23 @@ fn terminal_outcome(event: &ErpEventType) -> Option<ProcessOutcome> {
         ErpEventType::ProcessFailed { .. } => Some(ProcessOutcome::Cancelled),
         _ => None,
     }
+}
+
+/// Whether this outbox message belongs to the ERP notifier rather than to a
+/// wire transport.
+///
+/// makod runs two consumers over one outbox — the AS4/webhook transport and
+/// this ERP worker — and the store has no per-message ownership of its own.
+/// This is that ownership rule, and both sides read it from here so they cannot
+/// drift apart: the ERP worker takes what it maps, the transports decline it.
+///
+/// It is not cosmetic. Without it the transport picked up internal lifecycle
+/// notifications, found no EDIFACT renderer for them, and posted the raw JSON
+/// to the market partner's endpoint — a `ProcessInitiated` delivered to a
+/// counterparty as though it were a market message.
+#[must_use]
+pub fn is_erp_notification(msg_type: &str) -> bool {
+    msg_type.starts_with("ERP_") || map_message_type_to_erp_event(msg_type).is_some()
 }
 
 /// Map an outbox `message_type` string to a semantic [`ErpEventType`].
@@ -814,5 +841,58 @@ mod terminal_outcome_tests {
             }),
             Some(ProcessOutcome::Cancelled)
         );
+    }
+
+    /// The outbox has two consumers and no ownership column. This is the rule
+    /// that splits them, and it is asserted from both sides: what the ERP
+    /// worker maps, the transport must decline, and vice versa.
+    ///
+    /// The regression it pins: a `ProcessInitiated` reaching the AS4/webhook
+    /// transport, which has no renderer for it and posted the raw payload JSON
+    /// to the market partner.
+    #[test]
+    fn the_transport_and_the_erp_worker_claim_disjoint_message_types() {
+        use super::is_erp_notification;
+
+        // Every type the ERP worker handles belongs to the ERP worker.
+        for erp_type in [
+            "ProcessInitiated",
+            "ProcessCompleted",
+            "ProcessComplete",
+            "AperakAccepted",
+            "AperakRejected",
+            "AperakTimeout",
+            "ContrlReceived",
+            "MaloIdentified",
+            "DispatchConfirmed",
+            "LfaAntwortAufAbmeldeanfrage",
+        ] {
+            assert!(
+                is_erp_notification(erp_type),
+                "{erp_type} maps to an ERP event, so the transport must not send it",
+            );
+        }
+
+        // And every wire message type belongs to the transport. `APERAK` is the
+        // one to watch: the ERP worker has `AperakAccepted`/`AperakRejected`
+        // event names, and confusing either for the EDIFACT message type would
+        // stop real APERAKs from ever being transmitted.
+        for wire_type in [
+            "UTILMD",
+            "APERAK",
+            "MSCONS",
+            "CONTRL",
+            "ORDERS",
+            "ORDRSP",
+            "IFTSTA",
+            "INVOIC",
+            "REMADV",
+            "MaloIdentCallback",
+        ] {
+            assert!(
+                !is_erp_notification(wire_type),
+                "{wire_type} is a wire message — the transport must own it",
+            );
+        }
     }
 }

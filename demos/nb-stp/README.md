@@ -28,6 +28,7 @@ makod      → de.mako.process.initiated to marktd        (ERP webhook, HMAC-sig
 marktd     → fans out to processd via subscription
 processd   → GET /versorgung, GET /malo/grid, GET /partners  (mako-pruefung data fetch)
 processd   → mako-pruefung walks E_0622 → Accept (A51 from E_0623)
+processd   → GET /malos/<malo>/buendel, GET /melos/<melo>/msb  (what the answer must state)
 processd   → gpke.lieferbeginn.bestaetigen to makod
 makod      → UTILMD 55002 Bestätigung to webhook        (ERP confirmation)
 ```
@@ -49,6 +50,8 @@ sequenceDiagram
     processd->>marktd: GET /malo/{malo_id}/grid
     processd->>marktd: GET /partners/{lf_mp_id}
     Note over processd: mako-pruefung: E_0622 → Accept (A51)
+    processd->>marktd: GET /malos/{malo_id}/buendel
+    processd->>marktd: GET /melos/{melo_id}/msb
     processd->>makod: gpke.lieferbeginn.bestaetigen
     makod-->>webhook: UTILMD 55002 Bestätigung Anmeldung
 ```
@@ -119,7 +122,15 @@ confirms that `processd` dispatches bestaetigen automatically:
 
 ```bash
 cd demos/nb-stp
-MARKTD_URL=http://localhost:8180 WEBHOOK_URL=http://localhost:8000 bash smoke.sh
+bash smoke.sh
+```
+
+`MARKTD_URL` and `WEBHOOK_URL` default to what `docker-compose.yml` publishes,
+so the outbox assertions — the APERAK and the 55002 Bestätigung — always run.
+To exercise `makod` alone, opt out explicitly:
+
+```bash
+MARKTD_URL= WEBHOOK_URL= bash smoke.sh
 ```
 
 Expected output:
@@ -131,6 +142,8 @@ Expected output:
 ✓ PUT /api/v1/partners/4012345000023 → 200 (partner ready for mako-pruefung)
 ✓ PUT /api/v1/malos/<malo> → 201  (version=1, makod cache push triggered)
 ✓ PUT /api/v1/malos/<malo>/grid → 204  (grid record ready for mako-pruefung)
+✓ PUT /api/v1/lokationszuordnungen → 204  (MaLo → MeLo edge)
+✓ PUT /api/v1/melos/<melo>/msb → 204  (gMSB 9903456000009)
 ✓ PUT /api/v1/subscriptions/smoke-test-sub → 200
 ✓ GET /health → ok  (instance: ...)
 ✓ PUT /admin/partners/4012345000023 → 200
@@ -155,21 +168,42 @@ The 55002 that goes back to the LFN (message reference, timestamp and MaLo
 vary per run):
 
 ```
-UNB+UNOC:3+9900357000004:500+4012345000023:14+260830:0904+E8D66066D8E24B'
+UNB+UNOC:3+9900357000004:500+4012345000023:14+260701:0904+E8D66066D8E24B'
 UNH+5c9a7b9b2c084e+UTILMD:D:11A:UN:S2.1'
 BGM+E01+5c9a7b9b2c084e'
-DTM+137:202608300904?+00:303'
+DTM+137:202607010904?+00:303'
 NAD+MS+9900357000004::293'
 NAD+MR+4012345000023::9'
 IDE+24+5c9a7b9b2c084e'
 DTM+92:202610010000?+00:303'   ← the Lieferbeginn, echoed from the Anmeldung
-STS+E01++A51'                  ← E_0623 „Zustimmung (Prüfschritt 60)"
-LOC+Z16+17880806920'
+STS+7++E01+ZW7'                ← the NB's own classification: gemessene MaLo
+STS+E01++A51:E_0623'           ← „Zustimmung (Prüfschritt 60)", with its EBD
+LOC+Z16+51238696012'
+LOC+Z17+DE00056266802AO6G56M11SN51G21M24S'   ← the Messlokation behind it
 RFF+Z13:55002'                 ← the Prüfidentifikator, in SG6 of the Vorgang
-RFF+TN:VORGANG-0001'           ← the Anmeldung's Vorgangsnummer being answered
-UNT+12+5c9a7b9b2c084e'
+RFF+TN:VORGANG0001'            ← the Anmeldung's Vorgangsnummer being answered
+RFF+Z60:1'                     ← the Produktpaket-ID the NB will implement
+SEQ+Z98'                       ← Daten der Marktlokation …
+CCI+++ZB3'
+CAV+Z91:9903456000009::Z39:Z19'  ← … its Messstellenbetreiber (gMSB, Vertrag)
+SEQ+ZF3'                       ← Daten der Messlokation …
+RFF+Z19:DE00056266802AO6G56M11SN51G21M24S'
+CCI+++ZB3'
+CAV+Z91:9903456000009::Z39:Z19'
+CAV+ZF0:9903456000009'         ← … and the gMSB standing behind it
+UNT+23+5c9a7b9b2c084e'
 UNZ+1+E8D66066D8E24B'
 ```
+
+A Bestätigung is not a short message, and none of the above is decoration —
+every line is Muss in the 55002 Prüfschablone. Three of them say something the
+LFN has no other source for: `ZW7` is the NB's classification of the
+Marktlokation (the Anmeldung's own `ZW4` is *not* admitted here), `RFF+Z60`
+names which of the offered Produktpakete the NB will actually implement, and
+the two `SG8` blocks name the Messstellenbetreiber of the Marktlokation and of
+its Messlokation. `services/makod/tests/e2e_gpke_antwort_conformance.rs`
+renders each of the six GPKE Antwort-PIDs and holds it against the AHB, so this
+listing cannot drift from what the demo sends.
 
 `A51` is resolved from `E_0623`, not fixed: an Anmeldung that fails a check
 comes back as a 55003 Ablehnung carrying the code for the step that refused it.
@@ -197,6 +231,10 @@ comes back as a 55003 Ablehnung carrying the code for the step that refused it.
 | `fixtures/partner-lf.json` | Trading partner record for LFN GLN `4012345000023` |
 | `fixtures/preisblatt-nb.json` | `PreisblattNetznutzung` for NB `9900357000004` (FV2026-10-01) |
 | `fixtures/malo-nb.json` | `MARKTLOKATION` for NB `9900357000004` (demo MaLo) |
+
+The MaLo, the Messlokation behind it and that Messlokation's MSB are generated
+per run (a fresh BDEW-checksummed MaLo-ID and a 33-character Zählpunkt\
+bezeichnung), so the demo can be re-run without `docker compose down -v`.
 
 ### What the 55001 carries
 
@@ -281,7 +319,25 @@ curl -X PUT http://localhost:8180/api/v1/malos/51238696012 \
 curl -X PUT http://localhost:8180/api/v1/malos/51238696012/grid \
   -H "Content-Type: application/json" \
   -d '{"nb_mp_id":"9900357000004","bilanzierungsgebiet":"11YN0------0STXG","netzgebiet":"DEMO-NZ-001","sparte":"STROM","source":"manual"}'
+
+# The Messlokation behind the MaLo, and its Messstellenbetreiber. Not a
+# `mako-pruefung` input — this is what the **Bestätigung has to state**:
+# `SG5 LOC+Z17` and the two `SG8` Datenblöcke are Muss on 55002, and the LFN
+# has no other source for who meters the point it is about to supply.
+curl -X PUT http://localhost:8180/api/v1/lokationszuordnungen \
+  -H "Content-Type: application/json" \
+  -d '{"von_id":"51238696012","von_typ":"MALO",
+       "nach_id":"DE0005626680000000000000000000001","nach_typ":"MELO",
+       "valid_from":"2020-01-01","data":{}}'
+
+curl -X PUT http://localhost:8180/api/v1/melos/DE0005626680000000000000000000001/msb \
+  -H "Content-Type: application/json" \
+  -d '{"msb_mp_id":"9903456000009","valid_from":"2020-01-01"}'
 ```
+
+Without the last two the Anmeldung is still confirmed, and the Bestätigung says
+`ZW6` „Pauschale Marktlokation" instead of `ZW7` „Gemessene" — which is what a
+Marktlokation with no Messlokation behind it is.
 
 Submit once per MaLo — a repeat Anmeldung is rejected with **A06** „Andere
 Anmeldung in Bearbeitung". Use `docker compose down -v` to re-run.

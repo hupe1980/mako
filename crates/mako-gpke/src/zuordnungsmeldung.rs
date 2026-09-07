@@ -622,23 +622,22 @@ impl Workflow for GpkeZuordnungsmeldungWorkflow {
                 // either way (APERAK AHB 1.0 § 2.4): `312` Anerkennung on a
                 // clean message, `313` Verarbeitbarkeitsfehler otherwise.
                 let aperak = if validation_passed {
-                    serde_json::json!({
-                        "sender":        receiver.as_str(),
-                        "receiver":      sender.as_str(),
-                        "pid":           29001_u32,
-                        "document_code": "312",
-                    })
+                    PendingOutbox::aperak_anerkennung(
+                        receiver.as_str(),
+                        sender.as_str(),
+                        message_ref.as_str(),
+                    )
                 } else {
-                    serde_json::json!({
-                        "sender":     receiver.as_str(),
-                        "receiver":   sender.as_str(),
-                        "pid":        29001_u32,
-                        "error_code": mako_engine::erc::codes::Z29,
-                        "reason":     validation_errors.join("; "),
-                    })
+                    PendingOutbox::aperak_fehler(
+                        receiver.as_str(),
+                        sender.as_str(),
+                        message_ref.as_str(),
+                        mako_engine::erc::codes::Z29,
+                        validation_errors.join("; "),
+                    )
                 };
                 let outbox = vec![
-                    PendingOutbox::new("APERAK", sender.as_str(), aperak),
+                    aperak,
                     // The ERP/`processd` notification. A Meldung changes what a
                     // supplier believes about its own Zuordnung, so it has to
                     // leave the engine even though nothing is answered.

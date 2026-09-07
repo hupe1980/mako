@@ -248,7 +248,7 @@ pub use mscons::{
 #[cfg(feature = "aperak")]
 mod aperak;
 #[cfg(feature = "aperak")]
-pub use aperak::AperakBuilder;
+pub use aperak::{AperakBuilder, CODES_REQUIRING_ORTSANGABE, requires_ortsangabe};
 
 #[cfg(feature = "contrl")]
 mod contrl;

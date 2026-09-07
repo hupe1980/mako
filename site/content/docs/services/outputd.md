@@ -42,7 +42,7 @@ Port: `:9880`
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/v1/render/{kind}` | Render a view with the current or a pinned template; `X-Mako-Template-Hash` names the layout used. Stores nothing |
-| `POST` | `/api/v1/documents/{kind}` | Render, **record** and queue for delivery; idempotent on `subject_ref` |
+| `POST` | `/api/v1/documents/issue/{kind}` | Render, **record** and queue for delivery; idempotent on `subject_ref` |
 | `GET` | `/api/v1/documents` | A customer's documents (`?malo_id=` or `?kunden_nr=`, `&kind=`) — the portal inbox |
 | `GET` | `/api/v1/documents/{id}` | One document with every delivery track |
 | `GET` | `/api/v1/documents/{id}/content` | The bytes as issued — a reproduction, never a re-render |
@@ -72,7 +72,7 @@ What "about" means depends on the kind:
 | `INVOICE` | `model` — the EN 16931 semantic model | outputd projects the page view from it, so the projection the publish gate proves templates against is the one production feeds them |
 | `MAHNUNG`, `PREISANPASSUNG` | `view` — the kind's own view | their producer has no EN 16931 model, and the view *is* the contract |
 
-`POST /api/v1/documents/{kind}` takes the same body plus a `subject_ref`, a
+`POST /api/v1/documents/issue/{kind}` takes the same body plus a `subject_ref`, a
 `recipient` and the `channels` to queue. See *Issuing and delivery* below.
 
 A caller projecting `en16931::Invoice → DocumentView` itself and sending the
@@ -105,7 +105,7 @@ what they may do, and every route checks it before touching the database.
 | `publish-template` | `POST /templates` | `LF`, `MSB`, `ESA` |
 | `rollout-template` | `PUT /templates/{kind}/current` | `LF`, `MSB`, `ESA` |
 | `render-document` | `POST /render/{kind}` | `LF`, `MSB`, `ESA` |
-| `issue-document` | `POST /documents/{kind}` | `LF`, `MSB`, `ESA` |
+| `issue-document` | `POST /documents/issue/{kind}` | `LF`, `MSB`, `ESA` |
 | `report-delivery` | `POST /deliveries/{id}/status` | `LF`, `MSB`, `ESA` |
 | `read-document` | `GET /documents…`, `/spool`, `POST /deliveries/{id}/read` | any authenticated caller in the tenant |
 
@@ -132,7 +132,7 @@ customer's OIDC identity into that scope, and it resolves the scope from
 ## Issuing and delivery
 
 `POST /render/{kind}` produces bytes and keeps none — the right endpoint for a
-preview, a re-print, or a caller with its own archive. `POST /documents/{kind}`
+preview, a re-print, or a caller with its own archive. `POST /documents/issue/{kind}`
 is the same render **recorded and queued**, which is what makes two regulated
 questions answerable:
 

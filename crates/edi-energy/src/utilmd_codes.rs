@@ -53,6 +53,13 @@ pub const SEQ_SUMMENZEITREIHE: &str = "Z22";
 /// `SG8 SEQ+Z01` — Daten der Marktlokation, the Stammdaten block a
 /// Vorgang's `CCI` Merkmale belong to.
 pub const SEQ_DATEN_DER_MARKTLOKATION: &str = "Z01";
+
+/// `SG8 SEQ+Z98` — „Daten der Marktlokation" on an **answer**.
+///
+/// Not the same place as [`SEQ_DATEN_DER_MARKTLOKATION`] (`Z01`), which the
+/// Anmeldung uses: the Bestätigung's own block is `Z98`, Muss behind `ZW7`
+/// „Gemessene Marktlokation" (Bedingung `[483]`).
+pub const SEQ_DATEN_DER_MARKTLOKATION_ANTWORT: &str = "Z98";
 /// `SG8 SEQ+Z75` — Daten des Kunden des Lieferanten (EnFG-Grundlage).
 pub const SEQ_DATEN_DES_KUNDEN: &str = "Z75";
 
@@ -389,6 +396,68 @@ pub mod nad {
     /// `VY` — andere zugehörige Partei, `SG12`. On a 55010 the
     /// **Neulieferant** (Bedingung `[567]`).
     pub const ZUGEHOERIGE_PARTEI: &str = "VY";
+}
+
+/// `SG10 CCI` DE 7037 — Merkmal codes.
+pub mod cci {
+    /// `ZB3` — „Zugeordneter Marktpartner".
+    pub const ZUGEORDNETER_MARKTPARTNER: &str = "ZB3";
+}
+
+/// `SG10 CAV` DE 7111 — Wertecodes.
+pub mod cav {
+    /// `Z91` — Messstellenbetreiber; DE 1131 carries its MP-ID.
+    pub const MSB: &str = "Z91";
+    /// `ZF0` — grundzuständiger Messstellenbetreiber; DE 1131 its MP-ID.
+    ///
+    /// A separate place from [`MSB`] because the two need not be the same
+    /// party: a wettbewerblicher MSB operates the Messstelle, and the LFN still
+    /// has to know which gMSB it displaced.
+    pub const GMSB: &str = "ZF0";
+}
+
+/// `SG10 CAV` DE 7110 — the two Merkmalswerte an MSB assignment carries.
+///
+/// The first says **which kind** of Messstellenbetreiber it is, the second **on
+/// what basis** it operates. Both are Muss on a Bestätigung Anmeldung; a
+/// message stating only the first is refused with
+/// `AHB-…-CAV-7110-MISSING`.
+pub mod msb {
+    /// `Z39` — grundzuständiger Messstellenbetreiber.
+    pub const GRUNDZUSTAENDIG: &str = "Z39";
+    /// `Z40` — wettbewerblicher Messstellenbetreiber.
+    pub const WETTBEWERBLICH: &str = "Z40";
+    /// `Z41` — Auffangmessstellenbetreiber.
+    pub const AUFFANG: &str = "Z41";
+
+    /// `Z19` — „Auf vertraglicher Grundlage gegenüber Anschlussnutzer /
+    /// Anschlussnehmer".
+    pub const GRUNDLAGE_VERTRAG: &str = "Z19";
+    /// `Z20` — „In der Ausübung der Weiterverpflichtung durch den gMSB".
+    pub const GRUNDLAGE_WEITERVERPFLICHTUNG: &str = "Z20";
+}
+
+/// `SG8 SEQ` DE 1229 — the Datenblock an answer opens.
+pub mod seq_antwort {
+    /// `ZF3` — „Informative Daten der Messlokation".
+    pub const DATEN_DER_MESSLOKATION: &str = "ZF3";
+}
+
+/// `SG8 RFF` DE 1153 — the Lokation a Datenblock refers to.
+pub mod rff_lokation {
+    /// `Z19` — Messlokation.
+    pub const MESSLOKATION: &str = "Z19";
+}
+
+/// `SG6 RFF` DE 1153 — Referenz-Qualifier inside a Vorgang.
+pub mod rff {
+    /// `Z13` — Prüfidentifikator.
+    pub const PRUEFIDENTIFIKATOR: &str = "Z13";
+    /// `TN` — Referenz Vorgangsnummer (aus Anfragenachricht).
+    pub const REFERENZ_VORGANGSNUMMER: &str = "TN";
+    /// `Z60` — „Informativ zur Umsetzung geplantes Produktpaket": the
+    /// Produktpaket-ID the NB will implement, Muss on a Bestätigung Anmeldung.
+    pub const GEPLANTES_PRODUKTPAKET: &str = "Z60";
 }
 
 /// `NAD` `C080` DE 3045 — Format für den Namen des Beteiligten.

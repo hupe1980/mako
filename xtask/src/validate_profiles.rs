@@ -151,6 +151,156 @@ struct ManifestEntry {
 }
 
 /// Every segment `Nr` in a MIG structure.
+/// Every code a Bedingung names is a code the profile itself admits.
+///
+/// A Bedingung reads „Wenn SG4 ERC+Z29 vorhanden." — it *conditions* something
+/// on a code, so that code has to appear in some Anwendungsfall's operand list
+/// for that segment. The two are printed in different columns of the same AHB
+/// table, so a parse that loses one keeps the other and the profile stays
+/// internally inconsistent in a way nothing else notices: the condition text is
+/// never evaluated against a message, while the operand list *is* — a dropped
+/// code turns into „the Prüfschablone admits no such code" at validation time.
+///
+/// APERAK AHB 1.0 breaks `SG4 ERC` DE 9321 across a page and lost eleven codes
+/// that way, `Z29` among them, while conditions `[5]` and `[9]`–`[13]` went on
+/// citing six of them.
+///
+/// Two shapes are out of scope and skipped rather than reported:
+///
+/// - a `Hinweis:` naming a value carried by *another* message type
+///   („Wert aus BGM+Z33 DE1004 der IFTSTA"), which this profile cannot hold;
+/// - a segment whose qualifier the AHB leaves free — COMDIS `SG3 AJT` DE 4465
+///   takes its codes from the EBD named beside it, so the AHB prints a bare
+///   `X` and the profile admits no code list to check against.
+fn codes_cited_by_conditions_exist(dir: &str, ahb: &serde_json::Value, mig: &Mig) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(conditions) = ahb.get("conditions").and_then(|v| v.as_object()) else {
+        return out;
+    };
+
+    // Segment `Nr` → tag, from the MIG's Nachrichtenstruktur.
+    let mut tag_of: BTreeMap<String, String> = BTreeMap::new();
+    collect_tags(&mig.structure, &mut tag_of);
+
+    // Tag → (codes admitted anywhere, whether any operand is free-form).
+    let mut per_tag: BTreeMap<String, (BTreeSet<String>, bool)> = BTreeMap::new();
+    for af in ahb
+        .get("anwendungsfaelle")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+    {
+        for el in af
+            .get("elements")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            let Some(tag) = el
+                .get("nr")
+                .and_then(|v| v.as_str())
+                .and_then(|nr| tag_of.get(nr))
+            else {
+                continue;
+            };
+            let entry = per_tag.entry(tag.clone()).or_default();
+            for op in el
+                .get("operands")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+            {
+                match op.get("code").and_then(|v| v.as_str()) {
+                    Some(c) => {
+                        entry.0.insert(c.to_owned());
+                    }
+                    None => entry.1 = true,
+                }
+            }
+        }
+    }
+
+    for (id, text) in conditions {
+        let Some(text) = text.as_str() else { continue };
+        if text.trim_start().starts_with("Hinweis") {
+            continue;
+        }
+        for (tag, code) in cited_codes(text) {
+            let Some((admitted, free_form)) = per_tag.get(&tag) else {
+                continue;
+            };
+            if *free_form || admitted.is_empty() || admitted.contains(&code) {
+                continue;
+            }
+            out.push(format!(
+                "{dir}: Bedingung [{id}] cites {tag}+{code}, which no Anwendungsfall admits — {text}"
+            ));
+        }
+    }
+    out
+}
+
+/// Walk the MIG structure, recording each segment node's `nr` → `tag`.
+fn collect_tags(nodes: &[serde_json::Value], out: &mut BTreeMap<String, String>) {
+    for n in nodes {
+        if let (Some(nr), Some(tag)) = (
+            n.get("nr").and_then(|v| v.as_str()),
+            n.get("tag").and_then(|v| v.as_str()),
+        ) {
+            out.insert(nr.to_owned(), tag.to_owned());
+        }
+        if let Some(children) = n.get("children").and_then(|v| v.as_array()) {
+            collect_tags(children, out);
+        }
+        if let Some(children) = n.get("segments").and_then(|v| v.as_array()) {
+            collect_tags(children, out);
+        }
+    }
+}
+
+/// The `TAG+CODE` pairs a Bedingung text names.
+///
+/// A trailing `/` list (`AJT+A01/A04/A06`) names several under one tag.
+fn cited_codes(text: &str) -> BTreeSet<(String, String)> {
+    let mut out = BTreeSet::new();
+    let chars: Vec<char> = text.chars().collect();
+    for (i, c) in chars.iter().enumerate() {
+        if *c != '+' || i < 3 {
+            continue;
+        }
+        // A three-letter uppercase segment tag directly before the `+`, and
+        // nothing alphanumeric before it.
+        if !chars[i - 3..i].iter().all(|c| c.is_ascii_uppercase()) {
+            continue;
+        }
+        if i >= 4 && chars[i - 4].is_ascii_alphanumeric() {
+            continue;
+        }
+        let tag: String = chars[i - 3..i].iter().collect();
+        let mut j = i + 1;
+        let mut cur = String::new();
+        while j < chars.len() {
+            let ch = chars[j];
+            if ch.is_ascii_alphanumeric() {
+                cur.push(ch);
+            } else if (ch == '/' || ch == ' ') && !cur.is_empty() {
+                out.insert((tag.clone(), std::mem::take(&mut cur)));
+                // A space ends the list unless a `/` continues it.
+                if ch == ' ' && chars.get(j + 1) != Some(&'/') {
+                    break;
+                }
+            } else {
+                break;
+            }
+            j += 1;
+        }
+        if !cur.is_empty() {
+            out.insert((tag.clone(), cur));
+        }
+    }
+    out
+}
+
 fn nrs(nodes: &[serde_json::Value], out: &mut BTreeSet<String>) {
     for n in nodes {
         if let Some(nr) = n.get("nr").and_then(|v| v.as_str()) {
@@ -265,6 +415,7 @@ pub fn run(workspace_root: &str) -> bool {
                         dir, &malformed, &allowed,
                     ));
                 }
+                errors.extend(codes_cited_by_conditions_exist(dir, &raw, &mig));
             }
             Err(e) => errors.push(format!("{dir}: {e}")),
         }

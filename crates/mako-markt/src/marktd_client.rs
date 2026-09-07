@@ -872,6 +872,61 @@ impl MarktdClient {
         Ok(Some(true))
     }
 
+    /// The Messlokationen behind `malo_id` on `at`, each with the MSB that
+    /// operates it — what a GPKE **Bestätigung Anmeldung** has to state.
+    ///
+    /// UTILMD AHB Strom makes `SG5 LOC+Z17` and the `SG8 SEQ+Z98`/`SEQ+ZF3`
+    /// Datenblöcke Muss on 55002/55078, and the Bestätigung is where the LFN
+    /// learns who meters the point it is about to supply — it has no other
+    /// source. The facts live here, in the NB's own Lokationszuordnung, so the
+    /// answering service reads them rather than asking the ERP to repeat them.
+    ///
+    /// An empty result is not an error: a **pauschale** Marktlokation has no
+    /// Messlokation, and the answer then says `ZW6` rather than `ZW7`. A
+    /// Messlokation whose MSB assignment does not cover `at` is skipped for the
+    /// same reason — an answer may not name a Messlokation it cannot attribute.
+    ///
+    /// # Errors
+    ///
+    /// [`MarktdClientError::Http`] on network or HTTP failure. A transport
+    /// error must not read as „pauschale Marktlokation".
+    pub async fn buendel_messlokationen_mit_msb(
+        &self,
+        malo_id: &str,
+        at: time::Date,
+    ) -> Result<Vec<(String, String)>, MarktdClientError> {
+        #[derive(serde::Deserialize)]
+        struct Buendel {
+            #[serde(default)]
+            messlokationen: Vec<String>,
+        }
+        let url = format!("{}/api/v1/malos/{malo_id}/buendel", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("at", at.to_string())])
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        let buendel: Buendel = resp
+            .json()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
+
+        let mut out = Vec::with_capacity(buendel.messlokationen.len());
+        for melo in buendel.messlokationen {
+            if let Some(msb) = self.get_melo_msb_at(&melo, at).await? {
+                out.push((melo, msb));
+            }
+        }
+        Ok(out)
+    }
+
     /// `PUT /api/v1/netzzugang/antraege` — upsert a §20b
     /// Netzzugangsplattform request in the marktd registry.
     ///

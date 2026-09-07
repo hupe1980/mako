@@ -76,6 +76,28 @@ pub struct BillingdMcpState {
     pub deps: Arc<crate::clients::BillingDeps>,
 }
 
+/// A tool that takes no arguments.
+///
+/// **Not `serde_json::Value`.** Its JSON Schema is the empty schema — no
+/// `type` — and the MCP specification requires a tool's `inputSchema` to have
+/// root type `object`. `rmcp` asserts that while building the router, so a
+/// single argument-less tool declared as `Parameters<serde_json::Value>`
+/// panics the whole service at startup. Nothing else catches it: the router is
+/// built in `main`, and no test starts the binary.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct NoParams {}
+
+/// Filters for the §41e / §14a VPP settlement listing.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListVppSettlementsParams {
+    /// The aggregator's MP-ID; unset lists every LF.
+    pub lf_mp_id: Option<String>,
+    /// The VPP's Marktlokation; unset lists every VPP.
+    pub vpp_id: Option<String>,
+    /// Page size. Defaults to 20, clamped to 100.
+    pub limit: Option<i64>,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListRecordsParams {
     /// 11-digit MaLo-ID.
@@ -370,17 +392,13 @@ CloudEvent de.vpp.settlement.berechnet is emitted per settlement. § 41e EnWG / 
     )]
     async fn list_vpp_settlements(
         &self,
-        Parameters(p): Parameters<serde_json::Value>,
+        Parameters(p): Parameters<ListVppSettlementsParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::{RecordFilter, list_billing_records};
-        let lf_mp_id = p.get("lf_mp_id").and_then(|v| v.as_str());
-        let limit = p
-            .get("limit")
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or(20)
-            .clamp(1, 100);
+        let lf_mp_id = p.lf_mp_id.as_deref();
+        let limit = p.limit.unwrap_or(20).clamp(1, 100);
         // VPP records are stored under the vpp_id in the `malo_id` column.
-        let vpp_malo = p.get("vpp_id").and_then(|v| v.as_str());
+        let vpp_malo = p.vpp_id.as_deref();
         // The category filter runs in the query, not over the rows it returned:
         // a portfolio whose latest `limit` documents are all ordinary invoices
         // would otherwise answer "no settlements" while its settlements sit one
@@ -465,7 +483,7 @@ before billing.",
     )]
     async fn list_product_categories(
         &self,
-        Parameters(_p): Parameters<serde_json::Value>,
+        Parameters(_p): Parameters<NoParams>,
     ) -> Result<CallToolResult, McpError> {
         let categories = serde_json::json!([
             { "category": "STROM", "description": "Standard electricity — Eintarif/Zweitarif/Mehrtarif", "required": ["arbeitspreis_ct_per_kwh"], "optional": ["grundpreis_ct_per_day", "arbeitspreis_ht_ct_per_kwh", "arbeitspreis_nt_ct_per_kwh", "dynamic_epex", "dynamic_epex_floor_ct_kwh"], "regulatory": "§41a EnWG for dynamic; §3 StromStG levy included" },

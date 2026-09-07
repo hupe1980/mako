@@ -9,6 +9,21 @@ use crate::{Error, Pruefidentifikator, Release};
 
 use super::{Set, Unset, bytes_to_segments};
 
+/// `ERC` DE 9321 codes for which `SG5 FTX+Z02` „Ortsangabe des AHB-Fehlers" is
+/// Muss.
+///
+/// APERAK AHB 1.0 makes Nr 00017 `Muss [4] ∧ ([5] ∨ [9] ∨ [10] ∨ [11] ∨ [12] ∨
+/// [13])`, and those six Bedingungen are „Wenn SG4 ERC+Z29 / Z35 / Z38 / Z39 /
+/// Z41 / Z40 vorhanden." — the codes that say the message violates the
+/// Anwendungshandbuch, as opposed to failing a business check.
+pub const CODES_REQUIRING_ORTSANGABE: [&str; 6] = ["Z29", "Z35", "Z38", "Z39", "Z40", "Z41"];
+
+/// Whether an `ERC` DE 9321 code obliges an `SG5 FTX+Z02`.
+#[must_use]
+pub fn requires_ortsangabe(code: &str) -> bool {
+    CODES_REQUIRING_ORTSANGABE.contains(&code)
+}
+
 #[derive(Debug, Clone)]
 struct AperakBuilderInner {
     release: Release,
@@ -17,7 +32,11 @@ struct AperakBuilderInner {
     sender_agency: Option<AgencyCode>,
     receiver_agency: Option<AgencyCode>,
     message_ref: String,
-    document_code: String,
+    /// `BGM` DE 1001. `None` derives it from the presence of an error code:
+    /// `313` Verarbeitbarkeitsfehlermeldung when one is set, `312`
+    /// Anerkennungsmeldung when none is. Those are the only two codes the
+    /// APERAK MIG admits.
+    document_code: Option<String>,
     document_id: Option<String>,
     acw_ref: Option<String>,
     /// `SG5 RFF+AGO` — the Dokumentennummer of the message answered.
@@ -27,6 +46,8 @@ struct AperakBuilderInner {
     reference_date: Option<String>,
     error_code: Option<String>,
     error_text: Option<String>,
+    /// `SG5 FTX+Z02` — where in the acknowledged message the AHB is violated.
+    ortsangabe: Option<String>,
     document_date: Option<String>,
 }
 
@@ -56,13 +77,14 @@ impl AperakBuilder<Unset, Unset> {
                 sender_agency: None,
                 receiver_agency: None,
                 message_ref: "1".to_owned(),
-                document_code: "1000".to_owned(),
+                document_code: None,
                 document_id: None,
                 acw_ref: None,
                 ago_ref: None,
                 reference_date: None,
                 error_code: None,
                 error_text: None,
+                ortsangabe: None,
                 document_date: None,
             },
         }
@@ -169,8 +191,9 @@ impl<S, R> AperakBuilder<S, R> {
         self
     }
 
-    /// The Dokumentennummer (`BGM` DE 1004) of the message answered — `SG5
-    /// RFF+AGO`. Defaults to the Nachrichten-Referenznummer.
+    /// The Dokumentennummer (`BGM` DE 1004) of the message answered —
+    /// `RFF+AGO`, in `SG2` on an Anerkennungsmeldung and in `SG5` on a
+    /// rejection. Defaults to the Nachrichten-Referenznummer.
     pub fn ago_ref(mut self, reference: impl Into<String>) -> Self {
         self.inner.ago_ref = Some(reference.into());
         self
@@ -195,6 +218,17 @@ impl<S, R> AperakBuilder<S, R> {
         self
     }
 
+    /// `SG5 FTX+Z02` „Ortsangabe des AHB-Fehlers" — where in the acknowledged
+    /// message the reported error is.
+    ///
+    /// Muss for the six codes [`requires_ortsangabe`] names; unset, the
+    /// error text stands in for it, because an APERAK carrying one of those
+    /// codes without it is refused by the receiving Marktpartner.
+    pub fn ortsangabe(mut self, where_: impl Into<String>) -> Self {
+        self.inner.ortsangabe = Some(where_.into());
+        self
+    }
+
     /// Override the message reference number.  Defaults to `"1"`.
     pub fn message_ref(mut self, reference: impl Into<String>) -> Self {
         self.inner.message_ref = reference.into();
@@ -207,19 +241,30 @@ impl<S, R> AperakBuilder<S, R> {
         self
     }
 
-    /// Override the BGM document function code (DE1001).
+    /// Override the BGM document function code (DE 1001).
     ///
-    /// The default is `"1000"` (standard EDIFACT APERAK code).
-    /// For BDEW-specific message classes:
-    /// - `"312"` — Anerkennungsmeldung (positive acknowledgement)
-    /// - `"313"` — Verarbeitbarkeitsfehlermeldung (processing error rejection,
-    ///   BGM+313 per BDEW APERAK AHB 1.0 §2.1.1)
+    /// Leave it unset. The APERAK MIG admits exactly two codes and which one
+    /// applies follows from the message itself:
     ///
-    /// In most cases, the EDIFACT renderer in `makod` sets this
-    /// automatically based on whether an `error_code` is present.
+    /// - `"312"` — Anerkennungsmeldung (PID 29002), no `SG4` Fehlerbeschreibung
+    /// - `"313"` — Verarbeitbarkeitsfehlermeldung (PID 29001), `SG4` present
+    ///
+    /// so the default is derived from [`error_code`](Self::error_code) rather
+    /// than fixed. `"1000"` — the generic UN/EDIFACT APERAK code — is *not*
+    /// admitted by any EDI@Energy Prüfschablone; passing it here produces a
+    /// message the receiving Marktpartner rejects.
     pub fn document_code(mut self, code: impl Into<String>) -> Self {
-        self.inner.document_code = code.into();
+        self.inner.document_code = Some(code.into());
         self
+    }
+
+    /// The `BGM` DE 1001 this message will carry.
+    fn effective_document_code(&self) -> &str {
+        match self.inner.document_code.as_deref() {
+            Some(code) => code,
+            None if self.inner.error_code.is_some() => "313",
+            None => "312",
+        }
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
@@ -245,7 +290,7 @@ impl<S, R> AperakBuilder<S, R> {
             [&self.inner.message_ref],
             ["APERAK", "D", "07B", "UN", self.inner.release.as_str()]
         );
-        emit_seg!(w, "BGM", &self.inner.document_code, doc_id);
+        emit_seg!(w, "BGM", self.effective_document_code(), doc_id);
         // `DTM+137` Dokumentendatum. Every EDI@Energy AHB gives DE 2379 as
         // `303` (`CCYYMMDDHHMMZZZ`) with condition `[931]` fixing the zone to
         // `+00`; `[494]` requires the stamp to be the creation moment or
@@ -261,6 +306,16 @@ impl<S, R> AperakBuilder<S, R> {
                 "DTM",
                 ["171", &super::ccyymmddhhmm_utc(reference_date), "303"]
             );
+            // `RFF+AGO` has two places, and which one it takes is decided by
+            // `SG4`: Nr 00006 in `SG2` for an Anerkennungsmeldung, Nr 00015
+            // inside the Fehlerbeschreibung for a rejection. An
+            // Anerkennungsmeldung opens no `SG4`, so an AGO emitted down there
+            // would sit in a group that never starts — `MIG-STRUCTURE`, plus a
+            // Muss `SG2` reported missing on top.
+            if self.inner.error_code.is_none() {
+                let ago = self.inner.ago_ref.as_deref().unwrap_or(r);
+                emit_comp!(w, "RFF", ["AGO", ago]);
+            }
         }
         if let Some(id) = &self.inner.sender_id {
             emit_comp!(
@@ -286,10 +341,26 @@ impl<S, R> AperakBuilder<S, R> {
         if let Some(text) = &self.inner.error_text {
             emit_comp!(w, "FTX", ["ABO"], [""], [""], [text]);
         }
-        if let Some(r) = &self.inner.acw_ref {
+        if let Some(code) = &self.inner.error_code
+            && let Some(r) = &self.inner.acw_ref
+        {
             emit_comp!(w, "RFF", ["ACW", r]);
             let ago = self.inner.ago_ref.as_deref().unwrap_or(r);
             emit_comp!(w, "RFF", ["AGO", ago]);
+            // `SG5 FTX+Z02` (Nr 00017) is Muss for the six codes that report an
+            // AHB violation rather than a business one — the receiver is told
+            // *where* the message breaks the Anwendungshandbuch, not only that
+            // it does. Emitted only for those, because for every other code the
+            // AHB does not ask for it.
+            if requires_ortsangabe(code) {
+                let ortsangabe = self
+                    .inner
+                    .ortsangabe
+                    .as_deref()
+                    .or(self.inner.error_text.as_deref())
+                    .unwrap_or(code);
+                emit_comp!(w, "FTX", ["Z02"], [""], [""], [ortsangabe]);
+            }
         }
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;

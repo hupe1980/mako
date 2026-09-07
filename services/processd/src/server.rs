@@ -1159,7 +1159,6 @@ mod rest {
                 .into_response();
         }
 
-        // Parse the requested Lieferbeginn date.
         let lieferbeginn = match time::Date::parse(
             &lieferbeginn_str,
             time::macros::format_description!("[year]-[month]-[day]"),

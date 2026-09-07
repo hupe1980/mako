@@ -83,6 +83,21 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                     .first()
                     .and_then(|t| t.vorgangsnummer())
                     .map(ToOwned::to_owned),
+                // `SG8 SEQ+Z79` DE 1050 — the Produktpaket-ID the Anmeldung
+                // offers. The Bestätigung echoes it in `SG6 RFF+Z60`
+                // („Informativ zur Umsetzung geplantes Produktpaket"), where
+                // the AHB marks it Muss: the NB says which of the offered
+                // packages it will actually implement, and unless it says
+                // otherwise that is the one it was asked for.
+                produktpaket_id: u.transactions().first().and_then(|t| {
+                    t.sequences
+                        .iter()
+                        .find(|s| {
+                            s.seq.action.as_deref()
+                                == Some(edi_energy::utilmd_codes::produkt::SEQ_PRODUKTPAKET)
+                        })
+                        .and_then(|s| s.seq.sequence_id.clone())
+                }),
                 // `SG12 NAD+Z09` — copied verbatim onto the NB's 55010, where
                 // Bedingung [279] marks it Muss on a verbrauchende oder ruhende
                 // Marktlokation and [572] names it „Kundenname aus Anmeldung

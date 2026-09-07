@@ -1,0 +1,71 @@
+# billingd.toml — order-to-cash demo (auth disabled)
+# DO NOT use in production.
+
+# Demo only. Without this, billingd refuses to start with no [oidc]: these
+# endpoints issue invoices, which is the act that creates a receivable.
+allow_insecure_no_auth = true
+
+port   = 9280
+tenant = "9912345000005"
+
+# Where the price comes from. `POST /api/v1/products/{lf}/resolve` returns the
+# Tarifpreisblatt version in force for each leg of the billed period.
+productd_url = "http://productd:9080"
+
+# Where the Marktlokation's Netzbetreiber would come from when the caller does
+# not name one — § 41 Abs. 1 Nr. 5 EnWG puts it on the invoice. The smoke test
+# names it, so no lookup happens and marktd is not part of this stack; the
+# hostname does not resolve on purpose, so a caller that ever stops naming the
+# NB fails loudly here instead of quietly issuing an invoice without one.
+marktd_url = "http://marktd.not-run.invalid:8180"
+
+# The metered quantity's production source. Not run in this demo: the smoke
+# test supplies the reading through the documented `meter` override, which is
+# what makes the invoice reproducible. The hostname does not resolve on
+# purpose — an override that is ever dropped fails loudly here instead of
+# quietly billing zero. `demos/eeg-billing` is where edmd is exercised.
+edmd_url = "http://edmd.not-run.invalid:8380"
+
+# Contract facts: the Vertrag behind the MaLo, the buyer for EN 16931 BG-7.
+vertragd_url = "http://vertragd:9780"
+
+# The document store — the ZUGFeRD PDF and the § 147 AO eight-year retention.
+outputd_url = "http://outputd:9880"
+
+# The Massenkontokorrent that carries the Offener Posten.
+accountingd_url = "http://accountingd:9380"
+
+# `de.billing.rechnung.erstellt` is how the receivable reaches the ledger:
+# `accountingd_url` above is **read-only** (billingd asks it what advances a
+# MaLo has paid), and the debit entry rides this CloudEvent. Pointing it at the
+# demo's ERP receiver instead would leave every invoice untracked — no Offene
+# Posten, no Mahnwesen, no collection.
+#
+# accountingd forwards its own `de.accounting.*` events on to the ERP receiver,
+# so the chain is still observable end to end.
+erp_webhook_url = "http://accountingd:9380/webhook"
+
+# § 14 Abs. 4 Nr. 2 UStG requires every Rechnung to carry the seller's
+# USt-IdNr. or Steuernummer, and billingd refuses to start without one rather
+# than issue documents that are not invoices.
+seller_name   = "Demo Energie GmbH"
+seller_vat_id = "DE123456789"
+
+
+[database]
+url = "postgres://demo:demo-secret@postgres/billingd"
+
+# The nightly § 40b EnWG sweep is off: this demo bills one period explicitly so
+# the run is reproducible. A production deployment turns it on.
+[billing_runs]
+enabled = false
+
+# § 40 Abs. 2 Nr. 1 EnWG — the supplier's address on every invoice.
+[seller]
+street       = "Musterstr. 1"
+post_code    = "10115"
+city         = "Berlin"
+country      = "DE"
+contact_name = "Kundenservice"
+phone        = "+49 30 123456"
+email        = "rechnung@demo-energie.example"
