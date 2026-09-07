@@ -115,6 +115,21 @@ name    = "chacha20"
 version = "0.9"
 reason  = "agentplane's keyring AEAD (chacha20poly1305 0.10, its latest release) pins chacha20 0.9; our rand 0.10 (mako-engine, lopdf) uses 0.10. Not unifiable from here — resolve when chacha20poly1305 bumps."
 
+# ── Iceberg cold tier vs. DataFusion ─────────────────────────────────────────
+# `edmd`'s cold-tier archive brings both: `iceberg` → `apache-avro` compresses
+# Avro blocks with zstd 0.13, while `datafusion` → `async-compression` is on
+# 0.14. Both are thin bindings over the same vendored libzstd C source and never
+# exchange types. Resolve when apache-avro bumps.
+[[bans.skip]]
+name    = "zstd"
+version = "0.13"
+reason  = "apache-avro 0.21 (via iceberg) pins zstd 0.13; datafusion 53 → async-compression uses 0.14."
+
+[[bans.skip]]
+name    = "zstd-safe"
+version = "7.3"
+reason  = "Transitive of zstd 0.13 — see the zstd skip."
+
 # ── agentplane crypto chain ───────────────────────────────────────────────────
 # agentplane's `signing` feature uses the ed25519-dalek 3 line for journal record
 # attestation; our JWT verification (jsonwebtoken 11, via mako-service) still
