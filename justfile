@@ -6,7 +6,10 @@
 #   just check    → minimum gate before every commit
 #   just ci       → full CI suite (check + test + lint + deny)
 
-set shell := ["zsh", "-eu", "-o", "pipefail", "-c"]
+# bash, not zsh: `ubuntu-latest` ships bash and not zsh, so a zsh pin makes every
+# `just` recipe on CI fail before it runs a command. Recipes needing more than a
+# single command carry their own `#!/usr/bin/env bash` shebang.
+set shell := ["bash", "-euo", "pipefail", "-c"]
 
 # ── Default: list all recipes ──────────────────────────────────────────────────
 
