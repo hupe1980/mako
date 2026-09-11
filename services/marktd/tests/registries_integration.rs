@@ -15,7 +15,7 @@ use mako_markt::{
 use mako_service::cedar::{CedarEnforcer, CedarPrincipal};
 use marktd::pg::{
     PgMsbRahmenvertragGasRepository, PgNetzzugangRepository,
-    msb_rahmenvertrag_gas::{MsbRahmenvertragGas, MsbRvGasStatus},
+    msb_rahmenvertrag_gas::{MsbRvGasStatus, MsbRvGasUpsertRequest},
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -76,8 +76,8 @@ fn cedar_policy_registers_the_registry_scopes() {
 
 // ── Gas MSB-Rahmenvertrag registry ────────────────────────────────────────────
 
-fn rv(status: MsbRvGasStatus) -> MsbRahmenvertragGas {
-    MsbRahmenvertragGas {
+fn rv(status: MsbRvGasStatus) -> MsbRvGasUpsertRequest {
+    MsbRvGasUpsertRequest {
         id: Uuid::nil(),
         tenant: TENANT.to_owned(),
         gnb_mp_id: GNB.to_owned(),
@@ -87,9 +87,47 @@ fn rv(status: MsbRvGasStatus) -> MsbRahmenvertragGas {
         signed_at: None,
         valid_from: time::macros::date!(2026 - 10 - 01),
         valid_to: None,
-        vertrag: serde_json::json!({}),
+        vertrag: None,
         version: 0,
     }
+}
+
+/// The `PUT` body is gated: a `vertrag` naming another BO is refused as the
+/// request deserialises, before any handler code runs. That is the whole point
+/// of `Bo4e<Vertrag>`: a bare `serde_json::Value` here would store whatever
+/// arrived.
+#[test]
+fn the_upsert_body_gates_its_bo4e_vertrag() {
+    let body = |vertrag: serde_json::Value| {
+        serde_json::json!({
+            "gnb_mp_id": GNB, "msb_mp_id": MSB, "valid_from": "2026-10-01",
+            "vertrag": vertrag,
+        })
+    };
+    let ok: MsbRvGasUpsertRequest =
+        serde_json::from_value(body(serde_json::json!({ "vertragsnummer": "RV-1" })))
+            .expect("a Vertrag with no _typ is accepted; the gate injects it");
+    assert_eq!(
+        ok.vertrag
+            .expect("present")
+            .canonical_json()
+            .expect("serialisable")["_typ"],
+        "VERTRAG"
+    );
+    let err = serde_json::from_value::<MsbRvGasUpsertRequest>(body(
+        serde_json::json!({ "_typ": "MARKTLOKATION" }),
+    ))
+    .expect_err("a Marktlokation is not a Vertrag");
+    assert!(err.to_string().contains("expected a BO4E VERTRAG"), "{err}");
+
+    // `deny_unknown_fields`: a body naming a field the API does not have is a
+    // refusal, not a silently discarded value.
+    let err = serde_json::from_value::<MsbRvGasUpsertRequest>(serde_json::json!({
+        "gnb_mp_id": GNB, "msb_mp_id": MSB, "valid_from": "2026-10-01",
+        "vertragsnummer": "RV-1",
+    }))
+    .expect_err("`vertragsnummer` is not a field of this request");
+    assert!(err.to_string().contains("unknown field"), "{err}");
 }
 
 /// Re-submitting the same business key `(gnb, msb, valid_from)` without an id

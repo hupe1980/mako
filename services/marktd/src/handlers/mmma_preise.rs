@@ -17,12 +17,12 @@
 use std::sync::Arc;
 
 use axum::{
-    Json,
     extract::{Extension, Path, Query},
     http::StatusCode,
     response::IntoResponse,
 };
 use mako_markt::repository::{MmmPreisStromRepository, MmmaPreisGasRepository};
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -70,6 +70,7 @@ pub struct MmmaGasResponse {
 
 /// Request body for upserting Gas MMM prices.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MmmaGasUpsertRequest {
     /// Marktgebiet — defaults to `"THE"`.
     #[serde(default = "default_marktgebiet")]
@@ -226,6 +227,7 @@ pub struct MmmStromResponse {
 
 /// Request body for upserting Strom MMM prices.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MmmStromUpsertRequest {
     pub mehr_ct_kwh: Decimal,
     pub minder_ct_kwh: Decimal,

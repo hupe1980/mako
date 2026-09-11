@@ -810,8 +810,8 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                         message_ref: message_ref.clone(),
                     });
                     // Register two deadlines atomically with the events:
-                    //   1. APERAK Gas *sending* deadline (APERAK AHB 1.0 \u00a72.3.1):
-                    //      Initialprozess (44001): 3 Werktage; Folgeprozess: n\u00e4chster Werktag 12:00.
+                    //   1. APERAK Gas *sending* deadline (APERAK AHB 1.0 §2.3.1):
+                    //      Initialprozess (44001): 3 Werktage; Folgeprozess: nächster Werktag 12:00.
                     //   2. The business answer deadline, per Prüfidentifikator
                     //      out of `mako_fristen::antwort` (4 / 3 / 2 WT).
                     let aperak_send_dl = if is_initialprozess {
@@ -874,9 +874,9 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     events.push(GasSupplierChangeEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // F-035: APERAK BGM+313 (Verarbeitbarkeitsfehlermeldung) \u2014 mandatory
-                    // per APERAK AHB 1.0 \u00a72.1.1 when AHB validation fails.
-                    // Validation failure \u2192 APERAK sent immediately: register the sending
+                    // F-035: APERAK BGM+313 (Verarbeitbarkeitsfehlermeldung) — mandatory
+                    // per APERAK AHB 1.0 §2.1.1 when AHB validation fails.
+                    // Validation failure → APERAK sent immediately: register the sending
                     // deadline so the OutboxWorker delivery is monitored.
                     let aperak_send_dl = if is_initialprozess {
                         PendingDeadline::new(

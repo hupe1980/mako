@@ -171,7 +171,7 @@ pub fn router() -> Router {
         )
         .route(
             "/api/v1/portal/{malo_id}/kontakt",
-            put(handlers::put_portal_kontakt),
+            get(handlers::get_portal_kontakt).put(handlers::put_portal_kontakt),
         )
         .route(
             "/api/v1/portal/{malo_id}/sepa",

@@ -1192,6 +1192,118 @@ fn every_emitted_rechnung_is_valid_bo4e() {
     }
 }
 
+/// The recipient reaches **both** document maps, off one field.
+///
+/// This is the defect the field was added for. `to_rechnung` used to name the
+/// Rechnungsempfänger by the Marktlokation alone — a `Geschaeftspartner` whose
+/// only content was a `mako:externe_kunden_id` ZusatzAttribut — while
+/// `to_en16931` took the customer on a separate argument that the caller
+/// supplied and this map never saw. So the BO4E document mako **stores and
+/// publishes** named nobody, and the EN 16931 view of the very same invoice
+/// named the customer in full. § 14 Abs. 4 Nr. 1 UStG asks for the
+/// Leistungsempfänger on the document, not on one rendering of it.
+#[test]
+fn the_recipient_reaches_both_document_maps() {
+    let (_, mut invoice) = emitted_invoices()
+        .into_iter()
+        .next()
+        .expect("at least one emitted shape");
+    invoice.set_rechnungsempfaenger(Some(energy_billing::Rechnungsempfaenger {
+        name: Some("Erika Mustermann".to_owned()),
+        line1: Some("Musterstr. 1".to_owned()),
+        post_code: Some("10115".to_owned()),
+        city: Some("Berlin".to_owned()),
+        country: Some("DE".to_owned()),
+        vat_id: None,
+    }));
+
+    let rechnung = invoice.to_rechnung();
+    let empfaenger = rechnung
+        .rechnungsempfaenger
+        .as_ref()
+        .expect("a Rechnung always names a recipient");
+    assert_eq!(
+        empfaenger.organisationsname.as_deref(),
+        Some("Erika Mustermann"),
+        "the BO4E document must name the party, not only the EN 16931 view"
+    );
+    let adresse = empfaenger
+        .adresse
+        .as_ref()
+        .expect("a complete address is carried");
+    assert_eq!(adresse.postleitzahl.as_deref(), Some("10115"));
+    assert_eq!(adresse.ort.as_deref(), Some("Berlin"));
+    // The MaLo reference still travels: it is what ties the document back to
+    // the delivery point, and it was the only thing this BO carried before.
+    assert!(
+        empfaenger.zusatz_attribute.as_ref().is_some_and(|z| z
+            .iter()
+            .any(|a| a.name.as_deref() == Some("mako:externe_kunden_id"))),
+        "the Marktlokation reference must survive alongside the customer"
+    );
+
+    // And what mako emits is still a document mako would accept.
+    mako_markt::bo4e::ensure_conformant(&rechnung)
+        .expect("an addressed Rechnung is still conformant");
+}
+
+/// With no recipient resolved, the document is addressed to the Marktlokation —
+/// the documented degradation, and now the *same* one on both sides.
+#[test]
+fn an_unresolved_recipient_degrades_the_same_way_on_both_sides() {
+    let (_, invoice) = emitted_invoices()
+        .into_iter()
+        .next()
+        .expect("at least one emitted shape");
+    let rechnung = invoice.to_rechnung();
+    let empfaenger = rechnung
+        .rechnungsempfaenger
+        .as_ref()
+        .expect("a Rechnung always names a recipient");
+    assert!(
+        empfaenger.organisationsname.is_none() && empfaenger.adresse.is_none(),
+        "with nothing resolved the BO carries only its Marktlokation reference"
+    );
+    mako_markt::bo4e::ensure_conformant(&rechnung)
+        .expect("the degraded form is still conformant BO4E");
+}
+
+/// A half-known address is not one.
+///
+/// § 14 Abs. 4 Nr. 1 UStG wants the full address, and an `Adresse` with a town
+/// and no street is a document that *looks* addressed and is not. The gap is
+/// recorded where an operator can see it rather than shipped as a partial
+/// address.
+#[test]
+fn a_partial_address_is_reported_rather_than_half_written() {
+    let (_, mut invoice) = emitted_invoices()
+        .into_iter()
+        .next()
+        .expect("at least one emitted shape");
+    invoice.set_rechnungsempfaenger(Some(energy_billing::Rechnungsempfaenger {
+        name: Some("Erika Mustermann".to_owned()),
+        city: Some("Berlin".to_owned()),
+        ..Default::default()
+    }));
+    let rechnung = invoice.to_rechnung();
+    let empfaenger = rechnung.rechnungsempfaenger.as_ref().expect("recipient");
+    assert_eq!(
+        empfaenger.organisationsname.as_deref(),
+        Some("Erika Mustermann")
+    );
+    assert!(
+        empfaenger.adresse.is_none(),
+        "a town with no street is not an address"
+    );
+    assert!(
+        empfaenger.zusatz_attribute.as_ref().is_some_and(|z| z
+            .iter()
+            .any(|a| a.name.as_deref() == Some("mako:adresse_unvollstaendig"))),
+        "the gap is recorded, not silently dropped"
+    );
+    mako_markt::bo4e::ensure_conformant(&rechnung).expect("still conformant BO4E");
+}
+
 /// One invoice per shape the crate can emit, so the guard above covers the
 /// branches that differ in which BO4E enums they set: the commodity, and the
 /// VAT category (`Steuerart::Ust` vs `Rcv`, the two `to_rechnung` can produce).

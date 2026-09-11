@@ -344,6 +344,15 @@ async fn dispatch_invoice(
                 .and_then(|v| v.rechnungsempfaenger.as_ref())
                 .is_some_and(|r| r.stromwiederverkaeufer),
         regulatory_rates: rates.clone(),
+        // § 14 Abs. 4 Nr. 1 UStG's Leistungsempfänger, on the context so that
+        // the BO4E `Rechnung` and the EN 16931 model name the same party from
+        // the same field. Carried alongside the priced invoice instead, it
+        // reaches the EN 16931 map only, and the BO4E document mako stores and
+        // publishes names a recipient with no name at all.
+        rechnungsempfaenger: vertrag
+            .as_ref()
+            .and_then(|v| v.rechnungsempfaenger.as_ref())
+            .map(crate::clients::Rechnungsempfaenger::as_context_party),
         contract_id: vertrag.as_ref().map(|v| {
             v.vertrag
                 .vertrags_nr
@@ -447,10 +456,7 @@ async fn dispatch_invoice(
             ),
         });
     }
-    Ok(Billed {
-        invoice,
-        buyer: vertrag.and_then(|v| v.rechnungsempfaenger),
-    })
+    Ok(Billed { invoice })
 }
 
 /// One leg of a billing period: the product in force, and the days it covers.
@@ -711,11 +717,11 @@ pub(crate) async fn dispatch_invoice_multi(
         let next = bill_leg(deps, leg, req, malo_id, &leg_nr(i), run, i == last, &share).await?;
         billed = Some(match billed {
             None => next,
+            // The recipient travels **on** the invoice's context, and `merge`
+            // keeps the first leg's — the same customer throughout a split
+            // period.
             Some(acc) => Billed {
                 invoice: acc.invoice.merge(next.invoice),
-                // The buyer is the same customer throughout; keep the first
-                // answer that resolved one.
-                buyer: acc.buyer.or(next.buyer),
             },
         });
     }
@@ -873,19 +879,19 @@ async fn bill_leg(
     .await
 }
 
-/// A priced period and the customer master the document is addressed to.
+/// A priced period.
 ///
-/// The two travel together because they come from the same `vertragd` answer:
-/// the § 40 Abs. 1 contract facts on the invoice and the EN 16931 BG-7 buyer are
-/// two views of one contract, and resolving them separately meant two round
-/// trips and two answers that could disagree.
+/// The party it is addressed to rides on `invoice.context.rechnungsempfaenger`,
+/// which is what both document maps read. A second field here would reach the
+/// EN 16931 map only, leaving the BO4E `Rechnung` mako stores and publishes
+/// with a Rechnungsempfänger that has no name and no address.
+///
+/// It is `None` when `vertragd` is unreachable or the MaLo is uncontracted: the
+/// document is then addressed to the Marktlokation and carries the resulting
+/// BR-DE-8/9 findings, which is the documented degradation rather than a failed
+/// billing run.
 pub(crate) struct Billed {
     pub(crate) invoice: Invoice,
-    /// `None` when vertragd is unreachable or the MaLo is uncontracted — the
-    /// document is then built with a buyer synthesised from the MaLo-ID and
-    /// carries the resulting BR-DE-8/9 findings, which is the documented
-    /// degradation rather than a failed billing run.
-    pub(crate) buyer: Option<crate::clients::Rechnungsempfaenger>,
 }
 
 /// Resolve the Zählernummer serving a MaLo via the marktd device registry:

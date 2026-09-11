@@ -75,6 +75,7 @@ macro_rules! no_residual_rules {
 }
 
 no_residual_rules![
+    rubo4e::current::Adresse,
     rubo4e::current::Angebot,
     rubo4e::current::Bilanzierung,
     rubo4e::current::Energiemenge,
@@ -85,11 +86,15 @@ no_residual_rules![
     rubo4e::current::Kosten,
     rubo4e::current::Lastgang,
     rubo4e::current::LastvariablePreisposition,
+    rubo4e::current::Lokationszuordnung,
     rubo4e::current::Marktlokation,
     rubo4e::current::Messlokation,
     rubo4e::current::Netzlokation,
     rubo4e::current::Person,
     rubo4e::current::Preisgarantie,
+    rubo4e::current::PreisblattDienstleistung,
+    rubo4e::current::PreisblattHardware,
+    rubo4e::current::PreisblattKonzessionsabgabe,
     rubo4e::current::PreisblattMessung,
     rubo4e::current::PreisblattNetznutzung,
     rubo4e::current::Standorteigenschaften,

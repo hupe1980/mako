@@ -43,7 +43,7 @@ use axum::{
     body::Bytes,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Json, Response},
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
 use edi_energy::{AnyMessage, EdiEnergyMessage as _, Platform};
@@ -53,7 +53,8 @@ use mako_engine::{
     store_slatedb::SlateDbPartnerStore,
     types::MarktpartnerCode,
 };
-use serde::{Deserialize, Serialize};
+use mako_service::Json;
+use serde::Serialize;
 use tracing::info;
 use utoipa::ToSchema;
 
@@ -74,17 +75,16 @@ pub struct PartnerAdminState {
 
 // ── Request / response types ──────────────────────────────────────────────────
 
-/// Request body for `PUT /admin/partners/{mp_id}`.
-///
-/// Accepts a full [`PartnerRecord`] as JSON, flattened — the body's own
-/// `mp_id` field must match the `{mp_id}` path parameter, and a mismatch is
-/// rejected with `400`.
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct UpsertRequest {
-    #[schema(value_type = Object)]
-    #[serde(flatten)]
-    pub record: PartnerRecord,
-}
+// The `PUT /admin/partners/{mp_id}` body **is** a [`PartnerRecord`] — the
+// body's own `mp_id` must match the `{mp_id}` path parameter, and a mismatch is
+// rejected with `400`.
+//
+// There was a one-field `UpsertRequest` wrapper here that flattened it. It
+// bought nothing and cost something: `serde` forbids `deny_unknown_fields`
+// beside `flatten`, and a `deny_unknown_fields` on the *inner* type sees the
+// outer's leftovers — so the wrapper worked only for as long as it stayed
+// empty, and adding one field to it would have made every request fail at run
+// time with nothing in the test suite to catch it.
 
 #[derive(Serialize, ToSchema)]
 pub(crate) struct PartnerResponse {
@@ -276,7 +276,7 @@ fn insecure_delivery_channel(record: &PartnerRecord) -> Option<(&str, &str)> {
     path = "/admin/partners/{mp_id}",
     tag = "admin",
     params(("mp_id" = String, Path, description = "Marktpartner-ID")),
-    request_body(content = UpsertRequest, content_type = "application/json"),
+    request_body(content = Object, description = "A full `PartnerRecord`", content_type = "application/json"),
     responses(
         (status = 200, description = "Upserted", body = PartnerResponse),
         (status = 400, description = "MP-ID mismatch"),
@@ -288,7 +288,7 @@ pub(crate) async fn handle_put(
     headers: HeaderMap,
     State(state): State<Arc<PartnerAdminState>>,
     Path(mp_id_str): Path<String>,
-    Json(body): Json<UpsertRequest>,
+    Json(record): Json<PartnerRecord>,
 ) -> Response {
     let identity = match state.cedar.authenticate(&headers) {
         Some(id) => id,
@@ -305,19 +305,19 @@ pub(crate) async fn handle_put(
         return forbidden();
     }
     let path_gln = MarktpartnerCode::from(mp_id_str.as_str());
-    if body.record.mp_id != path_gln {
+    if record.mp_id != path_gln {
         return (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!(
                     "MP-ID in path ({path_gln}) does not match MP-ID in body ({})",
-                    body.record.mp_id
+                    record.mp_id
                 ),
             }),
         )
             .into_response();
     }
-    if let Some((qualifier, address)) = insecure_delivery_channel(&body.record) {
+    if let Some((qualifier, address)) = insecure_delivery_channel(&record) {
         return (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
@@ -334,7 +334,7 @@ pub(crate) async fn handle_put(
     // `updated_at` is when *we* wrote the record, so the server stamps it. A
     // client-supplied value would also be read back by `merge_from_partin`,
     // which carries it forward on every PARTIN merge.
-    let mut record = body.record;
+    let mut record = record;
     record.updated_at = time::OffsetDateTime::now_utc();
     match state.store.upsert(state.tenant_id, &record).await {
         Ok(()) => {
@@ -617,15 +617,15 @@ mod channel_security_tests {
 
 #[cfg(test)]
 mod documented_body_tests {
-    use super::UpsertRequest;
+    use mako_engine::partner::PartnerRecord;
 
     /// The `PUT /admin/partners/{mp_id}` bodies in the operator guide must
     /// parse.
     ///
     /// # Why this is a test
     ///
-    /// The quick-start `curl` used `"gln"` as the identifier field. `UpsertRequest`
-    /// flattens a `PartnerRecord`, whose field is `mp_id`, so the documented
+    /// The quick-start `curl` used `"gln"` as the identifier field. The body is
+    /// a `PartnerRecord`, whose field is `mp_id`, so the documented
     /// call could not have worked — the same shape as the `[[party]] gln =`
     /// examples that `deny_unknown_fields` rejected. Paste every documented body
     /// into the parser rather than reading it.
@@ -643,9 +643,9 @@ mod documented_body_tests {
                 "valid_from":"2025-10-01T00:00:00Z",
                 "country_code":"DE"}"#,
         ] {
-            let parsed: UpsertRequest = serde_json::from_str(body)
+            let parsed: PartnerRecord = serde_json::from_str(body)
                 .unwrap_or_else(|e| panic!("documented body does not parse: {e}\n{body}"));
-            assert_eq!(parsed.record.mp_id.as_str(), "9900000000001");
+            assert_eq!(parsed.mp_id.as_str(), "9900000000001");
         }
     }
 
@@ -654,7 +654,7 @@ mod documented_body_tests {
     fn the_old_gln_spelling_is_rejected() {
         let body = r#"{"gln":"9900000000001","channels":[]}"#;
         assert!(
-            serde_json::from_str::<UpsertRequest>(body).is_err(),
+            serde_json::from_str::<PartnerRecord>(body).is_err(),
             "\"gln\" is not the identifier field; the example that used it was wrong"
         );
     }

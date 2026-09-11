@@ -118,7 +118,7 @@ fn cfg() -> BillingdConfig {
 #[test]
 fn mixed_rate_invoice_renders_conformant_cii_and_ubl() {
     let invoice = mixed_rate_invoice();
-    let model = einvoice::build(&invoice, &cfg(), "51238696781", None).expect("model builds");
+    let model = einvoice::build(&invoice, &cfg()).expect("model builds");
 
     let cii = einvoice::render_cii(&model);
     assert!(cii.contains("R-XR-9001"), "invoice number in CII");
@@ -195,7 +195,7 @@ fn mixed_rate_invoice_renders_conformant_cii_and_ubl() {
 #[test]
 fn the_model_production_builds_is_checked_against_the_profile_it_declares() {
     let invoice = mixed_rate_invoice();
-    let model = einvoice::build(&invoice, &cfg(), "51238696781", None).expect("model builds");
+    let model = einvoice::build(&invoice, &cfg()).expect("model builds");
 
     let report = einvoice::validate(&model);
     let mut fatal: Vec<String> = report.fatal().map(|f| f.rule.clone()).collect();
@@ -222,8 +222,7 @@ fn the_model_production_builds_is_checked_against_the_profile_it_declares() {
 /// `_3.0` version matches no published version and fails BR-DE-21.
 #[test]
 fn only_a_b2g_document_declares_xrechnung() {
-    let retail =
-        einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None).expect("model builds");
+    let retail = einvoice::build(&mixed_rate_invoice(), &cfg()).expect("model builds");
     assert_eq!(
         retail.specification_id.as_deref(),
         Some("urn:cen.eu:en16931:2017"),
@@ -255,15 +254,18 @@ fn only_a_b2g_document_declares_xrechnung() {
 /// that; only this test can.
 #[test]
 fn the_buyer_electronic_address_does_not_fabricate_a_gln() {
-    let model =
-        einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None).expect("model builds");
+    let model = einvoice::build(&mixed_rate_invoice(), &cfg()).expect("model builds");
     assert!(
         model.buyer.electronic_address.is_none(),
         "a MaLo-ID has no EAS scheme — omit BT-49 rather than claim GLN",
     );
 }
 
-/// With the buyer vertragd supplies, the address findings are gone.
+/// With the recipient vertragd supplies, the address findings are gone.
+///
+/// The party rides on the invoice's own `BillingContext`, which is what both
+/// document maps read — so this same input is what names the BO4E `Rechnung`'s
+/// Rechnungsempfänger too (pinned in `energy-billing`).
 ///
 /// `billingd` holds no customer master; `vertragd.kunden` does. Feeding that
 /// through closes BR-DE-8 (city) and BR-DE-9 (post code) — the two findings that
@@ -284,8 +286,9 @@ fn a_buyer_from_vertragd_closes_the_address_findings() {
         // not reach the model — pinned below.
         email: Some("erika@example.test".to_owned()),
     };
-    let model = einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", Some(&buyer))
-        .expect("model builds");
+    let mut invoice = mixed_rate_invoice();
+    invoice.set_rechnungsempfaenger(Some(buyer.as_context_party()));
+    let model = einvoice::build(&invoice, &cfg()).expect("model builds");
 
     assert_eq!(model.buyer.name.as_deref(), Some("Erika Mustermann"));
     assert_eq!(model.buyer.address.city.as_deref(), Some("Berlin"));
@@ -316,8 +319,7 @@ fn a_buyer_from_vertragd_closes_the_address_findings() {
 #[test]
 fn document_level_allowances_travel_with_the_totals_that_need_them() {
     // An ordinary invoice: no allowances, and BT-106 == BT-109.
-    let plain =
-        einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None).expect("model builds");
+    let plain = einvoice::build(&mixed_rate_invoice(), &cfg()).expect("model builds");
     assert!(plain.allowances.is_empty() && plain.charges.is_empty());
     assert_eq!(
         plain.totals.line_total, plain.totals.taxable_total,
@@ -328,8 +330,7 @@ fn document_level_allowances_travel_with_the_totals_that_need_them() {
     // pair this service owns. The other half (that outputd's `DocumentView`
     // carries BG-20/BG-21 and BT-107/108) is pinned in outputd's own
     // `document::view` tests, because the view is that service's contract.
-    let rest = einvoice::build(&restrechnung_invoice(), &cfg(), "51238696781", None)
-        .expect("model builds");
+    let rest = einvoice::build(&restrechnung_invoice(), &cfg()).expect("model builds");
     assert_eq!(rest.allowances.len(), 1, "one group per (category, rate)");
     assert!(
         rest.allowances[0].vat.rate.is_some(),
@@ -359,8 +360,7 @@ fn document_level_allowances_travel_with_the_totals_that_need_them() {
 /// render API accepts.
 #[test]
 fn the_render_request_carries_the_semantic_model() {
-    let model =
-        einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None).expect("model builds");
+    let model = einvoice::build(&mixed_rate_invoice(), &cfg()).expect("model builds");
     let body = serde_json::json!({ "model": model });
 
     let back: en16931::Invoice = serde_json::from_value(body["model"].clone())
@@ -387,8 +387,7 @@ fn the_render_request_carries_the_semantic_model() {
 #[test]
 fn the_seller_electronic_address_is_a_gln_or_absent() {
     // A correctly configured operator: a real BDEW-Codenummer is a real GLN.
-    let model =
-        einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None).expect("model builds");
+    let model = einvoice::build(&mixed_rate_invoice(), &cfg()).expect("model builds");
     let bt34 = model
         .seller
         .electronic_address
@@ -402,8 +401,7 @@ fn the_seller_electronic_address_is_a_gln_or_absent() {
     // document stays valid — it simply stops making a claim it cannot support.
     let mut mistyped = cfg();
     mistyped.tenant = "9900000000001".to_owned();
-    let model = einvoice::build(&mixed_rate_invoice(), &mistyped, "51238696781", None)
-        .expect("model builds");
+    let model = einvoice::build(&mixed_rate_invoice(), &mistyped).expect("model builds");
     assert!(
         model.seller.electronic_address.is_none(),
         "a bad GS1 check digit must omit BT-34, not claim it",
@@ -424,8 +422,7 @@ fn the_seller_electronic_address_is_a_gln_or_absent() {
 /// en16931 0.4.0's XRechnung profile is what surfaced it.
 #[test]
 fn the_billing_period_reaches_the_semantic_model() {
-    let model =
-        einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None).expect("model builds");
+    let model = einvoice::build(&mixed_rate_invoice(), &cfg()).expect("model builds");
     let period = model.invoicing_period.clone().expect("BG-14 is mapped");
     assert_eq!(
         period.start.map(|d| d.to_string()).as_deref(),
@@ -449,8 +446,7 @@ fn the_billing_period_reaches_the_semantic_model() {
 /// This side pins what *production* stamps.
 #[test]
 fn production_stamps_the_terms_the_gate_specimen_proves_templates_against() {
-    let produced =
-        einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None).expect("model builds");
+    let produced = einvoice::build(&mixed_rate_invoice(), &cfg()).expect("model builds");
 
     assert_eq!(
         produced.business_process.as_deref(),
@@ -503,8 +499,7 @@ fn the_seller_steuernummer_reaches_the_model_and_the_wire() {
     v["seller"]["email"] = serde_json::json!("service@example.de");
     let cfg: BillingdConfig = serde_json::from_value(v).expect("config parses");
 
-    let model =
-        einvoice::build(&mixed_rate_invoice(), &cfg, "51238696781", None).expect("model builds");
+    let model = einvoice::build(&mixed_rate_invoice(), &cfg).expect("model builds");
     assert_eq!(
         model.seller.tax_registration.as_deref(),
         Some("123/456/78901"),

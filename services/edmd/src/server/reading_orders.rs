@@ -15,6 +15,7 @@ use rust_decimal::Decimal;
 // DB: `ablese_auftraege` (migration 0003_ablese_auftraege.sql)
 
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct CreateReadingOrderRequest {
     pub malo_id: String,
     pub melo_id: Option<String>,
@@ -45,6 +46,7 @@ pub(crate) struct CreateReadingOrderRequest {
 /// listing or fetching any *completed* order failed with a type-mismatch error
 /// the moment a register reading was present.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct CompleteReadingOrderRequest {
     pub zaehlerstand_kwh: Option<Decimal>,
     pub zaehlerstand_qm3: Option<Decimal>,
@@ -446,6 +448,7 @@ pub(crate) async fn cancel_reading_order(
 
 /// Body for `PUT /api/v1/reading-orders/{id}/fail`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FailReadingOrderRequest {
     /// Ablesehindernis — why no reading could be taken.
     grund: String,

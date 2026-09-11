@@ -15,11 +15,11 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
 };
-use mako_service::{ApiError, ApiResult, oidc::Claims};
+use mako_service::{ApiError, ApiResult, Json, oidc::Claims};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -315,7 +315,8 @@ fn decimal_from_json(v: &serde_json::Value) -> Option<Decimal> {
 ///
 /// # Errors
 ///
-/// `422` when `kosten_json` is not a `rubo4e::current::Kosten`.
+/// `422` when `kosten_json` is not a `rubo4e::current::Kosten` — refused as the
+/// body deserialises, by `Bo4e<Kosten>`, with the gate's own `code`/`paths`.
 pub async fn put_kostenblatt(
     claims: Claims,
     Extension(cedar): Authz,
@@ -325,10 +326,6 @@ pub async fn put_kostenblatt(
     Json(req): Json<UpsertKostenblattRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
     authorize(&cedar, &claims, "compute-kostenblatt", &cfg.tenant)?;
-    if let Some(kosten) = &req.kosten_json {
-        serde_json::from_value::<rubo4e::current::Kosten>(kosten.clone())
-            .map_err(|e| ApiError::unprocessable(format!("invalid Kosten payload: {e}")))?;
-    }
     let id = pg::upsert_kostenblatt(&pool, &cfg.tenant, &activation_id, &req)
         .await
         .map_err(ApiError::Internal)?;
@@ -626,8 +623,6 @@ pub async fn post_compute(
     // The outbound gate: this document is settled against by the ÜNB.
     mako_markt::bo4e::ensure_conformant(&kosten)
         .map_err(|e| ApiError::Unprocessable(format!("the Kostenblatt is not valid BO4E: {e}")))?;
-    let kosten_json = mako_markt::bo4e::to_canonical_json(&kosten)
-        .map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
 
     let upsert = UpsertKostenblattRequest {
         tr_id: req.tr_id.clone(),
@@ -638,7 +633,9 @@ pub async fn post_compute(
         vnb_mp_id: req.vnb_mp_id.clone(),
         dispatch_kwh,
         arbeitspreis_eur_per_kwh: req.arbeitspreis_eur_per_kwh,
-        kosten_json: Some(kosten_json),
+        // Built here and already through the outbound gate; `upsert_kostenblatt`
+        // serialises it canonically.
+        kosten_json: Some(mako_markt::bo4e::Bo4e::from_built(kosten)),
         activation_start_utc: Some(window.start),
         activation_end_utc: Some(window.end),
         dispatch_source: Some(source.to_owned()),

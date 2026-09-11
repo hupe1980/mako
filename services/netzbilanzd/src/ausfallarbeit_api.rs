@@ -27,9 +27,9 @@
 
 use std::sync::Arc;
 
-use axum::{Extension, Json};
+use axum::Extension;
 use mako_redispatch::ausfallarbeit as engine;
-use mako_service::{ApiError, ApiResult, oidc::Claims};
+use mako_service::{ApiError, ApiResult, Json, oidc::Claims};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 

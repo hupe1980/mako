@@ -40,6 +40,7 @@ pub struct VppDispatchEvent {
 /// `vpp_id` is the operator-assigned virtual power plant identifier
 /// (typically the SR-ID of the `SteuerbareRessource` portfolio in `marktd`).
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VppBillingRequest {
     /// Aggregator MP-ID — the party issuing the Gutschrift.
     pub lf_mp_id: String,
@@ -238,6 +239,11 @@ pub async fn post_vpp_billing(
             ),
         ),
     ];
+    // The §41e settlement is issued against the prosumer behind the MaLo, so the
+    // ordinary BG-7 lookup resolves the right party. Resolved **before** the
+    // document is built: `build_vpp_settlement` returns the BO4E `Rechnung` as
+    // JSON, and a recipient attached afterwards would never reach it.
+    let buyer = vpp_buyer(&deps, &req.malo_id).await;
     let (invoice, rechnung_json) = build_vpp_settlement(
         &req.malo_id,
         &req.lf_mp_id,
@@ -247,16 +253,13 @@ pub async fn post_vpp_billing(
         mwst_rate,
         positions,
         attrs,
+        buyer
+            .as_ref()
+            .map(crate::clients::Rechnungsempfaenger::as_context_party),
     )
     .map_err(BillingError::Internal)?;
     let total_netto = invoice.netto_eur;
     let total_brutto = invoice.brutto_eur;
-
-    // The §41e settlement is issued against the prosumer behind the MaLo, so the
-    // ordinary BG-7 lookup resolves the right party. This path builds the
-    // document from dispatch events rather than through `dispatch_invoice`, so
-    // it looks the buyer up itself.
-    let buyer = vpp_buyer(&deps, &req.malo_id).await;
 
     // VPP settlement row, its ledger claims and its `de.vpp.settlement.berechnet`
     // outbox event commit atomically, so a settled dispatch can never be
@@ -303,15 +306,7 @@ pub async fn post_vpp_billing(
         }),
     );
     issue_record(&mut tx, cfg, record_id, &ce).await?;
-    crate::einvoice::store(
-        &mut *tx,
-        record_id,
-        &invoice,
-        cfg,
-        &req.malo_id,
-        buyer.as_ref(),
-    )
-    .await?;
+    crate::einvoice::store(&mut *tx, record_id, &invoice, cfg, &req.malo_id).await?;
     tx.commit().await?;
 
     Ok((
@@ -706,6 +701,8 @@ pub async fn post_vpp_webhook(
             serde_json::json!(flexibility_kwh.to_string()),
         ),
     ];
+    // Resolved before the build, for the same reason as above.
+    let buyer = vpp_buyer(&deps, &contract.malo_id).await;
     let (invoice, rechnung_json) = match build_vpp_settlement(
         &contract.malo_id,
         &contract.aggregator_mp_id,
@@ -715,6 +712,9 @@ pub async fn post_vpp_webhook(
         mwst_rate,
         vec![pos],
         attrs,
+        buyer
+            .as_ref()
+            .map(crate::clients::Rechnungsempfaenger::as_context_party),
     ) {
         Ok(v) => v,
         Err(e) => {
@@ -799,18 +799,8 @@ pub async fn post_vpp_webhook(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     }
-    // The §41e settlement is issued against the prosumer behind the MaLo, so the
-    // ordinary BG-7 lookup resolves the right party.
-    let buyer = vpp_buyer(&deps, &contract.malo_id).await;
-    if let Err(e) = crate::einvoice::store(
-        &mut *tx,
-        record_id,
-        &invoice,
-        cfg,
-        &contract.malo_id,
-        buyer.as_ref(),
-    )
-    .await
+    if let Err(e) =
+        crate::einvoice::store(&mut *tx, record_id, &invoice, cfg, &contract.malo_id).await
     {
         tracing::error!(%record_id, error = ?e, "billingd: attach en16931 model failed");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();

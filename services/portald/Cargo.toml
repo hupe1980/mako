@@ -19,7 +19,12 @@ path = "src/main.rs"
 
 [dependencies]
 mako-fristen = { workspace = true }
+# The BO4E gate. portald is the edge a customer reaches, and the payload it
+# forwards to `vertragd` is a `Geschaeftspartner`: gating it here turns a
+# mistyped enum into a named field instead of a 502 from one hop away.
+mako-markt   = { workspace = true }
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel", "metrics"] }
+rubo4e       = { workspace = true }
 axum         = { version = "0.8" }
 tokio        = { version = "1", features = ["full"] }
 serde        = { workspace = true, features = ["derive"] }

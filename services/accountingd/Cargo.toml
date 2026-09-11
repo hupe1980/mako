@@ -54,6 +54,7 @@ secrecy      = { version = "0.10", features = ["serde"] }
 integration-tests = []
 
 [dev-dependencies]
+toml       = "0.8"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "rust_decimal", "migrate", "macros"] }

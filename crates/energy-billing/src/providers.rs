@@ -2280,7 +2280,7 @@ impl BillingProvider for SolarProvider {
                 }
             }
 
-            // Info position: PV coverage ratio (useful for \u00a740a Kilowattstundenpreis reporting)
+            // Info position: PV coverage ratio (useful for §40a Kilowattstundenpreis reporting)
             let ratio_pct = (ggv.pv_coverage_ratio() * dec!(100)).round_kfm(1);
             positions.push(BillingPosition {
                 description: format!(
@@ -3400,13 +3400,13 @@ impl BillingProvider for DynamicElectricityProvider {
 ///
 /// **Must be registered last** — computes tax on the sum of ALL prior positions.
 ///
-/// ## Multi-rate VAT (\u00a712 UStG)
+/// ## Multi-rate VAT (§12 UStG)
 ///
 /// The provider groups prior positions by their `applicable_tax_rate`:
-/// - `None` \u2192 uses the engine-wide default rate (passed to `new()`)
-/// - `Some(dec!(0.19))` \u2192 standard rate
-/// - `Some(dec!(0.07))` \u2192 reduced rate (\u00a712 Abs. 2 Nr. 1 UStG for renewable Fernw\u00e4rme)
-/// - `Some(dec!(0.0))` \u2192 zero rate (\u00a712 Abs. 3 UStG for solar PV \u226430 kWp since 01.01.2023)
+/// - `None` → uses the engine-wide default rate (passed to `new()`)
+/// - `Some(dec!(0.19))` → standard rate
+/// - `Some(dec!(0.07))` → reduced rate (§12 Abs. 2 Nr. 1 UStG for renewable Fernwärme)
+/// - `Some(dec!(0.0))` → zero rate (§12 Abs. 3 UStG for solar PV ≤30 kWp since 01.01.2023)
 ///
 /// One `Tax` position is generated per distinct rate group.
 /// Groups with `rate = 0` produce no Tax position.
@@ -3450,7 +3450,7 @@ impl BillingProvider for MwStProvider {
             // Normalised, exactly as `tax_subtotals_of` groups the BG-23
             // breakdown: `0.19` and `0.190` are one rate, and bucketing them
             // apart rounded each half on its own, so `gesamtsteuer` could land
-            // a cent away from `\u03a3 steuerbetraege`.
+            // a cent away from `Σ steuerbetraege`.
             let key = effective_rate.to_string();
             let entry = rate_buckets
                 .entry(key)
@@ -3475,7 +3475,7 @@ impl BillingProvider for MwStProvider {
             // "Σ steuerbetraege == gesamtsteuer" (19 % 1.995 + 7 % 0.525 →
             // 2.00 + 0.53 = 2.53, not round2(2.52)).
             let mwst_eur = validated_eur((net_base.abs() * rate).round_kfm(2));
-            // Sign follows the net base (credit invoices \u2192 negative MwSt)
+            // Sign follows the net base (credit invoices → negative MwSt)
             let mwst_eur = if net_base < Decimal::ZERO {
                 -mwst_eur
             } else {

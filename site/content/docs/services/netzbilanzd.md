@@ -825,6 +825,13 @@ literal round-tripped through `from_value::<Kosten>()` proves nothing, because
 crosses [the outbound gate](@/docs/architecture/domain-model.md#the-bo4e-gate)
 before it is persisted.
 
+A `kosten_json` an **operator** supplies on
+`PUT /api/v1/redispatch/kostenblatt/{activation_id}` crosses the inbound gate as
+a `Bo4e<Kosten>`, and what is stored is the gate's canonical round-trip. A
+hand-rolled `serde_json::from_value::<Kosten>` beside a stored request body
+would let a wrong `_typ`, an out-of-schema enum and unbounded nesting into the
+column the ÜNB settles against. `fremdkosten_json` is gated the same way.
+
 ### The dispatched energy comes from the projected series
 
 The quantity the ÜNB is invoiced for is read from `edmd`'s

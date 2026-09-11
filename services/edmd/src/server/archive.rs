@@ -566,6 +566,7 @@ pub(crate) async fn get_archive_timeseries(
 //            GROUP BY malo_id ORDER BY total_kwh DESC LIMIT 10"}
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SqlQueryRequest {
     sql: String,
     /// Maximum rows to return (default: 10_000).

@@ -27,8 +27,9 @@
 
 use std::sync::Arc;
 
-use axum::{Extension, Json, extract::Path, http::StatusCode, response::IntoResponse};
+use axum::{Extension, extract::Path, http::StatusCode, response::IntoResponse};
 use mako_markt::repository::{MabisZpRecord, MabisZpRepository};
+use mako_service::Json;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tracing::info;
@@ -44,6 +45,7 @@ pub type MabisZpRepoExt = Arc<PgMabisZpRepository>;
 // ── Request / response DTOs ───────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PutMabisZpBody {
     /// The Meldepunkt filed as `LOC+172`.
     pub mabis_zp_id: String,

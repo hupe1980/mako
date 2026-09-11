@@ -1,6 +1,6 @@
 [package]
 name        = "eeg-billing"
-description = "Pure EEG/KWKG feed-in settlement for German energy markets. EEG 2017–2024 (Solarpaket I), §§20–50b EEG 2023 + §7 KWKG 2023. Multi-EEG-version rates, §12 Abs. 3 UStG, §51 Negativpreisregel, §24 Anlagenerweiterung. Zero I/O, zero async, no float money."
+description = "Pure EEG/KWKG feed-in settlement for German energy markets — EEG 2017–2024 and § 7 KWKG 2023. Zero I/O, no float money."
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true

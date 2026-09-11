@@ -1255,6 +1255,29 @@ pub struct Rechnungsempfaenger {
     pub email: Option<String>,
 }
 
+impl Rechnungsempfaenger {
+    /// The address half, as the billing engine's own type.
+    ///
+    /// The engine names the recipient on **both** the BO4E `Rechnung` and the
+    /// EN 16931 model from this one field, so the two views of one invoice
+    /// cannot name different parties.
+    ///
+    /// `stromwiederverkaeufer` and `email` stay here: one decides § 13b reverse
+    /// charge and the other decides delivery, and neither is part of naming the
+    /// party.
+    #[must_use]
+    pub fn as_context_party(&self) -> energy_billing::Rechnungsempfaenger {
+        energy_billing::Rechnungsempfaenger {
+            name: self.name.clone(),
+            line1: self.line1.clone(),
+            post_code: self.post_code.clone(),
+            city: self.city.clone(),
+            country: self.country.clone(),
+            vat_id: self.vat_id.clone(),
+        }
+    }
+}
+
 /// The contract facts billingd puts on the invoice (§40 Abs. 1 EnWG).
 #[derive(Debug, serde::Deserialize)]
 pub struct VertragFacts {

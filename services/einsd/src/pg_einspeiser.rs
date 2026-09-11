@@ -53,6 +53,7 @@ impl Einspeiser {
 
 /// Fields accepted when creating or replacing an operator.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpsertEinspeiser {
     pub name: String,
     #[serde(default)]

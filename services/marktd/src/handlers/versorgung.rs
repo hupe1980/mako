@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -23,6 +23,7 @@ use mako_markt::{
         VersorgungsStatusRecord, VersorgungsStatusRepository, ZuordnungsStatus,
     },
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use serde::{Deserialize, Serialize};
 
@@ -125,6 +126,7 @@ impl From<VersorgungsStatusHistoryRecord> for VersorgungsStatusHistoryResponse {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct VersorgungsStatusUpsertRequest {
     #[schema(value_type = String, example = "Beliefert")]
     pub lieferstatus: String,

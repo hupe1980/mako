@@ -6,6 +6,7 @@ use super::*;
 
 /// Request body for `POST /api/v1/billing/{id}/correction`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CorrectionRequest {
     /// Human-readable reason for the correction (e.g. "Zählerstandskorrektur").
     pub reason: String,

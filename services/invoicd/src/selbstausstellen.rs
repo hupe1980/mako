@@ -30,11 +30,12 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;
 use rust_decimal::Decimal;
@@ -45,6 +46,7 @@ use crate::{handler::HandlerState, pg};
 
 /// Request body for `POST /api/v1/selbstausstellen`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SelbstausstellenRequest {
     /// 11-digit Marktlokations-ID.
     pub malo_id: String,

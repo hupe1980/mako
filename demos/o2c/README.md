@@ -33,7 +33,9 @@ sequenceDiagram
 
     ERP->>productd: PUT /products/{lf}/STROM-H0-DEMO
     Note over productd: Tarifpreisblatt — 20 ct/Tag, 32 ct/kWh
-    ERP->>vertragd: POST /kunden, POST /kunden/{id}/vertraege
+    ERP->>vertragd: POST /kunden (BO4E Geschaeftspartner)
+    ERP->>vertragd: PUT /kunden/{id}/zahlungsinformation (BO4E)
+    ERP->>vertragd: POST /kunden/{id}/vertraege
     Note over vertragd: Versorgungsvertrag on the Marktlokation,<br/>§ 309 Nr. 9 BGB term check
     ERP->>billingd: POST /billing/{malo}/calculate
     billingd->>productd: POST /products/{lf}/resolve
@@ -45,6 +47,41 @@ sequenceDiagram
     ERP->>accountingd: POST /payments/import
     Note over accountingd: the Offener Posten closes
 ```
+
+## Why the customer is a BO4E `Geschaeftspartner`
+
+Not a flat bag of `vorname` / `strasse` / `plz`. § 14 Abs. 4 Nr. 1 UStG makes
+the **Leistungsempfänger's** full name and address part of what an invoice has
+to state, EN 16931 makes BT-44 mandatory, and the object posted here is the
+party `billingd` puts on the document — so this is the demo's most load-bearing
+payload, not a formality.
+
+It is also the demo's own history. The earlier version posted
+
+```json
+{ "anrede": "Frau", "vorname": "Erika", "nachname": "Mustermann",
+  "strasse": "Musterstr. 1", "plz": "10115", "ort": "Berlin",
+  "iban": "…", "zahlungsart": "SEPA_LASTSCHRIFT" }
+```
+
+to an endpoint that has **none** of those fields — it takes a BO4E
+`geschaeftspartner`, and the mandate belongs on
+`PUT /kunden/{id}/zahlungsinformation` as a BO4E `Zahlungsinformation`. `serde`
+ignores a key no field declares, so the request returned `201`, the customer was
+created with no name and no address, the invoice named nobody, and the demo
+reported success.
+
+Three changes make that shape impossible now, and the demo asserts each:
+
+| | |
+|---|---|
+| every `Json<T>` request body denies unknown fields | the same payload is a `422` naming `vorname` |
+| a BO4E document in a request body is a `Bo4e<T>` | the gate runs as `serde` deserialises — no handler can forget it |
+| one status predicate decides "billable" **and** "billed to whom" | two lists would let a priced invoice be addressed to `Marktlokation 5123…` |
+
+`cargo xtask check-request-bodies` holds the first two; step 3 of the smoke test
+asserts the third by reading the recipient back off both the BO4E `Rechnung` and
+the EN 16931 model.
 
 ## What the invoice comes to, and why
 
@@ -139,13 +176,24 @@ Expected output:
 ✓ PUT /api/v1/products/<lf>/STROM-H0-DEMO → 201
 ✓ GET the product back → 200  (the catalogue is the only price source)
 
-▶ [2] vertragd — Kunde and Versorgungsvertrag
+▶ [2] vertragd — POST the Kunde (BO4E Geschaeftspartner)
 ✓ POST /api/v1/kunden → 201
+✓ GET /api/v1/kunden/<id> → the stored BO4E Geschaeftspartner, _typ stamped by the gate
+✓ POST a bad Anrede → 422 bo4e.unknown_enum at `anrede`  (the gate, not the handler)
+✓ POST an unknown field → 422 naming `vorname`  (it is not silently dropped)
+
+▶ [2a] vertragd — PUT the Zahlungsinformation (BO4E)
+✓ PUT /api/v1/kunden/<id>/zahlungsinformation → 200  (IBAN checked mod-97)
+✓ PUT a bad IBAN → 422  (mod-97, before a collection is ever built)
+
+▶ [2b] vertragd — POST the Versorgungsvertrag
 ✓ POST /api/v1/kunden/<id>/vertraege → 201
-✓ GET /api/v1/vertraege/<id> → status ANGELEGT
+✓ GET /api/v1/kunden/<id>/vertraege → 1 contract(s), status ANGELEGT
 
 ▶ [3] billingd — POST calculate for 2026-01-01..2026-01-31
 ✓ POST /api/v1/billing/<malo>/calculate → 201
+✓ rechnung_json.rechnungsempfaenger → Erika Mustermann, Berlin  (§ 14 Abs. 4 Nr. 1 UStG)
+✓ en16931_json.buyer → the same party  (one field feeds both maps)
 ✓ netto = 91.32500 EUR  (Grundpreis 6.20 + Arbeitspreis 80.00 + Stromsteuer 5.125)
 ✓ brutto = 108.67500 EUR  (19 % USt, kaufmännisch gerundet)
 ✓ GET /api/v1/templates/reference/INVOICE → 200
@@ -165,7 +213,7 @@ Expected output:
 ✓ GET /api/v1/offene-posten → 0 open for <malo>  (the receivable is settled)
 
 ▶ [7] what the ERP receiver saw
-✓ ERP events: de.accounting.payment.imported, de.billing.rechnung.erstellt, de.tarif.product.updated
+✓ ERP events: de.accounting.payment.imported, de.tarif.product.updated
 ✓ de.accounting.payment.imported → 108.68 EUR, matched_by=remittance_token
 
 All order-to-cash smoke tests passed.
@@ -177,7 +225,7 @@ All order-to-cash smoke tests passed.
 |---|---|
 | **edmd** | The metered quantity's production source. The smoke test supplies the reading through billingd's documented `meter` override, which is what makes the invoice reproducible to the cent. `demos/eeg-billing` is where a reading actually comes out of edmd. |
 | **marktd** | Where `billingd` resolves the Marktlokation's Netzbetreiber when the caller does not name one. The smoke test names it, so no lookup happens. `demos/nb-stp` is where marktd is exercised. |
-| **processd / makod** | `vertragd` dispatches `start-supply` per Vertragskomponente. Neither runs here, so those tasks stay queued and visible in `GET /api/v1/outbound/dead` rather than silently succeeding, and the contract stays `ANGELEGT`: supply starts when the **NB** confirms the Lieferbeginn, not when the supplier files the contract. `demos/nb-stp` is where that confirmation happens. |
+| **processd / makod** | `vertragd` dispatches `start-supply` per Vertragskomponente. Neither runs here, so those tasks stay queued and visible in `GET /api/v1/outbound/dead`, and the contract stays `ANGELEGT` — supply starts when the **NB** confirms the Lieferbeginn. `demos/nb-stp` is where that confirmation happens |
 
 All three are configured with hostnames that **do not resolve** (`…​.not-run.invalid`)
 rather than omitted: an override that is ever dropped fails loudly at the call

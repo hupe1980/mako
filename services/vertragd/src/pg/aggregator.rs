@@ -29,6 +29,7 @@ pub struct AggregatorvertragRow {
 
 /// Fields accepted when creating or replacing an Aggregatorvertrag.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpsertAggregatorvertragInput {
     pub vpp_id: String,
     pub malo_id: String,

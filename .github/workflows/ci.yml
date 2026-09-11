@@ -352,6 +352,10 @@ jobs:
       - run: cargo run -p xtask -- check-bo4e-discriminants
       - run: cargo run -p xtask -- check-bo4e-examples
       - run: cargo run -p xtask -- check-bo4e-attributes
+      # serde drops a key no field declares, so a request naming a field the API
+      # does not have gets a 2xx and the value goes nowhere; and a BO4E document
+      # typed `serde_json::Value` is one nothing gated.
+      - run: cargo run -p xtask -- check-request-bodies
       # A `time` value serialised into JSON reaches the client as a component
       # array, not an RFC 3339 string.
       - run: cargo run -p xtask -- check-wire-timestamps

@@ -511,15 +511,23 @@ pub async fn issue_and_deliver(
     if contact.as_ref().and_then(|c| c.email.as_ref()).is_some() {
         channels.push("EMAIL".to_owned());
     }
+    // A postal address is all-or-nothing. Mapping the contact row field by
+    // field produced `{"line1":null,…}` for a customer with no address on
+    // file — which is `Some` to `outputd`, so the `POST` channel was queued
+    // against an address that does not exist instead of being suppressed with
+    // a reason. `None` is the honest answer and the one that says so.
+    let address = contact.as_ref().and_then(|c| {
+        Some(serde_json::json!({
+            "line1":     c.line1.as_deref()?,
+            "post_code": c.post_code.as_deref()?,
+            "city":      c.city.as_deref()?,
+            "country":   c.country.as_deref().unwrap_or("DE"),
+        }))
+    });
     let recipient = serde_json::json!({
         "name":  contact.as_ref().and_then(|c| c.name.clone()),
         "email": contact.as_ref().and_then(|c| c.email.clone()),
-        "address": contact.as_ref().map(|c| serde_json::json!({
-            "line1":     c.line1,
-            "post_code": c.post_code,
-            "city":      c.city,
-            "country":   c.country,
-        })),
+        "address": address,
     });
 
     let issued = deps

@@ -29,6 +29,7 @@
 pub mod columns;
 pub mod conformance;
 pub mod gate;
+pub mod typed;
 
 pub use columns::{
     MAKO_PREISTYP_ATTRIBUT, MaloShadowColumns, MeloShadowColumns, StandorteigenschaftenError,
@@ -43,6 +44,7 @@ pub use gate::{
     to_canonical_json,
 };
 pub use rubo4e::validation::ValidationFailure;
+pub use typed::{Bo4e, REJECTION_SENTINEL, recover_rejection};
 
 use rubo4e::current::Marktlokation;
 

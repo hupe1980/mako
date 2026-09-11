@@ -6,6 +6,7 @@ use super::*;
 // ── Jahresablesung campaign (N7 — § 40b Abs. 1 EnWG) ───────────────────────────
 
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct JahresablesungCampaignRequest {
     /// NB MP-ID (BDEW-Codenummer) — used to filter MaLos in the NB's grid area.
     pub nb_mp_id: String,

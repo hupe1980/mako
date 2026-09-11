@@ -27,7 +27,7 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -37,6 +37,7 @@ use mako_markt::{
     error::MdmError,
     repository::{NeLoRecord, NeLoRepository, PageResult},
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use rubo4e::current::Netzlokation;
 use serde::{Deserialize, Serialize};
@@ -87,6 +88,7 @@ fn deserialize_stored_nelo(data: serde_json::Value, nelo_id: &str) -> Option<Net
 /// BO declares it, so it is derived from the payload and required by the
 /// endpoint's profile.
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NeLoUpsertRequest {
     /// Owning Netzbetreiber MP-ID (indexed column, required for filtering).
     ///

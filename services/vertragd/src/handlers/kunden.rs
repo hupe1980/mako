@@ -3,11 +3,11 @@
 use std::{collections::HashSet, sync::Arc};
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
 };
-use mako_service::{ApiError, ApiResult, oidc::Claims};
+use mako_service::{ApiError, ApiResult, Json, oidc::Claims};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -474,6 +474,7 @@ pub async fn gdpr_export(
 
 /// Body of the erasure request.
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct AnonymizeRequest {
     /// Who asked. Falls back to the operator's token subject.
     pub requested_by: Option<String>,

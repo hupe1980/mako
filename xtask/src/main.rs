@@ -28,6 +28,8 @@ Commands:
   check-routes        Refuse axum 0.7 `/:param` route literals, which panic at startup
   check-publish-order Refuse a crates.io publish order that precedes its own dependencies
   check-bo4e-attributes Refuse a ZusatzAttribut that is not `mako:`-namespaced and registered
+  check-request-bodies  Every `Json<T>` body denies unknown fields, and a BO4E document in
+                        one is a `Bo4e<T>` rather than an ungated `serde_json::Value`
   check-bo4e-discriminants  Refuse a hand-written BO4E `_typ` — the discriminant is the type's
   check-bo4e-examples  Refuse a documented BO4E example using a field BO4E does not define
   check-malo-ids       Refuse a MaLo-ID literal whose BDEW check digit is wrong
@@ -70,6 +72,7 @@ mod check_malo_ids;
 mod check_prompt_tools;
 mod check_publish_order;
 mod check_release_coverage;
+mod check_request_bodies;
 mod check_rounding;
 mod check_routes;
 mod check_runner_routes;
@@ -96,6 +99,7 @@ fn main() {
         Some("check-sql") => check_sql(),
         Some("check-publish-order") => check_publish_order::check_publish_order(),
         Some("check-bo4e-attributes") => check_bo4e_attributes(),
+        Some("check-request-bodies") => check_request_bodies(),
         Some("check-bo4e-discriminants") => check_bo4e_discriminants(),
         Some("check-bo4e-examples") => check_bo4e_examples(),
         Some("check-malo-ids") => check_malo_ids(),
@@ -209,6 +213,13 @@ fn check_prompt_tools() {
 fn check_answer_commands() {
     let (workspace_root, _) = workspace_info();
     if !check_answer_commands::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_request_bodies() {
+    let (workspace_root, _) = workspace_info();
+    if !check_request_bodies::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

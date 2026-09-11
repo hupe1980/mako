@@ -179,6 +179,17 @@ A channel with nothing to send to — `EMAIL` with no address on file — is sto
 `SUPPRESSED` **with its reason**, never omitted, so *why did this never go out*
 is answerable from the row rather than from its absence.
 
+**A postal address is all-or-nothing**, and typed. `recipient.address` needs a
+street, a postcode and a town, and `Recipient.address` is already `Option`, so
+"we do not know where they live" has a representation and it is the one that
+suppresses the channel. While the field was free-form JSON, an issuing service
+that found a customer record with no address still produced
+`{"line1":null,"post_code":null,…}` — which is `Some`, so `POST` was not
+suppressed, and the delivery target recorded as *where the letter went* was that
+JSON text. The producers had a second, disagreeing answer beside it: a
+`post_code && city` test chose the channel while the address was attached
+regardless. One predicate now decides both.
+
 `SENT` and `DELIVERED` are deliberately different states. A relay accepting a
 message is not the recipient's server accepting it, and a spool being collected
 is not a letter being posted; those become `DELIVERED` only when the far end

@@ -50,7 +50,7 @@ use axum::{
     Router,
     extract::State,
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Json, Response},
+    response::{IntoResponse, Response},
     routing::post,
 };
 use mako_engine::store_slatedb::SlateDbStore;
@@ -83,6 +83,7 @@ use mako_redispatch::{
         StammdatenWorkflow as RedispatchStammdatenWorkflow, WORKFLOW_NAME as STAMMDATEN_WORKFLOW,
     },
 };
+use mako_service::Json;
 use mako_wim::{
     WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInvoicWorkflow,
     WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
@@ -118,6 +119,7 @@ pub const KNOWN_FV_TRANSITIONS: &[(&str, &str)] = &[("FV2025-10-01", "FV2026-10-
 
 /// `POST /admin/migrations` request body.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MigrateRequest {
     /// Source BDEW format version (e.g. `"FV2025-10-01"`).
     pub from: String,

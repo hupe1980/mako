@@ -16,12 +16,13 @@
 //! - **MCP tools**: protected by `McpAuth` (API-key bearer or OIDC).
 
 use axum::{
-    Extension, Json,
+    Extension,
     body::Bytes,
     extract::{Path, Query},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;
 use serde::Deserialize;
@@ -2343,6 +2344,7 @@ pub async fn get_dormant_mandates(
 
 /// Body of `POST /api/v1/dunning/{id}/locks`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlaceLockRequest {
     pub grund: crate::pg::LockGrund,
     /// The citation this rests on. Defaults to the ground's own.
@@ -2458,6 +2460,7 @@ pub struct ReviewQuery {
 
 /// Body of `DELETE /api/v1/dunning/locks/{lock_id}`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LiftLockRequest {
     /// Why the lock no longer applies. `vereinbarung_gebrochen` carries the
     /// § 41g Abs. 1 S. 11 side effect described below.
@@ -2550,6 +2553,7 @@ pub async fn lift_lock(
 
 /// Body of `POST /api/v1/dunning/{id}/einwaende`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EinwandRequest {
     pub art: crate::pg::EinwandArt,
     pub betrag_ct: i64,
@@ -2655,6 +2659,7 @@ pub async fn get_einwaende(
 
 /// Body of `POST /api/v1/einwaende/{einwand_id}/erledigen`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CloseEinwandRequest {
     /// `stattgegeben` | `zurueckgenommen` | `zurueckgewiesen`.
     pub erledigung: String,
@@ -3133,6 +3138,7 @@ pub struct VorauszahlungQuery {
 
 /// Request body for `POST /api/v1/accounts/{malo_id}/buchen`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BuchenRequest {
     /// Buchungsart. Must be a valid `entry_type` value.
     /// Allowed: `RECHNUNG`, `ZAHLUNG`, `GUTSCHRIFT`, `EEG_GUTSCHRIFT`,
@@ -4097,6 +4103,7 @@ pub async fn get_open_items(
 // ── GDPR Art. 17 anonymization ─────────────────────────────────────────
 
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AnonymizeRequest {
     /// Operator identity for the GDPR Art. 5(2) audit log.
     pub requested_by: String,
@@ -4243,6 +4250,7 @@ pub async fn post_reconcile(
 
 /// Body for `POST /api/v1/periods/{period_id}/seal`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SealPeriodRequest {
     /// First day of the period (inclusive, ISO 8601).
     pub start: String,
@@ -4809,6 +4817,7 @@ pub async fn get_eeg_payout(
 
 /// Request body for `POST /api/v1/eeg/payouts/run`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RunEegPayoutsRequest {
     /// When `true`, force SCT Inst regardless of `[eeg].sepa_instant` config.
     /// When `false` (default), use the config flag.
@@ -5056,6 +5065,7 @@ pub async fn post_run_eeg_payouts(
 /// - `MD01` — no mandate (direct debit only — not applicable here)
 /// - `RJCT` + empty reason — generic rejection
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Pain002StatusUpdate {
     /// `ACCP` | `RJCT` | `CANC`
     pub status: String,
@@ -5562,6 +5572,7 @@ async fn apply_pain002_status(
 
 /// Request body for `POST /api/v1/sepa/reversals`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateReversalRequest {
     /// The collected entry to give back (`sepa_collection_entries.entry_id`).
     pub collection_entry_id: uuid::Uuid,
@@ -5874,6 +5885,7 @@ pub async fn post_sepa_reversal(
 
 /// Body of `POST /api/v1/sepa/recalls`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateRecallRequest {
     /// The submitted run to recall (`sepa_collection_runs.run_id`).
     pub run_id: uuid::Uuid,
@@ -6528,6 +6540,7 @@ pub async fn get_interest_charges(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateInterestChargeRequest {
     pub lf_mp_id: Option<String>,
     pub invoice_reference: Option<String>,

@@ -123,6 +123,57 @@ impl Default for Verbraucherinformationen {
     }
 }
 
+/// The party the invoice is addressed to — § 14 Abs. 4 Nr. 1 UStG's
+/// *Leistungsempfänger*, EN 16931's BG-7 buyer.
+///
+/// # Why this is on the context
+///
+/// The engine prices a Marktlokation; it holds no customer master. So it used
+/// to name the recipient by the **MaLo alone** — a `Geschaeftspartner` carrying
+/// one `mako:externe_kunden_id` ZusatzAttribut and no name, no address. That is
+/// not a document § 14 UStG describes, and a BO4E consumer reading the stored
+/// `Rechnung` found no recipient at all, while the *same* invoice's EN 16931
+/// model carried the customer in full because the caller supplied it on a
+/// separate channel.
+///
+/// One source now: the caller that resolves the customer puts it here, and both
+/// maps read it. `None` still works — the document then names the
+/// Marktlokation, which is the documented degradation for an uncontracted MaLo
+/// rather than a failed run — but it is now the same degradation on both sides.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rechnungsempfaenger {
+    /// The addressee as printed — an organisation name or a person's full name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Street and house number.
+    #[serde(default)]
+    pub line1: Option<String>,
+    /// Postcode.
+    #[serde(default)]
+    pub post_code: Option<String>,
+    /// Town.
+    #[serde(default)]
+    pub city: Option<String>,
+    /// ISO 3166-1 alpha-2. Absent is read as `DE`.
+    #[serde(default)]
+    pub country: Option<String>,
+    /// USt-IdNr., where the customer has one (BT-48).
+    #[serde(default)]
+    pub vat_id: Option<String>,
+}
+
+impl Rechnungsempfaenger {
+    /// Is there enough here to name a recipient at all?
+    ///
+    /// A recipient with no name is not one: the fallback that names the
+    /// Marktlokation is more honest than an empty BT-44.
+    #[must_use]
+    pub fn names_somebody(&self) -> bool {
+        self.name.as_deref().is_some_and(|n| !n.trim().is_empty())
+    }
+}
+
 // ── InvoiceType ───────────────────────────────────────────────────────────────
 
 /// Whether this is an initial invoice, a correction, a cancellation, or a final settlement.
@@ -742,6 +793,13 @@ pub struct BillingContext {
     /// - § 14 Abs. 4 Nr. 3 UStG wants the actual Ausstellungsdatum.
     #[serde(default)]
     pub issue_date: Option<time::Date>,
+
+    /// The party the invoice is addressed to. See [`Rechnungsempfaenger`].
+    ///
+    /// `None` names the Marktlokation instead, which is the documented
+    /// degradation for a MaLo with no contract on file.
+    #[serde(default)]
+    pub rechnungsempfaenger: Option<Rechnungsempfaenger>,
 
     /// Optional contract reference (for LF internal use / ERP routing).
     #[serde(default)]

@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 /// `vertragd.toml`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VertragdConfig {
     /// PostgreSQL connection + pool tuning (`[database]` block).
     pub database: mako_service::config::DatabaseConfig,
@@ -150,6 +151,7 @@ impl mako_service::ServiceConfig for VertragdConfig {
 
 /// The operator's own identity on a customer notice — § 126b BGB's declarant.
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct AbsenderConfig {
     /// The legal name, as it must appear on the page.
     pub name: Option<String>,

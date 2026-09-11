@@ -40,6 +40,14 @@ pub enum ApiError {
     /// 400 — malformed request.
     #[error("{0}")]
     BadRequest(String),
+    /// 415 — the body's media type is not one this route reads.
+    ///
+    /// Distinct from a 400 because the client's fix is different: the body may
+    /// be perfectly good JSON that arrived without `Content-Type:
+    /// application/json`, and telling it to fix the *body* sends it looking in
+    /// the wrong place.
+    #[error("{0}")]
+    UnsupportedMediaType(String),
     /// 422 — well-formed but semantically invalid.
     #[error("{0}")]
     Unprocessable(String),
@@ -108,6 +116,7 @@ impl ApiError {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::Unprocessable(_) | Self::UnprocessableWith { .. } => {
                 StatusCode::UNPROCESSABLE_ENTITY
             }

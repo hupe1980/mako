@@ -16,11 +16,12 @@
 //! | `DELETE` | `/admin/fanout/dlq/{event_id}/{subscriber_id}` | Discard the delivery without retry |
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
     response::IntoResponse,
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row as _};

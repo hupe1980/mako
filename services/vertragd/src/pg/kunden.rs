@@ -1,6 +1,8 @@
 //! Kunden, portal identities, and the projections other services read.
 
 use anyhow::Result;
+use mako_markt::bo4e::Bo4e;
+use rubo4e::current::Geschaeftspartner;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row as _};
 use uuid::Uuid;
@@ -15,6 +17,7 @@ use super::{KundeRow, KundenIdentitaetRow};
 /// alongside. For B2B customers with several portal users, POST
 /// `/kunden/{id}/identitaeten` per user afterwards.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateKundeInput {
     pub kunden_nr: Option<String>,
     /// Primary portal user OIDC sub — creates a KundenIdentitaet automatically.
@@ -25,7 +28,14 @@ pub struct CreateKundeInput {
     /// commercial customer consuming ≤ 10 000 kWh a year is one too, and the
     /// operator says so here rather than having it guessed from the segment.
     pub haushaltskunde: Option<bool>,
-    pub geschaeftspartner: Option<serde_json::Value>,
+    /// The customer as a BO4E `Geschaeftspartner` — name, address, VAT-ID and
+    /// contact methods, the § 14 Abs. 4 Nr. 1 UStG Leistungsempfänger every
+    /// invoice must name.
+    ///
+    /// Crosses [the BO4E gate](mako_markt::bo4e::decode) during
+    /// deserialization; what is stored is the gate's canonical round-trip,
+    /// never the request body.
+    pub geschaeftspartner: Option<Bo4e<Geschaeftspartner>>,
     pub organisations_id: Option<String>,
     pub umsatzsteuer_id: Option<String>,
     pub zahlungsziel_tage: Option<i32>,
@@ -39,9 +49,16 @@ pub struct CreateKundeInput {
 
 /// Partial update of a Kunde. Absent fields keep their stored value.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateKundeInput {
     pub kunden_nr: Option<String>,
-    pub geschaeftspartner: Option<serde_json::Value>,
+    /// See [`CreateKundeInput::geschaeftspartner`] — gated the same way.
+    ///
+    /// **Replaces** the stored document. The column is written whole, not
+    /// field by field, so a request carrying only a new telephone number
+    /// leaves the customer with only a telephone number: read
+    /// `GET /api/v1/kunden/{id}` first and send it back changed.
+    pub geschaeftspartner: Option<Bo4e<Geschaeftspartner>>,
     pub organisations_id: Option<String>,
     pub umsatzsteuer_id: Option<String>,
     pub zahlungsziel_tage: Option<i32>,
@@ -59,6 +76,7 @@ pub struct UpdateKundeInput {
 /// Add or update a portal user identity for a Kunde.
 /// Idempotent on `oidc_sub`: re-POST updates rolle / standort_filter.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpsertIdentitaetInput {
     pub oidc_sub: String,
     pub email: Option<String>,
@@ -80,6 +98,22 @@ pub struct KundeListRow {
     pub zahlungsziel_tage: i32,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+}
+
+/// The canonical BO4E JSON of an optional gated document — what gets stored.
+///
+/// Never `serde_json::to_value(..).unwrap_or_default()`: that yields JSON
+/// `null`, which PostgreSQL accepts into a `JSONB NOT NULL` column, so a
+/// customer would be stored with a literal `null` where the Geschäftspartner
+/// belongs and the write would report success.
+fn canonical<T>(value: Option<&Bo4e<T>>) -> Result<Option<serde_json::Value>>
+where
+    T: mako_markt::bo4e::Bo4eTyped + Serialize,
+{
+    value
+        .map(Bo4e::canonical_json)
+        .transpose()
+        .map_err(Into::into)
 }
 
 // ── Kunde CRUD ────────────────────────────────────────────────────────────────
@@ -121,7 +155,7 @@ pub async fn upsert_kunde(pool: &PgPool, tenant: &str, input: &CreateKundeInput)
     .bind(&input.kunden_nr)
     .bind(&input.kundentyp)
     .bind(haushaltskunde)
-    .bind(&input.geschaeftspartner)
+    .bind(canonical(input.geschaeftspartner.as_ref())?)
     .bind(&input.organisations_id)
     .bind(&input.umsatzsteuer_id)
     .bind(input.zahlungsziel_tage.unwrap_or(14))
@@ -178,7 +212,7 @@ pub async fn update_kunde(
     .bind(id)
     .bind(tenant)
     .bind(&input.kunden_nr)
-    .bind(&input.geschaeftspartner)
+    .bind(canonical(input.geschaeftspartner.as_ref())?)
     .bind(&input.organisations_id)
     .bind(&input.umsatzsteuer_id)
     .bind(input.zahlungsziel_tage)
@@ -675,16 +709,23 @@ pub async fn fetch_rechnungsempfaenger_by_malo(
     malo_id: &str,
     tenant: &str,
 ) -> Result<Option<RechnungsempfaengerRow>> {
-    let row: Option<BuyerCols> = sqlx::query_as(
+    // The same predicate the price feed uses. See
+    // [`crate::pg::vertraege::KOMPONENTE_BILLABLE`]: a period that can be
+    // billed has a party it is billed to, and answering the two questions with
+    // different status lists is what produced priced invoices addressed to
+    // "Marktlokation 5123…".
+    let row: Option<BuyerCols> = sqlx::query_as(&format!(
         "SELECT ku.geschaeftspartner, ku.umsatzsteuer_id, ku.stromwiederverkaeufer
            FROM versorgungsvertraege v
            JOIN vertragskomponenten k ON k.vertrag_id = v.id
            JOIN kunden ku            ON ku.id = v.kunden_id
           WHERE k.malo_id=$1 AND v.tenant=$2
-            AND v.status IN ('TEILERFUELLUNG','AKTIV','GEKÜNDIGT')
-            AND k.status IN ('AKTIV','BESTAETIGT')
+            AND v.status IN {vertrag}
+            AND k.status IN {komponente}
           ORDER BY v.vertragsbeginn DESC LIMIT 1",
-    )
+        vertrag = super::vertraege::VERTRAG_BILLABLE,
+        komponente = super::vertraege::KOMPONENTE_BILLABLE,
+    ))
     .bind(malo_id)
     .bind(tenant)
     .fetch_optional(pool)

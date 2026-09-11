@@ -2187,9 +2187,22 @@ curl -X POST http://localhost:8080/api/v1/commands \
 | `DELETE` | `/admin/partners/{mp_id}` | Remove a partner record |
 | `POST` | `/admin/partners/import` | Import from a raw PARTIN EDIFACT interchange |
 
-**`PUT /admin/partners/{mp_id}` request body** — a flattened `PartnerRecord`.
-Only `mp_id` is required, and it must equal the path parameter; everything else
-defaults. `updated_at` is server-owned and ignored if sent.
+**`PUT /admin/partners/{mp_id}` request body** — a `PartnerRecord`. Only
+`mp_id` is required, and it must equal the path parameter; everything else
+defaults.
+
+The body **denies unknown fields**, so a key this record does not declare is a
+`400` naming it rather than a `200` with the value dropped — the trap here being
+`gln`, which is what an older quick-start used and what the field is *not*
+(`mp_id`). The record is posted directly rather than through a wrapper that
+flattens it: `serde` forbids `deny_unknown_fields` beside `flatten`, and a
+`deny_unknown_fields` on the *inner* type sees the outer's leftovers.
+
+This is **`makod`'s** partner registry: the PARTIN record with its
+communication `channels`, `roles` and `contacts`. `marktd`'s
+`PUT /api/v1/partners/{mp_id}` is a different registry holding the BO4E
+`Geschaeftspartner` and the AS4 `makoadresse`, and the two bodies are not
+interchangeable.
 
 ```json
 {
@@ -2577,8 +2590,8 @@ orchestrator probes from, and a throttled probe reads as a dead container.
 | `/health` | alias of `/health/ready` | as above | — |
 
 ```
-HTTP 200 {"status":"ok","instance_id":"makod-0-1","version":"0.19.0"}
-HTTP 503 {"status":"degraded","instance_id":"makod-0-1","version":"0.19.0",
+HTTP 200 {"status":"ok","instance_id":"makod-0-1","version":"<version>"}
+HTTP 503 {"status":"degraded","instance_id":"makod-0-1","version":"<version>",
           "reason":"worker_stale:deadline-scheduler"}
 ```
 
@@ -2859,7 +2872,7 @@ curl -X PUT http://localhost:8080/admin/partners/9900000000001 \
 
 ```bash
 curl -s http://localhost:8080/health | jq .
-# → {"status":"ok","instance_id":"makod-0-1","version":"0.19.0"}
+# → {"status":"ok","instance_id":"makod-0-1","version":"<version>"}
 ```
 
 ### Submitting a test EDIFACT message

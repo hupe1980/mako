@@ -10,6 +10,7 @@ use super::*;
 /// `tariff.category`.  Unsupported meter inputs for the active category are silently
 /// ignored.  Supply `tariff` and/or `meter` as overrides to skip external lookups.
 #[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CalculateRequest {
     pub lf_mp_id: String,
     /// §41 Abs. 1 Nr. 5 EnWG — Netzbetreiber identification on the invoice.
@@ -152,10 +153,7 @@ pub async fn post_calculate(
     // vertragd answer the billing pipeline already needs for the §40 Abs. 1
     // contract facts. billingd holds no customer master, and a model built
     // without it carries a synthesised buyer that fails XRechnung on BR-DE-8/9.
-    let Billed {
-        invoice: result,
-        buyer,
-    } = dispatch_invoice_multi(
+    let Billed { invoice: result } = dispatch_invoice_multi(
         &deps,
         &legs,
         &req,
@@ -243,7 +241,7 @@ pub async fn post_calculate(
     persist_risk(&mut *tx, record_id, assessment.as_ref()).await?;
     // Attach the EN 16931 semantic model (the XRechnung/CII/UBL render source),
     // mapped from the invoice with full per-line VAT — not from BO4E.
-    crate::einvoice::store(&mut *tx, record_id, &result, &cfg, &malo_id, buyer.as_ref()).await?;
+    crate::einvoice::store(&mut *tx, record_id, &result, &cfg, &malo_id).await?;
     tx.commit().await?;
 
     Ok((

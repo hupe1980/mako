@@ -5,30 +5,34 @@
 //!   GET  /api/v1/partners/:gln
 //!   GET  /api/v1/partners
 //!
-//! All PUT requests are validated as `rubo4e::current::Geschaeftspartner` (L6).
-//! The `_typ` discriminator is auto-injected when absent and the canonical
-//! camelCase form is stored in the `partners.channels` JSONB column.
+//! The `geschaeftspartner` a PUT carries is a `Bo4e<Geschaeftspartner>`, so the
+//! BO4E gate runs as the body deserialises: `_typ` is injected when absent,
+//! every enum in the tree is checked, and the canonical camelCase round-trip is
+//! what reaches the `partners.geschaeftspartner` JSONB column.
 
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
 use mako_markt::{
+    bo4e::Bo4e,
     cloudevents::{EventExtensions, MarktEvent},
-    domain::MarktpartnerId,
+    domain::{MarktpartnerId, Sparte},
     error::MdmError,
     repository::{
         AppState, CorrelationIndex, MaloRepository, MeloRepository, PartnerRecord,
         PartnerRepository, PriCatRepository as _, SubscriptionRepository,
     },
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use rubo4e::current::Geschaeftspartner;
 use serde::Deserialize;
+use utoipa::ToSchema;
 
 use super::preisblatt::PriCatRepoExt;
 use super::{Claims, IntoMdmResponse as _};
@@ -39,18 +43,52 @@ pub struct PartnerQuery {
     pub sparte: Option<String>,
 }
 
-/// Validate and normalise a partner `data` payload as `rubo4e::current::Geschaeftspartner`.
+/// The `PUT /api/v1/partners/{mp_id}` body.
 ///
-/// The `data` field in `PartnerRecord.channels` is the partner's BO4E payload;
-/// this returns its canonical serialization, having put it through the BO4E
-/// gate — `_typ`, schema, strict enums (`marktrolle`, `rollencodetyp`,
-/// `marktteilnehmerstatus`, and every other enum in the tree), BO4E rules.
-fn normalize_geschaeftspartner(
-    data: serde_json::Value,
-) -> Result<serde_json::Value, (StatusCode, serde_json::Value)> {
-    let partner: Geschaeftspartner = mako_markt::bo4e::decode(data)
-        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))?;
-    super::serialise_or_500(&partner)
+/// Separate from [`PartnerRecord`] because the two directions are not
+/// symmetric: what is written must cross the BO4E gate, and what is read is
+/// whatever was stored, possibly under an older schema series. The stored row
+/// also carries a `version` the server owns.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PartnerUpsertRequest {
+    /// 13-digit Marktpartner-ID.
+    ///
+    /// Optional, and refused when it names a **different** partner than the
+    /// `{mp_id}` path parameter — the same treatment the BO4E gate gives
+    /// `_typ`, and for the same reason: the path already fixes which partner
+    /// this is, so requiring the caller to repeat it adds a way to be wrong and
+    /// no information — and silently letting the path win means a body naming
+    /// another partner is neither honoured nor reported.
+    #[serde(default)]
+    #[schema(value_type = String)]
+    pub mp_id: Option<MarktpartnerId>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// BO4E market role — the BDEW code (`LF`, `NB`, `MSB`, …).
+    #[serde(default)]
+    #[schema(value_type = String)]
+    pub marktrolle: Option<rubo4e::current::Marktrolle>,
+    #[serde(default)]
+    #[schema(value_type = String)]
+    pub sparte: Option<Sparte>,
+    /// Coding authority: `BDEW` | `DVGW` | `GLN`.
+    #[serde(default)]
+    #[schema(value_type = String)]
+    pub rollencodetyp: Option<rubo4e::current::Rollencodetyp>,
+    /// AS4 endpoint URL list (BO4E `Marktteilnehmer.makoadresse`).
+    #[serde(default)]
+    pub makoadresse: Vec<String>,
+    /// The partner's BO4E `Geschaeftspartner`, crossing
+    /// [the gate](mako_markt::bo4e::decode) as the request deserialises —
+    /// `_typ`, schema, strict enums (`marktrolle`, `rollencodetyp`,
+    /// `marktteilnehmerstatus`, and every other enum in the tree), BO4E rules.
+    ///
+    /// A `serde_json::Value` here would be gated only where the handler
+    /// remembered to; as `Bo4e<Geschaeftspartner>` the gate is the only way in.
+    #[serde(default)]
+    #[schema(value_type = Object)]
+    pub geschaeftspartner: Option<Bo4e<Geschaeftspartner>>,
 }
 
 /// `PUT /api/v1/partners/:gln`
@@ -61,7 +99,7 @@ pub async fn put_partner<Ma, Me, Su, Ci, Pa>(
     Extension(pool): Extension<sqlx::PgPool>,
     claims: Claims,
     Path(gln_str): Path<String>,
-    Json(mut record): Json<PartnerRecord>,
+    Json(body): Json<PartnerUpsertRequest>,
 ) -> impl IntoResponse
 where
     Ma: MaloRepository + Clone,
@@ -92,15 +130,40 @@ where
         }
     };
 
-    // L6: Validate and normalise the partner's BO4E payload as Geschaeftspartner.
-    // Injects _typ, validates enum fields, canonicalises camelCase.
-    // Only applied when the `channels` field contains a non-null object.
-    if record.channels.is_object() && !record.channels.is_null() {
-        match normalize_geschaeftspartner(record.channels.clone()) {
-            Ok(normalised) => record.channels = normalised,
-            Err((status, body)) => return (status, Json(body)).into_response(),
+    // The BO4E gate ran while the body deserialised (`Bo4e<Geschaeftspartner>`),
+    // which is also where `_typ` was injected and every enum in the tree
+    // checked. What gets stored below is the canonical round-trip.
+    let geschaeftspartner = match body
+        .geschaeftspartner
+        .as_ref()
+        .map(mako_markt::bo4e::Bo4e::canonical_json)
+        .transpose()
+    {
+        Ok(v) => v.unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
+        Err(e) => return MdmError::Internal(e.to_string()).into_response(),
+    };
+    if let Some(body_id) = body.mp_id.as_ref()
+        && *body_id != mp_id
+    {
+        return MdmError::Unprocessable {
+            reason: format!(
+                "the body names partner {body_id} and the path names {mp_id}; \
+                 omit `mp_id` or make the two agree"
+            ),
         }
+        .into_response();
     }
+    let record = PartnerRecord {
+        mp_id: mp_id.clone(),
+        display_name: body.display_name,
+        marktrolle: body.marktrolle,
+        sparte: body.sparte,
+        rollencodetyp: body.rollencodetyp,
+        makoadresse: body.makoadresse,
+        geschaeftspartner,
+        version: 0,
+        updated_at: time::OffsetDateTime::UNIX_EPOCH,
+    };
 
     // Typed enum validation: serde maps any unknown role string (e.g. a typo,
     // or the legacy EDIFACT zuordnungstyp "LFG" — BO4E models gas suppliers as
@@ -130,7 +193,6 @@ where
 
     let is_lf = record.marktrolle == Some(rubo4e::current::Marktrolle::Lf);
     let lf_mp_id = gln_str.clone();
-    record.mp_id = mp_id;
 
     match state.partner_repo.upsert(record).await {
         Ok(version) => {
@@ -238,14 +300,16 @@ where
 
     match state.partner_repo.find(&mp_id).await {
         Ok(Some(p)) => {
-            // L5: deserialise `channels` JSONB as `rubo4e::current::Geschaeftspartner`
-            // for a fully typed GET response. Falls back to raw JSON on parse failure
-            // (e.g. legacy records written before L6 PUT validation was enforced).
+            // Read the stored document back as a typed `Geschaeftspartner` for
+            // the response, falling back to the raw JSON when it does not
+            // decode — a row may predate the current schema series, and failing
+            // a `GET` on a document that merely got older is worse than handing
+            // the caller the JSON to decide about.
             let geschaeftspartner: Option<serde_json::Value> =
-                if p.channels.is_object() && !p.channels.is_null() {
-                    match serde_json::from_value::<Geschaeftspartner>(p.channels.clone()) {
+                if p.geschaeftspartner.is_object() && !p.geschaeftspartner.is_null() {
+                    match serde_json::from_value::<Geschaeftspartner>(p.geschaeftspartner.clone()) {
                         Ok(gp) => serde_json::to_value(&gp).ok(),
-                        Err(_) => Some(p.channels.clone()),
+                        Err(_) => Some(p.geschaeftspartner.clone()),
                     }
                 } else {
                     None

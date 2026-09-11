@@ -223,7 +223,18 @@ CREATE TABLE bilanzierungen (
     bilanzierungsende         TIMESTAMPTZ,            -- validity end (exclusive); NULL = open
     -- Typed columns extracted from the BO4E Bilanzierung JSONB.
     bilanzkreis               TEXT,                   -- Bilanzkreis EIC
-    aggregationsverantwortung TEXT,                   -- NB | ÜNB
+    -- BO4E wire values, not the German abbreviations: `Aggregationsverantwortung`
+    -- spells them UENB | VNB.
+    aggregationsverantwortung TEXT,
+    abwicklungsmodell         TEXT,                   -- MODELL_1 | MODELL_2
+    -- Who aggregates, derived from the PAIR above. `Aggregationsverantwortung`
+    -- has two members and cannot say that the responsibility *ruht*, which is
+    -- the e-mobility Modell 2 state (AWH to BK6-20-160 §1.6.2) and is encoded
+    -- on the wire as an ABSENT field — indistinguishable from "not stated"
+    -- unless `abwicklungsmodell` is read with it.
+    aggregationszustaendigkeit TEXT
+        CHECK (aggregationszustaendigkeit IS NULL OR aggregationszustaendigkeit IN
+               ('UEBERTRAGUNGSNETZBETREIBER','VERTEILNETZBETREIBER','RUHEND','UNBEKANNT')),
     prognosegrundlage         TEXT,                   -- SLP | Prognose | …
     fallgruppenzuordnung      TEXT,                   -- GaBi Fallgruppe
     -- Full BO4E Bilanzierung (round-trip-preserving).
@@ -842,7 +853,12 @@ CREATE TABLE partners (
     -- latter is a `Rollencodetyp`.
     rollencodetyp  TEXT CHECK (rollencodetyp IN ('BDEW', 'DVGW', 'GLN')),
     makoadresse    TEXT[],                            -- AS4 endpoint URL list (makoadresse: Vec<String>)
-    channels       JSONB       NOT NULL DEFAULT '[]',
+    -- The partner's BO4E Geschaeftspartner, as the gate canonicalised it.
+    --
+    -- The default is an empty *object*, matching what the column holds. The
+    -- AS4 endpoints are `makoadresse`; a communication-channel list belongs to
+    -- makod's own partner store, not here.
+    geschaeftspartner JSONB    NOT NULL DEFAULT '{}'::jsonb,
     version        BIGINT      NOT NULL DEFAULT 1,
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -852,7 +868,7 @@ CREATE INDEX partners_makoadresse   ON partners USING GIN (makoadresse) WHERE ma
 
 CREATE INDEX malo_data_gin         ON malo     USING GIN (data jsonb_path_ops);
 CREATE INDEX melo_data_gin         ON melo     USING GIN (data jsonb_path_ops);
-CREATE INDEX partners_channels_gin ON partners USING GIN (channels jsonb_path_ops);
+CREATE INDEX partners_gp_gin       ON partners USING GIN (geschaeftspartner jsonb_path_ops);
 
 -- ── Idempotency dedup for inbound makod events ────────────────────────────────
 -- Purge entries older than 7 days via a scheduled DELETE in background worker.

@@ -9,7 +9,7 @@ use rust_decimal::Decimal;
 use rust_decimal::dec;
 use serde::Serialize;
 
-use crate::context::{AbschlagDeduction, BillingContext};
+use crate::context::{AbschlagDeduction, BillingContext, Rechnungsempfaenger};
 use crate::error::EngineError;
 use crate::position::{BillingPosition, BillingWarning, PositionCategory};
 
@@ -344,6 +344,22 @@ impl Invoice {
         tag: &'a str,
     ) -> impl Iterator<Item = &'a BillingPosition> {
         self.positions.iter().filter(move |p| p.has_tag(tag))
+    }
+
+    /// Name the party this invoice is addressed to, after pricing.
+    ///
+    /// The recipient lives on [`BillingContext::rechnungsempfaenger`], which is
+    /// where both document maps read it, and the natural place to set it is
+    /// when the context is built. A caller that resolves the customer only
+    /// after pricing — a Sammelrechnung addressed to the framework-contract
+    /// holder rather than to any one site's customer — sets it here instead.
+    ///
+    /// It is still one field: this fills it, it does not add a second channel.
+    /// The parallel channel is exactly what this replaced — the recipient used
+    /// to travel beside the priced invoice, reaching the EN 16931 map and not
+    /// the BO4E one.
+    pub fn set_rechnungsempfaenger(&mut self, empfaenger: Option<Rechnungsempfaenger>) {
+        self.context.rechnungsempfaenger = empfaenger;
     }
 
     /// Validate the arithmetic invariants.
@@ -824,15 +840,16 @@ impl Invoice {
             vorauszahlungen: Some(vorauszahlungen),
             // BO4E `zuZahlen`: gesamtbrutto − vorausbezahlt (§41 EnWG balance).
             zu_zahlen: Some(betrag_eur(self.zahlbetrag_eur.round_kfm(2))),
-            // The recipient. The engine knows the customer only through the
-            // MaLo; the reference survives as a ZusatzAttribut on the BO.
-            rechnungsempfaenger: Some(Box::new(bo::Geschaeftspartner {
-                zusatz_attribute: Some(vec![zusatz_attribut(
-                    "mako:externe_kunden_id",
-                    serde_json::json!(ctx.malo_id),
-                )]),
-                ..Default::default()
-            })),
+            // The recipient — § 14 Abs. 4 Nr. 1 UStG's Leistungsempfänger, and
+            // the same party the EN 16931 map puts in BG-7, off the same field.
+            //
+            // The MaLo reference stays as a ZusatzAttribut whatever else is
+            // known: it is what ties the document back to the delivery point,
+            // and it is the *only* thing this BO carried before the recipient
+            // was placed on the context — so a BO4E consumer of a mako invoice
+            // found a Rechnungsempfänger with no name and no address while the
+            // EN 16931 view of the same invoice named the customer in full.
+            rechnungsempfaenger: Some(Box::new(rechnungsempfaenger(ctx))),
             ..Default::default()
         }
     }
@@ -1111,6 +1128,74 @@ fn as_bo4e_timestamp(date: time::Date) -> Option<time::OffsetDateTime> {
     (0..=9999)
         .contains(&date.year())
         .then(|| date.midnight().assume_utc())
+}
+
+/// The BO4E `Geschaeftspartner` the invoice is addressed to.
+///
+/// The Marktlokation reference always travels — it is what ties the document to
+/// the delivery point — and the customer master is added when the caller
+/// resolved one. When it did not, the party is named by its Marktlokation,
+/// which is the documented degradation for an uncontracted MaLo and matches
+/// what the EN 16931 map does with the same absence.
+///
+/// BO4E models an organisation and a natural person in one object and has no
+/// single "display name" field, so a resolved name goes into
+/// `organisationsname` regardless of which it is: the caller has already
+/// decided how the party is printed, and splitting a formatted name back into
+/// `vorname`/`nachname` here would guess.
+#[cfg(feature = "bo4e")]
+fn rechnungsempfaenger(ctx: &BillingContext) -> rubo4e::current::Geschaeftspartner {
+    use rubo4e::current as bo;
+
+    let mut zusatz = vec![zusatz_attribut(
+        "mako:externe_kunden_id",
+        serde_json::json!(ctx.malo_id),
+    )];
+    let Some(e) = ctx
+        .rechnungsempfaenger
+        .as_ref()
+        .filter(|e| e.names_somebody())
+    else {
+        return bo::Geschaeftspartner {
+            zusatz_attribute: Some(zusatz),
+            ..Default::default()
+        };
+    };
+    // A partial address is not one. § 14 Abs. 4 Nr. 1 UStG wants the full
+    // address, and an `Adresse` with a town and no street is a document that
+    // looks addressed and is not — the same all-or-nothing rule the delivery
+    // side applies before it queues a letter.
+    let adresse = match (
+        e.line1.as_deref(),
+        e.post_code.as_deref(),
+        e.city.as_deref(),
+    ) {
+        (Some(line1), Some(plz), Some(ort)) => Some(bo::Adresse {
+            strasse: Some(line1.to_owned()),
+            postleitzahl: Some(plz.to_owned()),
+            ort: Some(ort.to_owned()),
+            landescode: e
+                .country
+                .as_deref()
+                .and_then(|c| bo::Landescode::from_wire(c).ok())
+                .or(Some(bo::Landescode::De)),
+            ..Default::default()
+        }),
+        _ => {
+            zusatz.push(zusatz_attribut(
+                "mako:adresse_unvollstaendig",
+                serde_json::json!(true),
+            ));
+            None
+        }
+    };
+    bo::Geschaeftspartner {
+        organisationsname: e.name.clone(),
+        adresse,
+        umsatzsteuer_id: e.vat_id.clone(),
+        zusatz_attribute: Some(zusatz),
+        ..Default::default()
+    }
 }
 
 /// A BO4E `ZusatzAttribut` — the sanctioned extension point for facts the

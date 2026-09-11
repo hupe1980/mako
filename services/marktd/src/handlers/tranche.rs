@@ -6,13 +6,19 @@
 //!   GET  /api/v1/tranchen        — list Tranchen (?malo_id=… filters by parent MaLo)
 //!
 //! A Tranche is a share of a Marktlokation's energy assigned to a distinct
-//! balancing responsibility (BO4E `Tranche`; GPKE Teil 4 „Daten der Tranche").
+//! balancing responsibility (GPKE Teil 4 „Daten der Tranche").
 //! Writes require the NB role (same policy as NeLo — network/balancing topology).
+//!
+//! **`data` is not BO4E.** BO4E models no Tranche Geschäftsobjekt — `BoTyp` has
+//! 39 members and none is `TRANCHE`. The word is in the schema as
+//! `Preismodell::Tranche`, the B2B pricing model where volume is bought in
+//! instalments, which is an unrelated concept sharing a German noun. The field
+//! therefore crosses no BO4E gate: there is no type to gate it against.
 
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -21,6 +27,7 @@ use mako_markt::{
     error::MdmError,
     repository::{PageResult, TrancheRecord, TrancheRepository},
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -35,8 +42,10 @@ use super::{
 pub type TrancheRepoExt = Arc<PgTrancheRepository>;
 
 /// PUT body for a Tranche upsert. The typed columns are indexed/patchable; the
-/// full BO4E `Tranche` payload goes in `data`.
+/// open-ended Tranche payload goes in `data` (mako's own — see the module docs
+/// for why there is no BO4E type here).
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TrancheUpsertRequest {
     /// Parent Marktlokation this Tranche belongs to.
     #[serde(default)]
@@ -50,7 +59,7 @@ pub struct TrancheUpsertRequest {
     /// Energierichtung (`EINSPEISUNG` / `ENTNAHME`).
     #[serde(default)]
     pub energierichtung: Option<String>,
-    /// Full BO4E `Tranche` payload (open-ended JSON object).
+    /// mako's own open-ended Tranche payload (**not** BO4E).
     #[serde(default)]
     #[schema(value_type = Object)]
     pub data: serde_json::Value,

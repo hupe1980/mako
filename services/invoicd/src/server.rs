@@ -24,12 +24,13 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use axum::{
-    Extension, Json, Router,
+    Extension, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;
 use mako_service::{Daemon, ServiceContext};
@@ -550,7 +551,7 @@ async fn resolve_dispute(
     if let Err(r) = authorize(&cedar, &claims, "write-receipt", &state.tenant) {
         return r;
     }
-    let note = body.as_ref().and_then(|b| b.note.as_deref());
+    let note = body.as_ref().and_then(|Json(b)| b.note.as_deref());
     match pg::receipts::resolve_dispute(&state.pool, id, &state.tenant, note).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => (

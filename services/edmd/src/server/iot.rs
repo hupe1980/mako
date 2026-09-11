@@ -21,6 +21,7 @@ pub(crate) struct IotInterval {
 /// The envelope is **transport-agnostic and already decoded**. See
 /// [`post_iot_reads`] for why `edmd` does not decode wM-Bus frames itself.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct IotPushRequest {
     /// `WAERME` · `WASSER` · `STROM` · `GAS`.
     sparte: String,

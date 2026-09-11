@@ -718,7 +718,7 @@ pub struct SettleInput {
     /// and which lifecycle state the plant is in. Stored in `einsd`'s
     /// `eeg_anlagen.inbetriebnahme_typ` column.
     ///
-    /// | `InbetriebnahmeTyp` | F\u00f6rderdauer | Audit relevance |
+    /// | `InbetriebnahmeTyp` | Förderdauer | Audit relevance |
     /// |---|---|---|
     /// | `Erstinbetriebnahme` (default) | starts at `inbetriebnahme` | Normal plant |
     /// | `Wiederinbetriebnahme` | continues from original | Restart after shutdown |

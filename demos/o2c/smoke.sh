@@ -158,7 +158,7 @@ PRODUCT_JSON=$(cat <<JSON
   "register_count": "Eintarif",
   "kundentyp": "Haushalt",
   "valid_from": "2026-01-01",
-  "status": "PUBLISHED",
+  "product_status": "PUBLISHED",
   "data": {
     "_typ": "TARIFPREISBLATT",
     "bezeichnung": "Strom Zuhause Demo 2026",
@@ -187,21 +187,41 @@ echo
 # and `haushaltskunde` is the § 3 Nr. 57 EnWG fact, which is not the same
 # question: a small business under 10 000 kWh a year is a Haushaltskunde too,
 # and it decides three deadlines (§ 41 Abs. 5, § 41b Abs. 5, § 309 Nr. 9 BGB).
-info "[2] vertragd — POST the Kunde"
+# The customer is a **BO4E `Geschaeftspartner`** — not a flat bag of `vorname` /
+# `strasse` / `plz`. That is not a stylistic preference: § 14 Abs. 4 Nr. 1 UStG
+# makes the Leistungsempfänger's full name and address part of what an invoice
+# has to state, EN 16931 makes BT-44 mandatory, and the party this object names
+# is the party `billingd` puts on the document. Every request body denies
+# unknown fields, so a flat payload naming fields the API does not have is a
+# `422` naming the field rather than a `201` with a nameless customer and an
+# invoice addressed to "Marktlokation 5123…"
+# (`cargo xtask check-request-bodies`).
+info "[2] vertragd — POST the Kunde (BO4E Geschaeftspartner)"
 KUNDE_JSON=$(cat <<JSON
 {
   "kundentyp": "B2C",
   "haushaltskunde": true,
-  "anrede": "Frau",
-  "vorname": "Erika",
-  "nachname": "Mustermann",
   "email": "erika.mustermann@example.org",
-  "strasse": "Musterstr. 1",
-  "plz": "10115",
-  "ort": "Berlin",
-  "land": "DE",
-  "iban": "${CUSTOMER_IBAN}",
-  "zahlungsart": "SEPA_LASTSCHRIFT"
+  "erp_kunde_id": "DEMO-KUNDE-${MALO_ID}",
+  "geschaeftspartner": {
+    "anrede": "FRAU",
+    "vorname": "Erika",
+    "nachname": "Mustermann",
+    "adresse": {
+      "strasse": "Musterstr.",
+      "hausnummer": "1",
+      "postleitzahl": "10115",
+      "ort": "Berlin",
+      "landescode": "DE"
+    },
+    "kontaktwege": [
+      {
+        "kontaktart": "E_MAIL",
+        "kontaktwert": "erika.mustermann@example.org",
+        "istBevorzugterKontaktweg": true
+      }
+    ]
+  }
 }
 JSON
 )
@@ -211,6 +231,63 @@ code=$(status "$resp")
 KUNDE_ID=$(body "$resp" | jq -r '.id // .kunden_id')
 [ -n "$KUNDE_ID" ] && [ "$KUNDE_ID" != "null" ] || fail "no customer id in $(body "$resp")"
 pass "POST /api/v1/kunden → $code  (id=$KUNDE_ID)"
+
+# What was stored is the gate's canonical round-trip, not the request body: the
+# `_typ` the request omitted is present, and every enum is in BO4E's own wire
+# spelling. Reading it back is also the read half of DSGVO Art. 16 — a partial
+# `PUT` replaces the whole document, so a client corrects it by reading, editing
+# and sending it back.
+resp=$(req GET "${VERTRAGD_URL}/api/v1/kunden/${KUNDE_ID}")
+[[ "$(status "$resp")" == "200" ]] || fail "GET the Kunde back → $(status "$resp")"
+GP=$(body "$resp" | jq -c '.kunde.geschaeftspartner')
+[ "$(jq -r '._typ' <<<"$GP")" = "GESCHAEFTSPARTNER" ] || \
+    fail "the stored document is not a canonical BO4E Geschaeftspartner: $GP"
+[ "$(jq -r '.nachname' <<<"$GP")" = "Mustermann" ] || \
+    fail "the customer's name did not survive the round-trip: $GP"
+[ "$(jq -r '.adresse.postleitzahl' <<<"$GP")" = "10115" ] || \
+    fail "the customer's address did not survive the round-trip: $GP"
+pass "GET /api/v1/kunden/$KUNDE_ID → the stored BO4E Geschaeftspartner, _typ stamped by the gate"
+
+# The gate refuses what it cannot store, and says which stage refused. Two
+# shapes, because they fail for different reasons and answer differently:
+#   * an out-of-schema enum  → 422 bo4e.unknown_enum, with the JSON-path
+#   * a field the API has not  → 422, naming the field
+resp=$(req POST "${VERTRAGD_URL}/api/v1/kunden" \
+    '{"kundentyp":"B2C","geschaeftspartner":{"anrede":"FRAUU"}}')
+[[ "$(status "$resp")" == "422" ]] || fail "an out-of-schema Anrede must be a 422, got $(status "$resp")"
+[ "$(body "$resp" | jq -r '.code')" = "bo4e.unknown_enum" ] || \
+    fail "the refusal must name the gate stage: $(body "$resp")"
+[ "$(body "$resp" | jq -r '.paths[0]')" = "anrede" ] || \
+    fail "the refusal must name the field: $(body "$resp")"
+pass "POST a bad Anrede → 422 bo4e.unknown_enum at \`anrede\`  (the gate, not the handler)"
+
+resp=$(req POST "${VERTRAGD_URL}/api/v1/kunden" '{"kundentyp":"B2C","vorname":"Erika"}')
+[[ "$(status "$resp")" == "422" ]] || \
+    fail "a field the API does not have must be a 422, got $(status "$resp"): $(body "$resp")"
+grep -q 'vorname' <<<"$(body "$resp")" || fail "the refusal must name the field: $(body "$resp")"
+pass "POST an unknown field → 422 naming \`vorname\`  (it is not silently dropped)"
+
+# The SEPA mandate is a BO4E `Zahlungsinformation`, on its own sub-resource:
+# the IBAN is validated mod-97 and the BIC is checked, neither of which a flat
+# `"iban"` field beside the customer would do.
+info "[2a] vertragd — PUT the Zahlungsinformation (BO4E)"
+resp=$(req PUT "${VERTRAGD_URL}/api/v1/kunden/${KUNDE_ID}/zahlungsinformation" "$(cat <<JSON
+{
+  "zahlungsart": "SEPA_LASTSCHRIFT",
+  "iban": "${CUSTOMER_IBAN}",
+  "kontoinhaber": "Erika Mustermann"
+}
+JSON
+)")
+[[ "$(status "$resp")" == "200" ]] || \
+    fail "PUT zahlungsinformation → $(status "$resp"): $(body "$resp")"
+pass "PUT /api/v1/kunden/$KUNDE_ID/zahlungsinformation → 200  (IBAN checked mod-97)"
+
+resp=$(req PUT "${VERTRAGD_URL}/api/v1/kunden/${KUNDE_ID}/zahlungsinformation" \
+    '{"zahlungsart":"SEPA_LASTSCHRIFT","iban":"DE00000000000000000000"}')
+[[ "$(status "$resp")" == "422" ]] || \
+    fail "an IBAN failing mod-97 must be a 422, got $(status "$resp")"
+pass "PUT a bad IBAN → 422  (mod-97, before a collection is ever built)"
 
 # `vertragsbeginn` before the billed period, and a household term § 309 Nr. 9
 # BGB permits: 24 months is the ceiling, and the tacit extension is into an
@@ -252,6 +329,13 @@ pass "POST /api/v1/kunden/$KUNDE_ID/vertraege → $code  (id=$VERTRAG_ID)"
 # `BESTAETIGT` — and supply starts when the *NB* confirms the Lieferbeginn, not
 # when the supplier files the contract. No processd runs here, so this one stays
 # `ANGELEGT`, which is the correct state for a contract nobody has answered yet.
+#
+# That is *not* the same question as "may this period be billed". A filed
+# contract is billable and has a customer; only a rejected or withdrawn one has
+# neither. One predicate answers both
+# (`vertragd::pg::vertraege::KOMPONENTE_BILLABLE`) — a price feed and a
+# recipient lookup on different status lists would price this exact contract and
+# address the invoice to nobody. Step 3 asserts the name.
 resp=$(req GET "${VERTRAGD_URL}/api/v1/kunden/${KUNDE_ID}/vertraege")
 [[ "$(status "$resp")" == "200" ]] || fail "GET the customer's contracts → $(status "$resp")"
 COUNT=$(body "$resp" | jq -r 'if type=="array" then length else (.vertraege // .items // [] | length) end')
@@ -288,6 +372,28 @@ BRUTTO=$(jq -r '.total_brutto_eur // .brutto_eur' <<<"$RECHNUNG")
 RECHNUNGSNUMMER=$(jq -r '.rechnungsnummer' <<<"$RECHNUNG")
 [ -n "$BILLING_ID" ] && [ "$BILLING_ID" != "null" ] || fail "no invoice id in $RECHNUNG"
 pass "POST /api/v1/billing/${MALO_ID}/calculate → $code  (id=$BILLING_ID)"
+
+# **Who the invoice is addressed to.** § 14 Abs. 4 Nr. 1 UStG makes the
+# Leistungsempfänger part of what an invoice has to state and EN 16931 makes
+# BT-44 mandatory, so this is not a nicety — and it is the assertion that was
+# missing while the demo created a nameless customer and reported success. The
+# party lives on the billing engine's context, which is the one field the BO4E
+# `Rechnung` and the EN 16931 model both read: naming it twice is how they came
+# to disagree.
+resp=$(req GET "${BILLINGD_URL}/api/v1/billing/${BILLING_ID}")
+[[ "$(status "$resp")" == "200" ]] || fail "GET the invoice back → $(status "$resp")"
+RECORD=$(body "$resp")
+BO4E_EMPF=$(jq -c '.rechnung_json.rechnungsempfaenger' <<<"$RECORD")
+[ "$(jq -r '.organisationsname' <<<"$BO4E_EMPF")" = "Erika Mustermann" ] || \
+    fail "the BO4E Rechnung names no recipient: $BO4E_EMPF"
+[ "$(jq -r '.adresse.ort' <<<"$BO4E_EMPF")" = "Berlin" ] || \
+    fail "the BO4E Rechnung carries no recipient address: $BO4E_EMPF"
+pass "rechnung_json.rechnungsempfaenger → Erika Mustermann, Berlin  (§ 14 Abs. 4 Nr. 1 UStG)"
+
+EN_BUYER=$(jq -c '.en16931_json.buyer' <<<"$RECORD")
+[ "$(jq -r '.name' <<<"$EN_BUYER")" = "Erika Mustermann" ] || \
+    fail "the EN 16931 model names a different party than the BO4E document: $EN_BUYER"
+pass "en16931_json.buyer → the same party  (one field feeds both maps)"
 
 numeric_eq "$NETTO" "$EXPECTED_NETTO" || \
     fail "netto is $NETTO, expected $EXPECTED_NETTO (20 ct × 31 Tage + 32 ct × ${VERBRAUCH_KWH} kWh \

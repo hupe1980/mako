@@ -21,11 +21,12 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
     response::IntoResponse,
 };
+use mako_service::Json;
 use mako_service::oidc::Claims;
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -76,6 +77,7 @@ pub(crate) const RENDER_BUDGET: std::time::Duration = std::time::Duration::from_
 
 /// `POST /api/v1/templates` body.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PublishTemplateRequest {
     /// Which document this renders.
     pub kind: TemplateKind,
@@ -299,6 +301,7 @@ pub async fn list_templates(
 
 /// `PUT /api/v1/templates/{kind}/current` body.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SetCurrentRequest {
     /// The published template to render with from now on.
     pub hash: String,
@@ -1019,6 +1022,7 @@ pub async fn post_delivery_read(
 /// `POST /api/v1/deliveries/{delivery_id}/status` body — what a channel
 /// reports back.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeliveryStatusReport {
     /// `true` when the far end observed the document **arrive** — the
     /// recipient's server accepted it, the letter was posted. Anything less is

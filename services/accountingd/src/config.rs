@@ -29,6 +29,7 @@ use serde::Deserialize;
 /// bank_api_key   = "env:BANK_API_KEY"
 /// ```
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct EegConfig {
     /// Use SEPA Instant Credit Transfer (pain.001.001.09 / SCT Inst) for EEG payouts.
     ///
@@ -67,6 +68,7 @@ pub struct EegConfig {
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AccountingdConfig {
     /// `[database]` block — connection URL plus pool tuning. The daemon runner
     /// connects a tuned pool (with `application_name = "accountingd"`) from this.

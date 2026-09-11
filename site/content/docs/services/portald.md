@@ -113,7 +113,8 @@ All paths are prefixed `/api/v1/portal/{malo_id}`.
 | `GET` | `/kuendigungsfrist` | `vertragd` — reachable end dates per reason |
 | `POST` | `/tarifwechsel` | `vertragd` |
 | `POST` | `/kuendigen` | `vertragd` |
-| `PUT` | `/kontakt` | `vertragd` — GDPR Art. 16 |
+| `GET` | `/kontakt` | `vertragd` — DSGVO Art. 15, and the **read half** of the rectification flow: a `PUT` replaces the stored `Geschaeftspartner` whole, so a client that has not read it first cannot change one field without dropping the rest. Projected, not proxied: operator notes and the ERP key are not the customer's to see |
+| `PUT` | `/kontakt` | `vertragd` — DSGVO Art. 16. The body's `geschaeftspartner` is a BO4E `Geschaeftspartner` and crosses [the gate](../architecture/domain-model.md#the-bo4e-gate) **here**, at the edge the customer reaches: a portal user who mistypes an enum gets the field named back, not a `502` from one hop away |
 | `PUT` | `/sepa` | `accountingd` |
 
 `/health/live`, `/health/ready` and `/metrics` come from the service runner.

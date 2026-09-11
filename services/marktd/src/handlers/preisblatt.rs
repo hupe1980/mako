@@ -4,11 +4,12 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
     response::IntoResponse,
 };
+use mako_markt::bo4e::Bo4e;
 use mako_markt::{
     cloudevents::MarktEvent,
     repository::{
@@ -16,9 +17,12 @@ use mako_markt::{
         PreisblattMessungRepository, PreisblattRepository, PreisblattSource,
     },
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use rubo4e::current::{
-    LastvariablePreisposition, PreisblattMessung, PreisblattNetznutzung, ZeitvariablePreisposition,
+    LastvariablePreisposition, PreisblattDienstleistung, PreisblattHardware,
+    PreisblattKonzessionsabgabe, PreisblattMessung, PreisblattNetznutzung,
+    ZeitvariablePreisposition,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -50,12 +54,15 @@ pub struct PreisblattQuery {
 
 /// Request body for `PUT /api/v1/preisblaetter/{nb_mp_id}`.
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PreisblattUpsertRequest {
     /// Full BO4E `PreisblattNetznutzung` payload.
+    ///
+    /// `bo4e_version` is **not** an envelope field: it is provenance, and only
+    /// the server knows which schema series it parsed the payload under. A
+    /// caller-supplied one let a row be stamped with a version mako never read
+    /// it as.
     pub data: serde_json::Value,
-    /// BO4E schema version of `data` (e.g. `"202607.1.0"`). Defaults to current.
-    #[serde(default = "default_bo4e_version")]
-    pub bo4e_version: String,
 }
 
 fn default_bo4e_version() -> String {
@@ -297,7 +304,7 @@ pub async fn put_preisblatt(
     }
 
     let data = req.data;
-    let bo4e_version = req.bo4e_version;
+    let bo4e_version = default_bo4e_version();
 
     // The durable price sheet, its PRICAT version snapshot and the
     // de.markt.pricat.published event commit in ONE transaction. A detached
@@ -539,12 +546,15 @@ pub async fn get_preisblatt_messung(
 
 /// Request body for `PUT /api/v1/preisblaetter-messung/{msb_mp_id}`.
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PreisblattMessungUpsertRequest {
     /// Full BO4E `PreisblattMessung` payload.
+    ///
+    /// `bo4e_version` is **not** an envelope field: it is provenance, and only
+    /// the server knows which schema series it parsed the payload under. A
+    /// caller-supplied one let a row be stamped with a version mako never read
+    /// it as.
     pub data: serde_json::Value,
-    /// BO4E schema version of `data`. Defaults to current.
-    #[serde(default = "default_bo4e_version")]
-    pub bo4e_version: String,
 }
 
 /// `PUT /api/v1/preisblaetter-messung/{msb_mp_id}`
@@ -680,7 +690,12 @@ pub async fn put_preisblatt_messung(
     }
 
     match repo
-        .upsert_messung(&msb_mp_id, data, &req.bo4e_version, PreisblattSource::Api)
+        .upsert_messung(
+            &msb_mp_id,
+            data,
+            &default_bo4e_version(),
+            PreisblattSource::Api,
+        )
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -766,15 +781,17 @@ pub async fn get_preisblatt_ka(
 
 /// Request body for `PUT /api/v1/preisblaetter-ka/{nb_mp_id}`.
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PreisblattKaUpsertRequest {
-    pub data: serde_json::Value,
+    /// The BO4E `PreisblattKonzessionsabgabe`, crossing
+    /// [the gate](mako_markt::bo4e::decode) as the request deserialises.
+    #[schema(value_type = Object)]
+    pub data: Bo4e<PreisblattKonzessionsabgabe>,
     /// `"STROM"` or `"GAS"`. Defaults to `"STROM"`.
     #[serde(default = "default_sparte")]
     pub sparte: String,
     /// `"Tarifkunden"` | `"Sondervertragskunden"` | omit for both.
     pub kundengruppe_ka: Option<String>,
-    #[serde(default = "default_bo4e_version")]
-    pub bo4e_version: String,
 }
 
 fn default_sparte() -> String {
@@ -805,8 +822,13 @@ pub async fn put_preisblatt_ka(
             &nb_mp_id,
             &req.sparte,
             req.kundengruppe_ka.as_deref(),
-            req.data,
-            &req.bo4e_version,
+            match req.data.canonical_json() {
+                Ok(v) => v,
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                }
+            },
+            &mako_markt::bo4e::schema_version(),
             PreisblattSource::Api,
         )
         .await
@@ -830,10 +852,12 @@ pub struct PreisblattDlResponse {
 }
 
 #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PreisblattDlUpsertRequest {
-    pub data: serde_json::Value,
-    #[serde(default = "default_bo4e_version")]
-    pub bo4e_version: String,
+    /// The BO4E `PreisblattDienstleistung`, crossing
+    /// [the gate](mako_markt::bo4e::decode) as the request deserialises.
+    #[schema(value_type = Object)]
+    pub data: Bo4e<PreisblattDienstleistung>,
 }
 
 pub async fn get_preisblatt_dienstleistung(
@@ -888,8 +912,13 @@ pub async fn put_preisblatt_dienstleistung(
     match repo
         .upsert_dienstleistung(
             &msb_mp_id,
-            req.data,
-            &req.bo4e_version,
+            match req.data.canonical_json() {
+                Ok(v) => v,
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                }
+            },
+            &mako_markt::bo4e::schema_version(),
             PreisblattSource::Api,
         )
         .await
@@ -913,10 +942,12 @@ pub struct PreisblattHwResponse {
 }
 
 #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PreisblattHwUpsertRequest {
-    pub data: serde_json::Value,
-    #[serde(default = "default_bo4e_version")]
-    pub bo4e_version: String,
+    /// The BO4E `PreisblattHardware`, crossing
+    /// [the gate](mako_markt::bo4e::decode) as the request deserialises.
+    #[schema(value_type = Object)]
+    pub data: Bo4e<PreisblattHardware>,
 }
 
 pub async fn get_preisblatt_hardware(
@@ -968,8 +999,13 @@ pub async fn put_preisblatt_hardware(
     match repo
         .upsert_hardware(
             &msb_mp_id,
-            req.data,
-            &req.bo4e_version,
+            match req.data.canonical_json() {
+                Ok(v) => v,
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                }
+            },
+            &mako_markt::bo4e::schema_version(),
             PreisblattSource::Api,
         )
         .await

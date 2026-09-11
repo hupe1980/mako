@@ -14,8 +14,8 @@
 //!
 //! ## What it checks
 //!
-//! Every fenced block in `site/content/` and `concepts/` that parses as JSON and
-//! carries a `_typ`, at any depth. Each such object is decoded into its BO4E
+//! Every fenced block in `site/content/`, `concepts/` and `demos/` that parses
+//! as JSON and carries a `_typ`, at any depth. Each such object is decoded into its BO4E
 //! type and run through
 //! [`Bo4eExtensions::extension_paths`](rubo4e::json::Bo4eExtensions::extension_paths).
 //!
@@ -59,7 +59,11 @@ pub fn run(workspace_root: &Path) -> bool {
     let mut findings: Vec<String> = Vec::new();
     let mut checked = 0usize;
 
-    for dir in ["site/content", "concepts"] {
+    // `demos/` is in the scan for the same reason the other two are — more so,
+    // in fact: a demo payload is what gets copied into a ticket as "this is
+    // what a request looks like", and `demos/o2c` shipped a customer payload
+    // whose fields the API did not have at all.
+    for dir in ["site/content", "concepts", "demos"] {
         let root = workspace_root.join(dir);
         if !root.is_dir() {
             // A checkout without this directory is normal — say so, rather than
@@ -69,7 +73,7 @@ pub fn run(workspace_root: &Path) -> bool {
             continue;
         }
         let mut files = Vec::new();
-        collect_md(&root, &mut files);
+        collect_docs(&root, &mut files);
         for path in files {
             let Ok(src) = std::fs::read_to_string(&path) else {
                 continue;
@@ -79,15 +83,7 @@ pub fn run(workspace_root: &Path) -> bool {
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            for block in fenced_blocks(&src) {
-                // HTTP-style examples put headers before the body.
-                let Some(start) = block.find('{') else {
-                    continue;
-                };
-                let Ok(value) = serde_json::from_str::<serde_json::Value>(&elide(&block[start..]))
-                else {
-                    continue;
-                };
+            for value in json_values(&path, &src) {
                 for object in objects_with_typ(&value) {
                     if check_one(&rel, &object, &mut findings) {
                         checked += 1;
@@ -141,6 +137,17 @@ fn check_one(rel: &str, value: &serde_json::Value, findings: &mut Vec<String>) -
     let Some(typ) = value.get("_typ").and_then(serde_json::Value::as_str) else {
         return false;
     };
+    // `{ "...": "full BO4E payload" }` is prose standing in for a document, not
+    // a document. `elide` handles an ellipsis in *value* position; in **key**
+    // position it means the object's contents were left out, and reporting its
+    // one placeholder key as an undefined field would be reporting the
+    // shorthand rather than anything a reader could copy wrong.
+    if value
+        .as_object()
+        .is_some_and(|o| o.keys().any(|k| k == "..." || k == "…"))
+    {
+        return false;
+    }
 
     macro_rules! dispatch {
         ($($wire:literal => $ty:ty),* $(,)?) => {
@@ -216,20 +223,55 @@ fn check_one(rel: &str, value: &serde_json::Value, findings: &mut Vec<String>) -
 /// Every object carrying a `_typ`, at any depth.
 fn objects_with_typ(root: &serde_json::Value) -> Vec<serde_json::Value> {
     let mut out = Vec::new();
-    let mut stack = vec![root.clone()];
-    while let Some(cur) = stack.pop() {
+    let mut stack = vec![(root.clone(), None::<String>)];
+    while let Some((cur, key)) = stack.pop() {
         match &cur {
             serde_json::Value::Object(o) => {
                 if o.contains_key("_typ") {
                     out.push(cur.clone());
+                } else if let Some(wire) = key.as_deref().and_then(typ_from_field_name) {
+                    // A BO4E document whose `_typ` the *gate* injects. That is
+                    // the shape a real request has — the endpoint fixes which
+                    // BO it takes, so a caller repeating the discriminant adds
+                    // a way to be wrong and no information — and it is exactly
+                    // the shape a demo payload carries. Without this arm the
+                    // field names in `"geschaeftspartner": { … }` are checked
+                    // by nothing, and a misspelled `nachnamen` ships.
+                    let mut stamped = o.clone();
+                    stamped.insert("_typ".into(), wire.into());
+                    out.push(serde_json::Value::Object(stamped));
                 }
-                stack.extend(o.values().cloned());
+                stack.extend(o.iter().map(|(k, v)| (v.clone(), Some(k.clone()))));
             }
-            serde_json::Value::Array(a) => stack.extend(a.iter().cloned()),
+            serde_json::Value::Array(a) => {
+                stack.extend(a.iter().map(|v| (v.clone(), key.clone())));
+            }
             _ => {}
         }
     }
     out
+}
+
+/// The BO4E discriminant a **field name** implies, if it names a type.
+///
+/// `"geschaeftspartner"` is a `GESCHAEFTSPARTNER`, `"standort_adresse"` an
+/// `ADRESSE`, `"kosten_json"` a `KOSTEN` — the same reading
+/// `check-request-bodies` does over Rust field names, applied to JSON keys.
+/// Anything that is not a BO4E type's own name (`data`, `payload`, `view`)
+/// yields `None`.
+fn typ_from_field_name(key: &str) -> Option<&'static str> {
+    let base = key.strip_suffix("_json").unwrap_or(key);
+    let last = base.rsplit('_').next().unwrap_or(base);
+    for candidate in [base, last] {
+        let wire = candidate.to_uppercase();
+        if let Ok(t) = rubo4e::current::BoTyp::from_wire(&wire) {
+            return Some(t.as_wire());
+        }
+        if let Ok(t) = rubo4e::current::ComTyp::from_wire(&wire) {
+            return Some(t.as_wire());
+        }
+    }
+    None
 }
 
 /// Replace the `...` a documented example uses for brevity with real JSON.
@@ -318,6 +360,51 @@ fn objects_with_misspelt_typ(root: &serde_json::Value) -> Vec<String> {
 }
 
 /// The contents of every ``` fenced block.
+/// Every JSON value a documentation or demo file carries.
+///
+/// Markdown keeps its examples in fenced blocks, so those are extracted first
+/// and each parsed whole (HTTP-style blocks put headers in front of the body,
+/// hence the scan to the first `{`). A shell script or a bare `.json` fixture
+/// has no fences: its payloads are heredocs and literals scattered through
+/// other text, so every `{` is tried as the start of a value and the scan
+/// resumes after whatever parsed.
+///
+/// A payload interpolating a shell variable as a **bare** value
+/// (`"jahr": ${YEAR}`) is not JSON and is skipped. Inside a string
+/// (`"malo_id": "${MALO_ID}"`) — which is every substitution these demos make —
+/// the document stays well-formed and is checked.
+fn json_values(path: &Path, src: &str) -> Vec<serde_json::Value> {
+    if path.extension().is_some_and(|e| e == "md") {
+        return fenced_blocks(src)
+            .iter()
+            .filter_map(|block| {
+                let start = block.find('{')?;
+                serde_json::from_str::<serde_json::Value>(&elide(&block[start..])).ok()
+            })
+            .collect();
+    }
+    let mut out = Vec::new();
+    let mut rest = src;
+    while let Some(i) = rest.find('{') {
+        let candidate = elide(&rest[i..]);
+        match serde_json::Deserializer::from_str(&candidate)
+            .into_iter::<serde_json::Value>()
+            .next()
+        {
+            Some(Ok(value)) if value.is_object() => {
+                out.push(value);
+                // Resume after the opening brace rather than after the value:
+                // `elide` may have rewritten the text, so an offset into the
+                // rewritten string does not map back. One brace forward always
+                // makes progress and nested objects are walked anyway.
+                rest = &rest[i + 1..];
+            }
+            _ => rest = &rest[i + 1..],
+        }
+    }
+    out
+}
+
 fn fenced_blocks(src: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur: Option<String> = None;
@@ -337,15 +424,25 @@ fn fenced_blocks(src: &str) -> Vec<String> {
     out
 }
 
-fn collect_md(dir: &Path, out: &mut Vec<PathBuf>) {
+/// Markdown, plus the shell scripts a demo's payloads actually live in.
+///
+/// A demo's request bodies are heredocs inside `smoke.sh`, not fenced blocks in
+/// its README — and those are the ones an integrator runs and copies. The
+/// fenced-block scanner reads a `.sh` file as one block, which is exactly right
+/// here: every `{ … }` in it that parses as JSON and carries a `_typ` gets
+/// checked, and a `${VAR}` inside a string leaves the JSON well-formed.
+fn collect_docs(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_md(&path, out);
-        } else if path.extension().is_some_and(|e| e == "md") {
+            collect_docs(&path, out);
+        } else if path
+            .extension()
+            .is_some_and(|e| e == "md" || e == "sh" || e == "json")
+        {
             out.push(path);
         }
     }

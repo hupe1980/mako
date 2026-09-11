@@ -37,12 +37,12 @@ use crate::plane::{AgentDecision, Envelope, Plane, Reception};
 use std::sync::Arc;
 
 use axum::{
-    Json,
     body::Bytes,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use mako_service::Json;
 use mako_service::oidc::Claims;
 use secrecy::ExposeSecret;
 use serde_json::Value;

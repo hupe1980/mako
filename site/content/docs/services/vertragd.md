@@ -237,6 +237,23 @@ derivation knows nothing about a Kündigung. Note that `ABGELEHNT` and
 `STORNIERT` are different answers — a registration the NB refused is not a
 cancellation by the customer.
 
+### "In supply" and "billable" are different questions
+
+A component is **in supply** from `BESTAETIGT` — the moment the Netzbetreiber
+confirms the Lieferbeginn. A period is **billable** in every state except the
+two that say no supply took place at all: `ABGELEHNT` (the NB refused) and
+`STORNIERT` (withdrawn). `KOMPONENTE_BILLABLE` is that second list, and three
+queries share it: the product/price feed `billingd` bills from, the § 40 Abs. 1
+contract facts, and the BG-7 recipient the invoice is addressed to.
+
+They did not always. The price feed filtered on **nothing**, so a MaLo whose
+Anmeldung the NB had rejected was still priced; the recipient lookup demanded
+`AKTIV`/`BESTAETIGT`, so a contract that was filed but not yet confirmed
+produced a priced invoice addressed to nobody — `billingd` fell back to a party
+called "Marktlokation 5123…", which fails § 14 Abs. 4 Nr. 1 UStG and EN 16931's
+BT-44. Two lists, one question, and the difference was invisible to anything
+that compiles or runs; a source-scanning test pins them together now.
+
 ## Portal authorization (OIDC → MaLo)
 
 `vertragd` decouples the **legal entity** (Kunde) from **portal users**
@@ -401,14 +418,29 @@ transaction**. There is nothing to project anywhere and nothing to reconcile.
 
 ### BO4E payloads cross the gate
 
-`PUT /kunden/{id}/person`, `/kunden/{id}/zahlungsinformation` and
-`/vertraege/{id}/preisgarantie` take BO4E COMs, and each runs
+`POST`/`PUT /kunden` (`geschaeftspartner`), `PUT /kunden/{id}/person`,
+`/kunden/{id}/zahlungsinformation`, `/vertraege/{id}/preisgarantie` and
+`POST /kunden/{id}/vertraege` (`standort_adresse`) all carry BO4E, and each runs
 [the gate](@/docs/architecture/domain-model.md#the-bo4e-gate) before storing.
 
-All three store the **canonical round-trip**, not the request body — and a BO4E
+The customer's own `geschaeftspartner` reached that list late. It was a
+`serde_json::Value` with a doc comment calling it a BO4E `Geschaeftspartner`,
+and whatever arrived went into the column — so the party an invoice names could
+carry a `_typ` saying `MARKTLOKATION`, or an `anrede` no BO4E reader accepts. It
+is a `Bo4e<Geschaeftspartner>` now, which runs the gate while `serde`
+deserialises the request; `cargo xtask check-request-bodies` refuses the old
+shape.
+
+Every one stores the **canonical round-trip**, not the request body — and a BO4E
 enum that decodes to the `Unknown` catch-all serialises back as the literal
 string `"UNKNOWN"`. The strict-enum stage is therefore what keeps an
 unrecognised `anrede` or `zahlungsart` from *replacing* what the caller sent.
+
+**A `geschaeftspartner` on a `PUT` replaces the stored document**, whole: the
+column is written, not merged, so a request carrying only a new telephone number
+leaves the customer with only a telephone number. `GET /kunden/{id}` is the read
+half, and `portald` exposes it as `GET /portal/{malo}/kontakt` for exactly this
+reason.
 
 For a `Preisgarantie` the gate also checks the `Zeitraum` in
 `zeitlicheGueltigkeit` — the field `preisgarantie_bis` is derived from, and the

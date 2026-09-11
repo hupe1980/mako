@@ -5,13 +5,14 @@
 //! valid token from any tenant order a disconnection in this operator's name.
 
 use axum::{
-    Extension, Json,
+    Extension,
     body::Bytes,
     extract::{Path, Query},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use mako_markt::makod_client::MakodClient;
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;
 use mako_service::{ApiError, ApiResult};
@@ -130,6 +131,7 @@ pub async fn get_order(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecuteRequest {
     /// `SG25 FTX+ACB` — the field reference the LF sees.
     pub note: Option<String>,
@@ -183,6 +185,7 @@ pub async fn execute_order(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FailRequest {
     /// `SG25 FTX+ACB` — why it could not be carried out.
     pub reason: String,

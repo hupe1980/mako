@@ -47,6 +47,7 @@ secrecy      = { version = "0.10" }
 
 
 [dev-dependencies]
+toml       = "0.8"
 # The reading side of the `CCI+Z22` lookup — the two must agree on the alphabet.
 mako-pruefung = { workspace = true, features = ["role-nb"] }
 testcontainers = { workspace = true }

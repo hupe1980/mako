@@ -12,11 +12,12 @@
 
 use std::sync::Arc;
 
-use axum::{Extension, Json, extract::Path, http::StatusCode, response::IntoResponse};
+use axum::{Extension, extract::Path, http::StatusCode, response::IntoResponse};
 use mako_markt::repository::{
     DeviceRepository, GeraetKonfiguration, Konfigurationsparameter, SteuerbareRessourceRepository,
     TechnischeRessourceRepository,
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use rubo4e::current::{
     Geraet, SteuerbareRessource, TechnischeRessource, Zaehler, Zaehlzeitdefinition,
@@ -97,6 +98,7 @@ pub struct GeraetResponse {
 
 /// Request body for `PUT /api/v1/steuerbare-ressourcen/{sr_id}`.
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UpsertSrRequest {
     /// Full BO4E `SteuerbareRessource` payload (may be `{}`).
     ///
@@ -113,12 +115,11 @@ pub struct UpsertSrRequest {
     pub malo_id: Option<String>,
     /// Associated MeLo-ID, if known. mako's own, as above.
     pub melo_id: Option<String>,
-    #[serde(default = "default_bo4e_version")]
-    pub bo4e_version: String,
 }
 
 /// Request body for `PUT /api/v1/zaehler/{zaehler_id}`.
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UpsertZaehlerRequest {
     /// Owning MeLo-ID.
     pub melo_id: String,
@@ -129,20 +130,17 @@ pub struct UpsertZaehlerRequest {
     /// the column drives the replacement workflow, so it must not be able to
     /// disagree with the meter record it shadows.
     pub data: serde_json::Value,
-    #[serde(default = "default_bo4e_version")]
-    pub bo4e_version: String,
 }
 
 /// Request body for `PUT /api/v1/geraete/{geraet_id}`.
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UpsertGeraetRequest {
     /// Owning `zaehler_id`.
     pub zaehler_id: String,
     /// Full BO4E `Geraet` payload. The `geraet_typ` column is derived from
     /// `data.geraetetyp`, not supplied beside it.
     pub data: serde_json::Value,
-    #[serde(default = "default_bo4e_version")]
-    pub bo4e_version: String,
 }
 
 fn default_bo4e_version() -> String {
@@ -230,7 +228,7 @@ pub async fn put_steuerbare_ressource(
             req.malo_id.as_deref(),
             req.melo_id.as_deref(),
             data,
-            &req.bo4e_version,
+            &default_bo4e_version(),
             konfigurationsprodukte,
         )
         .await
@@ -609,7 +607,7 @@ pub async fn put_zaehler(
             &tenant,
             &req.melo_id,
             &zaehler,
-            &req.bo4e_version,
+            &default_bo4e_version(),
         )
         .await
     {
@@ -749,7 +747,7 @@ pub async fn put_geraet(
             &tenant,
             &req.zaehler_id,
             &geraet,
-            &req.bo4e_version,
+            &default_bo4e_version(),
         )
         .await
     {
@@ -788,6 +786,7 @@ pub async fn put_geraet(
 /// ]
 /// ```
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PutKonfigurationenRequest {
     /// Ordered list of configuration entries.  Keys without a value should be
     /// omitted rather than sent with an empty `wert`.
@@ -1005,6 +1004,7 @@ pub type TrRepoExt = Arc<PgTechnischeRessourceRepository>;
 
 /// Request body for `PUT /api/v1/technische-ressourcen/{tr_id}`.
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UpsertTrRequest {
     /// Full BO4E `TechnischeRessource` payload — and the **only** source of
     /// every queryable field on the row.
@@ -1016,8 +1016,6 @@ pub struct UpsertTrRequest {
     /// reads: a resource whose column says controllable while its document says
     /// otherwise is one mako will try to steer and the field will not answer.
     pub data: serde_json::Value,
-    #[serde(default = "default_bo4e_version")]
-    pub bo4e_version: String,
 }
 
 /// Serialize a BO4E enum to its canonical wire string (e.g. `SPEICHER`).
@@ -1087,7 +1085,7 @@ pub async fn put_technische_ressource(
             verbrauchsart.as_deref(),
             ist_fernschaltbar,
             data,
-            &req.bo4e_version,
+            &default_bo4e_version(),
         )
         .await
     {

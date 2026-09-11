@@ -51,6 +51,7 @@ use utoipa_swagger_ui::SwaggerUi;
         crate::handlers::pricat::DispatchLogEntry,
         crate::handlers::netzzugang::StatusBody,
         crate::pg::msb_rahmenvertrag_gas::MsbRahmenvertragGas,
+        crate::pg::msb_rahmenvertrag_gas::MsbRvGasUpsertRequest,
         crate::pg::msb_rahmenvertrag_gas::MsbRvGasStatus,
     )),
 )]

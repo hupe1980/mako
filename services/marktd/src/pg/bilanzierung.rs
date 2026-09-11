@@ -27,6 +27,8 @@ fn map_row(row: &PgRow) -> Result<BilanzierungRecord, sqlx::Error> {
         bilanzierungsende: row.try_get("bilanzierungsende")?,
         bilanzkreis: row.try_get("bilanzkreis")?,
         aggregationsverantwortung: row.try_get("aggregationsverantwortung")?,
+        abwicklungsmodell: row.try_get("abwicklungsmodell")?,
+        aggregationszustaendigkeit: row.try_get("aggregationszustaendigkeit")?,
         prognosegrundlage: row.try_get("prognosegrundlage")?,
         fallgruppenzuordnung: row.try_get("fallgruppenzuordnung")?,
         data: row.try_get("data")?,
@@ -37,8 +39,8 @@ fn map_row(row: &PgRow) -> Result<BilanzierungRecord, sqlx::Error> {
 }
 
 const SELECT_COLS: &str = "tenant, malo_id, bilanzierungsbeginn, bilanzierungsende, \
-     bilanzkreis, aggregationsverantwortung, prognosegrundlage, fallgruppenzuordnung, \
-     data, bo4e_version, updated_at";
+     bilanzkreis, aggregationsverantwortung, abwicklungsmodell, aggregationszustaendigkeit, \
+     prognosegrundlage, fallgruppenzuordnung, data, bo4e_version, updated_at";
 
 impl BilanzierungRepository for PgBilanzierungRepository {
     async fn upsert(&self, rec: &BilanzierungRecord) -> Result<(), MdmError> {
@@ -51,13 +53,16 @@ impl BilanzierungRepository for PgBilanzierungRepository {
         sqlx::query(
             r"INSERT INTO bilanzierungen
                   (tenant, malo_id, bilanzierungsbeginn, bilanzierungsende, bilanzkreis,
-                   aggregationsverantwortung, prognosegrundlage, fallgruppenzuordnung,
+                   aggregationsverantwortung, abwicklungsmodell, aggregationszustaendigkeit,
+                   prognosegrundlage, fallgruppenzuordnung,
                    data, bo4e_version, updated_at)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
               ON CONFLICT (tenant, malo_id, bilanzierungsbeginn) DO UPDATE
               SET bilanzierungsende         = EXCLUDED.bilanzierungsende,
                   bilanzkreis               = EXCLUDED.bilanzkreis,
                   aggregationsverantwortung = EXCLUDED.aggregationsverantwortung,
+                  abwicklungsmodell         = EXCLUDED.abwicklungsmodell,
+                  aggregationszustaendigkeit = EXCLUDED.aggregationszustaendigkeit,
                   prognosegrundlage         = EXCLUDED.prognosegrundlage,
                   fallgruppenzuordnung      = EXCLUDED.fallgruppenzuordnung,
                   data                      = EXCLUDED.data,
@@ -70,6 +75,8 @@ impl BilanzierungRepository for PgBilanzierungRepository {
         .bind(rec.bilanzierungsende)
         .bind(&rec.bilanzkreis)
         .bind(&rec.aggregationsverantwortung)
+        .bind(&rec.abwicklungsmodell)
+        .bind(&rec.aggregationszustaendigkeit)
         .bind(&rec.prognosegrundlage)
         .bind(&rec.fallgruppenzuordnung)
         .bind(&rec.data)

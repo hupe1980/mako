@@ -2,12 +2,13 @@
 
 use crate::error::{BillingError, BillingResult};
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
     response::IntoResponse,
 };
 use energy_billing::RoundMoney;
+use mako_service::Json;
 use mako_service::oidc::Claims;
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -61,6 +62,12 @@ fn build_vpp_settlement(
     mwst_rate: rust_decimal::Decimal,
     positions: Vec<BillingPosition>,
     extra_attrs: Vec<rubo4e::current::ZusatzAttribut>,
+    // The prosumer the § 41e settlement is issued against. Taken **before** the
+    // document is built, not attached after: this function returns the BO4E
+    // `Rechnung` as JSON, and a recipient resolved afterwards would reach the
+    // EN 16931 model and not that JSON — which is the exact split this field
+    // replaced.
+    rechnungsempfaenger: Option<energy_billing::Rechnungsempfaenger>,
 ) -> anyhow::Result<(Invoice, serde_json::Value)> {
     let ctx = BillingContext {
         malo_id: malo_id.to_owned(),
@@ -68,6 +75,7 @@ fn build_vpp_settlement(
         rechnungsnummer,
         period: BillingPeriod::new(period_from, period_to)?,
         invoice_type: InvoiceType::CreditNote,
+        rechnungsempfaenger,
         regulatory_rates: RegulatoryRates {
             mwst_rate,
             ..Default::default()
@@ -189,6 +197,12 @@ fn build_aggregate_invoice(
     rates: RegulatoryRates,
     parts: Vec<(String, Invoice)>,
     extra_attrs: Vec<rubo4e::current::ZusatzAttribut>,
+    // Who the *bundle* is addressed to — the framework-contract holder or the
+    // § 42b GGV operator, never any one participating site's supply customer.
+    // Taken before the build for the same reason as everywhere else: this
+    // returns the BO4E `Rechnung` as JSON, and a recipient attached afterwards
+    // would reach only the EN 16931 model.
+    rechnungsempfaenger: Option<energy_billing::Rechnungsempfaenger>,
 ) -> anyhow::Result<(Invoice, serde_json::Value)> {
     let mut ctx = BillingContext {
         malo_id: subject_id.to_owned(),
@@ -198,6 +212,7 @@ fn build_aggregate_invoice(
             .expect("parse_period guarantees from <= to"),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates,
+        rechnungsempfaenger,
         ..Default::default()
     };
 

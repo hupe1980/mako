@@ -84,7 +84,8 @@ const DELIBERATE: &[(&str, &str)] = &[
     ),
     (
         "51238696782",
-        "the refusal fixture: `crates/mako-markt`, `crates/energy-api` and \
+        "the refusal fixture: `crates/mako-markt` (including its BO4E-gate \
+         example), `crates/energy-api` and \
          `services/productd` assert that a wrong check digit is rejected. It fails \
          the BDEW Anwendungshilfe arithmetic, and also failed the Luhn variant a \
          dependency briefly used — so the assertion states the rule rather than \

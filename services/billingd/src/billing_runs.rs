@@ -394,7 +394,7 @@ async fn bill_one(
     )
     .await
     .map_err(|e| anyhow::anyhow!("dispatch: {e}"))?;
-    let (invoice, buyer) = (billed.invoice, billed.buyer);
+    let invoice = billed.invoice;
     let summary = handlers::LegSummary::of(&legs);
 
     // Same deterministic risk gate as the on-demand endpoint — scored read-only
@@ -453,15 +453,7 @@ async fn bill_one(
             .await
             .map_err(|e| anyhow::anyhow!("issue: {e}"))?;
     }
-    crate::einvoice::store(
-        &mut *tx,
-        record_id,
-        &invoice,
-        cfg,
-        &cand.malo_id,
-        buyer.as_ref(),
-    )
-    .await?;
+    crate::einvoice::store(&mut *tx, record_id, &invoice, cfg, &cand.malo_id).await?;
     handlers::persist_risk(&mut *tx, record_id, assessment.as_ref()).await?;
     tx.commit().await?;
 

@@ -18,7 +18,7 @@ pub struct DirectInterval {
     pub value: Decimal,
     /// Physical unit the meter registered, parsed by
     /// [`metering::interval::MeasurementUnit::parse_scaled`]: `kWh`/`MWh`/`GJ`/
-    /// `MJ`/`Wh` for energy, `m3`/`m\u00b3`/`l` for volume. It must be either the
+    /// `MJ`/`Wh` for energy, `m3`/`m³`/`l` for volume. It must be either the
     /// unit the Sparte is measured in or the one it is billed in; anything else
     /// is rejected rather than stored under a guessed interpretation.
     #[serde(default = "default_unit_kwh")]
@@ -58,6 +58,7 @@ pub(crate) fn default_unit_kwh() -> String {
 /// For Gas, set `unit = "m3"` and supply `brennwert_kwh_per_m3` + `zustandszahl`
 /// for the Hs-based conversion.  The handler stores converted kWh_Hs values.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DirectPushRequest {
     /// Caller-supplied idempotency key (e.g. SMGW SN + timestamp).
     /// Re-submitting the same key returns 200 with the original result.
@@ -113,8 +114,8 @@ pub struct DirectPushRequest {
 ///
 /// ## Why direct push?
 ///
-/// - MSCONS round-trip via `makod` adds 15\u201360 min latency.
-/// - \u00a741a EnWG dynamic tariffs need sub-hourly resolution for real-time billing.
+/// - MSCONS round-trip via `makod` adds 15–60 min latency.
+/// - §41a EnWG dynamic tariffs need sub-hourly resolution for real-time billing.
 /// - High-frequency RLM meters (up to 96 intervals/day) saturate the EDIFACT pipeline.
 ///
 /// ## Idempotency
@@ -153,7 +154,7 @@ pub async fn post_direct_reads_rlm(
 /// `POST /api/v1/meter-reads/gas/{malo_id}`
 ///
 /// iMSys / SMGW direct push for **Gas RLM** customers.
-/// Accepts m\u00b3 readings and converts to kWh_Hs using Brennwert \u00d7 Zustandszahl.
+/// Accepts m³ readings and converts to kWh_Hs using Brennwert × Zustandszahl.
 pub async fn post_direct_reads_gas(
     State(state): State<HandlerState>,
     claims: Claims,
@@ -1010,6 +1011,7 @@ pub async fn post_corrections(
 /// stored, and the resulting issues are written to `quality_warnings` on the
 /// intervals they name, in the same statement as the readings themselves.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BulkReadRequest {
     /// Idempotency key — re-submitting the same `session_id` is a no-op if already committed.
     #[serde(default)]

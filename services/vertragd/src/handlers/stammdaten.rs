@@ -3,11 +3,11 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
 };
-use mako_service::{ApiError, ApiResult, oidc::Claims};
+use mako_service::{ApiError, ApiResult, Json, oidc::Claims};
 use serde::Deserialize;
 use time::Date;
 use uuid::Uuid;
@@ -18,6 +18,7 @@ use crate::{outbound, pg};
 // ── GGV-Betreiber (§ 42b EnWG) ────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SetGgvBetreiberRequest {
     /// The Kunde operating the community — the BG-7 buyer of its bundled
     /// Sammelrechnung.

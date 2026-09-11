@@ -62,6 +62,7 @@ typst-assets = { version = "0.15", features = ["fonts"] }
 lopdf        = { version = "0.44", default-features = false }
 
 [dev-dependencies]
+toml       = "0.8"
 roxmltree = "0.21"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }

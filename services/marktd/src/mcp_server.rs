@@ -331,7 +331,7 @@ impl MdmdMcpHandler {
                 serde_json::Value,
             ),
         >(
-            r"SELECT mp_id, display_name, makoadresse, channels
+            r"SELECT mp_id, display_name, makoadresse, geschaeftspartner
               FROM partners
               ORDER BY mp_id
               LIMIT $1 OFFSET $2",
@@ -344,13 +344,13 @@ impl MdmdMcpHandler {
 
         let partners: Vec<serde_json::Value> = rows
             .into_iter()
-            .map(|(mp_id, display_name, makoadresse, channels)| {
+            .map(|(mp_id, display_name, makoadresse, geschaeftspartner)| {
                 serde_json::json!({
                     "mp_id": mp_id,
                     "display_name": display_name,
                     "as4_endpoint": makoadresse.as_ref().and_then(|v| v.first()).cloned(),
                     "makoadresse": makoadresse,
-                    "channels": channels,
+                    "geschaeftspartner": geschaeftspartner,
                 })
             })
             .collect();
@@ -1031,7 +1031,8 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
 
     /// Read a single trading partner by its 13-digit MP-ID.
     ///
-    /// Returns display name, AS4 / MaKo communication channels, roles, and
+    /// Returns display name, AS4 endpoints (`makoadresse`), the BO4E
+    /// `Geschaeftspartner`, roles, and
     /// the applicable EDIFACT identification scheme (BDEW `293`, DVGW `332`,
     /// or GS1 `9`).
     #[tool(
@@ -1043,7 +1044,7 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
         Parameters(p): Parameters<GetPartnerParams>,
     ) -> Result<CallToolResult, McpError> {
         let row = sqlx::query(
-            r"SELECT mp_id, display_name, makoadresse, channels, updated_at
+            r"SELECT mp_id, display_name, makoadresse, geschaeftspartner, updated_at
               FROM partners
               WHERE mp_id = $1",
         )
@@ -1058,7 +1059,10 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
                 "mp_id": r.try_get::<String, _>("mp_id").ok(),
                 "display_name": r.try_get::<Option<String>, _>("display_name").ok().flatten(),
                 "makoadresse": r.try_get::<Option<String>, _>("makoadresse").ok().flatten(),
-                "channels": r.try_get::<Option<serde_json::Value>, _>("channels").ok().flatten(),
+                "geschaeftspartner": r
+                    .try_get::<Option<serde_json::Value>, _>("geschaeftspartner")
+                    .ok()
+                    .flatten(),
                 "updated_at": r.try_get::<Option<time::OffsetDateTime>, _>("updated_at").ok().flatten().map(|t| t.to_string()),
             }))
             .map(|b| CallToolResult::success(vec![b]))
@@ -1302,7 +1306,7 @@ impl ServerHandler for MdmdMcpHandler {
              - `list_malo` — list/filter MaLos by sparte, bilanzierungsmethode, netzebene\n\
              - `get_melo` — read a MeLo by ID (netzebene_messung, regelzone, standorteigenschaften)\n\
              - `get_melo_standorteigenschaften` — Redispatch 2.0 site properties for a MeLo\n\
-             - `list_partners` — list registered trading partners (MP-ID, AS4 endpoint, channels)\n\
+             - `list_partners` — list registered trading partners (MP-ID, AS4 endpoint, Geschaeftspartner)\n\
              - `get_partner` — read a single trading partner by MP-ID\n\
              - `get_preisblatt` — read the PreisblattNetznutzung for an NB (used by invoicd for § 147 AO / GoBD)\n\
              - `get_versorgungsstatus` — read VersorgungsStatus (Beliefert/Unbeliefert/…) for a MaLo\n\

@@ -454,6 +454,7 @@ mod gas_enrichment_tests {
             RegulatoryRates::default(),
             parts,
             vec![],
+            None,
         )
         .unwrap();
         assert_eq!(agg.netto_eur, dec!(30.03));
@@ -504,6 +505,7 @@ mod gas_enrichment_tests {
             RegulatoryRates::default(),
             parts,
             vec![],
+            None,
         )
         .unwrap();
         let pos = json["rechnungspositionen"].as_array().unwrap();

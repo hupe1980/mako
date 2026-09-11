@@ -15,12 +15,13 @@
 //! `/health/*` and `/metrics` are the runner's and are not mounted here.
 
 use axum::{
-    Extension, Json, Router,
+    Extension, Router,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post, put},
 };
+use mako_service::Json;
 use std::sync::Arc;
 use time::{Date, OffsetDateTime};
 use tracing::warn;

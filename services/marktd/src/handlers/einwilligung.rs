@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
     response::IntoResponse,
@@ -32,6 +32,7 @@ use mako_markt::{
         EsaMessproduktAngebot, EsaMessproduktPreis,
     },
 };
+use mako_service::Json;
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -63,6 +64,7 @@ async fn emit(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GrantBody {
     pub anschlussnutzer_ref: String,
     pub esa_mp_id: String,
@@ -304,6 +306,7 @@ pub async fn consent_check(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FrameworkBody {
     #[serde(default)]
     pub signed_at: Option<time::OffsetDateTime>,
@@ -344,6 +347,7 @@ pub async fn put_framework(
 
 /// Body of `PUT /api/v1/esa/preise/:msb_mp_id/:esa_mp_id`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EsaPreiseBody {
     /// Which subscription these prices were agreed for — a subscription is the
     /// (Meldepunkt, Messprodukt) pair.
@@ -468,6 +472,7 @@ pub async fn get_esa_preise(
 
 /// Body of `PUT /api/v1/esa/messprodukte/:msb_mp_id` — one catalogue entry.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KatalogEintrag {
     /// Messprodukt-Code from Codeliste der Konfigurationen 1.4 Kap. 4.6.
     /// Accepted in the published spaced form or digits only.

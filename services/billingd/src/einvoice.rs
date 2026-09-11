@@ -114,8 +114,19 @@ fn seller_party(cfg: &BillingdConfig) -> Party {
 /// closes: a household has no Peppol endpoint (BT-49) and no Leitweg-ID (BT-10).
 /// Those two findings are what a retail invoice legitimately carries; a B2G
 /// recipient supplies both through [`apply_b2g_buyer`] / [`with_buyer_reference`].
-fn buyer_party(malo_id: &str, buyer: Option<&crate::clients::Rechnungsempfaenger>) -> Party {
-    let Some(b) = buyer else {
+///
+/// Read off `invoice.context.rechnungsempfaenger` — the same field the BO4E
+/// `Rechnung` names its Rechnungsempfänger from, so the two views of one
+/// document cannot name different parties. An argument threaded beside the
+/// priced invoice would reach this map only.
+fn buyer_party(invoice: &Invoice) -> Party {
+    let malo_id = invoice.context.malo_id.as_str();
+    let Some(b) = invoice
+        .context
+        .rechnungsempfaenger
+        .as_ref()
+        .filter(|e| e.names_somebody())
+    else {
         return Party {
             name: Some(format!("Marktlokation {malo_id}")),
             address: PostalAddress {
@@ -215,14 +226,8 @@ pub const BUSINESS_PROCESS: &str = "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0"
 pub fn build(
     invoice: &Invoice,
     cfg: &BillingdConfig,
-    malo_id: &str,
-    buyer: Option<&crate::clients::Rechnungsempfaenger>,
 ) -> Result<en16931::Invoice, energy_billing::EngineError> {
-    let mut model = invoice.to_en16931(
-        EN16931_SPEC_ID,
-        seller_party(cfg),
-        buyer_party(malo_id, buyer),
-    )?;
+    let mut model = invoice.to_en16931(EN16931_SPEC_ID, seller_party(cfg), buyer_party(invoice))?;
     model.business_process = Some(BUSINESS_PROCESS.to_owned());
     if let Some(iban) = cfg.seller_iban.clone() {
         model.payment = Some(en16931::invoice::PaymentInstructions {
@@ -252,7 +257,6 @@ pub async fn store(
     invoice: &Invoice,
     cfg: &BillingdConfig,
     malo_id: &str,
-    buyer: Option<&crate::clients::Rechnungsempfaenger>,
 ) -> crate::error::BillingResult<()> {
     // `to_en16931` refuses an invoice the standard cannot represent — today,
     // one mixing a not-subject-to-VAT line with any other category
@@ -265,7 +269,7 @@ pub async fn store(
     // with that reason instead of "re-run the calculation" — advice that would
     // produce the same refusal. Any other mapping failure is a genuine fault
     // and propagates.
-    let model = match build(invoice, cfg, malo_id, buyer) {
+    let model = match build(invoice, cfg) {
         Ok(m) => m,
         Err(e @ energy_billing::EngineError::ValidationBlocked { .. }) => {
             tracing::warn!(

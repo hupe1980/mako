@@ -44,10 +44,53 @@ pub struct Recipient {
     /// suppressed with a reason rather than silently skipped.
     #[serde(default)]
     pub email: Option<String>,
-    /// The postal address the `POST` channel prints, free-form JSON so the
-    /// print service's own schema can travel unchanged.
+    /// The postal address the `POST` channel prints.
+    ///
+    /// Typed rather than free-form JSON. A letter needs a street, a postcode
+    /// and a town; anything less is not an address, and while this was a
+    /// `serde_json::Value` an issuing service that found a customer record
+    /// with no address at all still produced `{"line1":null,"post_code":null,…}`
+    /// — which is `Some`, so the `POST` channel was not suppressed and the
+    /// delivery target became that JSON text, recorded as where the letter
+    /// went.
     #[serde(default)]
-    pub address: Option<serde_json::Value>,
+    pub address: Option<PostalAddress>,
+}
+
+/// A postal address complete enough to send a letter to.
+///
+/// Every field is required, which is the point: [`Recipient::address`] is
+/// `Option`, so "we do not know where they live" has a representation already,
+/// and it is the one that suppresses the `POST` channel with a reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PostalAddress {
+    /// Street and house number.
+    pub line1: String,
+    /// Postcode.
+    pub post_code: String,
+    /// Town.
+    pub city: String,
+    /// ISO 3166-1 alpha-2. Defaults to `DE`.
+    #[serde(default = "default_country")]
+    pub country: String,
+}
+
+fn default_country() -> String {
+    "DE".to_owned()
+}
+
+impl std::fmt::Display for PostalAddress {
+    /// One line, the way a delivery target is recorded: `Musterstr. 1, 10115
+    /// Berlin, DE`. Was `serde_json::Value::to_string`, which recorded the
+    /// document's *JSON* as the address a letter went to.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}, {} {}, {}",
+            self.line1, self.post_code, self.city, self.country
+        )
+    }
 }
 
 /// A stored document, without its bytes.
@@ -197,7 +240,14 @@ pub async fn issue(
     .bind(doc.media_type)
     .bind(doc.recipient.name.as_deref())
     .bind(doc.recipient.email.as_deref())
-    .bind(doc.recipient.address.as_ref())
+    .bind(
+        doc.recipient
+            .address
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|e| anyhow::anyhow!("recipient address is not serialisable: {e}"))?,
+    )
     .bind(doc.issued_by)
     .fetch_optional(&mut *tx)
     .await

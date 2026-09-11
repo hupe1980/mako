@@ -50,6 +50,7 @@ en16931-formats = { workspace = true }
 
 
 [dev-dependencies]
+toml       = "0.8"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 time = { workspace = true }

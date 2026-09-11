@@ -12,7 +12,8 @@
 //! - `type`: CloudEvents `type` exact-match filter.
 //! - `limit`: max rows (default 500, max 5000).
 
-use axum::{Extension, Json, extract::Query, http::StatusCode, response::IntoResponse};
+use axum::{Extension, extract::Query, http::StatusCode, response::IntoResponse};
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use serde::Deserialize;
 use sqlx::PgPool;

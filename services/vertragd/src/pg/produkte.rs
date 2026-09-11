@@ -324,8 +324,13 @@ pub async fn malo_slices(
     anyhow::ensure!(von <= bis, "von ({von}) darf nicht nach bis ({bis}) liegen");
     // `bis` is inclusive for the caller and exclusive in the range algebra.
     let bis_exkl = bis.next_day().unwrap_or(bis);
-    Ok(sqlx::query_as::<_, MaloProduktSlice>(
-        r"SELECT k.malo_id, k.lf_mp_id, k.sparte, p.product_code,
+    // The status filter is not optional. Without it this returned slices for a
+    // component the Netzbetreiber had **rejected** or the operator had
+    // withdrawn, so `billingd` priced a period in which no supply took place.
+    // The list is shared with the buyer lookup — see
+    // [`crate::pg::vertraege::KOMPONENTE_BILLABLE`].
+    Ok(sqlx::query_as::<_, MaloProduktSlice>(&format!(
+        "SELECT k.malo_id, k.lf_mp_id, k.sparte, p.product_code,
                  k.jahresverbrauch_kwh,
                  GREATEST(p.gueltig_von, $3) AS gueltig_von,
                  CASE WHEN p.gueltig_bis IS NULL OR p.gueltig_bis > $4
@@ -333,10 +338,12 @@ pub async fn malo_slices(
           FROM komponenten_produkte p
           JOIN vertragskomponenten k ON k.id = p.komp_id
           WHERE p.tenant = $1 AND k.malo_id = $2
+            AND k.status IN {komponente}
             AND daterange(p.gueltig_von, p.gueltig_bis, '[)')
                 && daterange($3::DATE, $4::DATE, '[)')
           ORDER BY p.gueltig_von",
-    )
+        komponente = crate::pg::vertraege::KOMPONENTE_BILLABLE,
+    ))
     .bind(tenant)
     .bind(malo_id)
     .bind(von)

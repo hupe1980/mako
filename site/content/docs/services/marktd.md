@@ -127,7 +127,7 @@ services:
       retries: 10
 
   marktd:
-    image: ghcr.io/hupe1980/mako-marktd:0.12.0
+    image: ghcr.io/hupe1980/mako-marktd:<version>
     depends_on:
       postgres:
         condition: service_healthy
@@ -425,7 +425,7 @@ sub-resource cannot leave the column and the document disagreeing.
 | `GET` | `/api/v1/netzzugang/antraege` | `read-netzzugang` | List §20b requests (`?status=&netzanschluss_id=`) |
 | `GET` | `/api/v1/netzzugang/antraege/{id}` | `read-netzzugang` | Get a §20b request |
 | `PATCH` | `/api/v1/netzzugang/antraege/{id}/status` | `write-netzzugang` | Advance lifecycle (`erfasst → uebermittelt → bestaetigt/abgelehnt`, optional `platform_ref`; optional `expected_version` → 412 on mismatch). Used by the makod sender and by the operator recording the platform's answer |
-| `PUT` | `/api/v1/msb-rahmenvertraege-gas` | `write-msb-rv-gas` | Upsert a Gas MSB-Rahmenvertrag conclusion (GeLi Gas 3.0 Tenor 13–16; `status=anpassung_erforderlich` tracks the BK7-17-026 migration duty). Idempotent on `(tenant, gnb_mp_id, msb_mp_id, valid_from)`; optimistic `version` → 412; rejects `valid_to < valid_from` |
+| `PUT` | `/api/v1/msb-rahmenvertraege-gas` | `write-msb-rv-gas` | Upsert a Gas MSB-Rahmenvertrag conclusion (GeLi Gas 3.0 Tenor 13–16; `status=anpassung_erforderlich` tracks the BK7-17-026 migration duty). Idempotent on `(tenant, gnb_mp_id, msb_mp_id, valid_from)`; optimistic `version` → 412; rejects `valid_to < valid_from`. The body's `vertrag` is a gated `Bo4e<Vertrag>` |
 | `GET` | `/api/v1/msb-rahmenvertraege-gas` | `read-msb-rv-gas` | List Gas MSB framework contracts (`?msb_mp_id=&status=`) |
 | `GET` | `/api/v1/msb-rahmenvertraege-gas/{id}` | `read-msb-rv-gas` | Get one Gas MSB framework contract |
 | `GET` | `/api/v1/nelos` | `read-nelo` | List NeLos (`?nb_mp_id=` filters by Netzbetreiber) |
@@ -438,9 +438,9 @@ sub-resource cannot leave the column and the document disagreeing.
 | `PUT` | `/api/v1/malos/{malo_id}/grid` | `write-malo-grid` (NB role) | Upsert grid record from NIS/GIS |
 | `GET` | `/api/v1/preisblaetter-messung/{msb_mp_id}` | `read-preisblatt` | `PreisblattMessung` valid on date (MSB metering tariffs); includes `auf_abschlaege` |
 | `PUT` | `/api/v1/preisblaetter-messung/{msb_mp_id}` | `write-preisblatt` | Upsert MSB metering price sheet |
-| `GET/PUT` | `/api/v1/preisblaetter-ka/{nb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattKonzessionsabgabe` valid on date |
-| `GET/PUT` | `/api/v1/preisblaetter-dienstleistung/{msb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattDienstleistung` valid on date (MSB services) |
-| `GET/PUT` | `/api/v1/preisblaetter-hardware/{msb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattHardware` valid on date (MSB devices) |
+| `GET/PUT` | `/api/v1/preisblaetter-ka/{nb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattKonzessionsabgabe` valid on date. `data` crosses [the BO4E gate](#the-bo4e-gate) |
+| `GET/PUT` | `/api/v1/preisblaetter-dienstleistung/{msb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattDienstleistung` valid on date (MSB services). `data` crosses [the BO4E gate](#the-bo4e-gate) |
+| `GET/PUT` | `/api/v1/preisblaetter-hardware/{msb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattHardware` valid on date (MSB devices). `data` crosses [the BO4E gate](#the-bo4e-gate) |
 | `GET` | `/api/v1/steuerbare-ressourcen/{sr_id}` | `read-sr` | Get a `SteuerbareRessource` by SR-ID |
 | `PUT` | `/api/v1/steuerbare-ressourcen/{sr_id}` | `write-sr` | Upsert a `SteuerbareRessource` |
 | `GET/PUT` | `/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte` | `read-sr` / `write-sr` | List or atomically replace the §14a `Konfigurationsprodukte` of a `SteuerbareRessource` |
@@ -449,15 +449,15 @@ sub-resource cannot leave the column and the document disagreeing.
 | `PUT` | `/api/v1/technische-ressourcen/{tr_id}` | `write-device` | Upsert a `TechnischeRessource` (E-mobility, generation, storage) |
 | `GET` | `/api/v1/malos/{malo_id}/technische-ressourcen` | `read-device` | List `TechnischeRessource` for a `MaLo` |
 | `GET` | `/api/v1/malos/{id}/lokationen` | `read-lokationszuordnung` | Recursive `Lokationszuordnung` graph from a MaLo (`?at=YYYY-MM-DD`) |
-| `GET` | `/api/v1/malos/{id}/buendel` | `read-lokationszuordnung` | First-class **Lokationsbündel** rooted at a MaLo — the bundle projected from the typed graph plus its structural-integrity status (`valid` + `validation_error`; ≥1 MeLo required) |
+| `GET` | `/api/v1/malos/{id}/buendel` | `read-lokationszuordnung` | First-class **Lokationsbündel** rooted at a MaLo — the bundle projected from the typed graph, its structural-integrity status (`valid` + `validation_error`; ≥1 MeLo required), and the BDEW *Lokationsbündelstruktur* the declared code names (`struktur` + `befunde`) |
 | `GET` | `/api/v1/melos/{id}/lokationen` | `read-lokationszuordnung` | Recursive `Lokationszuordnung` graph from a MeLo |
-| `PUT` | `/api/v1/lokationszuordnungen` | `write-lokationszuordnung` | Upsert a directed location graph edge (`lokationsbuendelcode` extracted into a typed column). Note the single-write-path invariant: a MeLo `PUT` reconciles the `melo→malo` graph edge in the same transaction (previous edges closed with `valid_to`, never deleted), so the `melo.malo_id` FK and the graph cannot drift |
+| `PUT` | `/api/v1/lokationszuordnungen` | `write-lokationszuordnung` | Upsert a directed location graph edge; `data` is a gated `Bo4e<Lokationszuordnung>` and the response carries the bundle audit's `befunde`. See [Lokationsbündel](#lokationsbuendel) |
 | `DELETE` | `/api/v1/lokationszuordnungen/{von_id}/{nach_id}` | `write-lokationszuordnung` | Hard-delete an edge pair (all temporal variants) |
 | `GET` | `/api/v1/melos/{melo_id}/zaehler` | `read-device` | List `Zaehler` for a MeLo (typed `Vec<ZaehlerResponse>` with `data: rubo4e::current::Zaehler`) |
 | `GET` | `/api/v1/melos/{melo_id}/msb` | `read-melo-msb` | The MSB responsible for the MeLo on `?at=YYYY-MM-DD` (default today) — WiM Teil 2 UC 4.1.1 historical Werteanfrage routing |
 | `PUT` | `/api/v1/melos/{melo_id}/msb` | `write-melo-msb` | Record a dated MSB assignment (`{ msb_mp_id, valid_from }`); closes the previously-open assignment atomically |
 | `GET` | `/api/v1/melos/{melo_id}/msb/history` | `read-melo-msb` | Full dated MSB timeline for the MeLo (newest first) |
-| `PUT` | `/api/v1/malos/{malo_id}/bilanzierung` | `write-bilanzierung` | Upsert a **BO4E `Bilanzierung`** (BO #3) through [the BO4E gate](#the-bo4e-gate), keyed on `(malo, bilanzierungsbeginn)`; typed columns (Bilanzkreis/Aggregationsverantwortung/Prognosegrundlage/Fallgruppe) extracted, full BO stored as JSONB |
+| `PUT` | `/api/v1/malos/{malo_id}/bilanzierung` | `write-bilanzierung` | Upsert a **BO4E `Bilanzierung`** (BO #3) through [the BO4E gate](#the-bo4e-gate), keyed on `(malo, bilanzierungsbeginn)`. Typed columns are derived from the **typed** object and the canonical round-trip is stored — including `abwicklungsmodell` and the derived `aggregationszustaendigkeit`. `422` for a missing `bilanzierungsbeginn` (it is half the key) or a `bilanzierungsende` at/before it |
 | `GET` | `/api/v1/malos/{malo_id}/bilanzierung` | `read-bilanzierung` | The Bilanzierung effective at `?at=<RFC3339\|YYYY-MM-DD>` (default now) — point-in-time by validity window |
 | `GET` | `/api/v1/malos/{malo_id}/bilanzierung/history` | `read-bilanzierung` | Full Bilanzierung history for the MaLo (newest validity-start first) |
 | `GET` | `/api/v1/melos/{melo_id}/sharing-eligibility` | `read-sharing-eligibility` | §42c EnWG metering **capability** — qualifies via Zählerstandsgangmessung (§2 Satz 1 Nr. 27 MsbG) **or** viertelstündliche RLM. Returns `capability`, `basis`, `required_action`, `reasons`, `bilanzierungsgebiet`, and the master-data `evidence` it decided from. |
@@ -554,10 +554,13 @@ inside the JSON payload.
       "rollencodetyp": "BDEW"
     },
     "preispositionen": [ ... ]
-  },
-  "bo4e_version": "202607.1.0"
+  }
 }
 ```
+
+`bo4e_version` is **not** a request field. It is provenance — only the server
+knows which schema series it parsed the payload under — and it is returned on
+the `GET`.
 
 ### GET response
 
@@ -708,17 +711,26 @@ The record has two halves, validated differently:
 | Part | Validation |
 |---|---|
 | `marktrolle`, `rollencodetyp`, `sparte` — top-level record fields | Typed enums; `422` when serde's lenient decode falls through to `Unknown` (a typo, or the legacy EDIFACT `LFG` — BO4E models a gas supplier as `LF` + `rollencodetyp: DVGW`) |
-| `channels` — the BO4E payload | Decoded as `rubo4e::current::Geschaeftspartner`: `_typ` injected when absent, `422` when it names another type, every declared enum checked, re-serialised to canonical camelCase before storage |
+| `geschaeftspartner` — the BO4E payload | A `Bo4e<Geschaeftspartner>`, so the gate runs as the body deserialises: `_typ` injected when absent, `422` when it names another type, every declared enum checked, and the canonical camelCase round-trip is what reaches storage |
 
 > `marktrolle`, `rollencodetyp` and `marktteilnehmerstatus` are **`Marktteilnehmer`**
 > fields — BO4E does not define them on `Geschaeftspartner`. Putting them inside
-> `channels` does not fail: the decode absorbs them as extension fields, stores
-> them unvalidated and reads them back as nothing. The role fields belong at the
-> top level, where they are typed.
+> `geschaeftspartner` does not fail: the decode absorbs them as extension
+> fields, stores them unvalidated and reads them back as nothing. The role
+> fields belong at the top level, where they are typed.
+
+> **The field was called `channels`.** It was typed `serde_json::Value`,
+> documented as "raw JSON for additional channel details (certificate, etc.)",
+> gated as a `Geschaeftspartner` **only when it happened to be a JSON object**
+> — an array went through untouched — and served back under a third name. The
+> AS4 endpoints are `makoadresse`; a communication-channel list belongs to
+> `makod`'s own partner store, which is a different registry for a different
+> purpose. The column is `partners.geschaeftspartner` now.
 
 ```bash
-# Register a trading partner (LF). The role fields are top-level; `channels`
-# carries the Geschaeftspartner.
+# Register a trading partner (LF). The role fields are top-level;
+# `geschaeftspartner` carries the BO4E document. `mp_id` may be omitted — the
+# path already names the partner — and is refused if it names a different one.
 curl -s -X PUT "http://marktd:8180/api/v1/partners/9904234560001" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
@@ -728,7 +740,7 @@ curl -s -X PUT "http://marktd:8180/api/v1/partners/9904234560001" \
     "rollencodetyp": "BDEW",
     "sparte":        "STROM",
     "makoadresse":   ["https://as4.muster-ev.de/as4/in"],
-    "channels": {
+    "geschaeftspartner": {
       "_typ": "GESCHAEFTSPARTNER",
       "anrede": "FRAU",
       "adresse": {
@@ -765,8 +777,9 @@ field containing the typed `rubo4e::current::Geschaeftspartner` payload:
 }
 ```
 
-A partner record with no schema-valid payload is returned with the raw `channels`
-JSONB in the `geschaeftspartner` field.
+A partner record whose stored document no longer decodes — a row written under
+an older schema series — is returned with the raw JSONB in the
+`geschaeftspartner` field rather than failing the read.
 
 ---
 
@@ -782,10 +795,10 @@ Migrations run automatically at startup via `sqlx migrate run`.
 | `malo` | Marktlokationen — JSONB payload, `bo4e_version`, GIN index |
 | `rollenzuordnungen` | Temporal NB/LF/MSB role assignments per MaLo |
 | `melo_msb_zuordnungen` | Per-MeLo **dated MSB timeline** — `(tenant, melo_id, msb_mp_id, valid_from, valid_to)`; point-in-time MSB resolution for WiM Teil 2 UC 4.1.1 (a MaLo can bundle MeLos with divergent MSB history). Derived from **IFTSTA 21012** (`derive_msb_zuordnung`), never from the *vorläufige* Anmeldebestätigung 55043 |
-| `bilanzierungen` | **BO4E `Bilanzierung`** (BO #3) per MaLo — `bilanzierungsbeginn/ende` validity, typed `bilanzkreis`/`aggregationsverantwortung`/`prognosegrundlage`/`fallgruppenzuordnung`, full BO in `data JSONB`. Writing a currently-effective one **derives** `malo.fallgruppe`. `bilanzierungsmethode` and `bilanzierungsgebiet` stay on `malo`: they are `Marktlokation` fields (BO #12), not `Bilanzierung` ones |
+| `bilanzierungen` | **BO4E `Bilanzierung`** (BO #3) per MaLo — `bilanzierungsbeginn/ende` validity, typed `bilanzkreis`/`aggregationsverantwortung`/`abwicklungsmodell`/`aggregationszustaendigkeit`/`prognosegrundlage`/`fallgruppenzuordnung`, full BO in `data JSONB`. Writing a currently-effective one **derives** `malo.fallgruppe`. `bilanzierungsmethode` and `bilanzierungsgebiet` stay on `malo` — they are `Marktlokation` fields (BO #12) |
 | `lokationszuordnungen` | Location graph edges — `(tenant, von_id, von_typ, nach_id, nach_typ, valid_from, valid_to)`; `von_typ`/`nach_typ` are the canonical BO4E `Lokationstyp` codes (`MALO`/`MELO`/`NELO`/`SR`/`TR`); recursive-CTE BFS traversal |
 | `melo` | Messlokationen — JSONB payload, `bo4e_version` |
-| `partners` | Trading partners (GLN → channels) — JSONB |
+| `partners` | Trading partners (MP-ID → BO4E `Geschaeftspartner`) — JSONB |
 | `subscriptions` | ERP webhook registrations |
 | `process_correlation` | Running/completed MaKo process tracking per MaLo |
 | `processed_events` | Inbound event idempotency log |
@@ -804,7 +817,7 @@ Migrations run automatically at startup via `sqlx migrate run`.
 | `pricat_versions` | Versioned PRICAT snapshots — `(nb_mp_id, tenant, valid_from)` unique, dispatch state |
 | `pricat_dispatch_log` | Dispatch audit log — one row per NB × LF dispatch attempt |
 | `nelo` | Netz-Element-Lokationen (Redispatch 2.0) — EIC or BDEW Codenummer, owner NB GLN, JSONB data |
-| `tranche` | Tranchen der Marktlokation (GPKE Teil 4 „Daten der Tranche") — keyed by `(tranche_id, tenant)`, parent `malo_id`; `bilanzierungsgebiet`/`netzebene`/`energierichtung` typed columns + BO4E `Tranche` JSONB |
+| `tranche` | Tranchen der Marktlokation (GPKE Teil 4 „Daten der Tranche") — keyed by `(tranche_id, tenant)`, parent `malo_id`; `bilanzierungsgebiet`/`netzebene`/`energierichtung` typed columns + an open-ended `data` JSONB (**not** BO4E — the schema has no Tranche Geschäftsobjekt) |
 | `malo_grid` | MaLo grid topology — Netzgebiet, Bilanzierungsgebiet, sourced from NIS/GIS |
 | `steuerbare_ressourcen` | WiM iMS controllable resources — keyed by SR-ID (`C[A-Z0-9]{9}[0-9]`), linked to MaLo; `konfigurationsprodukte JSONB` for contracted iMS control products  |
 | `technische_ressourcen` | E-mobility, generation, storage resources — keyed by TrId; BO4E-aligned `nutzung` (`TechnischeRessourceNutzung`) + `verbrauchsart` (`TechnischeRessourceVerbrauchsart`) + `ist_fernschaltbar` typed columns; linked to MaLo/MeLo |
@@ -900,6 +913,7 @@ asserts the status and the message.
 | `fallgruppe` | `TEXT` | GaBi Gas RLM category (e.g. `LNF`, `LF`, `TK`) |
 | `fernsteuerbar` | `BOOLEAN` | §14a EnWG „Status der Fernsteuerbarkeit" — `true` = technisch fernsteuerbar, `false` = nicht (UTILMD `CCI+7037` `Z97`/`Z96`) |
 | `abwicklungsmodell` | `TEXT` | NZR-EMob (BK6-20-160 Anlage 6) — `MODELL_1` (balanced at the Marktlokation) \| `MODELL_2` (balanced in a Ladepunktbetreiber's Bilanzierungsgebiet), from UTILMD `CCI+ZA2++ZE9`/`ZF0`. `NULL` means no counterparty has stated one — **not** Modell 1 |
+| `lokationsbuendel_objektcode` | `TEXT` | The object's place in its Lokationsbündelstruktur (BDEW codelist chapter 2.1). Validated on write — see [Lokationsbündel](#lokationsbuendel) |
 
 ### Key typed columns on `melo`
 
@@ -908,6 +922,7 @@ asserts the status and the message.
 | `netzebene_messung` | `TEXT` | Netzebene where the meter is installed |
 | `regelzone` | `TEXT` | Regelzone EIC code — extracted from `standorteigenschaften.eigenschaftenStrom[0].regelzoneEic` |
 | `standorteigenschaften` | `JSONB` | Full `Standorteigenschaften` object (GIN indexed) for WiM Stammdaten enrichment |
+| `lokationsbuendel_objektcode` | `TEXT` | The object's place in its Lokationsbündelstruktur (BDEW codelist chapter 2.1). Validated on write — see [Lokationsbündel](#lokationsbuendel) |
 
 ## NB Network Contracts — `Vertrag` BO4E
 
@@ -1338,8 +1353,11 @@ curl "http://localhost:8180/api/v1/correlations/51238696012" \
 
 ## Docker Deployment
 
+Pin the release you deploy — `<version>` below is the tag you choose, not a
+floating one.
+
 ```bash
-docker pull ghcr.io/hupe1980/mako-marktd:0.19.0
+docker pull ghcr.io/hupe1980/mako-marktd:<version>
 
 docker run -d \
   --name marktd \
@@ -1349,7 +1367,7 @@ docker run -d \
   -e DATABASE_URL=postgres://marktd:secret@postgres/marktd \
   -e MAKOD_API_KEY=my-api-key \
   -e MAKOD_WEBHOOK_SECRET=my-webhook-secret \
-  ghcr.io/hupe1980/mako-marktd:0.19.0
+  ghcr.io/hupe1980/mako-marktd:<version>
 ```
 
 The config path is an **environment variable**, not a flag: `marktd` parses only
@@ -1682,8 +1700,7 @@ curl -s -X PUT "http://marktd:8180/api/v1/preisblaetter-messung/9900012345678" \
         { "zaehlzeitregister": "HT", "preis": { "wert": "12.50", "einheit": "CT", "bezugswert": "KWH" } },
         { "zaehlzeitregister": "NT", "preis": { "wert": "8.75",  "einheit": "CT", "bezugswert": "KWH" } }
       ]
-    },
-    "bo4e_version": "202607.1.0"
+    }
   }'
 
 # Retrieve for a billing date — response includes typed zeitvariable_preispositionen
@@ -1960,8 +1977,7 @@ curl -s -X PUT "http://marktd:8180/api/v1/zaehler/Z001234567" \
       "zaehlwerke": [
         { "_typ": "ZAEHLWERK", "obisKennzahl": "1-0:1.8.0", "richtung": "EINSP" }
       ]
-    },
-    "bo4e_version": "202607.1.0"
+    }
   }'
 
 # List Zaehlwerk registers for a meter (typed Vec<Zaehlwerk>)
@@ -2465,7 +2481,7 @@ Response: `Vec<LokationszuordnungEdge>` ordered by `depth` (0 = direct edges fro
 ]
 ```
 
-### Lokationsbündel
+### Lokationsbündel {#lokationsbuendel}
 
 `GET /api/v1/malos/{id}/buendel` returns the **Lokationsbündel** (UTILMD
 Lokationsbündelstruktur) as a first-class aggregate — the set of MeLos, NeLos,
@@ -2477,15 +2493,53 @@ carry at least one MeLo, and all MeLos of the bundle must share one MSB
 incomplete mid-Einzug, so the endpoint reports `valid: false` with a
 `validation_error` rather than failing the request.
 
+**`struktur` and `befunde` answer the BDEW codelist's question.**
+`lokationsbuendelcode` is a 13-digit BDEW code from EDI@Energy's *Codeliste der
+Lokationsbündelstrukturen* (v1.0, 31.03.2023, applicable from 01.10.2024), and
+`audit_struktur` resolves it: the check digit, then the structure, then the
+cardinalities the structure states. `befunde` is empty when the bundle matches
+what it declares.
+
+The cardinalities are checked **per object type**, not per
+`lokationsbuendelObjektcode` — this projection holds ids grouped by
+`Lokationstyp`. The per-code audit is `rubo4e`'s
+`Lokationszuordnung::audit_buendel()`, which needs the BO4E document with its
+objects inline; that document is what an edge's `data` carries.
+
+Two things the graph cannot decide, both reported rather than assumed:
+**steuerbare Ressourcen** have no object code in the codelist, and
+**Marktlokationen** cannot be counted because the projection keeps only the root
+MaLo. That is correct for twelve of the fifteen structures; the three
+*Summenmessung* ones need two or more, and for those `befunde` carries
+`the structure needs at least N Marktlokationen … audit the BO4E
+Lokationszuordnung instead`.
+
 ```json
 {
   "malo_id": "51238696012",
-  "lokationsbuendelcode": "1S",
-  "messlokationen": ["DE-MEL-001"],
+  "lokationsbuendelcode": "9992000000026",
+  "messlokationen": ["DE0001234567890123456789012345678"],
   "netzlokationen": [],
   "steuerbare_ressourcen": [],
   "technische_ressourcen": [],
-  "valid": true
+  "valid": true,
+  "struktur": {
+    "code": "9992000000026",
+    "bezeichnung": "Verbrauch mit einer Messlokation (Standard)",
+    "max_ebene": 1
+  },
+  "befunde": []
+}
+```
+
+A bundle that declares a structure it does not satisfy is **reported, not
+refused** — BDEW requires none of this of a stored record:
+
+```json
+{
+  "lokationsbuendelcode": "9992000000026",
+  "messlokationen": ["DE0001…678", "DE0009…012"],
+  "befunde": ["the structure permits 1 Messlokation, the bundle holds 2"]
 }
 ```
 
@@ -2503,8 +2557,23 @@ Content-Type: application/json
   "nach_typ":  "MELO",
   "valid_from": null,
   "valid_to":   null,
-  "data":       {}
+  "data": {
+    "lokationsbuendelcode": "9992000000026"
+  }
 }
+
+# → 200 { "id": "…", "befunde": [] }
+#
+# `befunde` is the per-object-code audit against the declared structure: a
+# malformed or unpublished `lokationsbuendelObjektcode`, an object filed under
+# the wrong type, a code the structure does not use, a broken cardinality. It
+# is **reported, not refused** — an edge is often asserted before the objects
+# around it exist. A `malo`/`melo` PUT refuses a mis-typed object code outright,
+# because that one lands in a typed column the audit reads.
+#
+# `data: {}` declares no structure, so it departs from nothing and `befunde` is
+# empty. (`GET /buendel` *does* say so, because there the question asked is
+# which structure the bundle is.)
 
 # Hard-delete an edge pair (all temporal variants)
 DELETE /api/v1/lokationszuordnungen/51238696012/DE-MEL-001
@@ -2542,8 +2611,7 @@ GET  /api/v1/malos/{malo_id}/technische-ressourcen
   "melo_id":           "DE-MEL-001",
   "nutzung":           "STROMVERBRAUCHSART",
   "verbrauchsart":     "E_MOBILITAET",
-  "ist_fernschaltbar": true,
-  "bo4e_version":      "202607.1.0"
+  "ist_fernschaltbar": true
 }
 ```
 

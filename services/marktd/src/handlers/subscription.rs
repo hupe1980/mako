@@ -29,7 +29,7 @@
 use std::{net::IpAddr, sync::Arc};
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
@@ -41,6 +41,7 @@ use mako_markt::{
         Subscription, SubscriptionRepository,
     },
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -50,6 +51,7 @@ use super::{Claims, IntoMdmResponse as _};
 // ── DTOs ──────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SubscriptionUpsertRequest {
     pub webhook_url: String,
     pub webhook_secret: Option<String>,

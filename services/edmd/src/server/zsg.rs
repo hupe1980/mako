@@ -85,6 +85,7 @@ pub struct ZsgReading {
 /// }
 /// ```
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ZsgPushRequest {
     /// Caller-supplied idempotency key (e.g. SMGW serial + timestamp).
     pub session_id: Option<String>,

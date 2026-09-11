@@ -25,11 +25,12 @@
 //! `/history` returns all available years for audit purposes.
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
     response::IntoResponse,
 };
+use mako_service::Json;
 use rubo4e::current::Energiemix;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row as _};
@@ -63,9 +64,15 @@ pub struct NbEnergiemixQuery {
 
 /// Request body for `PUT /api/v1/energiemix/{nb_mp_id}`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PutNbEnergiemixRequest {
-    /// `rubo4e::current::Energiemix` COM JSON.
-    pub energiemix: serde_json::Value,
+    /// The BO4E `Energiemix`, crossing [the gate](mako_markt::bo4e::decode) as
+    /// the request deserialises.
+    ///
+    /// Its strict-enum stage is what stops an unrecognised `erzeugungsart`
+    /// decoding to `Unknown` and being published as a § 42 EnWG
+    /// Stromkennzeichnung naming a source that does not exist.
+    pub energiemix: mako_markt::bo4e::Bo4e<Energiemix>,
     /// Calendar year this mix is valid for.  Defaults to current year (UTC).
     pub gueltig_fuer: Option<i16>,
     /// Total EEG feed-in into this grid area in kWh (optional informational).
@@ -116,18 +123,12 @@ pub async fn put_nb_energiemix(
     {
         return forbidden("write-energiemix denied");
     }
-    // The BO4E gate. Its strict-enum stage is what stops an unrecognised
-    // `erzeugungsart` decoding to `Unknown` and being published as a §42 EnWG
-    // Stromkennzeichnung disclosure naming a source that does not exist.
-    let typed: Energiemix = match mako_markt::bo4e::decode(req.energiemix) {
-        Ok(e) => e,
-        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(e.to_json())).into_response(),
-    };
+    // The BO4E gate ran while the body deserialised (`Bo4e<Energiemix>`).
     // §42 Abs. 2 Nr. 2 EnWG completeness: the grid-area Reststrommix must carry
     // an energy-source breakdown that accounts for the whole supply. An empty
     // Energiemix satisfies neither the invoice nor the portal disclosure
     // obligation, so it is rejected here rather than stored as a hollow record.
-    match typed.anteil.as_ref().filter(|a| !a.is_empty()) {
+    match req.energiemix.anteil.as_ref().filter(|a| !a.is_empty()) {
         None => {
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -158,7 +159,7 @@ pub async fn put_nb_energiemix(
         }
     }
 
-    let canonical = match super::serialise_or_500(&typed) {
+    let canonical = match super::serialise_or_500(req.energiemix.get()) {
         Ok(v) => v,
         Err((status, body)) => return (status, Json(body)).into_response(),
     };

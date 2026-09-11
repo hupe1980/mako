@@ -24,10 +24,11 @@ use axum::{
     Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Json, Response},
+    response::{IntoResponse, Response},
     routing::{delete, get, put},
 };
 use energy_api::models::electricity::MaloIdentResultPositive;
+use mako_service::Json;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tracing::info;
@@ -83,6 +84,7 @@ pub struct MaloAdminState {
 /// the request body must not include a `tenant_id` — the tenant is
 /// always the operator that holds the bearer token.
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UpsertRequest {
     /// Full positive MaLo identification result from the UTILMD query process.
     #[schema(value_type = Object)]

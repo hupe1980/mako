@@ -28,10 +28,10 @@ pub mod vertraege;
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json, Router,
+    Extension, Router,
     routing::{delete, get, post, put},
 };
-use mako_service::{ApiError, ApiResult, oidc::Claims};
+use mako_service::{ApiError, ApiResult, Json, oidc::Claims};
 use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;

@@ -43,6 +43,7 @@ pub struct GgvTenantInput {
 /// `ggv_id` is the operator-assigned ID of the Gemeinschaftliche Gebäudeversorgung
 /// (typically the `tr_id` of the PV TechnischeRessource in `marktd`).
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GgvBillingRequest {
     pub lf_mp_id: String,
     /// NB MP-ID for NNE pass-through (optional — supply in individual tenant rows if different).
@@ -89,6 +90,7 @@ pub struct NutzungsplanInput {
 /// Calculates a combined invoice when a price change occurs within the billing
 /// period. Uses `billing::merge_period_documents` semantics via `Invoice::merge()`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TarifwechselRequest {
     /// Lieferant MP-ID.
     pub lf_mp_id: String,
@@ -209,7 +211,6 @@ pub async fn post_tarifwechsel(
     let billed =
         dispatch_invoice_multi(&deps, &legs, &leg_req, &malo_id, &base_nr, RunId(None)).await?;
     let merged = billed.invoice;
-    let buyer = billed.buyer;
 
     let rechnung_json = merged.to_rechnung_json();
     let netto = merged.netto_eur;
@@ -271,7 +272,7 @@ pub async fn post_tarifwechsel(
         issue_record(&mut tx, &cfg, record_id, &ce).await?;
     }
     persist_risk(&mut *tx, record_id, assessment.as_ref()).await?;
-    crate::einvoice::store(&mut *tx, record_id, &merged, &cfg, &malo_id, buyer.as_ref()).await?;
+    crate::einvoice::store(&mut *tx, record_id, &merged, &cfg, &malo_id).await?;
     tx.commit().await?;
 
     Ok((
@@ -396,7 +397,6 @@ pub async fn post_ggv_billing(
         product_code: String,
         category: &'static str,
         invoice: Invoice,
-        buyer: Option<crate::clients::Rechnungsempfaenger>,
     }
     let mut priced: Vec<Priced> = Vec::with_capacity(req.tenants.len());
     // Every document this request produces — the participant records and the
@@ -537,6 +537,22 @@ pub async fn post_ggv_billing(
         let rechnungsnummer =
             next_rechnungsnummer(&pool, &cfg.tenant, series::INVOICE, None, period_from).await?;
 
+        // A GGV Teilnehmer under §42b is a Letztverbraucher with their own MaLo
+        // and supply relationship, so the ordinary BG-7 lookup applies. This
+        // path drives the engine directly rather than through
+        // `dispatch_invoice`, so it resolves the recipient itself — and does so
+        // *before* the engine runs, because the engine produces the BO4E
+        // `Rechnung` and a recipient attached afterwards would never reach it.
+        let rechnungsempfaenger = vertragd
+            .get_vertrag_by_malo(&tenant.malo_id)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(malo_id = %tenant.malo_id, error = %e, "GGV: BG-7 buyer lookup failed");
+                None
+            })
+            .and_then(|v| v.rechnungsempfaenger)
+            .map(|b| b.as_context_party());
+
         let ctx = BillingContext {
             malo_id: tenant.malo_id.clone(),
             lf_mp_id: req.lf_mp_id.clone(),
@@ -547,24 +563,13 @@ pub async fn post_ggv_billing(
             regulatory_rates: rates.clone(),
             contract_id: None,
             billing_run_id: Some(run_id.clone()),
+            rechnungsempfaenger,
             ..Default::default()
         };
         let engine = tariff.build_engine(&GridInput::default(), &rates);
         let result = engine.bill(ctx, &quantities)?;
 
         priced.push(Priced {
-            // A GGV Teilnehmer under §42b is a Letztverbraucher with their own
-            // MaLo and supply relationship, so the ordinary BG-7 lookup applies.
-            // This path drives the engine directly rather than through
-            // `dispatch_invoice`, so it resolves the buyer itself.
-            buyer: vertragd
-                .get_vertrag_by_malo(&tenant.malo_id)
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::warn!(malo_id = %tenant.malo_id, error = %e, "GGV: BG-7 buyer lookup failed");
-                    None
-                })
-                .and_then(|v| v.rechnungsempfaenger),
             malo_id: tenant.malo_id.clone(),
             rechnungsnummer,
             product_code: tariff.product_code().unwrap_or("SOLAR_GGV").to_owned(),
@@ -582,6 +587,20 @@ pub async fn post_ggv_billing(
         .collect();
     let sammel_nr =
         next_rechnungsnummer(&pool, &cfg.tenant, series::CONSOLIDATED, None, period_from).await?;
+    // The bundle bills the § 42b GGV operator — a Kunde in vertragd, resolved
+    // by the community id (`ggv_betreiber`), the same buyer master every other
+    // e-invoice path uses. Best-effort like the per-MaLo lookups: an
+    // unconfigured Betreiber ships the document with its buyer findings rather
+    // than failing the billing run. Resolved **before** the build: this
+    // produces the BO4E `Rechnung` too, and a recipient attached afterwards
+    // would reach only the EN 16931 model.
+    let sammel_buyer = vertragd
+        .get_ggv_betreiber(&ggv_id)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(%ggv_id, error = %e, "GGV: Betreiber lookup failed");
+            None
+        });
     let (sammel_invoice, sammel_rechnung) = build_aggregate_invoice(
         &ggv_id,
         &req.lf_mp_id,
@@ -599,21 +618,11 @@ pub async fn post_ggv_billing(
             zusatz_attribut("mako:total_kwh", serde_json::json!(total_kwh.to_string())),
             zusatz_attribut("mako:billing_run_id", serde_json::json!(run_id)),
         ],
+        sammel_buyer
+            .as_ref()
+            .map(crate::clients::Rechnungsempfaenger::as_context_party),
     )?;
     let (sammel_netto, sammel_brutto) = (sammel_invoice.netto_eur, sammel_invoice.brutto_eur);
-
-    // The bundle bills the § 42b GGV operator — a Kunde in vertragd, resolved
-    // by the community id (`ggv_betreiber`), the same buyer master every other
-    // e-invoice path uses. Best-effort like the per-MaLo lookups: an
-    // unconfigured Betreiber ships the document with its buyer findings rather
-    // than failing the billing run.
-    let sammel_buyer = vertragd
-        .get_ggv_betreiber(&ggv_id)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(%ggv_id, error = %e, "GGV: Betreiber lookup failed");
-            None
-        });
 
     // The bundle is a document the operator receives, so it is scored like any
     // other invoice.
@@ -661,15 +670,7 @@ pub async fn post_ggv_billing(
             Ok(id) => id,
             Err(e) => return Err(period_conflict(&pool, &cfg.tenant, e).await),
         };
-        crate::einvoice::store(
-            &mut *tx,
-            record_id,
-            &t.invoice,
-            &cfg,
-            &t.malo_id,
-            t.buyer.as_ref(),
-        )
-        .await?;
+        crate::einvoice::store(&mut *tx, record_id, &t.invoice, &cfg, &t.malo_id).await?;
         tenant_results.push(serde_json::json!({
             "record_id": record_id,
             "malo_id": t.malo_id,
@@ -705,15 +706,7 @@ pub async fn post_ggv_billing(
         issue_record(&mut tx, &cfg, sammel_id, &ce).await?;
     }
     persist_risk(&mut *tx, sammel_id, assessment.as_ref()).await?;
-    crate::einvoice::store(
-        &mut *tx,
-        sammel_id,
-        &sammel_invoice,
-        &cfg,
-        &ggv_id,
-        sammel_buyer.as_ref(),
-    )
-    .await?;
+    crate::einvoice::store(&mut *tx, sammel_id, &sammel_invoice, &cfg, &ggv_id).await?;
     // Link the participant records to the bundle inside the same transaction:
     // the risk baseline and the record listings treat them as its children, and
     // a child that committed unlinked would be double-counted alongside the

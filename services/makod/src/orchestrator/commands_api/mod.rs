@@ -153,9 +153,17 @@
 //!
 //! ### Invoicing commands (`gpke.abrechnung.*`)
 //!
-//! Billing commands use a BO4E `RECHNUNG` object because the invoice itself
-//! is the master data — there is no separate cache to look up.  The ERP
-//! supplies the full invoice payload.
+//! These carry **flat scalar fields**, not a Business Object: `document_id`
+//! (the Rechnungsnummer), `document_code`, `document_date`, and on an Abweisung
+//! `antwort_code` / `antwort_codeliste` / `ablehnungsgrund`. See
+//! [`render_invoic`](crate::orchestrator::edifact_renderer) for the table.
+//!
+//! `makod` renders the INVOIC **envelope** — UNH, BGM, DTM, NAD, UNT, with an
+//! empty `UNS+D` detail section. It never holds the invoice's line items or
+//! amounts, so there is no BO4E `Rechnung` in a command payload and nothing
+//! here to gate. A document with positions is built by the billing services,
+//! which do hold one and do gate it (`billingd`, `invoicd`,
+//! `netzbilanzd`).
 //!
 //! ## Marktrolle
 //!
@@ -201,7 +209,7 @@ use axum::{
     Router,
     extract::{DefaultBodyLimit, State},
     http::StatusCode,
-    response::{IntoResponse, Json},
+    response::IntoResponse,
     routing::post,
 };
 use mako_engine::{

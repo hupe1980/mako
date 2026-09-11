@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
     response::IntoResponse,
@@ -23,6 +23,7 @@ use mako_markt::{
     domain::Sparte,
     repository::{GrundversorgerRecord, GrundversorgerRepository},
 };
+use mako_service::Json;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tracing::info;
@@ -44,6 +45,7 @@ pub struct GrundversorgerQuery {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PutGrundversorgerBody {
     /// Commodity: `STROM` or `GAS`.
     pub sparte: String,

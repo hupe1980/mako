@@ -43,6 +43,25 @@ pub struct PartyView {
     pub email: Option<String>,
 }
 
+impl PartyView {
+    /// The postal address `outputd` accepts, or `None` when it is incomplete.
+    ///
+    /// One predicate for two decisions that must agree — whether to *request*
+    /// the `POST` channel and what to *send* as its address. Separate tests
+    /// disagree: a `post_code && city` check admits an address with no `line1`,
+    /// and `outputd` reads a present `recipient.address` as "there is somewhere
+    /// to post this to".
+    #[must_use]
+    pub fn postal_address(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "line1":     self.line1.as_deref()?,
+            "post_code": self.post_code.as_deref()?,
+            "city":      self.city.as_deref()?,
+            "country":   self.country.as_deref().unwrap_or("DE"),
+        }))
+    }
+}
+
 /// One price line as it changes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreisPosition {
@@ -129,12 +148,7 @@ impl OutputdClient {
             "recipient": {
                 "name":  view.empfaenger.name,
                 "email": view.empfaenger.email,
-                "address": {
-                    "line1":     view.empfaenger.line1,
-                    "post_code": view.empfaenger.post_code,
-                    "city":      view.empfaenger.city,
-                    "country":   view.empfaenger.country,
-                },
+                "address": view.empfaenger.postal_address(),
             },
             "channels":    channels,
             // The notice bears the day it is written: the § 41 Abs. 5 Satz 2

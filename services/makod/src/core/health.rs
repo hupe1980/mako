@@ -35,8 +35,9 @@
 
 use std::sync::{Arc, RwLock};
 
-use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
+use axum::{Router, extract::State, http::StatusCode, routing::get};
 use mako_engine::store_slatedb::{KvNamespace, SlateDbStore};
+use mako_service::Json;
 use serde::Serialize;
 use utoipa::ToSchema;
 

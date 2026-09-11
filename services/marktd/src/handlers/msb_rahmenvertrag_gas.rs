@@ -10,17 +10,20 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
     response::IntoResponse,
 };
 use mako_markt::{cloudevents::MarktEvent, error::MdmError};
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::pg::msb_rahmenvertrag_gas::{MsbRahmenvertragGas, MsbRvGasStatus};
+use crate::pg::msb_rahmenvertrag_gas::{
+    MsbRahmenvertragGas, MsbRvGasStatus, MsbRvGasUpsertRequest,
+};
 
 use super::{Claims, IntoMdmResponse as _, Tenant};
 
@@ -52,7 +55,7 @@ async fn emit(
     put,
     path = "/api/v1/msb-rahmenvertraege-gas",
     tag = "msb-rahmenvertraege-gas",
-    request_body = MsbRahmenvertragGas,
+    request_body = MsbRvGasUpsertRequest,
     responses(
         (status = 200, description = "Upserted; returns stable id and new version"),
         (status = 400, description = "Missing gnb_mp_id / msb_mp_id"),
@@ -68,7 +71,7 @@ pub async fn upsert_msb_rv_gas(
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(notify): Extension<Arc<tokio::sync::Notify>>,
-    Json(mut rec): Json<MsbRahmenvertragGas>,
+    Json(mut rec): Json<MsbRvGasUpsertRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-msb-rv-gas", &tenant) {
         tracing::warn!(error = %e, "marktd: Cedar denied write-msb-rv-gas");

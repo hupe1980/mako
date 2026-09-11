@@ -27,6 +27,7 @@ use super::*;
 
 /// Request body for `POST /api/v1/meter-reads/{malo_id}/substitute`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SubstituteRequest {
     /// Gap start (UTC, RFC3339).
     pub gap_from: String,

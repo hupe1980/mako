@@ -74,6 +74,7 @@ pub struct CommandsApiState {
 /// its own Marktrolle.  The BO4E object(s) carrying domain data are placed in
 /// `payload` — they are never used for routing.
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ErpCommand {
     /// Dotted command name: `<domain>.<prozess>.<aktion>`.
     ///
@@ -107,8 +108,10 @@ pub struct ErpCommand {
     /// }
     /// ```
     ///
-    /// Billing commands embed a BO4E `RECHNUNG` object because the invoice is
-    /// the master data itself (no separate cache lookup needed).
+    /// Not a BO4E document: this is a **command** envelope, and each command
+    /// names the scalar fields it reads out of it (see the module docs). Even
+    /// the invoicing commands are flat — `makod` renders the INVOIC envelope
+    /// with an empty detail section and never holds an invoice's positions.
     ///
     /// **Never include** `sender_party_id`, `receiver_party_id`, `pruefidentifikator`, or
     /// `message_ref` — these are engine-owned and will be ignored or rejected.

@@ -40,10 +40,10 @@ set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8080}"
 AUTH_TOKEN="${AUTH_TOKEN:-demo-secret-change-me}"
-# Both default to what `docker-compose.yml` publishes. They used to default to
-# empty, which made a bare `bash smoke.sh` **skip** the outbox assertions — the
-# APERAK and the 55002 Bestätigung, which are the entire point of this demo —
-# and still exit 0. Set either to the empty string to opt out deliberately.
+# Both default to what `docker-compose.yml` publishes, so a bare `bash smoke.sh`
+# runs the outbox assertions — the APERAK and the 55002 Bestätigung, which are
+# the entire point of this demo. Set either to the empty string to opt out
+# deliberately; an empty default would let the run skip them and still exit 0.
 MARKTD_URL="${MARKTD_URL-http://localhost:8180}"
 WEBHOOK_URL="${WEBHOOK_URL-http://localhost:8000}"
 # processd REST API — used to assert the NB decision is Accept (not merely that
@@ -252,7 +252,7 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
     # The smoke test also registers 4012345000023 in makod (step 3), but that is
     # a separate registry.  Without this step, processd returns ERC A05 (Reject).
     info "[P1b] PUT LF partner 4012345000023 in marktd partner directory (E_0622 Prüfschritt 60)"
-    LF_PARTNER_JSON='{"mp_id":"4012345000023","display_name":"Demo LF","marktrolle":"LF","sparte":"STROM","makoadresse":[],"channels":{}}'
+    LF_PARTNER_JSON='{"display_name":"Demo LF","marktrolle":"LF","sparte":"STROM","makoadresse":[]}'
     resp=$(marktd_put_json "/api/v1/partners/4012345000023" "$LF_PARTNER_JSON")
     code=$(status "$resp")
     [[ "$code" == "200" || "$code" == "201" ]] || \
@@ -580,10 +580,10 @@ info "[7/9] NB ERP: bestaetigen (manual fallback / duplicate-command guard)"
 # `A51` is `E_0623` Prüfschritt 60 — "Zustimmung" — which is the same code the
 # processd auto-responder reaches in step 6c.
 #
-# A command missing it is answered `422 invalid_payload`. That used to count as
-# a pass on the full stack, so a smoke test sending a malformed command reported
-# the duplicate guard as confirmed. The two are now told apart by the response
-# body, not by the status code alone.
+# A command missing it is answered `422 invalid_payload`. The duplicate guard
+# and a malformed command are told apart by the response **body**, not by the
+# 4xx status alone — on the status alone a malformed command would report the
+# guard as confirmed.
 CMD_PAYLOAD=$(jq -n --arg mid "$SMOKE_MALO_ID" \
     '{"command":"gpke.lieferbeginn.bestaetigen",
       "payload":{"malo_id":$mid,"antwort_code":"A51","antwort_codeliste":"E_0623"}}')

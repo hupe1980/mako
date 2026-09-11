@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -21,6 +21,7 @@ use mako_markt::{
         SubscriptionRepository,
     },
 };
+use mako_service::Json;
 use rubo4e::current::{Messlokation, Standorteigenschaften};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -63,16 +64,16 @@ fn default_bo4e_version() -> String {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct MeloUpsertRequest {
     /// Associated MaLo-ID (optional).
     pub malo_id: Option<String>,
     /// Full BO4E MESSLOKATION payload.
+    ///
+    /// The BO4E schema version is **not** a request field: it is provenance,
+    /// and only the server knows which series it parsed the payload under. It
+    /// is returned on the `GET`.
     pub data: serde_json::Value,
-    /// BO4E schema version this payload is interpreted under. Server-derived;
-    /// a value sent by the client is recorded but never changes how `data` is
-    /// parsed, so prefer omitting it.
-    #[serde(default = "default_bo4e_version")]
-    pub bo4e_version: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -88,7 +89,7 @@ pub struct MeloResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub netzebene_messung: Option<String>,
     /// Regelzone EIC code extracted from `standorteigenschaften.eigenschaftenStrom[0].regelzone`.
-    /// Maps this MeLo to the \u00dcNB for Redispatch 2.0 Stammdaten routing.
+    /// Maps this MeLo to the ÜNB for Redispatch 2.0 Stammdaten routing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regelzone: Option<String>,
     /// Full BO4E `Standorteigenschaften` JSONB — carries `StandorteigenschaftenStrom`
@@ -216,7 +217,7 @@ where
             malo_id.as_ref(),
             &melo,
             if_match,
-            &req.bo4e_version,
+            &default_bo4e_version(),
         )
         .await
     {

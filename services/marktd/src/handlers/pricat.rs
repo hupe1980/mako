@@ -7,8 +7,9 @@
 
 use std::sync::Arc;
 
-use axum::{Extension, Json, extract::Path, http::StatusCode, response::IntoResponse};
+use axum::{Extension, extract::Path, http::StatusCode, response::IntoResponse};
 use mako_markt::repository::{PriCatRepository, PriCatVersion};
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use serde::Serialize;
 use utoipa::ToSchema;

@@ -1129,6 +1129,19 @@ from `vertragd.kunden`, because `billingd` holds no customer master. A vertragd
 outage degrades the invoice rather than failing the run: the buyer falls back to
 naming the supply site.
 
+**One field feeds both document maps.** The recipient sits on the billing
+engine's own `BillingContext`, and the BO4E `Rechnung` and the EN 16931 model
+each read it from there, so the two cannot name different parties. The BO4E
+document is the one mako **stores and publishes**, and § 14 Abs. 4 Nr. 1 UStG
+asks for the Leistungsempfänger on the document, not on one rendering of it —
+which is why the party cannot travel beside the priced invoice as an argument
+only the EN 16931 map receives.
+
+The address is all-or-nothing. A recipient known only in part carries the name
+and no `Adresse`, plus a `mako:adresse_unvollstaendig` attribute — a town with
+no street is a document that looks addressed and is not, and the gap belongs
+where an operator can see it.
+
 `billingd` runs `einvoice::validate` on every model it builds — against the profile
 the document *declares* — and logs any finding.
 

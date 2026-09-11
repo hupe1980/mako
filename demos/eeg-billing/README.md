@@ -75,6 +75,20 @@ The readings are pushed under **OBIS `1-0:2.8.0`** (Wirkarbeit Export). `edmd` n
 an unlabelled reading as feed-in — an unqualified quantity is that measuring point's
 consumption — so a push without the register stores intervals the settlement cannot see.
 
+## Money and quantities are JSON **strings**
+
+Every `Decimal` in mako's wire formats is a string — `"9.8"`, not `9.8`. A JSON
+float cannot represent a decimal exactly, so accepting one would let a tariff
+rate or a plant's capacity arrive as the nearest binary double and settle a
+Vergütung against it; `rust_decimal` under `serde-str` refuses the float
+outright.
+
+That is not a note for its own sake: an unquoted `"leistung_kwp": 9.8` makes
+`PUT /api/v1/anlagen/{tr_id}` — this demo's second step — a `422`. `just
+test-demo-payloads` deserialises every demo body into the real request type in
+seconds and without Docker, so such a drift is a test failure rather than a red
+run.
+
 ## Build images
 
 ```bash

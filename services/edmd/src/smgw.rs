@@ -75,11 +75,12 @@ use std::sync::Arc;
 
 use crate::smgw_model::{CertificateType, SmgwSession};
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;
 use serde::{Deserialize, Serialize};

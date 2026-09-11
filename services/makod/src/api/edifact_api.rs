@@ -57,7 +57,7 @@ use axum::{
     extract::{DefaultBodyLimit, State},
     http::{StatusCode, header},
     middleware::{self, Next},
-    response::{IntoResponse, Json, Response},
+    response::{IntoResponse, Response},
     routing::post,
 };
 use edi_energy::{AnyMessage, EdiEnergyMessage as _, Platform};
@@ -70,6 +70,7 @@ use mako_engine::{
     store_slatedb::SlateDbPartnerStore,
     types::MarktpartnerCode,
 };
+use mako_service::Json;
 use serde::Serialize;
 use utoipa::ToSchema;
 

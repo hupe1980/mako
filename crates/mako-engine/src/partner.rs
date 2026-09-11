@@ -166,6 +166,7 @@ pub struct ContactPerson {
 /// Use [`PartnerRecord::merge_from_partin`] to update an existing record with
 /// fields from a newer inbound PARTIN (respects validity dates).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PartnerRecord {
     /// The partner's Marktpartner-ID — a BDEW-Codenummer, a DVGW-Codenummer,
     /// a GS1 GLN or an EIC (Allgemeine Festlegungen §2.13).

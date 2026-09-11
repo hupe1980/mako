@@ -168,7 +168,7 @@ curl -s -X PUT "http://localhost:8180/api/v1/malos/$MALO_ID/grid" \
 # Register in marktd partner directory
 curl -s -X PUT http://localhost:8180/api/v1/partners/4012345000023 \
   -H "Content-Type: application/json" \
-  -d '{"mp_id":"4012345000023","display_name":"Demo LF","marktrolle":"LF","sparte":"STROM","makoadresse":["https://as4.example.com/as4/receive"],"channels":{}}' \
+  -d '{"display_name":"Demo LF","marktrolle":"LF","sparte":"STROM","makoadresse":["https://as4.example.com/as4/receive"]}' \
   -w "\nHTTP %{http_code}\n"
 # → HTTP 200
 
@@ -178,6 +178,13 @@ curl -s -X PUT http://localhost:8080/admin/partners/4012345000023 \
   -H "Content-Type: application/json" \
   --data-binary @fixtures/partner-lf.json | jq '.'
 ```
+
+> **Two registries, two shapes.** `marktd` holds the partner's BO4E
+> `Geschaeftspartner` and its AS4 endpoints (`makoadresse`); `makod` holds the
+> PARTIN record with its communication `channels`, `roles` and `contacts`. The
+> bodies are not interchangeable, and both refuse a field they do not have —
+> so a body sent to the wrong one is a `422` naming the field rather than a
+> `200` with the values dropped.
 
 ---
 
@@ -359,10 +366,23 @@ docker compose up -d
 bash smoke.sh
 ```
 
-It publishes a Tarifpreisblatt, creates a Kunde and a Versorgungsvertrag on a
-Marktlokation, bills one month against that tariff, records the document in
-`outputd` for the § 147 AO eight years, watches the invoice land in
-`accountingd` as an Offener Posten, and closes it with a payment import.
+It publishes a Tarifpreisblatt, creates a Kunde as a **BO4E
+`Geschaeftspartner`** and a Versorgungsvertrag on a Marktlokation, bills one
+month against that tariff, records the document in `outputd` for the § 147 AO
+eight years, watches the invoice land in `accountingd` as an Offener Posten, and
+closes it with a payment import.
+
+The customer is a BO4E document rather than a flat bag of `vorname` / `strasse`
+/ `plz`, and the demo asserts why: § 14 Abs. 4 Nr. 1 UStG makes the
+Leistungsempfänger's full name and address part of what an invoice has to state,
+so step 3 reads the recipient back off **both** the BO4E `Rechnung` and the
+EN 16931 model. A flat shape posted to an endpoint that has none of those fields
+is a `422` naming the field, not a `201` and a nameless customer.
+
+A demo payload is copied into tickets as *"this is what a request looks like"*,
+so both halves are held to the real types — `just test-demo-payloads` for every
+request body, `just test-demo-configs` for every `*.toml` the stacks start with.
+No Docker, no running stack, seconds.
 
 The expected amount is computed by the smoke test itself — `20 ct/Tag × 31
 Tage`, `32 ct/kWh × 250 kWh` and the § 3 StromStG Stromsteuer at `2.05 ct/kWh`

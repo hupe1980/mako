@@ -266,24 +266,28 @@ pub async fn issue_pending(
         // § 41f Abs. 5 requires the *Ankündigung* to be brieflich; a Mahnung is
         // not that notice, so the portal alone is lawful Textform and the
         // letter is added where an address is on file.
-        let has_address = view.empfaenger.post_code.is_some() && view.empfaenger.city.is_some();
+        // One answer to "can this be posted": the address either builds or it
+        // does not, and the channel list follows from that. Two answers — a
+        // `post_code && city` test choosing the channel beside an address
+        // attached unconditionally — would leave `outputd` acting on the
+        // address, which is the one with `null`s in it.
+        let address = crate::clients::PostalAddress::complete(
+            view.empfaenger.line1.as_deref(),
+            view.empfaenger.post_code.as_deref(),
+            view.empfaenger.city.as_deref(),
+            view.empfaenger.country.as_deref(),
+        );
         let mut channels = vec!["PORTAL".to_owned()];
         if view.empfaenger.email.is_some() {
             channels.push("EMAIL".to_owned());
         }
-        if has_address {
+        if address.is_some() {
             channels.push("POST".to_owned());
         }
         let recipient = Recipient {
             name: view.empfaenger.name.clone(),
             email: view.empfaenger.email.clone(),
-            address: Some(serde_json::json!({
-                "name":      view.empfaenger.name,
-                "line1":     view.empfaenger.line1,
-                "post_code": view.empfaenger.post_code,
-                "city":      view.empfaenger.city,
-                "country":   view.empfaenger.country,
-            })),
+            address,
         };
         let request = IssueDocumentRequest {
             view: serde_json::to_value(&view)?,

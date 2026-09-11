@@ -17,9 +17,9 @@
 //! Marktlokation is making a mistake the door has to name rather than silently
 //! file under the first MaLo.
 
-use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse as _, Response};
+use mako_service::Json;
 use serde_json::Value;
 use time::OffsetDateTime;
 

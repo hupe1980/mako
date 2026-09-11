@@ -1085,6 +1085,7 @@ pub struct CorrectionRecord {
 ///
 /// Used by `POST /api/v1/corrections/{malo_id}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CorrectionRequest {
     /// All corrections to apply atomically.
     pub corrections: Vec<CorrectionRecord>,

@@ -983,6 +983,65 @@ Two call sites need something other than all four stages, and each says why:
   A fixture test covers the *shapes* a builder produces; the gate's rules are
   arithmetic over the *values* a request supplies.
 
+### The gate is in the type — `Bo4e<T>`
+
+`decode` is one function call, and the defect it kept producing is that somebody
+did not make it. A request struct declaring
+
+```rust
+/// Full BO4E `Vertrag` payload.
+pub vertrag: serde_json::Value,
+```
+
+is a document nothing checks: wrong `_typ`, out-of-schema enums, arbitrary
+nesting depth, none of the rules — and what gets stored is the **request body**,
+not the gate's canonical round-trip. Nothing in the type system distinguishes
+such a field from one whose handler decodes it, and a handler that *does* call
+`decode` can still store the unvalidated body afterwards.
+
+`mako_markt::bo4e::Bo4e<T>` moves the decision into the type:
+
+```rust
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpsertRequest {
+    pub sparte: Sparte,
+    /// Full BO4E `Marktlokation`.
+    pub data: Bo4e<Marktlokation>,
+}
+```
+
+`serde` runs all four stages while it deserialises the request. There is no
+constructor that skips them — `Deserialize` is the only way in from untrusted
+JSON, and it *is* `decode`. The handler reads `&*field` for the typed BO and
+`field.canonical_json()` for what to store; a value mako built in Rust enters
+through `Bo4e::from_built`, which is honest about being a different thing.
+
+The rejection survives `serde`: a `Deserialize` impl carries a string and
+nothing else, so the impl appends the machine-readable object behind a sentinel
+byte and `mako_service::Json` — the request extractor every handler uses — lifts
+it back into the problem body. A `422` from `Bo4e<T>` renders the same
+`code` / `paths` / `failures` keys as one from a hand-written `decode` call.
+
+`cargo xtask check-request-bodies` refuses a `serde_json::Value` field whose
+name is a BO4E type's own — `vertrag`, `kosten_json`, `standort_adresse`,
+`geschaeftspartner` — in any request body. The exemption list is empty.
+
+### A request body refuses what it cannot store
+
+`serde` ignores a key no field declares, so a request naming a field the API
+does not have succeeds and the value goes nowhere. `demos/o2c` posted a customer
+as `{"vorname": "Erika", "nachname": "Mustermann", "strasse": …}` to an endpoint
+that has none of those fields — it takes a BO4E `geschaeftspartner` — and got a
+`201`. The customer was created with no name and no address, the invoice named
+nobody, and the demo passed.
+
+Every `Json<T>` request body now carries `#[serde(deny_unknown_fields)]`, so the
+same mistake is a `422` naming the field. The same guard enforces it, with four
+documented exemptions: three that carry `#[serde(flatten)]`, which serde refuses
+to combine with it, and `SmgwTyp2Push`, whose payload BSI TR-03109 defines
+rather than mako.
+
 **A nested value is not a third case.** A COM or standalone BO read out of the
 extension map of the object that carried it — `ZeitvariablePreisposition` under
 a `PreisblattMessung`, `Standorteigenschaften` under a `Messlokation` — crosses
@@ -1018,7 +1077,14 @@ BO4E cannot model everything mako bills for, and its answer is `ZusatzAttribut`
 — a `{name, wert}` pair on every BO and most COMs. The standard mandates no
 naming convention for it.
 
-mako's is `mako:<snake_case>`, enforced. Without a prefix, `rechnungsart` is
+mako's is `mako:<snake_case>`, enforced — and `mako` is one of the four
+namespace prefixes `rubo4e` itself registers (`mako`, `hems`, `edmd`, `mabis`),
+so the guard reads the prefix from `rubo4e::zusatz_attribut::Namespace::MAKO`
+rather than writing a literal. A rename or a de-registration upstream then fails
+at the next CI run instead of mako shipping into a collision no schema and no
+counterparty can see.
+
+Without a prefix, `rechnungsart` is
 indistinguishable from a field BO4E might introduce later and from an attribute
 the ERP on the other side already writes — and several crates emit into the same
 document.

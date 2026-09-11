@@ -42,8 +42,10 @@
 //!
 //! ## What is allowed
 //!
-//! Reading (`data.get("_typ")`), the gate's own injection, and test fixtures —
-//! a fixture *is* an untrusted payload, and writing one by hand is the point.
+//! Reading (`data.get("_typ")`), the gate's own injection, and hand-written
+//! fixtures — in `tests/` and in `examples/`. A fixture *is* an untrusted
+//! payload, and writing one by hand is the point; an example that demonstrates
+//! the gate refusing a document has to have a document to refuse.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -120,7 +122,13 @@ fn collect(dir: &Path, root: &Path, exempt: &BTreeSet<&str>, findings: &mut Vec<
             .replace('\\', "/");
         // A test file is allowed to spell a payload by hand — that is what an
         // untrusted fixture is. Only shipped code is scanned.
-        if rel.contains("/tests/") || rel.ends_with("/tests.rs") {
+        //
+        // `examples/` on the same reasoning: an example that *demonstrates the
+        // gate* has to show it a document a counterparty might send, and that
+        // document is written by hand for the same reason a fixture is. What
+        // the rule protects — code that builds a document mako **emits** — is
+        // not what an example refusing one does.
+        if rel.contains("/tests/") || rel.ends_with("/tests.rs") || rel.contains("/examples/") {
             continue;
         }
         let Ok(src) = std::fs::read_to_string(&path) else {

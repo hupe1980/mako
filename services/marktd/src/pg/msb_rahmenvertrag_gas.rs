@@ -7,6 +7,8 @@
 //! registry tracks per-(GNB, MSB) conclusion state, including the migration
 //! duty for legacy contracts.
 
+use mako_markt::bo4e::Bo4e;
+use rubo4e::current::Vertrag;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row, postgres::PgRow};
 use time::Date;
@@ -54,10 +56,15 @@ fn status_from_str(s: &str) -> Result<MsbRvGasStatus, sqlx::Error> {
     }
 }
 
-/// A Gas MSB framework-contract record.
+/// A Gas MSB framework-contract record **as stored**.
 ///
 /// The natural key is `(tenant, gnb_mp_id, msb_mp_id, valid_from)` — upserts
 /// are idempotent on it and keep the `id` stable.
+///
+/// `vertrag` reads back as opaque JSON, the way every stored BO4E document in
+/// mako does: a row may predate the current schema series, and failing a `GET`
+/// on a document that merely got older is worse than handing the caller the
+/// JSON to decide about. What goes *in* is [`MsbRvGasUpsertRequest`], gated.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MsbRahmenvertragGas {
     #[serde(default)]
@@ -76,7 +83,7 @@ pub struct MsbRahmenvertragGas {
     pub valid_from: Date,
     #[serde(default)]
     pub valid_to: Option<Date>,
-    /// Full BO4E `Vertrag` payload (vertragsart `RAHMENVERTRAG`).
+    /// The stored BO4E `Vertrag` (vertragsart `RAHMENVERTRAG`), as stored.
     #[serde(default)]
     pub vertrag: serde_json::Value,
     /// Optimistic-locking version. Incremented on every successful write; on
@@ -84,6 +91,47 @@ pub struct MsbRahmenvertragGas {
     /// (absent/`0` skips the check).
     #[serde(default)]
     pub version: i64,
+}
+
+/// The `PUT /api/v1/msb-rahmenvertraege-gas` body.
+///
+/// Separate from [`MsbRahmenvertragGas`] because the two directions are not
+/// symmetric: what is **written** must cross the BO4E gate, and what is
+/// **read** is whatever was stored, possibly under an older schema series.
+/// Sharing one struct is what left `vertrag` ungated — a `serde_json::Value`
+/// with `#[serde(default)]`, so a `PUT` omitting it stored the JSON literal
+/// `null` into a `JSONB NOT NULL` column, which PostgreSQL accepts.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MsbRvGasUpsertRequest {
+    /// Optional: an id to keep stable. Absent → allocated on insert.
+    #[serde(default)]
+    pub id: Uuid,
+    pub gnb_mp_id: String,
+    pub msb_mp_id: String,
+    /// Contract text edition, e.g. `KoV XV Anlage 8` (legacy: `BK7-17-026`).
+    #[serde(default = "default_fassung")]
+    pub fassung: String,
+    #[serde(default = "default_status")]
+    pub status: MsbRvGasStatus,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub signed_at: Option<time::OffsetDateTime>,
+    pub valid_from: Date,
+    #[serde(default)]
+    pub valid_to: Option<Date>,
+    /// The BO4E `Vertrag` (vertragsart `RAHMENVERTRAG`), crossing
+    /// [the gate](mako_markt::bo4e::decode) as it deserialises.
+    ///
+    /// Absent stores the empty object the column defaults to, not `null`.
+    #[serde(default)]
+    #[schema(value_type = Object)]
+    pub vertrag: Option<Bo4e<Vertrag>>,
+    /// Optimistic-locking version; `0`/absent skips the check.
+    #[serde(default)]
+    pub version: i64,
+    /// Set by the handler from the authenticated tenant, never by the caller.
+    #[serde(skip)]
+    pub tenant: String,
 }
 
 fn default_fassung() -> String {
@@ -136,7 +184,7 @@ impl PgMsbRahmenvertragGasRepository {
     /// every successful write.
     ///
     /// Returns the stable id and the new version.
-    pub async fn upsert(&self, rec: &MsbRahmenvertragGas) -> Result<(Uuid, i64), MdmError> {
+    pub async fn upsert(&self, rec: &MsbRvGasUpsertRequest) -> Result<(Uuid, i64), MdmError> {
         let current: Option<i64> = sqlx::query_scalar(
             "SELECT version FROM msb_rahmenvertraege_gas \
              WHERE tenant = $1 AND gnb_mp_id = $2 AND msb_mp_id = $3 AND valid_from = $4",
@@ -190,7 +238,16 @@ impl PgMsbRahmenvertragGasRepository {
         .bind(rec.signed_at)
         .bind(rec.valid_from)
         .bind(rec.valid_to)
-        .bind(&rec.vertrag)
+        .bind(
+            rec.vertrag
+                .as_ref()
+                .map(Bo4e::canonical_json)
+                .transpose()
+                .map_err(|e| MdmError::Internal(e.to_string()))?
+                // The column is `JSONB NOT NULL DEFAULT '{}'`, and JSON `null`
+                // satisfies it. An absent contract is the empty object.
+                .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
+        )
         .bind(new_version)
         .fetch_one(&self.pool)
         .await

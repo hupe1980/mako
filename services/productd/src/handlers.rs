@@ -2,12 +2,12 @@
 
 use crate::rounding::RoundMoney;
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use mako_service::{ApiError, ApiResult, cedar::CedarEnforcer, oidc::Claims};
+use mako_service::{ApiError, ApiResult, Json, cedar::CedarEnforcer, oidc::Claims};
 use rubo4e::current::{Energiemix, Tarifinfo, Tarifmerkmal, Tarifpreisblatt, Tariftyp};
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -362,25 +362,17 @@ pub fn normalize_tarifpreisblatt(
 
 // ── BO4E Energiemix validation ────────────────────────────────────────────────
 
-/// Validate an `Energiemix` COM payload.
+/// The § 42 EnWG completeness rule BO4E does not state.
 ///
-/// Runs the BO4E gate (`_typ`, schema, strict enums, BO4E rules) and then the
-/// §42 EnWG completeness rule the standard does not state. The strict-enum
-/// stage matters here for the same reason it does for the price sheet: the
-/// canonical round-trip is what gets stored, so an unrecognised
-/// `erzeugungsart` would be written back as the literal `"UNKNOWN"` and the
-/// disclosure would name a source that does not exist.
-fn normalize_energiemix(
-    data: serde_json::Value,
-) -> Result<(Energiemix, serde_json::Value), (StatusCode, serde_json::Value)> {
-    let mix: Energiemix = mako_markt::bo4e::decode(data)
-        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))?;
-
-    // §42 Abs. 2 Nr. 2 EnWG completeness: the energy-source breakdown must be
-    // present and account for the whole supply. An empty `{}` Energiemix used
-    // to be accepted and would satisfy neither the invoice nor the portal
-    // disclosure obligation. The `anteil[]` shares (Prozent) must sum to
-    // ~100 % (±0.5 for rounding).
+/// The gate itself runs while the request deserialises (`Bo4e<Energiemix>`) —
+/// `_typ`, schema, strict enums, BO4E's own rules. What it cannot know is that
+/// a *Stromkennzeichnung* has to account for the whole supply: an empty `{}`
+/// `Energiemix` is a conformant BO4E document and satisfies neither the
+/// invoice nor the portal disclosure obligation.
+///
+/// The `anteil[]` shares (Prozent) must be present and sum to ~100 % (±0.5 for
+/// rounding).
+fn check_energiemix_completeness(mix: &Energiemix) -> Result<(), (StatusCode, serde_json::Value)> {
     let berr = |msg: String| {
         (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -409,13 +401,7 @@ fn normalize_energiemix(
         )));
     }
 
-    let canonical = serde_json::to_value(&mix).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            serde_json::json!({ "error": format!("could not serialise Energiemix: {e}") }),
-        )
-    })?;
-    Ok((mix, canonical))
+    Ok(())
 }
 
 // ── Product CRUD ──────────────────────────────────────────────────────────────
@@ -639,6 +625,7 @@ pub struct ProductQuery {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResolveProductsRequest {
     pub anfragen: Vec<ProductQuery>,
 }
@@ -874,7 +861,7 @@ pub async fn put_energiemix(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
     Path((lf_mp_id, product_code)): Path<(String, String)>,
-    Json(mut req): Json<EnergimixUpsertRequest>,
+    Json(req): Json<EnergimixUpsertRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = authorize(&cedar, &claims, "write-product", &cfg.tenant) {
         return e.into_response();
@@ -891,12 +878,9 @@ pub async fn put_energiemix(
         )
             .into_response();
     }
-    // Validate and canonicalise the Energiemix COM payload.
-    let (_typed_mix, canonical) = match normalize_energiemix(req.energiemix) {
-        Ok(v) => v,
-        Err((status, json)) => return (status, Json(json)).into_response(),
-    };
-    req.energiemix = canonical;
+    if let Err((status, json)) = check_energiemix_completeness(&req.energiemix) {
+        return (status, Json(json)).into_response();
+    }
 
     match upsert_energiemix(&pool, &lf_mp_id, claims.tenant(), &product_code, req).await {
         Ok(()) => StatusCode::OK.into_response(),
@@ -2150,6 +2134,7 @@ pub async fn post_angebot_versenden(
 
 /// Request body for `POST /api/v1/angebote/{id}/annehmen`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AnnehmenRequest {
     /// Index into `varianten` array (0-based).  `None` = accept the base offer.
     pub gewaehlte_variante: Option<i16>,
@@ -2335,6 +2320,7 @@ pub async fn post_expire_angebote(
 
 /// Request body for `PUT /api/v1/angebote/{id}` — edit before sending.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateAngebotRequest {
     /// New validity end date (YYYY-MM-DD).
     pub gueltig_bis: Option<String>,

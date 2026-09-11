@@ -393,27 +393,34 @@ async fn issue_preisanpassung_document(
     };
 
     let today = mako_fristen::heute();
+    let empfaenger = PartyView {
+        name: buyer.name,
+        vat_id: buyer.vat_id,
+        line1: buyer.line1,
+        post_code: buyer.post_code,
+        city: buyer.city,
+        country: buyer.country,
+        email: buyer.email,
+        ..PartyView::default()
+    };
+
+    // One predicate decides both halves of "post it": whether to ask for the
+    // channel, and what address to send with it. Asking on `post_code && city`
+    // while the address `outputd` needs also carries a `line1` meant requesting
+    // a letter `outputd` then suppressed — a channel recorded as never viable,
+    // for a customer whose address only looked complete here.
     let mut channels = vec!["PORTAL".to_owned()];
-    if buyer.email.is_some() {
+    if empfaenger.email.is_some() {
         channels.push("EMAIL".to_owned());
     }
-    if buyer.post_code.is_some() && buyer.city.is_some() {
+    if empfaenger.postal_address().is_some() {
         channels.push("POST".to_owned());
     }
 
     let view = PreisanpassungView {
         datum: today.to_string(),
         absender: crate::dokumente::absender(cfg),
-        empfaenger: PartyView {
-            name: buyer.name,
-            vat_id: buyer.vat_id,
-            line1: buyer.line1,
-            post_code: buyer.post_code,
-            city: buyer.city,
-            country: buyer.country,
-            email: buyer.email,
-            ..PartyView::default()
-        },
+        empfaenger,
         vertragsnummer: Some(row.vertrags_nr.clone()),
         malo_id: Some(malo_id.to_owned()),
         sparte: Some(row.sparte.clone()),

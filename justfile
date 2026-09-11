@@ -29,6 +29,26 @@ check:
 test:
     cargo test --all-features --all-targets
 
+# A demo payload is shipped API surface — run by whoever evaluates the platform
+# and copied into tickets as "this is what a request looks like" — so each one
+# is deserialised into the real request type. These are ordinary `#[test]`s, so
+# `just test` covers them; the recipe runs them alone, in seconds, while a demo
+# is being edited.
+#
+# Every request body demos/ posts is one the service accepts
+test-demo-payloads:
+    cargo test --test demo_payloads -p marktd -p vertragd -p productd -p billingd -p accountingd -p einsd
+
+# A demo *config* is shipped surface for the same reason a demo payload is: it
+# is what an operator copies. `figment` merges the TOML with the service's
+# environment variables, so a key the config struct does not declare is dropped
+# in silence — a setting that appears configured and does nothing. Asserts no
+# unknown key; a missing one is fine, since the demo stacks supply the database
+# URL and the secrets through the environment.
+test-demo-configs:
+    cargo test --test demo_config -p marktd -p vertragd -p productd -p billingd \
+        -p accountingd -p einsd -p edmd -p outputd -p processd
+
 # Run tests for a specific crate (e.g. `just test-crate mako-engine`)
 test-crate crate:
     cargo test -p {{ crate }} --all-features
@@ -276,10 +296,9 @@ regulatories:
 #
 # The exit code is only half of it: an example that *prints* its findings and
 # returns `Ok(())` passes a run gate while shipping a message no counterparty
-# accepts — which is how a 55001 with ten AHB errors and an MSCONS with twelve
-# stayed in `crates/edi-energy/examples/` unnoticed. The examples now assert
-# what they claim, and the output is scanned here as a second net: an example
-# may not report a failure, a validation error or a panic on the happy path.
+# accepts. Every example asserts what it claims, and the output is scanned here
+# as a second net: an example may not report a failure, a validation error or a
+# panic on the happy path.
 #
 # An example whose *subject* is an invalid message — `05_validate` shows what a
 # rejection looks like — opts out by declaring
@@ -322,7 +341,7 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check check-fuzz test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-runner-routes check-wire-timestamps check-business-dates check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+ci: check check-fuzz test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-runner-routes check-wire-timestamps check-business-dates check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -619,6 +638,14 @@ check-malo-ids:
 # Refuse a ZusatzAttribut that is not `mako:`-namespaced and registered
 check-bo4e-attributes:
     cargo xtask check-bo4e-attributes
+
+# Three rules about the moment an untrusted JSON body becomes a Rust value:
+# every `Json<T>` body denies unknown fields (serde silently drops a key no
+# field declares, so a customer can be created with no name), a BO4E document in
+# a body is a `Bo4e<T>` rather than an ungated `serde_json::Value`, and no
+# comment carries a `\uXXXX` escape.
+check-request-bodies:
+    cargo xtask check-request-bodies
 
 # Refuse a specialist procedure that tells a model to call a tool the manifest
 # does not grant. `check-tool-grants` validates the grant list; this validates

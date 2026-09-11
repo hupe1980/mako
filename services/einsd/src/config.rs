@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 /// `einsd` runtime configuration — loaded via `mako_service::load_config`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EinsdConfig {
     /// PostgreSQL connection + pool tuning (`application_name` = `einsd`).
     pub database: mako_service::config::DatabaseConfig,

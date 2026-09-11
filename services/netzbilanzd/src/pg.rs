@@ -1270,8 +1270,14 @@ pub struct UpsertKostenblattRequest {
     pub dispatch_kwh: Decimal,
     /// Contract rate in EUR/kWh.
     pub arbeitspreis_eur_per_kwh: Decimal,
-    /// Typed BO4E `Kosten` for CIM export.
-    pub kosten_json: Option<serde_json::Value>,
+    /// The BO4E `Kosten` for CIM export, crossing
+    /// [the gate](mako_markt::bo4e::decode) as the request deserialises.
+    ///
+    /// What is stored is the gate's canonical round-trip. A hand-rolled
+    /// `serde_json::from_value::<Kosten>` beside a stored request body would
+    /// let a wrong `_typ`, an out-of-schema enum and unbounded nesting into the
+    /// column.
+    pub kosten_json: Option<mako_markt::bo4e::Bo4e<rubo4e::current::Kosten>>,
     /// Activation window start.
     pub activation_start_utc: Option<time::OffsetDateTime>,
     /// Activation window end.
@@ -1317,7 +1323,12 @@ pub async fn upsert_kostenblatt(
     .bind(&req.vnb_mp_id)
     .bind(req.dispatch_kwh)
     .bind(req.arbeitspreis_eur_per_kwh)
-    .bind(&req.kosten_json)
+    .bind(
+        req.kosten_json
+            .as_ref()
+            .map(mako_markt::bo4e::Bo4e::canonical_json)
+            .transpose()?,
+    )
     .bind(req.activation_start_utc)
     .bind(req.activation_end_utc)
     .bind(&req.dispatch_source)
@@ -1465,8 +1476,13 @@ pub struct FremdkostenRow {
 pub struct UpsertFremdkostenRequest {
     /// Operator-facing description.
     pub bezeichnung: Option<String>,
-    /// A full `rubo4e::current::Fremdkosten` object.
-    pub fremdkosten_json: serde_json::Value,
+    /// A full BO4E `Fremdkosten`, crossing [the gate](mako_markt::bo4e::decode)
+    /// as the request deserialises.
+    ///
+    /// What is stored is the gate's canonical round-trip — an injected `_typ`,
+    /// wire-spelled enums — because this column is what dispatch merges into
+    /// the counterparty's invoice.
+    pub fremdkosten_json: mako_markt::bo4e::Bo4e<rubo4e::current::Fremdkosten>,
     /// Sum of the positions, in EUR.
     pub total_eur: Decimal,
 }
@@ -1496,7 +1512,7 @@ pub async fn upsert_fremdkosten(
     )
     .bind(tenant)
     .bind(draft_id)
-    .bind(&req.fremdkosten_json)
+    .bind(req.fremdkosten_json.canonical_json()?)
     .bind(&req.bezeichnung)
     .bind(req.total_eur)
     .fetch_one(pool)

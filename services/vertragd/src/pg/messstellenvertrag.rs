@@ -78,6 +78,7 @@ impl MessstellenvertragRow {
 
 /// Fields accepted when creating or replacing a Messstellenvertrag.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpsertMessstellenvertragInput {
     pub vertragsbeginn: Date,
     #[serde(default = "default_frist")]

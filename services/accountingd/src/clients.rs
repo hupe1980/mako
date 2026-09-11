@@ -88,7 +88,50 @@ impl VertragdClient {
 pub struct Recipient {
     pub name: Option<String>,
     pub email: Option<String>,
-    pub address: Option<serde_json::Value>,
+    /// The postal address, or `None` when there is not a complete one.
+    ///
+    /// Mirrors `outputd`'s `delivery::store::PostalAddress`, which refuses an
+    /// unknown field — so a drift between the two is a `422` naming the key,
+    /// not a document silently issued to an address that is missing half of
+    /// itself.
+    pub address: Option<PostalAddress>,
+}
+
+/// A postal address complete enough to send a letter to.
+///
+/// All four fields, because `Recipient::address` is already `Option`: "we have
+/// no address" has a representation, and it is the one that makes `outputd`
+/// suppress the `POST` channel with a reason instead of queueing a letter to
+/// nowhere.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PostalAddress {
+    pub line1: String,
+    pub post_code: String,
+    pub city: String,
+    pub country: String,
+}
+
+impl PostalAddress {
+    /// Build one only when every part is present.
+    ///
+    /// The `Mahnung` path used to build `Some({"line1":null,…})` regardless and
+    /// then decide the `POST` channel from a *separate* `post_code && city`
+    /// test — two answers to one question, and the one `outputd` acted on was
+    /// the wrong one.
+    #[must_use]
+    pub fn complete(
+        line1: Option<&str>,
+        post_code: Option<&str>,
+        city: Option<&str>,
+        country: Option<&str>,
+    ) -> Option<Self> {
+        Some(Self {
+            line1: line1?.to_owned(),
+            post_code: post_code?.to_owned(),
+            city: city?.to_owned(),
+            country: country.unwrap_or("DE").to_owned(),
+        })
+    }
 }
 
 /// A document to render, record and deliver.

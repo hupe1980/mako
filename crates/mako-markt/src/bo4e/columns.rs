@@ -61,17 +61,24 @@ pub struct MaloShadowColumns {
 
 impl MaloShadowColumns {
     /// Derive the typed columns from a validated `Marktlokation`.
-    #[must_use]
-    pub fn from_marktlokation(malo: &Marktlokation) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// [`ObjektcodeError`] when `lokationsbuendelObjektcode` is not a
+    /// catalogued Marktlokation object code.
+    pub fn from_marktlokation(malo: &Marktlokation) -> Result<Self, ObjektcodeError> {
+        Ok(Self {
             netzebene: malo.netzebene.map(|v| v.as_wire()),
             bilanzierungsgebiet: malo.bilanzierungsgebiet.clone(),
             gasqualitaet: malo.gasqualitaet.map(|v| v.as_wire()),
             energierichtung: malo.energierichtung.map(|v| v.as_wire()),
             bilanzierungsmethode: malo.bilanzierungsmethode.map(|v| v.as_wire()),
             regelzone: malo.regelzone.as_ref().map(ToString::to_string),
-            lokationsbuendel_objektcode: malo.lokationsbuendel_objektcode.clone(),
-        }
+            lokationsbuendel_objektcode: checked_objektcode(
+                malo.lokationsbuendel_objektcode.as_ref(),
+                rubo4e::lokationsbuendel::Objekttyp::Marktlokation,
+            )?,
+        })
     }
 }
 
@@ -100,23 +107,108 @@ pub struct MeloShadowColumns {
     pub standorteigenschaften: Option<serde_json::Value>,
 }
 
+/// Why a `lokationsbuendelObjektcode` could not be shadowed.
+///
+/// The column feeds the Lokationsbündel audit, so a value that is not a
+/// catalogued object code — or is one that stands for a *different* object type
+/// — makes every answer built on it wrong.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ObjektcodeError {
+    /// Not a 13-digit BDEW code with a valid § 8.1 check digit.
+    #[error("lokationsbuendelObjektcode {code} is not a valid BDEW code: {grund}")]
+    Ungueltig {
+        /// The value as supplied.
+        code: String,
+        /// Why it failed.
+        grund: String,
+    },
+    /// Well-formed, and not one of the 27 codes chapter 2.1 publishes.
+    ///
+    /// Not automatically a defect — the codelist's introduction says complex or
+    /// special structures are agreed bilaterally rather than coded — but it is
+    /// not something to shadow into a typed column either.
+    #[error("lokationsbuendelObjektcode {code} is not a published object code")]
+    Unbekannt {
+        /// The value as supplied.
+        code: String,
+    },
+    /// The code is catalogued and stands for another object type.
+    #[error("lokationsbuendelObjektcode {code} stands for a {ist}, but it is carried by a {soll}")]
+    FalscherObjekttyp {
+        /// The value as supplied.
+        code: String,
+        /// The type the codelist says the code is for.
+        ist: &'static str,
+        /// The type of the object carrying it.
+        soll: &'static str,
+    },
+}
+
+/// Check a `lokationsbuendelObjektcode` against the BDEW codelist and the type
+/// of the object carrying it.
+///
+/// `None` passes: BO4E declares the field optional and most payloads omit it.
+///
+/// # Errors
+///
+/// [`ObjektcodeError`], naming which of the three checks refused.
+fn checked_objektcode(
+    code: Option<&String>,
+    soll: rubo4e::lokationsbuendel::Objekttyp,
+) -> Result<Option<String>, ObjektcodeError> {
+    use rubo4e::identifiers::LokationsbuendelObjektcode;
+    use rubo4e::lokationsbuendel::Objektrolle;
+
+    let Some(code) = code else { return Ok(None) };
+    let typed = LokationsbuendelObjektcode::new(code).map_err(|e| ObjektcodeError::Ungueltig {
+        code: code.clone(),
+        grund: e.to_string(),
+    })?;
+    let rolle = Objektrolle::from_code(&typed)
+        .ok_or_else(|| ObjektcodeError::Unbekannt { code: code.clone() })?;
+    if rolle.objekttyp != soll {
+        return Err(ObjektcodeError::FalscherObjekttyp {
+            code: code.clone(),
+            ist: rolle.objekttyp.abbreviation(),
+            soll: soll.abbreviation(),
+        });
+    }
+    Ok(Some(code.clone()))
+}
+
 /// Why a `Messlokation` payload's `standorteigenschaften` extension could not be
 /// read as the BO it names.
 #[derive(Debug, thiserror::Error)]
 #[error("`standorteigenschaften` is not a valid BO4E Standorteigenschaften: {0}")]
 pub struct StandorteigenschaftenError(String);
 
+/// Why a `Messlokation`'s typed columns could not be derived.
+///
+/// Two independent reads can fail, and they fail for different reasons a caller
+/// acts on differently — one is a nested BO that will not decode, the other a
+/// codelist value that names the wrong kind of object.
+#[derive(Debug, thiserror::Error)]
+pub enum MeloColumnsError {
+    /// The nested `standorteigenschaften` is not the BO it claims.
+    #[error(transparent)]
+    Standorteigenschaften(#[from] StandorteigenschaftenError),
+    /// The `lokationsbuendelObjektcode` is not a catalogued Messlokation code.
+    #[error(transparent)]
+    Objektcode(#[from] ObjektcodeError),
+}
+
 impl MeloShadowColumns {
     /// Derive the typed columns from a validated `Messlokation`.
     ///
     /// # Errors
     ///
-    /// Returns [`StandorteigenschaftenError`] when the payload carries a
-    /// `standorteigenschaften` key that does not parse as the BO4E BO, or whose
-    /// enum values are not in the schema.
+    /// [`MeloColumnsError`] when the payload carries a `standorteigenschaften`
+    /// key that does not parse as the BO4E BO (or whose enum values are not in
+    /// the schema), or a `lokationsbuendelObjektcode` that is not a catalogued
+    /// Messlokation object code.
     pub fn from_messlokation(
         melo: &rubo4e::current::Messlokation,
-    ) -> Result<Self, StandorteigenschaftenError> {
+    ) -> Result<Self, MeloColumnsError> {
         use rubo4e::current::Standorteigenschaften;
         use rubo4e::json::Bo4eExtensionData as _;
 
@@ -153,7 +245,10 @@ impl MeloShadowColumns {
 
         Ok(Self {
             netzebene_messung: melo.netzebene_messung.map(|v| v.as_wire()),
-            lokationsbuendel_objektcode: melo.lokationsbuendel_objektcode.clone(),
+            lokationsbuendel_objektcode: checked_objektcode(
+                melo.lokationsbuendel_objektcode.as_ref(),
+                rubo4e::lokationsbuendel::Objekttyp::Messlokation,
+            )?,
             regelzone,
             standorteigenschaften,
         })
@@ -348,7 +443,8 @@ mod tests {
             bilanzierungsmethode: Some(Bilanzierungsmethode::Rlm),
             ..Default::default()
         };
-        let cols = MaloShadowColumns::from_marktlokation(&malo);
+        let cols = MaloShadowColumns::from_marktlokation(&malo)
+            .expect("a catalogued Marktlokation object code, or none");
         assert_eq!(cols.netzebene, Some("MSP_NSP_UMSP"));
         assert_eq!(cols.gasqualitaet, Some("L_GAS"));
         assert_eq!(cols.energierichtung, Some("EINSP"));
@@ -365,6 +461,7 @@ mod tests {
                 ..Default::default()
             };
             let wire = MaloShadowColumns::from_marktlokation(&malo)
+                .expect("no object code")
                 .netzebene
                 .expect("set");
             assert_eq!(Netzebene::from_wire(wire), Ok(v));
@@ -375,6 +472,7 @@ mod tests {
                 ..Default::default()
             };
             let wire = MaloShadowColumns::from_marktlokation(&malo)
+                .expect("no object code")
                 .energierichtung
                 .expect("set");
             assert_eq!(Energierichtung::from_wire(wire), Ok(v));
@@ -385,7 +483,8 @@ mod tests {
     #[test]
     fn an_empty_marktlokation_yields_no_columns() {
         assert_eq!(
-            MaloShadowColumns::from_marktlokation(&Marktlokation::default()),
+            MaloShadowColumns::from_marktlokation(&Marktlokation::default())
+                .expect("no object code"),
             MaloShadowColumns::default()
         );
     }
@@ -579,6 +678,90 @@ mod preistyp_tests {
         assert_eq!(
             position_preistyp(&serde_json::json!({ "zusatzAttribute": [] })),
             ""
+        );
+    }
+}
+
+#[cfg(test)]
+mod objektcode_tests {
+    use super::{MaloShadowColumns, MeloShadowColumns, ObjektcodeError};
+    use rubo4e::current::{Marktlokation, Messlokation};
+
+    /// `9992000001016` is the level-1 consumption **Marktlokation** and
+    /// `9992000001032` the level-1 **Messlokation** at the Netzübergabe.
+    const MALO_CODE: &str = "9992000001016";
+    const MELO_CODE: &str = "9992000001032";
+
+    fn malo(code: &str) -> Result<MaloShadowColumns, ObjektcodeError> {
+        MaloShadowColumns::from_marktlokation(&Marktlokation {
+            lokationsbuendel_objektcode: Some(code.to_owned()),
+            ..Default::default()
+        })
+    }
+
+    /// A catalogued code for the right object type shadows through unchanged.
+    #[test]
+    fn a_correct_object_code_is_shadowed() {
+        assert_eq!(
+            malo(MALO_CODE)
+                .expect("catalogued")
+                .lokationsbuendel_objektcode,
+            Some(MALO_CODE.to_owned())
+        );
+        let melo = MeloShadowColumns::from_messlokation(&Messlokation {
+            lokationsbuendel_objektcode: Some(MELO_CODE.to_owned()),
+            ..Default::default()
+        })
+        .expect("catalogued");
+        assert_eq!(melo.lokationsbuendel_objektcode, Some(MELO_CODE.to_owned()));
+    }
+
+    /// **The defect this closes.** A Messlokation's object code on a
+    /// Marktlokation is well-formed, catalogued, and describes a different kind
+    /// of object — so nothing about the value itself is wrong, and it was
+    /// copied into the typed column without a word.
+    #[test]
+    fn a_messlokation_code_on_a_marktlokation_is_refused() {
+        let err = malo(MELO_CODE).expect_err("a MeLo code is not a MaLo code");
+        assert_eq!(
+            err,
+            ObjektcodeError::FalscherObjekttyp {
+                code: MELO_CODE.to_owned(),
+                ist: "MeLo",
+                soll: "MaLo",
+            }
+        );
+    }
+
+    /// A wrong BDEW § 8.1 check digit never reaches the catalogue lookup.
+    #[test]
+    fn a_bad_check_digit_is_refused() {
+        assert!(matches!(
+            malo("9992000001017").expect_err("bad check digit"),
+            ObjektcodeError::Ungueltig { .. }
+        ));
+    }
+
+    /// Well-formed and unpublished is its own answer: the codelist's
+    /// introduction says complex structures are agreed bilaterally, so this is
+    /// a fact about the payload rather than a malformed value — but it is still
+    /// not something to shadow into a column the audit reads.
+    #[test]
+    fn a_well_formed_unpublished_code_is_refused_by_name() {
+        assert!(matches!(
+            malo("9992000009002").expect_err("not published"),
+            ObjektcodeError::Unbekannt { .. }
+        ));
+    }
+
+    /// BO4E declares the field optional and most payloads omit it.
+    #[test]
+    fn an_absent_object_code_passes() {
+        assert_eq!(
+            MaloShadowColumns::from_marktlokation(&Marktlokation::default())
+                .expect("absent is fine")
+                .lokationsbuendel_objektcode,
+            None
         );
     }
 }

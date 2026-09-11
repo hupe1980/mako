@@ -88,7 +88,6 @@ administrative APIs for MaLo cache and partner directory management.",
             crate::malo_admin_api::StatsResponse,
             crate::malo_admin_api::TenantStats,
             // partner admin
-            crate::partner_api::UpsertRequest,
             crate::partner_api::PartnerResponse,
             crate::partner_api::ListResponse,
             crate::partner_api::DeleteResponse,

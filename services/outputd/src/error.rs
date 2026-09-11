@@ -19,10 +19,10 @@
 //! ```
 
 use axum::{
-    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use mako_service::Json;
 
 /// A handler failure, as the client sees it.
 #[derive(Debug, thiserror::Error)]

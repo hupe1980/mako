@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 /// Request body for `POST /api/v1/anlagen` and `PUT /api/v1/anlagen/{tr_id}`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AnlageUpsertRequest {
     pub tr_id: String,
     pub malo_id: String,

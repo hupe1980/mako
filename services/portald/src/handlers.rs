@@ -21,11 +21,12 @@
 #![allow(clippy::result_large_err)] // the error *is* the HTTP response
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+use mako_service::Json;
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -496,6 +497,7 @@ pub async fn get_portal_vertrag(
 
 /// Request body for `POST /api/v1/portal/{malo_id}/tarifwechsel`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PortalTarifwechselRequest {
     /// New product code in `productd`.
     pub new_product_code: String,
@@ -571,6 +573,7 @@ pub async fn post_portal_tarifwechsel(
 
 /// Request body for `POST /api/v1/portal/{malo_id}/kuendigen`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PortalKuendigungRequest {
     /// Last day of supply (`YYYY-MM-DD`).
     ///
@@ -658,12 +661,66 @@ pub async fn post_portal_kuendigen(
     }
 }
 
+/// `GET /api/v1/portal/{malo_id}/kontakt`
+///
+/// The contact details the operator holds — DSGVO Art. 15, and the read half
+/// of the rectification flow: [`put_portal_kontakt`] **replaces** the stored
+/// `Geschaeftspartner`, so a client that has not read it first cannot change
+/// one field without dropping the rest. There was no way to read it at all
+/// until this route existed, which made every correction a full re-entry —
+/// and a partial one silent data loss.
+///
+/// Projected, not proxied whole: `vertragd`'s customer record also carries
+/// operator notes, the ERP key and the tenant, and none of those are the
+/// customer's to see.
+pub async fn get_portal_kontakt(
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
+    Path(malo_id): Path<String>,
+) -> Response {
+    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    let vertragd = match require(clients.vertragd.as_ref(), "vertragd") {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match vertragd
+        .get_json(&format!("/api/v1/kunden/{}", ctx.kunden_id))
+        .await
+    {
+        Ok(Some(body)) => {
+            let kunde = body.get("kunde").unwrap_or(&serde_json::Value::Null);
+            let pick = |k: &str| kunde.get(k).cloned().unwrap_or(serde_json::Value::Null);
+            Json(serde_json::json!({
+                "geschaeftspartner": pick("geschaeftspartner"),
+                "sepa_erlaubt":      pick("sepa_erlaubt"),
+                "kundentyp":         pick("kundentyp"),
+            }))
+            .into_response()
+        }
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+    }
+}
+
 /// Request body for `PUT /api/v1/portal/{malo_id}/kontakt`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PortalKontaktRequest {
-    /// Updated BO4E `Geschaeftspartner` (name, address, contact). Partial —
-    /// fields absent in the request are preserved by `vertragd`.
-    pub geschaeftspartner: Option<serde_json::Value>,
+    /// The BO4E `Geschaeftspartner` (name, address, contact methods).
+    ///
+    /// **Replaces** the stored document — `vertragd` writes the column whole,
+    /// not field by field, so a request carrying only a new telephone number
+    /// leaves the customer with only a telephone number. Read
+    /// `GET .../kontakt` first and send it back changed.
+    ///
+    /// Crosses [the BO4E gate](mako_markt::bo4e::decode) here, at the edge the
+    /// customer reaches, rather than one hop later inside `vertragd`: a portal
+    /// user who mistypes an enum gets the field named back, not a 502.
+    pub geschaeftspartner: Option<mako_markt::bo4e::Bo4e<rubo4e::current::Geschaeftspartner>>,
     /// Updated SEPA consent flag.
     pub sepa_erlaubt: Option<bool>,
 }
@@ -692,8 +749,17 @@ pub async fn put_portal_kontakt(
         Err(resp) => return resp,
     };
 
+    let geschaeftspartner = match req
+        .geschaeftspartner
+        .as_ref()
+        .map(mako_markt::bo4e::Bo4e::canonical_json)
+        .transpose()
+    {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
     let body = serde_json::json!({
-        "geschaeftspartner": req.geschaeftspartner,
+        "geschaeftspartner": geschaeftspartner,
         "sepa_erlaubt":      req.sepa_erlaubt,
     });
     match vertragd
@@ -714,6 +780,7 @@ pub async fn put_portal_kontakt(
 
 /// Request body for `PUT /api/v1/portal/{malo_id}/sepa`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PortalSepaRequest {
     /// IBAN in any whitespace-separated form — `accountingd` validates mod-97.
     pub iban: String,

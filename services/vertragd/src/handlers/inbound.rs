@@ -8,8 +8,8 @@
 
 use std::sync::Arc;
 
-use axum::{Extension, Json, body::Bytes, http::HeaderMap, http::StatusCode};
-use mako_service::{ApiError, ApiResult};
+use axum::{Extension, body::Bytes, http::HeaderMap, http::StatusCode};
+use mako_service::{ApiError, ApiResult, Json};
 use time::Date;
 use uuid::Uuid;
 
@@ -453,8 +453,6 @@ async fn resolve_kunde(
             "built a non-conformant Geschaeftspartner: {e}"
         ))
     })?;
-    let geschaeftspartner =
-        serde_json::to_value(&geschaeftspartner).map_err(|e| ApiError::Internal(e.into()))?;
     let input = pg::CreateKundeInput {
         kunden_nr: Some(angebotsnummer.to_owned()),
         oidc_sub: None,
@@ -463,7 +461,10 @@ async fn resolve_kunde(
         // A CPQ quotation is a commercial one; the § 41 Abs. 5 and § 309 Nr. 9
         // consumer rules do not apply to it.
         haushaltskunde: Some(false),
-        geschaeftspartner: Some(geschaeftspartner),
+        // `from_built`: the inbound gate answers "is this untrusted JSON the BO
+        // it claims", and this one was assembled in Rust and already crossed
+        // the *outbound* gate above. `upsert_kunde` serialises it canonically.
+        geschaeftspartner: Some(mako_markt::bo4e::Bo4e::from_built(geschaeftspartner)),
         organisations_id: None,
         umsatzsteuer_id: None,
         zahlungsziel_tage: Some(30),

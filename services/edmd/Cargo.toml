@@ -77,6 +77,7 @@ datafusion = { version = "53", default-features = false }
 arrow      = { workspace = true, features = ["ipc", "prettyprint"] }
 
 [dev-dependencies]
+toml       = "0.8"
 ## `test-broker` gives the kafka_ingest e2e test an in-process broker.
 krafka              = { workspace = true, features = ["test-broker"] }
 tempfile            = "3"

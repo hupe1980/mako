@@ -4,6 +4,7 @@
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OutputdConfig {
     pub database: mako_service::config::DatabaseConfig,
     pub port: Option<u16>,
@@ -31,6 +32,7 @@ pub struct OutputdConfig {
 /// energy supplier actually owes: § 41 Abs. 5 EnWG and § 126b BGB ask for
 /// Textform on a durable medium, not for registered post.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeliveryConfig {
     /// Run the delivery worker. Default **true**.
     ///

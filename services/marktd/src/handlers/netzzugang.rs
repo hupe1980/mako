@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
     response::IntoResponse,
@@ -24,6 +24,7 @@ use mako_markt::{
     cloudevents::MarktEvent,
     repository::{NetzzugangAntrag, NetzzugangStatus},
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use serde::Deserialize;
 use utoipa::ToSchema;
@@ -195,6 +196,7 @@ pub async fn get_antrag(
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StatusBody {
     /// Target lifecycle state.
     #[schema(value_type = String)]

@@ -4,12 +4,13 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use axum::{
-    Extension, Json, Router,
+    Extension, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
 };
+use mako_service::Json;
 use mako_service::ServiceContext;
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;

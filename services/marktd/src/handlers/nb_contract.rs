@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
     response::IntoResponse,
@@ -27,6 +27,7 @@ use mako_markt::{
     error::MdmError,
     repository::{BillingSchedule, NbContractRecord, NbContractRepository, NetznutzerTyp},
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use rubo4e::current::Vertrag;
 use serde::{Deserialize, Serialize};
@@ -60,6 +61,7 @@ fn normalize_vertrag(
 // ── DTOs ──────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NbContractUpsertRequest {
     pub malo_id: String,
     pub nb_mp_id: String,

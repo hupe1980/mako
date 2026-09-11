@@ -194,6 +194,7 @@ const IFTSTA_BACKOFF: &str = "now() + LEAST(\
 
 /// Body of `POST /api/v1/sperr-orders`, and the shape the ORDERS ingest builds.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateOrderRequest {
     /// 11-digit MaLo-ID (`SG2 LOC+172`, hint \[521\]).
     pub malo_id: String,

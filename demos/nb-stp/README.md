@@ -309,7 +309,7 @@ curl http://localhost:8180/health | jq .
 # LF partner directory (check 6)
 curl -X PUT http://localhost:8180/api/v1/partners/4012345000023 \
   -H "Content-Type: application/json" \
-  -d '{"mp_id":"4012345000023","display_name":"Demo LF","marktrolle":"LF","sparte":"STROM","makoadresse":[],"channels":{}}'
+  -d '{"display_name":"Demo LF","marktrolle":"LF","sparte":"STROM","makoadresse":[]}'
 
 # MaLo with NB rollenzuordnung
 curl -X PUT http://localhost:8180/api/v1/malos/51238696012 \

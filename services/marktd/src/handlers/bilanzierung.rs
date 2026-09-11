@@ -1,11 +1,21 @@
 //! `GET|PUT /api/v1/malos/{malo_id}/bilanzierung[/history]` — the first-class,
 //! temporal BO4E `Bilanzierung` resource (BO #3).
 //!
-//! The PUT body is a full BO4E `Bilanzierung`; it is **type-validated** by
-//! round-trip deserialization into `rubo4e::current::Bilanzierung` (like the
-//! MaLo/MeLo envelope), the typed columns + validity are extracted, and the raw
-//! BO is persisted as JSONB. `?at=` resolves the Bilanzierung effective at a
-//! point in time.
+//! The PUT body is a `Bo4e<Bilanzierung>`, so [the gate](mako_markt::bo4e::decode)
+//! runs as `serde` deserialises it. The typed columns are derived from the
+//! **typed** object and the **canonical round-trip** is persisted as JSONB —
+//! never the request body, so a column cannot disagree with the document it
+//! shadows. `?at=` resolves the Bilanzierung effective at a point in time.
+//!
+//! ## `aggregationszustaendigkeit` is a fourth column, not a fifth spelling
+//!
+//! `Aggregationsverantwortung` has two members — `UENB` and `VNB` — and in
+//! e-mobility Modell 2 the Aggregationsverantwortung *ruht* (BDEW
+//! Anwendungshilfe to BK6-20-160 § 1.6.2). Its wire encoding is an **absent**
+//! field, which is indistinguishable from a payload that simply does not say.
+//! So the state is read from the **pair** with `abwicklungsmodell`, by
+//! `rubo4e`'s `Bilanzierung::aggregationszustaendigkeit()`, and stored beside
+//! the raw value rather than instead of it.
 //!
 //! ## Access control
 //! - `GET` — any authenticated caller in the same tenant
@@ -14,12 +24,14 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
     response::IntoResponse,
 };
+use mako_markt::bo4e::Bo4e;
 use mako_markt::repository::{BilanzierungRecord, BilanzierungRepository};
+use mako_service::{ApiError, ApiResult, Json};
 use serde::Deserialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::{Iso8601, Rfc3339};
@@ -39,11 +51,6 @@ pub struct AtQuery {
     pub at: Option<String>,
 }
 
-/// Extract a BO4E enum/newtype field as its wire string.
-fn as_wire_str(v: Option<&serde_json::Value>) -> Option<String> {
-    v.and_then(|v| v.as_str()).map(str::to_owned)
-}
-
 /// Parse an `?at=` value as an instant: RFC 3339 first, then a bare date
 /// (interpreted at 00:00 UTC).
 fn parse_at(s: &str) -> Result<OffsetDateTime, String> {
@@ -56,72 +63,37 @@ fn parse_at(s: &str) -> Result<OffsetDateTime, String> {
 }
 
 /// `PUT /api/v1/malos/{malo_id}/bilanzierung` — upsert a BO4E Bilanzierung.
+///
+/// The body is a `Bo4e<Bilanzierung>`, so the gate — `_typ`, schema, strict
+/// enums with their JSON-paths, BO4E rules — runs as `serde` deserialises it.
+/// Every typed column is then derived from the **typed** object by
+/// [`BilanzierungRecord::from_bo4e`], and what is stored is the canonical
+/// round-trip rather than the request body.
 pub async fn put_bilanzierung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<BilanzierungRepoExt>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Path(malo_id): Path<String>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    if let Err(e) = enforcer.check(&claims.principal(), "write-bilanzierung", &tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
+    Json(bo): Json<Bo4e<rubo4e::current::Bilanzierung>>,
+) -> ApiResult<StatusCode> {
+    enforcer
+        .check(&claims.principal(), "write-bilanzierung", &tenant)
+        .map_err(|_| ApiError::Forbidden)?;
 
-    // The BO4E gate: `_typ`, schema, strict enums (serde decodes an unknown
-    // wire value to `Unknown`, so this is what rejects typos, legacy codes and
-    // values from a newer schema, with their JSON-paths), BO4E rules.
-    if let Err(e) = mako_markt::bo4e::decode::<rubo4e::current::Bilanzierung>(body.clone()) {
-        return (StatusCode::UNPROCESSABLE_ENTITY, Json(e.to_json())).into_response();
-    }
+    let rec = BilanzierungRecord::from_bo4e(&tenant, &malo_id, &bo)
+        .map_err(|e| ApiError::unprocessable(e.to_string()))?;
 
-    // Validity start is mandatory for the temporal key.
-    let Some(beginn) = body
-        .get("bilanzierungsbeginn")
-        .and_then(|v| v.as_str())
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-    else {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "bilanzierungsbeginn (RFC 3339) is required — it is the temporal key"
-            })),
-        )
-            .into_response();
-    };
-    let ende = body
-        .get("bilanzierungsende")
-        .and_then(|v| v.as_str())
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok());
-
-    let bo4e_version = body.get("_version").and_then(|v| v.as_str()).map_or_else(
-        || mako_markt::bo4e::schema_version().to_owned(),
-        str::to_owned,
+    info!(
+        %malo_id,
+        beginn = %rec.bilanzierungsbeginn,
+        zustaendigkeit = rec.aggregationszustaendigkeit.as_deref().unwrap_or("-"),
+        "marktd: upserting BO4E Bilanzierung"
     );
-
-    let rec = BilanzierungRecord {
-        malo_id: malo_id.clone(),
-        bilanzierungsbeginn: beginn,
-        bilanzierungsende: ende,
-        bilanzkreis: as_wire_str(body.get("bilanzkreis")),
-        aggregationsverantwortung: as_wire_str(body.get("aggregationsverantwortung")),
-        prognosegrundlage: as_wire_str(body.get("prognosegrundlage")),
-        fallgruppenzuordnung: as_wire_str(body.get("fallgruppenzuordnung")),
-        data: body,
-        bo4e_version,
-        tenant: tenant.clone(),
-        updated_at: OffsetDateTime::now_utc(),
-    };
-
-    info!(%malo_id, %beginn, "marktd: upserting BO4E Bilanzierung");
-    match repo.upsert(&rec).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => MdmErrorResponse(e).into_response(),
-    }
+    repo.upsert(&rec)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `GET /api/v1/malos/{malo_id}/bilanzierung?at=<rfc3339|date>` — point-in-time.

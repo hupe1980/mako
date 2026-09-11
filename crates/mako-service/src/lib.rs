@@ -43,6 +43,7 @@ pub mod error;
 pub mod headers;
 pub mod health;
 pub mod http;
+pub mod json;
 pub mod outbox;
 pub mod service;
 pub mod shutdown;
@@ -78,6 +79,7 @@ pub use builder::ServiceBuilder;
 pub use cloudevent::{CloudEvent, PublishError, post_ce_with_retry, source};
 pub use config::{ConfigError, DatabaseConfig, HttpConfig, load_config};
 pub use error::{ApiError, ApiResult};
+pub use json::{DETAIL_SENTINEL, Json};
 pub use service::{Daemon, ServiceConfig, ServiceContext, run};
 pub use telemetry::{
     ExtraLayer, OtelConfig, OtelGuard, init_tracing, init_tracing_from_env,

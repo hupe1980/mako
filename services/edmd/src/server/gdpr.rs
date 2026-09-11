@@ -55,6 +55,7 @@ use super::*;
 ///
 /// [`SubjectRegistry::erase_all_in`]: meterstore::SubjectRegistry::erase_all_in
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct GdprErasureRequest {
     /// Human-readable reason for erasure (required for the audit trail).
     reason: String,

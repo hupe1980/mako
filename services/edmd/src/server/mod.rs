@@ -8,12 +8,13 @@ use std::sync::Arc;
 // Tests for the Hampel filter logic live in the external `metering` crate.
 
 use axum::{
-    Extension, Json, Router,
+    Extension, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post, put},
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::{Claims, OidcVerifier};
 use rubo4e::current::{

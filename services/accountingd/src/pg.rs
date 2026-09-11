@@ -289,6 +289,7 @@ pub async fn bp_consolidated_balance(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateAccountRequest {
     pub iban: Option<String>,
     pub mandatsref: Option<String>,
@@ -1622,6 +1623,7 @@ impl SepaMandateRow {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateMandateRequest {
     pub malo_id: String,
     pub lf_mp_id: String,
@@ -4393,6 +4395,7 @@ pub struct PaymentPlanInstallmentRow {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreatePaymentPlanRequest {
     pub malo_id: String,
     pub lf_mp_id: Option<String>,

@@ -219,9 +219,9 @@ pub struct MeloRecord {
     /// `Messlokation.standorteigenschaften.eigenschaftenStrom[0].regelzoneEic`
     /// — the EIC, not the sibling `regelzone`, which is the Regelzone's *name*.
     ///
-    /// Maps this MeLo to the \u00dcNB (Transmission System Operator) for:
-    /// - Redispatch 2.0 `Stammdaten` forwarding (VNB \u2192 \u00dcNB)
-    /// - MABIS IFTSTA 21000 routing (Bilanzkreisabrechnung Strom, BKV\u2194\u00dcNB)
+    /// Maps this MeLo to the ÜNB (Transmission System Operator) for:
+    /// - Redispatch 2.0 `Stammdaten` forwarding (VNB → ÜNB)
+    /// - MABIS IFTSTA 21000 routing (Bilanzkreisabrechnung Strom, BKV↔ÜNB)
     pub regelzone: Option<String>,
     /// Full BO4E `Standorteigenschaften` payload as JSONB.
     ///
@@ -270,6 +270,7 @@ pub struct Subscription {
 /// GS1 GLN — use [`crate::domain::nad_agency_code`] to determine the coding
 /// authority.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PartnerRecord {
     /// 13-digit Marktpartner-ID.
     pub mp_id: MarktpartnerId,
@@ -283,8 +284,17 @@ pub struct PartnerRecord {
     /// AS4 endpoint URL list from `Marktteilnehmer.makoadresse`.
     /// Used by `makod` for dynamic AS4 destination routing.
     pub makoadresse: Vec<String>,
-    /// Raw JSON for additional channel details (certificate, etc.)
-    pub channels: serde_json::Value,
+    /// The partner's BO4E `Geschaeftspartner`, as stored.
+    ///
+    /// The AS4 endpoints are [`makoadresse`](Self::makoadresse); a
+    /// communication *channel* list belongs to `mako_engine::PartnerRecord`,
+    /// which is a different store for a different purpose.
+    ///
+    /// Opaque on read, like every stored BO4E document in mako — a row may
+    /// predate the current schema series. What goes *in* is gated: see
+    /// `marktd`'s `PartnerUpsertRequest`.
+    #[serde(default)]
+    pub geschaeftspartner: serde_json::Value,
     /// Optimistic-concurrency version.
     #[serde(default)]
     pub version: i64,
@@ -2010,9 +2020,32 @@ pub struct BilanzierungRecord {
     /// Bilanzkreis EIC (BO4E `bilanzkreis`).
     #[serde(default)]
     pub bilanzkreis: Option<String>,
-    /// Aggregationsverantwortung (`NB` / `ÜNB`).
+    /// Aggregationsverantwortung — BO4E wire values `UENB` / `VNB`.
+    ///
+    /// **Absent is not "nobody"**, which is why
+    /// [`aggregationszustaendigkeit`](Self::aggregationszustaendigkeit) exists
+    /// beside it: in Modell 2 the Aggregationsverantwortung *ruht* (AWH to
+    /// BK6-20-160 § 1.6.2) and the wire encoding of that is an **absent**
+    /// field, indistinguishable here from a payload that simply does not say.
     #[serde(default)]
     pub aggregationsverantwortung: Option<String>,
+    /// Which Abwicklungsmodell — BO4E wire values `MODELL_1` / `MODELL_2`.
+    ///
+    /// Shadowed because it is half of the pair that decides
+    /// [`aggregationszustaendigkeit`](Self::aggregationszustaendigkeit), and
+    /// because "is this MaLo balanced in the LPB's Bilanzierungsgebiet" is a
+    /// query, not a field to dig out of JSONB.
+    #[serde(default)]
+    pub abwicklungsmodell: Option<String>,
+    /// Who aggregates, in the four states the market rules need:
+    /// `UEBERTRAGUNGSNETZBETREIBER`, `VERTEILNETZBETREIBER`, `RUHEND`,
+    /// `UNBEKANNT`.
+    ///
+    /// Derived by `rubo4e`'s `Bilanzierung::aggregationszustaendigkeit()` from
+    /// the **pair** — `Aggregationsverantwortung` has two members and cannot
+    /// say "ruht" on its own, and an absent field alone is genuinely ambiguous.
+    #[serde(default)]
+    pub aggregationszustaendigkeit: Option<String>,
     /// Prognosegrundlage (`SLP` / `Prognose` / …).
     #[serde(default)]
     pub prognosegrundlage: Option<String>,
@@ -2030,6 +2063,89 @@ pub struct BilanzierungRecord {
     /// Last update (RFC 3339).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
+}
+
+/// Why a [`BilanzierungRecord`] could not be built from a BO4E document.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum BilanzierungRecordError {
+    /// No `bilanzierungsbeginn`, which is half the temporal primary key.
+    #[error(
+        "bilanzierungsbeginn is required — it is the temporal key \
+         (tenant, malo_id, bilanzierungsbeginn)"
+    )]
+    NoBeginn,
+    /// `bilanzierungsende` is at or before `bilanzierungsbeginn`.
+    #[error("bilanzierungsende {ende} is not after bilanzierungsbeginn {beginn}")]
+    EndeBeforeBeginn {
+        /// The stated start.
+        beginn: time::OffsetDateTime,
+        /// The stated end.
+        ende: time::OffsetDateTime,
+    },
+    /// The validated document could not be serialised back to JSON.
+    #[error(transparent)]
+    Serialise(#[from] crate::bo4e::Bo4eSerialiseError),
+}
+
+impl BilanzierungRecord {
+    /// Build a record from a **gated** BO4E `Bilanzierung`.
+    ///
+    /// Every column is read off the typed object, never `data.get("…")`: a
+    /// string lookup yields `None` when the field is spelled differently than
+    /// the reader guesses. What is stored is the gate's canonical round-trip,
+    /// so a column cannot disagree with the document it shadows.
+    ///
+    /// `bo4e_version` is the **server's** fact, from the linked `rubo4e` — only
+    /// the server knows which schema series it parsed the payload under.
+    ///
+    /// # Errors
+    ///
+    /// [`BilanzierungRecordError`].
+    pub fn from_bo4e(
+        tenant: &str,
+        malo_id: &str,
+        bo: &crate::bo4e::Bo4e<rubo4e::current::Bilanzierung>,
+    ) -> Result<Self, BilanzierungRecordError> {
+        use rubo4e::convenience::Aggregationszustaendigkeit;
+
+        let beginn = bo
+            .bilanzierungsbeginn
+            .ok_or(BilanzierungRecordError::NoBeginn)?;
+        let ende = bo.bilanzierungsende;
+        // Half-open `[beginn, ende)`, like every other temporal range in mako:
+        // an end at or before the start describes no interval at all, and
+        // storing one makes the row invisible to every point-in-time read.
+        if let Some(ende) = ende
+            && ende <= beginn
+        {
+            return Err(BilanzierungRecordError::EndeBeforeBeginn { beginn, ende });
+        }
+        // Four states, because the pair says more than either field: in
+        // Modell 2 the Aggregationsverantwortung *ruht* and its wire encoding
+        // is an absent field, which `aggregationsverantwortung` alone cannot
+        // distinguish from "not stated".
+        let zustaendigkeit = match bo.aggregationszustaendigkeit() {
+            Aggregationszustaendigkeit::Uebertragungsnetzbetreiber => "UEBERTRAGUNGSNETZBETREIBER",
+            Aggregationszustaendigkeit::Verteilnetzbetreiber => "VERTEILNETZBETREIBER",
+            Aggregationszustaendigkeit::Ruhend => "RUHEND",
+            _ => "UNBEKANNT",
+        };
+        Ok(Self {
+            malo_id: malo_id.to_owned(),
+            bilanzierungsbeginn: beginn,
+            bilanzierungsende: ende,
+            bilanzkreis: bo.bilanzkreis.as_ref().map(ToString::to_string),
+            aggregationsverantwortung: bo.aggregationsverantwortung.map(|v| v.as_wire().to_owned()),
+            abwicklungsmodell: bo.abwicklungsmodell.map(|v| v.as_wire().to_owned()),
+            aggregationszustaendigkeit: Some(zustaendigkeit.to_owned()),
+            prognosegrundlage: bo.prognosegrundlage.map(|v| v.as_wire().to_owned()),
+            fallgruppenzuordnung: bo.fallgruppenzuordnung.map(|v| v.as_wire().to_owned()),
+            data: bo.canonical_json()?,
+            bo4e_version: crate::bo4e::schema_version(),
+            tenant: tenant.to_owned(),
+            updated_at: time::OffsetDateTime::now_utc(),
+        })
+    }
 }
 
 /// Repository for the first-class temporal BO4E `Bilanzierung` resource.
@@ -2170,11 +2286,20 @@ pub trait NeLoRepository: Send + Sync {
 /// Stored Tranche record.
 ///
 /// A **Tranche** is a share of a Marktlokation's energy assigned to a distinct
-/// balancing responsibility (BO4E `Tranche`; GPKE Teil 4 „Daten der Tranche",
+/// balancing responsibility (GPKE Teil 4 „Daten der Tranche",
 /// PIDs 55619/55642/55652/55662/55686). One row per `(tranche_id, tenant)`; the
 /// parent MaLo is recorded for `list_by_malo` grouping.
 ///
-/// Source: GPKE Teil 4 (BK6-22-024 Anlage 1d) §1.4; BO4E `Tranche`.
+/// # There is no BO4E `Tranche`
+///
+/// BO4E models **no** Tranche Geschäftsobjekt: `BoTyp` has 39 members
+/// and none is `TRANCHE`. The word does appear in the schema — as
+/// `Preismodell::Tranche`, the B2B *pricing* model where volume is bought in
+/// instalments — which is a different concept that happens to share a German
+/// noun. So `data` is mako's own open-ended payload, not a Business Object, and
+/// it crosses no BO4E gate because there is no BO4E type to gate it against.
+///
+/// Source: GPKE Teil 4 (BK6-22-024 Anlage 1d) §1.4.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrancheRecord {
     /// Tranche identifier (e.g. `<MaLo>-T01`).
@@ -2188,7 +2313,7 @@ pub struct TrancheRecord {
     pub netzebene: Option<String>,
     /// Energierichtung (`EINSPEISUNG` / `ENTNAHME`).
     pub energierichtung: Option<String>,
-    /// Full BO4E `Tranche` payload (open-ended JSONB).
+    /// mako's own open-ended Tranche payload. **Not** BO4E — see the type docs.
     pub data: serde_json::Value,
     pub version: i64,
     #[serde(with = "time::serde::rfc3339")]
@@ -2723,6 +2848,90 @@ pub enum BuendelError {
     DivergentMsb { malo_id: String, msbs: Vec<String> },
 }
 
+/// One way a bundle departs from the BDEW structure it declares.
+///
+/// Deliberately mako's own and not `rubo4e::lokationsbuendel::Befund`: that
+/// enum reports per-**object-code** findings a BO4E `Lokationszuordnung`
+/// carries, and this projection has ids grouped by type instead. Reusing the
+/// name would promise findings this audit cannot produce.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum Buendelbefund {
+    /// No `lokationsbuendelcode`, so there is no structure to check against.
+    #[error("the bundle declares no lokationsbuendelcode")]
+    StrukturcodeFehlt,
+    /// The code is not a 13-digit BDEW code with a valid check digit.
+    #[error("lokationsbuendelcode {code} is not a valid BDEW code: {grund}")]
+    StrukturcodeUngueltig {
+        /// The value as stored.
+        code: String,
+        /// Why it failed.
+        grund: String,
+    },
+    /// Well-formed, but not one of the fifteen published structures.
+    #[error("lokationsbuendelcode {code} is not a published Lokationsbündelstruktur")]
+    StrukturUnbekannt {
+        /// The declared code.
+        code: String,
+    },
+    /// The structure has no row for this object type at all.
+    #[error("the structure describes no {objekttyp}, but the bundle holds {ist}")]
+    ObjekttypNichtVorgesehen {
+        /// The object type, in the codelist's spelling.
+        objekttyp: String,
+        /// How many the bundle holds.
+        ist: usize,
+    },
+    /// The structure needs more than one Marktlokation and this projection
+    /// keeps only the root, so the count cannot be checked from the graph.
+    ///
+    /// Not a defect in the bundle — a limit of what a `Lokationstyp` edge graph
+    /// can answer. `rubo4e`'s `Lokationszuordnung::audit_buendel()` decides it
+    /// from the BO4E document, where the objects and their
+    /// `lokationsbuendelObjektcode`s are inline.
+    #[error(
+        "the structure needs at least {min} Marktlokationen; the location graph keeps only \
+         the root, so this cannot be checked here — audit the BO4E Lokationszuordnung instead"
+    )]
+    MarktlokationenNichtPruefbar {
+        /// Fewest Marktlokationen the structure permits.
+        min: u32,
+    },
+    /// The count of one object type is outside what the structure permits.
+    #[error(
+        "the structure permits {} {objekttyp}, the bundle holds {ist}",
+        match max { Some(m) if *m == *min => min.to_string(),
+                    Some(m) => format!("{min}-{m}"),
+                    None => format!("≥{min}") }
+    )]
+    Kardinalitaet {
+        /// The object type, in the codelist's spelling.
+        objekttyp: String,
+        /// How many the bundle holds.
+        ist: usize,
+        /// Fewest the structure permits.
+        min: u32,
+        /// Most it permits, or `None` for the codelist's `N`.
+        max: Option<u32>,
+    },
+}
+
+/// What [`Lokationsbuendel::audit_struktur`] found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Buendelstrukturaudit {
+    /// The published structure the declared code names, where it named one.
+    pub struktur: Option<&'static rubo4e::lokationsbuendel::Lokationsbuendelstruktur>,
+    /// Every departure found. Empty is conformant.
+    pub befunde: Vec<Buendelbefund>,
+}
+
+impl Buendelstrukturaudit {
+    /// `true` when the bundle matches the structure it declares.
+    #[must_use]
+    pub fn is_conformant(&self) -> bool {
+        self.befunde.is_empty()
+    }
+}
+
 /// First-class **Lokationsbündel** (UTILMD Lokationsbündelstruktur) — the set of
 /// locations bundled under one Marktlokation, projected from the typed
 /// [`LokationszuordnungEdge`] graph. Its BO4E carrier is
@@ -2795,6 +3004,133 @@ impl Lokationsbuendel {
             netzlokationen: nelo.into_iter().collect(),
             steuerbare_ressourcen: sr.into_iter().collect(),
             technische_ressourcen: tr.into_iter().collect(),
+        }
+    }
+
+    /// Check the bundle against the BDEW *Lokationsbündelstruktur* it declares.
+    ///
+    /// `lokationsbuendelcode` was an opaque `Option<String>`: nothing checked
+    /// its BDEW check digit, nothing resolved it to one of the fifteen
+    /// published structures, and `GET /malos/{id}/buendel` could not say which
+    /// structure a bundle was. This resolves it through
+    /// `rubo4e::lokationsbuendel` — EDI@Energy's *Codeliste der
+    /// Lokationsbündelstrukturen* (BDEW v1.0, 31.03.2023, applicable from
+    /// 01.10.2024) — and reports every disagreement.
+    ///
+    /// # What it can and cannot see
+    ///
+    /// This projection holds **ids grouped by [`Lokationstyp`]**, not the
+    /// per-object `lokationsbuendelObjektcode`s. So the cardinalities are
+    /// checked per *object type* — the structure's rows for that type summed —
+    /// and not per code. A structure wanting one consuming and one generating
+    /// Marktlokation is satisfied here by any two Marktlokationen.
+    ///
+    /// `rubo4e`'s `Lokationszuordnung::audit_buendel()` is the per-code check,
+    /// and it needs the BO4E document with its objects inline. That document is
+    /// what an edge's `data` carries, so the finer audit belongs on the write
+    /// path; this is what the *graph* can answer on a read.
+    ///
+    /// **Steuerbare Ressourcen** are not counted at all: chapter 2.1 of the
+    /// codelist has no object code for one, so there is no cardinality to hold
+    /// them to.
+    ///
+    /// **Marktlokationen cannot be counted here**, and that is *reported*, not
+    /// assumed away. [`from_graph`](Self::from_graph) keeps only the root MaLo
+    /// — a sibling Marktlokation on an edge is discarded — so the projection
+    /// holds exactly one by construction. For twelve structures that is the
+    /// right answer. For the three **Summenmessung** structures it is not:
+    /// `9992000000125` alone requires a consumption MaLo (`…1016`, exactly one)
+    /// *and* at least one generating MaLo (`…1115`), summing to a minimum of
+    /// two. Passing such a bundle silently would be a wrong answer, so
+    /// [`Buendelbefund::MarktlokationenNichtPruefbar`] says the graph cannot
+    /// decide it and names `audit_buendel` as what can.
+    ///
+    /// A report, never a refusal: BDEW requires none of this of a stored
+    /// record, and a bundle is legitimately incomplete mid-Einzug.
+    #[must_use]
+    pub fn audit_struktur(&self) -> Buendelstrukturaudit {
+        use rubo4e::lokationsbuendel::{Lokationsbuendelstruktur, Objekttyp};
+
+        let mut befunde = Vec::new();
+        let Some(raw) = self.lokationsbuendelcode.as_deref() else {
+            return Buendelstrukturaudit {
+                struktur: None,
+                befunde: vec![Buendelbefund::StrukturcodeFehlt],
+            };
+        };
+        // The check digit first: `Lokationsbuendelcode` enforces BDEW § 8.1, and
+        // all 42 published codes verify under it. A code that fails it cannot
+        // name a structure, so there is nothing further to check.
+        let code = match rubo4e::identifiers::Lokationsbuendelcode::new(raw) {
+            Ok(c) => c,
+            Err(e) => {
+                return Buendelstrukturaudit {
+                    struktur: None,
+                    befunde: vec![Buendelbefund::StrukturcodeUngueltig {
+                        code: raw.to_owned(),
+                        grund: e.to_string(),
+                    }],
+                };
+            }
+        };
+        let Some(struktur) = Lokationsbuendelstruktur::from_code(&code) else {
+            return Buendelstrukturaudit {
+                struktur: None,
+                befunde: vec![Buendelbefund::StrukturUnbekannt {
+                    code: raw.to_owned(),
+                }],
+            };
+        };
+
+        // The Marktlokation the bundle is rooted at is the only one the
+        // projection keeps, so a structure needing two or more cannot be
+        // decided here. Say so rather than pass.
+        let malo_min: u32 = struktur
+            .objekte_of(Objekttyp::Marktlokation)
+            .map(|o| o.min)
+            .sum();
+        if malo_min > 1 {
+            befunde.push(Buendelbefund::MarktlokationenNichtPruefbar { min: malo_min });
+        }
+
+        // Per object type: the structure's rows summed. `max: None` on any row
+        // makes the type unbounded, which is the codelist's `N`.
+        for (typ, ist) in [
+            (Objekttyp::Messlokation, self.messlokationen.len()),
+            (Objekttyp::Netzlokation, self.netzlokationen.len()),
+            (
+                Objekttyp::TechnischeRessource,
+                self.technische_ressourcen.len(),
+            ),
+        ] {
+            let rows: Vec<_> = struktur.objekte_of(typ).collect();
+            if rows.is_empty() {
+                // The structure has no row for this type at all, so any object
+                // of it is one the structure does not describe.
+                if ist > 0 {
+                    befunde.push(Buendelbefund::ObjekttypNichtVorgesehen {
+                        objekttyp: typ.to_string(),
+                        ist,
+                    });
+                }
+                continue;
+            }
+            let min: u32 = rows.iter().map(|o| o.min).sum();
+            let max: Option<u32> = rows.iter().try_fold(0_u32, |acc, o| o.max.map(|m| acc + m));
+            let ist_u32 = u32::try_from(ist).unwrap_or(u32::MAX);
+            if ist_u32 < min || max.is_some_and(|m| ist_u32 > m) {
+                befunde.push(Buendelbefund::Kardinalitaet {
+                    objekttyp: typ.to_string(),
+                    ist,
+                    min,
+                    max,
+                });
+            }
+        }
+
+        Buendelstrukturaudit {
+            struktur: Some(struktur),
+            befunde,
         }
     }
 
@@ -3061,6 +3397,7 @@ pub trait DeviceRepository: Send + Sync {
 ///
 /// Source: MsbG §19; BO4E Zaehlwerk; BDEW AHB WiM Teil 3.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ZaehlzeitRegisterRecord {
     /// Primary key (UUID).
     pub id: uuid::Uuid,
@@ -3098,6 +3435,7 @@ fn default_kwh() -> String {
 ///
 /// Source: BO4E Zaehlzeitdefinition; MsbG Anlage 1; BDEW Rolloutprofil.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ZaehlzeitSaisonRecord {
     /// Primary key (UUID).
     pub id: uuid::Uuid,
@@ -3905,6 +4243,7 @@ impl NetzzugangStatus {
 /// canonical JSON the adapter delivers, `platform_ref` is the platform's
 /// reference once one is assigned.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NetzzugangAntrag {
     #[serde(default)]
     pub id: Uuid,
@@ -3982,7 +4321,7 @@ mod partner_record_tests {
             sparte: Some(Sparte::Strom),
             rollencodetyp: Some(rubo4e::current::Rollencodetyp::Bdew),
             makoadresse: vec!["https://as4.musterstadt.example/msh".to_owned()],
-            channels: serde_json::json!({}),
+            geschaeftspartner: serde_json::json!({}),
             version: 1,
             updated_at: time::OffsetDateTime::UNIX_EPOCH,
         }
@@ -4153,6 +4492,139 @@ mod lokationsbuendel_tests {
         assert_eq!("SR".parse(), Ok(Lokationstyp::Sr));
     }
 
+    /// A 13-digit code with a valid BDEW § 8.1 check digit that names none of
+    /// the fifteen published structures.
+    const UNPUBLISHED_BUT_WELL_FORMED: &str = "9992000009002";
+
+    /// Build a bundle declaring `code`, with `melos` Messlokationen.
+    fn buendel_with(code: Option<&str>, melos: usize) -> Lokationsbuendel {
+        Lokationsbuendel {
+            malo_id: "MALO1".to_owned(),
+            lokationsbuendelcode: code.map(ToOwned::to_owned),
+            messlokationen: (1..=melos).map(|i| format!("MELO{i}")).collect(),
+            netzlokationen: vec![],
+            steuerbare_ressourcen: vec![],
+            technische_ressourcen: vec![],
+        }
+    }
+
+    /// The BDEW codelist resolves the declared code to a named structure, and a
+    /// bundle that matches its cardinalities reports nothing.
+    ///
+    /// `9992000000026` is *Verbrauch mit einer Messlokation (Standard)*: exactly
+    /// one Marktlokation, exactly one Messlokation, any number of technische
+    /// Ressourcen, at most one Netzlokation.
+    #[test]
+    fn a_conformant_bundle_names_its_published_structure() {
+        let audit = buendel_with(Some("9992000000026"), 1).audit_struktur();
+        assert!(audit.is_conformant(), "{:?}", audit.befunde);
+        let s = audit.struktur.expect("a published structure");
+        assert_eq!(s.bezeichnung, "Verbrauch mit einer Messlokation (Standard)");
+        assert_eq!(s.max_ebene(), 1);
+    }
+
+    /// The same structure permits exactly one Messlokation, so two is a finding
+    /// that names the count and the bound — not a silently accepted bundle.
+    #[test]
+    fn a_second_messlokation_breaks_the_standard_structure() {
+        let audit = buendel_with(Some("9992000000026"), 2).audit_struktur();
+        assert_eq!(audit.befunde.len(), 1, "{:?}", audit.befunde);
+        let msg = audit.befunde[0].to_string();
+        assert!(
+            msg.contains("permits 1") && msg.contains("holds 2"),
+            "the finding must state both numbers: {msg}"
+        );
+    }
+
+    /// `9992000000018` is *Verbrauch ohne Messlokation (Pauschal)* — it has no
+    /// Messlokation row at all, so any MeLo is an object the structure does not
+    /// describe. That is a different finding from a broken cardinality.
+    #[test]
+    fn an_object_the_structure_does_not_describe_is_its_own_finding() {
+        let audit = buendel_with(Some("9992000000018"), 1).audit_struktur();
+        assert!(matches!(
+            audit.befunde.as_slice(),
+            [Buendelbefund::ObjekttypNichtVorgesehen { ist: 1, .. }]
+        ));
+    }
+
+    /// **The Summenmessung structures need more than one Marktlokation**, and
+    /// the graph projection keeps only the root — so the audit says it cannot
+    /// decide rather than passing the bundle.
+    ///
+    /// `9992000000125` is *Summenmessung mit mindestens einer separat gemessenen
+    /// Erzeugung*: `…1016` (exactly one consumption MaLo) plus `…1115` (at least
+    /// one generating MaLo) sum to a minimum of two. It is also the code the
+    /// `marktd` edge fixtures carry, so this is not a hypothetical shape.
+    #[test]
+    fn a_structure_needing_two_malos_is_reported_as_undecidable() {
+        // Two Messlokationen, which this structure's summed minimum also wants,
+        // so the only finding left is the one about Marktlokationen.
+        let audit = buendel_with(Some("9992000000125"), 2).audit_struktur();
+        assert!(
+            matches!(
+                audit.befunde.as_slice(),
+                [Buendelbefund::MarktlokationenNichtPruefbar { min: 2 }]
+            ),
+            "{:?}",
+            audit.befunde
+        );
+        assert!(
+            audit.befunde[0].to_string().contains("audit the BO4E"),
+            "the finding must name what *can* decide it: {}",
+            audit.befunde[0]
+        );
+    }
+
+    /// The twelve structures that want exactly one Marktlokation stay silent
+    /// about it — the projection holds exactly one by construction.
+    #[test]
+    fn a_single_malo_structure_says_nothing_about_marktlokationen() {
+        let audit = buendel_with(Some("9992000000026"), 1).audit_struktur();
+        assert!(audit.is_conformant(), "{:?}", audit.befunde);
+    }
+
+    /// A code with a wrong BDEW check digit cannot name a structure, so the
+    /// audit stops there rather than reporting cardinalities against nothing.
+    #[test]
+    fn a_bad_check_digit_is_refused_before_the_lookup() {
+        let audit = buendel_with(Some("9992000000019"), 1).audit_struktur();
+        assert!(audit.struktur.is_none());
+        assert!(matches!(
+            audit.befunde.as_slice(),
+            [Buendelbefund::StrukturcodeUngueltig { .. }]
+        ));
+    }
+
+    /// A well-formed code outside the fifteen published structures is reported
+    /// as unpublished — the codelist's introduction says complex structures are
+    /// agreed bilaterally, so this is a fact about the bundle, not a defect.
+    ///
+    /// `9992000009996` is a fabricated code with a correct § 8.1 check digit.
+    /// `9992000000125` looked like one and is not: it is *Summenmessung mit
+    /// mindestens einer separat gemessenen Erzeugung*, which is why the fixture
+    /// above uses it.
+    #[test]
+    fn a_well_formed_unpublished_code_says_so() {
+        let audit = buendel_with(Some(UNPUBLISHED_BUT_WELL_FORMED), 1).audit_struktur();
+        assert!(audit.struktur.is_none());
+        assert!(
+            matches!(
+                audit.befunde.as_slice(),
+                [Buendelbefund::StrukturUnbekannt { .. }]
+            ),
+            "{:?}",
+            audit.befunde
+        );
+    }
+
+    /// No code at all is the commonest case and says exactly that.
+    #[test]
+    fn a_bundle_with_no_code_reports_the_absence() {
+        let audit = buendel_with(None, 1).audit_struktur();
+        assert_eq!(audit.befunde, vec![Buendelbefund::StrukturcodeFehlt]);
+    }
+
     /// A bundle projects every non-root node by type and de-duplicates.
     #[test]
     fn from_graph_projects_nodes_by_type() {
@@ -4305,5 +4777,111 @@ mod netznutzer_typ_tests {
         assert_eq!(json, "\"LETZTVERBRAUCHER\"");
         let back: NetznutzerTyp = serde_json::from_str(&json).unwrap();
         assert_eq!(back, NetznutzerTyp::Letztverbraucher);
+    }
+}
+
+#[cfg(test)]
+mod bilanzierung_record_tests {
+    use super::{BilanzierungRecord, BilanzierungRecordError};
+    use crate::bo4e::Bo4e;
+    use rubo4e::current::{Abwicklungsmodell, Aggregationsverantwortung, Bilanzierung};
+    use time::macros::datetime;
+
+    fn bo(b: Bilanzierung) -> Bo4e<Bilanzierung> {
+        Bo4e::from_built(b)
+    }
+
+    fn beginn() -> Bilanzierung {
+        Bilanzierung {
+            bilanzierungsbeginn: Some(datetime!(2026-01-01 00:00 UTC)),
+            ..Default::default()
+        }
+    }
+
+    /// **The Modell-2 state has a spelling now.** In e-mobility Modell 2 the
+    /// Aggregationsverantwortung *ruht*, and its wire encoding is an absent
+    /// field — so the raw column is `NULL`, exactly as it is for a payload that
+    /// says nothing, and only the derived column tells the two apart.
+    #[test]
+    fn modell_2_with_no_holder_is_ruhend_not_unknown() {
+        let rec = BilanzierungRecord::from_bo4e(
+            "t",
+            "51238696012",
+            &bo(Bilanzierung {
+                abwicklungsmodell: Some(Abwicklungsmodell::Modell2),
+                ..beginn()
+            }),
+        )
+        .expect("a record");
+        assert_eq!(rec.aggregationsverantwortung, None);
+        assert_eq!(rec.abwicklungsmodell.as_deref(), Some("MODELL_2"));
+        assert_eq!(rec.aggregationszustaendigkeit.as_deref(), Some("RUHEND"));
+    }
+
+    /// The same absent field with no Modell 2 beside it says nothing at all,
+    /// and must not be reported as "nobody holds it".
+    #[test]
+    fn an_absent_holder_alone_is_unbekannt() {
+        let rec = BilanzierungRecord::from_bo4e("t", "51238696012", &bo(beginn())).expect("record");
+        assert_eq!(rec.aggregationszustaendigkeit.as_deref(), Some("UNBEKANNT"));
+    }
+
+    /// A named holder is a named holder whatever the model, and the column
+    /// carries BO4E's own wire spelling — `VNB`, not the German `NB`.
+    #[test]
+    fn a_named_holder_wins_over_the_model() {
+        let rec = BilanzierungRecord::from_bo4e(
+            "t",
+            "51238696012",
+            &bo(Bilanzierung {
+                abwicklungsmodell: Some(Abwicklungsmodell::Modell2),
+                aggregationsverantwortung: Some(Aggregationsverantwortung::Vnb),
+                ..beginn()
+            }),
+        )
+        .expect("a record");
+        assert_eq!(rec.aggregationsverantwortung.as_deref(), Some("VNB"));
+        assert_eq!(
+            rec.aggregationszustaendigkeit.as_deref(),
+            Some("VERTEILNETZBETREIBER")
+        );
+    }
+
+    /// `bilanzierungsbeginn` is half the primary key, so its absence is a named
+    /// refusal rather than a row that cannot be addressed.
+    #[test]
+    fn a_missing_beginn_is_refused_by_name() {
+        let err = BilanzierungRecord::from_bo4e("t", "51238696012", &bo(Bilanzierung::default()))
+            .expect_err("no temporal key");
+        assert_eq!(err, BilanzierungRecordError::NoBeginn);
+    }
+
+    /// The range is half-open `[beginn, ende)`. An end at or before the start
+    /// describes no interval, and a row carrying one is invisible to every
+    /// point-in-time read.
+    #[test]
+    fn an_end_before_the_start_is_refused() {
+        let err = BilanzierungRecord::from_bo4e(
+            "t",
+            "51238696012",
+            &bo(Bilanzierung {
+                bilanzierungsende: Some(datetime!(2025-01-01 00:00 UTC)),
+                ..beginn()
+            }),
+        )
+        .expect_err("an empty interval");
+        assert!(matches!(
+            err,
+            BilanzierungRecordError::EndeBeforeBeginn { .. }
+        ));
+    }
+
+    /// The stored document is the gate's round-trip and the version stamp is
+    /// the server's, not the payload's.
+    #[test]
+    fn the_stored_document_is_canonical_and_the_stamp_is_ours() {
+        let rec = BilanzierungRecord::from_bo4e("t", "51238696012", &bo(beginn())).expect("record");
+        assert_eq!(rec.data["_typ"], "BILANZIERUNG");
+        assert_eq!(rec.bo4e_version, crate::bo4e::schema_version());
     }
 }

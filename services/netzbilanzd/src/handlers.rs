@@ -9,12 +9,12 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
 };
 use mako_markt::{makod_client::MakodClient, marktd_client::MarktdClient};
-use mako_service::{ApiError, ApiResult, cedar::CedarEnforcer, oidc::Claims};
+use mako_service::{ApiError, ApiResult, Json, cedar::CedarEnforcer, oidc::Claims};
 use serde::Deserialize;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -1761,14 +1761,13 @@ pub async fn put_fremdkosten(
     Json(req): Json<pg::UpsertFremdkostenRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
     authorize(&cedar, &claims, "amend-settlement", &cfg.tenant)?;
-    // The BO4E gate: the stored JSON has to *be* a Fremdkosten, not merely
-    // carry the right `_typ`, because dispatch merges it into the document that
-    // reaches the counterparty. Strict enums included — an out-of-schema
+    // The BO4E gate ran while the body deserialised (`Bo4e<Fremdkosten>`): the
+    // stored JSON has to *be* a Fremdkosten, not merely carry the right `_typ`,
+    // because dispatch merges it into the document that reaches the
+    // counterparty. Strict enums included — an out-of-schema
     // `bdewArtikelnummer` on a cost block would otherwise be dispatched as
     // `"UNKNOWN"`.
-    mako_markt::bo4e::decode::<rubo4e::current::Fremdkosten>(req.fremdkosten_json.clone())
-        .map_err(|e| ApiError::unprocessable_with(e.to_string(), e.detail().into()))?;
-
+    //
     // Checked before the insert so a missing draft is a 404 rather than a
     // foreign-key violation matched on its error text.
     let draft = pg::fetch_draft(&pool, &cfg.tenant, draft_id)

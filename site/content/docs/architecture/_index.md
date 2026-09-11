@@ -314,6 +314,26 @@ EDIFACT ↔ BO4E, 71 workflows over 469 Prüfidentifikatoren, AS4 ingest and the
 deadline scheduler. The sections that follow describe only the daemons whose
 internal design this page has to explain.
 
+### Every JSON request body, everywhere
+
+Two invariants hold across all seventeen daemons, and both replace a class of
+silent acceptance:
+
+- **A BO4E document in a request body is a `Bo4e<T>`**, so
+  [the gate](@/docs/architecture/domain-model.md#the-bo4e-gate) runs while
+  `serde` deserialises and no handler can forget it. A field typed
+  `serde_json::Value` with a doc comment calling it a BO4E payload is a document
+  nothing checks.
+- **Every body denies unknown fields.** `serde` ignores a key no field declares,
+  so without this a request naming a field the API does not have succeeds with
+  the value going nowhere. It is a `422` naming the field.
+
+`cargo xtask check-request-bodies` holds both, and both refusals render the same
+`{error, detail, …}` problem body as any other — `mako_service::Json` is the
+request extractor, because `axum::Json` answers its own rejections in
+`text/plain` and a malformed body was the one error in mako that did not answer
+in the shape the platform guarantees.
+
 ### `marktd` — Market Data Hub (`:8180`)
 
 `marktd` is the single source of truth for market entity state. Every `PUT`

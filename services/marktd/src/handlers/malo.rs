@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -22,6 +22,7 @@ use mako_markt::{
         PartnerRepository, Rollenzuordnung, SubscriptionRepository,
     },
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use rubo4e::current::{Lastprofil, Marktlokation, Profilart};
 use serde::{Deserialize, Serialize};
@@ -74,6 +75,7 @@ fn default_bo4e_version() -> String {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct MaloUpsertRequest {
     /// "STROM" or "GAS"
     #[schema(value_type = String, example = "STROM")]
@@ -83,9 +85,6 @@ pub struct MaloUpsertRequest {
     #[serde(default)]
     #[schema(value_type = Vec<Object>)]
     pub rollenzuordnung: Vec<Rollenzuordnung>,
-    /// BO4E schema version of `data` (e.g. `"202607.1.0"`). Defaults to current.
-    #[serde(default = "default_bo4e_version")]
-    pub bo4e_version: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -292,7 +291,7 @@ where
         &malo,
         req.rollenzuordnung,
         if_match,
-        &req.bo4e_version,
+        &default_bo4e_version(),
     )
     .await
     {

@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 /// Request body for `PUT /api/v1/products/{lf_mp_id}/{product_code}`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProductUpsertRequest {
     pub category: String,
     pub name: String,
@@ -27,11 +28,14 @@ pub struct ProductUpsertRequest {
     /// `DRAFT` = staged/preview; `PUBLISHED` (default) = active for billing.
     #[serde(default = "default_published")]
     pub product_status: String,
-    /// Optional \u00a742 EnWG `Energiemix` payload (camelCase BO4E COM JSON).
-    /// If supplied here it is stored in the dedicated `energiemix` column
-    /// and also exposed via `GET /energiemix`.
+    /// Optional § 42 EnWG `Energiemix`, crossing
+    /// [the gate](mako_markt::bo4e::decode) as the request deserialises.
+    ///
+    /// Stored in the dedicated `energiemix` column and served by
+    /// `GET /energiemix`. Gated identically here and on the sub-resource, so
+    /// the same document is checked the same way whichever route writes it.
     #[serde(default)]
-    pub energiemix: Option<serde_json::Value>,
+    pub energiemix: Option<mako_markt::bo4e::Bo4e<rubo4e::current::Energiemix>>,
     /// Optional list of `Oekolabel` enum codes (e.g. \`[\"OK_POWER\", \"NATURWATT_STROM\"]\`).
     #[serde(default)]
     pub oekolabel: Option<Vec<String>>,
@@ -63,7 +67,7 @@ pub struct ProductRow {
     pub bo4e_version: String,
     /// `DRAFT` or `PUBLISHED`.
     pub product_status: String,
-    /// \u00a742 EnWG `Energiemix` COM payload. `None` = no green certification.
+    /// §42 EnWG `Energiemix` COM payload. `None` = no green certification.
     pub energiemix: Option<serde_json::Value>,
     /// Active `Oekolabel` certification codes.
     pub oekolabel: Option<Vec<String>>,
@@ -162,7 +166,12 @@ pub async fn upsert_product(
     .bind(&req.data)
     .bind(&req.bo4e_version)
     .bind(&req.product_status)
-    .bind(&req.energiemix)
+    .bind(
+        req.energiemix
+            .as_ref()
+            .map(mako_markt::bo4e::Bo4e::canonical_json)
+            .transpose()?,
+    )
     .bind(&req.oekolabel)
     .bind(tenant)
     .fetch_one(pool)
@@ -291,10 +300,13 @@ pub async fn fetch_product_history(
 /// separate from the main product PUT so the annual Herkunftsnachweis update
 /// does not archive the entire product and pricing definition.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EnergimixUpsertRequest {
-    /// Full `rubo4e::current::Energiemix` COM payload (camelCase JSON).
-    /// Validation: deserialisable as `Energiemix`; invalid enum fields return 422.
-    pub energiemix: serde_json::Value,
+    /// Full BO4E `Energiemix`, crossing [the gate](mako_markt::bo4e::decode)
+    /// as the request deserialises. What is stored is the canonical
+    /// round-trip, so an out-of-schema `erzeugungsart` cannot be written back
+    /// as the literal `"UNKNOWN"` and disclose a source that does not exist.
+    pub energiemix: mako_markt::bo4e::Bo4e<rubo4e::current::Energiemix>,
     /// Oekolabel certification codes.
     /// Valid values: ENERGREEN, OK_POWER, NATURWATT_STROM, GRUENER_STROM, etc.
     #[serde(default)]
@@ -335,7 +347,7 @@ pub async fn upsert_energiemix(
     )
     .bind(lf_mp_id)
     .bind(product_code)
-    .bind(&req.energiemix)
+    .bind(req.energiemix.canonical_json()?)
     .bind(&req.oekolabel)
     .bind(tenant)
     .execute(pool)
@@ -455,6 +467,7 @@ pub async fn list_products(
 // ── EPEX day-ahead prices ─────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EpexImportRequest {
     /// Ordered ct/kWh values for the delivery day's market time units, in
     /// UTC-instant order (which equals local wall-clock order). The length must
@@ -605,6 +618,7 @@ pub async fn monthly_epex_average(
 // ── nEHS certificate prices (BEHG CO₂) ────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NehsImportRequest {
     /// EUR per tonne CO₂ — an auction clearing price, an Einführungsphase
     /// Festpreis, or the Mehrmengenpreis of a Nachkauf.
@@ -756,6 +770,7 @@ pub struct AngebotRow {
 
 /// Request body for `POST /api/v1/angebote`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateAngebotRequest {
     pub lf_mp_id: Option<String>,
     /// Existing Kunde UUID in `vertragd`.

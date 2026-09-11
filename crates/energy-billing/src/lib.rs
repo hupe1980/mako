@@ -91,7 +91,7 @@ pub mod tariff;
 // Core billing types
 pub use context::{
     AbschlagDeduction, BillingContext, BillingPeriod, CustomerKategorie, InvoiceType,
-    SettlementForm, Verbraucherinformationen, Verbrauchshistorie, Vertragsart,
+    Rechnungsempfaenger, SettlementForm, Verbraucherinformationen, Verbrauchshistorie, Vertragsart,
     Vertragsinformationen,
 };
 pub use engine::BillingEngine;

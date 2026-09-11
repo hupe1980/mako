@@ -1,11 +1,12 @@
 //! HTTP handlers for `einsd`.
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use mako_service::error::ApiError;
 use mako_service::oidc::Claims;
@@ -816,6 +817,7 @@ pub struct HorizonQuery {
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/settle/{year}/{month}`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SettleTriggerRequest {
     /// Einspeisemenge kWh for the billing month.
     /// When absent, `einsd` will return `status = "no_data"`.
@@ -965,6 +967,7 @@ pub struct SettlementsQuery {
 // ── EPEX monthly prices ───────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EpexPriceBody {
     pub avg_ct_kwh: Decimal,
     pub source: Option<String>,
@@ -973,6 +976,7 @@ pub struct EpexPriceBody {
 // ── Anlage 1 Marktwert prices ──────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MarktwertBody {
     pub avg_ct_kwh: Decimal,
     /// Required for a Monatsmarktwert (Anlage 1 Nr. 3); refused for a
@@ -1238,6 +1242,7 @@ pub async fn put_epex_spot(
 
 /// Bulk spot-price load request body.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpotPriceLoadBody {
     #[serde(default)]
     pub source: Option<String>,
@@ -1276,6 +1281,7 @@ pub async fn get_epex_price(
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/repowering`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RepoweringRequest {
     /// ISO 8601 date when the new components were commissioned.
     /// The Förderendedatum is reset to `repowering_datum + 20 years`.
@@ -1289,6 +1295,7 @@ pub struct RepoweringRequest {
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/wind-reevaluation`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WindReevaluationRequest {
     /// Year after commissioning from which the adjusted AW takes effect: 6, 11 or 16.
     pub wirksam_ab_jahr: i16,
@@ -1486,6 +1493,7 @@ pub async fn post_repowering(
 
 /// Request body for `POST /api/v1/verguetungssatz-lookup`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VerguetungssatzLookupRequest {
     pub erzeugungsart: String,
     pub leistung_kwp: Decimal,
@@ -1502,6 +1510,7 @@ pub struct VerguetungssatzLookupRequest {
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/mastr-registrierung`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MastrRegistrierungRequest {
     /// MaStR Registrierungsnummer (format: `SEE000000000000`, `EEE000000000000`, etc.).
     ///
@@ -1672,6 +1681,7 @@ pub async fn post_verguetungssatz_lookup(
 
 /// Request body for `POST /api/v1/settle/{year}/{month}`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BatchSettleRequest {
     /// EPEX monthly average ct/kWh.  When absent, uses stored `epex_monthly_prices`.
     pub epex_avg_ct_kwh: Option<Decimal>,
@@ -1846,6 +1856,7 @@ pub async fn post_batch_settle(
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/zusammenlegen`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ZusammenlegungRequest {
     /// TR-ID of the parent (surviving) plant.
     pub parent_tr_id: String,
@@ -1938,6 +1949,7 @@ pub async fn post_zusammenlegen(
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/switch-veraeusserungsform`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VeraeusserungsformWechselRequest {
     /// The Veräußerungsform to switch to: `"VERGUETUNG"` (Einspeisevergütung,
     /// §21 Abs. 1) or `"DIREKTVERMARKTUNG"` (gleitende Marktprämie, §20).
@@ -2232,6 +2244,7 @@ fn build_veraeusserungsform_ce(
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CorrectionSettleRequest {
     /// Corrected Einspeisemenge kWh.
     pub einspeisemenge_kwh: Option<rust_decimal::Decimal>,
@@ -2572,6 +2585,7 @@ mod calendar_tests {
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/regionalnachweis`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RegionalnachweisRequest {
     /// Register reference of the issued Regionalnachweis (§79a EEG).
     pub nachweis_ref: String,
@@ -2583,6 +2597,7 @@ pub struct RegionalnachweisRequest {
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/stromsteuerbefreiung`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StromsteuerbefreiungRequest {
     /// The exemption granted, in ct/kWh. Capped at the §3 StromStG full rate of
     /// 2,05 ct/kWh — an exemption cannot exceed the tax it exempts from.
@@ -2595,6 +2610,7 @@ pub struct StromsteuerbefreiungRequest {
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Sect54DefektRequest {
     /// Abs. 1 — Zahlungsberechtigung applied for after the 18th Kalendermonat.
     #[serde(default)]
@@ -2616,6 +2632,7 @@ pub struct Sect54DefektRequest {
 
 /// Request body for closing a §54 defect period.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Sect54NachweisRequest {
     /// Last day the defect applied — §54 Abs. 3 Satz 2/3.
     pub effective_until: String,
@@ -2965,6 +2982,7 @@ pub async fn put_einspeiser(
 
 /// Body of `POST /api/v1/anlagen/{tr_id}/pflichtverstoesse`.
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PflichtverstossAnlegenRequest {
     /// The §52 Abs. 1 Nummer, as `eeg_billing::SanktionsTyp` names it —
     /// `FERNSTEUERBARKEIT_FEHLEND`, `SECT10B_VORGABEN_VERLETZT`, … The full
@@ -2986,6 +3004,7 @@ pub struct PflichtverstossAnlegenRequest {
 
 /// Body of `PUT /api/v1/anlagen/{tr_id}/pflichtverstoesse/{typ}/behoben`.
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PflichtverstossBehobenRequest {
     /// Day the obligation was met, ISO 8601. Must not precede `beginn`.
     pub behoben_am: String,

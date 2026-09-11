@@ -13,6 +13,7 @@ use crate::{domain, outbound};
 
 /// Create a B2B framework contract.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateRahmenvertragInput {
     pub gueltig_von: Date,
     pub gueltig_bis: Option<Date>,
@@ -31,6 +32,7 @@ pub struct CreateRahmenvertragInput {
 
 /// Create a supply contract with its commodity components.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateVersorgungsvertragInput {
     pub rahmenvertrag_id: Option<Uuid>, // B2B: usually set; B2C: None
     pub kundentyp: String,
@@ -50,7 +52,10 @@ pub struct CreateVersorgungsvertragInput {
     pub renewal_monate: Option<i32>,
     pub standort_bezeichnung: Option<String>,
     /// BO4E `Adresse` of the supply location.
-    pub standort_adresse: Option<serde_json::Value>,
+    ///
+    /// Crosses [the BO4E gate](mako_markt::bo4e::decode) during
+    /// deserialization; the stored JSONB is the canonical round-trip.
+    pub standort_adresse: Option<mako_markt::bo4e::Bo4e<rubo4e::current::Adresse>>,
     pub zahlungsziel_tage: Option<i32>,
     pub erp_contract_id: Option<String>,
     pub notizen: Option<String>,
@@ -81,6 +86,7 @@ pub struct CreateKomponenteInput {
 
 /// Terminate a contract.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KuendigungInput {
     /// The day supply ends.
     pub lieferende: Date,
@@ -105,6 +111,7 @@ const fn default_grund() -> domain::Kuendigungsgrund {
 
 /// Change the product of one component.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TarifwechselInput {
     /// UUID of the Vertragskomponente to be re-tariffed.
     pub komp_id: Uuid,
@@ -417,7 +424,13 @@ pub async fn insert_versorgungsvertrag(
     .bind(input.auto_renewal.unwrap_or(false))
     .bind(input.renewal_monate.unwrap_or(0))
     .bind(&input.standort_bezeichnung)
-    .bind(&input.standort_adresse)
+    .bind(
+        input
+            .standort_adresse
+            .as_ref()
+            .map(mako_markt::bo4e::Bo4e::canonical_json)
+            .transpose()?,
+    )
     .bind(input.zahlungsziel_tage)
     .bind(&input.erp_contract_id)
     .bind(&input.notizen)
@@ -660,14 +673,19 @@ pub async fn fetch_vertrag_by_malo(
     malo_id: &str,
     tenant: &str,
 ) -> Result<Option<(VersorgungsvertragRow, VertragskomponenteRow)>> {
-    let vertrag: Option<VersorgungsvertragRow> = sqlx::query_as(
+    // The billable predicate, shared with the price feed and the recipient
+    // lookup — see [`KOMPONENTE_BILLABLE`]. This is the answer `billingd` puts
+    // the § 40 Abs. 1 facts *and* the BG-7 recipient on, so a narrower list
+    // here than the one that decides whether a period is priced produced
+    // exactly the document that has a price and no addressee.
+    let vertrag: Option<VersorgungsvertragRow> = sqlx::query_as(&format!(
         "SELECT v.* FROM versorgungsvertraege v
          JOIN vertragskomponenten k ON k.vertrag_id = v.id
          WHERE k.malo_id=$1 AND v.tenant=$2
-           AND v.status IN ('TEILERFUELLUNG','AKTIV','GEKÜNDIGT')
-           AND k.status IN ('AKTIV','BESTAETIGT')
-         ORDER BY v.vertragsbeginn DESC LIMIT 1",
-    )
+           AND v.status IN {VERTRAG_BILLABLE}
+           AND k.status IN {KOMPONENTE_BILLABLE}
+         ORDER BY v.vertragsbeginn DESC LIMIT 1"
+    ))
     .bind(malo_id)
     .bind(tenant)
     .fetch_optional(pool)
@@ -678,12 +696,12 @@ pub async fn fetch_vertrag_by_malo(
     // The same status filter as the contract lookup. Without it a later
     // ABGELEHNT/STORNIERT retry row for the same MaLo won the ORDER BY and fed
     // billingd the § 40 facts of a component that never went into supply.
-    let komponente: Option<VertragskomponenteRow> = sqlx::query_as(
+    let komponente: Option<VertragskomponenteRow> = sqlx::query_as(&format!(
         "SELECT * FROM vertragskomponenten
          WHERE vertrag_id=$1 AND malo_id=$2
-           AND status IN ('AKTIV','BESTAETIGT')
-         ORDER BY created_at DESC LIMIT 1",
-    )
+           AND status IN {KOMPONENTE_BILLABLE}
+         ORDER BY created_at DESC LIMIT 1"
+    ))
     .bind(vertrag.id)
     .bind(malo_id)
     .fetch_optional(pool)
@@ -800,6 +818,40 @@ const VERTRAG_TERMINAL: &str = "('GEKÜNDIGT','ABGELAUFEN','STORNIERT')";
 /// A replayed rejection flipped an already-confirmed or already-ended component
 /// to ABGELEHNT, which took it out of the billing feed retroactively.
 const KOMPONENTE_TERMINAL: &str = "('BEENDET','ABGELEHNT','STORNIERT')";
+
+/// Component statuses a period may be **billed** for.
+///
+/// Everything except the two that say no supply happened: `ABGELEHNT` (the
+/// Netzbetreiber refused the Anmeldung) and `STORNIERT` (the contract was
+/// withdrawn). `BEENDET` stays in — a Schlussrechnung is issued after supply
+/// ends, and the closing invoice is the one that most needs a customer.
+///
+/// # Why it is a constant
+///
+/// Two queries used to answer this question differently and neither knew it.
+/// [`crate::pg::malo_slices`] — the product/price feed `billingd` bills from —
+/// filtered on **nothing**, so a MaLo whose Anmeldung the NB had rejected was
+/// still priced. `fetch_rechnungsempfaenger_by_malo` — who the invoice is
+/// addressed to — accepted only `AKTIV`/`BESTAETIGT`, so a contract that was
+/// filed but not yet confirmed produced a priced invoice **addressed to
+/// nobody**: § 14 Abs. 4 Nr. 1 UStG names the Leistungsempfänger, EN 16931
+/// makes BT-44 mandatory, and `billingd` fell back to a party called
+/// "Marktlokation 5123…".
+///
+/// One predicate, both queries: if a period can be billed, the party it is
+/// billed to is on the same component.
+pub(crate) const KOMPONENTE_BILLABLE: &str =
+    "('ANGELEGT','ANGEMELDET','BESTAETIGT','AKTIV','BEENDET')";
+
+/// Contract statuses whose components may be billed.
+///
+/// The mirror of [`KOMPONENTE_BILLABLE`] one level up: `derive_vertrag_status`
+/// maps an all-`ANGELEGT` contract to `ANGELEGT` and a dispatched one to
+/// `IN_BEARBEITUNG`, and both were missing from the buyer lookup — which is
+/// what made the *first* invoice of every new supply relationship the
+/// unaddressed one.
+pub(crate) const VERTRAG_BILLABLE: &str =
+    "('ANGELEGT','IN_BEARBEITUNG','TEILERFUELLUNG','AKTIV','GEKÜNDIGT','ABGELAUFEN')";
 
 /// # Errors
 ///
@@ -974,6 +1026,59 @@ pub fn derive_vertrag_status(komponenten: &[VertragskomponenteRow]) -> &'static 
         // Something is still pending and nothing runs yet.
         () if komponenten.iter().any(|k| k.status == "ANGEMELDET") => "IN_BEARBEITUNG",
         () => "ANGELEGT",
+    }
+}
+
+#[cfg(test)]
+mod billable_predicate_tests {
+    /// The three queries that decide "is this period billed, and to whom" must
+    /// use the one constant.
+    ///
+    /// They did not, and the difference was invisible: `malo_slices` filtered
+    /// on **nothing**, so a MaLo whose Anmeldung the Netzbetreiber had rejected
+    /// was still priced; `fetch_rechnungsempfaenger_by_malo` and
+    /// `fetch_vertrag_by_malo` demanded `AKTIV`/`BESTAETIGT`, so a contract
+    /// that was filed but not yet confirmed was priced and addressed to nobody.
+    /// A source scan, because the disagreement is between three SQL literals
+    /// and nothing that compiles or runs can see it.
+    #[test]
+    fn every_billing_query_uses_the_shared_status_list() {
+        for (file, src, needle) in [
+            (
+                "pg/produkte.rs",
+                include_str!("produkte.rs"),
+                "KOMPONENTE_BILLABLE",
+            ),
+            (
+                "pg/kunden.rs",
+                include_str!("kunden.rs"),
+                "KOMPONENTE_BILLABLE",
+            ),
+            (
+                "pg/vertraege.rs",
+                include_str!("vertraege.rs"),
+                "KOMPONENTE_BILLABLE",
+            ),
+        ] {
+            assert!(
+                src.contains(needle),
+                "{file} must scope its billing query with {needle}"
+            );
+        }
+        // And the constant still says what the doc comment claims: everything
+        // but the two states in which no supply happened.
+        for status in ["ANGELEGT", "ANGEMELDET", "BESTAETIGT", "AKTIV", "BEENDET"] {
+            assert!(
+                super::KOMPONENTE_BILLABLE.contains(status),
+                "{status} is billable"
+            );
+        }
+        for status in ["ABGELEHNT", "STORNIERT"] {
+            assert!(
+                !super::KOMPONENTE_BILLABLE.contains(status),
+                "{status} means no supply took place"
+            );
+        }
     }
 }
 

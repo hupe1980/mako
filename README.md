@@ -205,12 +205,15 @@ is [mako docs · Services](https://hupe1980.github.io/mako/docs/services/).
 
 ### BO4E typed API (`marktd`)
 
-**88 active `rubo4e::current` types — every payload, in or out, crosses one four-stage gate**, decoded through `rubo4e`'s own depth-capped entry point.
+**94 active `rubo4e::current` types — every payload, in or out, crosses one four-stage gate**, and a BO4E document in a request body is a `Bo4e<T>`, so the gate runs while `serde` deserialises and no handler can forget it.
 
 | Category | Detail |
 |---|---|
 | 📦 **Typed responses** | `GET /api/v1/malos` → `Marktlokation`; `GET /api/v1/melos` → `Messlokation`; `GET /api/v1/zaehler` → `Zaehler`; `GET /api/v1/geraete` → `Geraet` — all canonical BO4E camelCase |
 | 🔍 **One gate on write** | `mako_markt::bo4e::decode` at every endpoint: `_typ` → typed deserialization → strict enums by JSON-path → the rules BO4E states in prose and enforces nowhere. Every refusal is a 422 with the same `code` |
+| 🧬 **The gate is in the type** | A BO4E field in a request body is a `Bo4e<T>`, which runs all four stages inside `Deserialize` — there is no constructor that skips them. A `serde_json::Value` documented as a BO4E payload is refused by `cargo xtask check-request-bodies`, with an empty exemption list |
+| 🧩 **Lokationsbündel, audited against the BDEW codelist** | EDI@Energy's *Codeliste der Lokationsbündelstrukturen* — 15 structures, 27 object codes — decides which structure a bundle declares and where each object sits in it. An object code standing for another object type is a `422` |
+| 🚧 **Bodies refuse what they cannot store** | Every `Json<T>` request body denies unknown fields, so a caller naming a field the API does not have gets a 422 naming it rather than a 2xx and a value that went nowhere |
 | 📤 **Nothing is emitted that would be refused** | The same rules run outbound — over every shape the three billing engines can produce, and at runtime wherever a document is *assembled* (a Sammelrechnung, a Rechnung merged with its Fremdkosten). Money is compared at the scale of the stated total |
 | 🏦 **Identifiers and bank details** | A customer's **IBAN** (ISO 7064 MOD-97-10) and **BIC** (ISO 9362) are checked before storage, so a typo is a 422 rather than a returned direct debit; `MaloId`, `MeloId` and `EicCode` carry their check digits |
 | 📋 **`Vertrag` for LRV exchange** | `nb_contracts` stores full BO4E `Vertrag` JSONB + typed SQL columns; `PUT /api/v1/nb-contracts` validates `vertragsart` / `vertragsstatus`; emits `de.markt.nb-contract.updated` CloudEvent |
@@ -223,7 +226,7 @@ is [mako docs · Services](https://hupe1980.github.io/mako/docs/services/).
 | 🏷️ **`Tarifpreisblatt` + `Preisblatt`** | `productd` stores all energy products as `Tarifpreisblatt` JSONB; category drives calculator selection; all prices are user-defined; schema validated on PUT (wrong `_typ` → 422); queried by `billingd` calculator for pricing inputs |
 | 🔒 **One vocabulary per column** | Typed columns are derived from the typed BO, never a string lookup on its JSON, and hold BO4E wire values only. Each enum column's SQL `CHECK` is that enum's `VARIANTS`, compared against the schema by a `mako-markt` test. |
 | 🧭 **UTILMD characteristics read by class** | `makod` reads SG10 `CCI`/`CAV` by DE 7059 Klassentyp *and* DE 7037 Merkmal — the two code spaces overlap (`Z18` = Regelzone or „Kein Haushaltskunde") — and maps them to BO4E enums: `CCI+Z30++Z06/Z07` → `Energierichtung`, `CAV+E03…E09` / `Y01…Y03` → `Netzebene`. Each mapping cites its MIG Strom S2.2 / Gas G1.2 segment number. |
-| 🏷️ **Namespaced BO4E extensions** | What BO4E does not model rides in a `ZusatzAttribut` named `mako:<snake_case>` — 41, each registered with what it carries. BO4E mandates no convention for its extension slot, so `cargo xtask check-bo4e-attributes` enforces the prefix and keeps the registry consumers read. |
+| 🏷️ **Namespaced BO4E extensions** | What BO4E does not model rides in a `ZusatzAttribut` named `mako:<snake_case>` — 42, each registered with what it carries. BO4E mandates no convention for its extension slot; `mako` is a prefix `rubo4e` itself registers, and `cargo xtask check-bo4e-attributes` reads it from there |
 | ✅ **Outbound BO4E conformance** | Every emission site crosses the same gate, because an engine test covers the shapes a builder produces but not the values a request supplies. Out-of-schema **fields** are refused alongside values; documents are built typed, never assembled as JSON |
 | 🧾 **`Steuerbetrag` + `Registeranzahl`** | `energy-billing` projects the EN 16931 BG-23 tax breakdown into BO4E `Steuerbetrag` entries on the Rechnung JSON; `Registeranzahl` (Eintarif/Zweitarif) drives HT/NT position branching |
 | 🏦 **`Zahlungsinformation` + `Zahlungsart`** | `accountingd` SEPA mandate registry stores structured payment info; pain.008 XML generated from `SepaMandateRow` (IBAN, BIC, Kontoinhaber, Mandatsreferenz) |

@@ -14,12 +14,13 @@
 use std::sync::Arc;
 
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, Query},
     http::StatusCode,
     response::IntoResponse,
 };
 use mako_markt::repository::MeloMsbRepository;
+use mako_service::Json;
 use serde::Deserialize;
 use time::Date;
 use time::format_description::well_known::Iso8601;
@@ -40,6 +41,7 @@ pub struct MsbAtQuery {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PutMeloMsbBody {
     /// GLN of the Messstellenbetreiber.
     pub msb_mp_id: String,

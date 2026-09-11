@@ -588,7 +588,12 @@ fn a_document<'a>(subject: &'a str, content: &'a [u8]) -> docs::NewDocument<'a> 
         recipient: docs::Recipient {
             name: Some("Erika Mustermann".to_owned()),
             email: Some("erika@example.test".to_owned()),
-            address: Some(serde_json::json!({ "plz": "10115", "ort": "Berlin" })),
+            address: Some(outputd::delivery::store::PostalAddress {
+                line1: "Musterstr. 1".to_owned(),
+                post_code: "10115".to_owned(),
+                city: "Berlin".to_owned(),
+                country: "DE".to_owned(),
+            }),
         },
         issued_by: Some("operator-sub"),
     }

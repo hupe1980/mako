@@ -20,7 +20,7 @@ impl PgPartnerRepository {
     }
 }
 
-const SELECT_COLS: &str = "mp_id, display_name, marktrolle, sparte, rollencodetyp, makoadresse, channels, version, updated_at";
+const SELECT_COLS: &str = "mp_id, display_name, marktrolle, sparte, rollencodetyp, makoadresse, geschaeftspartner, version, updated_at";
 
 impl PartnerRepository for PgPartnerRepository {
     async fn upsert(&self, partner: PartnerRecord) -> Result<i64, MdmError> {
@@ -39,7 +39,7 @@ impl PartnerRepository for PgPartnerRepository {
         let rollencodetyp_str = partner.rollencodetyp.map(|r| r.to_string());
 
         sqlx::query(
-            r#"INSERT INTO partners (mp_id, display_name, marktrolle, sparte, rollencodetyp, makoadresse, channels, version, updated_at)
+            r#"INSERT INTO partners (mp_id, display_name, marktrolle, sparte, rollencodetyp, makoadresse, geschaeftspartner, version, updated_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
                ON CONFLICT (mp_id) DO UPDATE
                SET display_name  = EXCLUDED.display_name,
@@ -47,7 +47,7 @@ impl PartnerRepository for PgPartnerRepository {
                    sparte        = EXCLUDED.sparte,
                    rollencodetyp = EXCLUDED.rollencodetyp,
                    makoadresse   = EXCLUDED.makoadresse,
-                   channels      = EXCLUDED.channels,
+                   geschaeftspartner = EXCLUDED.geschaeftspartner,
                    version       = EXCLUDED.version,
                    updated_at    = now()"#,
         )
@@ -57,7 +57,7 @@ impl PartnerRepository for PgPartnerRepository {
         .bind(sparte_str)
         .bind(&rollencodetyp_str)
         .bind(&partner.makoadresse)
-        .bind(&partner.channels)
+        .bind(&partner.geschaeftspartner)
         .bind(new_version)
         .execute(&self.pool)
         .await
@@ -131,7 +131,7 @@ fn row_to_partner(r: PgRow) -> PartnerRecord {
         sparte: sparte_str.as_deref().map(parse_sparte),
         rollencodetyp: rollencodetyp_str.and_then(|s| decode_enum("rollencodetyp", &s)),
         makoadresse: makoadresse.unwrap_or_default(),
-        channels: r.get("channels"),
+        geschaeftspartner: r.get("geschaeftspartner"),
         version: r.get("version"),
         updated_at: r.get("updated_at"),
     }

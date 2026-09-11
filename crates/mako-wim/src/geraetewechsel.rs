@@ -1591,9 +1591,9 @@ impl Workflow for WimDeviceChangeWorkflow {
                     // positive (BGM+312) and the negative (BGM+313) one.
                     //
                     // Register TWO deadlines atomically with the events:
-                    //   1. APERAK Strom *sending* deadline (APERAK AHB 1.0 \u00a72.4.1):
+                    //   1. APERAK Strom *sending* deadline (APERAK AHB 1.0 §2.4.1):
                     //      weekday = 45 min; Saturday = Sunday noon.
-                    //   2. The *business answer* deadline \u2014 Best\u00e4tigung or Ablehnung.
+                    //   2. The *business answer* deadline — Bestätigung or Ablehnung.
                     //      Sized per PID (3 / 5 / 7 / 1 WT), never flat: see
                     //      `antwort_frist_werktage`. The PID guard above already
                     //      rejected anything outside the family, so the lookup
@@ -1615,9 +1615,9 @@ impl Workflow for WimDeviceChangeWorkflow {
                     events.push(DeviceChangeEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // F-035: APERAK BGM+313 \u2014 mandatory per APERAK AHB 1.0 \u00a72.1.1.
-                    // Validation failed \u2192 APERAK sent immediately: register the 45-min
-                    // *sending* deadline so the OutboxWorker is monitored (APERAK AHB 1.0 \u00a72.4.1).
+                    // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
+                    // Validation failed → APERAK sent immediately: register the 45-min
+                    // *sending* deadline so the OutboxWorker is monitored (APERAK AHB 1.0 §2.4.1).
                     let aperak_send_dl = aperak_deadline(sparte, pid.as_u32(), received_at);
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(

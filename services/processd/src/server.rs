@@ -634,11 +634,12 @@ mod rest {
     use std::sync::Arc;
 
     use axum::{
-        Extension, Json,
+        Extension,
         extract::{Path, State},
         http::StatusCode,
         response::IntoResponse,
     };
+    use mako_service::Json;
 
     use mako_service::{cedar::CedarEnforcer, oidc::Claims};
     use sqlx::PgPool;

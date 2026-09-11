@@ -42,7 +42,10 @@ impl PgMaloRepository {
         let sparte_str = sparte.to_string();
         // Typed columns, derived from the validated BO rather than from string
         // lookups on its JSON. Every value is a BO4E wire value by construction.
-        let cols = MaloShadowColumns::from_marktlokation(data);
+        let cols =
+            MaloShadowColumns::from_marktlokation(data).map_err(|e| MdmError::Unprocessable {
+                reason: e.to_string(),
+            })?;
         let payload = serde_json::to_value(data)
             .map_err(|e| MdmError::Internal(format!("Marktlokation is not serialisable: {e}")))?;
 

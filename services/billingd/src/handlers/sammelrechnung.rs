@@ -6,6 +6,7 @@ use super::*;
 
 /// Request body for `POST /api/v1/billing/sammelrechnung/{rahmenvertrag_id}`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SammelrechnungRequest {
     pub lf_mp_id: String,
     pub period_from: String,
@@ -23,7 +24,6 @@ struct SitePriced {
     product_code: String,
     category: String,
     invoice: Invoice,
-    buyer: Option<crate::clients::Rechnungsempfaenger>,
 }
 
 /// `POST /api/v1/billing/sammelrechnung/{rahmenvertrag_id}`
@@ -139,10 +139,9 @@ pub async fn post_sammelrechnung(
         };
 
         priced.push(SitePriced {
-            // Each per-MaLo line of a Sammelrechnung bills that site's own supply
-            // customer, so the buyer that came back with the priced invoice is
-            // the right one.
-            buyer: billed.buyer,
+            // Each per-MaLo line of a Sammelrechnung bills that site's own
+            // supply customer, and that party is already on the priced
+            // invoice's context — `dispatch_invoice_multi` put it there.
             malo_id: entry.malo_id.clone(),
             rechnungsnummer: malo_nr,
             product_code: summary.product_code,
@@ -175,6 +174,10 @@ pub async fn post_sammelrechnung(
         .map(|p| (p.malo_id.clone(), p.invoice.clone()))
         .collect();
     let malos_count = parts.len();
+    // The bundled document bills the **Rahmenvertrag holder**, not any one
+    // site's supply customer, so the recipient is vertragd's holder projection
+    // rather than the per-MaLo one the lines carry. Passed into the build, not
+    // set afterwards: this returns the BO4E `Rechnung` as JSON too.
     let (sammel_invoice, sammel_json) = build_aggregate_invoice(
         &rahmenvertrag_id,
         &req.lf_mp_id,
@@ -191,6 +194,10 @@ pub async fn post_sammelrechnung(
             ),
             zusatz_attribut("mako:billing_run_id", serde_json::json!(run_id)),
         ],
+        sites
+            .rechnungsempfaenger
+            .as_ref()
+            .map(crate::clients::Rechnungsempfaenger::as_context_party),
     )?;
     let (total_netto, total_brutto) = (sammel_invoice.netto_eur, sammel_invoice.brutto_eur);
 
@@ -237,15 +244,7 @@ pub async fn post_sammelrechnung(
             Ok(id) => id,
             Err(e) => return Err(period_conflict(&pool, &cfg.tenant, e).await),
         };
-        crate::einvoice::store(
-            &mut *tx,
-            record_id,
-            &site.invoice,
-            &cfg,
-            &site.malo_id,
-            site.buyer.as_ref(),
-        )
-        .await?;
+        crate::einvoice::store(&mut *tx, record_id, &site.invoice, &cfg, &site.malo_id).await?;
         per_malo_ids.push(record_id);
     }
 
@@ -286,10 +285,6 @@ pub async fn post_sammelrechnung(
         &sammel_invoice,
         &cfg,
         &rahmenvertrag_id,
-        // The bundled document bills the **Rahmenvertrag holder**, not any one
-        // site's supply customer, so this is vertragd's holder projection rather
-        // than the per-MaLo one used for the lines above.
-        sites.rechnungsempfaenger.as_ref(),
     )
     .await?;
     // Inside the transaction: the risk baseline and the record listings treat
@@ -333,6 +328,7 @@ fn site_error(malo_id: &str, e: &BillingError) -> serde_json::Value {
 
 /// Request body for `POST /api/v1/billing/{id}/submit-b2g`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SubmitB2gRequest {
     /// Target portal identifier: `"ZRE"` (Zentraler Rechnungseingang) or `"OZG-RE"`.
     /// Defaults to `"ZRE"`.
