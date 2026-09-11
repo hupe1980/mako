@@ -22,7 +22,7 @@
 //!
 //! ## Rule 2 — a BO4E document in a request body is a `Bo4e<T>`
 //!
-//! [`mako_markt::bo4e::decode`] is one function call, and the defect it keeps
+//! `mako_markt::bo4e::decode` is one function call, and the defect it keeps
 //! producing is that somebody does not make it. A field typed
 //! `serde_json::Value` and documented as a BO4E payload is stored exactly as it
 //! arrived: wrong `_typ`, out-of-schema enums, unbounded nesting, no rules.

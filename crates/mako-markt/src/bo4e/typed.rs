@@ -1,7 +1,7 @@
 //! [`Bo4e<T>`] — a BO4E document that cannot exist without having crossed the
 //! gate.
 //!
-//! [`decode`](super::decode) is one function call, and the defect it keeps
+//! [`super::decode`] is one function call, and the defect it keeps
 //! producing is that somebody does not make it. A request struct declares
 //!
 //! ```ignore
@@ -22,7 +22,7 @@
 //!
 //! and `serde` runs the gate while it deserialises the request. There is no
 //! constructor that skips it: [`Deserialize`] is the only way in from untrusted
-//! JSON, and it is [`decode`](super::decode).
+//! JSON, and it is [`super::decode`].
 //!
 //! # What the handler then does
 //!
@@ -59,7 +59,7 @@ use super::gate::{Bo4eRejection, Bo4eSerialiseError, Bo4eTyped, decode};
 /// so finding it in an error string cannot be a false positive.
 pub const REJECTION_SENTINEL: &str = "\u{1}bo4e-rejection\u{1}";
 
-/// A BO4E document that has crossed [`decode`](super::decode).
+/// A BO4E document that has crossed [`super::decode`].
 ///
 /// Deserialises through the gate — see the [module docs](self). Serialises as
 /// the document itself, so a struct carrying one round-trips unchanged.
