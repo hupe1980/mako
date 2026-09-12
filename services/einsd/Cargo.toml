@@ -47,9 +47,11 @@ secrecy      = { version = "0.10" }
 
 
 [dev-dependencies]
+# Test-only: pins that the Veräußerungsform wire codes einsd emits are the
+# ones the NB-side reader parses. No production path reads an Entscheidungsbaum.
+mako-pruefung = { workspace = true, features = ["role-nb"] }
 toml       = "0.8"
 # The reading side of the `CCI+Z22` lookup — the two must agree on the alphabet.
-mako-pruefung = { workspace = true, features = ["role-nb"] }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 time = { workspace = true }
