@@ -95,8 +95,14 @@ pub async fn put_aggregatorvertrag(
 
 /// `GET /api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}`
 ///
-/// The Messstellenbetriebsvertrag the MSB holds at a Messlokation, plus the
-/// date a Kündigung received on `?on=` (default today) could take effect.
+/// The Messstellenbetriebsvertrag the MSB holds at a Messlokation on `?on=`
+/// (default today), plus the date a Kündigung received that day could take
+/// effect.
+///
+/// `?on=` picks the contract as well as dating the answer: the same MSB may hold
+/// successive contracts at one Messlokation, and the one that answers is the
+/// latest to have begun by that day. An ended term still answers — `E_0200`
+/// tells „bereits beendet" apart from „keine Zuordnung".
 ///
 /// `processd` reads this to answer a WiM Kündigung MSB out of `E_0200`. A `404`
 /// is **no contract** — the `ZC9` case; a `5xx` is a lookup that could not be
@@ -112,11 +118,11 @@ pub async fn get_messstellenvertrag(
     Query(q): Query<MessstellenvertragQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
     authorize(&enforcer, &claims, "read-stammdaten", ctx.tenant())?;
-    let row = pg::find_messstellenvertrag(&ctx.pool, ctx.tenant(), &melo_id, &msb_mp_id)
+    let on = q.on.unwrap_or_else(mako_fristen::heute);
+    let row = pg::find_messstellenvertrag(&ctx.pool, ctx.tenant(), &melo_id, &msb_mp_id, on)
         .await
         .map_err(ApiError::Internal)?
         .ok_or(ApiError::NotFound)?;
-    let on = q.on.unwrap_or_else(mako_fristen::heute);
     ok(row.view(on, q.haushaltskunde.unwrap_or(true)))
 }
 
@@ -145,8 +151,8 @@ pub async fn put_messstellenvertrag(
 
 #[derive(Deserialize)]
 pub struct MessstellenvertragQuery {
-    /// ISO 8601 date the next admissible Kündigungstermin is computed against;
-    /// defaults to today.
+    /// ISO 8601 date the contract is read as of and the next admissible
+    /// Kündigungstermin is computed against; defaults to today.
     pub on: Option<Date>,
     /// Whether the Anschlussnutzer is a Haushaltskunde — decides the
     /// § 309 Nr. 9 lit. c BGB cap. Defaults to `true`, the protective reading.

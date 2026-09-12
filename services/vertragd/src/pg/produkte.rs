@@ -271,21 +271,6 @@ pub async fn produkt_am(
     .await?)
 }
 
-/// Every slice of a component, newest first — the Tarifwechsel history.
-///
-/// # Errors
-///
-/// Propagates storage errors.
-pub async fn historie(pool: &PgPool, komp_id: Uuid) -> Result<Vec<ProduktSlice>> {
-    Ok(sqlx::query_as::<_, ProduktSlice>(&format!(
-        "SELECT {SLICE_COLS} FROM komponenten_produkte
-          WHERE komp_id = $1 ORDER BY gueltig_von DESC"
-    ))
-    .bind(komp_id)
-    .fetch_all(pool)
-    .await?)
-}
-
 /// One product slice as a billing reader sees it, clipped to the period asked
 /// about and carrying the market location it belongs to.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -324,10 +309,10 @@ pub async fn malo_slices(
     anyhow::ensure!(von <= bis, "von ({von}) darf nicht nach bis ({bis}) liegen");
     // `bis` is inclusive for the caller and exclusive in the range algebra.
     let bis_exkl = bis.next_day().unwrap_or(bis);
-    // The status filter is not optional. Without it this returned slices for a
-    // component the Netzbetreiber had **rejected** or the operator had
-    // withdrawn, so `billingd` priced a period in which no supply took place.
-    // The list is shared with the buyer lookup — see
+    // The status filter is load-bearing: a component the Netzbetreiber
+    // **rejected** or the operator withdrew names a period in which no supply
+    // took place, and a slice for it is a period `billingd` would price. The
+    // list is shared with the buyer lookup — see
     // [`crate::pg::vertraege::KOMPONENTE_BILLABLE`].
     Ok(sqlx::query_as::<_, MaloProduktSlice>(&format!(
         "SELECT k.malo_id, k.lf_mp_id, k.sparte, p.product_code,

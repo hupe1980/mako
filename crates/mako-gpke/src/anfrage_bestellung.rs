@@ -40,11 +40,9 @@
 //! # Regulatory basis
 //!
 //! - **BDEW UTILMD AHB Strom S2.1 / S2.2** (profiles `fv20251001`, `fv20261001`)
-//! - **BNetzA BK6-22-024 Anlage 1d** — GPKE Teil 4 Kap. 1.4.4 / 1.5.4. Earlier
-//!   revisions of this module cited „BK6-22-024 § 5" and a 24-hour window. The
-//!   Aktenzeichen was right by accident — Teil 4 *is* an Anlage to BK6-22-024 —
-//!   but the Festlegung has no numbered § 5 and no 24-hour window; the windows
-//!   are the 2 and 10 Werktage in the table above.
+//! - **BNetzA BK6-22-024 Anlage 1d** — GPKE Teil 4 Kap. 1.4.4 / 1.5.4. The
+//!   Festlegung has no numbered § 5 and no 24-hour window; the windows are the
+//!   2 and 10 Werktage in the table above.
 //! - **APERAK Frist: 45 Minuten** für eine UTILMD (APERAK AHB 1.0 § 2.4.1, same as all GPKE
 //!   processes)
 
@@ -186,7 +184,9 @@ pub enum AnfrageBestellungState {
     New,
     /// PID 55555 received; AHB validation result not yet recorded.
     Initiated(AnfrageData),
-    /// Validation passed; NB must respond within 24 hours.
+    /// Validation passed; the NB's answer window is running — the 2 or 10
+    /// Werktage of GPKE Teil 4 Kap. 1.4.4 / 1.5.4, which
+    /// [`mako_fristen::antwort`] resolves from the Prüfidentifikator.
     ValidationPassed(AnfrageData),
     /// NB dispatched a data response. Process complete (accepted or rejected by NB).
     ResponseDispatched(AnfrageData),

@@ -890,43 +890,6 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                                 "outbox worker: acknowledge failed",
                             );
                         }
-                        // CONTRL AHB 1.0 §1.2: the CONTRL must be delivered
-                        // within 6 wall-clock hours of interchange receipt.
-                        // `msg.created_at` is when the PendingOutbox was
-                        // materialised (which should equal the ingest timestamp
-                        // for transport-layer CONTRL obligations).
-                        if msg.message_type.as_ref() == "CONTRL" {
-                            let elapsed = time::OffsetDateTime::now_utc() - msg.created_at;
-                            if elapsed > time::Duration::hours(mako_fristen::CONTRL_FRIST_HOURS) {
-                                tracing::warn!(
-                                    message_id   = %msg.message_id,
-                                    elapsed_secs = elapsed.whole_seconds(),
-                                    max_secs     = mako_fristen::CONTRL_FRIST_HOURS * 3600,
-                                    "outbox worker: CONTRL delivered OUTSIDE the 6h Übertragungsfrist \
-                                     (CONTRL AHB 1.0 §1.2) — this is a BNetzA compliance violation"
-                                );
-                            }
-                        }
-                        // APERAK AHB 1.0 §2.4.1: Strom UTILMD/ORDERS APERAK must be
-                        // delivered within 45 minutes on weekdays, or by Sunday 12:00
-                        // if received on Saturday.  Log a compliance warning if the
-                        // delivery window was missed so operators can investigate.
-                        if msg.message_type.as_ref() == "APERAK" {
-                            let elapsed = time::OffsetDateTime::now_utc() - msg.created_at;
-                            if elapsed
-                                > time::Duration::minutes(
-                                    mako_fristen::APERAK_STROM_WEEKDAY_MINUTES,
-                                )
-                            {
-                                tracing::warn!(
-                                    message_id   = %msg.message_id,
-                                    elapsed_mins = elapsed.whole_minutes(),
-                                    "outbox worker: APERAK delivered after the 45-minute Strom \
-                                     sending window (APERAK AHB 1.0 §2.4.1) — \
-                                     check OutboxWorker and AS4 transport health"
-                                );
-                            }
-                        }
                         // The message is out, so any delivery window that was
                         // watching for it has been answered — retire it.
                         //
@@ -1127,10 +1090,30 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
             }
         };
 
+        let now = time::OffsetDateTime::now_utc();
         for deadline in open
             .iter()
             .filter(|d| mako_fristen::discharges_delivery_window(&msg.message_type, d.label()))
         {
+            // Delivered, but after the window closed. The scheduler will not see
+            // this one — the deadline is retired below — so the miss is recorded
+            // here or nowhere. The window comes off the deadline rather than
+            // from a duration constant, because neither the CONTRL nor the
+            // APERAK window is one number: a Strom Syntaxfehlermeldung on a
+            // UTILMD is 15 minutes, an ALOCAT CONTRL 45, the Regelfall 6 hours,
+            // and a Saturday APERAK runs to Sunday noon.
+            if now > deadline.due_at() {
+                tracing::warn!(
+                    message_id   = %msg.message_id,
+                    message_type = %msg.message_type,
+                    label        = %deadline.label(),
+                    due_at       = %deadline.due_at(),
+                    late_secs    = (now - deadline.due_at()).whole_seconds(),
+                    "outbox worker: delivered after its delivery window closed — \
+                     a missed Übertragungsfrist (CONTRL AHB 1.0 §2.3.1/§2.4.1, \
+                     APERAK AHB 1.0 §2.3/§2.4)"
+                );
+            }
             if let Err(e) = self.deadline_store.cancel(deadline.deadline_id()).await {
                 tracing::warn!(
                     message_id  = %msg.message_id,
@@ -1934,7 +1917,7 @@ where
                     "EngineBuilder::build: NoopDeadlineStore is active in a \
                      non-testing build. This silently discards all APERAK deadlines, \
                      which is an immediately reportable BNetzA violation \
-                     (BK6-22-024 §5, BK7-24-01-009). \
+                     (APERAK AHB 1.0 §2.4.1, AWH GeLi Gas BK7-24-01-009). \
                      Call .with_deadline_store(SlateDbStore::as_deadline_store()) \
                      in your production engine assembly. \
                      If this is a test, enable the 'testing' feature."
@@ -2132,8 +2115,13 @@ where
                     pid_router.register(pid, wf);
                 }
             }
-            // Commodity (Sparte-qualified) entries use distinct (pid, Sparte) keys
-            // and never conflict across modules; register them all unconditionally.
+            // Commodity (Sparte-qualified) entries are keyed on (pid, Sparte), so
+            // a PID split across the two Sparten cannot collide. Two modules of
+            // the *same* Sparte claiming one PID still can — COMDIS 29001 is
+            // claimed by both GPKE and WiM billing — and that pair is resolved
+            // by conversation-ID correlation at ingest, not by this table. What
+            // the key buys is that neither of them can be displaced by the Gas
+            // claim on the same PID.
             for (pid, sparte, wf) in scratch.registered_commodity_entries() {
                 pid_router.register_with_sparte(pid, sparte, wf);
             }

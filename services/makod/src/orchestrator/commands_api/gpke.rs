@@ -411,6 +411,19 @@ pub(super) async fn dispatch_lf_anmeldung(
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_owned),
+        // `SG4 STS+7` DE 9013 element 3. On 55077 the column admits only the
+        // three Geschäftsvorfälle; the workflow refuses an Anmeldung that
+        // states none rather than letting the renderer default to the
+        // verbrauchende `ZW4`.
+        transaktionsgrund_ergaenzung: payload
+            .get("transaktionsgrund_ergaenzung")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned),
+        // `SG8 SEQ+Z79` Produkt `9991000002090` — Muss in Geschäftsvorfall 3
+        // (Codeliste der Konfigurationen 1.4 Kap. 6.1.1). A bare string is the
+        // prozentuale Aufteilung; `{art, wert}` names one of the other two.
+        tranchengroesse: payload.get("tranchengroesse").cloned(),
     };
 
     // ── Duplicate guard ───────────────────────────────────────────────────────
@@ -794,7 +807,8 @@ pub(super) async fn dispatch_kuendigung_antwort(
 ///
 /// The LF receives PID 55007 Ankündigung via AS4 (auto-spawned by the ingest
 /// dispatcher). After review, the ERP operator calls this command to send the
-/// formal response. APERAK Frist: 24h wall-clock (BK6-22-024 §4).
+/// formal response. The APERAK is its own 45-minute clock (APERAK AHB 1.0
+/// §2.4.1); the business answer is due inside 55007's published Antwortfrist.
 ///
 /// ## Required payload fields
 ///
@@ -825,9 +839,7 @@ pub(super) async fn dispatch_gpke_nb_lieferende_antwort(
 /// `gpke.beendigung-zuordnung.ablehnen` (→ 55012 Ablehnung).
 ///
 /// The ingest dispatcher spawns `gpke-beendigung-zuordnung` on an inbound 55010
-/// and registers the 24 h business Frist (BK6-22-024 § 4). Until these two
-/// commands existed the spawned process had no way to be answered at all — it
-/// could only run out its deadline.
+/// and registers the business Frist `mako_fristen::antwort` publishes for it.
 ///
 /// ## Required payload fields
 ///
@@ -1127,7 +1139,7 @@ pub(super) async fn dispatch_lf_activate(
 /// Business key = `malo_id`; the inbound ORDERS 17115/17117 spawned the process
 /// and registered the correlation.
 ///
-/// Regulatory basis: GPKE BK6-22-024 §5 — the NB must dispatch IFTSTA 21039 after
+/// Regulatory basis: GPKE Teil 2 § 3.5 — the NB must dispatch IFTSTA 21039 after
 /// physical execution. `durchgefuehrt = false` reports a failed execution with a
 /// reason (meter access denied, safety block, …) so the LF is not left waiting.
 pub(super) async fn dispatch_gpke_sperrung_ausfuehrung(

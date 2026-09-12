@@ -1,6 +1,6 @@
 [package]
 name        = "productd"
-description = "Product and Tariff Catalog daemon (LF role). Single source of truth for retail energy tariffs (Eintarif/Zweitarif/RLM), Energiedienstleistungen, Telco/Internet bundle products, Tarifpreisblatt JSONB, MaLo->product assignment, EPEX Spot day-ahead prices for para.41a dynamic tariffs. Port :9080."
+description = "Product and tariff catalogue daemon (LF role) — Tarifpreisblatt, MaLo-Zuordnung und die EPEX-Spot-Day-Ahead-Reihe für § 41a"
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true

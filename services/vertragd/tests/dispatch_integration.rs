@@ -1978,22 +1978,111 @@ async fn a_second_overlapping_messstellenvertrag_is_refused() {
     .await;
     assert!(other.is_ok(), "a different MSB is a different contract");
 
-    // A direct INSERT of a second open term for the *same* MSB is what the
-    // exclusion constraint refuses; the repository upserts instead.
-    let clash = sqlx::query(
-        r"INSERT INTO messstellenvertraege
-              (tenant, melo_id, msb_mp_id, vertragsbeginn, kuendigungsfrist_monate)
-          VALUES ($1, $2, $3, $4, 1)",
+    // A second *open* term for the same MSB is what the exclusion constraint
+    // refuses, and the repository must reach it rather than quietly rewriting
+    // the running contract — the handler answers 409 from this error.
+    let clash = upsert_messstellenvertrag(
+        &pool,
+        tenant,
+        melo,
+        msb,
+        &UpsertMessstellenvertragInput {
+            vertragsbeginn: time::macros::date!(2025 - 06 - 01),
+            kuendigungsfrist_monate: 1,
+            kunden_id: None,
+            kuendigung_zum: None,
+            kuendigung_eingang: None,
+            frueher_moeglich: None,
+            beendet_am: None,
+        },
     )
-    .bind(tenant)
-    .bind(melo)
-    .bind(msb)
-    .bind(time::macros::date!(2025 - 06 - 01))
-    .execute(&pool)
     .await;
     assert!(
         clash.is_err(),
         "msv_no_overlap must refuse a second open term for the same MSB"
+    );
+
+    // The same MSB returning after its first contract ended is an ordinary
+    // MSB-Wechsel each way. The second term is a second row, and the first
+    // survives: it is the evidence that the MSB held the Messlokation then.
+    upsert_messstellenvertrag(
+        &pool,
+        tenant,
+        melo,
+        msb,
+        &UpsertMessstellenvertragInput {
+            vertragsbeginn: time::macros::date!(2024 - 01 - 01),
+            kuendigungsfrist_monate: 1,
+            kunden_id: None,
+            kuendigung_zum: None,
+            kuendigung_eingang: None,
+            frueher_moeglich: None,
+            beendet_am: Some(time::macros::date!(2025 - 06 - 30)),
+        },
+    )
+    .await
+    .expect("end the first term");
+    upsert_messstellenvertrag(
+        &pool,
+        tenant,
+        melo,
+        msb,
+        &UpsertMessstellenvertragInput {
+            vertragsbeginn: time::macros::date!(2026 - 01 - 01),
+            kuendigungsfrist_monate: 1,
+            kunden_id: None,
+            kuendigung_zum: None,
+            kuendigung_eingang: None,
+            frueher_moeglich: None,
+            beendet_am: None,
+        },
+    )
+    .await
+    .expect("a later, non-overlapping term is a second contract");
+
+    let terms: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM messstellenvertraege
+         WHERE tenant = $1 AND melo_id = $2 AND msb_mp_id = $3",
+    )
+    .bind(tenant)
+    .bind(melo)
+    .bind(msb)
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    assert_eq!(terms, 2, "the earlier contract must not be overwritten");
+
+    // Which of the two answers a Kündigung follows the Stichtag, not the row
+    // order: the later term must not speak for a day before it began.
+    use vertragd::pg::find_messstellenvertrag;
+    let waehrend_des_ersten = find_messstellenvertrag(
+        &pool,
+        tenant,
+        melo,
+        msb,
+        time::macros::date!(2025 - 01 - 15),
+    )
+    .await
+    .expect("lookup")
+    .expect("row");
+    assert_eq!(
+        waehrend_des_ersten.vertragsbeginn,
+        time::macros::date!(2024 - 01 - 01)
+    );
+    let heute = find_messstellenvertrag(
+        &pool,
+        tenant,
+        melo,
+        msb,
+        time::macros::date!(2026 - 06 - 01),
+    )
+    .await
+    .expect("lookup")
+    .expect("row");
+    assert_eq!(
+        heute.vertragsbeginn,
+        time::macros::date!(2026 - 01 - 01),
+        "the running term answers once it has begun"
     );
 }
 
@@ -2016,10 +2105,16 @@ async fn the_contract_round_trips_the_three_e0200_readings() {
     let msb = "9900000000003";
 
     assert!(
-        find_messstellenvertrag(&pool, tenant, melo, msb)
-            .await
-            .expect("lookup")
-            .is_none(),
+        find_messstellenvertrag(
+            &pool,
+            tenant,
+            melo,
+            msb,
+            time::macros::date!(2026 - 03 - 15)
+        )
+        .await
+        .expect("lookup")
+        .is_none(),
         "no contract is the ZC9 case, not an error"
     );
 
@@ -2041,11 +2136,11 @@ async fn the_contract_round_trips_the_three_e0200_readings() {
     .await
     .expect("upsert");
 
-    let live = find_messstellenvertrag(&pool, tenant, melo, msb)
+    let stichtag = time::macros::date!(2026 - 03 - 15);
+    let live = find_messstellenvertrag(&pool, tenant, melo, msb, stichtag)
         .await
         .expect("lookup")
         .expect("row");
-    let stichtag = time::macros::date!(2026 - 03 - 15);
     assert_eq!(
         live.naechstmoeglich(stichtag, false),
         Some(time::macros::date!(2026 - 06 - 15)),
@@ -2069,7 +2164,7 @@ async fn the_contract_round_trips_the_three_e0200_readings() {
         .await
         .expect("record")
     );
-    let gekuendigt = find_messstellenvertrag(&pool, tenant, melo, msb)
+    let gekuendigt = find_messstellenvertrag(&pool, tenant, melo, msb, stichtag)
         .await
         .expect("lookup")
         .expect("row");
@@ -2081,6 +2176,23 @@ async fn the_contract_round_trips_the_three_e0200_readings() {
         gekuendigt.naechstmoeglich(stichtag, false),
         None,
         "a terminated contract has no next date — E_0200 answers Z34"
+    );
+
+    // A Stichtag before the contract began has no contract to answer about, and
+    // that is the ZC9 case — distinct from the Z29 one above, which reports a
+    // term that existed and ended.
+    assert!(
+        find_messstellenvertrag(
+            &pool,
+            tenant,
+            melo,
+            msb,
+            time::macros::date!(2023 - 12 - 31)
+        )
+        .await
+        .expect("lookup")
+        .is_none(),
+        "a term recorded for a later start must not answer for an earlier day"
     );
 }
 

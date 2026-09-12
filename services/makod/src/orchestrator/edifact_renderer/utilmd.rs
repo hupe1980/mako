@@ -23,11 +23,12 @@ use super::*;
 /// | `document_date` | no       | Document date (defaults to today at dispatch time) |
 /// | `message_ref`   | no       | Derived from `causation_event_id` when absent  |
 /// | `transaktionsgrund` | no   | `SG4 STS+7` DE 9013 element 2                  |
-/// | `transaktionsgrund_ergaenzung` | no | `STS+7` DE 9013 element 3 (`ZW3`…`ZAP`); defaults to `ZW4` where the column lists it |
+/// | `transaktionsgrund_ergaenzung` | **on 55077/55601** | `STS+7` DE 9013 element 3 (`ZW3`…`ZAP`); defaults to `ZW4` only where the column lists it, and is refused where it does not |
 /// | `antwort_code`  | no       | `SG4 STS+E01` DE 9013 — **required on every Antwort-PID** |
 /// | `antwort_codeliste` | no   | `STS+E01` DE 1131, the **Codeliste** the code comes from (`E_0622`, `S_0090`, `G_0051`, …) |
 /// | `bemerkung`     | no       | `FTX+ACB` free text (mandatory alongside a catch-all Ablehnungscode) |
 /// | `bilanzkreis`   | on 55001/55014/55608, 44001 | Strom: `SG8 SEQ+Z79` Produktpaket · Gas: `SG10 CCI+Z19` — its own slot, never `bemerkung` |
+/// | `tranchengroesse` | **on `ZW2`** | `SG8 SEQ+Z79` Produkt `9991000002090` — a bare string is the prozentuale Aufteilung, `{art, wert}` names one of the other two |
 /// | `document_code` | no       | `BGM` DE 1001, when the Anwendungsfall fixes one other than `E01` |
 /// | `lokationstyp`  | no       | `SG5 LOC` DE 3227 — `Z21` Tranche, Gas `172` Meldepunkt; defaults to the PID's own object |
 /// | `beteiligte_marktpartner` | on 55036/55038, 44036/44038 | `SG12 NAD+VY` — every Altlieferant, or the auslösender Marktpartner |
@@ -288,10 +289,39 @@ pub(super) fn render_utilmd(
         {
             Transaktionsgrund::bare(grund)
         } else {
-            let erg = p
+            let stated = p
                 .get("transaktionsgrund_ergaenzung")
                 .and_then(|v| v.as_str())
-                .unwrap_or(ergaenzung::VERBRAUCHENDE_MALO);
+                .filter(|s| !s.is_empty());
+            // `ZW4` „verbrauchende Marktlokation" is the default only where the
+            // column admits it. 55077 and 55601 are the erzeugende pair and
+            // admit `ZW0`/`ZW1`/`ZW2` — the Geschäftsvorfall — so a missing one
+            // is a fact nobody stated rather than a value to guess: the three
+            // mean different Zuordnungen and only the third builds a Tranche.
+            let erg = match stated {
+                Some(e) => e,
+                None if ergaenzung_admitted(&release, pid, ergaenzung::VERBRAUCHENDE_MALO) => {
+                    ergaenzung::VERBRAUCHENDE_MALO
+                }
+                None => {
+                    let admitted = admitted_ergaenzungen(&release, pid);
+                    return Err(RenderError::MissingField {
+                        message_type: mt.into(),
+                        field: format!(
+                            "transaktionsgrund_ergaenzung on PID {pid}: the column does not \
+                             admit the default {default} and lists {list} — the sender must \
+                             state which one applies",
+                            default = ergaenzung::VERBRAUCHENDE_MALO,
+                            list = if admitted.is_empty() {
+                                "no code".to_owned()
+                            } else {
+                                admitted.join("/")
+                            },
+                        )
+                        .into(),
+                    });
+                }
+            };
             Transaktionsgrund::new(grund, erg)
         };
         tx = tx.transaktionsgrund(t);
@@ -379,6 +409,14 @@ pub(super) fn render_utilmd(
                 edi_energy::utilmd_codes::produkt::CCI_BILANZKREIS_GAS,
                 bilanzkreis,
             ),
+            // Geschäftsvorfall 3 („der LFN wird einer neu zu bildenden Tranche
+            // zugeordnet") adds a second mandatory product to the same package.
+            _ if is_tranchenbildung(p) => {
+                tx.produktpaket(edi_energy::utilmd_codes::Produktpaket::tranchenbildung(
+                    bilanzkreis,
+                    &tranchengroesse(p, pid)?,
+                ))
+            }
             _ => tx.produktpaket(edi_energy::utilmd_codes::Produktpaket::bilanzkreis(
                 bilanzkreis,
             )),
@@ -1001,4 +1039,118 @@ fn column_lists_ergaenzung(release: &edi_energy::Release, pid: u32) -> bool {
             af.element_rules(&l.nr)
                 .any(|r| r.de == "9013" && r.occurrence == 1)
         })
+}
+
+/// `true` when the payload states Geschäftsvorfall 3 (`STS+7++xxx+ZW2`).
+///
+/// The Tranchengröße hangs off the Transaktionsgrundergänzung and not off the
+/// Prüfidentifikator: 55077 and 55601 each carry all three Geschäftsvorfälle,
+/// and only the third one builds a Tranche.
+fn is_tranchenbildung(p: &serde_json::Value) -> bool {
+    p.get("transaktionsgrund_ergaenzung")
+        .and_then(|v| v.as_str())
+        == Some(edi_energy::utilmd_codes::ergaenzung::GESCHAEFTSVORFALL_3)
+}
+
+/// The `SG8` Tranchengröße a Geschäftsvorfall 3 must carry.
+///
+/// Codeliste der Konfigurationen 1.4 Kap. 6.1.1 makes the Produkt-Code
+/// `9991000002090` „zwingend" on `STS+7++xxx+ZW2`, so an Anmeldung without one
+/// is refused here rather than sent: the receiving NB has to reject it, and a
+/// rejection costs the LF the Anmeldefrist.
+///
+/// The payload states which of the three Produkteigenschaften it is, because
+/// they are not interchangeable — only the prozentuale Aufteilung is a share
+/// `E_0623` can add up. `art` defaults to that form, being the one the
+/// Aufteilungsfaktor and the Technische-Ressourcen lists are the exception to.
+fn tranchengroesse(
+    p: &serde_json::Value,
+    pid: u32,
+) -> Result<edi_energy::utilmd_codes::Tranchengroesse, RenderError> {
+    use edi_energy::utilmd_codes::Tranchengroesse;
+
+    let missing = || RenderError::MissingField {
+        message_type: "UTILMD".into(),
+        field: "tranchengroesse".into(),
+    };
+    let node = p.get("tranchengroesse").ok_or_else(missing)?;
+    // A bare string is the prozentuale Aufteilung, which is what an LF sending
+    // a percentage would write; the object form names the Eigenschaft.
+    let (art, wert) = match node {
+        serde_json::Value::String(s) => ("prozent", s.as_str()),
+        serde_json::Value::Object(_) => (
+            node.get("art")
+                .and_then(|v| v.as_str())
+                .unwrap_or("prozent"),
+            node.get("wert")
+                .and_then(|v| v.as_str())
+                .ok_or_else(missing)?,
+        ),
+        _ => return Err(missing()),
+    };
+    if wert.is_empty() {
+        return Err(missing());
+    }
+    match art {
+        "prozent" => {
+            // `[914] ∧ [930] ∧ [955]` — > 0, at most two decimals, < 100. A
+            // share outside that is not a Tranche the NB can apply, and the
+            // Prüfschablone cannot see it: the bounds live in the Codeliste.
+            if !edi_energy::utilmd_codes::is_valid_prozent_wert(wert) {
+                return Err(RenderError::MissingField {
+                    message_type: "UTILMD".into(),
+                    field: format!(
+                        "tranchengroesse.wert {wert:?} on PID {pid}: the prozentuale \
+                         Aufteilung must be > 0, < 100 and carry at most two decimals \
+                         (Codeliste der Konfigurationen 1.4 Kap. 6.1.1)"
+                    )
+                    .into(),
+                });
+            }
+            Ok(Tranchengroesse::prozent(wert))
+        }
+        "aufteilungsfaktor" => Ok(Tranchengroesse::aufteilungsfaktor(wert)),
+        "technische_ressourcen" => Ok(Tranchengroesse::technische_ressourcen(wert)),
+        other => Err(RenderError::MissingField {
+            message_type: "UTILMD".into(),
+            field: format!(
+                "tranchengroesse.art {other:?}: the Codeliste publishes \
+                 \"prozent\", \"aufteilungsfaktor\" and \"technische_ressourcen\""
+            )
+            .into(),
+        }),
+    }
+}
+
+/// The DE 9013 Transaktionsgrundergänzung codes a PID's column admits.
+///
+/// The Ergänzung is the occurrence **after** the Transaktionsgrund in `STS+7`,
+/// which the profile indexes from zero — `occurrence == 1`. Reading occurrence
+/// zero would answer with `E01`/`E03` and admit a code the column never lists
+/// for the Ergänzung.
+fn admitted_ergaenzungen(release: &edi_energy::Release, pid: u32) -> Vec<String> {
+    let Some((profile, af)) = utilmd_column(release, pid) else {
+        return Vec::new();
+    };
+    profile
+        .structure
+        .layouts
+        .iter()
+        .filter(|l| {
+            l.tag == "STS"
+                && l.leaves()
+                    .next()
+                    .is_some_and(|(_, _, e)| e.codes.iter().any(|c| c.code == "7"))
+        })
+        .flat_map(|l| af.element_rules(&l.nr))
+        .filter(|r| r.de == "9013" && r.occurrence == 1)
+        .flat_map(|r| r.operands.iter().filter_map(|o| o.code.clone()))
+        .collect()
+}
+
+/// `true` when `code` is one the PID's column lists for the Ergänzung.
+fn ergaenzung_admitted(release: &edi_energy::Release, pid: u32, code: &str) -> bool {
+    admitted_ergaenzungen(release, pid)
+        .iter()
+        .any(|c| c == code)
 }

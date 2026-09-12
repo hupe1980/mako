@@ -105,6 +105,8 @@ impl MockLfn {
         let (_, outbox) = self
             .process
             .execute_and_collect(LfAnmeldungCommand::InitiateAnmeldung {
+                transaktionsgrund_ergaenzung: None,
+                tranchengroesse: None,
                 pid: Pruefidentifikator::new(pid).unwrap(),
                 sender: MarktpartnerCode::new(LFN_ID),
                 receiver: MarktpartnerCode::new(NB_ID),

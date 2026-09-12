@@ -132,8 +132,8 @@ pub async fn post_correction(
     mako_markt::bo4e::ensure_conformant(&corrected)
         .map_err(|e| anyhow::anyhow!("the correction is not a valid BO4E document: {e}"))?;
 
-    let netto = -original.total_netto_eur.unwrap_or_default();
-    let brutto = -original.total_brutto_eur.unwrap_or_default();
+    let netto = -original.total_netto_eur;
+    let brutto = -original.total_brutto_eur;
 
     // Korrekturrechnung row + its `de.billing.rechnung.erstellt`
     // (`is_correction: true`) event commit atomically, so accountingd's CREDIT

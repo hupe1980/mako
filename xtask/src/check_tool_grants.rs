@@ -639,6 +639,14 @@ fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bo
             "concepts/AGENTD.md",
             format!("{grants} grants across {agents} manifests"),
         ),
+        (
+            "concepts/AIFIRST.md",
+            format!("{grants} grants across {agents} manifests"),
+        ),
+        (
+            "concepts/AIFIRST.md",
+            format!("{serving} services, {total} tools"),
+        ),
         // ── How many step-by-step prompts a specialist may be granted ──
         (
             "services/agentd/README.md",

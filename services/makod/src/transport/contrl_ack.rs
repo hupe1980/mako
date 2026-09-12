@@ -14,11 +14,27 @@
 //! > — APERAK AHB 1.0 §2.3 (Gas rules)
 //!
 //! For every inbound **Gas** interchange (UNB…UNZ) **or Gas APERAK**, makod MUST
-//! send a CONTRL Empfangsbestätigung (UCI DE0083 = 7) back to the sender within
-//! **6 wall-clock hours**.  Only CONTRL-on-CONTRL is forbidden (§2.2.2.2).
+//! send a CONTRL Empfangsbestätigung (UCI DE0083 = 7) back to the sender.
+//! Only CONTRL-on-CONTRL is forbidden (§2.2.2.2).
 //!
-//! For **Strom** interchanges no Empfangsbestätigung is required (only UCI = 4
-//! Syntaxfehlermeldung on parse failure, which is handled separately).
+//! For **Strom** interchanges no Empfangsbestätigung is required: §2.4 uses the
+//! CONTRL there for nothing but the Syntaxfehlermeldung.
+//!
+//! ## The two Ausprägungen
+//!
+//! [`Verdict`] is the pair `UCI` DE 0083 admits — `7` „Übertragung bestätigt"
+//! and `4` „Diese Ebene und alle tieferen Ebenen zurückgewiesen", the latter
+//! carrying a DE 0085 [`SyntaxFehler`]. The Sparte decides whether a *clean*
+//! interchange is acknowledged; it never decides whether a broken one is
+//! reported, which both Sparten owe.
+//!
+//! ## The window is not one number
+//!
+//! Six wall-clock hours is the Regelfall (§2.3.1, §2.4.1). §2.4.1 shortens a
+//! Strom UTILMD or ORDERS to **15 minutes** — six hours again when it arrived on
+//! a Saturday — and §2.3.1 shortens a GABi-Gas ALOCAT to **45 minutes**. The
+//! deadline registered beside the outbox entry carries whichever applies; see
+//! [`mako_fristen::ContrlAnlass`].
 //!
 //! ## Architecture
 //!
@@ -55,6 +71,95 @@ use mako_engine::{
 };
 
 use crate::party_registry::{MpIdRegistry, RoleSparte};
+
+// ── Verdict ──────────────────────────────────────────────────────────────────
+
+/// What the CONTRL states about the interchange it answers.
+///
+/// CONTRL AHB 1.0 Kap. 2 gives `UCI` DE 0083 exactly two values in this market:
+/// `7` „Übertragung bestätigt" and `4` „Diese Ebene und alle tieferen Ebenen
+/// zurückgewiesen". The second carries a DE 0085 Syntaxfehler code, the first
+/// carries none — an Empfangsbestätigung reports no error, and an empty trailing
+/// element is not the same as an absent one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// Empfangsbestätigung — `UCI` DE 0083 = `7`. Gas only: in Strom the CONTRL
+    /// is used **exclusively** as a Syntaxfehlermeldung (AHB §2.4).
+    Empfangsbestaetigung,
+    /// Syntaxfehlermeldung — `UCI` DE 0083 = `4` plus the DE 0085 code, and with
+    /// it the statement that the Übertragungsdatei is not processed further.
+    Syntaxfehler(SyntaxFehler),
+}
+
+impl Verdict {
+    const fn accepted(self) -> bool {
+        matches!(self, Self::Empfangsbestaetigung)
+    }
+
+    const fn syntax_error(self) -> Option<&'static str> {
+        match self {
+            Self::Empfangsbestaetigung => None,
+            Self::Syntaxfehler(code) => Some(code.de0085()),
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Empfangsbestaetigung => "Empfangsbestätigung",
+            Self::Syntaxfehler(_) => "Syntaxfehlermeldung",
+        }
+    }
+}
+
+/// The `UCI` DE 0085 codes the AHB admits at interchange level.
+///
+/// CONTRL AHB 1.0 Kap. 3 lists thirteen; these are the ones mako can decide from
+/// what it knows about a rejected Übertragungsdatei. Each is also an
+/// [`edifact_rs::contrl::SyntaxError`], which is where the code value comes
+/// from — ISO 9735-4 Annex A fixes it, and reading it off the upstream enum
+/// keeps a literal out of this file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyntaxFehler {
+    /// `12` „Ungültiger Wert" — the catch-all for a file that did not parse.
+    UngueltigerWert,
+    /// `25` „Test-Kennzeichen nicht unterstützt" — `UNB` DE 0035 = `1` on a
+    /// production endpoint (Allgemeine Festlegungen §3).
+    TestKennzeichen,
+    /// `7` „Empfänger der Übertragungsdatei ist nicht der tatsächliche
+    /// Empfänger" — `UNB` DE 0010 names a party this deployment does not hold.
+    FalscherEmpfaenger,
+}
+
+impl SyntaxFehler {
+    /// The DE 0085 code, read off the ISO 9735-4 Annex A enum.
+    const fn de0085(self) -> &'static str {
+        use edifact_rs::contrl::SyntaxError as E;
+        match self {
+            Self::UngueltigerWert => E::InvalidValue.code(),
+            Self::TestKennzeichen => E::TestIndicatorNotSupported.code(),
+            Self::FalscherEmpfaenger => E::NotActualRecipient.code(),
+        }
+    }
+
+    /// The Syntaxfehler a failed parse reports.
+    ///
+    /// [`edifact_rs::contrl::SyntaxError::for_error`] maps the parser's own
+    /// error to the Annex-A code; anything it resolves to a code the AHB does
+    /// not admit at interchange level falls back to `12` „Ungültiger Wert",
+    /// which Kap. 3 does admit and which the AHB itself treats as the catch-all.
+    #[must_use]
+    pub fn from_parse_error(error: &edi_energy::Error) -> Self {
+        let edi_energy::Error::Parse(inner) = error else {
+            return Self::UngueltigerWert;
+        };
+        use edifact_rs::contrl::SyntaxError as E;
+        match E::for_error(inner) {
+            E::TestIndicatorNotSupported => Self::TestKennzeichen,
+            E::NotActualRecipient => Self::FalscherEmpfaenger,
+            _ => Self::UngueltigerWert,
+        }
+    }
+}
 
 // ── ContrlAckService ─────────────────────────────────────────────────────────
 
@@ -192,8 +297,16 @@ impl ContrlAckService {
             return Ok(());
         };
 
-        self.enqueue(sender_mp_id.as_ref(), interchange_ref, recipient_mp_id)
-            .await
+        self.enqueue(
+            sender_mp_id.as_ref(),
+            interchange_ref,
+            recipient_mp_id,
+            Verdict::Empfangsbestaetigung,
+            // The Empfangsbestätigung is Gas-only, and §2.3.1 shortens only the
+            // ALOCAT — which rides DVGW, not this path.
+            mako_fristen::ContrlAnlass::Regelfall,
+        )
+        .await
     }
 
     /// Enqueue the Empfangsbestätigung for a **DVGW** gas-transport interchange.
@@ -210,11 +323,16 @@ impl ContrlAckService {
     /// # Errors
     ///
     /// As [`emit_for_interchange`](Self::emit_for_interchange).
+    /// `ist_alocat` shortens the window to 45 minutes: CONTRL AHB 1.0 §2.3.1
+    /// singles out „der Prozess der ALOCAT-Übermittlung vom NB an den MGV nach
+    /// GABi Gas". It is the caller's to state because the document code that
+    /// decides it is in the ingest report, not in the envelope.
     pub async fn emit_for_dvgw_interchange(
         &self,
         sender_mp_id: &str,
         interchange_ref: &str,
         recipient_mp_id: &str,
+        ist_alocat: bool,
     ) -> Result<(), EngineError> {
         if sender_mp_id.is_empty() {
             tracing::warn!(
@@ -224,16 +342,93 @@ impl ContrlAckService {
             );
             return Ok(());
         }
-        self.enqueue(sender_mp_id, interchange_ref, recipient_mp_id)
-            .await
+        self.enqueue(
+            sender_mp_id,
+            interchange_ref,
+            recipient_mp_id,
+            Verdict::Empfangsbestaetigung,
+            if ist_alocat {
+                mako_fristen::ContrlAnlass::GasAlocat
+            } else {
+                mako_fristen::ContrlAnlass::Regelfall
+            },
+        )
+        .await
     }
 
-    /// Queue the CONTRL and its 6-hour delivery deadline, atomically.
+    /// Emit the **Syntaxfehlermeldung** for an interchange that cannot be
+    /// processed — `UCI` DE 0083 = `4` with the DE 0085 code in `fehler`.
+    ///
+    /// This is the half of the CONTRL that both Sparten owe. Where the
+    /// Empfangsbestätigung is Gas-only, CONTRL AHB 1.0 §2.4 is explicit that in
+    /// Strom „wird die CONTRL **ausschließlich** als Syntaxfehlermeldung
+    /// eingesetzt" — so there is no Sparte gate here, and the `messages` the
+    /// interchange was *meant* to carry decide only the window (§2.4.1 gives a
+    /// UTILMD or ORDERS 15 minutes rather than 6 hours).
+    ///
+    /// Sending it says two things at once (§2.3.2 / §2.4.2): the Übertragungsdatei
+    /// arrived, and it „wird nicht weiterbearbeitet". Call it only where that is
+    /// true of the whole file — a fault inside one message of an otherwise
+    /// readable interchange is reported per message, which needs the segment
+    /// positions the ingest loop does not carry.
+    ///
+    /// # When no CONTRL can be sent at all
+    ///
+    /// §2.2.2.1: the CONTRL's Muss-Datenelemente are copied out of the subject
+    /// interchange, so a `UNB` that is itself missing or invalid makes a
+    /// syntactically correct CONTRL impossible — „Der Fehler muss dann durch
+    /// andere Mittel als durch die CONTRL mitgeteilt werden." The callers
+    /// dead-letter that case instead, which is why this takes an already-parsed
+    /// interchange reference and sender rather than raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// As [`emit_for_interchange`](Self::emit_for_interchange).
+    pub async fn emit_syntax_error(
+        &self,
+        interchange: &[u8],
+        interchange_ref: &str,
+        recipient_mp_id: &str,
+        sender_mp_id: &str,
+        fehler: SyntaxFehler,
+    ) -> Result<(), EngineError> {
+        if sender_mp_id.is_empty() {
+            tracing::warn!(
+                interchange_ref,
+                "CONTRL: no UNB sender on a rejected interchange — \
+                 Syntaxfehlermeldung NOT enqueued (regulatory gap)"
+            );
+            return Ok(());
+        }
+        let types = unh_message_types(interchange);
+        // §2.2.2.2: never a CONTRL in answer to a CONTRL, however broken.
+        if !types.is_empty() && types.iter().all(|t| t == "CONTRL") {
+            return Ok(());
+        }
+        let anlass = syntaxfehler_anlass(self.mp_id_registry.sparte_of(recipient_mp_id), &types);
+        self.enqueue(
+            sender_mp_id,
+            interchange_ref,
+            recipient_mp_id,
+            Verdict::Syntaxfehler(fehler),
+            anlass,
+        )
+        .await
+    }
+
+    /// Queue the CONTRL and its delivery deadline, atomically.
+    ///
+    /// `verdict` is what the UCI states about the interchange, and `anlass` the
+    /// window it has to be delivered inside — the two are independent: a
+    /// Syntaxfehlermeldung on a Strom UTILMD is due in 15 minutes, on a Gas
+    /// MSCONS in 6 hours.
     async fn enqueue(
         &self,
         sender_mp_id: &str,
         interchange_ref: &str,
         recipient_mp_id: &str,
+        verdict: Verdict,
+        anlass: mako_fristen::ContrlAnlass,
     ) -> Result<(), EngineError> {
         // CONTRL sender = the own MP-ID the interchange was addressed to (the
         // Sparte-correct MP-ID, even in a multi-Sparte deployment). Fall back to the
@@ -262,7 +457,9 @@ impl ContrlAckService {
             serde_json::json!({
                 "sender":          contrl_sender,
                 "receiver":        sender_mp_id,
-                "accepted":        true,
+                "accepted":        verdict.accepted(),
+                // DE 0085, only on a Syntaxfehlermeldung.
+                "syntax_error":    verdict.syntax_error(),
                 // UNB DE0020 interchange control reference.
                 // Surfaced from the parsed interchange header; the CONTRL
                 // renderer uses this to populate UCI reference fields.
@@ -270,8 +467,8 @@ impl ContrlAckService {
             }),
         );
 
-        // The 6-hour CONTRL delivery deadline (CONTRL AHB 1.0 §2.3.1): the
-        // Empfangsbestätigung must be delivered within 6 wall-clock hours.
+        // The CONTRL delivery deadline (CONTRL AHB 1.0 §2.3.1 / §2.4.1), whose
+        // width `anlass` decides.
         //
         // `OutboxWorker::discharge_delivery_window` retires this deadline as
         // soon as the CONTRL is delivered, so it only ever reaches the scheduler
@@ -289,7 +486,7 @@ impl ContrlAckService {
                 mako_engine::version::FormatVersion::parse("FV2025-10-01")
                     .expect("FV2025-10-01 is a valid fallback format version")
             });
-        let due_at = mako_fristen::contrl_due_at(time::OffsetDateTime::now_utc());
+        let due_at = mako_fristen::contrl_due_at(time::OffsetDateTime::now_utc(), anlass);
         let deadline = Deadline::new(
             StreamId::for_process(self.tenant_id, &process_id),
             process_id,
@@ -310,18 +507,21 @@ impl ContrlAckService {
             Ok(()) => {
                 tracing::debug!(
                     sender_mp_id,
-                    "CONTRL ack: Empfangsbestätigung + 6h deadline enqueued atomically",
+                    verdict = verdict.label(),
+                    due_at  = %due_at,
+                    "CONTRL: message + delivery deadline enqueued atomically",
                 );
                 Ok(())
             }
             Err(e) => {
                 // Log at error: a missing CONTRL triggers §1.3 clarification
-                // obligations on the counterparty side (6h deadline violation).
+                // obligations on the counterparty side.
                 tracing::error!(
                     error      = %e,
                     sender_mp_id,
-                    "CONTRL ack: atomic outbox+deadline enqueue failed — regulatory \
-                     6h CONTRL window at risk (CONTRL AHB 1.0 §1.2 / APERAK AHB 1.0 §1.2)",
+                    verdict = verdict.label(),
+                    "CONTRL: atomic outbox+deadline enqueue failed — the regulatory \
+                     CONTRL window is at risk (CONTRL AHB 1.0 §2.3.1 / §2.4.1)",
                 );
                 Err(e)
             }
@@ -330,6 +530,77 @@ impl ContrlAckService {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// The window a Syntaxfehlermeldung earns, from the recipient's Sparte and the
+/// message types the rejected interchange carried.
+///
+/// §2.3.1 gives the ALOCAT 45 minutes for „die zugehörige CONTRL" without
+/// distinguishing the two verdicts, so a broken ALOCAT owes the same window as
+/// an accepted one. It is decided first because it names the message and not the
+/// Sparte, and an ALOCAT interchange carries no UTILMD or ORDERS to compete
+/// with it.
+///
+/// §2.4.1's 15-minute window sits in the **Strom** chapter, so it applies only
+/// where the recipient is a Strom party. A sparte-neutral or unknown recipient
+/// keeps the Regelfall — the longer window, and the one that cannot be missed by
+/// having been applied wrongly.
+fn syntaxfehler_anlass(sparte: Option<RoleSparte>, types: &[String]) -> mako_fristen::ContrlAnlass {
+    if types.iter().any(|t| t == "ALOCAT") {
+        mako_fristen::ContrlAnlass::GasAlocat
+    } else if matches!(sparte, Some(RoleSparte::Strom))
+        && types.iter().any(|t| t == "UTILMD" || t == "ORDERS")
+    {
+        mako_fristen::ContrlAnlass::StromUtilmdOderOrders
+    } else {
+        mako_fristen::ContrlAnlass::Regelfall
+    }
+}
+
+/// `true` when the DVGW interchange carried an ALOCAT, which shortens the CONTRL
+/// window to 45 minutes (CONTRL AHB 1.0 §2.3.1).
+///
+/// Read off the ingest report rather than the envelope: the document code that
+/// decides it is in the message body.
+#[must_use]
+pub fn dvgw_report_has_alocat(report: &crate::dvgw_ingest::DvgwIngestReport) -> bool {
+    report.messages.iter().any(|m| {
+        m.document
+            .is_some_and(|d| d.message_type() == dvgw_edi::DvgwMessageType::Alocat)
+    })
+}
+
+/// The `UNH` DE 0065 message-type code of every message in a raw interchange.
+///
+/// Read off the wire rather than off a parsed model, because the case that needs
+/// it is the one where nothing parsed: a Syntaxfehlermeldung on an unreadable
+/// UTILMD still owes the 15-minute window of §2.4.1, and the message type sits
+/// in the `UNH` whether or not the body behind it is valid.
+///
+/// Deliberately a scan and not a parse. It reads what it can and returns what it
+/// found; a garbled `UNH` simply contributes nothing, and the Regelfall window
+/// that results is the longer one.
+fn unh_message_types(interchange: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(interchange);
+    let mut out = Vec::new();
+    for segment in text.split('\'') {
+        let segment = segment.trim_start_matches(['\n', '\r', ' ']);
+        let Some(rest) = segment.strip_prefix("UNH+") else {
+            continue;
+        };
+        // `UNH+<ref>+<type>:<version>:…`
+        if let Some(after_ref) = rest.split_once('+').map(|(_, r)| r) {
+            let code = after_ref
+                .split([':', '+'])
+                .next()
+                .unwrap_or_default()
+                .trim();
+            if !code.is_empty() {
+                out.push(code.to_owned());
+            }
+        }
+    }
+    out
+}
 
 /// Returns `true` when the message is a CONTRL.
 ///
@@ -480,6 +751,106 @@ fn sender_mp_id(msg: &AnyMessage) -> Option<Box<str>> {
 
 #[cfg(test)]
 mod tests {
+    use super::{SyntaxFehler, Verdict};
+
+    /// The two `UCI` DE 0083 values CONTRL AHB 1.0 Kap. 3 admits, and the
+    /// DE 0085 codes that ride the rejecting one.
+    #[test]
+    fn the_verdict_carries_the_ahb_code_pair() {
+        assert!(Verdict::Empfangsbestaetigung.accepted());
+        assert_eq!(
+            Verdict::Empfangsbestaetigung.syntax_error(),
+            None,
+            "an Empfangsbestätigung reports no error, and an empty DE 0085 is \
+             not the same as an absent one"
+        );
+
+        for (fehler, code) in [
+            (SyntaxFehler::UngueltigerWert, "12"),
+            (SyntaxFehler::TestKennzeichen, "25"),
+            (SyntaxFehler::FalscherEmpfaenger, "7"),
+        ] {
+            let verdict = Verdict::Syntaxfehler(fehler);
+            assert!(!verdict.accepted());
+            assert_eq!(verdict.syntax_error(), Some(code), "{fehler:?}");
+        }
+    }
+
+    /// Every code mako can emit is one Kap. 3 lists in the `UCI` DE 0085 column.
+    #[test]
+    fn every_emitted_code_is_admitted_at_interchange_level() {
+        // CONTRL AHB 1.0 Kap. 3, „Syntaxfehlermeldung in der Übertragungsdatei".
+        const UCI_0085: &[&str] = &[
+            "2", "7", "12", "13", "16", "20", "21", "23", "25", "26", "28", "29", "32",
+        ];
+        for fehler in [
+            SyntaxFehler::UngueltigerWert,
+            SyntaxFehler::TestKennzeichen,
+            SyntaxFehler::FalscherEmpfaenger,
+        ] {
+            assert!(
+                UCI_0085.contains(&fehler.de0085()),
+                "{fehler:?} emits DE 0085 {} which the AHB does not admit on the UCI",
+                fehler.de0085()
+            );
+        }
+    }
+
+    /// §2.4.1 is the Strom chapter, so its short window follows both the Sparte
+    /// and the message type. This is the rule itself, decided without a clock:
+    /// the window it names is 15 minutes or 6 hours depending on the weekday,
+    /// and that arithmetic belongs to `mako_fristen`.
+    #[test]
+    fn the_short_window_needs_both_strom_and_a_utilmd_or_orders() {
+        use super::{RoleSparte as S, syntaxfehler_anlass};
+        use mako_fristen::ContrlAnlass as A;
+
+        let utilmd = vec!["UTILMD".to_owned()];
+        let orders = vec!["ORDERS".to_owned()];
+        let mscons = vec!["MSCONS".to_owned()];
+
+        assert_eq!(
+            syntaxfehler_anlass(Some(S::Strom), &utilmd),
+            A::StromUtilmdOderOrders
+        );
+        assert_eq!(
+            syntaxfehler_anlass(Some(S::Strom), &orders),
+            A::StromUtilmdOderOrders
+        );
+        // The same message types toward a Gas recipient: §2.3.1, six hours.
+        assert_eq!(syntaxfehler_anlass(Some(S::Gas), &utilmd), A::Regelfall);
+        // A Strom recipient, and a message type §2.4.1 does not name.
+        assert_eq!(syntaxfehler_anlass(Some(S::Strom), &mscons), A::Regelfall);
+        // Unknown or sparte-neutral: the longer window.
+        assert_eq!(syntaxfehler_anlass(None, &utilmd), A::Regelfall);
+        assert_eq!(syntaxfehler_anlass(Some(S::Both), &utilmd), A::Regelfall);
+
+        // §2.3.1 gives „die zugehörige CONTRL" on an ALOCAT 45 minutes and does
+        // not exempt the Syntaxfehlermeldung, so the rejected ALOCAT is owed the
+        // same window as the accepted one — and it is a DVGW message, so the
+        // recipient's Sparte adds nothing to it.
+        let alocat = vec!["ALOCAT".to_owned()];
+        assert_eq!(syntaxfehler_anlass(Some(S::Gas), &alocat), A::GasAlocat);
+        assert_eq!(syntaxfehler_anlass(None, &alocat), A::GasAlocat);
+    }
+
+    /// The message type comes off the `UNH` of the raw interchange, because the
+    /// Syntaxfehlermeldung is owed exactly when nothing parsed.
+    #[test]
+    fn the_message_type_is_read_off_the_wire() {
+        let raw = b"UNA:+.? 'UNB+UNOC:3+9900123456789:500+9900987654321:500+260912:0900+IC4711'\
+                    UNH+1+UTILMD:D:11B:UN:S2.1'BGM+E01+DOC1+9'UNT+3+1'UNZ+1+IC4711'";
+        assert_eq!(super::unh_message_types(raw), vec!["UTILMD".to_owned()]);
+
+        // A CONTRL interchange, which §2.2.2.2 forbids answering.
+        let contrl = b"UNB+UNOC:3+A+B+260912:0900+IC1'UNH+1+CONTRL:D:3:UN:2.0b'UNT+2+1'UNZ+1+IC1'";
+        assert_eq!(super::unh_message_types(contrl), vec!["CONTRL".to_owned()]);
+
+        // Nothing readable contributes nothing, and the caller keeps the
+        // Regelfall window.
+        assert!(super::unh_message_types(b"garbage without segments").is_empty());
+    }
+
     /// The Sparte classification must agree with the published Anwendungsübersicht.
     ///
     /// Both predicates below were hand-maintained lists, and **five PIDs were
@@ -626,12 +997,11 @@ mod tests {
 
     /// 31009 is the MSB-Rechnung, and it is Strom.
     ///
-    /// This module used to assert the opposite — „used for BOTH Strom and Gas" —
-    /// against four other sites in the workspace that treat it as Strom-only.
     /// All seven rows the Anwendungsübersicht 4.0 carries for 31009 are Strom
     /// (GPKE Teil 3 MSB → NB / MSB → LF, WiM Strom Teil 1, WiM Strom Teil 2
     /// MSB → ESA, AWH Änderung der Technik); the Gas MSB bills on 31003, which
-    /// is why 31003 is the one with rows in both Sparten.
+    /// is why 31003 is the one with rows in both Sparten. Calling 31009 Gas
+    /// would send a Gas CONTRL into a Strom interchange that expects none.
     #[test]
     fn the_msb_rechnung_is_strom() {
         assert!(is_strom_only_pid(31_009));

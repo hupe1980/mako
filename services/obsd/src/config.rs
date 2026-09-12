@@ -33,7 +33,6 @@
 //! ```
 
 use serde::Deserialize;
-use std::path::Path;
 
 // `deny_unknown_fields` like every nested block: a typo in a top-level key is a
 // refusal to start, not a setting that silently does nothing.
@@ -239,23 +238,7 @@ impl Default for SubscriptionConfig {
 /// OIDC configuration — re-exported from `mako-service` (shared across all daemons).
 pub use mako_service::oidc::OidcConfig;
 
-pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| anyhow::anyhow!("cannot read config file {}: {e}", path.display()))?;
-    toml::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("config parse error in {}: {e}", path.display()))
-}
-
-pub fn resolve_env(value: &str) -> anyhow::Result<String> {
-    if let Some(var) = value.strip_prefix("env:") {
-        std::env::var(var).map_err(|_| {
-            anyhow::anyhow!("environment variable {var:?} is not set (referenced in obsd.toml)")
-        })
-    } else {
-        Ok(value.to_owned())
-    }
-}
-
-pub fn resolve_env_secret(value: &str) -> anyhow::Result<secrecy::SecretString> {
-    resolve_env(value).map(secrecy::SecretString::from)
-}
+/// `env:VARNAME` indirection — re-exported from `mako-service`, so every daemon
+/// resolves a config reference the same way and reports a missing variable with
+/// the same error.
+pub use mako_service::config::{resolve_env, resolve_env_secret};

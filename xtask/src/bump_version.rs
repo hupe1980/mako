@@ -104,6 +104,27 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         }
     }
 
+    // The root lockfile follows from the manifest on the next build, and the
+    // workspace's own build always runs. `fuzz/` is `exclude`d, so it carries a
+    // lockfile of its own that nothing in an ordinary build touches: without
+    // this step it records the previous version until someone runs the fuzz
+    // targets, and then a fresh clone's first `just check-fuzz` reports a dirty
+    // tree for a bump that happened releases ago.
+    let fuzz_lock = std::path::Path::new(workspace_root).join("fuzz/Cargo.lock");
+    if fuzz_lock.exists() {
+        match std::process::Command::new("cargo")
+            .args(["update", "--workspace", "--offline"])
+            .current_dir(std::path::Path::new(workspace_root).join("fuzz"))
+            .status()
+        {
+            Ok(st) if st.success() => println!("  fuzz/Cargo.lock refreshed"),
+            _ => eprintln!(
+                "warning: could not refresh fuzz/Cargo.lock — run \
+                 `cargo update --workspace` in fuzz/ before committing"
+            ),
+        }
+    }
+
     println!("bumped workspace version -> {new_version}");
     println!("  [workspace.package] version = \"{new_version}\"");
     println!(

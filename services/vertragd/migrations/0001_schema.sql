@@ -365,6 +365,12 @@ ALTER TABLE messstellenvertraege
         daterange(vertragsbeginn, COALESCE(beendet_am, kuendigung_zum), '[)') WITH &&
     );
 
+-- A contract instance is its start date. The same MSB may hold successive
+-- contracts at one Messlokation, so `PUT` keys on the term rather than on the
+-- pair; without this index writing the later contract would overwrite the
+-- earlier one's record instead of adding to it.
+CREATE UNIQUE INDEX msv_instance
+    ON messstellenvertraege (tenant, melo_id, msb_mp_id, vertragsbeginn);
 CREATE INDEX msv_lookup ON messstellenvertraege (tenant, melo_id, msb_mp_id);
 CREATE INDEX msv_kunde  ON messstellenvertraege (kunden_id) WHERE kunden_id IS NOT NULL;
 

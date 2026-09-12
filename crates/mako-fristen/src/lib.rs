@@ -25,7 +25,7 @@
 //!
 //! | Clock | Window | Meaning |
 //! |---|---|---|
-//! | **CONTRL** | 6 wall-clock hours (CONTRL AHB 1.0 §1.2) | the interchange was syntactically readable |
+//! | **CONTRL** | 6 wall-clock hours; **15 min** for a Strom UTILMD/ORDERS Syntaxfehlermeldung (6 h on a Saturday), **45 min** for a GABi-Gas ALOCAT; deferred to the end of a Formatumstellung window (CONTRL AHB 1.0 §2.3.1, §2.4.1) | the syntax check of the Übertragungsdatei |
 //! | **APERAK** | 45 min Strom weekday; Gas: next Werktag 12:00 (Folgeprozess) or 3 Werktage (Initialprozess) | the message was accepted for processing |
 //! | **Antwortfrist** | per PID — 11:00 of the 1. Werktag for a GPKE Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom | the *business* answer is owed |
 //!
@@ -58,14 +58,17 @@
 //! a non-Werktag. This guarantees no Frist is ever shorter than the AHB
 //! requires. Per-state calendars are **not** used in BDEW MaKo.
 //!
-//! ## CONTRL 6h Übertragungsquittung
+//! ## CONTRL Übertragungsquittung
 //!
 //! ```rust
-//! use mako_fristen as fristen;
-//! use time::OffsetDateTime;
+//! use mako_fristen::{self as fristen, ContrlAnlass};
+//! use time::{Date, Month, OffsetDateTime, Time};
 //!
-//! let received = OffsetDateTime::now_utc();
-//! let due = fristen::contrl_due_at(received);
+//! let received = OffsetDateTime::new_utc(
+//!     Date::from_calendar_date(2026, Month::September, 9).unwrap(),
+//!     Time::from_hms(9, 0, 0).unwrap(),
+//! );
+//! let due = fristen::contrl_due_at(received, ContrlAnlass::Regelfall);
 //! assert_eq!(due - received, time::Duration::hours(6));
 //! ```
 
@@ -84,37 +87,148 @@ use time_tz::{OffsetDateTimeExt, OffsetResult, PrimitiveDateTimeExt, timezones};
 
 // ── CONTRL Übertragungsquittung ───────────────────────────────────────────────
 
-/// Maximum wall-clock hours within which a CONTRL must be sent after receiving
-/// an EDIFACT interchange.
+/// The default wall-clock hours within which a CONTRL must be sent after
+/// receiving an EDIFACT interchange or APERAK.
 ///
-/// Per CONTRL AHB 1.0 §1.2: "Der Empfänger teilt dem Absender **unverzüglich,
-/// jedoch spätestens 6 Stunden** nach Erhalt der Übertragungsdatei das
-/// Ergebnis seiner syntaktischen Prüfung mittels CONTRL mit."
+/// CONTRL AHB 1.0 §2.3.1 (Gas) and §2.4.1 (Strom) state it identically: „Der
+/// Empfänger der Übertragungsdatei oder APERAK teilt dem Absender
+/// **unverzüglich, jedoch spätestens 6 Stunden** nach Erhalt … das Ergebnis
+/// seiner syntaktischen Prüfung mittels der Nachricht CONTRL mit."
 pub const CONTRL_FRIST_HOURS: i64 = 6;
+
+/// Minutes within which a Strom Syntaxfehlermeldung on a UTILMD or ORDERS must
+/// go out on a day other than Saturday (CONTRL AHB 1.0 §2.4.1).
+///
+/// „Wird eine UTILMD oder ORDERS übertragen, so ist der Empfänger … verpflichtet,
+/// dem Absender unverzüglich, jedoch **spätestens 15 Minuten** nach Eingang der
+/// Übertragungsdatei eine Syntaxfehlermeldungen per CONTRL zu senden, falls die
+/// Übertragungsdatei syntaktisch falsch ist." On a Saturday the same sentence
+/// gives 6 hours instead.
+pub const CONTRL_STROM_SCHNELL_MINUTEN: i64 = 15;
+
+/// Minutes within which the CONTRL on a GABi-Gas ALOCAT must go out
+/// (CONTRL AHB 1.0 §2.3.1).
+///
+/// „Beim Prozess der ALOCAT-Übermittlung vom NB an den MGV nach GABi Gas muss
+/// binnen **45 Minuten** nach Erhalt einer ALOCAT-Nachricht die zugehörige
+/// CONTRL versendet werden."
+pub const CONTRL_ALOCAT_MINUTEN: i64 = 45;
 
 /// Deadline label used in the `DeadlineStore` for CONTRL delivery obligations.
 ///
 /// Register a `Deadline` with this label when enqueueing a CONTRL `PendingOutbox`
 /// entry. The outbox worker clears the deadline after successful CONTRL delivery.
-/// If the deadline fires before the CONTRL is delivered, the 6h Frist has been
-/// violated (CONTRL AHB 1.0 §1.2).
-pub const CONTRL_FRIST_LABEL: &str = "contrl-6h-delivery-window";
+/// A deadline that fires before the CONTRL was delivered is a violated Frist
+/// (CONTRL AHB 1.0 §2.3.1 / §2.4.1).
+///
+/// The label does not name a window, because the window is not one number:
+/// [`contrl_due_at`] answers 6 hours, 45 minutes or 15 minutes depending on what
+/// arrived and in which Sparte, and defers to the end of a Formatumstellung
+/// window when the deadline falls inside one.
+pub const CONTRL_FRIST_LABEL: &str = "contrl-delivery-window";
 
-/// Compute the CONTRL delivery deadline as 6 wall-clock hours after `received`.
+/// What the CONTRL is answering — the pair that decides its window.
+///
+/// CONTRL AHB 1.0 states three windows, and which applies follows the message
+/// that arrived rather than the CONTRL itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContrlAnlass {
+    /// Any interchange or APERAK not named by a shorter window: 6 hours
+    /// (§2.3.1, §2.4.1).
+    Regelfall,
+    /// A Strom UTILMD or ORDERS: 15 minutes, or 6 hours when it arrived on a
+    /// Saturday (§2.4.1).
+    StromUtilmdOderOrders,
+    /// A GABi-Gas ALOCAT from the NB to the MGV: 45 minutes (§2.3.1).
+    GasAlocat,
+}
+
+/// Compute the CONTRL delivery deadline for `anlass`.
+///
+/// Saturday is decided on the **Berlin** weekday, because the AHB dates the
+/// exception in gesetzlicher deutscher Zeit — an interchange arriving 23:30 UTC
+/// on a Friday is already Saturday in Germany.
 ///
 /// # Example
 ///
 /// ```rust
-/// use mako_fristen as fristen;
-/// use time::OffsetDateTime;
+/// use mako_fristen::{self as fristen, ContrlAnlass};
+/// use time::{Date, Month, OffsetDateTime, Time};
 ///
-/// let received = OffsetDateTime::now_utc();
-/// let due = fristen::contrl_due_at(received);
-/// assert_eq!(due - received, time::Duration::hours(6));
+/// // A fixed Wednesday: neither the Saturday exception nor a Formatumstellung
+/// // window applies, so both windows are the plain ones.
+/// let received = OffsetDateTime::new_utc(
+///     Date::from_calendar_date(2026, Month::September, 9).unwrap(),
+///     Time::from_hms(9, 0, 0).unwrap(),
+/// );
+/// assert_eq!(
+///     fristen::contrl_due_at(received, ContrlAnlass::Regelfall) - received,
+///     time::Duration::hours(6)
+/// );
+/// assert_eq!(
+///     fristen::contrl_due_at(received, ContrlAnlass::GasAlocat) - received,
+///     time::Duration::minutes(45)
+/// );
 /// ```
 #[must_use]
-pub fn contrl_due_at(received: OffsetDateTime) -> OffsetDateTime {
-    received + Duration::hours(CONTRL_FRIST_HOURS)
+pub fn contrl_due_at(received: OffsetDateTime, anlass: ContrlAnlass) -> OffsetDateTime {
+    let due = match anlass {
+        ContrlAnlass::Regelfall => received + Duration::hours(CONTRL_FRIST_HOURS),
+        ContrlAnlass::GasAlocat => received + Duration::minutes(CONTRL_ALOCAT_MINUTEN),
+        ContrlAnlass::StromUtilmdOderOrders => {
+            let berlin = timezones::db::europe::BERLIN;
+            if received.to_timezone(berlin).weekday() == Weekday::Saturday {
+                received + Duration::hours(CONTRL_FRIST_HOURS)
+            } else {
+                received + Duration::minutes(CONTRL_STROM_SCHNELL_MINUTEN)
+            }
+        }
+    };
+    match formatumstellung_toleranz_ende(due) {
+        Some(ende) if ende > due => ende,
+        _ => due,
+    }
+}
+
+/// The end of the Formatumstellung window `at` falls in, if any.
+///
+/// CONTRL AHB 1.0 §2.3.1 and §2.4.1 close identically: „Abweichungen von diesen
+/// Fristen sind von den Marktpartnern zu akzeptieren im Zeitraum der
+/// Formatumstellung vom **31.3. 18.00 Uhr bis 2.4. 00:00 Uhr** gesetzlicher
+/// deutscher Zeit (bei einer Formatumstellung zum 01.04.) bzw. vom **30.9.
+/// 18.00 Uhr bis 2.10. 00:00 Uhr** (bei einer Formatumstellung zum 01.10.)."
+///
+/// A CONTRL owed inside that window is owed at its end instead: a deviation
+/// happening in the window must be accepted, and one still outstanding when the
+/// window closes is a deviation outside it. Without this a Formatumstellung
+/// weekend reports every CONTRL as late — a violation the AHB says the
+/// counterparty may not raise.
+///
+/// The AHB's third case — a Formatumstellung the BNetzA dates away from 01.04.
+/// or 01.10., tolerated from six hours before that day until its end — is not
+/// modelled: it needs the date the Festlegung names, and no such date stands.
+/// The two regular windows are the ones the format calendar actually uses.
+fn formatumstellung_toleranz_ende(at: OffsetDateTime) -> Option<OffsetDateTime> {
+    let jahr = berlin_date(at).year();
+    // Both bounds are Berlin wall-clock, so the window is 30 hours in winter
+    // and in summer alike — neither edge crosses a DST transition.
+    for (von_monat, von_tag, bis_monat, bis_tag) in [
+        (Month::March, 31, Month::April, 2),
+        (Month::September, 30, Month::October, 2),
+    ] {
+        let (Ok(von_datum), Ok(bis_datum)) = (
+            Date::from_calendar_date(jahr, von_monat, von_tag),
+            Date::from_calendar_date(jahr, bis_monat, bis_tag),
+        ) else {
+            continue;
+        };
+        let von = berlin_at(von_datum, Time::from_hms(18, 0, 0).expect("18:00 is valid"));
+        let bis = berlin_midnight(bis_datum);
+        if at >= von && at < bis {
+            return Some(bis);
+        }
+    }
+    None
 }
 
 // ── APERAK Strom 45-minute / Saturday-noon sending window ────────────────────
@@ -1240,27 +1354,124 @@ mod tests {
     // ── contrl_due_at ─────────────────────────────────────────────────────────
 
     #[test]
-    fn contrl_due_at_is_exactly_6h_after_received() {
-        let received = OffsetDateTime::now_utc();
-        let due = contrl_due_at(received);
+    fn contrl_frist_label_is_stable() {
+        // Changing this label would silently orphan all existing Deadline records.
+        assert_eq!(CONTRL_FRIST_LABEL, "contrl-delivery-window");
+    }
+
+    #[test]
+    fn the_contrl_windows_match_the_ahb() {
+        // A Wednesday, so the Saturday exception does not apply.
+        let mittwoch = OffsetDateTime::new_utc(
+            date(2026, 9, 9),
+            Time::from_hms(9, 0, 0).expect("09:00 is valid"),
+        );
         assert_eq!(
-            due - received,
-            Duration::hours(6),
-            "CONTRL AHB 1.0 §1.2 requires exactly 6h frist"
+            contrl_due_at(mittwoch, ContrlAnlass::Regelfall) - mittwoch,
+            Duration::hours(CONTRL_FRIST_HOURS),
+            "§2.3.1 / §2.4.1: 6 Stunden"
+        );
+        assert_eq!(
+            contrl_due_at(mittwoch, ContrlAnlass::GasAlocat) - mittwoch,
+            Duration::minutes(CONTRL_ALOCAT_MINUTEN),
+            "§2.3.1: 45 Minuten für die ALOCAT"
+        );
+        assert_eq!(
+            contrl_due_at(mittwoch, ContrlAnlass::StromUtilmdOderOrders) - mittwoch,
+            Duration::minutes(CONTRL_STROM_SCHNELL_MINUTEN),
+            "§2.4.1: 15 Minuten für UTILMD/ORDERS"
         );
     }
 
+    /// §2.4.1 states the Saturday exception for UTILMD/ORDERS separately, and it
+    /// is a **German** Saturday: 23:30 UTC on a Friday is already Saturday in
+    /// Berlin, so the window is 6 hours rather than 15 minutes.
     #[test]
-    fn contrl_frist_label_is_stable() {
-        // Changing this label would silently orphan all existing Deadline records.
-        assert_eq!(CONTRL_FRIST_LABEL, "contrl-6h-delivery-window");
+    fn the_strom_saturday_exception_is_a_berlin_saturday() {
+        let samstag = OffsetDateTime::new_utc(
+            date(2026, 9, 12),
+            Time::from_hms(9, 0, 0).expect("09:00 is valid"),
+        );
+        assert_eq!(samstag.weekday(), Weekday::Saturday);
+        assert_eq!(
+            contrl_due_at(samstag, ContrlAnlass::StromUtilmdOderOrders) - samstag,
+            Duration::hours(CONTRL_FRIST_HOURS)
+        );
+
+        // Friday 23:30 UTC is Saturday 01:30 CEST.
+        let freitag_spaet = OffsetDateTime::new_utc(
+            date(2026, 9, 11),
+            Time::from_hms(23, 30, 0).expect("23:30 is valid"),
+        );
+        assert_eq!(
+            freitag_spaet.weekday(),
+            Weekday::Friday,
+            "still Friday in UTC"
+        );
+        assert_eq!(
+            contrl_due_at(freitag_spaet, ContrlAnlass::StromUtilmdOderOrders) - freitag_spaet,
+            Duration::hours(CONTRL_FRIST_HOURS),
+            "the AHB dates the exception in gesetzlicher deutscher Zeit"
+        );
     }
 
+    /// §2.3.1 / §2.4.1 close by making deviations inside the Formatumstellung
+    /// window something the counterparty must accept. A CONTRL owed inside it is
+    /// therefore owed at its end, not fifteen minutes after the interchange —
+    /// otherwise every Formatumstellung weekend reports Fristverletzungen that
+    /// cannot be raised.
     #[test]
-    fn contrl_frist_hours_matches_constant() {
-        let received = OffsetDateTime::now_utc();
+    fn the_formatumstellung_window_defers_the_contrl_deadline() {
+        // 31.03.2026 19:00 Berlin = 17:00 UTC (CEST), inside the window.
+        let im_fenster = OffsetDateTime::new_utc(
+            date(2026, 3, 31),
+            Time::from_hms(17, 0, 0).expect("17:00 is valid"),
+        );
         assert_eq!(
-            contrl_due_at(received) - received,
+            contrl_due_at(im_fenster, ContrlAnlass::StromUtilmdOderOrders),
+            berlin_midnight(date(2026, 4, 2)),
+            "the deadline is the end of the window, not 19:15"
+        );
+
+        // An interchange arriving before 18:00 whose 15 minutes run out inside
+        // the window is the same deviation, so it gets the same end.
+        let kurz_davor = OffsetDateTime::new_utc(
+            date(2026, 3, 31),
+            Time::from_hms(15, 55, 0).expect("15:55 is valid"),
+        );
+        assert_eq!(
+            contrl_due_at(kurz_davor, ContrlAnlass::StromUtilmdOderOrders),
+            berlin_midnight(date(2026, 4, 2)),
+            "17:55 Berlin + 15 min falls inside the window"
+        );
+
+        // 30.09 is the other one, and it is a window in both Sparten.
+        let herbst = OffsetDateTime::new_utc(
+            date(2026, 9, 30),
+            Time::from_hms(20, 0, 0).expect("20:00 is valid"),
+        );
+        assert_eq!(
+            contrl_due_at(herbst, ContrlAnlass::GasAlocat),
+            berlin_midnight(date(2026, 10, 2))
+        );
+    }
+
+    /// The window is two dates a year and nothing else: an ordinary day keeps
+    /// the window the AHB gives it.
+    #[test]
+    fn the_formatumstellung_window_does_not_leak_into_ordinary_days() {
+        let gewoehnlich = OffsetDateTime::new_utc(
+            date(2026, 3, 30),
+            Time::from_hms(17, 0, 0).expect("17:00 is valid"),
+        );
+        assert_eq!(
+            contrl_due_at(gewoehnlich, ContrlAnlass::StromUtilmdOderOrders) - gewoehnlich,
+            Duration::minutes(CONTRL_STROM_SCHNELL_MINUTEN)
+        );
+        // 02.04. 00:00 Berlin is the exclusive end — the window is over.
+        let danach = berlin_midnight(date(2026, 4, 2));
+        assert_eq!(
+            contrl_due_at(danach, ContrlAnlass::Regelfall) - danach,
             Duration::hours(CONTRL_FRIST_HOURS)
         );
     }

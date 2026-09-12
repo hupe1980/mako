@@ -30,8 +30,8 @@ pub struct BillingRecordRow {
     /// Why this record has no EN 16931 model, when the reason is the invoice
     /// itself rather than a missing step. `None` on every ordinary record.
     pub en16931_blocked: Option<String>,
-    pub total_netto_eur: Option<Decimal>,
-    pub total_brutto_eur: Option<Decimal>,
+    pub total_netto_eur: Decimal,
+    pub total_brutto_eur: Decimal,
     pub outcome: String,
     #[serde(with = "time::serde::rfc3339::option")]
     pub dispatched_at: Option<OffsetDateTime>,
@@ -639,7 +639,6 @@ pub async fn check_billing_anomaly(
             AND is_correction = FALSE
             AND sammelrechnung_id IS NULL
             AND outcome <> 'cancelled'
-            AND total_brutto_eur IS NOT NULL
             AND total_brutto_eur > 0
           ORDER BY period_to DESC
           LIMIT 4",
@@ -1052,7 +1051,7 @@ pub async fn risk_context(
                 WHERE tenant = $1 AND malo_id = $2
                   AND is_correction = FALSE AND sammelrechnung_id IS NULL
                   AND outcome <> 'cancelled'
-                  AND total_brutto_eur IS NOT NULL AND total_brutto_eur > 0
+                  AND total_brutto_eur > 0
                   AND period_from < $3
                 ORDER BY period_to DESC
                 LIMIT 3) t",

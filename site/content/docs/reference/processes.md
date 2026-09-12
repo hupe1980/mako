@@ -1693,20 +1693,42 @@ The APERAK does not signal process acceptance/rejection — that is done by the
 substantive response (e.g. UTILMD 55002/55003). APERAK is purely the
 **technical receipt acknowledgement**.
 
-### CONTRL — Syntactic Transport Acknowledgement
+### CONTRL — Syntaxprüfung und Empfangsbestätigung
 
-CONTRL is distinct from APERAK. It operates at the **transport/interchange level**
-(between AS4 Message Service Handlers) and confirms that the EDIFACT interchange
-was syntactically parseable. CONTRL is exchanged automatically by the AS4 MSH and
-is never exposed to the workflow layer.
+CONTRL reports the **syntax check of one Übertragungsdatei**, and it is neither
+the AS4 receipt nor the APERAK. The AS4 `eb:Receipt` says the bytes arrived; the
+CONTRL says what the syntax check made of them; the APERAK says whether the
+message could be *processed*. Three different statements on three clocks.
 
-| Level | Message | Scope | Who handles it |
+| Level | Message | Scope | Who emits it |
 |---|---|---|---|
-| Transport | CONTRL | Interchange syntax | AS4 MSH (`mako-as4`) |
-| Application | APERAK | Functional / AHB rules | Domain workflow (`mako-gpke`, etc.) |
+| AS4 transport | `eb:Receipt` (NRR) | The bytes arrived | The MSH (`mako-as4`) |
+| Interchange syntax | CONTRL | `UNB…UNZ` parsed, or did not | `makod` — an outbox message with its own deadline |
+| Application | APERAK | Verarbeitbarkeit / AHB rules | Domain workflow (`mako-gpke`, …) |
+
+**The two Ausprägungen** (CONTRL AHB 1.0 Kap. 2, `UCI` DE 0083):
+
+| | Code | When |
+|---|---|---|
+| Empfangsbestätigung | `7` | Gas only — „In der Sparte Strom wird die CONTRL **ausschließlich** als Syntaxfehlermeldung eingesetzt" (§2.4) |
+| Syntaxfehlermeldung | `4` + a DE 0085 code | Both Sparten, when the Übertragungsdatei does not parse and „wird nicht weiterbearbeitet" |
+
+**The window is not one number** (§2.3.1, §2.4.1):
+
+| What arrived | Window |
+|---|---|
+| A Strom UTILMD or ORDERS | **15 minutes**, or 6 hours when it arrived on a Saturday |
+| A GABi-Gas ALOCAT from the NB to the MGV | **45 minutes** |
+| Anything else, either Sparte | **6 hours** |
+
+**When no CONTRL can be sent.** §2.2.2.1: the CONTRL copies its Muss-Datenelemente
+out of the subject interchange, so a `UNB` that is itself unreadable makes a
+conformant CONTRL impossible — „Der Fehler muss dann durch andere Mittel als durch
+die CONTRL mitgeteilt werden." That interchange is dead-lettered instead. §2.2.2.2
+adds the other exception: never a CONTRL in answer to a CONTRL.
 
 Implementors must not confuse a CONTRL acknowledgement with APERAK compliance:
-a CONTRL-accepted message may still be rejected by an APERAK with code `Z04`.
+a syntactically accepted message may still be rejected by an APERAK.
 
 ### ERP Integration
 

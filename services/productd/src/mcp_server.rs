@@ -46,7 +46,6 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use sqlx::PgPool;
 use std::sync::Arc;
-use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
@@ -465,11 +464,10 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        // Compute "today in German local time" (CET/CEST) without an external
-        // time-zone database.  EU DST rule: UTC+2 from last Sunday of March to
-        // last Sunday of October; UTC+1 otherwise.
-        let now_utc = OffsetDateTime::now_utc();
-        let today_de = german_local_date(now_utc);
+        // The delivery day an EPEX series is keyed on is a Europe/Berlin
+        // calendar date, so it comes from the one calendar the platform counts
+        // business dates in rather than off the UTC clock.
+        let today_de = mako_fristen::heute();
         let tomorrow_de = today_de.next_day().unwrap_or(today_de);
 
         let status = match latest {
@@ -754,53 +752,6 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
     }
 }
 
-// ── German local time helper ──────────────────────────────────────────────────
-
-/// Compute the current date in German local time (CET/CEST) without an
-/// external time-zone database.
-///
-/// EU DST rule (last Sunday of March / October):
-/// - MESZ (UTC+2): from last Sunday of March 02:00 CET until last Sunday of
-///   October 03:00 CEST.
-/// - MEZ  (UTC+1): otherwise.
-///
-/// This is accurate to the day for the purpose of EPEX D-1 availability checks.
-/// Sub-day accuracy (the exact hour of the DST switch) is not needed here.
-fn german_local_date(utc: time::OffsetDateTime) -> time::Date {
-    let date_utc = utc.date();
-    let offset = german_utc_offset(date_utc, utc.hour());
-    let utc_offset = time::UtcOffset::from_hms(offset, 0, 0).expect("valid offset");
-    utc.to_offset(utc_offset).date()
-}
-
-fn last_sunday_of_month(year: i32, month: time::Month) -> time::Date {
-    let next_month = if month == time::Month::December {
-        time::Date::from_calendar_date(year + 1, time::Month::January, 1).unwrap()
-    } else {
-        time::Date::from_calendar_date(year, month.next(), 1).unwrap()
-    };
-    let last_day = next_month - time::Duration::days(1);
-    let days_since_sunday = last_day.weekday().number_days_from_sunday() as i64;
-    last_day - time::Duration::days(days_since_sunday)
-}
-
-fn german_utc_offset(date: time::Date, hour_utc: u8) -> i8 {
-    // DST starts last Sunday of March at 02:00 CET = 01:00 UTC
-    let dst_start = last_sunday_of_month(date.year(), time::Month::March);
-    // DST ends last Sunday of October at 03:00 CEST = 01:00 UTC
-    let dst_end = last_sunday_of_month(date.year(), time::Month::October);
-    if date > dst_start && date < dst_end {
-        return 2; // MESZ
-    }
-    if date == dst_start && hour_utc >= 1 {
-        return 2; // after switch-over
-    }
-    if date == dst_end && hour_utc < 1 {
-        return 2; // before switch-back
-    }
-    1 // MEZ
-}
-
 // ── Prompts ────────────────────────────────────────────────────────────────────
 
 #[prompt_router]
@@ -981,90 +932,4 @@ pub fn router(state: Arc<ProductdMcpState>, _shutdown: CancellationToken) -> Rou
     Router::new()
         .route_service("/mcp", service)
         .layer(middleware::from_fn_with_state(state, mcp_auth_middleware))
-}
-
-#[cfg(test)]
-mod dst_tests {
-    use super::{german_local_date, german_utc_offset, last_sunday_of_month};
-    use time::Month;
-    use time::macros::{date, datetime};
-
-    /// EPEX Spot prices are 15-min MTUs, so a wrong DST offset shifts every
-    /// price — the whole day's §41a dynamic tariff is then billed against the
-    /// wrong quarter-hours.
-    #[test]
-    fn offsets_switch_on_the_statutory_boundaries() {
-        // 2026: DST starts Sun 29 March, ends Sun 25 October.
-        assert_eq!(
-            last_sunday_of_month(2026, Month::March),
-            date!(2026 - 03 - 29)
-        );
-        assert_eq!(
-            last_sunday_of_month(2026, Month::October),
-            date!(2026 - 10 - 25)
-        );
-
-        // Deep winter and deep summer.
-        assert_eq!(german_utc_offset(date!(2026 - 01 - 15), 12), 1);
-        assert_eq!(german_utc_offset(date!(2026 - 07 - 15), 12), 2);
-    }
-
-    /// The spring-forward happens at 01:00 UTC: before it the offset is +1,
-    /// from it onward +2.
-    #[test]
-    fn spring_forward_flips_at_0100_utc() {
-        let d = date!(2026 - 03 - 29);
-        assert_eq!(german_utc_offset(d, 0), 1, "00:00 UTC is still CET");
-        assert_eq!(german_utc_offset(d, 1), 2, "01:00 UTC is already CEST");
-        assert_eq!(german_utc_offset(d, 12), 2);
-    }
-
-    /// The fall-back also happens at 01:00 UTC, in the other direction.
-    #[test]
-    fn fall_back_flips_at_0100_utc() {
-        let d = date!(2026 - 10 - 25);
-        assert_eq!(german_utc_offset(d, 0), 2, "00:00 UTC is still CEST");
-        assert_eq!(german_utc_offset(d, 1), 1, "01:00 UTC is back to CET");
-        assert_eq!(german_utc_offset(d, 12), 1);
-    }
-
-    /// Late-evening UTC belongs to the next German calendar day. Getting this
-    /// wrong files a price under yesterday's date.
-    #[test]
-    fn late_utc_evening_is_the_next_german_day() {
-        // 23:30 UTC in winter = 00:30 CET the next day.
-        assert_eq!(
-            german_local_date(datetime!(2026-01-15 23:30 UTC)),
-            date!(2026 - 01 - 16)
-        );
-        // 22:30 UTC in summer = 00:30 CEST the next day.
-        assert_eq!(
-            german_local_date(datetime!(2026-07-15 22:30 UTC)),
-            date!(2026 - 07 - 16)
-        );
-        // 21:30 UTC in summer is still the same German day.
-        assert_eq!(
-            german_local_date(datetime!(2026-07-15 21:30 UTC)),
-            date!(2026 - 07 - 15)
-        );
-    }
-
-    /// A month whose last day is itself a Sunday must return that day.
-    #[test]
-    fn last_sunday_handles_a_month_ending_on_sunday() {
-        // 31 May 2026 is a Sunday.
-        assert_eq!(
-            last_sunday_of_month(2026, Month::May),
-            date!(2026 - 05 - 31)
-        );
-    }
-
-    /// December must roll into the next year rather than panic.
-    #[test]
-    fn last_sunday_of_december_rolls_the_year() {
-        assert_eq!(
-            last_sunday_of_month(2026, Month::December),
-            date!(2026 - 12 - 27)
-        );
-    }
 }

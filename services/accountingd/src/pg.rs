@@ -149,8 +149,16 @@ impl AccountRow {
     }
 }
 
+/// The account for `(malo_id, lf_mp_id, tenant)`, created if it does not exist.
+///
+/// Takes an executor so a caller writing the account and what depends on it can
+/// commit them together.
+///
+/// # Errors
+///
+/// Propagates storage errors.
 pub async fn upsert_account(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     malo_id: &str,
     lf_mp_id: &str,
     tenant: &str,
@@ -166,7 +174,7 @@ pub async fn upsert_account(
     .bind(malo_id)
     .bind(lf_mp_id)
     .bind(tenant)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await
     .context("upsert_account")?;
     Ok(row.try_get("account_id")?)
@@ -743,29 +751,40 @@ pub struct PaymentClues<'a> {
 /// looked up against the unique indexes. A `LIKE '%…%'` scan would match a
 /// Mandatsreferenz that merely happens to be a prefix of another, and would
 /// book a stranger's payment onto a customer's account.
+///
+/// # An ambiguous rung is skipped, not guessed
+///
+/// Every rung refuses when it names more than one account, and the ladder moves
+/// on to the next. None of the three lookup keys is unique per account: one
+/// household pays for its Strom and its Gas Marktlokation from a single IBAN, a
+/// landlord pays for every unit from one, and an `EndToEndId` is unique only
+/// per Einzugslauf. Taking the first row of such a match books the money onto
+/// whichever account the query happened to return — and the receivable it was
+/// meant for stays open, which is the failure this ladder exists to prevent.
+/// Falling through is usually enough: the Verwendungszweck carries the
+/// Mandatsreferenz or the MaLo-ID that separates the two.
 pub async fn resolve_account_for_payment(
     pool: &PgPool,
     tenant: &str,
     clues: PaymentClues<'_>,
 ) -> anyhow::Result<Option<AccountMatch>> {
     // ── 1. The counterparty IBAN, as the bank reported it ────────────────────
+    //
+    // `acct_iban_hash` is not unique, and deliberately so: the same payer funds
+    // every Marktlokation they hold. Two rows mean the bank has told us who
+    // paid and not what for.
     if let Some(hash) = clues.iban_hash {
-        let row = sqlx::query_as::<_, (Uuid, String, String)>(
+        let rows = sqlx::query_as::<_, (Uuid, String, String)>(
             "SELECT account_id, malo_id, lf_mp_id FROM accounts \
-             WHERE iban_hash = $1 AND tenant = $2 LIMIT 1",
+             WHERE iban_hash = $1 AND tenant = $2 LIMIT 2",
         )
         .bind(hash)
         .bind(tenant)
-        .fetch_optional(pool)
+        .fetch_all(pool)
         .await
         .context("resolve_account_for_payment: iban")?;
-        if let Some((account_id, malo_id, lf_mp_id)) = row {
-            return Ok(Some(AccountMatch {
-                account_id,
-                malo_id,
-                lf_mp_id,
-                matched_by: "iban",
-            }));
+        if let Some(matched) = unique_match(rows, "iban", "the counterparty IBAN") {
+            return Ok(Some(matched));
         }
     }
 
@@ -775,28 +794,27 @@ pub async fn resolve_account_for_payment(
     // is exact — and it is the rung that catches a Rückläufer debited from an
     // account whose IBAN has since changed.
     if let Some(e2e) = clues.end_to_end_id.filter(|s| !s.trim().is_empty()) {
-        let row = sqlx::query_as::<_, (Uuid, String, String)>(
-            r"SELECT a.account_id, a.malo_id, a.lf_mp_id
+        // `sce_e2e` is unique per `(tenant, end_to_end_id, run_id)`, so the same
+        // reference can sit in two Einzugsläufe, and the `OR` additionally
+        // admits a mandate whose Mandatsreferenz is that string. Either way,
+        // two accounts is not an answer.
+        let rows = sqlx::query_as::<_, (Uuid, String, String)>(
+            r"SELECT DISTINCT a.account_id, a.malo_id, a.lf_mp_id
               FROM accounts a
               WHERE a.tenant = $1
                 AND (a.account_id IN (SELECT account_id FROM sepa_collection_entries
                                       WHERE tenant = $1 AND end_to_end_id = $2)
                   OR a.account_id IN (SELECT account_id FROM sepa_mandates
                                       WHERE tenant = $1 AND mandatsref = $2))
-              LIMIT 1",
+              LIMIT 2",
         )
         .bind(tenant)
         .bind(e2e.trim())
-        .fetch_optional(pool)
+        .fetch_all(pool)
         .await
         .context("resolve_account_for_payment: end_to_end_id")?;
-        if let Some((account_id, malo_id, lf_mp_id)) = row {
-            return Ok(Some(AccountMatch {
-                account_id,
-                malo_id,
-                lf_mp_id,
-                matched_by: "end_to_end_id",
-            }));
+        if let Some(matched) = unique_match(rows, "end_to_end_id", "the EndToEndId") {
+            return Ok(Some(matched));
         }
     }
 
@@ -826,22 +844,44 @@ pub async fn resolve_account_for_payment(
     // Two accounts matching means the text named two customers — a batch
     // reference, or a token that is an identifier for one and noise for
     // another. Booking either would be a guess.
-    match row.len() {
+    Ok(unique_match(
+        row,
+        "remittance_token",
+        "the Verwendungszweck",
+    ))
+}
+
+/// The one account in `rows`, or `None` when the rung named none or several.
+///
+/// Several is the case worth naming: the rung matched, and its evidence does not
+/// identify a single receivable. It is logged rather than booked, because the
+/// ladder's next rung — or an operator — can still resolve it, and a payment
+/// booked onto the wrong account of the right customer leaves a real receivable
+/// open while showing a credit somewhere else.
+fn unique_match(
+    rows: Vec<(Uuid, String, String)>,
+    matched_by: &'static str,
+    evidence: &str,
+) -> Option<AccountMatch> {
+    match rows.len() {
         1 => {
-            let (account_id, malo_id, lf_mp_id) = row.into_iter().next().expect("len == 1");
-            Ok(Some(AccountMatch {
+            let (account_id, malo_id, lf_mp_id) = rows.into_iter().next()?;
+            Some(AccountMatch {
                 account_id,
                 malo_id,
                 lf_mp_id,
-                matched_by: "remittance_token",
-            }))
+                matched_by,
+            })
         }
-        0 => Ok(None),
-        _ => {
+        0 => None,
+        n => {
             tracing::warn!(
-                "accountingd: remittance text names more than one account — not guessing"
+                rung = matched_by,
+                candidates = n,
+                "accountingd: {evidence} names more than one account — not guessing, \
+                 falling through to the next rung"
             );
-            Ok(None)
+            None
         }
     }
 }
@@ -1661,8 +1701,14 @@ pub async fn create_mandate(
     use time::format_description::well_known::Iso8601;
     let signed_at = Date::parse(&req.signed_at, &Iso8601::DEFAULT).context("parse signed_at")?;
 
+    // The mandate and the account columns CAMT.054 matches on are one write.
+    // Committed separately, a failure after the mandate row leaves a mandate
+    // whose account carries no `iban_hash`, and an incoming payment for it goes
+    // unmatched — the mandate looks present and the money does not arrive at it.
+    let mut tx = pool.begin().await.context("begin create_mandate")?;
+
     // Look up account.
-    let account_id = upsert_account(pool, &req.malo_id, &req.lf_mp_id, tenant).await?;
+    let account_id = upsert_account(&mut *tx, &req.malo_id, &req.lf_mp_id, tenant).await?;
 
     let row = sqlx::query(
         // ON CONFLICT on (tenant, mandatsref): unique per tenant, so two tenants
@@ -1702,7 +1748,7 @@ pub async fn create_mandate(
     .bind(&req.debtor_address.building_number)
     .bind(&req.debtor_address.post_code)
     .bind(&req.debtor_address.country_subdivision)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
     .context("create_mandate")?;
 
@@ -1718,11 +1764,13 @@ pub async fn create_mandate(
     .bind(&req.iban)
     .bind(crate::ledger::iban_hash(iban_key, &req.iban))
     .bind(&req.mandatsref)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .context("link mandate to account")?;
 
-    Ok(row.try_get("mandate_id")?)
+    let mandate_id: Uuid = row.try_get("mandate_id")?;
+    tx.commit().await.context("commit create_mandate")?;
+    Ok(mandate_id)
 }
 
 /// Mark a FRST mandate as successfully collected and transition it to RCUR.
@@ -2982,6 +3030,68 @@ pub struct DunningLockRow {
     pub created_by: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+}
+
+/// Filters a payout listing accepts. Every field narrows; `None` is „no filter".
+#[derive(Debug, Clone, Default)]
+pub struct EegPayoutFilter<'a> {
+    pub malo_id: Option<&'a str>,
+    pub year: Option<i16>,
+    pub month: Option<i16>,
+    pub payment_type: Option<&'a str>,
+    /// `Some(None)` selects the orders not yet submitted (`pain002_status IS
+    /// NULL`); `Some(Some(code))` one reported state.
+    pub status: Option<Option<&'a str>>,
+}
+
+/// EEG payout orders for `tenant`, newest first, capped at `limit`.
+///
+/// Each filter is bound at the column's own type. `billing_year` and
+/// `billing_month` are `SMALLINT`: a value that reaches the server as text makes
+/// the predicate `smallint = text`, an operator Postgres does not have, and the
+/// whole statement fails rather than the one filter.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn list_eeg_payouts(
+    pool: &PgPool,
+    tenant: &str,
+    filter: &EegPayoutFilter<'_>,
+    limit: i64,
+) -> anyhow::Result<Vec<sqlx::postgres::PgRow>> {
+    let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+        "SELECT payout_id, malo_id, tr_id, billing_year, billing_month, \
+                amount_ct, creditor_iban, creditor_name, payment_type, \
+                end_to_end_ref, pain002_status, pain002_reason, \
+                submitted_at, settled_at, source_ce_id, created_at \
+         FROM eeg_payout_orders \
+         WHERE tenant = ",
+    );
+    qb.push_bind(tenant);
+    if let Some(malo) = filter.malo_id {
+        qb.push(" AND malo_id = ").push_bind(malo);
+    }
+    if let Some(y) = filter.year {
+        qb.push(" AND billing_year = ").push_bind(y);
+    }
+    if let Some(m) = filter.month {
+        qb.push(" AND billing_month = ").push_bind(m);
+    }
+    if let Some(pt) = filter.payment_type {
+        qb.push(" AND payment_type = ").push_bind(pt);
+    }
+    match filter.status {
+        Some(None) => {
+            qb.push(" AND pain002_status IS NULL");
+        }
+        Some(Some(code)) => {
+            qb.push(" AND pain002_status = ").push_bind(code);
+        }
+        None => {}
+    }
+    qb.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit);
+    qb.build().fetch_all(pool).await.context("list_eeg_payouts")
 }
 
 /// Place a dunning lock on the account owning `case_id`.

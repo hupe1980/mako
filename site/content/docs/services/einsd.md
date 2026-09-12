@@ -1825,7 +1825,7 @@ row matches, and the basis for `POST_EEG_SPOT`.
 | Type | When | Key payload fields |
 |---|---|---|
 | `de.eeg.verguetung.berechnet` | FEED\_IN\_TARIFF / POST\_EEG settled | `tr_id`, `billing_year`, `billing_month`, `settlement_eur` (net), `pflichtzahlung_kumuliert_eur` (the **running** §52 claim, not a monthly increment — a later receipt supersedes an earlier one), **`gutschrift_nummer`**, **`gutschrift_steuer_eur`**, **`gutschrift_brutto_eur`**, **`bank_iban`**, **`bank_bic`**, **`zahlungsempfaenger`** |
-| `de.eeg.marktpraemie.berechnet` | MARKET\_PREMIUM settled | + `epex_avg_ct_kwh`, `aw_ct`, `effective_aw_ct` |
+| `de.eeg.marktpraemie.berechnet` | MARKET\_PREMIUM settled (DIREKTVERMARKTUNG, AUSSCHREIBUNG) | the same payload — one builder serves both types, and the type is what says which model settled |
 | `de.eeg.anlage.mastr-registriert` | MaStR confirmed | `tr_id`, `mastr_nummer` |
 | `de.eeg.anlage.foerderung-auslaufend` | EEG Förderung ending ≤180 days. Never for a KWKG plant, which has no `foerderendedatum` to count down to | `tr_id`, `foerderendedatum`, `days_remaining` |
 | `de.eeg.veraeusserungsform.gewechselt` | §21b switch accepted — enqueued in the same transaction as the plant update, so the switch and its §21c notification commit together | `tr_id`, the new model, the effective date |

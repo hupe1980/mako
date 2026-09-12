@@ -174,11 +174,36 @@ pub fn add_hours(received: &str, hours: u32) -> PyResult<String> {
     fmt_dt(fristen::add_hours(t, hours))
 }
 
-/// When the CONTRL for a message received at `received` is due (6 hours).
+/// When the CONTRL for an interchange received at `received` is due.
+///
+/// `anlass` names what arrived, because CONTRL AHB 1.0 gives three windows:
+///
+/// | `anlass` | Window | Fundstelle |
+/// |---|---|---|
+/// | `"regelfall"` (default) | 6 hours | §2.3.1, §2.4.1 |
+/// | `"strom_utilmd_orders"` | 15 minutes, 6 hours on a Saturday | §2.4.1 |
+/// | `"gas_alocat"` | 45 minutes | §2.3.1 |
+///
+/// A deadline falling inside a Formatumstellung window (31.3. 18:00 – 2.4. 00:00
+/// and 30.9. 18:00 – 2.10. 00:00, gesetzliche deutsche Zeit) moves to the end of
+/// that window: §2.3.1 and §2.4.1 make a deviation inside it one the market
+/// partners must accept.
 #[pyfunction]
-pub fn contrl_due_at(received: &str) -> PyResult<String> {
+#[pyo3(signature = (received, anlass = "regelfall"))]
+pub fn contrl_due_at(received: &str, anlass: &str) -> PyResult<String> {
     let t = parse_dt(received)?;
-    fmt_dt(fristen::contrl_due_at(t))
+    let anlass = match anlass {
+        "regelfall" => fristen::ContrlAnlass::Regelfall,
+        "strom_utilmd_orders" => fristen::ContrlAnlass::StromUtilmdOderOrders,
+        "gas_alocat" => fristen::ContrlAnlass::GasAlocat,
+        other => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "unknown CONTRL Anlass {other:?} — expected \"regelfall\", \
+                 \"strom_utilmd_orders\" or \"gas_alocat\""
+            )));
+        }
+    };
+    fmt_dt(fristen::contrl_due_at(t, anlass))
 }
 
 /// When the APERAK for an inbound **Strom** message is due.

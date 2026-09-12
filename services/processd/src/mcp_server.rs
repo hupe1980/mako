@@ -230,7 +230,7 @@ Escalate = data gap (grid record missing) or affiliate initiator \
     #[tool(
         description = "List NB Anmeldung decisions where `initiator_is_affiliate = true` — §20 EnWG \
 Diskriminierungsfreiheitspflicht audit. Returns decisions where the LF MP-ID matches the operator's \
-own MP-ID. These MUST NOT be auto-accepted (BNetzA §20 EnWG; BK6-22-024 §5.2). \
+own MP-ID. These MUST NOT be auto-accepted (§ 20 Abs. 1 EnWG; § 7a Abs. 5 EnWG Gleichbehandlung). \
 Use `obsd.get_kpi_report` for the aggregated §20 parity report.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]

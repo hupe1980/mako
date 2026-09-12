@@ -828,15 +828,12 @@ const KOMPONENTE_TERMINAL: &str = "('BEENDET','ABGELEHNT','STORNIERT')";
 ///
 /// # Why it is a constant
 ///
-/// Two queries used to answer this question differently and neither knew it.
-/// [`crate::pg::malo_slices`] — the product/price feed `billingd` bills from —
-/// filtered on **nothing**, so a MaLo whose Anmeldung the NB had rejected was
-/// still priced. `fetch_rechnungsempfaenger_by_malo` — who the invoice is
-/// addressed to — accepted only `AKTIV`/`BESTAETIGT`, so a contract that was
-/// filed but not yet confirmed produced a priced invoice **addressed to
-/// nobody**: § 14 Abs. 4 Nr. 1 UStG names the Leistungsempfänger, EN 16931
-/// makes BT-44 mandatory, and `billingd` fell back to a party called
-/// "Marktlokation 5123…".
+/// Two queries ask this question: [`crate::pg::malo_slices`], the product/price
+/// feed `billingd` bills from, and `fetch_rechnungsempfaenger_by_malo`, who the
+/// invoice is addressed to. They have to agree, because a status either query
+/// admits alone is a priced period with no Leistungsempfänger — and
+/// § 14 Abs. 4 Nr. 1 UStG names the Leistungsempfänger while EN 16931 makes
+/// BT-44 mandatory, so `billingd` has nothing to put there.
 ///
 /// One predicate, both queries: if a period can be billed, the party it is
 /// billed to is on the same component.

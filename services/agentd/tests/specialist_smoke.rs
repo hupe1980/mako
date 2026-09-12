@@ -1,12 +1,11 @@
 //! **Every specialist can actually run.**
 //!
-//! The golden run, the oversight suite and the regulatory suite all exercise
-//! one specialist. The other twenty-seven were asserted only statically — the
-//! manifest parses, the grants resolve, the schema exists. None of that proves
-//! a run *completes*: a schema no answer can satisfy, a prompt the runtime
-//! refuses to assemble, or a formation block that fails after the answer all
-//! parse cleanly and die at first dispatch, in production, on the event that
-//! needed them.
+//! The golden run, the oversight suite and the regulatory suite each exercise
+//! one specialist. A static assertion — the manifest parses, the grants resolve,
+//! the schema exists — does not prove a run *completes*: a schema no answer can
+//! satisfy, a prompt the runtime refuses to assemble, or a formation block that
+//! fails after the answer all parse cleanly and die at first dispatch, in
+//! production, on the event that needed them.
 //!
 //! This suite runs each specialist once on the production wiring
 //! (`Plane::new`, real Cedar set, real manifests) with a `FakeProvider`

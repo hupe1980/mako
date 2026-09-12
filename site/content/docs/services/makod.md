@@ -1793,6 +1793,37 @@ Gas 1.2 marks `SG10 CCI+Z19` DE 7037 Muss on a 44001, and
 `geli.lieferbeginn.anmelden` takes the same `bilanzkreis` field and renders that
 segment. Neither shape is sendable on the other Sparte.
 
+### The erzeugende Anmeldung states its Geschäftsvorfall
+
+55077 does not take the verbrauchende `ZW4`: its `SG4 STS+7` DE 9013 column
+admits `ZW0` (100 %ige Zuordnung), `ZW1` (bestehende Tranche) and `ZW2` (neu zu
+bildende Tranche). There is no default among the three, so a command without
+`transaktionsgrund_ergaenzung` is refused.
+
+`ZW2` carries the **Tranchengröße** as well — Produkt-Code `9991000002090`,
+„zwingend" per Codeliste der Konfigurationen 1.4 Kap. 6.1.1 — beside the
+Bilanzkreis under the same Produktpaket-ID:
+
+```json
+{
+  "command": "gpke.lieferbeginn.anmelden",
+  "payload": {
+    "malo_id":                     "10001234558",
+    "lieferbeginn_datum":          "2026-10-01",
+    "bilanzkreis":                 "11XBK-STD-----9",
+    "transaktionsgrund_ergaenzung": "ZW2",
+    "tranchengroesse":             "33.33"
+  }
+}
+```
+
+A bare string is the prozentuale Aufteilung (`9991000003014`), bounded by
+`[914] ∧ [930] ∧ [955]`: greater than zero, less than 100, at most two decimals.
+The other two Produkteigenschaften name themselves —
+`{"art": "aufteilungsfaktor", "wert": "0.25"}` and
+`{"art": "technische_ressourcen", "wert": "TR-1"}`. No AHB Bedingung expresses
+any of this, so the refusal is mako's own.
+
 For multi-role commands, include `"marktrolle"` to disambiguate:
 
 ```json
@@ -2060,8 +2091,8 @@ MP-IDs resolved by the engine (sender, receiver) are intentionally absent.
 | `wim.geraetewechsel.beauftragen` | `melo_id`², `process_date` (YYYYMMDD), `receiver_mp_id`, optional `pid` (default 55042) |
 | `wim.geraetewechsel.bestaetigen` | `melo_id`², optional `antwortcode` (defaults to the tree's unconditional Zustimmung), optional `bemerkung`, `abweichender_termin` (required with `Z01`) |
 | `wim.geraetewechsel.ablehnen` | `melo_id`², **`antwortcode`** (from `E_0200`/`E_0201`/`E_0202`/`E_0240`), optional `bemerkung`, `abweichender_termin` (required with `Z12`) |
-| `wim.geraetewechsel.aperak` | `melo_id`², optional `positiv` (default `true`), optional `reason` |
-| `wim.gesamtvorgang.melden` | `melo_id`², optional `erfolgreich` (default `true`), **`zuordnungsbeginn`** (YYYYMMDD, required on success) |
+| `wim.geraetewechsel.aperak` | `melo_id`², **`positiv`** (`true` = Anerkennung `BGM+312`, `false` = Fehler `BGM+313`), optional `reason` |
+| `wim.gesamtvorgang.melden` | `melo_id`², **`erfolgreich`**, **`zuordnungsbeginn`** (YYYYMMDD, required on success) |
 | `wim.zuordnung.bestaetigen` / `.ablehnen` | `melo_id`² |
 | `mabis.abrechnung.einleiten` | `zeitreihe`, `mabis_zp_id`, `bilanzierungsmonat`, `version`, `biko_id`, `absender_mp_id` |
 | `mabis.abrechnung.daten-einreichen` | `version`, `pid`, `antwortcode`, `grund` (required unless the code is the tree's Zustimmung) |
@@ -2135,6 +2166,27 @@ never be the reason a long conversation stalls.
 | 55003–55006, 55017, 55018 | resume by MaLo | `gpke-lf-anmeldung` — `ReceiveAntwort` |
 | 44001–44021 | spawn by MaLo | `geli-gas-supplier-change` — `ReceiveUtilmd` |
 | 55036–55038 · 44036–44038 | spawn per Meldung | `gpke-zuordnungsmeldung` / `geli-gas-zuordnungsmeldung` — `Empfangen`. Never *resumed*: three Meldungen ride one MaLo per Lieferbeginn, so each spawns its own process |
+
+### A Prüfidentifikator two Sparten share
+
+The routing table has two layers. A PID registered unqualified resolves the same
+way whoever it is addressed to; a PID two Sparten claim is registered
+**Sparte-qualified**, and `resolve_workflow` prefers that entry using the
+recipient MP-ID's Sparte. The unqualified table is last-wins across modules, so
+without the qualified entry a dual-fuel deployment routes every occurrence to
+whichever module registered last.
+
+| PID | Strom | Gas |
+|---|---|---|
+| ORDERS **17115** / **17117** Sperrauftrag | `gpke-sperrung` | `geli-gas-sperrung-nb` |
+| INSRPT **23001** | `wim-insrpt` | `wim-insrpt` (one workflow, Sparte in the command) |
+| COMDIS **29001** Ablehnung REMADV | `gpke-abrechnung` · `wim-invoic` | `gabi-gas-invoic` |
+
+29001 is the one a Sparte does not fully settle: **two** Strom billing families
+claim it (GPKE Teil 2/3 and WiM Strom Teil 1/2), and a COMDIS always answers a
+REMADV, so which of the two it belongs to comes from conversation-ID correlation
+rather than from the table. What the Sparte key guarantees is that neither can be
+displaced by the Gas claim on the same PID.
 
 The table is **illustrative, not exhaustive** — further combined-role pairs
 (e.g. the `wim-rechnungsabwicklung` ORDERS 17005/17006 and ORDRSP 19009/19010
@@ -2701,14 +2753,66 @@ A JWKS refresh loop also runs when OIDC is enabled (see [OIDC](#oidc-jwt-authent
 
 ---
 
-## CONTRL Empfangsbestätigung (Sparte Gas)
+## CONTRL — Empfangsbestätigung und Syntaxfehlermeldung
 
-Per **CONTRL AHB 1.0 §2.3.1**, the receiver must return a CONTRL Empfangsbestätigung
-(UCI DE0083 = 7) within **6 wall-clock hours** for *every* inbound **Gas**
-Übertragungsdatei (and every Gas APERAK); in Strom, CONTRL is only sent on syntax
-error. The obligation is a property of the *interchange*, keyed purely on Sparte —
-it is independent of which message types (UTILMD, INVOIC, MSCONS, ORDERS …) it
-contains.
+`UCI` DE 0083 has two values and they answer different questions
+(**CONTRL AHB 1.0** Kap. 2):
+
+| Ausprägung | DE 0083 | Sparte | When |
+|---|---|---|---|
+| Empfangsbestätigung | `7` | **Gas only** | Every inbound Gas Übertragungsdatei and every Gas APERAK (§2.3.1) |
+| Syntaxfehlermeldung | `4` + a DE 0085 code | **Both** | The Übertragungsdatei does not parse, and „wird nicht weiterbearbeitet" (§2.3.2 / §2.4.2) |
+
+§2.4 is explicit that „in der Sparte Strom wird die CONTRL **ausschließlich** als
+Syntaxfehlermeldung eingesetzt" — so the Sparte decides whether a *clean*
+interchange is acknowledged, and never whether a broken one is reported.
+
+The Empfangsbestätigung obligation is a property of the *interchange*, keyed
+purely on Sparte — independent of which message types (UTILMD, INVOIC, MSCONS,
+ORDERS …) it contains.
+
+### The window is not one number
+
+| What arrived | Window | Fundstelle |
+|---|---|---|
+| A Strom UTILMD or ORDERS | **15 minutes**; 6 hours when it arrived on a Saturday | §2.4.1 |
+| A GABi-Gas ALOCAT | **45 minutes** | §2.3.1 |
+| Anything else, either Sparte | **6 hours** | §2.3.1, §2.4.1 |
+
+The ALOCAT row covers both Ausprägungen. §2.3.1 shortens „die zugehörige CONTRL"
+without naming a verdict, so a rejected ALOCAT is owed its answer inside the same
+45 minutes as an accepted one.
+
+Saturday is a **Berlin** Saturday: the AHB dates the exception in gesetzlicher
+deutscher Zeit, so an interchange arriving 23:30 UTC on a Friday already falls
+under it. The window rides the deadline `mako_fristen::contrl_due_at` computes,
+and the outbox worker measures lateness against that deadline rather than a
+constant.
+
+### Formatumstellung defers the deadline
+
+§2.3.1 and §2.4.1 both close by making a deviation from these Fristen one the
+market partners **must accept** — „im Zeitraum der Formatumstellung vom 31.3.
+18.00 Uhr bis 2.4. 00:00 Uhr gesetzlicher deutscher Zeit … bzw. vom 30.9.
+18.00 Uhr bis 2.10. 00:00 Uhr". A CONTRL falling due inside either window is
+due at its end instead.
+
+The AHB's third case — a Formatumstellung the BNetzA dates away from 01.04. or
+01.10. — needs the date the Festlegung names and is not modelled.
+
+### What mako reports, and what it does not
+
+| Case | Answer |
+|---|---|
+| Every message in the interchange failed to parse | Syntaxfehlermeldung, DE 0085 mapped from the parser's own error (`12` „Ungültiger Wert" by default) |
+| `UNB` DE 0035 = `1` on the production endpoint | Syntaxfehlermeldung, DE 0085 **`25`** „Test-Kennzeichen nicht unterstützt" |
+| The `UNB` itself is unreadable | **No CONTRL** — §2.2.2.1 makes a conformant one impossible, and the interchange is dead-lettered instead |
+| The interchange is a CONTRL | **No CONTRL** — §2.2.2.2 forbids CONTRL-on-CONTRL |
+| Some messages parsed and some did not | The good ones are processed; the failures are dead-lettered and **not** yet reported per message — the AHB's `SG1 UCM` / `SG2 UCS` form needs segment positions the ingest loop does not carry |
+
+The DE 0085 code values come from `edifact_rs::contrl::SyntaxError`, which
+reproduces ISO 9735-4 Annex A, and every code mako emits is held against the
+`UCI` DE 0085 column of CONTRL AHB 1.0 Kap. 3 by a test.
 
 ### Which of our MP-IDs signs an outbound ORDERS
 
@@ -2761,7 +2865,7 @@ In the other direction, INVOIC **31009** (MSB-Rechnung) is Strom in all seven of
 its rows — the Gas MSB bills on 31003 — and IFTSTA **21028** is a GeLi Gas
 Informationsmeldung inside an otherwise Strom IFTSTA range.
 
-The CONTRL and its 6 h escalation deadline are written in one transaction
+The CONTRL and its escalation deadline are written in one transaction
 (`enqueue_outbox_with_deadlines`), so a crash cannot queue the acknowledgement
 without its deadline, and the outbox worker **discharges** the deadline on
 delivery — it escalates only when the CONTRL genuinely did not go out. Its sender

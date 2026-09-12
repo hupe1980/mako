@@ -278,21 +278,6 @@ pub async fn list_failed_runs(
     .await
 }
 
-/// List runs in `pending` or `failed` status (retry candidates).
-pub async fn list_pending_runs(
-    pool: &PgPool,
-    tenant: &str,
-) -> Result<Vec<SubmissionRunRow>, sqlx::Error> {
-    sqlx::query_as::<_, SubmissionRunRow>(
-        "SELECT * FROM submission_runs
-          WHERE tenant = $1 AND status IN ('pending','failed') AND attempt_count < 3
-          ORDER BY triggered_at ASC",
-    )
-    .bind(tenant)
-    .fetch_all(pool)
-    .await
-}
-
 /// Get submission run by ID.
 pub async fn get_run(
     pool: &PgPool,
@@ -394,38 +379,6 @@ pub async fn record_datenstatus(
     .execute(pool)
     .await?;
     Ok(res.rows_affected())
-}
-
-/// The version that currently settles a period, if any.
-///
-/// §3.8.3: the highest version carrying `Abrechnungsdaten` or
-/// `Abrechnungsdaten KBKA`. Returns `None` while every submitted version is
-/// still `Prüfdaten` — the period has been filed but nothing settles yet.
-///
-/// # Errors
-///
-/// Propagates database errors.
-pub async fn settling_version(
-    pool: &PgPool,
-    tenant: &str,
-    bilanzierungsgebiet_id: &str,
-    period_from: Date,
-    period_to: Date,
-) -> Result<Option<(Uuid, OffsetDateTime)>, sqlx::Error> {
-    sqlx::query_as(
-        "SELECT id, version FROM submission_runs
-          WHERE tenant = $1 AND bilanzierungsgebiet_id = $2
-            AND period_from = $3 AND period_to = $4
-            AND datenstatus IN ('ABRECHNUNGSDATEN', 'ABRECHNUNGSDATEN_KBKA')
-          ORDER BY version DESC
-          LIMIT 1",
-    )
-    .bind(tenant)
-    .bind(bilanzierungsgebiet_id)
-    .bind(period_from)
-    .bind(period_to)
-    .fetch_optional(pool)
-    .await
 }
 
 /// Record an inbound Prüfmitteilung (IFTSTA PID 21000/21001).

@@ -507,8 +507,7 @@ service refuses an empty Lastgang earlier still, as `SECT41A_NO_LASTGANG`.
 
 ## Layered billing quality assurance
 
-The platform implements the state-of-the-art layered model — deterministic
-where regulation demands auditability, ML-ready where statistics end:
+Four layers, deterministic where regulation demands auditability:
 
 1. **Rule engine (blocking)** — `energy-billing`'s validation pass: an
    Error-severity violation (§41a iMSys, missing EPEX prices, §14a
@@ -526,8 +525,7 @@ where regulation demands auditability, ML-ready where statistics end:
    20–49 sample, 50–79 review, **80–100 HELD — not dispatched** until
    `POST /api/v1/billing/{id}/release`. `GET /api/v1/billing/review-queue`
    is the analyst work list. Every point on the score is a coded,
-   human-readable finding persisted in `billing_records.risk_findings` —
-   explainability by construction, no post-hoc SHAP needed.
+   human-readable finding persisted in `billing_records.risk_findings`.
 
    A few findings are **verdicts, not evidence**: `MWST_STICHTAG_IM_ZEITRAUM`
    and `BEHG_JAHRESGRENZE_IM_ZEITRAUM` mean the period has no correct single
@@ -546,11 +544,10 @@ where regulation demands auditability, ML-ready where statistics end:
    endpoint (`WHERE risk_band = 'HELD'`) — a permanent draft no operator can see.
    "Held" and "known to be held" are one fact.
 
-3. **Statistical/ML analytics (external by design)** — the industry pattern:
-   edmd's Iceberg/S3 archive, Arrow IPC streams and DataFusion SQL are the
-   feed for external ML platforms (Isolation Forests, autoencoders,
-   time-series models); their verdicts can flow back as analyst reviews.
-   No ML runtime lives in the billing core — determinism is the product.
+3. **Statistical/ML analytics (external by design)** — edmd's Iceberg/S3
+   archive, Arrow IPC streams and DataFusion SQL feed external ML platforms;
+   their verdicts flow back as analyst reviews. No ML runtime lives in the
+   billing core.
 4. **AI-assisted investigation** — agentd's `billing-anomaly-agent` triages
    every `de.billing.rechnung.erstellt` event from the persisted
    `risk_findings` first, then the rolling baseline

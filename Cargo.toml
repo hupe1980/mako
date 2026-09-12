@@ -54,9 +54,7 @@ authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
 repository  = "https://github.com/hupe1980/mako"
-# The documentation site. Without it, crates.io and docs.rs show a crate with
-# no route back to the platform it belongs to — and no crate declares
-# `documentation`, which is fine: crates.io falls back to docs.rs on its own.
+# No crate declares `documentation`: crates.io falls back to docs.rs on its own.
 homepage    = "https://hupe1980.github.io/mako"
 rust-version = "1.94.1"
 
@@ -182,7 +180,7 @@ arrow                   = { version = "58", default-features = false }
 # ── Testing utilities ───────────────────────────────────────────────────────
 # testcontainers: spin up Docker containers in Rust integration tests.
 # Used by services' `tests/` to validate SQL queries against a real PostgreSQL
-# instance (see `just sqlx-prepare` and `just test-integration`).
+# instance (see `just test-db`).
 testcontainers   = { version = "0.23", features = ["blocking"] }
 testcontainers-modules = { version = "0.11", features = ["postgres"] }
 

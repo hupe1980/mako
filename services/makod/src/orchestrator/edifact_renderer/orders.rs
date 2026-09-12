@@ -77,7 +77,7 @@ pub(super) fn render_reqote(
 ) -> Result<RenderedInterchange, RenderError> {
     let mt = "REQOTE";
 
-    let pid = p.get("pid").and_then(|v| v.as_u64()).map(|n| n as u32);
+    let pid = optional_pid(p, mt)?;
 
     let sender = p
         .get("sender")
@@ -184,7 +184,7 @@ pub(super) fn render_orders(
 ) -> Result<RenderedInterchange, RenderError> {
     let mt = "ORDERS";
 
-    let pid = p.get("pid").and_then(|v| v.as_u64()).map(|n| n as u32);
+    let pid = optional_pid(p, mt)?;
 
     // The Sparte a handful of shared PIDs need to pick between two Marktrollen.
     // The emitting workflow states it; a payload without one leaves the lookup
@@ -289,7 +289,7 @@ pub(super) fn render_ordchg(
 ) -> Result<RenderedInterchange, RenderError> {
     let mt = "ORDCHG";
 
-    let pid = p.get("pid").and_then(|v| v.as_u64()).map(|n| n as u32);
+    let pid = optional_pid(p, mt)?;
 
     let sender = p
         .get("sender")
@@ -384,10 +384,7 @@ pub(super) fn render_ordrsp(
         .and_then(|v| v.as_str())
         .unwrap_or(msg.recipient.as_ref());
     let document_id = p.get("document_id").and_then(|v| v.as_str());
-    let pid = p
-        .get("pid")
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|n| u32::try_from(n).ok());
+    let pid = optional_pid(p, mt)?;
     let doc_date = p
         .get("document_date")
         .and_then(|v| v.as_str())
@@ -550,8 +547,8 @@ pub(super) fn render_quotes(
         .receiver(receiver)
         .message_ref(message_ref);
 
-    if let Some(pid) = p.get("pid").and_then(serde_json::Value::as_u64) {
-        builder = builder.pruefidentifikator(u32::try_from(pid).unwrap_or_default());
+    if let Some(pid) = optional_pid(p, mt)? {
+        builder = builder.pruefidentifikator(pid);
     }
     if let Some(id) = p.get("document_id").and_then(serde_json::Value::as_str) {
         builder = builder.document_id(id);

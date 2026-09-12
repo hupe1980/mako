@@ -362,41 +362,75 @@ impl Bilanzierungsmonat {
     /// The answer drives the Datenstatus a newly filed version receives
     /// (Kap. 3.8.3), so it must come from the calendar rather than from a flag
     /// on the message.
+    ///
+    /// # The phases partition the filing period
+    ///
+    /// Tabelle 2 states every window in Werktage — the BG-SZR Erstaufschlag runs
+    /// 1.–10. WT and its clearing 11.–30., the BK-SZR clearing closes on the 30.
+    /// and the KBKA opens on the 31. Read as raw calendar dates those windows do
+    /// not touch: the weekend and Feiertage between two adjacent Werktage sit
+    /// inside neither, and a filing arriving then would be answered „the
+    /// settlement is closed" a fortnight after the Bilanzierungsmonat ended.
+    ///
+    /// A window whose first day is the Werktag after the previous window's last
+    /// one therefore **opens on the calendar day after that last one**, absorbing
+    /// the non-Werktage between them. The later window takes them, not the
+    /// earlier: the Erstaufschlagsrecht is what the boundary decides, and a
+    /// version that arrives once the 10. WT has passed is „Prüfdaten" a positive
+    /// Prüfmitteilung can still promote, where the opposite error settles a
+    /// figure nobody checked.
+    ///
+    /// Two windows that are *not* adjacent Werktage keep their stated bounds, so
+    /// the DZÜ — BKA clearing to the 34. WT, KBKA from the 1. WT of the 8. Monat
+    /// — keeps the genuine [`Phase::ZwischenLaeufen`] gap Tabelle 2 gives it.
     #[must_use]
     pub fn phase(self, zeitreihe: Zeitreihe, date: Date) -> Phase {
         if date <= self.monatsende {
             return Phase::Vorlaufend;
         }
-        if self
-            .erstaufschlag(zeitreihe, Abrechnungslauf::Bka)
-            .is_some_and(|f| f.enthaelt(date))
-        {
+
+        let erstaufschlag = self.erstaufschlag(zeitreihe, Abrechnungslauf::Bka);
+        let bka = self.clearing(zeitreihe, Abrechnungslauf::Bka);
+        let kbka = self.clearing(zeitreihe, Abrechnungslauf::Kbka);
+
+        // The Erstaufschlag opens on the 1. WT, which is by construction the
+        // Werktag after the Monatsende — so it absorbs a Monatsende falling on a
+        // Friday and the weekend behind it.
+        if erstaufschlag.is_some_and(|f| ab_dem_vortag(f, Some(self.monatsende)).enthaelt(date)) {
             return Phase::Erstaufschlag;
         }
-        if self
-            .clearing(zeitreihe, Abrechnungslauf::Bka)
-            .is_some_and(|f| f.enthaelt(date))
-        {
+        if bka.is_some_and(|f| ab_dem_vortag(f, erstaufschlag.map(|e| e.bis)).enthaelt(date)) {
             return Phase::Clearing;
         }
-        if self
-            .clearing(zeitreihe, Abrechnungslauf::Kbka)
-            .is_some_and(|f| f.enthaelt(date))
-        {
+        if kbka.is_some_and(|f| ab_dem_vortag(f, bka.map(|c| c.bis)).enthaelt(date)) {
             return Phase::Kbka;
         }
-        // Between the BKA clearing close and the KBKA start — for the DZÜ the
-        // BKA window ends at the 34. WT and the KBKA opens in month 8.
-        let bka_ende = self
-            .clearing(zeitreihe, Abrechnungslauf::Bka)
-            .map(|f| f.bis);
-        let kbka_start = self
-            .clearing(zeitreihe, Abrechnungslauf::Kbka)
-            .map(|f| f.von);
-        match (bka_ende, kbka_start) {
+        match (bka.map(|f| f.bis), kbka.map(|f| f.von)) {
             (Some(ende), Some(start)) if date > ende && date < start => Phase::ZwischenLaeufen,
             _ => Phase::Geschlossen,
         }
+    }
+}
+
+/// `fenster`, opened back over the non-Werktage that separate it from the
+/// window closing on `vorheriges_ende`.
+///
+/// Only applies where the two are **adjacent Werktage**, which is how Tabelle 2
+/// says „and the next phase begins": 10. WT then 11. WT. Where the table leaves
+/// a real gap — the DZÜ between the 34. WT and the 8. Monat — nothing is
+/// absorbed and the gap stays a gap.
+fn ab_dem_vortag(fenster: Fenster, vorheriges_ende: Option<Date>) -> Fenster {
+    match vorheriges_ende {
+        Some(ende)
+            if fenster.von == mako_fristen::add_werktage(ende, 1, KALENDER)
+                && ende < fenster.von =>
+        {
+            Fenster {
+                von: ende.next_day().unwrap_or(fenster.von),
+                bis: fenster.bis,
+            }
+        }
+        _ => fenster,
     }
 }
 
@@ -586,6 +620,82 @@ mod tests {
         assert_eq!(
             m.phase(bg(), d(2026, Month::September, 1)),
             Phase::Geschlossen
+        );
+    }
+
+    /// Every Tabelle-2 window is stated in Werktage, so the phases are
+    /// contiguous in Werktagen — and a weekend or Feiertag between two adjacent
+    /// Werktage must not fall out of both. Read on the raw calendar the
+    /// BG-SZR Erstaufschlag closes on the 10. WT and its clearing opens on the
+    /// 11., which leaves the Saturday and Sunday between them inside neither:
+    /// a filing arriving then reaches the BIKO on the following Werktag, which
+    /// is the window that measures it.
+    #[test]
+    fn a_non_werktag_between_two_windows_belongs_to_the_next_one() {
+        for z in [bg(), bk()] {
+            for monat in [
+                Month::January,
+                Month::April,
+                Month::July,
+                Month::September,
+                Month::December,
+            ] {
+                let m = Bilanzierungsmonat::enthaltend(d(2026, monat, 15));
+                let mut tag = m.monatsende().next_day().unwrap();
+                let ende = m.clearing(z, Abrechnungslauf::Kbka).unwrap().bis;
+                while tag <= ende {
+                    assert!(
+                        m.phase(z, tag).nimmt_versionen_an(),
+                        "{z} {monat:?}: {tag} lies between the 1. WT and the close of \
+                         the KBKA and must take a version, got {:?}",
+                        m.phase(z, tag)
+                    );
+                    tag = tag.next_day().unwrap();
+                }
+            }
+        }
+    }
+
+    /// The boundary itself: the non-Werktage after a window's last Werktag
+    /// belong to the window that opens next, not to the one that closed.
+    #[test]
+    fn the_weekend_after_a_window_closes_belongs_to_the_next_phase() {
+        // The BG-SZR Erstaufschlag closes on the 10. WT; pick a month whose
+        // 10. WT is a Friday so a weekend separates it from the 11.
+        for jahr in 2026..2031 {
+            for monat in [Month::January, Month::May, Month::August] {
+                let m = Bilanzierungsmonat::enthaltend(d(jahr, monat, 15));
+                let zehnter = m.werktag(10);
+                let elfter = m.werktag(11);
+                if elfter == zehnter.next_day().unwrap() {
+                    continue; // no non-Werktag between them
+                }
+                let dazwischen = zehnter.next_day().unwrap();
+                assert_eq!(
+                    m.phase(bg(), dazwischen),
+                    Phase::Clearing,
+                    "{jahr}-{monat:?}: {dazwischen} follows the 10. WT, so the \
+                     Erstaufschlagsrecht has passed"
+                );
+                assert!(!m.phase(bg(), dazwischen).ist_erstaufschlag());
+            }
+        }
+    }
+
+    /// The tägliche AAÜZ is the one row Kap. 17.3.1.3 states in calendar days
+    /// („Folgetag (täglich)"), so it must not roll onto the next Werktag.
+    #[test]
+    fn the_taegliche_aauez_stays_on_the_calendar_day() {
+        let taeglich = Zeitreihe::new(Familie::TaeglicheAauez, None).unwrap();
+        // October 2026 ends on a Saturday, so the Folgetag is a Sunday.
+        let m = Bilanzierungsmonat::enthaltend(d(2026, Month::October, 15));
+        let folgetag = m.monatsende().next_day().unwrap();
+        assert_eq!(folgetag.weekday(), time::Weekday::Sunday);
+        assert_eq!(m.phase(taeglich, folgetag), Phase::Erstaufschlag);
+        assert_eq!(
+            m.phase(taeglich, folgetag.next_day().unwrap()),
+            Phase::Geschlossen,
+            "the obligation is one day wide"
         );
     }
 

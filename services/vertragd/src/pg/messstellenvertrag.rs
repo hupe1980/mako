@@ -103,11 +103,19 @@ const MSV_COLS: &str = "id, tenant, melo_id, msb_mp_id, kunden_id, vertragsbegin
      kuendigungsfrist_monate, kuendigung_zum, kuendigung_eingang,
      frueher_moeglich, beendet_am";
 
-/// The contract this MSB holds at a Messlokation, if any.
+/// The contract this MSB held at a Messlokation **as of `at`**, if any.
 ///
 /// `Ok(None)` is „no contract" — the `ZC9` case. A storage failure is an `Err`
 /// and must never be read as absence: answering `ZC9` because a lookup failed
 /// refuses a lawful Kündigung and keeps the customer bound.
+///
+/// The same MSB may hold successive contracts at one Messlokation, since an MSB
+/// that leaves and returns is an ordinary MSB-Wechsel each way. The one that
+/// answers is therefore the latest to have **begun** by `at` — an already ended
+/// term included, because `E_0200` tells `Z29` („bereits beendet") apart from
+/// `ZC9`. What the bound excludes is a term recorded in advance: without it a
+/// contract starting next year outranks the running one the moment it is
+/// written.
 ///
 /// # Errors
 ///
@@ -117,24 +125,34 @@ pub async fn find_messstellenvertrag(
     tenant: &str,
     melo_id: &str,
     msb_mp_id: &str,
+    at: Date,
 ) -> Result<Option<MessstellenvertragRow>> {
     let sql = format!(
         "SELECT {MSV_COLS} FROM messstellenvertraege
          WHERE tenant = $1 AND melo_id = $2 AND msb_mp_id = $3
+           AND vertragsbeginn <= $4
          ORDER BY vertragsbeginn DESC LIMIT 1"
     );
     Ok(sqlx::query_as::<_, MessstellenvertragRow>(&sql)
         .bind(tenant)
         .bind(melo_id)
         .bind(msb_mp_id)
+        .bind(at)
         .fetch_optional(pool)
         .await?)
 }
 
-/// Create or replace the contract at `(tenant, melo_id, msb_mp_id)`.
+/// Create or replace the contract instance beginning on `input.vertragsbeginn`.
 ///
-/// The `msv_no_overlap` exclusion constraint rejects a term that overlaps an
-/// existing contract for the same MSB and Messlokation.
+/// A contract instance is identified by its start date, not by the MSB alone:
+/// the same MSB may hold successive contracts at one Messlokation, and writing
+/// the later one must not overwrite the record of the earlier. `msv_instance`
+/// makes the start date the conflict target, so a `PUT` repeating a term it has
+/// already written updates it and a `PUT` stating a new term inserts one.
+///
+/// A new term that *overlaps* a stored one is what `msv_no_overlap` refuses —
+/// two simultaneously live contracts would let the `E_0200` answer depend on
+/// row order — and the handler turns that into a `409`.
 ///
 /// # Errors
 ///
@@ -146,33 +164,20 @@ pub async fn upsert_messstellenvertrag(
     msb_mp_id: &str,
     input: &UpsertMessstellenvertragInput,
 ) -> Result<Uuid> {
-    let existing = find_messstellenvertrag(pool, tenant, melo_id, msb_mp_id).await?;
-    if let Some(row) = existing {
-        sqlx::query(
-            r"UPDATE messstellenvertraege
-              SET vertragsbeginn = $2, kuendigungsfrist_monate = $3, kunden_id = $4,
-                  kuendigung_zum = $5, kuendigung_eingang = $6,
-                  frueher_moeglich = $7, beendet_am = $8, updated_at = now()
-              WHERE id = $1",
-        )
-        .bind(row.id)
-        .bind(input.vertragsbeginn)
-        .bind(input.kuendigungsfrist_monate)
-        .bind(input.kunden_id)
-        .bind(input.kuendigung_zum)
-        .bind(input.kuendigung_eingang)
-        .bind(input.frueher_moeglich)
-        .bind(input.beendet_am)
-        .execute(pool)
-        .await?;
-        return Ok(row.id);
-    }
     let id: Uuid = sqlx::query_scalar(
         r"INSERT INTO messstellenvertraege
               (tenant, melo_id, msb_mp_id, kunden_id, vertragsbeginn,
                kuendigungsfrist_monate, kuendigung_zum, kuendigung_eingang,
                frueher_moeglich, beendet_am)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          ON CONFLICT (tenant, melo_id, msb_mp_id, vertragsbeginn) DO UPDATE
+          SET kunden_id               = EXCLUDED.kunden_id,
+              kuendigungsfrist_monate = EXCLUDED.kuendigungsfrist_monate,
+              kuendigung_zum          = EXCLUDED.kuendigung_zum,
+              kuendigung_eingang      = EXCLUDED.kuendigung_eingang,
+              frueher_moeglich        = EXCLUDED.frueher_moeglich,
+              beendet_am              = EXCLUDED.beendet_am,
+              updated_at              = now()
           RETURNING id",
     )
     .bind(tenant)
@@ -207,11 +212,19 @@ pub async fn record_kuendigung(
     eingang: Date,
     zum: Date,
 ) -> Result<bool> {
+    // The Kündigung lands on the contract running when it arrived. Scoping to
+    // the MSB alone would carry it across every term the pair has ever had,
+    // rewriting a concluded contract's end date from an event that postdates it.
     let n = sqlx::query(
         r"UPDATE messstellenvertraege
           SET kuendigung_zum = $4, kuendigung_eingang = $5, updated_at = now()
-          WHERE tenant = $1 AND melo_id = $2 AND msb_mp_id = $3
-            AND beendet_am IS NULL",
+          WHERE id = (
+              SELECT id FROM messstellenvertraege
+              WHERE tenant = $1 AND melo_id = $2 AND msb_mp_id = $3
+                AND beendet_am IS NULL
+                AND vertragsbeginn <= $5
+              ORDER BY vertragsbeginn DESC
+              LIMIT 1)",
     )
     .bind(tenant)
     .bind(melo_id)

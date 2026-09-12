@@ -416,18 +416,47 @@ fn require_str<'a>(
 }
 
 /// Require a `u32` field from the payload, returning a `MissingField` error.
+///
+/// A number that does not fit is refused rather than narrowed: `as u32` wraps,
+/// and every `u32` in a payload here is a wire value — a Prüfidentifikator, a
+/// count — so a wrapped one is written to the counterparty as a different value
+/// than the caller stated.
 fn require_u32(
     p: &serde_json::Value,
     message_type: &'static str,
     field: &'static str,
 ) -> Result<u32, RenderError> {
     p.get(field)
-        .and_then(|v| v.as_u64())
-        .map(|n| n as u32)
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
         .ok_or_else(|| RenderError::MissingField {
             message_type: message_type.into(),
             field: field.into(),
         })
+}
+
+/// Read the optional `pid` field as a five-digit Prüfidentifikator.
+///
+/// `None` when the payload states none. A number that is not one — outside
+/// `u32`, or outside [`edi_energy::Pruefidentifikator`]'s `10000..=99999` — is
+/// refused rather than narrowed with `as u32` or defaulted to `0`, either of
+/// which puts a Prüfidentifikator on the wire that the caller did not state.
+fn optional_pid(
+    p: &serde_json::Value,
+    message_type: &'static str,
+) -> Result<Option<u32>, RenderError> {
+    let Some(raw) = p.get("pid").and_then(serde_json::Value::as_u64) else {
+        return Ok(None);
+    };
+    let pid = u32::try_from(raw)
+        .ok()
+        .filter(|n| edi_energy::Pruefidentifikator::new(*n).is_ok())
+        .ok_or_else(|| {
+            RenderError::BuilderError(format!(
+                "[{message_type}] {raw} is not a Prüfidentifikator (10000..=99999)"
+            ))
+        })?;
+    Ok(Some(pid))
 }
 
 /// Normalise a date string: accepts both ISO-8601 (`2026-01-01`) and
@@ -2030,6 +2059,70 @@ mod tests {
         let result = render_to_wire_bytes(&msg, &test_registry("9900123456789"));
         assert!(
             matches!(result, Err(RenderError::MissingField { field, .. }) if field.as_ref() == "pid")
+        );
+    }
+
+    /// CONTRL AHB 1.0 Kap. 3: the Syntaxfehlermeldung is `UCI` DE 0083 = `4`
+    /// carrying a DE 0085 code, the Empfangsbestätigung DE 0083 = `7` carrying
+    /// none. Both halves ship, so both are rendered here.
+    #[test]
+    fn the_contrl_renders_both_ahb_ausprägungen() {
+        let wire = |payload| {
+            let msg = fake_msg("CONTRL", "9900987654321", payload);
+            match render_to_wire_bytes(&msg, &test_registry("9900123456789")) {
+                Ok(rendered) => Some(String::from_utf8(rendered.bytes).expect("UNOC is UTF-8")),
+                // No CONTRL profile active on today's date — nothing to assert.
+                Err(RenderError::NoActiveProfile { .. }) => None,
+                Err(other) => panic!("unexpected error: {other}"),
+            }
+        };
+
+        if let Some(text) = wire(serde_json::json!({
+            "sender": "9900123456789",
+            "interchange_ref": "IC-4711",
+            "accepted": true,
+        })) {
+            assert!(
+                text.contains("+7'"),
+                "an Empfangsbestätigung is DE 0083 = 7, got: {text}"
+            );
+        }
+
+        let rejection = wire(serde_json::json!({
+            "sender": "9900123456789",
+            "interchange_ref": "IC-4711",
+            "accepted": false,
+            "syntax_error": "25",
+        }));
+        if let Some(text) = &rejection {
+            assert!(
+                text.contains("+4+25'"),
+                "a Syntaxfehlermeldung is DE 0083 = 4 followed by DE 0085, got: {text}"
+            );
+        }
+        assert!(
+            rejection.is_some(),
+            "the CONTRL profile is embedded, so the rejection must have rendered"
+        );
+    }
+
+    /// A CONTRL states either „empfangen und syntaktisch fehlerfrei" or
+    /// „zurückgewiesen"; neither may be produced from an absent decision.
+    #[test]
+    fn a_contrl_without_a_verdict_is_refused() {
+        let msg = fake_msg(
+            "CONTRL",
+            "9900987654321",
+            serde_json::json!({
+                "sender": "9900123456789",
+                "interchange_ref": "IC-4711",
+            }),
+        );
+        let result = render_to_wire_bytes(&msg, &test_registry("9900123456789"));
+        assert!(
+            matches!(&result, Err(RenderError::MissingField { field, .. })
+                     if field.starts_with("accepted")),
+            "expected a MissingField on `accepted`, got: {result:?}"
         );
     }
 

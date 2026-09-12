@@ -857,9 +857,14 @@ impl MakodMcpHandler {
     ///
     /// Deadline labels indicate which regulatory window was missed:
     /// - `aperak-*`: APERAK sending deadline (45 min Strom / nächster Werktag 12:00 Gas)
-    /// - `response-*`: Process response deadline (24 h GPKE / 5 WT WiM / 10 WT GeLi Gas)
+    /// - `contrl-*`: CONTRL delivery window (6 h, or 15 min for a Strom UTILMD/ORDERS)
+    /// - every other label: the business Antwortfrist of its Prüfidentifikator,
+    ///   which `mako_fristen::antwort` resolves — a clock time on a Werktag in
+    ///   GPKE, Werktage in WiM and GeLi Gas, and never one flat duration
     ///
-    /// Source: APERAK AHB 1.0 §2.3 / §2.4; BK6-22-024 §5; BK7-24-01-009 §5.
+    /// Source: APERAK AHB 1.0 §2.3 / §2.4; CONTRL AHB 1.0 §2.3.1 / §2.4.1;
+    /// GPKE Teil 2 (BK6-24-174 Anlage 1b) and Teil 4 (BK6-22-024 Anlage 1d);
+    /// AWH GeLi Gas (BK7-24-01-009).
     ///
     /// § 6a EnWG informatorisches Unbundling applies here exactly as it does to
     /// [`Self::get_process`]: each entry names a workflow and its timing, so an
@@ -1355,7 +1360,7 @@ impl MakodMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "**GPKE Sperrung — Ausführungsmeldung (BK6-22-024 §5)**\n\n\
+                "**GPKE Sperrung — Ausführungsmeldung (GPKE Teil 2 § 3.5)**\n\n\
                  This is the **NB side**. After the field team has (or has not) carried out the\n\
                  disconnection, the NB reports the outcome and `makod` dispatches IFTSTA 21039\n\
                  to the Lieferant.\n\n\
@@ -1371,13 +1376,13 @@ impl MakodMcpHandler {
                  - marktrolle: \"NB\"\n\
                  - payload: {\"malo_id\": \"<11-digit MaLo>\", \"reason\": \"<why>\"}\n\n\
                  `reason` is **mandatory** on the failure path — without it the LF waits out\n\
-                 its 24-hour deadline with no explanation.\n\n\
+                 its answer window with no explanation.\n\n\
                  Note: `sperrd` issues both commands automatically from its execute/fail\n\
                  endpoints. Call them by hand only when driving `makod` without `sperrd`.\n\n\
                  The **LF side** is a different command set: `gpke.sperrung.beauftragen`\n\
                  (17115), `gpke.entsperrung.beauftragen` (17117), `gpke.sperrung.stornieren`\n\
                  (ORDCHG 39000).\n\n\
-                 **Source:** GPKE AHB BK6-22-024 §5; ORDERS PIDs 17115/17117, IFTSTA 21039.",
+                 **Source:** GPKE Teil 2 § 3.5 (BK6-24-174 Anlage 1b); ORDERS PIDs 17115/17117, IFTSTA 21039.",
             ),
         ]
     }
@@ -1717,7 +1722,7 @@ fn next_steps_hint(command: &str) -> &'static str {
             "GNB has 10 Werktage to respond with the requested meter data (BK7-24-01-009)."
         }
         "geli.gas.sperrung.bestaetigen" | "gpke.sperrung.bestaetigen" => {
-            "Execution reported. IFTSTA 21039 is queued to the Lieferant (BK6-22-024 §5)."
+            "Execution reported. IFTSTA 21039 is queued to the Lieferant (GPKE Teil 2 § 3.5)."
         }
         "gpke.sperrung.fehlgeschlagen" => {
             "Non-execution reported with reason. IFTSTA 21039 is queued to the Lieferant \

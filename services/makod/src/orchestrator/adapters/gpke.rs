@@ -1025,8 +1025,8 @@ pub fn gpke_kuendigung_registry() -> AdapterRegistry<mako_gpke::GpkeKuendigungWo
 /// [`AnkuendigungZuordnungLfCommand::ReceiveAnkuendigung`].
 ///
 /// AHB validation is performed inline; `validation_passed` is set accordingly.
-/// The LFN ERP responds with a subsequent `SendAntwort` command (within 24h,
-/// BK6-22-024 §4).
+/// The LFN ERP responds with a subsequent `SendAntwort` command, inside the
+/// Antwortfrist `mako_fristen::antwort` publishes for the Prüfidentifikator.
 #[must_use]
 pub fn gpke_ankuendigung_zuordnung_lf_registry()
 -> AdapterRegistry<GpkeAnkuendigungZuordnungLfWorkflow> {
@@ -1808,7 +1808,7 @@ pub fn gpke_sperrung_lf_registry() -> AdapterRegistry<GpkeSperrungLfWorkflow> {
 /// (Ablehnung Anforderung bilanzierte Menge) from the NB. Both are negative
 /// responses to an LF-initiated ORDERS 17110/17114 request.
 ///
-/// **Regulatory basis**: GPKE / MMM Strom/Gas (BK6-22-024 §8).
+/// **Regulatory basis**: GPKE Teil 2 Mehr-/Mindermengen (BK6-24-174 Anlage 1b).
 #[must_use]
 pub fn gpke_allokationsliste_ordrsp_registry() -> AdapterRegistry<GpkeAllokationslisteWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -1860,7 +1860,7 @@ pub fn gpke_allokationsliste_ordrsp_registry() -> AdapterRegistry<GpkeAllokation
 /// These are **MMM Strom/Gas** PIDs, NOT GeLi Gas. They arrive at the LF
 /// after the NB fulfils the allocation-list request.
 ///
-/// **Regulatory basis**: GPKE / MMM Strom/Gas (BK6-22-024 §8).
+/// **Regulatory basis**: GPKE Teil 2 Mehr-/Mindermengen (BK6-24-174 Anlage 1b).
 #[must_use]
 pub fn gpke_allokationsliste_mscons_registry() -> AdapterRegistry<GpkeAllokationslisteWorkflow> {
     let mut registry = AdapterRegistry::new();

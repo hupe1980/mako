@@ -579,6 +579,25 @@ impl Produkt {
             wert: Some(bk.into()),
         }
     }
+
+    /// The **Tranchengröße** product (`9991000002090`).
+    ///
+    /// Codeliste der Konfigurationen 1.4 Kap. 6.1.1: „Im Geschäftsvorfall 3 der
+    /// Anmeldung einer Zuordnung des LFN `STS+7++xxx+ZW2` … ist **zwingend**
+    /// dieses Produkt anzugeben", bestellbar über 55077 und 55601, höchstens
+    /// einmal je Produktpaket-ID.
+    ///
+    /// The Eigenschaft travels with the value rather than being assumed,
+    /// because the three forms are not interchangeable — see
+    /// [`Tranchengroesse`].
+    #[must_use]
+    pub fn tranchengroesse(groesse: &Tranchengroesse) -> Self {
+        Self {
+            produkt_code: produkt::TRANCHENGROESSE.to_owned(),
+            eigenschaft: groesse.eigenschaft.clone(),
+            wert: Some(groesse.wert.clone()),
+        }
+    }
 }
 
 /// The `SG8` **Tranchengröße** of a Geschäftsvorfall 3, as it stands on the wire.
@@ -598,6 +617,43 @@ pub struct Tranchengroesse {
 }
 
 impl Tranchengroesse {
+    /// The **prozentuale Aufteilung** form (`9991000003014`).
+    ///
+    /// `wert` is the share as the wire carries it. Codeliste der
+    /// Konfigurationen 1.4 Kap. 6.1.1 attaches `[914] ∧ [930] ∧ [955]` to it —
+    /// greater than zero, at most two decimal places, less than 100 — which
+    /// [`is_valid_prozent_wert`] checks; this crate holds the grammar, not the
+    /// arithmetic, so the caller decides what to do about a value that fails.
+    #[must_use]
+    pub fn prozent(wert: impl Into<String>) -> Self {
+        Self {
+            eigenschaft: Some(produkt::TRANCHE_PROZENTUALE_AUFTEILUNG.to_owned()),
+            wert: wert.into(),
+        }
+    }
+
+    /// The **Aufteilungsfaktor** form (`9991000003022`) — a factor on a
+    /// Referenzträger or the installierte Leistung, not a share.
+    #[must_use]
+    pub fn aufteilungsfaktor(wert: impl Into<String>) -> Self {
+        Self {
+            eigenschaft: Some(produkt::TRANCHE_AUFTEILUNGSFAKTOR.to_owned()),
+            wert: wert.into(),
+        }
+    }
+
+    /// The **Aufteilung auf Technische Ressourcen** form (`9991000003220`).
+    ///
+    /// The Wertedetails name every Technische Ressource to assign, so `wert` is
+    /// a list and not a number.
+    #[must_use]
+    pub fn technische_ressourcen(wert: impl Into<String>) -> Self {
+        Self {
+            eigenschaft: Some(produkt::TRANCHE_AUFTEILUNG_TR.to_owned()),
+            wert: wert.into(),
+        }
+    }
+
     /// The value, but only where the Eigenschaft says it is a **percentage**.
     ///
     /// `None` for the Aufteilungsfaktor and the Technische-Ressourcen forms:
@@ -659,6 +715,10 @@ pub struct Produktpaket {
 impl Produktpaket {
     /// The single-product package a Zuordnung needs: Produktpaket 1 carrying
     /// the Bilanzkreis, to be applied in full.
+    ///
+    /// This is the package for Geschäftsvorfall 1 and 2. A Geschäftsvorfall 3
+    /// needs [`Produktpaket::tranchenbildung`] — the Codeliste makes the
+    /// Tranchengröße mandatory there, and it is not in this package.
     #[must_use]
     pub fn bilanzkreis(bk: impl Into<String>) -> Self {
         Self {
@@ -667,6 +727,64 @@ impl Produktpaket {
             umsetzung: Umsetzungsgrad::Vollumfaenglich,
         }
     }
+
+    /// Produktpaket 1 for a **Geschäftsvorfall 3** — the Bilanzkreis plus the
+    /// Tranchengröße, to be applied in full.
+    ///
+    /// Both products are verpflichtend per Produktpaket-ID (Codeliste der
+    /// Konfigurationen 1.4 Kap. 6.1.1): the Bilanzkreis „ist je Produktpaket-ID
+    /// in der UTILMD zwingend anzugeben", and the Tranchengröße is „im
+    /// Geschäftsvorfall 3 … zwingend". An Anmeldung under `ZW2` carrying only
+    /// the Bilanzkreis is one the NB has to refuse.
+    #[must_use]
+    pub fn tranchenbildung(bk: impl Into<String>, groesse: &Tranchengroesse) -> Self {
+        Self {
+            paket_id: 1,
+            produkte: vec![Produkt::bilanzkreis(bk), Produkt::tranchengroesse(groesse)],
+            umsetzung: Umsetzungsgrad::Vollumfaenglich,
+        }
+    }
+}
+
+/// `true` when `wert` satisfies the prozentuale Tranchengröße's own Bedingungen.
+///
+/// Codeliste der Konfigurationen 1.4 Kap. 6.1.1 attaches three to the
+/// Wertedetails of `9991000003014`: `[914]` „Möglicher Wert: > 0", `[930]`
+/// „max. 2 Nachkommastellen", `[955]` „Möglicher Wert: < 100". Both bounds are
+/// strict, so neither 0 nor 100 is a Tranche — a 100 % Zuordnung is
+/// Geschäftsvorfall 1 and carries no Tranchengröße at all.
+///
+/// Checked lexically on the decimal the wire carries, because that is what the
+/// Bedingungen are written about: `10.5` and `10,5` are the same share and
+/// `10.500` is a third decimal place whatever its value.
+#[must_use]
+pub fn is_valid_prozent_wert(wert: &str) -> bool {
+    let (ganz, bruch) = match wert.split_once(['.', ',']) {
+        Some((g, b)) => (g, b),
+        None => (wert, ""),
+    };
+    if ganz.is_empty() && bruch.is_empty() {
+        return false;
+    }
+    if !ganz.chars().all(|c| c.is_ascii_digit())
+        || !bruch.chars().all(|c| c.is_ascii_digit())
+        || bruch.len() > 2
+    {
+        return false;
+    }
+    // `[914]` > 0 and `[955]` < 100, on the digits themselves: no decimal type
+    // here, and a parse would turn a malformed value into a plausible one.
+    let ganz_wert: u32 = if ganz.is_empty() {
+        0
+    } else if ganz.len() > 3 {
+        return false;
+    } else {
+        ganz.parse().unwrap_or(u32::MAX)
+    };
+    if ganz_wert >= 100 {
+        return false;
+    }
+    ganz_wert > 0 || bruch.chars().any(|c| c != '0')
 }
 
 /// `SG4 STS+7` — Transaktionsgrund, Ergänzung and befristete Anmeldung.

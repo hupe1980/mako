@@ -1158,7 +1158,7 @@ async fn replacing_a_draft_clears_the_previous_calculations_derived_state() {
         .await
         .expect("fetch")
         .expect("row");
-    assert_eq!(row.total_netto_eur, Some(dec!(250)), "the re-run's amounts");
+    assert_eq!(row.total_netto_eur, dec!(250), "the re-run's amounts");
     assert_eq!(row.risk_score, None, "the old score does not survive");
     assert_eq!(row.risk_band, None, "the old band does not survive");
     assert_eq!(row.risk_findings, None, "the old findings do not survive");

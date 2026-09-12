@@ -367,8 +367,9 @@ fn classify_conflict(
             command: command.to_owned(),
             idempotency_key: Some(idempotency_key.to_owned()),
         }),
-        // A `duplicate_process` we cannot correlate is not a success: reporting
-        // one without a usable id is what produced the nil-UUID correlations.
+        // A `duplicate_process` we cannot correlate is not a success. Reporting
+        // one without a usable id hands the caller a correlation that points at
+        // no process, so the conflict is raised instead.
         ("duplicate_process", None) => Err(MdmError::MakodConflict {
             kind: "duplicate_process_without_id".to_owned(),
             detail: format!(

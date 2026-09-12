@@ -1126,8 +1126,9 @@ mod tests {
     ///
     /// A settlement accepts versions only inside its Erstaufschlag or clearing
     /// window (Kap. 3.10 Tabelle 2), so a hard-coded month would start failing
-    /// the moment its KBKA closed. Two months back is inside the BKA clearing
-    /// window for every Summenzeitreihe in the table.
+    /// the moment its KBKA closed. Two months back is still open for every
+    /// Summenzeitreihe in the table — the KBKA runs to the end of the 7. Monat —
+    /// whichever phase of it the day happens to fall in.
     fn offener_bilanzierungsmonat() -> String {
         let heute = mako_fristen::heute();
         let mut d = heute.replace_day(1).expect("day 1 exists");

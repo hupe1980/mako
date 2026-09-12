@@ -29,6 +29,15 @@ check:
 test:
     cargo test --all-features --all-targets
 
+# Doc examples. `--all-targets` selects every lib, bin, test, bench and example
+# target and **excludes doctests** — the two flags do not compose, so `just test`
+# compiles no `/// ```rust` block at all. Without this recipe a doc example is
+# prose: it can name a function that no longer exists, or call one with the wrong
+# arity, and nothing in the suite says so. A published crate's front page is the
+# first thing a reader copies, so it is held to compiling and passing.
+test-doc:
+    cargo test --workspace --all-features --doc
+
 # A demo payload is shipped API surface — run by whoever evaluates the platform
 # and copied into tickets as "this is what a request looks like" — so each one
 # is deserialised into the real request type. These are ordinary `#[test]`s, so
@@ -341,7 +350,7 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check check-fuzz test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-runner-routes check-wire-timestamps check-business-dates check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+ci: check check-fuzz test test-doc test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-runner-routes check-wire-timestamps check-business-dates check-citations check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -589,6 +598,13 @@ check-bo4e-examples:
 # `heute()` function.
 check-business-dates:
     cargo xtask check-business-dates
+
+# Refuse a Festlegung cited in a form it does not publish. BK6-22-024 numbers its
+# operative part in Tenorziffern and carries its substance in Anlagen, so
+# „BK6-22-024 § 4" names nothing that can be looked up — and an uncheckable
+# citation shields whatever Frist stands beside it from review.
+check-citations:
+    cargo xtask check-citations
 
 # How much of the published Prüfidentifikator inventory the AHB profiles carry,
 # and whether the PID reference names all of it. `validate-profiles` compares one

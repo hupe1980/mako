@@ -517,14 +517,20 @@ fn emit_sg8_produktpakete<W: std::io::Write>(
         emit_seg!(w, "SEQ", crate::utilmd_codes::SEQ_SUMMENZEITREIHE);
         emit_comp!(w, "RFF", [crate::utilmd_codes::RFF_ZEITREIHE, version]);
     }
+    // One `SG8 SEQ+Z79` group **per product**, not per package: the MIG gives
+    // the group a single `PIA` place (00083), so a second Produkt-Code inside
+    // one group has nowhere to sit. What binds the products into a package is
+    // the SEQ DE 1050 Produktpaket-ID they repeat — „Maximale Wiederholbarkeit
+    // des Produkt-Code je Produktpaket-ID: 1" (Codeliste der Konfigurationen
+    // 1.4 Kap. 6.1.1) counts codes within one ID, across the groups carrying it.
     for paket in &tx.produktpakete {
-        emit_seg!(
-            w,
-            "SEQ",
-            produkt::SEQ_PRODUKTPAKET,
-            &paket.paket_id.to_string()
-        );
         for p in &paket.produkte {
+            emit_seg!(
+                w,
+                "SEQ",
+                produkt::SEQ_PRODUKTPAKET,
+                &paket.paket_id.to_string()
+            );
             emit_comp!(
                 w,
                 "PIA",

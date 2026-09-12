@@ -4441,7 +4441,7 @@ mod tests {
     }
 
     /// Doubling the consumption does not double the credit — the defining
-    /// property of a pauschale, and the one the old factor model got wrong.
+    /// property of a pauschale.
     #[test]
     fn the_modul1_credit_does_not_scale_with_consumption() {
         let credit_for = |kwh: &str| {

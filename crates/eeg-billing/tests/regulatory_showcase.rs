@@ -2837,8 +2837,7 @@ fn s22_ausschreibung_thresholds() {
 
 /// § 21b Abs. 1 Satz 2 + § 21c Abs. 1 Satz 1 EEG 2023 — a Wechsel takes effect
 /// only on the first of a month and must be notified before the *preceding*
-/// month begins. The old model asserted „once per calendar month", a rule the
-/// statute does not contain.
+/// month begins. „Once per calendar month" is not a rule the statute contains.
 #[test]
 fn s21b_and_s21c_bound_the_veraeusserungsform_wechsel() {
     use eeg_billing::direktverm::{

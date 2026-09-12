@@ -564,22 +564,7 @@ pub use mako_service::oidc::OidcConfig;
 
 // ── Loader + env resolution ───────────────────────────────────────────────────
 
-/// Resolve an `"env:VAR_NAME"` reference or return the value as-is.
-///
-/// # Errors
-///
-/// Returns an error if the `env:` variable is not set.
-pub fn resolve_env(value: &str) -> anyhow::Result<String> {
-    if let Some(var) = value.strip_prefix("env:") {
-        std::env::var(var).map_err(|_| {
-            anyhow::anyhow!("environment variable {var:?} is not set (referenced in processd.toml)")
-        })
-    } else {
-        Ok(value.to_owned())
-    }
-}
-
-/// Like [`resolve_env`] but wraps the result in `secrecy::SecretString`.
-pub fn resolve_env_secret(value: &str) -> anyhow::Result<secrecy::SecretString> {
-    resolve_env(value).map(secrecy::SecretString::from)
-}
+/// `env:VARNAME` indirection — re-exported from `mako-service`, so every daemon
+/// resolves a config reference the same way and reports a missing variable with
+/// the same error.
+pub use mako_service::config::{resolve_env, resolve_env_secret};

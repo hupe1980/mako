@@ -123,7 +123,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     },
     // ── GPKE NB-seitiges Lieferende (PID 55007 NB→LF) ────────────────────────
     // The NB sends PID 55007 (Ankündigung) via AS4; the LF responds.
-    // APERAK Frist: 24h (BK6-22-024 §4).
+    // The answer window is the one `mako_fristen::antwort` publishes for 55007.
     CommandDescriptor {
         name: "gpke.nb-lieferende.bestaetigen",
         permitted_roles: &[Marktrolle::Lf],
@@ -138,7 +138,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     },
     // ── GPKE Beendigung der Zuordnung (PID 55010 NB→LFA, EBD E_0624) ─────────
     // The NB asks the LFA to end the network assignment; the LFA answers 55011
-    // (Bestätigung) or 55012 (Ablehnung) within the 24 h Frist (BK6-22-024 §4).
+    // (Bestätigung) or 55012 (Ablehnung) inside 55010's published Antwortfrist.
     // The ingest dispatcher has always spawned this workflow on an inbound
     // 55010, but without these two commands the process had no answer path and
     // could only run out its deadline.
@@ -221,7 +221,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     },
     // ── GPKE Ankündigung Zuordnung LF (PID 55607 NB→LFN) ─────────────────────
     // After Lieferantenwechsel the NB sends PID 55607 to the new LF (LFN).
-    // LFN must respond within 24h (BK6-22-024 §4).
+    // The LFN answers inside 55607's published Antwortfrist.
     CommandDescriptor {
         name: "gpke.zuordnung-lf.bestaetigen",
         permitted_roles: &[Marktrolle::Lf],
@@ -257,7 +257,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     //     gpke.sperrung.fehlgeschlagen → not executed  → IFTSTA 21039 + reason
     //
     // `sperrd` calls the NB-side pair after field-service confirmation
-    // (GPKE BK6-22-024 §5).
+    // (GPKE Teil 2 § 3.5, BK6-24-174 Anlage 1b).
     CommandDescriptor {
         name: "gpke.sperrung.beauftragen",
         permitted_roles: &[Marktrolle::Lf],

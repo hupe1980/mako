@@ -6,17 +6,23 @@
 use super::*;
 // ── CONTRL ────────────────────────────────────────────────────────────────────
 
-/// Render a CONTRL functional acknowledgement from domain-intent JSON.
+/// Render a CONTRL from domain-intent JSON.
+///
+/// CONTRL AHB 1.0 Kap. 3 admits exactly two `UCI` DE 0083 values: `7`
+/// „Übertragung bestätigt" for the Empfangsbestätigung and `4` „Diese Ebene und
+/// alle tieferen Ebenen zurückgewiesen" for the Syntaxfehlermeldung, which
+/// additionally carries the DE 0085 Syntaxfehler code.
 ///
 /// Payload fields:
 ///
-/// | Field           | Required | Description                                  |
-/// |-----------------|----------|----------------------------------------------|
-/// | `sender`        | yes      | Sender MP-ID                                   |
-/// | `receiver`      | no       | Receiver MP-ID (falls back to `msg.recipient`) |
-/// | `interchange_ref`| no      | UCI interchange control reference            |
-/// | `accepted`      | no       | `true` = accepted (code 4), `false` = rejected (code 8) |
-/// | `message_ref`   | no       | Derived from `causation_event_id` when absent              |
+/// | Field            | Required | Description                                                  |
+/// |------------------|----------|--------------------------------------------------------------|
+/// | `sender`         | yes      | Sender MP-ID                                                 |
+/// | `accepted`       | yes      | `true` = Empfangsbestätigung (DE 0083 `7`), `false` = Syntaxfehlermeldung (DE 0083 `4`) |
+/// | `receiver`       | no       | Receiver MP-ID (falls back to `msg.recipient`)               |
+/// | `interchange_ref`| no       | UCI interchange control reference                            |
+/// | `syntax_error`   | no       | DE 0085 on a Syntaxfehlermeldung; `12` when absent           |
+/// | `message_ref`    | no       | Derived from `causation_event_id` when absent                |
 pub(super) fn render_contrl(
     p: &serde_json::Value,
     msg: &OutboxMessage,
@@ -32,7 +38,19 @@ pub(super) fn render_contrl(
         .get("interchange_ref")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let accepted = p.get("accepted").and_then(|v| v.as_bool()).unwrap_or(true);
+    // Stated, never defaulted: a CONTRL says either „syntaktisch fehlerfrei
+    // empfangen" or „zurückgewiesen und nicht weiterbearbeitet", and both are
+    // binding statements to the counterparty. Defaulting the flag would make the
+    // confirming one out of an absent decision.
+    let accepted = p
+        .get("accepted")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| RenderError::MissingField {
+            message_type: mt.into(),
+            field: "accepted (UCI DE 0083: true = 7 Übertragung bestätigt, \
+                    false = 4 zurückgewiesen)"
+                .into(),
+        })?;
     let message_ref = p
         .get("message_ref")
         .and_then(|v| v.as_str())

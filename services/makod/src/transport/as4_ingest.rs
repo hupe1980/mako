@@ -164,13 +164,16 @@ pub struct BdewAs4IngestHandler {
     /// NonRepudiationInformation.  When `None`, receipts are emitted
     /// **unsigned** — strict counterparties will reject them; dev/test only.
     receipt_credentials: Option<As4ReceiptCredentials>,
-    /// CONTRL Empfangsbestätigung emitter for Gas interchanges.
+    /// CONTRL emitter — Empfangsbestätigung and Syntaxfehlermeldung.
     ///
-    /// Per CONTRL AHB 1.0 §2.3.1 and APERAK AHB 1.0 §2.3 (Gas rules),
-    /// a CONTRL must be sent for every inbound Gas interchange (except
-    /// CONTRL-on-CONTRL) within 6 wall-clock hours. The AS4-level
-    /// `eb:Receipt` is a separate protocol acknowledgement and does NOT
-    /// satisfy this obligation. Set to `None` for Strom-only deployments.
+    /// Per CONTRL AHB 1.0 §2.3.1 and APERAK AHB 1.0 §2.3 (Gas rules), a CONTRL
+    /// Empfangsbestätigung is owed for every inbound Gas interchange except
+    /// CONTRL-on-CONTRL. The Syntaxfehlermeldung is owed in **both** Sparten
+    /// (§2.4: in Strom the CONTRL has no other use), which is why `startup`
+    /// wires the service unconditionally rather than behind a Sparte: the
+    /// service decides per interchange which of the two it owes. The AS4-level
+    /// `eb:Receipt` is a separate protocol acknowledgement and satisfies
+    /// neither.
     pub contrl_ack: Option<Arc<crate::contrl_ack::ContrlAckService>>,
 }
 
@@ -452,6 +455,33 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                         "AS4 ingest: test interchange (DE0035=1) rejected — \
                          must not process test messages on production endpoint (§AF §3)",
                     );
+                    // The sender is owed the reason. `UNB` DE 0035 is a value the
+                    // production endpoint does not support, which is exactly
+                    // `UCI` DE 0085 = 25 „Test-Kennzeichen nicht unterstützt"
+                    // (CONTRL AHB 1.0 Kap. 3).
+                    if let Some(contrl_svc) = self.contrl_ack.as_deref()
+                        && let Err(e) = contrl_svc
+                            .emit_syntax_error(
+                                &edifact,
+                                &pi.header.control_ref,
+                                &pi.header.receiver_id,
+                                &pi.header.sender_id,
+                                crate::contrl_ack::SyntaxFehler::TestKennzeichen,
+                            )
+                            .await
+                    {
+                        self.ingest
+                            .dl_sink
+                            .reject(&DeadLetterReason::ProcessingError {
+                                message: format!("contrl_syntaxfehler_failed: {e}"),
+                                context: AuditContext::from_interchange(
+                                    &pi.header.sender_id,
+                                    &pi.header.receiver_id,
+                                    &pi.header.control_ref,
+                                )
+                                .with_message_type("CONTRL"),
+                            });
+                    }
                     return HandlerOutcome::bad_request(
                         "test interchange rejected: DE0035=1 on production endpoint",
                     );
@@ -484,6 +514,7 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                                     &sender,
                                     &report.interchange_ref,
                                     &report.recipient_mp_id,
+                                    super::contrl_ack::dvgw_report_has_alocat(&report),
                                 )
                                 .await
                             {
@@ -525,6 +556,12 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                 let mut accepted = 0usize;
                 let mut rejected = 0usize;
                 let mut parsed_msgs: Vec<edi_energy::AnyMessage> = Vec::new();
+                // `UCI` DE 0085 of the Syntaxfehlermeldung, if one is owed. The
+                // segment carries one code, so it is the first fault that names
+                // the file (§5.3.3 reports at the lowest level that can express
+                // a fault, and an interchange-level UCI has no lower level here).
+                let mut first_syntax_error = crate::contrl_ack::SyntaxFehler::UngueltigerWert;
+                let mut saw_syntax_error = false;
                 for result in self
                     .ingest
                     .platform
@@ -533,6 +570,11 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                     match result {
                         Err(e) => {
                             rejected += 1;
+                            if !saw_syntax_error {
+                                first_syntax_error =
+                                    crate::contrl_ack::SyntaxFehler::from_parse_error(&e);
+                                saw_syntax_error = true;
+                            }
                             // Deliberately *not* counted as a validation failure.
                             // `makod_validation_failed_total` carries a message type
                             // and a release, and a message that did not parse has
@@ -683,6 +725,37 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                 }
 
                 if accepted == 0 && rejected > 0 {
+                    // Not one message in the Übertragungsdatei could be read, so
+                    // the file is not processed further — which is exactly what
+                    // a Syntaxfehlermeldung states (CONTRL AHB 1.0 §2.3.2 /
+                    // §2.4.2). It is owed in **both** Sparten: §2.4 uses the
+                    // CONTRL in Strom for nothing else. The `UNB` parsed, or
+                    // `interchange_ref` would be the AS4 message id — §2.2.2.1
+                    // makes a CONTRL impossible in that case and the dead letter
+                    // above is the record instead.
+                    if let Some(contrl_svc) = self.contrl_ack.as_deref()
+                        && let Ok(pi) = self.ingest.platform.parse_interchange_full(&edifact[..])
+                        && let Err(e) = contrl_svc
+                            .emit_syntax_error(
+                                &edifact,
+                                &pi.header.control_ref,
+                                &pi.header.receiver_id,
+                                &pi.header.sender_id,
+                                first_syntax_error,
+                            )
+                            .await
+                    {
+                        use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                        self.ingest
+                            .dl_sink
+                            .reject(&DeadLetterReason::ProcessingError {
+                                message: format!("contrl_syntaxfehler_failed: {e}"),
+                                context: AuditContext::now()
+                                    .with_message_type("CONTRL")
+                                    .with_receiver_eic(recipient_mp_id.as_str())
+                                    .with_message_ref(interchange_ref.as_str()),
+                            });
+                    }
                     return HandlerOutcome::bad_request(
                         "AS4 payload contained no valid EDIFACT messages",
                     );
@@ -972,6 +1045,10 @@ pub async fn rate_limit_middleware(
     next.run(req).await
 }
 
+/// Whether a DVGW interchange carried a GABi-Gas ALOCAT.
+///
+/// CONTRL AHB 1.0 §2.3.1 shortens that interchange's CONTRL window to 45
+/// minutes; every other DVGW format keeps the 6 hours.
 #[cfg(test)]
 mod sender_extract_tests {
     use super::extract_sender_mp_id;

@@ -84,7 +84,7 @@ message type to the labels its delivery answers for:
 | Message | Discharges | Obligation |
 |---|---|---|
 | `APERAK` | `aperak-strom-45min-window`, `aperak-gas-folgeprozess-…`, `aperak-gas-initialprozess-…` | APERAK AHB 1.0 §2.4.1 / §2.3.1 |
-| `CONTRL` | `contrl-6h-delivery-window` | CONTRL AHB 1.0 §1.2 |
+| `CONTRL` | `contrl-delivery-window` | CONTRL AHB 1.0 §2.3.1 / §2.4.1 |
 
 A delivery discharges only its own windows — an acknowledged CONTRL says nothing
 about whether the application-level APERAK went out, and a deadline that merely

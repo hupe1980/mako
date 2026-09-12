@@ -98,9 +98,15 @@ CREATE TABLE billing_records (
     -- telling the operator to re-run a calculation that would refuse again.
     en16931_blocked     TEXT,
 
-    -- Monetary summary for fast reporting (avoids JSONB parse)
-    total_netto_eur     NUMERIC(16, 5),
-    total_brutto_eur    NUMERIC(16, 5),
+    -- Monetary summary for fast reporting (avoids JSONB parse).
+    --
+    -- NOT NULL: every write path computes both, and a Stornorechnung is booked
+    -- by negating them. A nullable column lets a correction of a record with no
+    -- totals book a zero reversal against an invoice that carries an amount,
+    -- and the negated JSON would still reconcile — so the constraint is what
+    -- keeps the ledger and the document from disagreeing.
+    total_netto_eur     NUMERIC(16, 5) NOT NULL,
+    total_brutto_eur    NUMERIC(16, 5) NOT NULL,
 
     outcome             TEXT        NOT NULL DEFAULT 'generated' CHECK (outcome IN (
                             'generated',    -- withheld: calculated, not released

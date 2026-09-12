@@ -190,6 +190,8 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
 
     let lfn = lfn_process();
     lfn.execute(LfAnmeldungCommand::InitiateAnmeldung {
+        transaktionsgrund_ergaenzung: None,
+        tranchengroesse: None,
         pid: mako_engine::types::Pruefidentifikator::new(55001).unwrap(),
         sender: MarktpartnerCode::new(LFN_ID),
         receiver: MarktpartnerCode::new(NB_ID),
@@ -380,6 +382,8 @@ async fn cross_fv_rejection_also_terminates_cleanly() {
     let lfn = lfn_process();
 
     lfn.execute(LfAnmeldungCommand::InitiateAnmeldung {
+        transaktionsgrund_ergaenzung: None,
+        tranchengroesse: None,
         pid: mako_engine::types::Pruefidentifikator::new(55001).unwrap(),
         sender: MarktpartnerCode::new(LFN_ID),
         receiver: MarktpartnerCode::new(NB_ID),
@@ -509,6 +513,8 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
 
     let lfn = lfn_process();
     lfn.execute(LfAnmeldungCommand::InitiateAnmeldung {
+        transaktionsgrund_ergaenzung: None,
+        tranchengroesse: None,
         pid: mako_engine::types::Pruefidentifikator::new(55001).unwrap(),
         sender: MarktpartnerCode::new(LFN_ID),
         receiver: MarktpartnerCode::new(NB_ID),

@@ -643,6 +643,7 @@ pub(crate) async fn ingest_edifact(
                     &sender,
                     &report.interchange_ref,
                     &report.recipient_mp_id,
+                    crate::transport::contrl_ack::dvgw_report_has_alocat(&report),
                 )
                 .await
             {
@@ -731,6 +732,29 @@ pub(crate) async fn ingest_edifact(
             "EDIFACT REST ingest: test interchange (DE0035=1) rejected — \
              must not process test messages on production endpoint (§AF §3)",
         );
+        // `UNB` DE 0035 is a value the production endpoint does not support —
+        // `UCI` DE 0085 = 25 „Test-Kennzeichen nicht unterstützt".
+        if let Some(contrl_svc) = state.contrl_ack.as_deref()
+            && let Err(e) = contrl_svc
+                .emit_syntax_error(
+                    &body,
+                    &pi.header.control_ref,
+                    &pi.header.receiver_id,
+                    &pi.header.sender_id,
+                    crate::contrl_ack::SyntaxFehler::TestKennzeichen,
+                )
+                .await
+        {
+            state.dl_sink.reject(&DeadLetterReason::ProcessingError {
+                message: format!("contrl_syntaxfehler_failed: {e}"),
+                context: AuditContext::from_interchange(
+                    &pi.header.sender_id,
+                    &pi.header.receiver_id,
+                    &pi.header.control_ref,
+                )
+                .with_message_type("CONTRL"),
+            });
+        }
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(IngestResponse {
@@ -966,6 +990,10 @@ pub(crate) async fn ingest_edifact(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+/// Whether a DVGW interchange carried a GABi-Gas ALOCAT.
+///
+/// CONTRL AHB 1.0 §2.3.1 shortens that interchange's CONTRL window to 45
+/// minutes; every other DVGW format keeps the 6 hours.
 #[cfg(test)]
 mod classify_tests {
     use super::MessageStatus;

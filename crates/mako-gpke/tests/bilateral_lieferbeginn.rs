@@ -192,6 +192,8 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
 
     let lfn = lfn_process();
     let initiate_cmd = LfAnmeldungCommand::InitiateAnmeldung {
+        transaktionsgrund_ergaenzung: None,
+        tranchengroesse: None,
         pid: mako_engine::types::Pruefidentifikator::new(55001).unwrap(),
         sender: MarktpartnerCode::new(LFN_ID),
         receiver: MarktpartnerCode::new(NB_ID),
@@ -485,6 +487,8 @@ async fn bilateral_lieferbeginn_rejection_path() {
 
     let lfn = lfn_process();
     lfn.execute(LfAnmeldungCommand::InitiateAnmeldung {
+        transaktionsgrund_ergaenzung: None,
+        tranchengroesse: None,
         pid: mako_engine::types::Pruefidentifikator::new(55001).unwrap(),
         sender: MarktpartnerCode::new(LFN_ID),
         receiver: MarktpartnerCode::new(NB_ID),
@@ -593,6 +597,8 @@ async fn bilateral_antwortfrist_deadline_fires_on_timeout() {
 
     let lfn = lfn_process();
     lfn.execute(LfAnmeldungCommand::InitiateAnmeldung {
+        transaktionsgrund_ergaenzung: None,
+        tranchengroesse: None,
         pid: mako_engine::types::Pruefidentifikator::new(55001).unwrap(),
         sender: MarktpartnerCode::new(LFN_ID),
         receiver: MarktpartnerCode::new(NB_ID),

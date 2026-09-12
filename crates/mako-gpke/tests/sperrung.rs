@@ -7,10 +7,13 @@
 //! - **`gpke-sperrung-lf`** — LF-role (LF initiates Sperrauftrag outbound, awaits NB's
 //!   ORDRSP 19116/19117, then awaits IFTSTA 21039 after confirmation).
 //!
-//! # APERAK Frist
+//! # The answer window
 //!
-//! the **1. Werktag nach dem ÜT** (BK6-24-174 GPKE Teil 2 § 3.5). Saturday is not a Werktag, but the
-//! 24h window is wall-clock, not business-day based.
+//! „Unverzüglich, jedoch spätester ÜT ist der 1. WT nach dem ÜT" for 17115 /
+//! 17117 / 39000, and der **3. WT** for the Anfrage Sperrung 17116 the NB puts
+//! to the MSB (BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2 / 3.5.3.2). Werktage
+//! — Saturday is not one — and not one flat number across the four. It is also
+//! not the APERAK clock, which is a separate 45 minutes.
 //!
 //! # Regulatory basis
 //!
@@ -512,21 +515,36 @@ async fn lf_timeout_fires_deadline_expired() {
     assert!(state.is_terminal(), "DeadlineExpired must be terminal");
 }
 
-/// APERAK Frist constant: LF-side label matches 24h window.
+/// The LF-side label names its process and **not** a duration.
+///
+/// A label carrying a number is a number in a second place: the window is the
+/// Werktag deadline `mako_fristen::antwort` resolves per Prüfidentifikator, and
+/// a label saying `24h` would outlive the day someone corrects that table. Both
+/// halves are asserted, because a disjunction here would accept `24h` as one of
+/// two right answers.
 #[test]
-fn lf_antwort_window_label_is_correct() {
+fn lf_antwort_window_label_names_the_process_not_a_duration() {
     assert!(
-        SPERRUNG_LF_ANTWORT_WINDOW_LABEL.contains("24h")
-            || SPERRUNG_LF_ANTWORT_WINDOW_LABEL.contains("gpke-sperrung-lf"),
-        "deadline label must identify the 24h GPKE sperrung window: {SPERRUNG_LF_ANTWORT_WINDOW_LABEL}",
+        SPERRUNG_LF_ANTWORT_WINDOW_LABEL.contains("gpke-sperrung-lf"),
+        "the label must name its process: {SPERRUNG_LF_ANTWORT_WINDOW_LABEL}",
+    );
+    assert!(
+        !SPERRUNG_LF_ANTWORT_WINDOW_LABEL.contains("24h"),
+        "the Sperrung window is „der 1. WT nach dem ÜT\" (BK6-24-174 GPKE Teil 2 \
+         § 3.5.1.2), not 24 wall-clock hours: {SPERRUNG_LF_ANTWORT_WINDOW_LABEL}",
     );
 }
 
-/// APERAK Frist constant: NB-side deadline label is set.
+/// The NB-side label, held to the same rule.
 #[test]
-fn nb_window_label_is_set() {
+fn nb_window_label_names_the_process_not_a_duration() {
     assert!(
-        !SPERRUNG_WINDOW_LABEL.is_empty(),
-        "SPERRUNG_WINDOW_LABEL must be non-empty",
+        SPERRUNG_WINDOW_LABEL.contains("gpke-sperrung"),
+        "the label must name its process: {SPERRUNG_WINDOW_LABEL}",
+    );
+    assert!(
+        !SPERRUNG_WINDOW_LABEL.contains("24h"),
+        "the window is 1 WT for 17115/17117/39000 and 3 WT for 17116, not \
+         24 wall-clock hours: {SPERRUNG_WINDOW_LABEL}",
     );
 }

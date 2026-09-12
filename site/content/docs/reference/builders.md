@@ -26,7 +26,7 @@ Prüfidentifikator, AHB and Marktlokation are defined in the
 | `UtilmdBuilder` | UTILMD (grid connection processes) |
 | `MsconsBuilder` | MSCONS (metered consumption reports) |
 | `AperakBuilder` | APERAK (application error acknowledgements) |
-| `ContrlBuilder` | CONTRL (interchange control acknowledgements) |
+| `ContrlBuilder` | CONTRL — Empfangsbestätigung (`UCI` DE 0083 `7`) and Syntaxfehlermeldung (`4` + DE 0085) |
 | `InvoicBuilder` | INVOIC (invoices) *(requires `invoic` feature)* |
 | `RemadvBuilder` | REMADV (remittance advice) *(requires `remadv` feature)* |
 | `OrdersBuilder` | ORDERS — orders (Sperrung, Konfiguration, ESA Bestellung/Abbestellung 17007/17008) *(`orders`)* |

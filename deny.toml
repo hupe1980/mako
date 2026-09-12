@@ -165,12 +165,12 @@ reason  = "sqlx-postgres 0.8 pins whoami 1.6; agentplane's postgres journal back
 [[bans.skip]]
 name    = "base64"
 version = "0.23"
-reason  = "rmcp 3.1 (the MCP server SDK) pins base64 0.23; the mainline workspace (arrow, agentd, …) uses base64 0.22 (canonical). Resolve when rmcp bumps base64 or the mainline reaches 0.23."
+reason  = "rmcp (the MCP server SDK) pins base64 0.23; the mainline workspace (arrow, agentd, …) uses base64 0.22 (canonical). Resolve when rmcp bumps base64 or the mainline reaches 0.23."
 
 [[bans.skip]]
 name    = "typed-builder"
 version = "0.20.1"
-reason  = "iceberg 0.9.1 (edmd Iceberg cold-tier archive) pins typed-builder 0.20.1; rubo4e 0.10.0 (the BO4E domain model, used workspace-wide) uses 0.23.2. Resolve when iceberg bumps typed-builder."
+reason  = "iceberg (edmd Iceberg cold-tier archive) pins typed-builder 0.20.1; rubo4e (the BO4E domain model, used workspace-wide) uses 0.23.2. Resolve when iceberg bumps typed-builder."
 
 [[bans.skip]]
 name    = "typed-builder-macro"
@@ -185,7 +185,7 @@ reason  = "cedar-policy-formatter (transitive dep of cedar-policy 4) depends on 
 [[bans.skip]]
 name    = "thiserror"
 version = "1"
-reason  = "slatedb 0.13 and several ecosystem crates (foyer, object_store) still depend on thiserror 1.x. Workspace crates use thiserror 2. Resolve when slatedb bumps to thiserror 2."
+reason  = "slatedb and several ecosystem crates (foyer, object_store) still depend on thiserror 1.x. Workspace crates use thiserror 2. Resolve when slatedb bumps to thiserror 2."
 
 [[bans.skip]]
 name    = "thiserror-impl"
@@ -259,31 +259,31 @@ reason  = "Runtime toml 0.8 → toml_edit 0.22 pulls winnow 0.7; cargo's build-t
 
 # p256/ecdsa (energy-api) still pins sha2 0.10, pulling the 2022-generation digest
 # chain (digest 0.10 / block-buffer 0.10 / crypto-common 0.1 / cpufeatures 0.2).
-# asx-rs + lopdf 0.43 both use sha2 0.11 (RustCrypto 2024 generation), so that
+# asx-rs + lopdf both use sha2 0.11 (RustCrypto 2024 generation), so that
 # side is no longer a source of these duplicates.
 # Resolve when the p256/ecdsa ecosystem updates to sha2 0.11.
 [[bans.skip]]
 name    = "digest"
 version = "0.10"
-reason  = "p256/ecdsa/rfc6979 (energy-api) pulls digest 0.10 via sha2 0.10; asx-rs + lopdf 0.43 use digest 0.11 via sha2 0.11. Resolve when p256 ecosystem updates."
+reason  = "p256/ecdsa/rfc6979 (energy-api) pulls digest 0.10 via sha2 0.10; asx-rs + lopdf use digest 0.11 via sha2 0.11. Resolve when p256 ecosystem updates."
 
 [[bans.skip]]
 name    = "block-buffer"
 version = "0.10"
-reason  = "Companion to digest 0.10 (p256/sha2 0.10 chain); asx-rs + lopdf 0.43 pull block-buffer 0.12 via digest 0.11."
+reason  = "Companion to digest 0.10 (p256/sha2 0.10 chain); asx-rs + lopdf pull block-buffer 0.12 via digest 0.11."
 
 [[bans.skip]]
 name    = "crypto-common"
 version = "0.1"
-reason  = "Companion to digest 0.10 (p256/sha2 0.10 chain); asx-rs + lopdf 0.43 pull crypto-common 0.2 via digest 0.11."
+reason  = "Companion to digest 0.10 (p256/sha2 0.10 chain); asx-rs + lopdf pull crypto-common 0.2 via digest 0.11."
 
 [[bans.skip]]
 name    = "cpufeatures"
 version = "0.2"
-reason  = "p256/sha2 0.10 chain still pulls cpufeatures 0.2; asx-rs + lopdf 0.43 pull cpufeatures 0.3 via sha2 0.11. Resolve when p256 ecosystem updates."
+reason  = "p256/sha2 0.10 chain still pulls cpufeatures 0.2; asx-rs + lopdf pull cpufeatures 0.3 via sha2 0.11. Resolve when p256 ecosystem updates."
 
 # ── asx-rs vs p256/ecdsa/energy-api crypto split ────────────────────────────────
-# asx-rs uses sha2 0.11 / hmac 0.13 (RustCrypto 2024 update). lopdf 0.43 also uses
+# asx-rs uses sha2 0.11 / hmac 0.13 (RustCrypto 2024 update). lopdf also uses
 # sha2 0.11, so xtask is no longer a source of crypto version splits.
 # p256/ecdsa/rfc6979 (energy-api ECDSA, makod HMAC) are still on sha2 0.10 / hmac 0.12.
 # No shared key material or verification state across the version boundary.
@@ -291,12 +291,12 @@ reason  = "p256/sha2 0.10 chain still pulls cpufeatures 0.2; asx-rs + lopdf 0.43
 [[bans.skip]]
 name    = "sha2"
 version = "0.10"
-reason  = "p256/ecdsa/rfc6979 (energy-api) pin sha2 0.10; asx-rs + lopdf 0.43 use sha2 0.11. Resolve when p256 ecosystem updates."
+reason  = "p256/ecdsa/rfc6979 (energy-api) pin sha2 0.10; asx-rs + lopdf use sha2 0.11. Resolve when p256 ecosystem updates."
 
 [[bans.skip]]
 name    = "sha2"
 version = "0.11"
-reason  = "asx-rs + lopdf 0.43 use sha2 0.11 (RustCrypto 2024); p256/ecdsa ecosystem pins sha2 0.10. See companion sha2 0.10 entry."
+reason  = "asx-rs + lopdf use sha2 0.11 (RustCrypto 2024); p256/ecdsa ecosystem pins sha2 0.10. See companion sha2 0.10 entry."
 
 [[bans.skip]]
 name    = "hmac"
@@ -472,7 +472,7 @@ ignore = [
 # ── Bans: duplicate-version skip entries ──────────────────────────────────────
 # Each entry allows a specific older version to coexist with a newer version.
 # New portald (reqwest 0.13) + existing workspace (reqwest 0.12) require both.
-# iceberg 0.9.1 + existing ecosystem crates pull older versions of crypto/utility crates.
+# iceberg and existing ecosystem crates pull older versions of crypto/utility crates.
 
 [[bans.skip]]
 name    = "reqwest"
@@ -484,15 +484,14 @@ name    = "reqwest"
 version = "=0.13"
 reason  = "portald introduces reqwest 0.13; coexists with workspace 0.12 services."
 
-# ── darling three-way split ─────────────────────────────────────────────────
-# 0.20: iceberg-datafusion 0.9.1 (edmd cold tier) → derive_builder.
-# 0.23: serde_with 3.21 + bon 3.9 (both already at their latest releases).
-# 0.24: rmcp-macros 3.1.2 (the MCP server SDK, all services) — the newest and
-#       therefore canonical version. Resolve when serde_with/bon bump to 0.24.
+# ── darling two-way split ───────────────────────────────────────────────────
+# 0.20: iceberg-datafusion (edmd cold tier) → derive_builder.
+# 0.24: rmcp-macros (the MCP server SDK, all services) — the newest and
+#       therefore canonical version. Resolve when derive_builder bumps to 0.24.
 [[bans.skip]]
 name    = "darling"
 version = "=0.20"
-reason  = "iceberg-datafusion 0.9.1 transitively requires darling 0.20; rmcp-macros 3.1 uses darling 0.24."
+reason  = "iceberg-datafusion transitively requires darling 0.20; rmcp-macros uses darling 0.24."
 
 [[bans.skip]]
 name    = "darling_core"
@@ -504,20 +503,8 @@ name    = "darling_macro"
 version = "=0.20"
 reason  = "paired with darling 0.20 skip above."
 
-[[bans.skip]]
-name    = "darling"
-version = "=0.23"
-reason  = "serde_with 3.21 and bon 3.9 (latest releases) pin darling 0.23; rmcp-macros 3.1.2 pulls 0.24. Resolve when serde_with/bon bump to darling 0.24."
 
-[[bans.skip]]
-name    = "darling_core"
-version = "=0.23"
-reason  = "paired with darling 0.23 skip above."
 
-[[bans.skip]]
-name    = "darling_macro"
-version = "=0.23"
-reason  = "paired with darling 0.23 skip above."
 
 [[bans.skip]]
 name    = "pem"
@@ -612,12 +599,12 @@ reason  = "petgraph 0.7 (via iceberg) uses ordered-float 2; workspace uses order
 [[bans.skip]]
 name    = "petgraph"
 version = "=0.7"
-reason  = "iceberg 0.9.1 uses petgraph 0.7; workspace uses petgraph 0.8."
+reason  = "iceberg uses petgraph 0.7; workspace uses petgraph 0.8."
 
 [[bans.skip]]
 name    = "syn"
 version = "2.0"
-reason  = "async-trait 0.1.91 (datafusion 53 via edmd, lance via agentd) uses syn 3; the rest of the proc-macro graph is still on syn 2."
+reason  = "async-trait (datafusion 53 via edmd, lance via agentd) uses syn 3; the rest of the proc-macro graph is still on syn 2."
 
 [[bans.skip]]
 name    = "phf"
@@ -655,11 +642,11 @@ version = "0.27"
 reason  = "proc-macro companion of strum 0.27."
 
 # ── lz4_flex 0.11 vs 0.13 ─────────────────────────────────────────────────────
-# krafka 0.12 pins lz4_flex 0.11; 0.13 is current.
+# krafka pins lz4_flex 0.11; 0.13 is current.
 [[bans.skip]]
 name    = "lz4_flex"
 version = "0.11"
-reason  = "krafka 0.12 pins lz4_flex 0.11 (visible in the all-features graph); 0.13 is current."
+reason  = "krafka pins lz4_flex 0.11 (visible in the all-features graph); 0.13 is current."
 
 # ── object_store 0.13 (three-way: 0.12 / 0.13 / 0.14) ───────────────────────────
 # 0.12 was already skipped above. Adding 0.13 for the cargo update bump.
@@ -691,7 +678,7 @@ reason  = "companion to toml 0.8 (runtime figment/slatedb chain); toml 0.9 (buil
 # ── rustix 0.38 / linux-raw-sys 0.4 / socket2 0.5 (prometheus + krafka) ───────
 # These older versions are pulled by:
 # - prometheus 0.14 → procfs 0.17 → rustix 0.38 (mako-service metrics)
-# - krafka 0.12 → socket2 0.5 (edmd kafka_ingest)
+# - krafka → socket2 0.5 (edmd kafka_ingest)
 # Modern stack (asx-rs, foyer/slatedb, tokio) uses rustix 1.x / socket2 0.6.
 
 [[bans.skip]]
@@ -707,7 +694,7 @@ reason  = "companion to rustix 0.38 (prometheus/procfs chain); modern stack pull
 [[bans.skip]]
 name    = "socket2"
 version = "0.5"
-reason  = "krafka 0.12 (edmd kafka_ingest) pins socket2 0.5; tokio/modern stack uses 0.6."
+reason  = "krafka (edmd kafka_ingest) pins socket2 0.5; tokio/modern stack uses 0.6."
 
 [[bans.skip]]
 name    = "windows-sys"

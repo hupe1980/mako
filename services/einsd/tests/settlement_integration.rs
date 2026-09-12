@@ -414,6 +414,65 @@ async fn a_state_change_records_the_transition_it_came_from() {
 
 // ── HTTP surface ──────────────────────────────────────────────────────────────
 
+/// § 52 Abs. 1 Nr. 11 EEG 2023 — the penalty for a missing Marktstammdatenregister
+/// entry accrues from the day the Netzbetreiber registered the plant and noted
+/// the entry missing, so `mastr_violation_start` is set on the first registration
+/// without one, **kept** across later writes that still lack one (the clock does
+/// not restart), and cleared once the entry is confirmed.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_mastr_violation_clock_starts_once_and_clears_on_confirmation() {
+    let Some((pool, _pg)) = test_pool("mastr_clock").await else {
+        return;
+    };
+    let app = test_router(pool.clone());
+
+    let violation_start = async |tr_id: &str| -> Option<time::Date> {
+        sqlx::query_scalar::<_, Option<time::Date>>(
+            "SELECT mastr_violation_start FROM eeg_anlagen WHERE tr_id = $1",
+        )
+        .bind(tr_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read the violation clock")
+    };
+
+    let mut ohne = anlage_json("P-MASTR");
+    ohne["mastr_registriert"] = serde_json::json!(false);
+    let (status, body) = post_json(&app, "/api/v1/anlagen", ohne.clone()).await;
+    assert!(status.is_success(), "register: {status} {body}");
+    let started = violation_start("P-MASTR").await.expect("clock started");
+
+    // A second write that still reports no MaStR entry must not restart it: the
+    // penalty runs from when the entry was first missing, not from the last save.
+    let (status, body) = post_json(&app, "/api/v1/anlagen", ohne).await;
+    assert!(status.is_success(), "re-register: {status} {body}");
+    assert_eq!(
+        violation_start("P-MASTR").await,
+        Some(started),
+        "the clock runs from the first registration without an entry"
+    );
+
+    // Confirming the entry ends the violation outright.
+    let mut mit = anlage_json("P-MASTR");
+    mit["mastr_registriert"] = serde_json::json!(true);
+    mit["mastr_nummer"] = serde_json::json!("SEE900000000001");
+    let (status, body) = post_json(&app, "/api/v1/anlagen", mit).await;
+    assert!(status.is_success(), "confirm: {status} {body}");
+    assert_eq!(
+        violation_start("P-MASTR").await,
+        None,
+        "a confirmed MaStR entry clears the violation"
+    );
+
+    // A plant registered with the entry present never starts a clock at all.
+    let mut sofort = anlage_json("P-MASTR-OK");
+    sofort["mastr_registriert"] = serde_json::json!(true);
+    let (status, body) = post_json(&app, "/api/v1/anlagen", sofort).await;
+    assert!(status.is_success(), "register confirmed: {status} {body}");
+    assert_eq!(violation_start("P-MASTR-OK").await, None);
+}
+
 /// Registering and reading a plant through the real router.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]

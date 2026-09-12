@@ -41,6 +41,10 @@ const CLAIMANTS: &[&str] = &[
     // States the same two figures plus a per-family breakdown that has to sum
     // to them, which is how it drifted while every other claimant held.
     "../../concepts/MARKET_LANDSCAPE.md",
+    // Names this guard as what holds it, which only became true once it was
+    // listed here. It writes both figures in bold, which is why `collapse`
+    // strips emphasis.
+    "../../site/content/docs/architecture/domain-model.md",
 ];
 
 /// Markup out, one space in its place.
@@ -62,9 +66,18 @@ fn strip_tags(html: &str) -> String {
 }
 
 /// Runs of whitespace to a single space, so a claim split across lines still
-/// reads as one phrase.
+/// reads as one phrase — and Markdown emphasis out, so `**469** PIDs` is the
+/// same claim as `469 PIDs`.
+///
+/// A literal `contains` is blind to emphasis, and a bolded figure is exactly how
+/// a document states a headline number: the phrase then never matches, and the
+/// claimant silently stops being checked while still reading as checked.
 fn collapse(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    text.replace("**", "")
+        .replace('*', "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn registered() -> (usize, usize) {
@@ -231,8 +244,11 @@ fn the_answer_obligation_split_matches_the_catalogue() {
             eprintln!("skipping: {} is not present", full.display());
             continue;
         };
+        // The claim goes through `collapse` too: it is written the way the
+        // document writes it, emphasis and all, and the comparison is on the
+        // text both sides reduce to.
         assert!(
-            collapse(&raw).contains(claim.as_str()),
+            collapse(&raw).contains(collapse(claim).as_str()),
             "{path} must state `{claim}`"
         );
     }

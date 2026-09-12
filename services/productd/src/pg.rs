@@ -85,8 +85,17 @@ pub async fn upsert_product(
     let valid_from = parse_date_opt(&req.valid_from).context("parse valid_from")?;
     let valid_to = parse_date_opt(&req.valid_to).context("parse valid_to")?;
 
+    // One transaction for all three statements. The middle one end-dates the
+    // running version and the last one writes its successor, so committing them
+    // separately lets the close succeed and the insert fail — the
+    // `products_no_overlap` exclusion constraint refuses on its own terms — and
+    // leaves the catalogue with a version that ends and nothing after it. An
+    // unpriced stretch of time is exactly what closing the predecessor here is
+    // meant to prevent.
+    let mut tx = pool.begin().await.context("begin upsert_product")?;
+
     // Archive previous version before upsert (includes energiemix for §42 audit trail).
-    let _ = sqlx::query(
+    sqlx::query(
         r"INSERT INTO product_history (lf_mp_id, product_code, data, energiemix, bo4e_version)
           SELECT lf_mp_id, product_code, data, energiemix, bo4e_version
           FROM products
@@ -99,7 +108,7 @@ pub async fn upsert_product(
     .bind(product_code)
     .bind(valid_from)
     .bind(tenant)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .context("archive product_history before upsert")?;
 
@@ -124,7 +133,7 @@ pub async fn upsert_product(
         .bind(lf_mp_id)
         .bind(product_code)
         .bind(from)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .context("close the superseded product version")?;
     }
@@ -174,11 +183,13 @@ pub async fn upsert_product(
     )
     .bind(&req.oekolabel)
     .bind(tenant)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
     .context("upsert product")?;
 
-    Ok(row.try_get("id")?)
+    let id: Uuid = row.try_get("id")?;
+    tx.commit().await.context("commit upsert_product")?;
+    Ok(id)
 }
 
 /// The product version in force at `as_of`.
@@ -521,35 +532,43 @@ pub async fn upsert_epex_day(
     let source = req.source.as_deref().unwrap_or("manual");
     let step = time::Duration::minutes(mtu_minutes);
 
-    // Replace the whole day so a resolution change (e.g. legacy hourly → 15-min)
-    // never leaves stale rows behind (hard cut, no backfill reconciliation).
+    let starts: Vec<OffsetDateTime> = (0..req.prices.len())
+        .map(|i| day_start + step * i32::try_from(i).unwrap_or(i32::MAX))
+        .collect();
+
+    // The day is replaced, not merged: a resolution change (legacy hourly →
+    // 15-min) would otherwise leave the old rows beside the new ones. The
+    // delete and the insert are **one transaction**, because between them the
+    // delivery day has no prices at all — and § 41a has no fallback, so a
+    // billing run that reads a half-written day is the one thing this table
+    // must never serve. One statement writes every MTU, so the day is also one
+    // round-trip rather than ninety-six.
+    let mut tx = pool.begin().await.context("begin epex day replace")?;
     sqlx::query("DELETE FROM epex_prices WHERE price_date = $1")
         .bind(date)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .context("clear epex day")?;
-
-    for (i, price) in req.prices.iter().enumerate() {
-        let mtu_start = day_start + step * i32::try_from(i).unwrap_or(i32::MAX);
-        sqlx::query(
-            r"INSERT INTO epex_prices (mtu_start, price_date, mtu_minutes, avg_ct_kwh, source)
-              VALUES ($1, $2, $3, $4, $5)
-              ON CONFLICT (mtu_start) DO UPDATE
-              SET price_date = EXCLUDED.price_date,
-                  mtu_minutes = EXCLUDED.mtu_minutes,
-                  avg_ct_kwh = EXCLUDED.avg_ct_kwh,
-                  source = EXCLUDED.source,
-                  imported_at = now()",
-        )
-        .bind(mtu_start)
-        .bind(date)
-        .bind(i16::try_from(mtu_minutes).unwrap_or(15))
-        .bind(price)
-        .bind(source)
-        .execute(pool)
-        .await
-        .context("upsert epex mtu")?;
-    }
+    sqlx::query(
+        r"INSERT INTO epex_prices (mtu_start, price_date, mtu_minutes, avg_ct_kwh, source)
+          SELECT * FROM UNNEST($1::timestamptz[], $2::date[], $3::smallint[],
+                               $4::numeric[], $5::text[])
+          ON CONFLICT (mtu_start) DO UPDATE
+          SET price_date = EXCLUDED.price_date,
+              mtu_minutes = EXCLUDED.mtu_minutes,
+              avg_ct_kwh = EXCLUDED.avg_ct_kwh,
+              source = EXCLUDED.source,
+              imported_at = now()",
+    )
+    .bind(&starts)
+    .bind(vec![date; starts.len()])
+    .bind(vec![i16::try_from(mtu_minutes).unwrap_or(15); starts.len()])
+    .bind(&req.prices)
+    .bind(vec![source.to_owned(); starts.len()])
+    .execute(&mut *tx)
+    .await
+    .context("upsert epex day")?;
+    tx.commit().await.context("commit epex day replace")?;
     Ok(())
 }
 

@@ -2406,8 +2406,28 @@ pub async fn place_lock(
         )
             .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        // `dl_no_overlap`: the account already carries a live lock on this
+        // ground for part of the term. Two would make lifting one a release the
+        // operator can read and the dunning run cannot see, so the second is
+        // refused rather than stacked.
+        Err(e) if is_exclusion_violation(&e) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "the account already carries a live lock on this ground \
+                          for part of that term — lift it or change the dates",
+            })),
+        )
+            .into_response(),
         Err(e) => internal(&e),
     }
+}
+
+/// `true` when the error is a Postgres exclusion-constraint violation (`23P01`).
+fn is_exclusion_violation(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<sqlx::Error>()
+        .and_then(sqlx::Error::as_database_error)
+        .and_then(sqlx::error::DatabaseError::code)
+        .is_some_and(|c| c == "23P01")
 }
 
 /// `GET /api/v1/dunning/{id}/locks` — every lock this account has carried.
@@ -3479,6 +3499,17 @@ pub async fn settle_jahresabschluss(
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     // The Abrechnungsjahr defaults to the current German calendar year.
     let year = q.year.unwrap_or_else(|| mako_fristen::heute().year());
+    // It is also the settlement's idempotency key, stored as a `SMALLINT`. A
+    // year outside that range has no representation there, and substituting one
+    // would let two different years share a key — the second settlement reading
+    // back the first one's amount as „already settled". Refused here, before the
+    // dry run, so both paths answer for the same year.
+    let billing_year_i16 = i16::try_from(year).map_err(|_| {
+        SettleError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("year {year} is outside the range an Abrechnungsjahr can take"),
+        )
+    })?;
     let dry_run = q.dry_run.unwrap_or(false);
 
     // 1. Resolve account.
@@ -3558,7 +3589,6 @@ pub async fn settle_jahresabschluss(
     // Idempotency: a Jahresabschluss for (tenant, malo, year) runs exactly once.
     // Re-invocation (retry, double-click, concurrent) returns the prior result
     // instead of writing a second settlement entry and re-recalibrating Abschlag.
-    let billing_year_i16 = i16::try_from(year).unwrap_or(0);
     match jahresabschluss_already_settled(pool, &cfg.tenant, malo_id, billing_year_i16).await {
         Ok(Some(prior_ct)) => {
             return Ok(serde_json::json!({
@@ -4675,60 +4705,20 @@ pub async fn get_eeg_payouts(
     if let Err(e) = cedar.check(&claims.principal(), "read-banking", &cfg.tenant) {
         return forbidden(&e);
     }
-    // Dynamic WHERE clause built from optional filters.
-    let mut conditions = vec!["tenant = $1".to_owned()];
-    let mut params: Vec<String> = vec![cfg.tenant.clone()];
-    let mut idx = 2usize;
-
-    if let Some(ref malo) = q.malo_id {
-        conditions.push(format!("malo_id = ${idx}"));
-        params.push(malo.clone());
-        idx += 1;
-    }
-    if let Some(y) = q.year {
-        conditions.push(format!("billing_year = ${idx}"));
-        params.push(y.to_string());
-        idx += 1;
-    }
-    if let Some(m) = q.month {
-        conditions.push(format!("billing_month = ${idx}"));
-        params.push(m.to_string());
-        idx += 1;
-    }
-    if let Some(ref pt) = q.payment_type {
-        conditions.push(format!("payment_type = ${idx}"));
-        params.push(pt.clone());
-        idx += 1;
-    }
-    if let Some(ref s) = q.status {
-        if s == "NULL" || s == "NOTSUBMITTED" {
-            conditions.push("pain002_status IS NULL".to_owned());
-        } else {
-            conditions.push(format!("pain002_status = ${idx}"));
-            params.push(s.clone());
-            // idx += 1; (not used further)
-        }
-    }
-
-    let sql = format!(
-        "SELECT payout_id, malo_id, tr_id, billing_year, billing_month, \
-                amount_ct, creditor_iban, creditor_name, payment_type, \
-                end_to_end_ref, pain002_status, pain002_reason, \
-                submitted_at, settled_at, source_ce_id, created_at \
-         FROM eeg_payout_orders \
-         WHERE {} \
-         ORDER BY created_at DESC LIMIT 200",
-        conditions.join(" AND ")
-    );
-
-    // Build dynamic query — sqlx doesn't support $n-parameterised queries with
-    // dynamic bind count via the macro path; use the builder API.
-    let mut q_builder = sqlx::query(&sql);
-    for p in &params {
-        q_builder = q_builder.bind(p);
-    }
-
-    match q_builder.fetch_all(&pool).await {
+    let filter = crate::pg::EegPayoutFilter {
+        malo_id: q.malo_id.as_deref(),
+        year: q.year,
+        month: q.month,
+        payment_type: q.payment_type.as_deref(),
+        status: q.status.as_deref().map(|s| {
+            if s == "NULL" || s == "NOTSUBMITTED" {
+                None
+            } else {
+                Some(s)
+            }
+        }),
+    };
+    match crate::pg::list_eeg_payouts(&pool, &cfg.tenant, &filter, 200).await {
         Ok(rows) => {
             let result: Vec<serde_json::Value> = rows
                 .into_iter()
@@ -6278,7 +6268,12 @@ pub async fn get_collection_entries(
 
 /// Submit a pain.001 XML to the configured bank adapter and update `submitted_at`.
 ///
-/// Best-effort: failures are logged but do not roll back the payout order.
+/// A submission failure is logged and does not roll back the payout order — the
+/// order stands and can be re-submitted. A failure to *record* an accepted
+/// submission is the dangerous one: the money has moved and the row still reads
+/// unsubmitted, which is what an operator resubmits by hand. It is logged at
+/// `error` with the `end_to_end_ref` the bank now holds, so the reconciliation
+/// starts from the reference rather than from the missing stamp.
 pub(crate) async fn submit_pain001_to_bank(
     bank_url: &str,
     api_key: Option<&str>,
@@ -6304,7 +6299,7 @@ pub(crate) async fn submit_pain001_to_bank(
     match req.send().await {
         Ok(resp) if resp.status().is_success() => {
             let now = time::OffsetDateTime::now_utc();
-            let _ = sqlx::query(
+            let recorded = sqlx::query(
                 "UPDATE eeg_payout_orders SET submitted_at = $1, pain002_status = 'PDNG' \
                  WHERE end_to_end_ref = $2 AND tenant = $3",
             )
@@ -6313,7 +6308,25 @@ pub(crate) async fn submit_pain001_to_bank(
             .bind(tenant)
             .execute(pool)
             .await;
-            tracing::info!(end_to_end_ref, "accountingd: pain.001 submitted to bank");
+            match recorded {
+                Ok(r) if r.rows_affected() == 1 => {
+                    tracing::info!(end_to_end_ref, "accountingd: pain.001 submitted to bank");
+                }
+                Ok(r) => tracing::error!(
+                    end_to_end_ref,
+                    rows_affected = r.rows_affected(),
+                    "accountingd: pain.001 accepted by the bank but no payout order \
+                     carries that end-to-end reference — the submission is unrecorded \
+                     and must not be repeated"
+                ),
+                Err(e) => tracing::error!(
+                    error = %e,
+                    end_to_end_ref,
+                    "accountingd: pain.001 accepted by the bank but `submitted_at` could \
+                     not be written — the order still reads unsubmitted and must not be \
+                     resubmitted before the bank statement is reconciled"
+                ),
+            }
         }
         Ok(resp) => {
             tracing::warn!(

@@ -3463,6 +3463,77 @@ async fn payment_resolves_by_counterparty_iban() {
     assert_eq!(hit.matched_by, "iban");
 }
 
+/// One IBAN funding two Marktlokationen is the ordinary case, not an anomaly —
+/// a household pays for its Strom and its Gas from one account. The bank has
+/// then said *who* paid and not *what for*, so the IBAN rung names no single
+/// receivable and the ladder falls through to the Verwendungszweck.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_shared_iban_falls_through_instead_of_guessing() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let key = accountingd::ledger::iban_hash_key("test-secret");
+    let iban = "DE89370400440532013000";
+    let strom = uniq_malo();
+    let gas = uniq_malo();
+    for malo in [&strom, &gas] {
+        pg::create_mandate(
+            &pool,
+            TENANT,
+            Some(&key),
+            pg::CreateMandateRequest {
+                malo_id: malo.clone(),
+                lf_mp_id: "LF1".to_owned(),
+                iban: iban.to_owned(),
+                bic: None,
+                kontoinhaber: Some("Erika Mustermann".to_owned()),
+                mandatsref: uniq("MND"),
+                sequence_type: "FRST".to_owned(),
+                scheme: "CORE".to_owned(),
+                signed_at: "2026-01-15".to_owned(),
+                debtor_address: Default::default(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let hash = accountingd::ledger::iban_hash(Some(&key), iban);
+
+    // The IBAN alone: two accounts, so no booking.
+    assert!(
+        pg::resolve_account_for_payment(
+            &pool,
+            TENANT,
+            pg::PaymentClues {
+                iban_hash: Some(&hash),
+                end_to_end_id: None,
+                remittance: None,
+            },
+        )
+        .await
+        .unwrap()
+        .is_none(),
+        "booking one of two accounts would leave the other receivable open"
+    );
+
+    // The same payment with the MaLo-ID in the Verwendungszweck resolves.
+    let hit = pg::resolve_account_for_payment(
+        &pool,
+        TENANT,
+        pg::PaymentClues {
+            iban_hash: Some(&hash),
+            end_to_end_id: None,
+            remittance: Some(&format!("Abschlag {gas}")),
+        },
+    )
+    .await
+    .unwrap()
+    .expect("the Verwendungszweck separates the two accounts");
+    assert_eq!(hit.malo_id, gas);
+    assert_eq!(hit.matched_by, "remittance_token");
+}
+
 /// A payment from an account nobody has on file still books, when the reference
 /// names the customer.
 ///
@@ -4311,5 +4382,190 @@ async fn a_terminal_collection_state_is_not_walked_back() {
         pg::set_collection_entry_status(&pool, entry.entry_id, "SETTLED_MAYBE", None)
             .await
             .is_err()
+    );
+}
+
+/// Lifting a lock is by `lock_id`. A second live lock on the same ground would
+/// therefore make lifting the first a release nobody can observe: the record
+/// says the halt was ended and the dunning run still skips the account.
+/// `dl_no_overlap` refuses the second instead.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn one_live_lock_per_ground_per_account() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let case = seed_stufe3(&pool, &ledger, &malo, 15_000).await;
+
+    async fn place(
+        pool: &sqlx::PgPool,
+        case: uuid::Uuid,
+        von: Option<time::Date>,
+        bis: Option<time::Date>,
+        grund: pg::LockGrund,
+    ) -> anyhow::Result<Option<uuid::Uuid>> {
+        pg::place_dunning_lock(
+            pool,
+            case,
+            TENANT,
+            grund,
+            None,
+            Some("n"),
+            von,
+            bis,
+            Some("op-1"),
+        )
+        .await
+    }
+
+    let first = place(
+        &pool,
+        case,
+        Some(date!(2026 - 01 - 01)),
+        Some(date!(2026 - 03 - 31)),
+        pg::LockGrund::Schutzbeduerftigkeit,
+    )
+    .await
+    .unwrap()
+    .expect("lock placed");
+
+    assert!(
+        place(
+            &pool,
+            case,
+            Some(date!(2026 - 03 - 31)),
+            None,
+            pg::LockGrund::Schutzbeduerftigkeit,
+        )
+        .await
+        .is_err(),
+        "a second Schutzbedürftigkeit sharing even one day is refused — \
+         `valid_to` is inclusive"
+    );
+
+    // A different ground is a different fact with its own end, so the two run
+    // together: § 41f Abs. 2 and § 41g Abs. 1 S. 10 are lifted separately.
+    place(
+        &pool,
+        case,
+        Some(date!(2026 - 02 - 01)),
+        None,
+        pg::LockGrund::Abwendungsvereinbarung,
+    )
+    .await
+    .unwrap()
+    .expect("a different ground may run alongside");
+
+    // Once lifted, the ground is free again — the constraint only binds live
+    // locks, so the same Schutzbedürftigkeit can be re-established later.
+    pg::lift_dunning_lock(&pool, first, TENANT, "entfallen")
+        .await
+        .unwrap()
+        .expect("lifted");
+    place(
+        &pool,
+        case,
+        Some(date!(2026 - 02 - 15)),
+        None,
+        pg::LockGrund::Schutzbeduerftigkeit,
+    )
+    .await
+    .unwrap()
+    .expect("a lifted lock no longer blocks its ground");
+}
+
+/// `GET /api/v1/eeg/payouts` narrows on `billing_year` and `billing_month`, both
+/// `SMALLINT`. A filter bound as text reaches the server as `smallint = text` —
+/// an operator Postgres does not define — and takes the whole listing down with
+/// it, so the filters have to be exercised against a real server to be known to
+/// work at all.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_payout_filters_narrow_instead_of_failing() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let account = pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+
+    for (year, month, ptype) in [
+        (2026i16, 1i16, "SCT_INST"),
+        (2026, 2, "SCT_CORE"),
+        (2025, 1, "SCT_INST"),
+    ] {
+        sqlx::query(
+            r"INSERT INTO eeg_payout_orders
+                  (malo_id, account_id, billing_year, billing_month, amount_ct,
+                   creditor_iban, creditor_name, payment_type, end_to_end_ref, tenant)
+              VALUES ($1, $2, $3, $4, 1000, 'DE02120300000000202051', 'Betreiber',
+                      $5, $6, $7)",
+        )
+        .bind(&malo)
+        .bind(account)
+        .bind(year)
+        .bind(month)
+        .bind(ptype)
+        .bind(format!("E2E-{year}-{month}"))
+        .bind(TENANT)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let count = async |f: pg::EegPayoutFilter<'_>| {
+        pg::list_eeg_payouts(&pool, TENANT, &f, 200)
+            .await
+            .unwrap()
+            .len()
+    };
+
+    assert_eq!(count(pg::EegPayoutFilter::default()).await, 3);
+    assert_eq!(
+        count(pg::EegPayoutFilter {
+            year: Some(2026),
+            ..Default::default()
+        })
+        .await,
+        2,
+        "the SMALLINT year filter narrows"
+    );
+    assert_eq!(
+        count(pg::EegPayoutFilter {
+            year: Some(2026),
+            month: Some(1),
+            ..Default::default()
+        })
+        .await,
+        1,
+        "year and month compose"
+    );
+    assert_eq!(
+        count(pg::EegPayoutFilter {
+            payment_type: Some("SCT_CORE"),
+            ..Default::default()
+        })
+        .await,
+        1
+    );
+    // Nothing has been submitted, so every order is in the not-yet-submitted set
+    // and none carries a reported state.
+    assert_eq!(
+        count(pg::EegPayoutFilter {
+            status: Some(None),
+            ..Default::default()
+        })
+        .await,
+        3
+    );
+    assert_eq!(
+        count(pg::EegPayoutFilter {
+            status: Some(Some("ACCP")),
+            ..Default::default()
+        })
+        .await,
+        0
     );
 }

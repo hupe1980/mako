@@ -117,6 +117,8 @@ impl MockLfn {
         let (_, outbox) = self
             .process
             .execute_and_collect(LfAnmeldungCommand::InitiateAnmeldung {
+                transaktionsgrund_ergaenzung: None,
+                tranchengroesse: None,
                 pid: Pruefidentifikator::new(55004).unwrap(),
                 sender: MarktpartnerCode::new(LFN_ID),
                 receiver: MarktpartnerCode::new(NB_ID),
@@ -349,7 +351,7 @@ impl MockNb {
 /// Key invariant: the acceptance does **not** trigger MSCONS 13015. Requesting
 /// Bewegungsdaten is only required when a new supplier takes over (PID 55001).
 /// When supply ends without a new supplier, there are no Bewegungsdaten to
-/// request (BK6-22-024 § 3 Abs. 5).
+/// request.
 #[tokio::test]
 async fn e2e_lieferende_strom_happy_path() {
     let lfn = MockLfn::new();

@@ -779,7 +779,7 @@ impl<'a, 'd> Ctx<'a, 'd> {
                 scope,
                 tag,
                 de,
-                value,
+                values,
                 negate,
                 suffix,
             } => {
@@ -797,11 +797,13 @@ impl<'a, 'd> Ctx<'a, 'd> {
                     };
                     layout.locate(&de, 0).is_some_and(|(ei, ci, _)| {
                         seg.component_str(ei, ci).is_some_and(|v| {
-                            if suffix {
-                                v.len() >= 2 && v.ends_with(value.as_str())
-                            } else {
-                                v == value
-                            }
+                            values.iter().any(|want| {
+                                if suffix {
+                                    v.len() >= 2 && v.ends_with(want.as_str())
+                                } else {
+                                    v == want
+                                }
+                            })
                         })
                     })
                 });

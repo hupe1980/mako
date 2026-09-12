@@ -91,31 +91,6 @@ pub enum GatewayStatus {
     CommunicationFault,
 }
 
-impl GatewayStatus {
-    /// `true` when the gateway can send metered data.
-    #[must_use]
-    pub fn is_data_delivering(self) -> bool {
-        matches!(self, Self::Operational)
-    }
-
-    /// `true` when substitute values are required (no data delivery), because the
-    /// § 60 Abs. 1 MsbG duty to deliver aufbereitete Messwerte at the times the
-    /// berechtigten Stellen set is otherwise missed.
-    #[must_use]
-    pub fn requires_substitute_values(self) -> bool {
-        matches!(
-            self,
-            Self::Revoked | Self::Replaced | Self::CommunicationFault
-        )
-    }
-
-    /// `true` when a Sonderablesung (emergency read-out) should be triggered.
-    #[must_use]
-    pub fn triggers_sonderablesung(self) -> bool {
-        matches!(self, Self::CommunicationFault | Self::Revoked)
-    }
-}
-
 // ── GatewayCertificate ────────────────────────────────────────────────────────
 
 /// BSI TR-03109-4 certificate metadata for a Smart Meter Gateway.
@@ -353,14 +328,6 @@ pub struct SmgwSession {
 }
 
 impl SmgwSession {
-    /// `true` when the gateway has a TLS certificate that is valid on `today`.
-    #[must_use]
-    pub fn has_valid_tls_cert(&self, today: Date) -> bool {
-        self.certificates
-            .iter()
-            .any(|c| matches!(c.cert_type, CertificateType::Tls) && c.is_valid(today))
-    }
-
     /// Certificates of any type expiring within `warning_days`.
     ///
     /// The window is the caller\'s: BSI TR-03109-4 binds certificate *runtimes*,
@@ -377,25 +344,6 @@ impl SmgwSession {
             .iter()
             .filter(|c| !c.is_revoked && c.is_expiring_soon(today, warning_days))
             .collect()
-    }
-
-    /// Active CLS channels on this gateway.
-    #[must_use]
-    pub fn active_cls_channels(&self) -> Vec<&ClsChannel> {
-        self.cls_channels
-            .iter()
-            .filter(|ch| ch.is_active())
-            .collect()
-    }
-
-    /// `true` when this gateway has any §14a-relevant CLS channels that are active.
-    ///
-    /// Determines whether DSO load control is possible at this metering point.
-    #[must_use]
-    pub fn has_section_14a_cls(&self) -> bool {
-        self.cls_channels
-            .iter()
-            .any(|ch| ch.is_active() && ch.device_type.is_section_14a_relevant())
     }
 
     /// Hours between `last_contact_at` and `now`. `None` if never contacted.
@@ -491,19 +439,6 @@ mod tests {
     }
 
     #[test]
-    fn operational_gateway_delivers_data() {
-        assert!(GatewayStatus::Operational.is_data_delivering());
-        assert!(!GatewayStatus::CommunicationFault.is_data_delivering());
-    }
-
-    #[test]
-    fn revoked_requires_substitute() {
-        assert!(GatewayStatus::Revoked.requires_substitute_values());
-        assert!(GatewayStatus::CommunicationFault.requires_substitute_values());
-        assert!(!GatewayStatus::Operational.requires_substitute_values());
-    }
-
-    #[test]
     fn certificate_validity_check() {
         let cert = valid_cert(CertificateType::Tls);
         let today = date!(2026 - 07 - 15);
@@ -529,19 +464,6 @@ mod tests {
     }
 
     #[test]
-    fn gateway_has_valid_tls() {
-        let gw = basic_gateway();
-        assert!(gw.has_valid_tls_cert(date!(2026 - 07 - 15)));
-    }
-
-    #[test]
-    fn gateway_no_tls_false() {
-        let mut gw = basic_gateway();
-        gw.certificates.clear();
-        assert!(!gw.has_valid_tls_cert(date!(2026 - 07 - 15)));
-    }
-
-    #[test]
     fn cls_channel_section_14a() {
         let channel = ClsChannel {
             channel_id: "CLS-01".to_owned(),
@@ -556,22 +478,6 @@ mod tests {
         assert!(channel.is_active());
         assert!(channel.is_section_14a_compliant());
         assert!(channel.device_type.is_section_14a_relevant());
-    }
-
-    #[test]
-    fn gateway_with_cls_has_14a() {
-        let mut gw = basic_gateway();
-        gw.cls_channels.push(ClsChannel {
-            channel_id: "CLS-01".to_owned(),
-            malo_id: gw.malo_id.clone(),
-            device_type: ClsDeviceType::EvCharger,
-            max_power_kw: dec!(11.0),
-            channel_status: ClsChannelStatus::Active,
-            produktcode: Some("BDEW-14A-EV".to_owned()),
-            valid_from: date!(2026 - 01 - 01),
-            valid_to: None,
-        });
-        assert!(gw.has_section_14a_cls());
     }
 
     #[test]

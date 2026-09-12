@@ -5,7 +5,7 @@
 
 use super::*;
 /// MSCONS "Übertragung Summenzeitreihe" (MaBiS), AHB 3.2 §8.3.1.
-pub(super) const MSCONS_PID_SUMMENZEITREIHE: u64 = 13003;
+pub(super) const MSCONS_PID_SUMMENZEITREIHE: u32 = 13003;
 
 /// BGM DE 1001 document-name code for an MSCONS Anwendungsfall.
 ///
@@ -13,7 +13,7 @@ pub(super) const MSCONS_PID_SUMMENZEITREIHE: u64 = 13003;
 /// message is, and the AHB fixes a different one per use case. Sending the
 /// wrong code labels a Summenzeitreihe as a Prozessdatenbericht, which the
 /// receiver routes by.
-pub(super) const fn mscons_document_code(pid: u64) -> &'static str {
+pub(super) const fn mscons_document_code(pid: u32) -> &'static str {
     match pid {
         // "Zeitreihen im Rahmen der Bilanzkreisabrechnung"
         MSCONS_PID_SUMMENZEITREIHE => "BK",
@@ -34,27 +34,27 @@ pub(super) const fn mscons_document_code(pid: u64) -> &'static str {
 
 /// MSCONS "Energiemenge (Strom)", AHB 3.2 — energy for a billing period, with
 /// no power maximum.
-pub(super) const MSCONS_PID_ENERGIEMENGE: u64 = 13019;
+pub(super) const MSCONS_PID_ENERGIEMENGE: u32 = 13019;
 
 /// MSCONS "Energiemenge und Leistungsmaximum", AHB 3.2.
-pub(super) const MSCONS_PID_ENERGIEMENGE_LEISTUNGSMAX: u64 = 13016;
+pub(super) const MSCONS_PID_ENERGIEMENGE_LEISTUNGSMAX: u32 = 13016;
 
 /// MSCONS "Arbeit / Leistungsmaximum im Kalenderjahr vor Lieferbeginn",
 /// AHB 3.2 — the movement data a Netznutzungsvertrag requires when an RLM
 /// Marktlokation changes supplier mid-year (GPKE Kap. 6.1).
-pub(super) const MSCONS_PID_ARBEIT_LEISTUNGSMAX: u64 = 13015;
+pub(super) const MSCONS_PID_ARBEIT_LEISTUNGSMAX: u32 = 13015;
 
 /// MSCONS "Redispatch 2.0 Ausfallarbeits-summenzeitreihe", AHB 3.2.
 ///
 /// Same segment shape as the MaBiS Summenzeitreihe — a summed series over
 /// settlement slots for one Zählpunkt — so it renders through the same path.
-pub(super) const MSCONS_PID_AUSFALLARBEIT_SZR: u64 = 13023;
+pub(super) const MSCONS_PID_AUSFALLARBEIT_SZR: u32 = 13023;
 
 /// MSCONS "Werte nach Typ 2" (MSB → ESA), UC 4.2 / §60 Abs. 1 MsbG.
 ///
 /// A MaLo + OBIS interval delivery addressed to the ESA (NAD+MR). Renders
 /// through [`render_mscons_typ2`].
-pub(super) const MSCONS_PID_WERTE_TYP2: u64 = 13027;
+pub(super) const MSCONS_PID_WERTE_TYP2: u32 = 13027;
 
 /// Render a summed MSCONS time series (Prüfidentifikator 13003 or 13023).
 ///
@@ -78,10 +78,7 @@ pub(super) fn render_mscons(
     // shapes. Dispatching on the Prüfidentifikator keeps an unsupported one from
     // being rendered in the shape of a supported one, which would produce a
     // syntactically valid message stating something the sender did not mean.
-    let pid = p
-        .get("pid")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
+    let pid = super::optional_pid(p, "MSCONS")?.unwrap_or(0);
     match pid {
         // Summenzeitreihe (MaBiS) and Redispatch 2.0
         // Ausfallarbeits-summenzeitreihe share the same shape: a summed series
@@ -188,13 +185,7 @@ pub(super) fn render_mscons(
 
     // `QTY` DE 6411 goes out where the column lists it (13023 admits `KWH`,
     // 13003 lists none — the unit is the OBIS-Kennzahl's).
-    let unit = if super::column_lists(
-        MessageType::Mscons,
-        &release,
-        u32::try_from(pid).unwrap_or_default(),
-        "QTY",
-        "6411",
-    ) {
+    let unit = if super::column_lists(MessageType::Mscons, &release, pid, "QTY", "6411") {
         "KWH"
     } else {
         ""
@@ -204,11 +195,9 @@ pub(super) fn render_mscons(
         .receiver(receiver)
         .message_ref(message_ref)
         .document_code(mscons_document_code(pid))
-        .pruefidentifikator(
-            edi_energy::Pruefidentifikator::new(u32::try_from(pid).unwrap_or_default()).map_err(
-                |e| RenderError::BuilderError(format!("invalid Prüfidentifikator {pid}: {e}")),
-            )?,
-        )
+        .pruefidentifikator(edi_energy::Pruefidentifikator::new(pid).map_err(|e| {
+            RenderError::BuilderError(format!("invalid Prüfidentifikator {pid}: {e}"))
+        })?)
         .metering_point(mabis_zp)
         .balancing_period(balancing_period)
         .version(version)
@@ -268,10 +257,7 @@ pub(super) fn render_mscons_arbeit_leistungsmax(
     msg: &OutboxMessage,
     registry: &MpIdRegistry,
 ) -> Result<RenderedInterchange, RenderError> {
-    let pid = p
-        .get("pid")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
+    let pid = super::optional_pid(p, "MSCONS")?.unwrap_or(0);
     use edi_energy::builders::{
         MSCONS_UNITS, QTY_ERSATZWERT, QTY_WAHRER_WERT, is_valid_mscons_unit,
     };
@@ -367,7 +353,7 @@ pub(super) fn render_mscons_arbeit_leistungsmax(
     let lists_grund = super::column_lists_place(
         MessageType::Mscons,
         &release,
-        u32::try_from(pid).unwrap_or_default(),
+        pid,
         "STS",
         Some("Z40"),
         "9013",
@@ -395,11 +381,9 @@ pub(super) fn render_mscons_arbeit_leistungsmax(
         .receiver(receiver)
         .message_ref(message_ref)
         .document_code(mscons_document_code(pid))
-        .pruefidentifikator(
-            edi_energy::Pruefidentifikator::new(u32::try_from(pid).unwrap_or_default()).map_err(
-                |e| RenderError::BuilderError(format!("invalid Prüfidentifikator {pid}: {e}")),
-            )?,
-        )
+        .pruefidentifikator(edi_energy::Pruefidentifikator::new(pid).map_err(|e| {
+            RenderError::BuilderError(format!("invalid Prüfidentifikator {pid}: {e}"))
+        })?)
         .header_reference("AGI", order_reference)
         .metering_point(malo_id)
         // The Energiemenge is OBIS `1-1:1.9.0` (Wirkarbeit); Bedingungen
@@ -547,7 +531,7 @@ pub(super) fn render_mscons_typ2(
     let unit = if super::column_lists(
         MessageType::Mscons,
         &release,
-        u32::try_from(MSCONS_PID_WERTE_TYP2).unwrap_or_default(),
+        MSCONS_PID_WERTE_TYP2,
         "QTY",
         "6411",
     ) {
@@ -561,10 +545,9 @@ pub(super) fn render_mscons_typ2(
         .message_ref(message_ref)
         .document_code(mscons_document_code(MSCONS_PID_WERTE_TYP2))
         .pruefidentifikator(
-            edi_energy::Pruefidentifikator::new(
-                u32::try_from(MSCONS_PID_WERTE_TYP2).unwrap_or_default(),
-            )
-            .map_err(|e| RenderError::BuilderError(format!("invalid Prüfidentifikator: {e}")))?,
+            edi_energy::Pruefidentifikator::new(MSCONS_PID_WERTE_TYP2).map_err(|e| {
+                RenderError::BuilderError(format!("invalid Prüfidentifikator: {e}"))
+            })?,
         );
 
     // `SG1 RFF+AGI` — Muss on 13027, hint `[574]`: „Wert aus BGM DE1004 der

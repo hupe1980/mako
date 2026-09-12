@@ -146,6 +146,8 @@ impl MockLfn {
         let (_, outbox) = self
             .nb_leg
             .execute_and_collect(LfAnmeldungCommand::InitiateAnmeldung {
+                transaktionsgrund_ergaenzung: None,
+                tranchengroesse: None,
                 pid: Pruefidentifikator::new(55001).unwrap(),
                 sender: MarktpartnerCode::new(LFN_ID),
                 receiver: MarktpartnerCode::new(NB_ID),
@@ -204,6 +206,8 @@ impl MockLfn {
         let (_, outbox) = self
             .lfa_leg
             .execute_and_collect(LfAnmeldungCommand::InitiateAnmeldung {
+                transaktionsgrund_ergaenzung: None,
+                tranchengroesse: None,
                 pid: Pruefidentifikator::new(55016).unwrap(),
                 sender: MarktpartnerCode::new(LFN_ID),
                 receiver: MarktpartnerCode::new(LFA_ID),

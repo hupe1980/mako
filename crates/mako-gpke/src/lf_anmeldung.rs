@@ -89,6 +89,33 @@ pub const ANMELDUNG_PIDS_MIT_BILANZKREIS: &[u32] = &[
     55077, // Anmeldung erz. MaLo
 ];
 
+/// The Anfrage-PIDs whose `SG4 STS+7` Ergänzung is a **Geschäftsvorfall**.
+///
+/// The erzeugende Anmeldung admits `ZW0`/`ZW1`/`ZW2` and nothing else, where
+/// the verbrauchende one admits `ZW4`/`ZAP`. There is no default among the
+/// three: a 100 %-Zuordnung, a handover of an existing Tranche and the building
+/// of a new one are different acts, and only the third carries a Tranchengröße.
+pub const ANMELDUNG_PIDS_MIT_GESCHAEFTSVORFALL: &[u32] = &[
+    55077, // Anmeldung erz. MaLo
+];
+
+/// `ZW0` — Geschäftsvorfall 1, „vollständige (100%ige) Zuordnung".
+pub const GESCHAEFTSVORFALL_1: &str = "ZW0";
+/// `ZW1` — Geschäftsvorfall 2, Zuordnung zu einer **bestehenden** Tranche.
+pub const GESCHAEFTSVORFALL_2: &str = "ZW1";
+/// `ZW2` — Geschäftsvorfall 3, Zuordnung zu einer **neu zu bildenden** Tranche.
+///
+/// The one that makes the Tranchengröße (`9991000002090`) mandatory, per
+/// Codeliste der Konfigurationen 1.4 Kap. 6.1.1.
+pub const GESCHAEFTSVORFALL_3: &str = "ZW2";
+
+/// The three Geschäftsvorfälle an erzeugende Anmeldung may state.
+pub const GESCHAEFTSVORFAELLE: &[&str] = &[
+    GESCHAEFTSVORFALL_1,
+    GESCHAEFTSVORFALL_2,
+    GESCHAEFTSVORFALL_3,
+];
+
 /// Inbound response PIDs (NB → LF or LFA → LF) routed back to this workflow.
 ///
 /// These must be registered in the PID router so the AS4 inbound layer can
@@ -273,6 +300,20 @@ pub enum LfAnmeldungCommand {
         /// LF der Marktlokation bzw. Tranche nicht zuordnen". `None` on 55004
         /// and 55016, which register nothing.
         bilanzkreis: Option<String>,
+        /// `SG4 STS+7` DE 9013 element 3 — the Transaktionsgrundergänzung.
+        ///
+        /// **Muss on 55077**, where the column admits only the three
+        /// Geschäftsvorfälle and no default among them is safe. On 55001 the
+        /// renderer supplies `ZW4` „verbrauchende Marktlokation", which is the
+        /// code that column lists.
+        transaktionsgrund_ergaenzung: Option<String>,
+        /// `SG8 SEQ+Z79` Produkt `9991000002090` — the **Tranchengröße**.
+        ///
+        /// Muss in Geschäftsvorfall 3 („`STS+7++xxx+ZW2`") per Codeliste der
+        /// Konfigurationen 1.4 Kap. 6.1.1, and meaningless outside it. Carried
+        /// verbatim to the renderer, which knows the three Produkteigenschaften
+        /// and the Bedingungen on each.
+        tranchengroesse: Option<serde_json::Value>,
     },
     /// Inbound NB/LFA response (55002/55003, 55005/55006, 55017, 55018, 55078, 55080) received via AS4.
     ///
@@ -406,6 +447,8 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                 process_date,
                 transaktionsgrund,
                 bilanzkreis,
+                transaktionsgrund_ergaenzung,
+                tranchengroesse,
             } => {
                 if !matches!(state, LfAnmeldungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -431,6 +474,37 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                          9991000002082 (Bilanzkreis) zur Muss-Angabe — ohne einen für den \
                          LF gültigen Bilanzkreis kann der NB die Zuordnung nicht vornehmen.",
                     )));
+                }
+
+                // The erzeugende Anmeldung states which Geschäftsvorfall it
+                // is. Its column admits `ZW0`/`ZW1`/`ZW2` and nothing else, so
+                // an unstated one cannot be defaulted: the renderer would fall
+                // back to the verbrauchende `ZW4`, which 55077 forbids, and the
+                // NB would refuse the message.
+                if ANMELDUNG_PIDS_MIT_GESCHAEFTSVORFALL.contains(&pid.as_u32()) {
+                    let erg = transaktionsgrund_ergaenzung.as_deref().unwrap_or("");
+                    if !GESCHAEFTSVORFAELLE.contains(&erg) {
+                        return Err(WorkflowError::rejected(format!(
+                            "Anmeldung {pid} ohne Geschäftsvorfall: SG4 STS+7 DE 9013 \
+                             lässt für die erzeugende Marktlokation nur {} zu — \
+                             ZW0 (100%ige Zuordnung), ZW1 (bestehende Tranche) und \
+                             ZW2 (neu zu bildende Tranche) sind verschiedene Vorgänge.",
+                            GESCHAEFTSVORFAELLE.join("/"),
+                        )));
+                    }
+                    // Codeliste der Konfigurationen 1.4 Kap. 6.1.1: „Im
+                    // Geschäftsvorfall 3 … ist zwingend dieses Produkt
+                    // anzugeben." No AHB Bedingung says so, so nothing
+                    // downstream would catch its absence.
+                    if erg == GESCHAEFTSVORFALL_3 && tranchengroesse.is_none() {
+                        return Err(WorkflowError::rejected(format!(
+                            "Anmeldung {pid} im Geschäftsvorfall 3 ohne Tranchengröße: \
+                             die Codeliste der Konfigurationen 1.4 Kap. 6.1.1 macht den \
+                             Produkt-Code 9991000002090 bei STS+7++xxx+ZW2 zur \
+                             Muss-Angabe, weil die neu zu bildende Tranche sonst keine \
+                             Größe hat.",
+                        )));
+                    }
                 }
 
                 let event = LfAnmeldungEvent::Initiated {
@@ -464,6 +538,11 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                         "transaktionsgrund": transaktionsgrund,
                         // `SG8 SEQ+Z79` / `SG10 CAV+ZV4` — the Bilanzkreis.
                         "bilanzkreis":       bilanzkreis,
+                        // `SG4 STS+7` DE 9013 element 3 — the Geschäftsvorfall
+                        // on the erzeugende Anmeldung, `ZW4` elsewhere.
+                        "transaktionsgrund_ergaenzung": transaktionsgrund_ergaenzung,
+                        // `SG8 SEQ+Z79` Produkt 9991000002090 — Muss on ZW2.
+                        "tranchengroesse":   tranchengroesse,
                     }),
                 );
 
@@ -552,6 +631,8 @@ mod tests {
 
     fn make_initiate(pid: u32) -> LfAnmeldungCommand {
         LfAnmeldungCommand::InitiateAnmeldung {
+            transaktionsgrund_ergaenzung: None,
+            tranchengroesse: None,
             pid: Pruefidentifikator::new(pid).unwrap(),
             sender: MarktpartnerCode::new("4012345000009"),
             receiver: MarktpartnerCode::new("9900123456789"),
@@ -559,6 +640,84 @@ mod tests {
             process_date: "2026-10-01".to_owned(),
             transaktionsgrund: None,
             bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+        }
+    }
+
+    /// An erzeugende Anmeldung with its Geschäftsvorfall, and — on
+    /// Geschäftsvorfall 3 — the Tranchengröße the Codeliste demands.
+    fn make_erzeugende(erg: &str, groesse: Option<serde_json::Value>) -> LfAnmeldungCommand {
+        let LfAnmeldungCommand::InitiateAnmeldung {
+            pid,
+            sender,
+            receiver,
+            location_id,
+            process_date,
+            transaktionsgrund,
+            bilanzkreis,
+            ..
+        } = make_initiate(55077)
+        else {
+            unreachable!("make_initiate builds an InitiateAnmeldung")
+        };
+        LfAnmeldungCommand::InitiateAnmeldung {
+            pid,
+            sender,
+            receiver,
+            location_id,
+            process_date,
+            transaktionsgrund,
+            bilanzkreis,
+            transaktionsgrund_ergaenzung: Some(erg.to_owned()),
+            tranchengroesse: groesse,
+        }
+    }
+
+    /// 55077's `SG4 STS+7` DE 9013 column admits `ZW0`/`ZW1`/`ZW2` and nothing
+    /// else. Without one the renderer would fall back to the verbrauchende
+    /// `ZW4`, which that column forbids — the NB refuses the message and the LF
+    /// loses the Anmeldefrist.
+    #[test]
+    fn an_erzeugende_anmeldung_states_its_geschaeftsvorfall() {
+        let err = GpkeLfAnmeldungWorkflow::handle(&LfAnmeldungState::New, make_initiate(55077))
+            .expect_err("55077 without a Geschäftsvorfall must be refused");
+        assert!(format!("{err}").contains("Geschäftsvorfall"), "{err}");
+
+        for erg in GESCHAEFTSVORFAELLE {
+            let groesse = (*erg == GESCHAEFTSVORFALL_3).then(|| serde_json::json!("33.33"));
+            let out = GpkeLfAnmeldungWorkflow::handle(
+                &LfAnmeldungState::New,
+                make_erzeugende(erg, groesse),
+            )
+            .unwrap_or_else(|e| panic!("{erg} is a lawful Geschäftsvorfall: {e}"));
+            assert_eq!(out.outbox[0].payload["transaktionsgrund_ergaenzung"], *erg);
+        }
+    }
+
+    /// Codeliste der Konfigurationen 1.4 Kap. 6.1.1: „Im Geschäftsvorfall 3 …
+    /// ist zwingend dieses Produkt anzugeben." No AHB Bedingung says so, so the
+    /// message would validate clean and still be refused by the NB.
+    #[test]
+    fn geschaeftsvorfall_3_carries_a_tranchengroesse() {
+        let err = GpkeLfAnmeldungWorkflow::handle(
+            &LfAnmeldungState::New,
+            make_erzeugende(GESCHAEFTSVORFALL_3, None),
+        )
+        .expect_err("ZW2 without a Tranchengröße must be refused");
+        assert!(format!("{err}").contains("9991000002090"), "{err}");
+
+        let out = GpkeLfAnmeldungWorkflow::handle(
+            &LfAnmeldungState::New,
+            make_erzeugende(GESCHAEFTSVORFALL_3, Some(serde_json::json!("33.33"))),
+        )
+        .expect("a stated Tranchengröße is accepted");
+        assert_eq!(out.outbox[0].payload["tranchengroesse"], "33.33");
+
+        // The other two Geschäftsvorfälle build no Tranche and carry none.
+        for erg in [GESCHAEFTSVORFALL_1, GESCHAEFTSVORFALL_2] {
+            let out =
+                GpkeLfAnmeldungWorkflow::handle(&LfAnmeldungState::New, make_erzeugende(erg, None))
+                    .expect("no Tranchengröße is owed");
+            assert!(out.outbox[0].payload["tranchengroesse"].is_null());
         }
     }
 

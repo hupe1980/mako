@@ -618,15 +618,10 @@ impl Default for SubscriptionConfig {
 /// OIDC configuration — re-exported from `mako-service` (shared across all daemons).
 pub use mako_service::oidc::OidcConfig;
 
-pub fn resolve_env(value: &str) -> anyhow::Result<String> {
-    if let Some(var) = value.strip_prefix("env:") {
-        std::env::var(var).map_err(|_| {
-            anyhow::anyhow!("environment variable {var:?} is not set (referenced in edmd.toml)")
-        })
-    } else {
-        Ok(value.to_owned())
-    }
-}
+/// `env:VARNAME` indirection — re-exported from `mako-service`, so every daemon
+/// resolves a config reference the same way and reports a missing variable with
+/// the same error.
+pub use mako_service::config::{resolve_env, resolve_env_secret};
 
 /// The erasure suppression key ring, current key first, `env:` references
 /// resolved.
@@ -659,10 +654,6 @@ pub fn erasure_key_ring(privacy: &PrivacyConfig) -> anyhow::Result<Vec<Vec<u8>>>
         );
     }
     Ok(ring)
-}
-
-pub fn resolve_env_secret(value: &str) -> anyhow::Result<secrecy::SecretString> {
-    resolve_env(value).map(secrecy::SecretString::from)
 }
 
 #[cfg(test)]

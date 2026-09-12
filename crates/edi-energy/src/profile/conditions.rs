@@ -851,6 +851,12 @@ pub enum Voraussetzung {
     },
     /// „Wenn SG10 QTY DE6063 mit Wert 220 vorhanden" — or, with `suffix`,
     /// „… DE7140 bei der die letzten beiden Stellen mit dem Wert "01" …".
+    ///
+    /// Also the two shapes the AHBs write far more often than „mit Wert":
+    /// „Wenn im DE3155 in demselben COM der Code TE / FX / AJ / AL vorhanden
+    /// ist" and „Wenn in dieser SG16 in QTY in DE6411 KWH/K3 vorhanden". Both
+    /// list **alternatives**, so the element satisfies the Voraussetzung when it
+    /// carries any one of them.
     ElementValue {
         /// Where to look.
         scope: Scope,
@@ -858,8 +864,8 @@ pub enum Voraussetzung {
         tag: String,
         /// The data element number.
         de: String,
-        /// The value it must carry.
-        value: String,
+        /// The values it may carry — any one satisfies the Voraussetzung.
+        values: Vec<String>,
         /// „nicht vorhanden“.
         negate: bool,
         /// Compare the last two characters only.
@@ -1036,10 +1042,13 @@ impl Voraussetzung {
         }
         let seg_word = words[ti].trim_end_matches([',', '.', ';', ')']);
         // „TAG DExxxx mit Wert v" — also „TAG (…) das DExxxx mit dem Wert v".
+        //
+        // The whole clause is searched, not only what follows the tag: „Wenn im
+        // DE3155 in demselben COM …" names the element first and the segment
+        // after it, and that word order is the common one.
         let de_idx = words
             .iter()
             .enumerate()
-            .skip(ti + 1)
             .find(|(_, w)| {
                 w.len() == 6 && w.starts_with("DE") && w[2..].chars().all(|c| c.is_ascii_digit())
             })
@@ -1059,9 +1068,29 @@ impl Voraussetzung {
                 scope,
                 tag: seg_word[..3].to_owned(),
                 de: de_word[2..].to_owned(),
-                value,
+                values: vec![value],
                 negate,
             });
+        }
+        // „… DExxxx … der Code EM vorhanden", „… der Code TE / FX / AJ / AL …",
+        // „… in DE6411 KWH/K3 vorhanden".
+        //
+        // Without this the clause falls through to the segment pattern alone,
+        // and the Voraussetzung becomes „a COM exists" — true of almost every
+        // message. That is wrong in both directions: it fires rules the element
+        // does not trigger and it satisfies rules the element does.
+        if let Some(di) = de_idx {
+            let values = code_alternatives(&words[di + 1..], &seg_word[..3]);
+            if !values.is_empty() {
+                return Some(Self::ElementValue {
+                    suffix: false,
+                    scope,
+                    tag: seg_word[..3].to_owned(),
+                    de: words[di][2..].to_owned(),
+                    values,
+                    negate,
+                });
+            }
         }
         let pattern = SegmentPattern::parse(seg_word)?;
         // Repetition: „mehr als einmal/zweimal/dreimal/viermal vorhanden".
@@ -1089,6 +1118,46 @@ impl Voraussetzung {
             negate,
         })
     }
+}
+
+/// The code alternatives a Voraussetzung lists after its `DExxxx` reference.
+///
+/// A code is an uppercase token of two to four characters or a run of six or
+/// more digits; `/` separates alternatives of one list and is split here so
+/// „TE / FX / AJ / AL" and „KWH/K3" read the same. Scanning stops at
+/// „vorhanden", which ends the clause.
+///
+/// `tag` is the segment the clause already named and is skipped, because a tag
+/// is uppercase and three characters and would otherwise read as a code; so is
+/// a `SGnn` group name, for the same reason. A clause with no code left after
+/// that yields nothing, and the caller keeps the segment-presence reading it
+/// would have had anyway.
+fn code_alternatives(rest: &[&str], tag: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for w in rest {
+        let w = w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '/');
+        if w.eq_ignore_ascii_case("vorhanden") {
+            break;
+        }
+        for part in w.split('/') {
+            if part.is_empty()
+                || part == tag
+                || (part.starts_with("SG") && part[2..].chars().all(|c| c.is_ascii_digit()))
+            {
+                continue;
+            }
+            let upper_code = (2..=4).contains(&part.len())
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                && part.chars().any(|c| c.is_ascii_uppercase());
+            let numeric_code = part.len() >= 6 && part.chars().all(|c| c.is_ascii_digit());
+            if (upper_code || numeric_code) && !out.iter().any(|o| o == part) {
+                out.push(part.to_owned());
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1304,7 +1373,7 @@ mod tests {
         );
         let v = Voraussetzung::parse("Wenn SG10 QTY DE6063 mit Wert 220 vorhanden").unwrap();
         assert!(
-            matches!(v, Voraussetzung::ElementValue { ref de, ref value, .. } if de == "6063" && value == "220")
+            matches!(v, Voraussetzung::ElementValue { ref de, ref values, .. } if de == "6063" && values == &["220".to_owned()])
         );
         let v = Voraussetzung::parse("Wenn SG8 SEQ+ZH0 (Priorisierung erforderliches Produktpaket) mehr als einmal vorhanden").unwrap();
         assert!(matches!(v, Voraussetzung::Count { more_than: 1, .. }));

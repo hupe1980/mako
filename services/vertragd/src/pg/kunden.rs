@@ -710,10 +710,10 @@ pub async fn fetch_rechnungsempfaenger_by_malo(
     tenant: &str,
 ) -> Result<Option<RechnungsempfaengerRow>> {
     // The same predicate the price feed uses. See
-    // [`crate::pg::vertraege::KOMPONENTE_BILLABLE`]: a period that can be
-    // billed has a party it is billed to, and answering the two questions with
-    // different status lists is what produced priced invoices addressed to
-    // "Marktlokation 5123…".
+    // [`crate::pg::vertraege::KOMPONENTE_BILLABLE`]: a period that can be billed
+    // has a party it is billed to, so the two questions must be answered off one
+    // status list. Two lists put a priced period and no Leistungsempfänger on
+    // the same invoice.
     let row: Option<BuyerCols> = sqlx::query_as(&format!(
         "SELECT ku.geschaeftspartner, ku.umsatzsteuer_id, ku.stromwiederverkaeufer
            FROM versorgungsvertraege v

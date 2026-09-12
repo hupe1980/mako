@@ -585,7 +585,18 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // inbound from the invoicer and belongs to the billing cycle.
         //
         // Source: COMDIS AHB 1.0, GPKE Teil 2/Teil 3, BK6-24-174.
+        //
+        // Registered **Sparte-qualified** as well: 29001 also carries the GaBi
+        // Gas „Ablehnung REMADV", and the Sparte-agnostic table is last-wins, so
+        // a dual-fuel deployment would otherwise route a Strom COMDIS to the Gas
+        // workflow. The recipient MP-ID (UNB DE 0010) decides — every `[[party]]`
+        // covers exactly one Sparte (BDEW §2.13).
         router.register(GPKE_COMDIS_ABLEHNUNG_PID.as_u32(), "gpke-abrechnung");
+        router.register_with_sparte(
+            GPKE_COMDIS_ABLEHNUNG_PID.as_u32(),
+            mako_engine::types::Sparte::Strom,
+            "gpke-abrechnung",
+        );
 
         // ORDRSP inbound PIDs for Konfigurationseinrichtung (19001/19002).
         //

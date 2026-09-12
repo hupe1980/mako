@@ -31,6 +31,8 @@ fn make_lf_anmeldung() -> Process<GpkeLfAnmeldungWorkflow, InMemoryEventStore> {
 /// Helper to build an `LfAnmeldungCommand::InitiateAnmeldung` with minimal valid data.
 fn initiate_cmd() -> LfAnmeldungCommand {
     LfAnmeldungCommand::InitiateAnmeldung {
+        transaktionsgrund_ergaenzung: None,
+        tranchengroesse: None,
         pid: Pruefidentifikator::new(55001).unwrap(),
         sender: MarktpartnerCode::new("4012345000023"),
         receiver: MarktpartnerCode::new("9900357000004"),
@@ -46,9 +48,11 @@ fn initiate_cmd() -> LfAnmeldungCommand {
 /// When a `TimeoutExpired` deadline fires on a `Pending` process, the workflow
 /// must transition to `Rejected` with a reason derived from the deadline label.
 ///
-/// This validates the critical regulatory path: if the NB does not respond
-/// within the 24-hour GPKE APERAK window, the process must self-close and the
-/// ERP must receive an `AperakTimeout` outcome.
+/// This validates the critical regulatory path: if the NB does not answer
+/// inside the window `mako_fristen::antwort` resolved for the Prüfidentifikator
+/// — a clock time on the first Werktag after the ÜT, never a flat duration —
+/// the process must self-close and the ERP must receive an `AperakTimeout`
+/// outcome.
 #[tokio::test]
 async fn timeout_on_pending_transitions_to_rejected() {
     let p = make_lf_anmeldung();

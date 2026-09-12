@@ -870,7 +870,7 @@ mod statutory_rate_tests {
     ///
     /// Above 150 kW the anzulegender Wert is set by tender (§ 22 Abs. 4), so the
     /// table has no open tier: `rate_for` answers `Err` rather than inventing a
-    /// rate. The old table ran three tiers to 5 MW and beyond.
+    /// rate.
     #[test]
     fn biomasse_pays_one_statutory_tier_and_refuses_above_it() {
         let t = biomasse_lookup(2023).expect("table");

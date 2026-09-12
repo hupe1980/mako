@@ -519,8 +519,18 @@ impl mako_engine::builder::EngineModule for WimModule {
         // Shared PID with GPKE billing. The router dispatches to the correct
         // workflow instance via conversation ID correlation.
         //
-        // Source: COMDIS AHB 1.0, WiM Strom Teil 1 (BK6-22-024).
+        // Source: COMDIS AHB 1.0, WiM Strom Teil 1 (BK6-22-024 Anlage 2a).
+        //
+        // Sparte-qualified for the same reason GPKE is: 29001 is also a GaBi Gas
+        // PID, and only the recipient's Sparte separates the two families. Which
+        // of the two **Strom** billing workflows a cold 29001 reaches is decided
+        // by conversation-ID correlation, as it is today.
         router.register(invoic::WIM_COMDIS_ABLEHNUNG_PID.as_u32(), "wim-invoic");
+        router.register_with_sparte(
+            invoic::WIM_COMDIS_ABLEHNUNG_PID.as_u32(),
+            mako_engine::types::Sparte::Strom,
+            "wim-invoic",
+        );
 
         // UTILMD 44183 „Ende MSB von NB" — the Gas NB informing the MSB of a
         // Stilllegung (AWH WiM Gas 2.0 Kap. 3.7). Informational: it carries no

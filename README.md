@@ -803,6 +803,12 @@ cargo xtask validate-profiles
 # so the wrong one misstates a cent without failing an ordinary test.
 cargo xtask check-rounding
 
+# Refuse a Festlegung cited in a form it does not publish. BK6-22-024 numbers
+# its operative part in Tenorziffern and carries its substance in Anlagen, so
+# "BK6-22-024 para 4" names nothing a reader can look up - and an uncheckable
+# citation is how a wrong Frist standing beside it survives review.
+cargo xtask check-citations
+
 # How much of the published Pruefidentifikator inventory the profiles carry, and
 # whether the PID reference names all of it. validate-profiles compares
 # consecutive releases, so it can prove nothing was lost and is blind to a PID

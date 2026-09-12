@@ -445,7 +445,7 @@ impl InvoicCheckEngine {
 
         // ── Stage 3: Zahlungsziel check ───────────────────────────────────────
         // DTM+265 (faelligkeitsdatum) must not exceed max_zahlungsziel_days.
-        // Source: §7 Allgemeine Festlegungen V6.1d; BK6-22-024 §5.
+        // Source: §7 Allgemeine Festlegungen V6.1d.
         if config.max_zahlungsziel_days > 0 {
             Self::check_zahlungsziel(rechnung, config, &mut findings);
         }

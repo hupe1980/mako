@@ -8,7 +8,7 @@
 //!
 //! | Clock | Window | Helper |
 //! |---|---|---|
-//! | CONTRL | 6 wall-clock hours | [`mako_fristen::contrl_due_at`] |
+//! | CONTRL | 6 hours; 15 min for a Strom UTILMD/ORDERS Syntaxfehlermeldung; 45 min for a GABi-Gas ALOCAT; the end of a Formatumstellung window when one is open | [`mako_fristen::contrl_due_at`] |
 //! | APERAK | 45 min Strom weekday; Gas next Werktag 12:00 or 3 Werktage | [`mako_fristen::aperak_strom_due_at`] and the Gas pair |
 //! | Antwortfrist | per Prüfidentifikator | [`mako_fristen::antwort::antwort_deadline`] |
 //!

@@ -207,8 +207,19 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
         // The FNB/VNB can reject the BKV's REMADV via COMDIS 29001.
         //
         // Source: COMDIS AHB 1.0, GaBi Gas, BK7.
+        //
+        // Sparte-qualified: 29001 is shared with the GPKE and WiM Strom billing
+        // families over a last-wins Sparte-agnostic table, so the Gas route has
+        // to be keyed on the recipient's Sparte to survive a dual-fuel build.
+        // The agnostic entry stays as the fallback a Gas-only deployment with a
+        // Sparte-neutral own party resolves through.
         router.register(
             invoic::GABI_GAS_COMDIS_ABLEHNUNG_PID.as_u32(),
+            "gabi-gas-invoic",
+        );
+        router.register_with_sparte(
+            invoic::GABI_GAS_COMDIS_ABLEHNUNG_PID.as_u32(),
+            mako_engine::types::Sparte::Gas,
             "gabi-gas-invoic",
         );
 

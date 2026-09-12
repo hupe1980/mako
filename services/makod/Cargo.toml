@@ -1,7 +1,7 @@
 [package]
 name             = "makod"
 version.workspace          = true
-description      = "Main binary for running the Mako process engine"
+description = "Protocol daemon for German market communication — EDIFACT, AS4, REST and the mako process engine"
 authors.workspace          = true
 edition.workspace          = true
 license.workspace          = true

@@ -531,7 +531,7 @@ pub async fn upsert_anlage(
                kwk_foerderdauer_h, kwk_anlagenart, kwk_verwendung, kwk_kostenanteil,
                kwk_bmwk_feststellung,
                flex_leistung_kw, flex_praemie_ct_kwh,
-               mastr_registriert, mastr_nummer, mastr_datum,
+               mastr_registriert, mastr_nummer, mastr_datum, mastr_violation_start,
                einspeiser_id,
                notes, is_biogas_sect51b, zuschlag_erloeschen_datum,
                biomasse_hauptbrennstoff, biomasse_guelle_anteil, biomasse_getreide_mais_anteil,
@@ -549,7 +549,7 @@ pub async fn upsert_anlage(
                $21, $22, $44, $45,
                $46,
                $23, $24,
-               $25, $26, $27,
+               $25, $26, $27, CASE WHEN $25 THEN NULL ELSE heute() END,
                $28,
                $29, $30, $31,
                $32, $33, $34,
@@ -599,6 +599,13 @@ pub async fn upsert_anlage(
                mastr_registriert         = EXCLUDED.mastr_registriert,
                mastr_nummer              = COALESCE(EXCLUDED.mastr_nummer, eeg_anlagen.mastr_nummer),
                mastr_datum               = COALESCE(EXCLUDED.mastr_datum, eeg_anlagen.mastr_datum),
+               -- § 52 Abs. 1 Nr. 11 EEG 2023: the penalty accrues from the day
+               -- the NB registered the plant and noted the missing MaStR entry,
+               -- so the start is set once and kept until the entry is confirmed.
+               mastr_violation_start     = CASE
+                                               WHEN EXCLUDED.mastr_registriert THEN NULL
+                                               ELSE COALESCE(eeg_anlagen.mastr_violation_start, heute())
+                                           END,
                einspeiser_id             = EXCLUDED.einspeiser_id,
                notes                     = EXCLUDED.notes,
                is_biogas_sect51b         = EXCLUDED.is_biogas_sect51b,
@@ -675,34 +682,6 @@ pub async fn upsert_anlage(
     })
     .context("upsert eeg_anlage")?;
 
-    // ── Auto-set mastr_violation_start on first registration without MaStR ──
-    // §52 Abs. 1 Nr. 11 EEG 2023: penalty accrues from when the NB registers
-    // the plant and notes the missing MaStR entry. Set the start date to today
-    // (using heute()) only when the column is NULL (not already tracking).
-    if !req.mastr_registriert {
-        sqlx::query(
-            r"UPDATE eeg_anlagen
-              SET mastr_violation_start = COALESCE(mastr_violation_start, heute())
-              WHERE tr_id = $1 AND tenant = $2 AND mastr_violation_start IS NULL",
-        )
-        .bind(&req.tr_id)
-        .bind(tenant)
-        .execute(pool)
-        .await
-        .context("set mastr_violation_start")?;
-    } else {
-        // Plant registered with MaStR confirmed: clear any outstanding violation start.
-        sqlx::query(
-            r"UPDATE eeg_anlagen
-              SET mastr_violation_start = NULL
-              WHERE tr_id = $1 AND tenant = $2",
-        )
-        .bind(&req.tr_id)
-        .bind(tenant)
-        .execute(pool)
-        .await
-        .context("clear mastr_violation_start")?;
-    }
     Ok(())
 }
 

@@ -30,11 +30,24 @@
 //!
 //! A workspace member (`path = …`) is mako's own code and belongs to the
 //! service pages, not to this table.
+//!
+//! **Prose → manifest.** The table is not the only place a version is claimed:
+//! a concept or reference page writes „the plane runs on `agentplane 0.28`"
+//! inside a sentence, and that sentence is read the same way a table row is.
+//! Every `` `crate X.Y` `` span in a tracked Markdown page under
+//! [`PROSE_DIRS`] is held to the same requirement, so a page naming a version
+//! cannot drift while the table holds.
 
 use std::path::Path;
 
 /// Where the documented table lives.
 const DOC: &str = "site/content/docs/architecture/_index.md";
+
+/// Directories whose Markdown pages may name a dependency version in prose.
+///
+/// `concepts/` is not tracked, so a checkout without it simply has fewer pages
+/// to check — the same rule the other doc guards follow.
+const PROSE_DIRS: &[&str] = &["site/content/docs", "concepts"];
 
 /// External crates the architecture table does not have to name.
 ///
@@ -117,6 +130,19 @@ pub fn run(workspace_root: &Path) -> bool {
         }
     }
 
+    // Prose claims, anywhere a doc page names a version in a code span.
+    for (path, line, name, claimed) in prose_versions(workspace_root) {
+        match manifests.iter().find_map(|m| requirement(m, &name)) {
+            Some(req) if req.starts_with(claimed.as_str()) => {}
+            Some(req) => problems.push(format!(
+                "  {path}:{line}  {name}: prose says `{claimed}`, pinned `{req}`"
+            )),
+            // A version-shaped span naming something no manifest requires is
+            // prose about someone else's crate, not a claim about this build.
+            None => {}
+        }
+    }
+
     let documented: std::collections::BTreeSet<&str> =
         claims.iter().map(|(n, _)| n.as_str()).collect();
     let root_manifest =
@@ -149,16 +175,96 @@ pub fn run(workspace_root: &Path) -> bool {
         );
         return true;
     }
-    eprintln!("check-dep-versions: the architecture page and the manifests disagree:");
+    eprintln!("check-dep-versions: the documentation and the manifests disagree:");
     for p in &problems {
         eprintln!("{p}");
     }
     eprintln!(
-        "\nUpdate the table in {DOC} — and its description, if the new version changed what \
-         mako uses. A crate that carries no domain meaning belongs in `INFRASTRUCTURE_ONLY` \
-         instead, in the category it fits."
+        "\nA row belongs in the table in {DOC} — with its description, if the new version \
+         changed what mako uses; a crate that carries no domain meaning belongs in \
+         `INFRASTRUCTURE_ONLY` instead, in the category it fits. A line reported with a \
+         `path:line` is prose naming a version, and is fixed where it stands."
     );
     false
+}
+
+/// Every `` `crate X.Y[.Z]` `` claim in a Markdown page under [`PROSE_DIRS`],
+/// as `(path, line, crate, version)`.
+///
+/// The span has to hold a crate name and a version and nothing else, so a
+/// sentence mentioning `rubo4e` and a sentence quoting `0.14` are both ignored
+/// and only the pair is a claim.
+fn prose_versions(root: &Path) -> Vec<(String, usize, String, String)> {
+    fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, usize, String, String)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, root, out);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let rel = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            for (i, line) in text.lines().enumerate() {
+                for span in code_spans(line) {
+                    if let Some((name, version)) = span.split_once(' ')
+                        && is_crate_name(name)
+                        && is_version(version)
+                    {
+                        out.push((rel.clone(), i + 1, name.to_owned(), version.to_owned()));
+                    }
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for dir in PROSE_DIRS {
+        walk(&root.join(dir), root, &mut out);
+    }
+    out
+}
+
+/// The contents of every `` ` ``-delimited span on one line.
+fn code_spans(line: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = line;
+    while let Some(open) = rest.find('`') {
+        rest = &rest[open + 1..];
+        let Some(close) = rest.find('`') else { break };
+        out.push(&rest[..close]);
+        rest = &rest[close + 1..];
+    }
+    out
+}
+
+fn is_crate_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+        && s.chars().any(|c| c.is_ascii_alphabetic())
+}
+
+fn is_version(s: &str) -> bool {
+    let mut parts = s.split('.');
+    let ok =
+        |p: Option<&str>| p.is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    ok(parts.next())
+        && ok(parts.next())
+        && parts
+            .next()
+            .is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        && parts.next().is_none()
 }
 
 /// Every `[workspace.dependencies]` entry naming a crate from outside this

@@ -135,6 +135,8 @@ async fn initiate_lf_anmeldung(
         );
     let process_id = process.process_id();
     let cmd = mako_gpke::LfAnmeldungCommand::InitiateAnmeldung {
+        transaktionsgrund_ergaenzung: None,
+        tranchengroesse: None,
         pid: Pruefidentifikator::new(pid).unwrap(),
         sender: MarktpartnerCode::new("4012345000023"),
         receiver: MarktpartnerCode::new("9900357000004"),
@@ -223,6 +225,8 @@ async fn handle_antwort_accepted_transitions_to_active() {
     // Initiate.
     process
         .execute(mako_gpke::LfAnmeldungCommand::InitiateAnmeldung {
+            transaktionsgrund_ergaenzung: None,
+            tranchengroesse: None,
             pid: Pruefidentifikator::new(55001).unwrap(),
             sender: MarktpartnerCode::new("4012345000023"),
             receiver: MarktpartnerCode::new("9900357000004"),
@@ -273,6 +277,8 @@ async fn handle_antwort_rejected_transitions_to_rejected() {
 
     process
         .execute(mako_gpke::LfAnmeldungCommand::InitiateAnmeldung {
+            transaktionsgrund_ergaenzung: None,
+            tranchengroesse: None,
             pid: Pruefidentifikator::new(55001).unwrap(),
             sender: MarktpartnerCode::new("4012345000023"),
             receiver: MarktpartnerCode::new("9900357000004"),

@@ -179,7 +179,8 @@ impl EdifactIngestDispatcher {
             // Note: PIDs 55007–55009 are present in UTILMD AHB Strom 2.1
             // (FV2025-10-01). They were NOT removed by BK6-22-024 (LFW24);
             // only the LF-initiated processes (55001/55002) were redesigned
-            // for 24h processing. APERAK Frist: 24h (BK6-22-024 §4).
+            // to meet the § 20a EnWG 24-hour switch. The answer window for
+            // 55007–55009 is the one `mako_fristen::antwort` publishes.
             "gpke-lf-abmeldung" => match pid {
                 55007 => {
                     let cmd = adapters::gpke_lf_abmeldung_registry().dispatch(raw, &fv)?;
@@ -470,7 +471,7 @@ impl EdifactIngestDispatcher {
             // existing process keyed on the original invoice message-ref.
             //
             // Regulatory basis: INVOIC AHB 2.8e / 1.0; REMADV AHB 1.0;
-            // COMDIS AHB 1.0; BK6-22-024 §5.
+            // COMDIS AHB 1.0.
             "gpke-abrechnung" => match pid {
                 31001 | 31002 | 31005 | 31006 => {
                     let cmd = adapters::gpke_abrechnung_registry().dispatch(raw, &fv)?;

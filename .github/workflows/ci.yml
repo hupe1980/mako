@@ -287,6 +287,13 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
       - run: cargo doc --no-deps --all-features
+      # Every test job passes `--all-targets`, which selects libs, bins, tests,
+      # benches and examples and **excludes doctests**. Without this step no
+      # `/// ```rust` block in the workspace is compiled by anything, and a doc
+      # example may name a function that does not exist. `cargo doc` above does
+      # not compile them either — it only renders them.
+      - name: Doc examples
+        run: cargo test --workspace --all-features --doc
 
   # ── MSRV ────────────────────────────────────────────────────────────────────
   msrv:

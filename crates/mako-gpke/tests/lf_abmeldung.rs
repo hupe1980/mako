@@ -164,7 +164,7 @@ async fn beenden_bestaetigen_transitions_to_beendet() {
 /// Deadline expiry in `ValidationPassed` state → `Rejected`.
 ///
 /// This simulates the Antwortfrist expiring: the LF did not send its
-/// response in time (BK6-22-024 §4). The workflow must auto-close.
+/// response in time. The workflow must auto-close.
 #[tokio::test]
 async fn deadline_expiry_in_validation_passed_transitions_to_rejected() {
     let p = make_process();

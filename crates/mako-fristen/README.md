@@ -37,7 +37,7 @@ others. They differ by orders of magnitude and they fail for different reasons.
 
 | Clock | Window | Meaning |
 |---|---|---|
-| **CONTRL** | 6 wall-clock hours (CONTRL AHB 1.0 §1.2) | the interchange was syntactically readable |
+| **CONTRL** | 6 wall-clock hours; **15 min** for a Strom UTILMD/ORDERS Syntaxfehlermeldung (6 h on a Saturday), **45 min** for a GABi-Gas ALOCAT; deferred to the end of a Formatumstellung window (CONTRL AHB 1.0 §2.3.1, §2.4.1) | the syntax check of the Übertragungsdatei |
 | **APERAK** | 45 min Strom weekday; Gas: next Werktag 12:00 (Folgeprozess) or 3 Werktage (Initialprozess) | the message was accepted for processing |
 | **Antwortfrist** | per PID — 11:00 of the 1. Werktag for a GPKE Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom | the *business* answer is owed |
 

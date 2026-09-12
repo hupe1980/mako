@@ -44,6 +44,10 @@ CREATE OR REPLACE FUNCTION heute() RETURNS date
     LANGUAGE sql STABLE
     AS $$ SELECT (now() AT TIME ZONE 'Europe/Berlin')::date $$;
 
+-- Equality over TEXT and UUID inside a GiST exclusion constraint; see
+-- `dl_no_overlap`.
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
 CREATE TABLE accounts (
     account_id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     malo_id             TEXT        NOT NULL,
@@ -445,6 +449,22 @@ CREATE INDEX dl_tenant ON dunning_locks (tenant, created_at DESC);
 -- Open-ended locks that nobody has revisited.
 CREATE INDEX dl_review ON dunning_locks (tenant, valid_from)
     WHERE aufgehoben_at IS NULL AND valid_to IS NULL;
+
+-- One live lock per ground per account. Lifting is by `lock_id`, so a second
+-- live lock on the same ground makes lifting the first do nothing an operator
+-- can see: dunning stays halted with the record saying it was released.
+--
+-- Scoped to the ground, because different grounds legitimately run at once — a
+-- Schutzbeduerftigkeit under § 41f Abs. 2 does not displace an accepted
+-- Abwendungsvereinbarung under § 41g Abs. 1 S. 10, and each is lifted on its own
+-- facts. `valid_to` is inclusive, as every reader of this table treats it.
+ALTER TABLE dunning_locks
+    ADD CONSTRAINT dl_no_overlap EXCLUDE USING gist (
+        tenant     WITH =,
+        account_id WITH =,
+        grund      WITH =,
+        daterange(valid_from, valid_to, '[]') WITH &&
+    ) WHERE (aufgehoben_at IS NULL);
 
 -- ── Forderungseinwände (§ 41f Abs. 3 S. 3–5 EnWG) ────────────────────────────
 --

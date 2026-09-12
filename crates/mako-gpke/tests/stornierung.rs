@@ -18,7 +18,8 @@
 //!
 //! # Regulatory basis
 //!
-//! BK6-24-174 (Beschluss 24.10.2024, gültig ab 06.06.2025) + BK6-22-024 §5.
+//! GPKE Teil 4 Kap. 5 (BK6-22-024 Anlage 1d), which publishes no Frist of its
+//! own — the bound is „die auslösende Meldung wurde noch nicht beantwortet".
 
 use mako_engine::{
     event_store::InMemoryEventStore,
@@ -170,7 +171,7 @@ async fn negative_aperak_transitions_to_rejected() {
     );
 }
 
-/// 24-hour deadline fires while waiting → terminal.
+/// The answer window fires while waiting → terminal.
 #[tokio::test]
 async fn timeout_fires_while_awaiting_aperak() {
     let p = make_process();
@@ -228,7 +229,7 @@ async fn domain_data_preserved_in_validation_passed() {
     }
 }
 
-/// APERAK Frist constant: label matches 24h window.
+/// The label names its process and not a duration.
 #[test]
 fn aperak_window_label_is_correct() {
     assert!(

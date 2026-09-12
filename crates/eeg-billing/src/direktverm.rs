@@ -477,8 +477,8 @@ mod tests {
             ErzeugungsArt::SolarFreiflaeche,
             SolarSegment::Erstes
         ));
-        // Nr. 1a — zweites Segment bis einschließlich 750 kW. The 900 kW rooftop
-        // plant the old flat 1-MW rule let through is the whole point.
+        // Nr. 1a — zweites Segment bis einschließlich 750 kW: a 900 kW rooftop
+        // plant is above the segment and a flat 1-MW reading would miss it.
         assert!(!requires_ausschreibung(
             dec!(750),
             ErzeugungsArt::SolarAufdach,

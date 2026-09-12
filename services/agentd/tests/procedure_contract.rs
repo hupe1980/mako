@@ -6,21 +6,19 @@
 //! without anything failing.
 //!
 //! The manifest declares a procedure, a model, a tool surface, ceilings and an
-//! answer schema. All five are supposed to reach the model exactly as written.
-//! Nothing proved any of them past one specialist:
+//! answer schema. All five must reach the model exactly as written, and each has
+//! a failure that is invisible from the outside:
 //!
-//! * A **tool surface wider than the grants** is the failure this project spent
-//!   a release inside: every specialist held its servers' whole read surface, and
-//!   no test could see it because the runtime dutifully offered whatever the
-//!   catalogue held. Now that the grants are narrow, the thing worth pinning is
-//!   that the narrowing *reaches the model* — a runtime that offered the whole
-//!   catalogue anyway would look identical from the outside.
+//! * A **tool surface wider than the grants** looks identical to a narrow one
+//!   unless the narrowing is asserted at the ask: the runtime offers whatever
+//!   the catalogue holds, so a grant list nobody reaches the model with is a
+//!   restriction in name only.
 //! * A **model other than the declared one** would make "moving a regulated
 //!   decision onto a different model is a manifest edit" false, silently: the
 //!   digest would be unchanged and the answer would come from somewhere else.
 //! * A **procedure that does not reach the prompt** turns the digest-covered
 //!   file into documentation. `plane_golden_run` asserts this for one specialist
-//!   by grepping for two phrases; the other 25 were unchecked.
+//!   by grepping for two phrases; this suite covers the rest.
 //! * A **schema not requested** means the closed answer shape is enforced by
 //!   nothing at the one moment it could be.
 //! * A **`max_output_tokens` above the manifest's ceiling** is a budget that

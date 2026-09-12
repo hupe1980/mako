@@ -194,7 +194,9 @@ pub enum GpkeStornierungState {
     New,
     /// 55022 received; awaiting validation result.
     Initiated(GpkeStornierungData),
-    /// AHB validation passed; NB must respond within 24 hours.
+    /// AHB validation passed; the NB's answer window is running — the
+    /// **original** message's Antwortfrist, per
+    /// [`STORNIERUNG_ANTWORT_WINDOW_LABEL`].
     ValidationPassed(GpkeStornierungData),
     /// Positive APERAK (55023) dispatched; cancellation accepted.
     AperakSent(GpkeStornierungData),
@@ -251,7 +253,10 @@ pub enum GpkeStornierungCommand {
     },
     /// NB dispatches a positive (55023) or negative (55024) APERAK response.
     ///
-    /// Must be called within 24 hours of receiving the 55022 message.
+    /// The window is the **original** message's Antwortfrist, which
+    /// [`STORNIERUNG_ANTWORT_WINDOW_LABEL`] carries: a Stornierung is
+    /// admissible only while that message is unanswered (GPKE Teil 4 Kap. 5),
+    /// and no Festlegung publishes a duration of its own for this step.
     DispatchAperak {
         /// `true` for Bestätigung (55023), `false` for Ablehnung (55024).
         positive: bool,

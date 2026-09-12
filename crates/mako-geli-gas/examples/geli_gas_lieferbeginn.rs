@@ -39,7 +39,7 @@ use mako_engine::{
     version::WorkflowId,
     workflow::CommandContext,
 };
-use mako_fristen::{self as fristen, HolidayCalendar};
+use mako_fristen::{self as fristen};
 use mako_geli_gas::{
     GasSupplierChangeCommand, GasSupplierChangeProjection, GeliGasSupplierChangeWorkflow,
 };
@@ -233,32 +233,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let utilmd_conversation_id = envs[0].conversation_id;
     let utilmd_event_id = envs[0].event_id;
 
-    // ── 10-Werktage APERAK deadline (GeLi Gas / BNetzA BK7-24-01-009) ────────
+    // ── The Antwortfrist of the 44001 ────────────────────────────────────────
     //
-    // GeLi Gas uses a 10-Werktage APERAK window — double the WiM Frist and
-    // significantly longer than the GPKE 24h wall-clock window.
+    // Two clocks run on this message and they are not interchangeable. The
+    // **APERAK** says the UTILMD could be processed at all — in Gas, „nächster
+    // Werktag 12:00" for a Folgeprozess and 3 Werktage for an Initialprozess
+    // (APERAK AHB 1.1 § 2.3), which `mako_fristen::aperak_gas_*` computes. The
+    // **Antwortfrist** is when the NB owes its business answer, and for 44001
+    // the AWH GeLi Gas publishes „Ablauf des 4. Werktags"
+    // (BNetzA BK7-24-01-009). Neither is ten Werktage: that figure is the LFN's
+    // *Vorlauffrist* for sending the Anmeldung, not a window for answering it.
     //
-    // Frist reference:
-    //   GPKE:     fristen::add_hours(now, 24)                → 24 h
-    //   WiM:      fristen::add_werktage(today, 5, BdewMaKo)   → 5 Werktage
-    //   GeLi Gas: fristen::add_werktage(today, 10, BdewMaKo)  → 10 Werktage ← here
-    let received_date = mako_fristen::heute();
-    let aperak_due_date = fristen::add_werktage(received_date, 10, HolidayCalendar::BdewMaKo);
-    let aperak_due_at = aperak_due_date.midnight().assume_utc();
+    // The number is never written here — `mako_fristen::antwort` holds it per
+    // Prüfidentifikator, and a literal in a call site is how the two drift.
+    let received_at = time::OffsetDateTime::now_utc();
+    let antwort_due_at = fristen::antwort::antwort_deadline(44_001, received_at)
+        .expect("44001 has a published Antwortfrist");
 
-    let aperak_deadline = Deadline::new(
+    let antwort_deadline = Deadline::new(
         process.stream_id().clone(),
         process.process_id(),
         process.tenant_id(),
         process.workflow_id().clone(),
-        "aperak-response-window",
-        aperak_due_at,
+        "geli-gas-lieferbeginn-antwort",
+        antwort_due_at,
     );
-    let aperak_deadline_id = aperak_deadline.deadline_id();
-    ctx.deadline_store().register(&aperak_deadline).await?;
+    let antwort_deadline_id = antwort_deadline.deadline_id();
+    ctx.deadline_store().register(&antwort_deadline).await?;
     println!(
-        "  [deadline] APERAK window registered (10 Werktage — due {aperak_due_date}, id: {}…)",
-        &aperak_deadline_id.to_string()[..8]
+        "  [deadline] Antwortfrist registered (44001 — due {antwort_due_at}, id: {}…)",
+        &antwort_deadline_id.to_string()[..8]
     );
 
     ctx.registry()
@@ -324,7 +328,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }),
         )])
         .await?;
-    ctx.deadline_store().cancel(aperak_deadline_id).await?;
+    ctx.deadline_store().cancel(antwort_deadline_id).await?;
     println!(
         "  [outbox] APERAK queued ({} pending)",
         ctx.outbox_store().len().await?

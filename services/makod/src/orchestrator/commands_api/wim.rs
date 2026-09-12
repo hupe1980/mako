@@ -41,11 +41,23 @@ pub(super) fn cmd_wim_geraetewechsel_aperak<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    let positive = p
+    // A missing polarity is not an Anerkennung. The APERAK says whether the
+    // message could be processed (`BGM+312` Anerkennung, `BGM+313` Fehler), and
+    // defaulting the flag would put an Anerkennung on the wire for a caller that
+    // never stated one — a binding statement to the counterparty, made by
+    // omission. The field is required, the way `mabis-syncd` requires the
+    // Prüfmitteilung's.
+    let Some(positive) = p
         .get("positiv")
         .or_else(|| p.get("positive"))
         .and_then(serde_json::Value::as_bool)
-        .unwrap_or(true);
+    else {
+        return Box::pin(std::future::ready(Err(DispatchError::InvalidPayload(
+            "an APERAK must state its polarity — \"positiv\": true is the \
+             Anerkennung (BGM+312), false the Fehlermeldung (BGM+313)"
+                .to_owned(),
+        ))));
+    };
     Box::pin(dispatch_wim_aperak(s, p, positive))
 }
 
@@ -456,10 +468,19 @@ pub(super) async fn dispatch_wim_gesamtvorgang(
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
     let melo_id = extract_melo_id(payload)?;
-    let erfolgreich = payload
+    // The outcome is the message, so it is stated rather than defaulted: a
+    // Gesamtvorgang reported successful by omission tells the NB to assign the
+    // MSBN.
+    let Some(erfolgreich) = payload
         .get("erfolgreich")
         .and_then(serde_json::Value::as_bool)
-        .unwrap_or(true);
+    else {
+        return Err(DispatchError::InvalidPayload(
+            "a Mitteilung über den Gesamtvorgang must state \"erfolgreich\" \
+             (WiM Teil 1 Kap. 2.3.2 Nr. 7)"
+                .to_owned(),
+        ));
+    };
     let zuordnungsbeginn = payload
         .get("zuordnungsbeginn")
         .and_then(|v| v.as_str())

@@ -818,8 +818,9 @@ impl ElectricityProvider {
 ///
 /// ## Legal basis
 ///
-/// §14a Abs. 1 EnWG (BK6-22-024 §2.13): DSOs must offer controllable load
-/// (Steuerbare Verbrauchseinrichtungen) customers a reduced NNE (Modul 1, 2 or 3).
+/// §14a Abs. 1 EnWG, as BNetzA **BK6-22-300** and **BK8-22/010-A** implement it:
+/// DSOs must offer controllable load (Steuerbare Verbrauchseinrichtungen)
+/// customers a reduced NNE (Modul 1, 2 or 3).
 /// The LF reflects this reduction as a credit on the retail invoice.
 pub struct ControllableLoadProvider {
     product: ControllableLoadProduct,

@@ -139,3 +139,41 @@ fn non_split_pid_is_sparte_independent() {
     // Unknown PID → None (dead-lettered by the caller).
     assert_eq!(resolve_workflow(&router, &reg, 99999, STROM_NB), None);
 }
+
+/// COMDIS 29001 „Ablehnung REMADV" is claimed by three billing families — GPKE
+/// and WiM in Strom, GaBi Gas in Gas — and the Sparte-agnostic table is
+/// last-wins, so without a commodity key the module order decides which one a
+/// dual-fuel deployment routes every 29001 to.
+///
+/// This drives the **real** module registrations rather than a hand-built
+/// router, because the defect is in what the modules declare.
+#[test]
+fn the_comdis_ablehnung_follows_the_recipients_sparte() {
+    use mako_engine::marktrolle::DeploymentRoles;
+
+    let mut router = PidRouter::new();
+    let roles = DeploymentRoles::all();
+    for module in makod::startup::production_modules() {
+        module.register_pids_with_roles(&mut router, &roles);
+    }
+    let reg = combined_registry();
+
+    assert_eq!(
+        resolve_workflow(&router, &reg, 29_001, GAS_GNB),
+        Some("gabi-gas-invoic"),
+        "a COMDIS addressed to the Gas party is the GaBi Gas Ablehnung"
+    );
+
+    let strom = resolve_workflow(&router, &reg, 29_001, STROM_NB)
+        .expect("29001 routes for a Strom recipient");
+    assert_ne!(
+        strom, "gabi-gas-invoic",
+        "a COMDIS addressed to the Strom party must not reach the Gas workflow — \
+         which of the two Strom billing families it reaches is settled by \
+         conversation-ID correlation, not by this table"
+    );
+    assert!(
+        strom == "gpke-abrechnung" || strom == "wim-invoic",
+        "unexpected Strom workflow for 29001: {strom}"
+    );
+}

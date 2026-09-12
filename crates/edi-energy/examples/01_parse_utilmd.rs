@@ -141,9 +141,9 @@ fn main() -> Result<(), edi_energy::Error> {
     // ── Validation ───────────────────────────────────────────────────────────
     //
     // Asserted, not printed. `cargo check` compiles an example without running
-    // it, and a run that prints its own findings and exits `0` is a fixture
-    // nobody notices going stale — which is how this one shipped for months
-    // with ten AHB errors in it.
+    // it, and a run that prints its own findings and exits `0` reports a stale
+    // fixture as a success — so the fixture's conformance is an assertion the
+    // run fails on, not a line in its output.
     let report = msg.validate()?;
     assert!(
         report.is_valid(),
