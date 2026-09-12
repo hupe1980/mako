@@ -1,7 +1,5 @@
----
-description: "Use when working in xtask: the profile importer, validation gates, release tooling, or xtask CLI commands."
-applyTo: "xtask/**"
----
+<!-- Nested AGENTS.md: the closest one to the file being edited wins.
+     Workspace-wide rules are in the root AGENTS.md and are not repeated here. -->
 
 # xtask Instructions
 

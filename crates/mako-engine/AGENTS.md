@@ -1,7 +1,5 @@
----
-description: "Use when working in crates/mako-engine: implementing Workflow or EventStore traits, writing commands/events, handling deadlines, projections, snapshots, outbox, or the SlateDB persistence layer."
-applyTo: "crates/mako-engine/**"
----
+<!-- Nested AGENTS.md: the closest one to the file being edited wins.
+     Workspace-wide rules are in the root AGENTS.md and are not repeated here. -->
 
 # mako-engine Crate Instructions
 
@@ -46,18 +44,32 @@ Key ID types: `ProcessId`, `StreamId`, `EventId`, `DeadlineId`, `TenantId`.
 
 ## Deadline Arithmetic (fristen module)
 
+**There is no 24-hour GPKE window**, under BK6-24-174 or anything else — see
+`mako_fristen::antwort::GPKE_IS_NOT_TWENTY_FOUR_HOURS`. A flat 24 h is neither
+the technical acknowledgement nor the business answer, and it is wrong in the
+direction that does not announce itself: it reports a lapsed Frist as still
+running. Three different clocks apply, and they are not interchangeable:
+
 ```rust
-// GPKE: 24 consecutive wall-clock hours (BK6-22-024 §5)
-let deadline = fristen::add_hours(received_at, 24);
+// Wall-clock windows the Festlegungen state as durations — weekends and
+// holidays do not extend them. CONTRL 6 h, Strom APERAK 45 min.
+let due = fristen::contrl_due_at(received_at, ContrlAnlass::Regelfall);
+let due = fristen::aperak_strom_due_at(received_at);
 
-// WiM: 5 Werktage (BK6-24-174) — Saturday counts, Sunday/holidays do not
-let deadline = fristen::add_werktage(received_date, 5, BdewMaKo);
+// The business answer is a clock time on the n-th Werktag after the
+// Übertragungstag — never a duration. Ask the per-PID table, do not count.
+let due = fristen::antwort::obligation(55_001);
 
-// GeLi Gas: 10 Werktage (BK7-24-01-009)
-let deadline = fristen::add_werktage(received_date, 10, BdewMaKo);
+// Werktage arithmetic, where a Festlegung really does count days:
+// Saturday counts, Sunday and a BDEW MaKo holiday do not.
+let deadline = fristen::add_werktage(received_date, 5, HolidayCalendar::BdewMaKo);
 ```
 
-All deadline arithmetic in **German local time (CET/CEST)**. Use `time::OffsetDateTime`, never `chrono`.
+Deadline arithmetic is in **Europe/Berlin**; use `time::OffsetDateTime`, never
+`chrono`. The governing Festlegung differs per process family — GPKE Teil 1–3 is
+BK6-24-174, GPKE Teil 4 and WiM Strom are BK6-22-024, GeLi Gas is
+BK7-24-01-009 — so take the citation from the domain crate's own `AGENTS.md`
+rather than from an example.
 
 ## Version Policy
 

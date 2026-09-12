@@ -1,7 +1,5 @@
----
-description: "Use when working in crates/edi-energy: parsing EDIFACT, validating messages, the profile pipeline, builders, or writing tests against the edi-energy API."
-applyTo: "crates/edi-energy/**"
----
+<!-- Nested AGENTS.md: the closest one to the file being edited wins.
+     Workspace-wide rules are in the root AGENTS.md and are not repeated here. -->
 
 # edi-energy Crate Instructions
 

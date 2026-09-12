@@ -1,7 +1,5 @@
----
-description: "Use when working in services/makod: the production daemon that assembles all domain modules, configures persistence, handles startup validation, and wires up HTTP/health endpoints."
-applyTo: "services/makod/**"
----
+<!-- Nested AGENTS.md: the closest one to the file being edited wins.
+     Workspace-wide rules are in the root AGENTS.md and are not repeated here. -->
 
 # makod Service Instructions
 

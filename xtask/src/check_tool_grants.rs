@@ -345,8 +345,8 @@ fn per_service_claims(
     let (productd, sperrd, vertragd) = (t("productd"), t("sperrd"), t("vertragd"));
     let _ = (marktd, processd); // no doc states these two as a number
 
-    let (p_edmd, p_einsd, p_invoicd) = (p("edmd"), p("einsd"), p("invoicd"));
-    let (p_makod, p_netzbilanzd, p_obsd) = (p("makod"), p("netzbilanzd"), p("obsd"));
+    let (p_edmd, p_einsd) = (p("edmd"), p("einsd"));
+    let (p_netzbilanzd, p_obsd) = (p("netzbilanzd"), p("obsd"));
     let (p_productd, p_vertragd) = (p("productd"), p("vertragd"));
 
     vec![
@@ -498,54 +498,6 @@ fn per_service_claims(
             format!("| **MCP** | {vertragd} read-only tools + {p_vertragd} prompts at `/mcp` |"),
         ),
         // ── Copilot instructions ──
-        (
-            ".github/copilot-instructions.md",
-            format!("({makod} tools, {p_makod} prompts, malo://"),
-        ),
-        (
-            ".github/copilot-instructions.md",
-            format!("**MCP: {invoicd} tools, {p_invoicd} prompts**"),
-        ),
-        (
-            ".github/copilot-instructions.md",
-            format!("{netzbilanzd}-tool MCP server + {p_netzbilanzd} prompts"),
-        ),
-        (
-            ".github/copilot-instructions.md",
-            format!("{sperrd}-tool **read-on"),
-        ),
-        (
-            ".github/copilot-instructions.md",
-            format!("MCP /mcp ({einsd} tools, {p_einsd} prompts)"),
-        ),
-        (
-            ".github/copilot-instructions.md",
-            format!("**MCP: {productd} tools, {p_productd} prompts**"),
-        ),
-        (
-            ".github/copilot-instructions.md",
-            format!("**{vertragd}-tool MCP server + {p_vertragd} prompts**"),
-        ),
-        (
-            ".github/copilot-instructions.md",
-            format!("({mabis_syncd} tools: `get_submission_st"),
-        ),
-        (
-            ".github/copilot-instructions.md",
-            format!("{portald}-tool MCP serve"),
-        ),
-        (
-            ".github/copilot-instructions.md",
-            format!("{edmd}-tool MCP serve"),
-        ),
-        (
-            ".github/copilot-instructions.md",
-            format!("{obsd}-tool MCP serve"),
-        ),
-        (
-            ".github/copilot-instructions.md",
-            format!("**{billingd} MCP tools** (`validate_tariff"),
-        ),
         // ── Concept docs ──
         ("concepts/EDMD.md", format!("MCP server ({edmd} tools)")),
         (
@@ -699,10 +651,6 @@ fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bo
         (
             "services/agentd/README.md",
             format!("All {agents} specialists declare"),
-        ),
-        (
-            ".github/copilot-instructions.md",
-            format!("**{agents} declarative manifests**"),
         ),
     ];
     claims.extend(per_service_claims(tools, &per_service_prompts));

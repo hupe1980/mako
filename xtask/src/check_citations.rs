@@ -23,6 +23,13 @@
 //! It checks the *form* of a citation, not whether the chapter it names says
 //! what the sentence claims. That needs the document, and the documents are not
 //! in the tree. The form is what can be checked cheaply and is wrong often.
+//!
+//! ## What it scans
+//!
+//! `crates`, `services`, `xtask`, `site/content`, `concepts`, `.github` and the
+//! root `AGENTS.md`. The agent-instruction files are in scope deliberately: a
+//! citation an agent reads before writing code is the one most likely to be
+//! copied into it.
 
 use std::path::{Path, PathBuf};
 
@@ -67,9 +74,24 @@ const RULE_SITES: &[&str] = &[
 /// Returns `true` when every citation uses a form the document publishes.
 pub fn run(workspace_root: &Path) -> bool {
     let mut findings = Vec::new();
-    for dir in ["crates", "services", "xtask", "site/content", "concepts"] {
+    for dir in [
+        "crates",
+        "services",
+        "xtask",
+        "site/content",
+        "concepts",
+        ".github",
+    ] {
         collect(&workspace_root.join(dir), workspace_root, &mut findings);
     }
+    // The root `AGENTS.md` carries the domain rules every agent reads before
+    // touching code, so its citations are the ones most likely to be copied.
+    // It is a file rather than a directory, so the walk above misses it.
+    check_file(
+        &workspace_root.join("AGENTS.md"),
+        workspace_root,
+        &mut findings,
+    );
 
     if findings.is_empty() {
         println!("check-citations: every Festlegung is cited in a form it publishes");
@@ -84,6 +106,20 @@ pub fn run(workspace_root: &Path) -> bool {
         eprintln!("  {}:{line}  {reason}", path.display());
     }
     false
+}
+
+/// One file, when it is not under any scanned directory.
+fn check_file(path: &Path, root: &Path, findings: &mut Vec<Finding>) {
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    if is_rule_site(rel) {
+        return;
+    }
+    let Ok(src) = std::fs::read_to_string(path) else {
+        return;
+    };
+    for (line, i) in offending_lines(&src) {
+        findings.push((path.to_path_buf(), i, line));
+    }
 }
 
 /// Every `.rs`, `.md` and `.sql` file under `dir`.
