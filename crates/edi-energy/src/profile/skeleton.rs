@@ -469,6 +469,96 @@ impl Generator<'_> {
         pins
     }
 
+    /// Whether the segment as generated so far carries `code` at the element
+    /// `de` names, at `occurrence`.
+    fn carries(
+        layout: &SegmentNode,
+        chosen: &[Vec<String>],
+        de: &str,
+        occurrence: u8,
+        code: &str,
+    ) -> bool {
+        for (ei, el) in layout.elements.iter().enumerate() {
+            let comps: Vec<&Element> = if el.components.is_empty() {
+                vec![el]
+            } else {
+                el.components.iter().collect()
+            };
+            for (ci, comp) in comps.iter().enumerate() {
+                if comp.id == de && occurrence_of(layout, comp.id.as_str(), ei, ci) == occurrence {
+                    return chosen
+                        .get(ei)
+                        .and_then(|v| v.get(ci))
+                        .is_some_and(|v| v == code);
+                }
+            }
+        }
+        false
+    }
+
+    /// Values a chosen code's own operand demands of a **sibling element of the
+    /// same segment** — „Wenn in diesem STS DE1131 = `E_0528`".
+    ///
+    /// A code permitted only under such a condition contradicts itself when the
+    /// element it names is absent: the skeleton would state `STS+…+Z43` while
+    /// the AHB admits `Z43` only beside `DE1131 = E_0528`, and validation
+    /// rightly refuses it. The generator omits conditional coded elements by
+    /// design — they are not the receiver-independent part of the column — so
+    /// the demand has to pull the ones a chosen code needs back in.
+    ///
+    /// The first same-segment demand of the operand is taken. The expressions
+    /// are disjunctions over which EBD the Vorgang carries („`[119] ⊻ ([120] ∧
+    /// …)`"), so satisfying one disjunct is enough, and any of them yields a
+    /// message the column admits.
+    fn sibling_demands(
+        &self,
+        layout: &SegmentNode,
+        chosen: &[Vec<String>],
+    ) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = Vec::new();
+        for rule in self.af.element_rules(&layout.nr) {
+            for op in &rule.operands {
+                let (Some(code), Some(status)) = (&op.code, Status::parse(&op.operand)) else {
+                    continue;
+                };
+                // The code has to stand at *its own* element: a three-letter
+                // code is not rare enough for „somewhere in this segment".
+                if !status.kind.is_receiver_checkable()
+                    || !Self::carries(layout, chosen, &rule.de, rule.occurrence, code)
+                {
+                    continue;
+                }
+                let Some(expr) = &status.expr else { continue };
+                for id in expr.cited() {
+                    let Some(text) = self.profile.ahb.conditions.get(id) else {
+                        continue;
+                    };
+                    let Some(super::conditions::Voraussetzung::ElementValue {
+                        tag,
+                        de,
+                        values,
+                        negate: false,
+                        ..
+                    }) = super::conditions::Voraussetzung::parse(text)
+                    else {
+                        continue;
+                    };
+                    if tag != layout.tag || de == rule.de {
+                        continue;
+                    }
+                    let Some(value) = values.first() else {
+                        continue;
+                    };
+                    if !out.iter().any(|(d, _)| *d == de) {
+                        out.push((de, value.clone()));
+                    }
+                    break;
+                }
+            }
+        }
+        out
+    }
+
     fn segment(&self, layout: &SegmentNode, pin: Option<&Pin>) -> OwnedSegment {
         let rules: Vec<&ElementRule> = self.af.element_rules(&layout.nr).collect();
         // The code chosen for each element, needed by dependent elements
@@ -526,6 +616,38 @@ impl Generator<'_> {
                 values.pop();
             }
             chosen.push(values);
+        }
+        // A code the column admits only beside a sibling value („`Z43` needs
+        // `DE1131 = E_0528`") needs that sibling stated, or the segment
+        // contradicts the column it was generated from.
+        for (de, value) in self.sibling_demands(layout, &chosen) {
+            for (ei, el) in layout.elements.iter().enumerate() {
+                let comps: Vec<&Element> = if el.components.is_empty() {
+                    vec![el]
+                } else {
+                    el.components.iter().collect()
+                };
+                let Some(ci) = comps.iter().position(|c| c.id == de) else {
+                    continue;
+                };
+                if self
+                    .fix
+                    .dropped_elements
+                    .contains(&(layout.nr.clone(), de.clone()))
+                {
+                    continue;
+                }
+                let Some(slot) = chosen.get_mut(ei) else {
+                    continue;
+                };
+                while slot.len() <= ci {
+                    slot.push(String::new());
+                }
+                if slot[ci].is_empty() {
+                    slot[ci].clone_from(&value);
+                }
+                break;
+            }
         }
         while chosen.last().is_some_and(Vec::is_empty) {
             chosen.pop();

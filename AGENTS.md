@@ -28,7 +28,7 @@ neither is restated here. This file is what an agent needs before touching code.
 
 ```bash
 just check      # cargo check --all-targets --all-features — the minimum
-just ci         # the gate: test, doctests, clippy, deny, 26 guards, site-free
+just ci         # the gate: test, doctests, clippy, deny, 25 guards, site-free
 just check-site # mermaid + link + zola checks; NOT part of `just ci`
 just test-db    # schema-per-test suites against real PostgreSQL (needs Docker)
 ```
@@ -250,6 +250,11 @@ Every daemon builds on the `mako-service` SDK. Do **not** hand-roll the lifecycl
 - 44555: does not exist in PID 3.3 or PID 4.0; Gas Sperrung process uses ORDERS PIDs 17115–17117
 - 11001–11003: legacy pre-reform PIDs, superseded by 55039/55042/55051/55168
 - 11004–11099: reserved but not in current WiM AHB
+- 56101–56123 and 56201–56202: provisional Energy-Sharing PIDs. No BDEW AHB
+  publishes them; § 42c runs inside the existing Lieferanten-/Bilanzkreis-
+  zuordnung and introduces no new message family (BNetzA Mitteilung Nr. 73)
+- 13024 / 13025: **not** Redispatch PIDs and correctly absent. Write the
+  Redispatch MSCONS range as „13020–13023, 13026", never as a span across them
 
 **PIDs that exist but belong to WiM Gas, NOT GeLi Gas:**
 - 44022–44024: role-conditional routing implemented in `mako-geli-gas`:
@@ -404,6 +409,46 @@ Events and outbox entries must be written in a single `WriteBatch` via
 a crash between the two produces a lost APERAK with no recovery path.
 
 ---
+
+### Known-wrong legal claims — treat any recurrence as High
+
+Every row is a statutory near-miss this codebase actually shipped or nearly
+shipped. They are here rather than in a review checklist because a plausible `§`
+is the most expensive output available in this domain: it is indistinguishable
+from a real one to any reader who does not hold the statute, and in a settlement
+engine it silently becomes money.
+
+| Wrong claim | Verified reality |
+|---|---|
+| "§41 Abs. 3 EnWG = 6-week price-change notice" | §41 Abs. 3 is an advertising-information duty. Six weeks is **§5 Abs. 2 StromGVV/GasGVV** (Grundversorgung); Sonderverträge: **§41 Abs. 5 EnWG** — ≥1 month for Haushaltskunden, ≥2 weeks otherwise, plus Sonderkündigungsrecht |
+| "§38a EEG 2023 = Mieterstromzuschlag" | §38a is Zahlungsberechtigungen for first-segment solar tenders. Mieterstromzuschlag is **§21 Abs. 3 EEG 2023** (rate via §48a) |
+| "MaBiS vorläufig day 3 / endgültig day 8" | BK6-24-174 Anlage 3 §3.10 counts **Werktage**: Erstaufschlag ≤ 10 WT, BKA-Clearing ≤ 30 WT, then KBKA |
+| "§29 MsbG mandatory iMSys 7–100 kW band" | Current §29 Abs. 1 Nr. 2b has only a **> 7 kW** lower bound; no 100 kW cap exists |
+| "§42c Energy Sharing reduces Netzentgelte" | No reduction exists in current law — full Netzentgelte apply (BK6 Mitteilung Nr. 73, BK6-06-009) |
+| "2022 heating-gas Energiesteuer = 0 (Energiesteuersenkungsgesetz)" | The 2022 cut (BGBl. I 2022 S. 810, Jun–Aug) hit **motor fuels** only; §2 Abs. 3 Nr. 4 heating gas stayed 0.55 ct/kWh. The real gas reliefs: EWSG Dezemberhilfe + **7 % USt 01.10.2022–31.03.2024** (§28 Abs. 5/6 UStG) |
+| Any "§… MessZV" citation | The **MessZV was repealed** by Art. 12 G. v. 29.08.2016 (folded into the MsbG). Living anchors: Ersatzwertbildung/Plausibilisierung **§ 60 Abs. 2 MsbG**; Messwert-Audit/Löschfrist **§ 60 Abs. 6 MsbG**; RLM/Spitzenleistung **§ 12 StromNZV**; MMM **§ 13 StromNZV**; business-record retention **§ 147 AO / GoBD**. ~500 dead citations were swept in 07/2026 — treat any reappearance as High |
+| "§40a EnWG = Abschlagszahlungen" | §40a is **Verbrauchsermittlung**. Abschlag rules: §13 StromGVV/GasGVV (via §41 EnWG for Sonderverträge). Deadlines + 2-week due-date rule: **§40c** (3 weeks for monthly billing) |
+| "invoice content (Kilowattstundenpreis, Verbrauchshistorie, Zählerstände) = §40a / §41 EnWG" | Invoice **content** is **§40 EnWG**: all-inclusive kWh-price = §40; Zählerstände = §40 Abs. 2 Nr. 6; Vorjahresvergleich = Nr. 7; Vergleichsgruppe = Nr. 8. §40a = Verbrauchsermittlung (estimation); §41 = supply-**contract** content, not the invoice |
+| "dynamic-tariff iMSys requirement = §41b EnWG" | §41b is Haushaltskunden-Lieferverträge außerhalb der Grundversorgung. The iMSys precondition for §41a dynamic tariffs is **§41a Abs. 1 EnWG** (+ MsbG rollout) |
+| "§53b EEG = regional Grünstromkennzeichnung / a BNetzA-certified grid-area reduction at a configurable rate" | §53b is **Regionalnachweise** (§79a EEG): a fixed **0,1 ct/kWh** cut to the anzulegender Wert, only "bei Anlagen, deren anzulegender Wert **gesetzlich bestimmt** ist" — never a tender-awarded AW, never a grid area, never a caller-supplied rate |
+| "§53c EEG = structural-oversupply reduction, not yet operational" | §53c is **Verringerung des Zahlungsanspruchs bei einer Stromsteuerbefreiung**: the AW drops by the per-kWh exemption granted for grid-transited electricity exempt under the **StromStG** (§3 full rate 20,50 EUR/MWh = 2,05 ct/kWh), *not* the EnergieStG. Operative law; disabling it under-deducts and overpays |
+| "§54 EEG = generic BNetzA Ausschreibungsreduzierung (§36d deadlines, §37a iMSys)" | §54 is **Ausschreibungen für Solaranlagen des ersten Segments** only, with four Absätze: −0,3 ct late Zahlungsberechtigung (>18 Kalendermonate), −0,3 ct Flurstück mismatch, −2,5 ct missing Agri-PV Nutzungsnachweis, AW → 0 for a §37c Abs. 2 Landesverordnung breach |
+| "§24 EEG Anlagenzusammenfassung requires operator identity" | Satz 1 opens "**unabhängig von den Eigentumsverhältnissen**". The four cumulative tests are site, gleichartige Energien, size-dependent claim, and a twelve-calendar-month window; Sätze 2–5 then carve out biogas from one Biogaserzeugungsanlage, Freifläche vs. building solar, differing Netzverknüpfungspunkte, and small Steckersolargeräte. Keying on the operator under-fuses, which overpays |
+| "A §-based reduction can be subtracted from the settled euro amount" | §§53, 53b, 53c and 54 all reduce the **anzulegender Wert**. The gleitende Marktprämie is `max(0, AW + Managementprämie − Marktwert)`, so a deduction taken after the floor drives the settlement negative — charging the operator for feeding in. Only §52 Pflichtzahlungen are a euro-level offset (Abs. 6) |
+| "Zuschlag-Erlöschen = §35a EEG (or §33, or §55 Pönalen)" | Expiry for want of timely commissioning is **technology-specific**: §36e Wind an Land, §37e Solaranlagen des ersten Segments, §39e Biomasseanlagen. §35a is **Entwertung von Zuschlägen** (a BNetzA act); §33 is **Ausschluss von Geboten** (before any award exists); §55 Pönalen are a bidder↔ÜNB obligation outside settlement entirely |
+| "A `None` from a period-rate helper can fall back to a default rate" | Those helpers return `None` to say **no single rate is correct for the period**. Answering it with `.unwrap_or(default)` bills part of the period wrong and reads exactly like a correct invoice downstream — a silent customer overcharge. Refuse the period and name the Stichtage (`steuer_stichtage_im_zeitraum`) |
+| "§40c EnWG's three-week deadline follows from a short billing period" | The three weeks attach to **§40b Abs. 1 monthly billing** — the agreed cadence — not to the period's length. A Schlussrechnung always has six weeks, measured from the end of the **Lieferverhältnis**, however short the final period is |
+| "§14a EnWG Modul 2 = zeitvariable/HT-NT Netzentgelte; Modul 3 = Spotpreis or Steuerungsentschädigung" | BNetzA **BK6-22-300** numbers them: **Modul 1** = pauschale Reduzierung des Netzentgelts (default, no extra metering); **Modul 2** = prozentuale Reduzierung des Arbeitspreises on the device's *separately metered* energy; **Modul 3** = zeitvariable Netzentgelte with **three** Tarifstufen HT/ST/NT, offered from 01.04.2025, requires iMSys. **Modul 2 and Modul 3 are mutually exclusive**; Modul 1 combines with either. A Steuerungsentschädigung is not a module — all three modules are rate reductions, not payments for a dispatch. Both `energy-billing` and `grid-billing` once had this shuffled, differently from each other |
+| "The ESA Werteanfrage shares REQOTE 35002 with the Preisanfrage, because no ESA-specific REQOTE PID exists" | It is **35003**. REQOTE AHB 1.1 §4.3 gives the Kommunikation as *ESA an MSB* and labels `SG1 RFF+Z13` "35003 Anfrage von Werten für ESA"; §4.2 **35002** is "Anfrage zur Rechnungsabwicklung des Messstellenbetriebs über den LF", **LF → MSB**, WiM Teil 1. The wrong PID manufactured a collision that a sender-role classifier then had to resolve. Corroboration: `PIA` is *mandatory* on 35003 — exactly the segment the old heuristic sniffed for. REQOTE↔QUOTES pair 3500n → 1500n |
+| "WiM MSB-Wechsel responses are 5 Werktage" | **Per PID, from four separate Use-Cases**: Kündigung 55039 **3 WT** (WiM Teil 1 Kap. 2.2.2 Nr. 2), Beginn 55042 **5 WT** (2.3.2 Nr. 2), Ende 55051 **7 WT** (2.4.2 Nr. 2), Verpflichtungsanfrage 55168 **1 WT** (Kap. **2.5**.2 Nr. 4 — not 2.4). A flat window escalates the Abmeldung two days early and hides a missed Verpflichtungsanfrage for four. Distinct again from the **APERAK** acknowledgement: 45 minutes for Strom UTILMD (APERAK AHB §2.4.1), never Werktage |
+| "INVOIC 31009 (MSB-Rechnung) is NB → MSB" | It is **MSB → NB / LF / ESA** — the MSB is the invoicer in all **seven** Anwendungsfälle of the PID overview 4.0 (GPKE Teil 3 ×2, WiM Teil 1 ×2, WiM Teil 2 ×1, AWH Änderung Technik ×2), Strom only. Modelling it inverted names the party owed money as the one billing for it. The recipient's role varies, so it cannot be a bare `nb_mp_id` |
+| "A MIG defines where a data element sits in a segment" | A MIG lists which elements a profile **uses**; the **position** is fixed by the UN/EDIFACT directory and is what the counterparty writes. Generating positions from the MIG's list order shifts everything after an omitted element — REQOTE's `FTX.C108` landed at 2 instead of 4 and mako **rejected valid inbound** `FTX+ACB+++text`. A missing element is a different defect: fix the profile against the MIG PDF, never work around it in a builder |
+| "Blindmehrarbeit rests on StromNEV §18" | §18 StromNEV is the **Entgelt für dezentrale Erzeugung** (the crate's own `sect18.rs` says so). Reactive-energy excess is charged from the Netzbetreiber's **Preisblatt**, formed under StromNEV §17. §19 is Sonderformen der Netznutzung. The free share (cos φ 0,9 → tan φ ≈ 0,4843, often rounded to 50 %) is a price-sheet term and must be an input, not a constant |
+| "Parse-don't-validate applies uniformly to inbound and outbound" | It does not. A value the system **produces** should be a validating newtype (`MabisZaehlpunktId`) so a malformed one is unconstructible. A value it **receives** must stay representable — requiring the type on an inbound command leaves the workflow unable to record what arrived and therefore unable to reject it properly. Type the outbound side; keep the inbound side raw and refuse explicitly |
+| "A DB `CHECK` is enough to protect an identifier that reaches the wire" | A `CHECK` only guards rows written to *that* table. A payload assembled from a fixture, a replay, or a caller passing a value straight through never meets it. MSCONS SG6's `LOC+172`/`107`/`237` are free text at the MIG level, so a swapped pair parses, validates and is **accepted by the BIKO** — the guard has to live in the pure crate as well (`Summenzeitreihe::validate_identifiers`) |
+| "A dependency's `validate()` enforces our profile's security mandate" | Library validation encodes the *generic* floor, not your profile's mandate. `asx-rs` rejects an AS4 policy layer only when it disables signing **and** encryption; BDEW AS4-Profil v1.2 §2.2.6.2.2 requires **both**, so a sign-only override validated cleanly and would have sent messages in the clear. Assert the domain mandate yourself over base *and* every override layer (`BdewAs4Profile::ensure_bdew_security`), and pin the gap with a test that asserts the upstream check still accepts what you reject |
+| "§13a Abs. 2 EnWG compensation uses one Ausfallarbeit basis" | The counterfactual differs by redispatch case: **Duldungsfall** derives it from the measured Lastgang (the NB steered, so nothing was transmitted), **Aufforderungsfall** from the schedule transmitted to the EIV (that schedule *is* the counterfactual). Resolving both from the Lastgang settles an Aufforderungsfall against what happened rather than what was instructed — a money error nothing downstream detects. `AusfallarbeitBasis` is a required input, carried into the result and trace |
+| "§12 Abs. 3 UStG 0 % applies to PV electricity / feed-in ≤ 30 kWp" | §12 Abs. 3 zero-rates the **supply of the PV system** (modules/storage/installation), NOT electricity or feed-in remuneration. A retail **consumption** supply is always standard-rated even for a prosumer. A small operator's **feed-in Gutschrift** is 0 % only via the **Kleinunternehmerregelung §19 UStG** — an election (`kleinunternehmer_19_ustg`), not a function of plant size |
 
 ## Licenses
 

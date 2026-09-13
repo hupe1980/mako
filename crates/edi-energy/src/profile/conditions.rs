@@ -953,6 +953,58 @@ fn names_qualified_segment(word: &str) -> bool {
     !rest.is_empty() && tag.len() == 3 && tag.chars().all(|c| c.is_ascii_uppercase())
 }
 
+/// Whether the word is a data-element reference (`DE1131`).
+fn is_de_token(w: &str) -> bool {
+    w.len() == 6 && w.starts_with("DE") && w[2..].chars().all(|c| c.is_ascii_digit())
+}
+
+/// „Wenn in diesem STS DE1131 = `E_0526`" / „… DE9013 <> `A01`".
+///
+/// The AHBs state an EBD-keyed rule as a **comparison**, not as a presence
+/// test, and the whole IFTSTA Antwortcode family is written this way. Such a
+/// clause carries no „vorhanden" at all, so it never reaches the element
+/// readings in [`Voraussetzung::parse`] — it would fall out as `None` and the
+/// rule would simply not be evaluated.
+///
+/// Anything after the value is ignored: the AHBs append the consequence
+/// („…, dann ist nur der Code A01 möglich"), which says what the rule does
+/// rather than when it applies.
+fn parse_comparison(words: &[&str]) -> Option<Voraussetzung> {
+    let di = words.iter().position(|w| is_de_token(w))?;
+    let negate = match *words.get(di + 1)? {
+        "=" => false,
+        "<>" | "\u{2260}" | "!=" => true,
+        _ => return None,
+    };
+    let value = words
+        .get(di + 2)?
+        .trim_end_matches([',', '.', ';', ')'])
+        .trim_matches(['"', '\u{201e}', '\u{201c}', '\u{201d}']);
+    // „DE6411 = MON/ANN" lists alternatives the element may carry, the same
+    // way „der Code TE / FX / AJ / AL" does; any one of them satisfies it.
+    let values: Vec<String> = value.split('/').map(str::to_owned).collect();
+    if values
+        .iter()
+        .any(|v| v.is_empty() || !v.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    {
+        return None;
+    }
+    let (scope, tag_idx) = locate_pattern(words);
+    let seg = words[tag_idx?].trim_end_matches([',', '.', ';', ')']);
+    let tag = seg.split('+').next().unwrap_or("");
+    if tag.len() != 3 {
+        return None;
+    }
+    Some(Voraussetzung::ElementValue {
+        suffix: false,
+        scope,
+        tag: tag.to_owned(),
+        de: words[di][2..].to_owned(),
+        values,
+        negate,
+    })
+}
+
 /// The group a Voraussetzung names as its scope and the index of the word that
 /// carries the segment pattern (`PIA+Z02`, `QTY`).
 ///
@@ -1019,10 +1071,15 @@ impl Voraussetzung {
         if !lower.starts_with("wenn ") {
             return None;
         }
+        let words: Vec<&str> = t.split_whitespace().collect();
+        // A comparison states its Voraussetzung without the word „vorhanden",
+        // so it has to be read before the gate below refuses it.
+        if let Some(v) = parse_comparison(&words) {
+            return Some(v);
+        }
         if !lower.contains("vorhanden") {
             return None;
         }
-        let words: Vec<&str> = t.split_whitespace().collect();
         let negate = lower.contains(" nicht vorhanden")
             || words
                 .get(1)
@@ -1049,9 +1106,7 @@ impl Voraussetzung {
         let de_idx = words
             .iter()
             .enumerate()
-            .find(|(_, w)| {
-                w.len() == 6 && w.starts_with("DE") && w[2..].chars().all(|c| c.is_ascii_digit())
-            })
+            .find(|(_, w)| is_de_token(w))
             .map(|(i, _)| i);
         if let Some(de_word) = de_idx.and_then(|i| words.get(i))
             && (lower.contains(" mit wert ") || lower.contains(" mit dem wert "))

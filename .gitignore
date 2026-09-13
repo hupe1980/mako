@@ -49,7 +49,6 @@ regulatories/bdew-mako/*
 !regulatories/bdew-mako/manifest.json
 concepts/
 .DS_Store
-.github/skills
 .claude
 
 # Zola build output

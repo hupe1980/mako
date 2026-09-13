@@ -1704,10 +1704,77 @@ fn append_condition(text: &str, cur: &mut Option<(String, String)>) {
     acc.push_str(text);
 }
 
+/// An adjacent repeat of a 3-to-7 word phrase — „in der Rolle LF in der Rolle
+/// LF". The wrap repair fired twice, or two readings of the same sentence were
+/// accumulated without a commit between them.
+fn stutters(text: &str) -> bool {
+    let w: Vec<&str> = text.split_whitespace().collect();
+    (3..=7).any(|n| {
+        w.len() >= 2 * n && (0..=w.len() - 2 * n).any(|i| w[i..i + n] == w[i + n..i + 2 * n])
+    })
+}
+
+/// How much of the sentence a reading actually carries: its word count with
+/// adjacent duplicated phrases discounted.
+///
+/// Raw length cannot decide between readings, because a stutter *adds* length —
+/// the duplicated rendering is always the longer one. Neither can „prefer the
+/// one that does not stutter": the detector fires on grammatical German too
+/// („sich der Inhalt **von** LIN DE7140 **von** LIN DE7140 … unterscheidet"),
+/// and preferring the clean candidate there picks a truncated fragment over the
+/// whole sentence. A fragment is worse than a stutter — it loses the clause.
+///
+/// Discounting the repeat measures what was read either way, so a stutter wins
+/// against a fragment and loses against the same sentence read cleanly.
+fn content_words(text: &str) -> usize {
+    let w: Vec<&str> = text.split_whitespace().collect();
+    let mut discounted = 0;
+    let mut i = 0;
+    while i < w.len() {
+        let repeat = (3..=7).find(|&n| i + 2 * n <= w.len() && w[i..i + n] == w[i + n..i + 2 * n]);
+        if let Some(n) = repeat {
+            discounted += n;
+            i += n;
+        } else {
+            i += 1;
+        }
+    }
+    w.len() - discounted
+}
+
+/// Whether `new` is a better reading of the same Bedingung than `old`.
+///
+/// An AHB repeats each Bedingung's legend on every page that cites it, and the
+/// column wraps it differently each time, so the same sentence is read several
+/// times. That redundancy is what decides: the reading that carries the most of
+/// the sentence wins, and between two that carry the same, the undamaged
+/// rendering wins.
+fn better_reading(new: &str, old: &str) -> bool {
+    if old.is_empty() {
+        return true;
+    }
+    let (new_words, old_words) = (content_words(new), content_words(old));
+    if new_words != old_words {
+        return new_words > old_words;
+    }
+    // The same sentence, read twice. Prefer the rendering that does not stutter,
+    // then the one that closes its brackets.
+    let (new_stutter, old_stutter) = (stutters(new), stutters(old));
+    if new_stutter != old_stutter {
+        return old_stutter;
+    }
+    let balanced = |t: &str| t.matches('(').count() == t.matches(')').count();
+    let (new_balanced, old_balanced) = (balanced(new), balanced(old));
+    if new_balanced != old_balanced {
+        return new_balanced;
+    }
+    new.chars().count() > old.chars().count()
+}
+
 fn commit_condition(cur: &mut Option<(String, String)>, conditions: &mut BTreeMap<String, String>) {
     let Some((id, text)) = cur.take() else { return };
     let entry = conditions.entry(id).or_default();
-    if text.chars().count() > entry.chars().count() {
+    if better_reading(&text, entry) {
         *entry = text;
     }
 }
@@ -2170,5 +2237,50 @@ mod tests {
         assert_eq!(codes, ["Z01", "Z02"]);
         assert_eq!(doc.conditions["10"], "Wenn SG4 STS+7++xxx+xxx+E01/E03");
         assert_eq!(doc.conditions["521"], "Hinweis: Wenn im zweiten DE 9013");
+    }
+
+    /// The AHB reprints a Bedingung on every page that cites it, so the reader
+    /// chooses between several readings of one sentence. These are the two ways
+    /// that choice goes wrong.
+    #[test]
+    fn a_stutter_loses_to_the_same_sentence_read_cleanly() {
+        let clean = "Wenn MP-ID in SG1 NAD+MR in der Rolle LF";
+        let stuttered = "Wenn MP-ID in SG1 NAD+MR in der Rolle LF in der Rolle LF";
+        assert!(
+            super::better_reading(clean, stuttered),
+            "the clean reading carries the whole sentence; the stutter only \
+             repeats part of it, and raw length would wrongly prefer the stutter"
+        );
+        assert!(!super::better_reading(stuttered, clean));
+    }
+
+    #[test]
+    fn a_fragment_loses_to_a_stutter() {
+        // „sich der Inhalt von A von B unterscheidet" is grammatical German, so
+        // the stutter test fires on an undamaged sentence. Rejecting it here
+        // would take the fragment and lose the clause.
+        let whole = "Wenn eine weitere SG36 vorhanden ist, bei der sich der Inhalt \
+                     von LIN DE7140 von LIN DE7140 dieser SG36 nur in der Ziffer \
+                     nach dem letzten \"-\" unterscheidet";
+        let fragment = "Wenn eine weitere SG36";
+        assert!(
+            super::better_reading(whole, fragment),
+            "a truncated fragment must never beat the whole clause, however \
+             clean the fragment looks"
+        );
+        assert!(!super::better_reading(fragment, whole));
+    }
+
+    #[test]
+    fn an_open_bracket_loses_to_a_closed_one() {
+        let closed = "Wenn DTM+137 (Nachrichtendatum) vorhanden";
+        let open = "Wenn DTM+137 (Nachrichtendatum vorhanden";
+        assert!(super::better_reading(closed, open));
+        assert!(!super::better_reading(open, closed));
+    }
+
+    #[test]
+    fn the_first_reading_is_always_taken() {
+        assert!(super::better_reading("anything", ""));
     }
 }
