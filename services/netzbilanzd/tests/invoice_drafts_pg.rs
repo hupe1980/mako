@@ -226,6 +226,7 @@ impl Draft {
 /// Anwendungsfälle for 31009 and the sender is the MSB in every one. Storing it
 /// the other way round named the party owed money as the one billing for it.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_msb_rechnung_stores_the_msb_as_sender() {
     with_pg!(|pool| {
         for (idx, (recipient, malo)) in [(NB, MALO), (LF, MALO_2), (ESA, MALO_3)]
@@ -271,6 +272,7 @@ async fn a_msb_rechnung_stores_the_msb_as_sender() {
 
 /// Numbers run consecutively per tenant, series and year, and restart per year.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn invoice_numbers_are_consecutive_per_series_and_year() {
     with_pg!(|pool| {
         let mut conn = pool.acquire().await.expect("acquire");
@@ -324,6 +326,7 @@ async fn invoice_numbers_are_consecutive_per_series_and_year() {
 /// The counter is bumped inside the drafting transaction, so an abandoned run
 /// leaves no gap in the sequence — which is what "fortlaufend" requires.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_rolled_back_run_consumes_no_invoice_number() {
     with_pg!(|pool| {
         let mut tx = pool.begin().await.expect("begin");
@@ -346,6 +349,7 @@ async fn a_rolled_back_run_consumes_no_invoice_number() {
 
 /// One invoice number identifies exactly one invoice, per tenant.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_invoice_number_is_unique_per_tenant() {
     with_pg!(|pool| {
         Draft::nne("t1", MALO, "NNE-2026-000001")
@@ -377,6 +381,7 @@ async fn an_invoice_number_is_unique_per_tenant() {
 /// computed one, so an operator who fixed an input and re-ran the job would get
 /// the old figures back with a 201.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_period_is_billed_once_and_re_billing_is_refused() {
     with_pg!(|pool| {
         Draft::nne("t1", MALO, "NNE-2026-000001")
@@ -408,6 +413,7 @@ async fn a_period_is_billed_once_and_re_billing_is_refused() {
 /// instalments are separated by their Rechnungsdatum; the invoice number keeps
 /// them distinct and the Abschlussrechnung reconciles them by it.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_period_carries_many_abschlaege_but_one_final_invoice() {
     with_pg!(|pool| {
         for (i, (nummer, on)) in [
@@ -453,6 +459,7 @@ async fn a_period_carries_many_abschlaege_but_one_final_invoice() {
 /// The Rechnungsdatum separates the cadence from the retry: instalments differ
 /// by it, a replay does not.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_replayed_run_cannot_produce_a_second_abschlag_for_the_same_day() {
     with_pg!(|pool| {
         let on = date!(2026 - 02 - 01);
@@ -494,6 +501,7 @@ async fn a_replayed_run_cannot_produce_a_second_abschlag_for_the_same_day() {
 /// Abschlagsrechnung's own Rechnungsbetrag; **[519]** — a stornierte
 /// Abschlagsrechnung is not listed, because nothing was paid on it.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_deduction_matches_the_stored_abschlag_and_refuses_a_reversed_one() {
     with_pg!(|pool| {
         let mut abschlag = Draft::nne("t1", MALO, "ABS-2026-000001");
@@ -613,6 +621,7 @@ async fn a_deduction_matches_the_stored_abschlag_and_refuses_a_reversed_one() {
 /// primary key refuses it on the write, which is what two concurrent billing
 /// runs need.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_abschlag_is_deducted_from_one_invoice_only() {
     with_pg!(|pool| {
         let mut abschlag = Draft::nne("t1", MALO, "ABS-2026-000001");
@@ -687,6 +696,7 @@ async fn an_abschlag_is_deducted_from_one_invoice_only() {
 /// Reopening the period without reopening its Anzahlungen strands them: the
 /// re-billed invoice cannot deduct money the customer has already paid.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn rejecting_a_draft_releases_its_abschlaege() {
     with_pg!(|pool| {
         let mut abschlag = Draft::nne("t1", MALO, "ABS-2026-000001");
@@ -733,6 +743,7 @@ async fn rejecting_a_draft_releases_its_abschlaege() {
 
 /// Rejecting a draft reopens the period.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn rejecting_a_draft_reopens_the_period() {
     with_pg!(|pool| {
         let first = Draft::nne("t1", MALO, "NNE-2026-000001")
@@ -760,6 +771,7 @@ async fn rejecting_a_draft_reopens_the_period() {
 /// A query that ignores the column lets a draft UUID from one deployment fetch,
 /// reject or dispatch another's invoice.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn every_read_and_transition_is_tenant_scoped() {
     with_pg!(|pool| {
         let id = Draft::nne("tenant-a", MALO, "NNE-2026-000001")
@@ -820,6 +832,7 @@ async fn every_read_and_transition_is_tenant_scoped() {
 /// that says whether the invoice left the house defensible — and leave `status`
 /// reading `'dispatched'`.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_dispute_is_its_own_status_and_preserves_the_check_verdict() {
     with_pg!(|pool| {
         let mut draft = Draft::nne("t1", MALO, "NNE-2026-000001");
@@ -878,6 +891,7 @@ async fn a_dispute_is_its_own_status_and_preserves_the_check_verdict() {
 
 /// A draft cannot be paid before it is dispatched.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_undispatched_draft_cannot_be_paid() {
     with_pg!(|pool| {
         let id = Draft::nne("t1", MALO, "NNE-2026-000001")
@@ -902,6 +916,7 @@ async fn an_undispatched_draft_cannot_be_paid() {
 /// an `i64` fails at runtime rather than at compile time. The query casts; this
 /// is what proves it.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_monthly_summary_decodes_and_totals() {
     with_pg!(|pool| {
         Draft::nne("t1", MALO, "NNE-2026-000001")
@@ -951,6 +966,7 @@ async fn the_monthly_summary_decodes_and_totals() {
 
 /// A disputed draft is not reported as overdue for dispatch.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_disputed_draft_is_not_reported_as_dispatch_overdue() {
     with_pg!(|pool| {
         let mut blocked = Draft::nne("t1", MALO, "NNE-2026-000001");
@@ -981,6 +997,7 @@ async fn a_disputed_draft_is_not_reported_as_dispatch_overdue() {
 /// meaningless, and a 7-day one makes it far too slow. An invoice cannot be paid
 /// on time if it has not been sent.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_draft_running_out_of_time_is_reported_however_young() {
     with_pg!(|pool| {
         let today = mako_fristen::heute();
@@ -1026,6 +1043,7 @@ async fn a_draft_running_out_of_time_is_reported_however_young() {
 
 /// A correction is linked and reasoned, and the original is never mutated.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_correction_is_linked_and_reasoned() {
     with_pg!(|pool| {
         let original = Draft::nne("tenant-b", MALO, "NNE-2026-000001")
@@ -1103,6 +1121,7 @@ async fn a_correction_is_linked_and_reasoned() {
 /// downstream notices — both are well-formed documents referencing the same
 /// original.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_invoice_is_reversed_only_once() {
     with_pg!(|pool| {
         let original = Draft::nne("t1", MALO, "NNE-2026-000001")
@@ -1197,6 +1216,7 @@ async fn an_invoice_is_reversed_only_once() {
 
 /// A correction must name what it corrects, and an original must not.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_correction_link_is_enforced_by_the_schema() {
     with_pg!(|pool| {
         let mut conn = pool.acquire().await.expect("acquire");
@@ -1246,6 +1266,7 @@ async fn the_correction_link_is_enforced_by_the_schema() {
 /// documents are well-formed, so nothing downstream notices. `has_storno` is
 /// what the handler consults before allowing it.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_correction_is_gated_on_the_reversal_that_precedes_it() {
     with_pg!(|pool| {
         let original = Draft::nne("t1", MALO, "NNE-2026-000001")
@@ -1309,6 +1330,7 @@ async fn a_correction_is_gated_on_the_reversal_that_precedes_it() {
 /// An invoice whose parts do not sum to its whole is the one error nobody
 /// catches by reading it.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_schema_refuses_a_tax_block_that_does_not_add_up() {
     with_pg!(|pool| {
         let mut conn = pool.acquire().await.expect("acquire");
@@ -1388,6 +1410,7 @@ async fn the_schema_refuses_a_tax_block_that_does_not_add_up() {
 /// own invoices was to fetch everything and filter client-side — and a filter
 /// nobody can express is one nobody applies.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn drafts_can_be_filtered_by_sparte() {
     with_pg!(|pool| {
         Draft::nne("t1", MALO, "NNE-2026-000001")
@@ -1434,6 +1457,7 @@ async fn drafts_can_be_filtered_by_sparte() {
 /// between two page requests — which `OFFSET` is not: an insert shifts the
 /// window and the caller silently skips a row it never saw.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_cursor_walks_every_draft_exactly_once() {
     with_pg!(|pool| {
         for i in 1..=5 {
@@ -1487,6 +1511,7 @@ async fn the_cursor_walks_every_draft_exactly_once() {
 /// the Abschläge the invoice settles. Without it the summary, the overdue alert
 /// and the audit export can only state what was invoiced.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_collectible_amount_is_stored_and_summed() {
     with_pg!(|pool| {
         let mut settled = Draft::nne("t1", MALO, "NNE-2026-000001");
@@ -1523,6 +1548,7 @@ async fn the_collectible_amount_is_stored_and_summed() {
 /// clamped at zero — clamping it would make the commonest year-end correction
 /// a 500. What is refused is a deduction that makes the invoice *larger*.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_deduction_may_leave_a_guthaben_but_never_increases_the_invoice() {
     with_pg!(|pool| {
         let mut guthaben = Draft::nne("t1", MALO, "NNE-2026-000001");
@@ -1554,6 +1580,7 @@ async fn a_deduction_may_leave_a_guthaben_but_never_increases_the_invoice() {
 
 /// The correction chain comes back as one window, not two concatenated ones.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_correction_chain_is_one_limited_window() {
     with_pg!(|pool| {
         let original = Draft::nne("t1", MALO, "NNE-2026-000001")
@@ -1642,6 +1669,7 @@ async fn insert_correction(
 
 /// The stored settlement input parses back, which is what a Storno recomputes.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_stored_settlement_input_round_trips() {
     with_pg!(|pool| {
         let mut draft = Draft::nne("t1", MALO, "NNE-2026-000001");
@@ -1729,6 +1757,7 @@ async fn insert_storno(
 /// stands, whole**. It is dispatched, it still holds its deductions, and a
 /// fresh Storno is the way forward.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_rejected_storno_leaves_the_original_standing_and_its_abschlaege_held() {
     with_pg!(|pool| {
         let mut conn = pool.acquire().await.expect("acquire");
@@ -1835,6 +1864,7 @@ async fn a_rejected_storno_leaves_the_original_standing_and_its_abschlaege_held(
 /// reversed invoice must be able to deduct money the customer has already paid.
 /// Dispatch is that point — it is where the original stops standing.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_dispatched_storno_releases_the_originals_abschlaege() {
     with_pg!(|pool| {
         let mut conn = pool.acquire().await.expect("acquire");
@@ -1906,6 +1936,7 @@ async fn a_dispatched_storno_releases_the_originals_abschlaege() {
 /// rejected Storno left them collectible twice. The release belongs at the
 /// point the original stops standing: the Storno's dispatch.
 #[test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 fn the_abschlag_release_happens_on_storno_dispatch_not_on_drafting() {
     let handlers = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/handlers.rs"),

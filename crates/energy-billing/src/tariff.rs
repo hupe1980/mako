@@ -310,7 +310,7 @@ pub struct ControllableLoadProduct {
     #[serde(default)]
     pub sect14a_modul2_nne_reduktion_ct_per_kwh: Option<Decimal>,
 
-    /// §14a **Modul 3** — zeitvariables Netzentgelt (BK6-22-300), from 01.04.2025.
+    /// §14a **Modul 3** — zeitvariables Netzentgelt (BK8-22/010-A), from 01.04.2025.
     ///
     /// Three Tarifstufen, not two: Hochtarif, Standardtarif and Niedertarif,
     /// each a NNE rate in ct/kWh published by the Netzbetreiber. All three must
@@ -329,14 +329,14 @@ pub struct ControllableLoadProduct {
     /// §14a Steuerungsentschädigung per kWh of dimmed energy (ct/kWh).
     ///
     /// Compensation for an actual Steuerungseingriff — **not** one of the three
-    /// BK6-22-300 modules, which are all rate reductions rather than payments
+    /// BK8-22/010-A modules, which are all rate reductions rather than payments
     /// for a dispatch that happened.
     #[serde(default)]
     pub sect14a_steuerungsentschaedigung_ct_per_kwh: Option<Decimal>,
     /// §14a **Modul 1** — pauschale Reduzierung des Netzentgelts, published by
     /// the Netzbetreiber as a flat annual amount (EUR/year).
     ///
-    /// BK6-22-300 fixes it nationwide as `80 EUR + 3 750 kWh × Arbeitspreis im
+    /// BK8-22/010-A fixes it nationwide as `80 EUR + 3 750 kWh × Arbeitspreis im
     /// Standardtarif × 0,2`, which lands between 110 and 190 EUR/year depending
     /// on the Netzbetreiber. There is no per-kW component: the reduction is the
     /// same whatever the steuerbare Leistung, which is precisely why it needs
@@ -345,7 +345,7 @@ pub struct ControllableLoadProduct {
     #[serde(default)]
     pub sect14a_modul1_pauschale_eur_per_year: Option<Decimal>,
     /// §14a Steuerungsentschädigung as an annual capacity rate (EUR/kW/year),
-    /// pro-rated by the hours actually dimmed. Not a BK6-22-300 module.
+    /// pro-rated by the hours actually dimmed. Not a BK8-22/010-A module.
     #[serde(default)]
     pub sect14a_steuerungsentschaedigung_eur_per_kw_year: Option<Decimal>,
 }

@@ -312,9 +312,66 @@ pub struct AccountingdConfig {
     #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
 
-    /// OIDC configuration for authenticating financial write endpoints.
-    /// When absent: dev mode (all requests accepted, WARN emitted at startup).
+    /// OIDC token verification for the financial REST API. Without it every
+    /// request is admitted with synthetic dev-admin claims, which is a posture
+    /// [`Self::check_auth_posture`] refuses to start in.
     pub oidc: Option<mako_service::oidc::OidcConfig>,
+
+    /// Start without HTTP token verification and without inbound webhook
+    /// signing (dev/test only).
+    ///
+    /// Both doors into this daemon lead to the ledger and to personal data, so
+    /// the posture has to be asked for by name.
+    #[serde(default)]
+    pub allow_insecure_no_auth: bool,
+}
+
+impl AccountingdConfig {
+    /// Refuse to start in a posture that leaves the book and its personal data
+    /// open.
+    ///
+    /// The two mechanisms are checked together because each guards a different
+    /// door into the same daemon: OIDC guards the REST API, and the inbound
+    /// HMAC guards `POST /webhook`, the one route no bearer token ever reaches.
+    ///
+    /// # Errors
+    ///
+    /// When either is unconfigured and `allow_insecure_no_auth` is not set.
+    pub fn check_auth_posture(&self) -> anyhow::Result<()> {
+        if self.allow_insecure_no_auth {
+            tracing::warn!(
+                "accountingd: allow_insecure_no_auth is set — SEPA mandates with their IBANs, \
+                 customer balances, the Kontokorrent history, pain.001 payout XML and the \
+                 GDPR erasure route are served to any caller, and POST /webhook books \
+                 ledger entries from unsigned bodies"
+            );
+            return Ok(());
+        }
+        let mut fehlt = Vec::new();
+        if self.oidc.is_none() {
+            fehlt.push(
+                "[oidc] — without it every REST route is admitted with dev claims: the SEPA \
+                 mandate register and its IBANs, customer balances and the full Kontokorrent \
+                 history, the aging list for the whole book, generated pain.001 payout XML, \
+                 and the § 17 DSGVO erasure route"
+                    .to_owned(),
+            );
+        }
+        if self.erp_hmac_secret.is_none() {
+            fehlt.push(
+                "erp_hmac_secret — without it POST /webhook accepts any unsigned body, and a \
+                 forged CloudEvent books a ledger entry against a customer's account"
+                    .to_owned(),
+            );
+        }
+        anyhow::ensure!(
+            fehlt.is_empty(),
+            "accountingd refuses to start: {}. Configure them, or set \
+             allow_insecure_no_auth = true to accept an unauthenticated deployment.",
+            fehlt.join("; ")
+        );
+        Ok(())
+    }
 }
 
 impl mako_service::ServiceConfig for AccountingdConfig {

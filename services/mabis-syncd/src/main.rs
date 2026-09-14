@@ -199,12 +199,23 @@ impl Daemon for MabisSyncd {
         let mcp_state = Arc::new(mcp_server::MabisMcpState {
             pool: ctx.pool().clone(),
             tenant: cfg.identity.tenant.clone(),
-            auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.identity.tenant),
+            // The same verifier and the same policy as the REST surface.
+            // Built with `from_auth_config` instead, `/mcp` runs in dev mode
+            // whenever `[mcp]` carries no key.
+            auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
+                &cfg.mcp,
+                oidc.clone(),
+                Some(Arc::clone(&cedar)),
+                &cfg.identity.tenant,
+            ),
         });
 
         Ok(server::router(state)
             .merge(mcp_server::router(mcp_state, ctx.shutdown.clone()))
             .layer(axum::Extension(cedar))
+            .layer(axum::Extension(mako_service::oidc::ExpectedTenant(
+                cfg.identity.tenant.clone(),
+            )))
             .layer(axum::Extension(oidc)))
     }
 }

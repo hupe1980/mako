@@ -51,7 +51,7 @@
 //!
 //! # Sources
 //!
-//! - BK6-22-024 Anlage 2a, WiM Strom Teil 1 Kap. 3.3
+//! - BK6-24-174 Anlage 2a, WiM Strom Teil 1 Kap. 3.3
 //! - BDEW *AWH Prozesse zur Änderung der Technik an Lokationen* V1.1 (31.03.2025)
 //! - *Entscheidungsbaum-Diagramme und Codelisten* 4.3 Kap. 8.6, 8.7 und 9.1, 9.2
 //! - Anwendungsübersicht der Prüfidentifikatoren 4.0, lfd. Nr. 30660–30740, 36000–36160
@@ -71,6 +71,9 @@ use super::types::MsbEntscheidung;
 
 pub use crate::codes::{TechnikBeauftragung as Beauftragungsart, TechnikBesteller as Besteller};
 
+/// The catalogued row this module's Vorlauf check reads.
+const AENDERUNG_KEY: &str = "wim.beauftragung-aenderung-technik";
+
 /// Mindestvorlauffrist of a Beauftragung zur Änderung der Technik, in Werktagen.
 ///
 /// WiM Teil 1 Kap. 3.3.1.2 Nr. 1 and the `E_0249`/`E_0250` Prüfschritt that
@@ -80,7 +83,28 @@ pub use crate::codes::{TechnikBeauftragung as Beauftragungsart, TechnikBesteller
 /// It is a rejection here and **not** a date the MSB may move — unlike the
 /// Abmeldung of Kap. 2.4.2 Nr. 2, where the NB sets the nächstmögliches
 /// Zuordnungsende and confirms with `Z01`. `E_0249` publishes no such code.
-pub const AENDERUNG_VORLAUF_WT: u32 = 20;
+///
+/// Read from [`mako_fristen::vorlauf::WIM`] rather than restated here: a second
+/// copy of a published window drifts from the Fundstelle the refusal below
+/// cites, and nothing at runtime would notice.
+///
+/// # Panics
+///
+/// Panics if the catalogued row is gone, which means the key was renamed
+/// without this call site. `the_vorlauf_comes_from_the_catalogue` pins it.
+#[must_use]
+pub fn aenderung_vorlauf_wt() -> u32 {
+    match aenderung_vorlauf().shape {
+        VorlaufShape::LatestWerktageBefore(n) => n,
+        other => unreachable!("{AENDERUNG_KEY} is a LatestWerktageBefore window, not {other:?}"),
+    }
+}
+
+/// The catalogued obligation for the Beauftragung zur Änderung der Technik.
+fn aenderung_vorlauf() -> &'static mako_fristen::vorlauf::VorlaufObligation {
+    mako_fristen::vorlauf::vorlauf(AENDERUNG_KEY)
+        .unwrap_or_else(|| panic!("{AENDERUNG_KEY} is catalogued in mako_fristen::vorlauf::WIM"))
+}
 
 /// The Messlokationsänderung a request refers to — the facts every tree in this
 /// family asks about.
@@ -429,7 +453,7 @@ pub fn pruefe_technik_bestellung(
                     Some(true) => {}
                 }
             }
-            match VorlaufShape::LatestWerktageBefore(AENDERUNG_VORLAUF_WT).check(
+            match aenderung_vorlauf().shape.check(
                 eingangsdatum,
                 bestellung.gewuenschter_termin,
                 cal,
@@ -442,12 +466,15 @@ pub fn pruefe_technik_bestellung(
                     } else {
                         1
                     },
-                    format!(
-                        "Frist nicht eingehalten — das gewünschte Änderungsdatum {} liegt \
-                         weniger als {AENDERUNG_VORLAUF_WT} Werktage nach dem \
-                         Nachrichteneingang {eingangsdatum}",
-                        bestellung.gewuenschter_termin
-                    ),
+                    {
+                        let wt = aenderung_vorlauf_wt();
+                        let termin = bestellung.gewuenschter_termin;
+                        format!(
+                            "Frist nicht eingehalten — das gewünschte Änderungsdatum {termin} \
+                             liegt weniger als {wt} Werktage nach dem \
+                             Nachrichteneingang {eingangsdatum}"
+                        )
+                    },
                 )),
                 VorlaufVerdict::Ok | VorlaufVerdict::TooEarly { .. } => {
                     MsbEntscheidung::accept(tree, code("A02"))
@@ -653,6 +680,22 @@ mod tests {
         Date::from_calendar_date(y, m, day).expect("valid date")
     }
 
+    /// The window comes from the catalogue, not from a copy in this module.
+    ///
+    /// Named in `aenderung_vorlauf_wt`'s doc as what keeps its panic out of
+    /// production: a renamed key fails here rather than at a customer.
+    #[test]
+    fn the_vorlauf_comes_from_the_catalogue() {
+        let row = aenderung_vorlauf();
+        assert_eq!(row.key, AENDERUNG_KEY);
+        assert_eq!(
+            row.shape,
+            mako_fristen::vorlauf::VorlaufShape::LatestWerktageBefore(20),
+            "WiM Teil 1 Kap. 3.3.1.2 Nr. 1 states 20 Werktage"
+        );
+        assert_eq!(aenderung_vorlauf_wt(), 20);
+    }
+
     fn aenderung(besteller: Besteller) -> MesslokationsAenderung {
         MesslokationsAenderung {
             melo_id: "DE0000000001234567890000000000001".to_owned(),
@@ -711,7 +754,7 @@ mod tests {
             Besteller::Netzbetreiber,
             Beauftragungsart::DirekteBeauftragung,
         );
-        let uet = mako_fristen::sub_werktage(b.gewuenschter_termin, AENDERUNG_VORLAUF_WT, CAL);
+        let uet = mako_fristen::sub_werktage(b.gewuenschter_termin, aenderung_vorlauf_wt(), CAL);
         let e = pruefe_technik_bestellung(&b, uet, CAL);
         assert_eq!(e.antwortcode(), Some("A02"));
         assert_eq!(e.ebd(), Some("E_0249"));

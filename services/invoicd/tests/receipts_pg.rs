@@ -91,6 +91,7 @@ macro_rules! pool_or_skip {
 /// Both direction constants satisfy the `direction` CHECK — the writers and the
 /// schema agree. A capitalised literal rejects every INSERT.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn both_direction_constants_pass_the_check() {
     let (pool, _guard) = pool_or_skip!();
 
@@ -113,12 +114,69 @@ async fn both_direction_constants_pass_the_check() {
     assert!(err.is_err(), "'Inbound' violates the direction CHECK");
 }
 
+/// Two tenants may hold the same `process_id`, and neither write reaches the
+/// other's row.
+///
+/// `process_id` is read from the inbound CloudEvent's `subject`. Keyed
+/// globally, one sender's redelivery rewrites the outcome, the findings and the
+/// Zahlungsziel of another tenant's Buchungsbeleg — a § 147 AO record altered
+/// by a party that never saw it.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_process_id_is_unique_per_tenant_and_not_across_them() {
+    let (pool, _guard) = pool_or_skip!();
+    const OTHER: &str = "9900357000004";
+
+    let id = Uuid::new_v4();
+    upsert_receipt(&pool, &receipt(id, DIRECTION_INBOUND))
+        .await
+        .expect("the first tenant stores its receipt");
+
+    let mut foreign = receipt(id, DIRECTION_INBOUND);
+    foreign.tenant = OTHER.to_owned();
+    foreign.outcome = "Dispute".to_owned();
+    upsert_receipt(&pool, &foreign)
+        .await
+        .expect("the same process id under another tenant is its own row");
+
+    let outcomes: Vec<(String, String)> =
+        sqlx::query_as("SELECT tenant, outcome FROM invoic_receipts WHERE process_id = $1")
+            .bind(id)
+            .fetch_all(&pool)
+            .await
+            .expect("read both rows back");
+    assert_eq!(outcomes.len(), 2, "one row per tenant");
+    assert_eq!(
+        outcomes
+            .iter()
+            .find(|(t, _)| t == TENANT)
+            .map(|(_, o)| o.as_str()),
+        Some("Ok"),
+        "the second tenant's write reached the first tenant's receipt"
+    );
+
+    // Within one tenant the pair is still unique: a redelivery updates.
+    let mut again = receipt(id, DIRECTION_INBOUND);
+    again.outcome = "Warn".to_owned();
+    upsert_receipt(&pool, &again)
+        .await
+        .expect("a redelivery is an update");
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM invoic_receipts WHERE process_id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+    assert_eq!(rows, 2, "a redelivery must not add a row");
+}
+
 /// An inbound receipt without its INVOIC message reference is refused.
 ///
 /// It could be checked but never answered: `makod` routes the REMADV by that
 /// reference and nothing else. Discovering it at the Zahlungsziel instead of at
 /// the INSERT is a day too late.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_inbound_receipt_without_a_message_reference_is_refused() {
     let (pool, _guard) = pool_or_skip!();
 
@@ -146,6 +204,7 @@ async fn an_inbound_receipt_without_a_message_reference_is_refused() {
 /// would drop the row out of `GET /api/v1/zahlungsstatus/{malo_id}`, which is
 /// the only view that answers "has this delivery point's invoice been paid".
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_redelivery_refreshes_the_check_and_keeps_the_malo() {
     let (pool, _guard) = pool_or_skip!();
 
@@ -192,6 +251,7 @@ async fn a_redelivery_refreshes_the_check_and_keeps_the_malo() {
 /// `invoice_ref` and dead-letters it, so a receipt without one can only arrive
 /// through a bug, and this makes that bug loud.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_message_reference_constraint_holds_on_redelivery_too() {
     let (pool, _guard) = pool_or_skip!();
 
@@ -223,6 +283,7 @@ async fn the_message_reference_constraint_holds_on_redelivery_too() {
 /// A re-dispatch reads the routing key and the answering PID from the receipt.
 /// Sending `process_id` in the message reference's place reached no workflow.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_redispatch_finds_the_message_reference_and_pid() {
     let (pool, _guard) = pool_or_skip!();
 
@@ -258,6 +319,7 @@ async fn a_redispatch_finds_the_message_reference_and_pid() {
 /// is what makes it unselectable: `erp_next_attempt_at` is `NOT NULL` and
 /// cannot carry a sentinel.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_dead_lettered_receipt_is_never_claimed_again() {
     let (pool, _guard) = pool_or_skip!();
 
@@ -271,7 +333,9 @@ async fn a_dead_lettered_receipt_is_never_claimed_again() {
         .expect("claim");
     assert_eq!(pending.len(), 1, "a fresh receipt is due immediately");
 
-    dead_letter_erp(&pool, id).await.expect("dead-letter");
+    dead_letter_erp(&pool, TENANT, id)
+        .await
+        .expect("dead-letter");
 
     let attempts: i16 =
         sqlx::query_scalar("SELECT erp_attempts FROM invoic_receipts WHERE process_id = $1")
@@ -299,6 +363,7 @@ async fn a_dead_lettered_receipt_is_never_claimed_again() {
 /// untouched and the ERP was POSTed the same receipt every lease period for
 /// ever. Not one `record_erp_failure` or `dead_letter_erp` runs here.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_retry_budget_terminates_even_when_no_outcome_is_ever_recorded() {
     let (pool, _guard) = pool_or_skip!();
 
@@ -343,6 +408,7 @@ async fn the_retry_budget_terminates_even_when_no_outcome_is_ever_recorded() {
 /// abort the very UPDATE that raised the counter, leaving the row at 4 and
 /// retrying for ever.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_terminal_backoff_is_an_interval_postgresql_accepts() {
     let (pool, _guard) = pool_or_skip!();
 
@@ -352,7 +418,7 @@ async fn the_terminal_backoff_is_an_interval_postgresql_accepts() {
         .expect("persist the receipt");
 
     for attempt in 0..DEAD_LETTER_ATTEMPTS {
-        record_erp_failure(&pool, id, attempt)
+        record_erp_failure(&pool, TENANT, id, attempt)
             .await
             .unwrap_or_else(|e| panic!("attempt {attempt} must be schedulable: {e}"));
     }
@@ -376,6 +442,7 @@ async fn the_terminal_backoff_is_an_interval_postgresql_accepts() {
 /// a second worker — a rolling deploy is enough — claims the same batch and the
 /// ERP gets every event twice.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_claimed_batch_is_leased_against_a_second_worker() {
     let (pool, _guard) = pool_or_skip!();
 
@@ -402,6 +469,7 @@ async fn a_claimed_batch_is_leased_against_a_second_worker() {
 /// The claim never crosses a tenant boundary, and it reports the state the
 /// event carries.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_claim_is_tenant_scoped_and_carries_the_dispatch_state() {
     let (pool, _guard) = pool_or_skip!();
 
@@ -432,6 +500,7 @@ async fn the_claim_is_tenant_scoped_and_carries_the_dispatch_state() {
 /// A dispute resolution has both parts or neither — a `Resolved` outcome
 /// without the timestamp loses when the operator closed it.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_resolution_cannot_be_recorded_without_its_timestamp() {
     let (pool, _guard) = pool_or_skip!();
 

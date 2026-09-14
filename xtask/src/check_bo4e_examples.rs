@@ -104,6 +104,16 @@ pub fn run(workspace_root: &Path) -> bool {
         }
     }
 
+    // The count is what the success line reports: "0 documented BO4E object(s)"
+    // reads like a pass while checking nothing.
+    if checked == 0 {
+        eprintln!(
+            "check-bo4e-examples: the scan found no documented BO4E object in \
+             site/content/, concepts/ or demos/ — the layout has probably changed"
+        );
+        return false;
+    }
+
     if findings.is_empty() {
         println!(
             "check-bo4e-examples: {checked} documented BO4E object(s), all using fields BO4E defines"
@@ -450,6 +460,15 @@ fn collect_docs(dir: &Path, out: &mut Vec<PathBuf>) {
 
 #[cfg(test)]
 mod tests {
+
+    /// A scan that reaches no file has checked nothing, and must say so rather
+    /// than report the clean line.
+    #[test]
+    fn refuses_a_tree_it_found_nothing_in() {
+        assert!(!super::run(std::path::Path::new(
+            "/nonexistent/mako/workspace/root"
+        )));
+    }
     use super::check_one;
 
     /// The spelling that shipped: `marktd`'s price-sheet examples documented

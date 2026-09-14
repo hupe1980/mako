@@ -6,7 +6,7 @@
 //! refuse. A row here is that loop's memory.
 
 use anyhow::Context as _;
-use mako_pruefung::nb::types::Marktlokationsart;
+use mako_pruefung::nb::types::{Marktlokationsart, Veraeusserungsform};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgExecutor, PgPool, Row};
 use time::{Date, OffsetDateTime};
@@ -124,7 +124,15 @@ pub struct NewNeuanlageFall {
     pub pid: i32,
     pub lf_mp_id: String,
     pub marktlokationsart: Marktlokationsart,
-    pub veraeusserungsform: Option<String>,
+    /// Typed, never the raw wire string.
+    ///
+    /// `veraeusserungsform` is a `CHECK`-constrained column, so a code outside
+    /// `Z90`/`Z91`/`Z92`/`Z94` does not degrade the row — it makes Postgres
+    /// refuse the whole INSERT, and the Anmeldung that arrived is then never
+    /// answered at all. Parsing at the boundary keeps an unreadable code out of
+    /// the statement; [`Veraeusserungsform::wire_code`] is in the list by
+    /// construction.
+    pub veraeusserungsform: Option<Veraeusserungsform>,
     pub uebertragungstag: Date,
     pub zuordnungsbeginn: Date,
     pub letzter_pruefungstag: Date,
@@ -160,7 +168,7 @@ pub async fn open_case(
     .bind(new.pid)
     .bind(&new.lf_mp_id)
     .bind(art)
-    .bind(&new.veraeusserungsform)
+    .bind(new.veraeusserungsform.map(Veraeusserungsform::wire_code))
     .bind(new.uebertragungstag)
     .bind(new.zuordnungsbeginn)
     .bind(new.letzter_pruefungstag)

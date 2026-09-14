@@ -187,6 +187,7 @@ fn mentions_malo(line: &str) -> bool {
 /// Scan the workspace. Returns `true` when every MaLo literal validates.
 pub fn run(workspace_root: &Path) -> bool {
     let mut findings = Vec::new();
+    let mut scanned = 0usize;
     // `makotest` is in the list because its bindings are the same `MaloId`: a
     // fixture there is exactly as wrong as one in a Rust test, and nothing but
     // this check says so.
@@ -199,13 +200,26 @@ pub fn run(workspace_root: &Path) -> bool {
         "site/content",
         "site/templates",
     ] {
-        collect(&workspace_root.join(dir), &mut findings);
+        collect(&workspace_root.join(dir), &mut scanned, &mut findings);
     }
     findings.extend(deliberate_entries_that_are_actually_valid());
     findings.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
 
+    // A guard that read no file finds no bad check digit, and reports the
+    // clean line for it.
+    if scanned == 0 {
+        eprintln!(
+            "check-malo-ids: the scan read no file under any of the searched trees — \
+             the layout has probably changed"
+        );
+        return false;
+    }
+
     if findings.is_empty() {
-        println!("check-malo-ids: every MaLo-ID and EIC literal carries a valid check digit");
+        println!(
+            "check-malo-ids: every MaLo-ID and EIC literal in {scanned} file(s) carries a \
+             valid check digit"
+        );
         return true;
     }
 
@@ -227,7 +241,8 @@ pub fn run(workspace_root: &Path) -> bool {
     false
 }
 
-fn collect(dir: &Path, findings: &mut Vec<Finding>) {
+/// Every scannable file under `dir`, counting what it read into `scanned`.
+fn collect(dir: &Path, scanned: &mut usize, findings: &mut Vec<Finding>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -251,7 +266,7 @@ fn collect(dir: &Path, findings: &mut Vec<Finding>) {
             if skip {
                 continue;
             }
-            collect(&path, findings);
+            collect(&path, scanned, findings);
         } else if path.extension().is_some_and(|e| {
             matches!(
                 e.to_str(),
@@ -269,12 +284,12 @@ fn collect(dir: &Path, findings: &mut Vec<Finding>) {
                 )
             )
         }) {
-            scan(&path, findings);
+            scan(&path, scanned, findings);
         }
     }
 }
 
-fn scan(path: &Path, findings: &mut Vec<Finding>) {
+fn scan(path: &Path, scanned: &mut usize, findings: &mut Vec<Finding>) {
     let Ok(src) = std::fs::read_to_string(path) else {
         return;
     };
@@ -282,6 +297,7 @@ fn scan(path: &Path, findings: &mut Vec<Finding>) {
     if path.file_name().is_some_and(|n| n == "check_malo_ids.rs") {
         return;
     }
+    *scanned += 1;
     for (id, line_no) in offending(&src) {
         let expected = check_digit(&id[..10]).unwrap_or('?');
         let message = format!(
@@ -462,6 +478,15 @@ fn eleven_digit_runs(line: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+
+    /// A scan that reaches no file has checked nothing, and must say so rather
+    /// than report the clean line.
+    #[test]
+    fn refuses_a_tree_it_found_nothing_in() {
+        assert!(!super::run(std::path::Path::new(
+            "/nonexistent/mako/workspace/root"
+        )));
+    }
     use super::{check_digit, eleven_digit_runs, offending};
 
     /// The Anwendungshilfe's own worked example, digit for digit.

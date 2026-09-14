@@ -428,6 +428,14 @@ failure, from a correct submission that was rejected.
 ## Configuration reference
 
 ```toml
+# Top-level keys come first: in TOML a bare key after a table header belongs to
+# that table, so a top-level setting written below one never reaches the
+# service. Drains the de.mabis.* outbox (submission failures, Korrekturbedarf) —
+# persist-before-dispatch, retry + dead-letter. Unset, events are enqueued but
+# nothing delivers them, and the startup log says so.
+erp_webhook_url = "http://erp:8000/events"
+erp_hmac_secret = "env:MABIS_SYNCD_ERP_HMAC_SECRET"
+
 [http]
 addr = "0.0.0.0:8880"       # default
 
@@ -462,13 +470,6 @@ run_hour_utc    = 5     # 05:00 UTC = 06:00 CET / 07:00 CEST
 
 [mcp]                   # read-only MCP server at /mcp
 api_key = "env:MABIS_SYNCD_MCP_API_KEY"
-
-# Drains the de.mabis.* outbox (submission failures, Korrekturbedarf) —
-# persist-before-dispatch, retry + dead-letter. Unset, events are enqueued
-# but nothing delivers them, and the startup log says so.
-erp_webhook_url = "http://erp:8000/events"
-erp_hmac_secret = "env:MABIS_SYNCD_ERP_HMAC_SECRET"
-
 ```
 
 Two values are checked at startup, where refusing still costs nothing:

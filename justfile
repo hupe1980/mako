@@ -74,7 +74,7 @@ test-integration name:
 # vars. Without Docker the `#[ignore]`d tests skip gracefully.
 
 # All database integration suites in one go.
-test-db: check-sql test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-productd-db test-marktd-db test-processd-db test-sperrd-db
+test-db: check-sql test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-productd-db test-marktd-db test-processd-db test-sperrd-db test-invoicd-db test-mabis-syncd-db test-netzbilanzd-db test-obsd-db test-outbox-db
 
 # Every service's SQL literals prepare against its own schema.
 #
@@ -82,8 +82,11 @@ test-db: check-sql test-edmd-db test-einsd-db test-accountingd-db test-billingd-
 # compiles and fails on the first request that reaches it — a `melo` scoped by a
 # `tenant` column it does not have, an INSERT naming nineteen columns against
 # eighteen placeholders. One throwaway server answers for all fourteen services.
-# Not in `just ci`: it needs a Docker daemon, and it fails rather than skipping
-# when there is none.
+# Not in `just ci`: locally it starts a Docker container, and it fails rather
+# than skipping when there is no daemon. CI runs it in the `check-sql` job
+# instead, where `services: postgres` supplies the server and
+# `MAKO_CHECK_SQL_URL` points the check at it — set that variable here too to
+# prepare against a server you already have.
 check-sql:
     cargo xtask check-sql
 
@@ -125,14 +128,41 @@ test-productd-db:
     cargo test -p productd --test catalog_integration -- --include-ignored --test-threads=1
 
 # All marktd integration suites (VersorgungsStatus, MeLo graph, ESA, registries,
-# durable fan-out, MaBiS-Zählpunkt, temporal constraints).
+# durable fan-out, MaBiS-Zählpunkt, temporal constraints, tenant isolation, and
+# the 23P01 → 409 translation).
 test-marktd-db:
     cargo test -p marktd \
         --test versorgung_integration --test melo_graph_integration \
         --test esa_integration --test registries_integration \
         --test fanout_durable_integration --test mabis_zp_integration \
-        --test temporal_constraints_integration \
+        --test temporal_constraints_integration --test tenant_isolation_integration \
+        --test overlap_is_a_client_error \
         -- --include-ignored --test-threads=1
+
+# invoicd's receipt store — the § 147 AO / GoBD audit trail, its per-tenant
+# uniqueness and the ERP re-dispatch lease.
+test-invoicd-db:
+    cargo test -p invoicd --test receipts_pg -- --include-ignored --test-threads=1
+
+# mabis-syncd's submission schema — the per-run series ledger the BIKO acks
+# against, and the constraints that stop a retry re-filing an acked series.
+test-mabis-syncd-db:
+    cargo test -p mabis-syncd --test schema_pg -- --include-ignored --test-threads=1
+
+# netzbilanzd's invoice-draft store — numbering series, Abschlag deduction,
+# the Storno chain and the tenant scoping of every read and transition.
+test-netzbilanzd-db:
+    cargo test -p netzbilanzd --test invoice_drafts_pg -- --include-ignored --test-threads=1
+
+# obsd's sweeps — the deadline alert and the § 7a parity report, both of which
+# run on a timer with no caller to notice a wrong predicate.
+test-obsd-db:
+    cargo test -p obsd --test worker_integration -- --include-ignored --test-threads=1
+
+# The shared transactional outbox: atomicity with the caller's write, the retry
+# schedule and the dead-letter hand-off. Every service that emits depends on it.
+test-outbox-db:
+    cargo test -p mako-service --test outbox_integration -- --include-ignored --test-threads=1
 
 # processd's SQL suite (approval queue claim/dispatch, decision audit log).
 #
@@ -141,6 +171,26 @@ test-marktd-db:
 test-processd-db:
     cargo test -p processd --no-default-features --features integrated \
         --test sql_integration -- --include-ignored --test-threads=1
+
+# Every real-PostgreSQL suite is `#[ignore]`d and named by a `test-*-db` recipe.
+#
+# An un-ignored container suite prints `ok` on a machine with no Docker daemon,
+# having returned early from every test; an unnamed one is reached by neither
+# `just ci` nor `just test-db`. Both read as coverage.
+check-db-suites:
+    cargo xtask check-db-suites
+
+# A service that reads `Claims` also pins the tenant it expects.
+#
+# Without `ExpectedTenant`, a token signed by the same realm for a different
+# operator extracts cleanly, and only the tenant condition in every Cedar rule
+# stands between it and the data.
+check-expected-tenant:
+    cargo xtask check-expected-tenant
+
+# Every catalogued Mindestvorlaufzeit is read by production code
+check-vorlauf-consulted:
+    cargo xtask check-vorlauf-consulted
 
 # Lint with warnings as errors
 clippy:
@@ -276,6 +326,14 @@ smoke-roles:
     # `CARGO_TARGET_DIR`, which is the isolation a run worth reporting uses —
     # rust-analyzer writes to the default directory while this runs.
     out="${CARGO_TARGET_DIR:-target}/debug/makod"
+    # Authorization is default-deny, so a bare start refuses every request and
+    # `--check` says so. `--cedar-policy-dir` loads *every* `.cedar` in the
+    # directory it is given, and `src/cedar/` also holds the permissive
+    # `default.cedar` — so the least-privilege set is staged alone. That is the
+    # policy set § 6a EnWG role separation is written for, and the one a role
+    # build should be smoke-tested against.
+    mkdir -p "$tmp/cedar"
+    cp services/makod/src/cedar/conservative.cedar "$tmp/cedar/"
     for pair in "role-lf:LF" "role-nb:NB" "role-msb:MSB"; do
         feat="${pair%%:*}"; role="${pair##*:}"
         echo "==> $feat (party role $role)"
@@ -284,6 +342,7 @@ smoke-roles:
             "$role" > "$tmp/makod.toml"
         "$out" --config "$tmp/makod.toml" --allow-volatile \
             --http-addr 127.0.0.1:18080 --auth-key smoke=0123456789abcdef \
+            --cedar-policy-dir "$tmp/cedar" \
             --allow-no-as4-signing --check
     done
 
@@ -335,11 +394,15 @@ examples:
             fi
             continue
         fi
-        # `FAILED`/`panicked` catch an assertion; `error(s)` with a non-zero
-        # count catches a report an example prints instead of asserting on.
+        # `FAILED`/`panicked` catch an assertion; a severity word or a
+        # non-zero count catches a report an example prints instead of
+        # asserting on. Neither the bracket around the severity nor the `(s)`
+        # after the count is required: an example that prints `ERROR: …` or
+        # `3 errors` is reporting the same failure as one that brackets and
+        # parenthesises it.
         if [ $code -ne 0 ] \
-           || grep -qE 'FAILED|panicked at|\[(ERROR|MIG-|AHB-|SEM-)' <<<"$out" \
-           || grep -qE '[1-9][0-9]* (error|finding)\(s\)' <<<"$out"; then
+           || grep -qE 'FAILED|panicked|\b(ERROR|FATAL|CRITICAL)\b|\[(MIG-|AHB-|SEM-)' <<<"$out" \
+           || grep -qE '(^|[^0-9.])[1-9][0-9]* (error|finding)s?([^a-z]|$)' <<<"$out"; then
             echo "  FAIL $crate/$ex"
             tail -25 <<<"$out" | sed 's/^/       /'
             fail=1
@@ -350,7 +413,7 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check check-fuzz test test-doc test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-runner-routes check-wire-timestamps check-business-dates check-citations check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+ci: check check-fuzz test test-doc test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-runner-routes check-wire-timestamps check-business-dates check-citations check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the

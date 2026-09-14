@@ -228,6 +228,109 @@ pub fn mabis_zp_lifecycle_registry() -> AdapterRegistry<MabisZpLifecycleWorkflow
     registry
 }
 
+/// Build an [`AdapterRegistry`] for the **Antwort** leg of the MaBiS-ZP
+/// lifecycle.
+///
+/// Prozessschritt 2 of every Use-Case in the family: the answering party — the
+/// BIKO, or the benachbarter NB on the Netzzeitreihe axis — returns
+/// „angenommen oder abgelehnt" to an Anfrage this participant sent
+/// (BK6-24-174 Anlage 3 Kap. 5.2.2 / 10.4.2 / 17.3.3.1.2 Nr. 2). Separate from
+/// [`mabis_zp_lifecycle_registry`] because it builds a different command from
+/// different segments, the way the ORDRSP Ablehnung is separate from the ORDERS
+/// Anforderung.
+///
+/// # What it reads
+///
+/// `SG4 STS+E01` carries both halves of the answer: DE 9013 the Antwortcode and
+/// DE 1131 the **Codeliste** it is drawn from. Neither alone decides anything —
+/// the same code means opposite things in two trees — so the Cluster is
+/// resolved from the pair through `mako_mabis::zp_antwort_ist_zustimmung`, and
+/// an unresolvable pair is refused rather than defaulted.
+///
+/// Defaulting is not the safe direction here: reading an uncatalogued code as
+/// an Ablehnung closes a Bilanzkreisabrechnung's MaBiS-Zählpunkt as refused
+/// when the BIKO in fact activated it, and the Summenzeitreihe that never
+/// arrives is the only symptom. A refusal dead-letters, which is visible.
+///
+/// The Begründung an Ablehnung must carry travels in `FTX+ACB`.
+#[must_use]
+pub fn mabis_zp_lifecycle_antwort_registry() -> AdapterRegistry<MabisZpLifecycleWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for the MaBiS-ZP Antwort adapter".into(),
+                )
+            })?;
+
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "MaBiS-ZP Antwort adapter: expected UTILMD message".into(),
+                ));
+            };
+
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "MaBiS-ZP Antwort adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+
+            let tx = u.transactions();
+            let vorgang = tx.first();
+            let antwort = vorgang.and_then(|t| t.antwort()).ok_or_else(|| {
+                EngineError::Deserialization(format!(
+                    "MaBiS-ZP Antwort adapter: PID {pid} carries no SG4 STS+E01 — the \
+                     Antwortcode and its Codeliste are what say whether the MaBiS-ZP \
+                     was activated"
+                ))
+            })?;
+
+            let ebd = antwort.codeliste.clone().ok_or_else(|| {
+                EngineError::Deserialization(format!(
+                    "MaBiS-ZP Antwort adapter: PID {pid} states no SG4 STS+E01 DE 1131 — \
+                     the Antwortcode '{}' names no Entscheidungsbaum, and the MaBiS-ZP \
+                     answers are read out of sixteen different ones",
+                    antwort.code
+                ))
+            })?;
+
+            let bestaetigt = mako_mabis::zp_antwort_ist_zustimmung(&ebd, &antwort.code)
+                .ok_or_else(|| {
+                    EngineError::Deserialization(format!(
+                        "MaBiS-ZP Antwort adapter: '{}' is not a code {ebd} publishes in \
+                         `mako_pruefung::mabis::codes`, so whether PID {pid} activated or \
+                         refused the MaBiS-ZP cannot be read — and a guess settles a \
+                         Bilanzkreisabrechnung either way",
+                        antwort.code
+                    ))
+                })?;
+
+            // `FTX+ACB` — the Begründung the Festlegung requires on an
+            // Ablehnung („erfolgt diese mit einer Begründung").
+            let grund = vorgang.and_then(|t| {
+                t.ftx
+                    .iter()
+                    .find(|f| f.qualifier == "ACB")
+                    .and_then(|f| f.text.clone())
+            });
+
+            Ok(ZpLifecycleCommand::ReceiveAntwort {
+                pid,
+                bestaetigt,
+                grund,
+                ebd,
+                message_ref: MessageRef::new(msg.message_ref()),
+            })
+        },
+    ));
+    registry
+}
+
 // ── MaBiS Anforderungen (ORDERS 17201–17208) ─────────────────────────────────
 
 /// Build an [`AdapterRegistry`] for [`MabisAnforderungWorkflow`].

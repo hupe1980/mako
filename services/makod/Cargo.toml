@@ -59,6 +59,7 @@ edi-energy   = { path = "../../crates/edi-energy", default-features = false, fea
     "utilmd", "mscons", "aperak", "contrl", "invoic", "remadv",
     "orders", "iftsta", "insrpt", "reqote", "partin", "ordchg", "ordrsp",
     "quotes", "comdis", "pricat", "utilts",
+    "tracing",
 ] }
 
 anyhow             = { workspace = true }

@@ -83,12 +83,36 @@ pub async fn fetch_einspeisemenge_from_edmd(
     if feed.intervals.is_empty() {
         return None;
     }
-    Some(
-        feed.intervals
-            .iter()
-            .filter_map(|iv| iv.kwh.parse::<Decimal>().ok())
-            .sum(),
-    )
+    match summe_einspeisung(&feed.intervals) {
+        Ok(summe) => Some(summe),
+        Err(iv) => {
+            tracing::error!(
+                malo_id, year, month, start = %iv.start, kwh = %iv.kwh,
+                "einsd: edmd returned an Einspeisung interval whose kWh value does not \
+                 parse — the month's quantity is refused rather than settled short"
+            );
+            None
+        }
+    }
+}
+
+/// Sum the month's feed-in intervals, or name the first one that does not parse.
+///
+/// The metered feed-in is the quantity the whole EEG settlement is computed on.
+/// An interval that does not parse is a corrupt reading, not a zero: summing
+/// what parsed and dropping the rest understates the month, the result is
+/// indistinguishable from a genuinely smaller one, and the plant is underpaid
+/// with nothing on the receipt to show it. So the whole sum refuses.
+///
+/// The refusal reaches both callers as `None`, which each already handles:
+/// `settle_plant` leaves `einspeisemenge_kwh` unset and the engine answers
+/// `NoData`, and the bulk dry-run counts the plant under `skipped_no_data`.
+fn summe_einspeisung(intervals: &[FeedInInterval]) -> Result<Decimal, &FeedInInterval> {
+    let mut summe = Decimal::ZERO;
+    for iv in intervals {
+        summe += iv.kwh.parse::<Decimal>().map_err(|_| iv)?;
+    }
+    Ok(summe)
 }
 
 #[derive(serde::Deserialize)]
@@ -107,7 +131,7 @@ struct FeedInResponse {
     intervals: Vec<FeedInInterval>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 struct FeedInInterval {
     start: String,
     kwh: String,
@@ -272,19 +296,18 @@ pub async fn derive_negativpreis_from_edmd(
         .map(|(t, _)| *t)
         .collect();
 
-    let mut intervals: Vec<eeg_billing::NegativpreisInterval> = feed
-        .intervals
-        .iter()
-        .filter_map(|iv| {
-            let start = OffsetDateTime::parse(&iv.start, &Rfc3339).ok()?;
-            let feed_in_kwh = iv.kwh.parse::<Decimal>().ok()?;
-            Some(eeg_billing::NegativpreisInterval {
-                start,
-                feed_in_kwh,
-                price_negative: negative_starts.contains(&start),
-            })
-        })
-        .collect();
+    let mut intervals = match negativpreis_intervalle(&feed.intervals, &negative_starts) {
+        Ok(intervals) => intervals,
+        Err(iv) => {
+            tracing::error!(
+                malo_id, year, month, start = %iv.start, kwh = %iv.kwh,
+                "§51 auto-derivation skipped — edmd returned an interval that does not \
+                 parse; deriving on the rest would drop it from a qualifying run and \
+                 silently leave the § 51 reduction unapplied"
+            );
+            return Negativpreis::Unbekannt;
+        }
+    };
     // The run detector needs ascending order to recognise a consecutive run;
     // edmd sorts its series, but a §51 threshold that silently stops applying
     // because an upstream sort changed is not a failure mode worth keeping.
@@ -295,6 +318,39 @@ pub async fn derive_negativpreis_from_edmd(
         kwh: r.kwh_during_negative,
         quarter_hours: r.negative_quarter_hours,
     }
+}
+
+/// Lift the feed-in intervals into the §51 overlay, or name the first one that
+/// does not parse.
+///
+/// A dropped interval is invisible to the run detector: the intervals that
+/// remain still look consecutive, so a malformed one in the middle of a
+/// qualifying run breaks it and the §51 reduction silently stops applying — the
+/// plant is then paid in full for a month §51 excluded. The derivation refuses
+/// instead, which leaves the two figures caller-supplied and records why, the
+/// same disposition every other gap in this gate takes.
+fn negativpreis_intervalle<'a>(
+    intervals: &'a [FeedInInterval],
+    negative_starts: &std::collections::HashSet<OffsetDateTime>,
+) -> Result<Vec<eeg_billing::NegativpreisInterval>, &'a FeedInInterval> {
+    use time::format_description::well_known::Rfc3339;
+
+    intervals
+        .iter()
+        .map(|iv| {
+            let (Ok(start), Ok(feed_in_kwh)) = (
+                OffsetDateTime::parse(&iv.start, &Rfc3339),
+                iv.kwh.parse::<Decimal>(),
+            ) else {
+                return Err(iv);
+            };
+            Ok(eeg_billing::NegativpreisInterval {
+                start,
+                feed_in_kwh,
+                price_negative: negative_starts.contains(&start),
+            })
+        })
+        .collect()
 }
 
 /// What the §51 auto-derivation could establish for a billing period.
@@ -3257,5 +3313,81 @@ fn pflichtverstoss_write_error(
         )
             .into_response(),
         _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod edmd_interval_tests {
+    use super::{FeedInInterval, negativpreis_intervalle, summe_einspeisung};
+    use rust_decimal::dec;
+    use std::collections::HashSet;
+    use time::OffsetDateTime;
+
+    fn iv(start: &str, kwh: &str) -> FeedInInterval {
+        FeedInInterval {
+            start: start.to_owned(),
+            kwh: kwh.to_owned(),
+        }
+    }
+
+    /// The metered feed-in is the quantity the EEG settlement is computed on, so
+    /// a corrupt reading refuses the whole month: a sum that silently omits it
+    /// is indistinguishable from a genuinely smaller month and underpays the
+    /// plant.
+    #[test]
+    fn an_unparseable_interval_refuses_the_whole_einspeisemenge() {
+        let intervals = [
+            iv("2026-06-01T00:00:00Z", "100.5"),
+            iv("2026-06-01T00:15:00Z", "n/a"),
+            iv("2026-06-01T00:30:00Z", "99.5"),
+        ];
+        let err = summe_einspeisung(&intervals).expect_err("a corrupt reading must refuse");
+        assert_eq!(err.kwh, "n/a");
+    }
+
+    /// A clean series sums exactly.
+    #[test]
+    fn a_clean_series_sums_to_the_month() {
+        let intervals = [
+            iv("2026-06-01T00:00:00Z", "100.5"),
+            iv("2026-06-01T00:15:00Z", "99.5"),
+        ];
+        assert_eq!(summe_einspeisung(&intervals).ok(), Some(dec!(200.0)));
+    }
+
+    /// §51 keys on consecutive runs of negative-price quarter-hours. A dropped
+    /// interval is invisible to the run detector — the intervals that remain
+    /// still look consecutive — so the reduction silently stops applying and the
+    /// plant is paid in full for a month §51 excluded. The overlay refuses.
+    #[test]
+    fn an_unparseable_interval_refuses_the_negativpreis_overlay() {
+        for intervals in [
+            [
+                iv("2026-06-01T00:00:00Z", "10"),
+                iv("2026-06-01T00:15:00Z", "kaputt"),
+            ],
+            [iv("2026-06-01T00:00:00Z", "10"), iv("nicht-rfc3339", "10")],
+        ] {
+            let err = negativpreis_intervalle(&intervals, &HashSet::new())
+                .expect_err("a corrupt interval must refuse the derivation");
+            assert_eq!(err.start, intervals[1].start);
+        }
+    }
+
+    /// A clean series carries the negative-price flag through per interval.
+    #[test]
+    fn a_clean_series_is_lifted_with_its_price_flags() {
+        use time::format_description::well_known::Rfc3339;
+        let negativ_start = "2026-06-01T00:15:00Z";
+        let negativ: HashSet<OffsetDateTime> =
+            [OffsetDateTime::parse(negativ_start, &Rfc3339).unwrap()]
+                .into_iter()
+                .collect();
+        let intervals = [iv("2026-06-01T00:00:00Z", "10"), iv(negativ_start, "12.5")];
+        let lifted = negativpreis_intervalle(&intervals, &negativ).expect("a clean series lifts");
+        assert_eq!(lifted.len(), 2);
+        assert!(!lifted[0].price_negative);
+        assert_eq!(lifted[1].feed_in_kwh, dec!(12.5));
+        assert!(lifted[1].price_negative);
     }
 }

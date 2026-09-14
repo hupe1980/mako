@@ -168,6 +168,9 @@ pub fn build_router(
             "/api/v1/verguetungssatz-lookup",
             post(crate::handlers::post_verguetungssatz_lookup),
         )
+        .layer(Extension(mako_service::oidc::ExpectedTenant(
+            cfg.tenant.clone(),
+        )))
         .layer(Extension(Arc::clone(&cfg)))
         .layer(Extension(Arc::clone(&http_client)))
         .layer(Extension(cedar))

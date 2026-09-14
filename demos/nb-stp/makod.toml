@@ -1,6 +1,12 @@
 # makod.toml — demo configuration (NB role, in-memory store, no OIDC)
 # DO NOT use in production.
 
+# Authorization is default-deny. This demo ships no policy set, so it takes the
+# built-in permit-all baseline instead — every authenticated caller is full
+# admin. A real deployment points authz.cedar_policy_dir at its own grants.
+[authz]
+permit_all = true
+
 [logging]
 level  = "info"
 format = "json"
@@ -17,17 +23,9 @@ primary = true
 addr = "0.0.0.0:8080"
 
 [erp]
-# Push process lifecycle CloudEvents (ProcessInitiated, ProcessCompleted, …) to
-# marktd's ingest endpoint.  marktd fans them out to subscribers — processd
-# receives ProcessInitiated and evaluates whether to dispatch bestaetigen or
-# ablehnen based on master data (MaLo, preisblatt, contracts).
+# Process lifecycle CloudEvents go to marktd, which fans them out — processd
+# receives ProcessInitiated and decides bestaetigen/ablehnen from master data.
 #
-# webhook_url: send ProcessInitiated/ProcessCompleted CloudEvents to marktd,
-# which fans them out to processd (NB STP auto-responder) and other subscribers.
-#
-# Both values come from docker-compose environment variables
-# (MAKOD_ERP_WEBHOOK_URL / MAKOD_ERP_WEBHOOK_SECRET) so this file works
-# unmodified outside Docker. An empty webhook_secret here would win over the
-# environment and sign every delivery with an empty key, so the section is
-# deliberately left with only the URL fallback.
+# `webhook_secret` is deliberately absent: an empty value here would win over
+# MAKOD_ERP_WEBHOOK_SECRET and sign every delivery with an empty key.
 webhook_url = "http://marktd:8180/api/v1/events"

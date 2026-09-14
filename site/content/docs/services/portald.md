@@ -220,6 +220,9 @@ outputd_url     = "http://outputd:9880"
 # Local development only: serve portal routes without resolving ownership.
 # allow_insecure_no_auth = true
 
+# Required, like `vertragd_url`: the MCP tools take a `malo_id` and carry no
+# customer token, so `/mcp` is a second door the ownership check never reaches.
+# portald refuses to start without a key unless `allow_insecure_no_auth` is set.
 [mcp]
 api_key = "env:PORTALD_MCP_API_KEY"
 ```
@@ -269,8 +272,11 @@ Prompts: `customer-overview`, `billing-dispute`, `eeg-foerderung-check`.
 `malo_id` and carry no customer token, so they do not run through the
 authorization gate the REST routes do — whoever can call `/mcp` can read every
 customer in the tenant. That is the right shape for a customer-service agent and
-the wrong one for a portal: gate it with `[mcp]`, keep it off the public
-ingress, and never hand its credential to an end user.
+the wrong one for a portal. `portald` therefore refuses to start without an
+`[mcp] api_key` — an absent key leaves `McpAuth` accepting a request with no
+`Authorization` header at all, which is a posture reached by leaving a config
+section out rather than by choosing it. Keep the credential off the public
+ingress and never hand it to an end user.
 
 ---
 

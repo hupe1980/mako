@@ -9,10 +9,20 @@
 //!
 //! Two things are verified: every publishable workspace member appears in the
 //! list, and no crate is published before a workspace dependency of its own.
+//!
+//! "Workspace member" is every member of the root manifest, not only the ones
+//! under `crates/` — a member that drops its `publish = false` is publishable
+//! wherever it lives, and a claim about all of them has to read all of them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Trees holding one workspace member per subdirectory.
+const MEMBER_TREES: &[&str] = &["crates", "services"];
+
+/// Workspace members that sit at a fixed path rather than one per subdirectory.
+const MEMBER_DIRS: &[&str] = &["makotest"];
 
 /// A workspace member's manifest, reduced to what the order depends on.
 struct Member {
@@ -138,31 +148,74 @@ fn read_publish_order(root: &str) -> Result<Vec<String>, Box<dyn std::error::Err
     Ok(order)
 }
 
-/// Every workspace member under `crates/`, with its intra-workspace deps.
+/// Every workspace member, with its intra-workspace deps.
 fn read_members(root: &str) -> Result<HashMap<String, Member>, Box<dyn std::error::Error>> {
-    let mut members = HashMap::new();
-    let crates_dir = Path::new(root).join("crates");
-    for entry in std::fs::read_dir(&crates_dir)? {
-        let dir = entry?.path();
+    let root = Path::new(root);
+    let mut dirs: Vec<PathBuf> = MEMBER_DIRS.iter().map(|d| root.join(d)).collect();
+    for tree in MEMBER_TREES {
+        let Ok(entries) = std::fs::read_dir(root.join(tree)) else {
+            continue;
+        };
+        for entry in entries {
+            dirs.push(entry?.path());
+        }
+    }
+
+    // Read every manifest first: a dependency is intra-workspace when its name
+    // is one of these, which is not known until all of them are.
+    let mut manifests: Vec<(String, String)> = Vec::new();
+    for dir in dirs {
         let manifest = dir.join("Cargo.toml");
         if !manifest.is_file() {
             continue;
         }
         let text = std::fs::read_to_string(&manifest)?;
-        let name = dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or("unreadable crate directory")?
-            .to_owned();
+        let name = package_name(&text)
+            .ok_or_else(|| format!("{} declares no `[package] name`", manifest.display()))?;
+        manifests.push((name, text));
+    }
+    if manifests.is_empty() {
+        return Err(
+            "no workspace member manifest was found — the layout has probably changed".into(),
+        );
+    }
+
+    let names: HashSet<&str> = manifests.iter().map(|(n, _)| n.as_str()).collect();
+    let mut members = HashMap::new();
+    for (name, text) in &manifests {
         members.insert(
-            name,
+            name.clone(),
             Member {
-                publishable: !declares_unpublished(&text),
-                deps: workspace_deps(&text, &crates_dir)?,
+                publishable: !declares_unpublished(text),
+                deps: workspace_deps(text, &names),
             },
         );
     }
     Ok(members)
+}
+
+/// The `[package] name` a manifest declares.
+///
+/// Read rather than taken from the directory, because the two differ:
+/// `makotest/` builds the crate `makotest-native`.
+fn package_name(text: &str) -> Option<String> {
+    let mut in_package = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_package = trimmed == "[package]";
+            continue;
+        }
+        if !in_package {
+            continue;
+        }
+        if let Some((key, value)) = trimmed.split_once('=')
+            && key.trim() == "name"
+        {
+            return Some(value.trim().trim_matches('"').to_owned());
+        }
+    }
+    None
 }
 
 /// Workspace members `text` depends on whose dependency survives publication.
@@ -170,10 +223,7 @@ fn read_members(root: &str) -> Result<HashMap<String, Member>, Box<dyn std::erro
 /// Read off the `name = { … }` line shape the manifests use rather than parsed
 /// as TOML: the check needs two facts, and a parser would be a dependency this
 /// crate does not otherwise carry.
-fn workspace_deps(
-    text: &str,
-    crates_dir: &Path,
-) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+fn workspace_deps(text: &str, members: &HashSet<&str>) -> Vec<String> {
     let mut deps = Vec::new();
     let mut in_deps = false;
     for line in text.lines() {
@@ -191,12 +241,12 @@ fn workspace_deps(
         let name = name.trim();
         // A `path`-only entry is stripped on publish, so it constrains nothing.
         let versioned = spec.contains("workspace = true") || spec.contains("version");
-        if versioned && !name.is_empty() && crates_dir.join(name).join("Cargo.toml").is_file() {
+        if versioned && members.contains(name) {
             let name = name.to_owned();
             if !deps.contains(&name) {
                 deps.push(name);
             }
         }
     }
-    Ok(deps)
+    deps
 }

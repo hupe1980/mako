@@ -2,6 +2,7 @@
   "ahb_version": "1.0h",
   "anwendungsfaelle": [
     {
+      "chapter": "9 Übersicht der COMDIS AHB Tabellen",
       "communication": "NB an LF",
       "elements": [
         {
@@ -626,6 +627,7 @@
       ]
     },
     {
+      "chapter": "9 Übersicht der COMDIS AHB Tabellen",
       "communication": "NB an LF",
       "elements": [
         {

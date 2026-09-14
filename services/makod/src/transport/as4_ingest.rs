@@ -435,23 +435,30 @@ impl As4AxumHandler for BdewAs4IngestHandler {
 
                 // ── Test-indicator guard (§AF §3 / Allgemeine Festlegungen V6.1d §3) ──
                 // Reject before dispatching any messages.
-                if let Ok(pi) = self.ingest.platform.parse_interchange_full(&edifact[..])
-                    && pi.header.test_indicator
+                //
+                // Read from the `UNB` alone, not from a full parse. A full parse
+                // errs on a § 2.13 party mismatch, a UNZ count mismatch, too many
+                // messages, or any single unparseable message — and the guard
+                // would then be skipped on exactly the interchange least worth
+                // trusting, letting a test-flagged one reach production
+                // workflows because one message inside it was malformed.
+                if let Ok(header) = self.ingest.platform.parse_interchange_header(&edifact[..])
+                    && header.test_indicator
                 {
                     use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
                     let ctx = AuditContext::from_interchange(
-                        &pi.header.sender_id,
-                        &pi.header.receiver_id,
-                        &pi.header.control_ref,
+                        &header.sender_id,
+                        &header.receiver_id,
+                        &header.control_ref,
                     );
                     self.ingest
                         .dl_sink
                         .reject(&DeadLetterReason::TestMessage { context: ctx });
                     tracing::warn!(
                         as4_message_id = %msg_id,
-                        sender = %pi.header.sender_id,
-                        receiver = %pi.header.receiver_id,
-                        control_ref = %pi.header.control_ref,
+                        sender = %header.sender_id,
+                        receiver = %header.receiver_id,
+                        control_ref = %header.control_ref,
                         "AS4 ingest: test interchange (DE0035=1) rejected — \
                          must not process test messages on production endpoint (§AF §3)",
                     );
@@ -463,9 +470,9 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                         && let Err(e) = contrl_svc
                             .emit_syntax_error(
                                 &edifact,
-                                &pi.header.control_ref,
-                                &pi.header.receiver_id,
-                                &pi.header.sender_id,
+                                &header.control_ref,
+                                &header.receiver_id,
+                                &header.sender_id,
                                 crate::contrl_ack::SyntaxFehler::TestKennzeichen,
                             )
                             .await
@@ -475,9 +482,9 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                             .reject(&DeadLetterReason::ProcessingError {
                                 message: format!("contrl_syntaxfehler_failed: {e}"),
                                 context: AuditContext::from_interchange(
-                                    &pi.header.sender_id,
-                                    &pi.header.receiver_id,
-                                    &pi.header.control_ref,
+                                    &header.sender_id,
+                                    &header.receiver_id,
+                                    &header.control_ref,
                                 )
                                 .with_message_type("CONTRL"),
                             });

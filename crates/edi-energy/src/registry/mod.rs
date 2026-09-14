@@ -434,6 +434,13 @@ impl ReleaseRegistry {
     /// The returned strings are suitable for passing directly to
     /// `FormatVersion::parse` in `mako-engine`.
     ///
+    /// The registry carries the versions of a **release**, so a profile whose
+    /// `valid_from` is still in the future is included. A sender picking the
+    /// version to stamp on an outbound message wants
+    /// [`Self::format_versions_in_force_on`] instead: EDIFACT has no
+    /// Übergangsfrist (Allgemeine Festlegungen 6.1d § 2.5), so a message
+    /// stamped with a version that has not taken effect is refused.
+    ///
     /// # Example
     /// ```rust,no_run
     /// use edi_energy::registry::ReleaseRegistry;
@@ -447,6 +454,32 @@ impl ReleaseRegistry {
             .profiles
             .iter()
             .filter_map(|p| p.valid_from())
+            .collect();
+        dates.sort();
+        dates.dedup();
+        dates
+            .into_iter()
+            .map(|d| format!("FV{:04}-{:02}-{:02}", d.year(), d.month() as u8, d.day()))
+            .collect()
+    }
+
+    /// The format versions already in force on `date`, sorted chronologically.
+    ///
+    /// [`Self::format_versions`] filtered to `valid_from <= date`. This is the
+    /// set a **sender** may choose from: a Formatversion applies from its
+    /// Anwendungszeitpunkt, six months after the document's Publikationsdatum
+    /// (Allgemeine Festlegungen 6.1d § 2.5), and EDIFACT publishes no
+    /// Übergangsfrist — so the version after the next Stichtag is a refusal at
+    /// the counterparty, not a newer dialect it tolerates.
+    ///
+    /// Returns an empty vector when the registry holds nothing in force yet.
+    #[must_use]
+    pub fn format_versions_in_force_on(&self, date: time::Date) -> Vec<String> {
+        let mut dates: Vec<time::Date> = self
+            .profiles
+            .iter()
+            .filter_map(|p| p.valid_from())
+            .filter(|d| *d <= date)
             .collect();
         dates.sort();
         dates.dedup();

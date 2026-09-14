@@ -69,9 +69,24 @@ impl Daemon for Outputd {
                  [oidc] or set allow_insecure_no_auth = true (dev only)."
             );
         }
+        // The outbound side of the same posture: a relay push carries the
+        // customer's document itself — the invoice or Mahnung base64-encoded,
+        // with their name, e-mail address, MaLo and Kundennummer beside it. The
+        // credential is what signs it, so a URL without one publishes all of
+        // that to whoever answers at that address.
+        let unsigned = cfg.delivery.unsigned_relays();
+        if !cfg.allow_insecure_no_auth && !unsigned.is_empty() {
+            anyhow::bail!(
+                "refusing to start: [delivery] configures a relay URL without a credential \
+                 ({}) — customer documents would be POSTed unsigned and unauthenticated. \
+                 Configure it, or set allow_insecure_no_auth = true (dev only).",
+                unsigned.join(", ")
+            );
+        }
         if cfg.allow_insecure_no_auth {
             tracing::warn!(
-                "allow_insecure_no_auth is set — HTTP API authentication is degraded (dev mode)"
+                "allow_insecure_no_auth is set — HTTP API authentication is degraded and \
+                 document pushes to a credential-less relay go out unsigned (dev mode)"
             );
         }
 
@@ -160,6 +175,9 @@ impl Daemon for Outputd {
                 "/api/v1/templates/by-hash/{hash}",
                 get(handlers::get_template_by_hash),
             )
+            .layer(Extension(mako_service::oidc::ExpectedTenant(
+                cfg.tenant.clone(),
+            )))
             .layer(Extension(oidc))
             .layer(Extension(cedar))
             .layer(Extension(cfg.clone()))

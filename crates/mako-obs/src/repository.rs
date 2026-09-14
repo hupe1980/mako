@@ -25,8 +25,17 @@ pub trait ProcessProjectionRepository: Send + Sync + 'static {
     /// Query process projections matching the given filters.
     async fn query(&self, q: &ObsQuery) -> Result<Vec<ProcessProjection>, ObsError>;
 
-    /// Retrieve a single projection by process ID.
-    async fn get(&self, process_id: Uuid) -> Result<Option<ProcessProjection>, ObsError>;
+    /// Retrieve a single projection by process ID, scoped to its owning tenant.
+    ///
+    /// `tenant` is a predicate, not a label: a process ID is a UUID a caller
+    /// can hold without being entitled to the row behind it, so a read that
+    /// does not carry the tenant is a cross-tenant read of the whole projection
+    /// store.
+    async fn get(
+        &self,
+        process_id: Uuid,
+        tenant: &str,
+    ) -> Result<Option<ProcessProjection>, ObsError>;
 
     /// Compute a KPI report for one PID over a calendar period.
     ///

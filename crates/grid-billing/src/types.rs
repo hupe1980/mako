@@ -217,7 +217,13 @@ pub enum QuantityUnit {
 
 /// §14a EnWG module for steuerbare Verbrauchseinrichtungen (controllable loads).
 ///
-/// Source: BNetzA BK6-22-300 (Beschluss 27.11.2023, in force 01.01.2024).
+/// Source: BNetzA BK8-22/010-A, „Festlegung von Netzentgelten für steuerbare
+/// Anschlüsse und Verbrauchseinrichtungen (NSAVER) nach § 14a EnWG"
+/// (Beschluss 23.11.2023). Modul 1 and Modul 2 apply ab 01.01.2024 (Tenor 1. d)
+/// and 2. c)); Modul 3 is billed ab 01.04.2025 (Tenor 3. d)).
+///
+/// BK6-22-300 is the companion Festlegung — it governs the netzorientierte
+/// Steuerung a Betreiber must take part in, not the Netzentgelt modules.
 ///
 /// All three modules are **mandatory** for eligible controllable loads (heat pumps,
 /// EV chargers, battery storage ≥ 4.2 kW) registered with the NB. The LF/NB
@@ -253,12 +259,12 @@ impl Sect14aModule {
     /// Canonical BNetzA decision reference for this module.
     #[must_use]
     pub fn bnentza_reference(self) -> &'static str {
-        "BK6-22-300"
+        "BK8-22/010-A"
     }
 
     /// Whether two **different** modules may be held at once.
     ///
-    /// BK6-22-300 offers one base module and one optional addition. Modul 1 and
+    /// BK8-22/010-A offers one base module and one optional addition. Modul 1 and
     /// Modul 2 are the two forms the base takes — a pauschale reduction needing
     /// no metering, or a percentage on the device's own Arbeitspreis — and the
     /// Anschlussnutzer picks one. Modul 3 re-prices the Arbeitspreis over time,
@@ -513,9 +519,9 @@ pub enum LegalReference {
     },
     /// BNetzA decision (Beschluss).
     ///
-    /// Example: `BnetzaDecision { reference: "BK6-22-300" }`.
+    /// Example: `BnetzaDecision { reference: "BK8-22/010-A" }`.
     BnetzaDecision {
-        /// Decision reference, e.g. `"BK6-22-300"`, `"BK6-24-174"`.
+        /// Decision reference, e.g. `"BK8-22/010-A"`, `"BK6-24-174"`.
         reference: &'static str,
     },
     /// BDEW application handbook (Anwendungshandbuch).
@@ -760,7 +766,8 @@ pub enum BillingPositionKind {
     /// COM data (pricing formula parameters) for ERP-side validation and portal
     /// display of the per-interval tariff breakdown.
     ///
-    /// Regulatory basis: BNetzA BK6-22-300 Anlage 2 §3 — Spotpreis-Netzentgelt.
+    /// Priced from the NB's own `PreisblattNetznutzung` formula, not from a
+    /// Festlegung: no § 14a module is spot-linked.
     /// → `BdewArtikelnummer::Wirkarbeit`
     NneArbeitModul3,
     /// Netznutzungsentgelt Leistung — RLM peak demand charge (kW).
@@ -937,7 +944,7 @@ pub enum PriceReference {
 pub enum TariffCalculationMethod {
     /// A published fixed rate.
     Festpreis,
-    /// Derived from a spot-market price — §14a Modul 3, BK6-22-300 Anlage 2 §3.
+    /// Derived from a spot-market price, under the NB's own Preisblatt formula.
     Spotpreis,
 }
 
@@ -1066,22 +1073,28 @@ impl BillingPositionKind {
 /// Modul 2 is the *prozentuale* reduction; Modul 1 is the flat annual pauschale
 /// and carries no factor at all (see [`ArbeitspreisModell::Modul1Pauschal`]).
 ///
-/// A newtype because the range matters: `"0.85"` is a 15 % reduction, and a
-/// value outside `(0, 1]` is not a reduction at all. It travels as a JSON
-/// **string** like every other `Decimal` — see the architecture page's
-/// *Quantities and money on the wire*. The unconstrained `Decimal` this
-/// replaces was range-checked in the validator and *not* in the engine, so a
-/// caller who skipped validation could multiply the tariff by 5.
+/// A newtype because the range matters: `"0.40"` is a 60 % reduction, and a
+/// value outside `(0, 1]` is not a reduction at all. The range is checked in
+/// the constructor rather than in a validator, so a caller that reaches the
+/// engine directly cannot multiply the tariff instead of reducing it. It
+/// travels as a JSON **string** like every other `Decimal` — see the
+/// architecture page's *Quantities and money on the wire*.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct Reduktionsfaktor(Decimal);
 
 impl Reduktionsfaktor {
-    /// A commonly published factor — 85 % of the tariff, i.e. a 15 % reduction.
+    /// The statutory factor: 40 % of the Arbeitspreis, i.e. a 60 % reduction.
     ///
-    /// Not a statutory rate: BK8-22/010-A leaves the Modul-2 percentage to each
-    /// Netzbetreiber's published Preisblatt, so this is a convenience default
-    /// and never a substitute for the operator's own figure.
-    pub const REGELFALL: Self = Self(rust_decimal::dec!(0.85));
+    /// BNetzA BK8-22/010-A Tenor 2. b): „Der reduzierte Arbeitspreis entspricht
+    /// **40%** des Arbeitspreises für die Entnahme ohne Leistungsmessung des
+    /// Netzbetreibers in der Niederspannung." Tenor 2. c) makes Modul 2
+    /// verpflichtend ab 01.01.2024, so this is the rate, not a default a
+    /// Netzbetreiber may publish around — the reference price is the operator's,
+    /// the percentage is not.
+    ///
+    /// Tenor 2. d) adds that no Grundpreis is levied on a Marktlokation billed
+    /// under Modul 2.
+    pub const REGELFALL: Self = Self(rust_decimal::dec!(0.40));
 
     /// Build a factor.
     ///
@@ -1245,9 +1258,10 @@ pub enum ArbeitspreisModell {
 
     /// **§14a Modul 3** — zeitvariable Netzentgelte in three Tarifstufen.
     ///
-    /// All three bands are required: BK6-22-300 defines Hochtarif, Standardtarif
-    /// and Niedertarif, and permitting a subset would reintroduce the partial
-    /// state this type exists to prevent. A band with no energy carries
+    /// All three bands are required: BK8-22/010-A Tenor 3. b) obliges a
+    /// zeitvariables Netzentgelt „mit drei Tarifstufen gemäß der Anlage",
+    /// and permitting a subset would leave the partial state this type exists to
+    /// prevent. A band with no energy carries
     /// `menge_kwh = 0` rather than being omitted.
     Modul3ZeitVariabel {
         /// Hochtarif band.
@@ -1260,7 +1274,7 @@ pub enum ArbeitspreisModell {
 
     /// A spot-derived NNE rate per dispatch interval.
     ///
-    /// **Not a §14a module.** BK6-22-300 defines exactly three, none of which is
+    /// **Not a §14a module.** BK8-22/010-A defines exactly three, none of which is
     /// spot-linked; this models a Netzentgelt whose rate follows the spot price
     /// under the NB's own `PreisblattNetznutzung` formula. The rates arrive
     /// already derived — this crate never queries a spot market.
@@ -1296,7 +1310,7 @@ impl ArbeitspreisModell {
             Self::Modul2ProzentualeReduzierung { .. } => Some(Sect14aModule::Modul2),
             Self::Modul3ZeitVariabel { .. } => Some(Sect14aModule::Modul3),
             // A spot-linked Netzentgelt is the NB's own price model, not one of
-            // the three modules BK6-22-300 defines.
+            // the three modules BK8-22/010-A defines.
             Self::SpotpreisNetzentgelt { .. } => None,
         }
     }
@@ -1878,7 +1892,7 @@ impl SettlementResult {
 /// For **SLP** meters:
 /// - Leave both fields as `None` (Arbeitspreisanteil only).
 ///
-/// For **§14a Modul 2 time-variable NNE** (BNetzA BK6-22-300):
+/// For **§14a Modul 3 zeitvariable NNE** (BNetzA BK8-22/010-A Tenor 3.):
 /// - Set `arbeitsmenge_ht_kwh` + `arbeitspreis_ht_ct_per_kwh` for Hochlast periods.
 /// - Set `arbeitsmenge_nt_kwh` + `arbeitspreis_nt_ct_per_kwh` for Niedertarif periods.
 /// - Leave `arbeitsmenge_kwh` / `arbeitspreis_ct_per_kwh` as the base fallback.
@@ -1946,7 +1960,7 @@ pub struct NneInput {
     pub sparte: Sparte,
 
     // ── §14a Modul 3 Spotpreis-NNE per-interval dispatch data ────────────────
-    /// §14a Modul 3 (BNetzA BK6-22-300 Anlage 2 §3) per-dispatch-interval positions.
+    /// Per-dispatch-interval positions for a spot-linked Netzentgelt.
     ///
     /// Each entry represents one 15-min interval during which a spot-price-linked
     /// NNE rate applies. The caller fetches the EPEX Spot day-ahead price for each
@@ -2041,7 +2055,7 @@ pub struct NneInput {
 ///
 /// ## Regulatory basis
 ///
-/// **Not a §14a module.** BK6-22-300 defines exactly three — Modul 1 (pauschale
+/// **Not a §14a module.** BK8-22/010-A defines exactly three — Modul 1 (pauschale
 /// Reduzierung), Modul 2 (prozentuale Arbeitspreisreduzierung) and Modul 3
 /// (zeitvariable Netzentgelte in three Tarifstufen) — and none of them is
 /// spot-linked. See [`ArbeitspreisModell::SpotpreisNetzentgelt`], which states
@@ -2620,7 +2634,7 @@ mod input_model_tests {
             Reduktionsfaktor::new(dec!(5)).is_err(),
             "5x is not a reduction"
         );
-        assert_eq!(Reduktionsfaktor::REGELFALL.get(), dec!(0.85));
+        assert_eq!(Reduktionsfaktor::REGELFALL.get(), dec!(0.40));
     }
 
     /// The charged energy is the same figure whichever model priced it.
@@ -2707,7 +2721,7 @@ mod input_model_tests {
                 Some(M::Modul3),
             ),
             (
-                // Not a §14a module at all — BK6-22-300 defines exactly three,
+                // Not a §14a module at all — BK8-22/010-A defines exactly three,
                 // none of them spot-linked.
                 ArbeitspreisModell::SpotpreisNetzentgelt { intervalle: vec![] },
                 None,
@@ -2718,7 +2732,7 @@ mod input_model_tests {
         }
     }
 
-    /// BK6-22-300 numbers the three modules in a specific way, and this project
+    /// BK8-22/010-A numbers the three modules in a specific way, and this project
     /// had them shuffled: the time-variable model was labelled Modul 2 and a
     /// spot-linked Netzentgelt was labelled Modul 3.
     ///
@@ -2737,7 +2751,7 @@ mod input_model_tests {
         assert!(M::Modul3.label().contains("zeitvariable Netzentgelte"));
     }
 
-    /// `Modul 1 + Modul 3` is the only pair BK6-22-300 offers.
+    /// `Modul 1 + Modul 3` is the only pair BK8-22/010-A offers.
     ///
     /// Modul 1 and Modul 2 are the two forms of the *base* module and the
     /// Anschlussnutzer picks one; Modul 3 adds to the pauschale Modul 1 and not

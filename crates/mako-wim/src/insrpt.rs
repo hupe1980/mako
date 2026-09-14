@@ -57,7 +57,7 @@
 //!
 //! ## Regulatory basis
 //!
-//! - **BK6-22-024 Anlage 2b** — WiM Strom Teil 2 Kap. 1.2
+//! - **BK6-24-174 Anlage 2b** — WiM Strom Teil 2 Kap. 1.2
 //! - **AWH WiM Gas 2.0 Kap. 4.3** (gültig ab 01.10.2026)
 //! - **INSRPT AHB 1.1g / MIG 1.1a** — EDI@Energy inspection report format
 

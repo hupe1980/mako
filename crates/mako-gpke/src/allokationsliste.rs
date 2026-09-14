@@ -27,8 +27,8 @@
 //!
 //! - **BDEW/VKU/bne/GEODE AWH „Prozesse Mehr-/Mindermengen Strom Gas" V2.1**
 //!   (18.03.2025) — the MMM process family. There is no BNetzA Festlegung for
-//!   it — BK6-22-024 covers GPKE Teil 4 and WiM Strom, and neither mentions
-//!   Allokationslisten.
+//!   it — BK6-22-024 covers GPKE Teil 4 and BK6-24-174 the rest, and neither
+//!   mentions Allokationslisten.
 
 use mako_engine::{
     error::WorkflowError,

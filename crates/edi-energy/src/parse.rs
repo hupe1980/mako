@@ -671,6 +671,33 @@ impl Parser {
         )
     }
 
+    /// Read only the interchange header — the `UNB` envelope.
+    ///
+    /// Independent of whether the messages inside parse. The envelope carries
+    /// the facts a receiver has to act on before it looks at any message: who
+    /// sent it, its control reference, and `DE 0035` — the test indicator a
+    /// production endpoint must refuse (Allgemeine Festlegungen § 3). Deciding
+    /// those from a full parse makes them conditional on every message being
+    /// well formed, so one malformed message inside a test interchange would
+    /// let the whole thing through.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when the bytes are not decodable EDIFACT at all, or carry
+    /// no `UNB`.
+    pub fn parse_interchange_header(
+        &self,
+        reader: impl Read,
+    ) -> Result<crate::interchange::InterchangeHeader, Error> {
+        let reader_cfg = self.config.to_reader_config();
+        let decoded = edifact_rs::decode_reader(BufReader::new(reader)).map_err(Error::Parse)?;
+        let segments: Vec<OwnedSegment> =
+            from_bufread_with_config(BufReader::new(decoded), reader_cfg)
+                .collect::<Result<_, _>>()
+                .map_err(Error::Parse)?;
+        parse_interchange_header_from_segments(&segments)
+    }
+
     /// Fully parse an EDIFACT interchange into a `ParsedInterchange`, materialising
     /// all messages eagerly.
     ///

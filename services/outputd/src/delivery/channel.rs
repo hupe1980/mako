@@ -114,11 +114,20 @@ pub struct DeliveryOutcome {
     pub evidence: Option<serde_json::Value>,
 }
 
-/// A relay this daemon POSTs documents to: a URL and an optional bearer token.
+/// A relay this daemon POSTs documents to: a URL and the credential that
+/// authenticates the push.
 ///
 /// The contract `accountingd` uses for its bank adapter. The body is JSON with
 /// the document base64-encoded — a relay is an endpoint an operator writes in
 /// whatever language they like, and multipart is more to ask of them.
+///
+/// The credential is both the bearer token and the [Standard Webhooks] signing
+/// key: the body carries a customer's invoice, their name, e-mail address, MaLo
+/// and Kundennummer, so the relay has to be able to tell a mako push from
+/// anything else that reached its URL. Startup refuses a relay URL configured
+/// without one.
+///
+/// [Standard Webhooks]: https://www.standardwebhooks.com/
 #[derive(Debug, Clone)]
 pub struct Relay {
     pub url: String,
@@ -140,7 +149,15 @@ pub struct RelayReceipt {
     pub delivered: Option<bool>,
 }
 
-/// POST one document to a relay.
+/// POST one document to a relay, signed.
+///
+/// `id` is the Standard Webhooks message id — the key the relay deduplicates
+/// on, so every retry of one delivery carries the same one.
+///
+/// The signature covers `{id}.{timestamp}.{body}` with the relay credential, so
+/// the receiver can tell a mako push from any other POST that reached its URL
+/// and a captured one cannot be replayed past the tolerance. This is the one
+/// signer the whole platform uses.
 ///
 /// # Errors
 ///
@@ -149,12 +166,25 @@ pub struct RelayReceipt {
 pub async fn send_to_relay(
     http: &reqwest::Client,
     relay: &Relay,
+    id: &str,
     body: &serde_json::Value,
 ) -> Result<DeliveryOutcome> {
     use secrecy::ExposeSecret as _;
-    let mut request = http.post(&relay.url).json(body);
+    let payload = serde_json::to_vec(body).context("serialise the relay body")?;
+    let mut request = http
+        .post(&relay.url)
+        .header("Content-Type", "application/json")
+        .body(payload.clone());
     if let Some(key) = relay.api_key.as_ref() {
         request = request.bearer_auth(key.expose_secret());
+        for (name, value) in mako_service::webhook::headers(
+            key.expose_secret().as_bytes(),
+            id,
+            time::OffsetDateTime::now_utc().unix_timestamp(),
+            &payload,
+        ) {
+            request = request.header(name, value);
+        }
     }
     let response = request.send().await.context("relay request")?;
     let status = response.status();

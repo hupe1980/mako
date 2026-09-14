@@ -58,7 +58,10 @@ let due = fristen::aperak_strom_due_at(received_at);
 
 // The business answer is a clock time on the n-th Werktag after the
 // Übertragungstag — never a duration. Ask the per-PID table, do not count.
-let due = fristen::antwort::obligation(55_001);
+// It yields the **published obligation**, not an instant: `None` means no
+// Festlegung this codebase has read quantifies the window.
+let obligation: Option<&'static AntwortObligation> =
+    fristen::antwort::antwort_obligation(55_001);
 
 // Werktage arithmetic, where a Festlegung really does count days:
 // Saturday counts, Sunday and a BDEW MaKo holiday do not.
@@ -67,7 +70,7 @@ let deadline = fristen::add_werktage(received_date, 5, HolidayCalendar::BdewMaKo
 
 Deadline arithmetic is in **Europe/Berlin**; use `time::OffsetDateTime`, never
 `chrono`. The governing Festlegung differs per process family — GPKE Teil 1–3 is
-BK6-24-174, GPKE Teil 4 and WiM Strom are BK6-22-024, GeLi Gas is
+BK6-24-174, WiM Strom too, GPKE Teil 4 is BK6-22-024, GeLi Gas is
 BK7-24-01-009 — so take the citation from the domain crate's own `AGENTS.md`
 rather than from an example.
 

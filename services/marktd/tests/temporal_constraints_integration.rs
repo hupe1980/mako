@@ -41,6 +41,7 @@ async fn seed_malo(pool: &PgPool, malo_id: &str) {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_malo_cannot_have_two_netzbetreiber_on_the_same_day() {
     let Some((pool, _pg)) = test_pool().await else {
         return;
@@ -99,6 +100,7 @@ async fn a_malo_cannot_have_two_netzbetreiber_on_the_same_day() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_melo_cannot_have_two_messstellenbetreiber_on_the_same_day() {
     let Some((pool, _pg)) = test_pool().await else {
         return;
@@ -137,6 +139,7 @@ async fn a_melo_cannot_have_two_messstellenbetreiber_on_the_same_day() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_netzbetreiber_cannot_publish_two_price_sheets_valid_on_one_day() {
     let Some((pool, _pg)) = test_pool().await else {
         return;
@@ -173,6 +176,7 @@ async fn a_netzbetreiber_cannot_publish_two_price_sheets_valid_on_one_day() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_open_started_price_sheet_exists_at_most_once_per_party() {
     let Some((pool, _pg)) = test_pool().await else {
         return;
@@ -205,6 +209,7 @@ async fn an_open_started_price_sheet_exists_at_most_once_per_party() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_tariff_window_must_be_a_real_interval() {
     let Some((pool, _pg)) = test_pool().await else {
         return;
@@ -250,6 +255,7 @@ async fn a_tariff_window_must_be_a_real_interval() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_strom_mehr_mindermengenpreise_are_keyed_by_month_alone() {
     let Some((pool, _pg)) = test_pool().await else {
         return;
@@ -279,6 +285,7 @@ async fn the_strom_mehr_mindermengenpreise_are_keyed_by_month_alone() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_gas_mabis_zaehlpunkt_cannot_be_recorded() {
     let Some((pool, _pg)) = test_pool().await else {
         return;
@@ -302,6 +309,7 @@ async fn a_gas_mabis_zaehlpunkt_cannot_be_recorded() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_tariff_zone_resolves_from_typed_weekday_and_wall_clock_columns() {
     use mako_markt::repository::ZaehlzeitRepository as _;
     use marktd::pg::PgZaehlzeitRepository;
@@ -407,6 +415,7 @@ type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgr
 /// „sonstige Leistung" invoice go to him in that role (Teil 2 Kap. 3.4.4 / 3.4.5)
 /// and the Lieferantenwechsel-Meldungen are the one carve-out.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_netznutzungsvertrag_records_who_the_netznutzer_is() {
     let Some((pool, _pg)) = test_pool().await else {
         return;

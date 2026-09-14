@@ -174,13 +174,13 @@ pub async fn sweep_deadlines(rt: &WorkerRuntime) -> Result<SweepOutcome, sqlx::E
             AND deadline_at IS NOT NULL
             AND deadline_alerted_at IS NULL
             AND deadline_at <= now() + make_interval(hours => $1::int)
-            AND ($2::text IS NULL OR tenant = $2)
+            AND tenant = $2
           ORDER BY deadline_at ASC
           LIMIT $3",
         terminal = crate::pg::projection::TERMINAL_STATE_SQL,
     ))
     .bind(i32::try_from(rt.deadline_warn_hours).unwrap_or(24))
-    .bind(tenant_filter(&rt.tenant))
+    .bind(require_tenant(&rt.tenant)?)
     .bind(DEADLINE_ALERT_LIMIT)
     .fetch_all(&rt.pool)
     .await?;
@@ -369,12 +369,19 @@ pub async fn sweep_parity(rt: &WorkerRuntime) -> Result<bool, sqlx::Error> {
     .await)
 }
 
-fn tenant_filter(tenant: &str) -> Option<String> {
+/// The tenant this sweep is scoped by, or a refusal.
+///
+/// An empty tenant is not "every tenant": it is a deployment that failed to say
+/// whose processes it watches. Widening the sweep would raise another operator's
+/// deadline alerts and emit them as CloudEvents under this tenant's name, on a
+/// timer and with no caller involved.
+fn require_tenant(tenant: &str) -> Result<&str, sqlx::Error> {
     if tenant.is_empty() {
-        None
-    } else {
-        Some(tenant.to_owned())
+        return Err(sqlx::Error::Configuration(
+            "obsd: the deadline sweep refuses to run without a tenant".into(),
+        ));
     }
+    Ok(tenant)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

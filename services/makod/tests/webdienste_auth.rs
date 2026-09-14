@@ -88,6 +88,7 @@ async fn an_anonymous_request_is_rejected() {
         handler().await,
         Some(auth_state(authorizer(None, DefaultPolicy::PermitAll))),
         1024 * 1024,
+        true,
     );
     let res = app.oneshot(post(None)).await.expect("service call");
     assert_eq!(
@@ -104,6 +105,7 @@ async fn an_unknown_token_is_rejected() {
         handler().await,
         Some(auth_state(authorizer(None, DefaultPolicy::PermitAll))),
         1024 * 1024,
+        true,
     );
     let res = app
         .oneshot(post(Some("not-the-configured-token")))
@@ -130,6 +132,7 @@ permit(
         handler().await,
         Some(auth_state(authorizer(Some(extra), DefaultPolicy::Deny))),
         1024 * 1024,
+        true,
     );
     let res = app
         .oneshot(post(Some("s3cret")))
@@ -159,6 +162,7 @@ permit(
         handler().await,
         Some(auth_state(authorizer(Some(extra), DefaultPolicy::Deny))),
         1024 * 1024,
+        true,
     );
     let res = app
         .oneshot(post(Some("s3cret")))
@@ -179,7 +183,7 @@ permit(
 /// anything, because they would pass whether or not auth were wired.
 #[tokio::test]
 async fn the_opt_out_removes_the_layer() {
-    let app = webdienste::build_app(handler().await, None, 1024 * 1024);
+    let app = webdienste::build_app(handler().await, None, 1024 * 1024, true);
     let res = app.oneshot(post(None)).await.expect("service call");
     assert_ne!(
         res.status(),
@@ -212,6 +216,7 @@ async fn a_control_order_without_a_caller_mp_id_is_refused() {
             tenant: Arc::from(TENANT),
         }),
         1024 * 1024,
+        true,
     );
     let res = app
         .oneshot(
@@ -255,6 +260,7 @@ async fn a_control_order_with_a_caller_mp_id_passes_the_identity_gate() {
             tenant: Arc::from(TENANT),
         }),
         1024 * 1024,
+        true,
     );
     let res = app
         .oneshot(
@@ -321,6 +327,7 @@ async fn wim_app() -> axum::Router {
             tenant: Arc::from(TENANT),
         }),
         1024 * 1024,
+        true,
     )
 }
 
@@ -368,4 +375,76 @@ async fn a_wim_anmeldung_from_the_named_netzbetreiber_is_accepted() {
         .await
         .expect("service call");
     assert_eq!(res.status(), StatusCode::ACCEPTED);
+}
+
+// ── Caller identity is a deployment declaration ──────────────────────────────
+
+/// Without a declared proxy, the caller-identity header is not read.
+///
+/// `x-mako-client-mp-id` decides whose name a § 14a Steuerungsauftrag or a WiM
+/// Anmeldung is placed in. It is evidence only where a fronting proxy sets it
+/// and strips any copy the client sent, and `makod` cannot tell the two apart —
+/// so an undeclared deployment ignores it and the handler refuses for want of a
+/// caller, rather than attributing the order to whoever asked.
+#[tokio::test]
+async fn an_undeclared_deployment_ignores_the_caller_identity_header() {
+    let app = webdienste::build_app(
+        handler().await,
+        Some(auth_state(authorizer(None, DefaultPolicy::PermitAll))),
+        1024 * 1024,
+        false,
+    );
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(CONTROL_URI)
+                .header("authorization", "Bearer s3cret")
+                .header("transactionId", "tx-untrusted-1")
+                .header("creationDateTime", "2026-08-18T10:00:00Z")
+                .header(webdienste::CLIENT_MP_ID_HEADER, "9900001000002")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("service call");
+
+    let status = res.status();
+    let body = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default();
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "an order attributed from an untrusted header must not be accepted: {body}"
+    );
+}
+
+/// A repeated header is refused outright where it *is* trusted: resolving it
+/// first-wins would let a second copy ride along behind the proxy's.
+#[tokio::test]
+async fn a_repeated_caller_identity_header_is_refused() {
+    let app = webdienste::build_app(
+        handler().await,
+        Some(auth_state(authorizer(None, DefaultPolicy::PermitAll))),
+        1024 * 1024,
+        true,
+    );
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(CONTROL_URI)
+                .header("authorization", "Bearer s3cret")
+                .header("transactionId", "tx-dup-1")
+                .header("creationDateTime", "2026-08-18T10:00:00Z")
+                .header(webdienste::CLIENT_MP_ID_HEADER, "9900001000002")
+                .header(webdienste::CLIENT_MP_ID_HEADER, "9900357000004")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("service call");
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }

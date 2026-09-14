@@ -80,7 +80,7 @@ dispute, because that tax is owed under §14c Abs. 1 UStG and is still not deduc
 ### The market branch — published Antwortcodes, three families
 
 The pipeline above answers „is this invoice plausible" in mako's own vocabulary
-([`Finding`]), which is what an operator queue and a § 147 AO receipt need. It
+(`Finding`), which is what an operator queue and a § 147 AO receipt need. It
 is *not* what the market resolves: the answer owed is a REMADV carrying
 **published Antwortcodes**, one per defect, each naming the Ebene and — on the
 Positionsebene — the Positionsnummer.
@@ -162,7 +162,7 @@ Set `max_zahlungsziel_days = 0` in `CheckConfig` to disable this check.
 
 ### Stage 8 — ToU-aware tariff matching
 
-For a time-of-use Preisblatt (§ 14a Modul 3, BK6-22-300), the bands come from
+For a time-of-use Preisblatt (§ 14a Modul 3, BK8-22/010-A Tenor 3.), the bands come from
 the `zeitvariablePreispositionen` extension, each entry pairing a
 `zaehlzeitregister` code with its price. There is **no** hard-coded HT/NT
 keyword list: the position's own `positionstext` is lower-cased and matched

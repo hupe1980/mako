@@ -217,7 +217,9 @@ async fn deliver(
                 .as_deref()
                 .ok_or_else(|| anyhow::anyhow!("EMAIL delivery has no target address"))?;
             let body = relay_body(pool, tenant, cfg, delivery, Some(to)).await?;
-            send_to_relay(http, &relay, &body).await.map(Into::into)
+            send_to_relay(http, &relay, &webhook_id(delivery), &body)
+                .await
+                .map(Into::into)
         }
         // A print service *pulls* from `GET /api/v1/spool`; the push is for
         // partners that offer an endpoint. With neither, the letter waits in
@@ -236,15 +238,28 @@ async fn deliver(
                 return Ok(DeliveryAttempt::AwaitingPickup);
             };
             let body = relay_body(pool, tenant, cfg, delivery, None).await?;
-            send_to_relay(http, &relay, &body).await.map(Into::into)
+            send_to_relay(http, &relay, &webhook_id(delivery), &body)
+                .await
+                .map(Into::into)
         }
         Channel::Erp => {
             let relay = relay(cfg.erp_webhook_url.as_deref(), cfg.erp_api_key.clone())
                 .ok_or_else(|| anyhow::anyhow!("no [delivery] erp_webhook_url configured"))?;
             let body = relay_body(pool, tenant, cfg, delivery, None).await?;
-            send_to_relay(http, &relay, &body).await.map(Into::into)
+            send_to_relay(http, &relay, &webhook_id(delivery), &body)
+                .await
+                .map(Into::into)
         }
     }
+}
+
+/// The Standard Webhooks message id a relay deduplicates on.
+///
+/// The delivery, not the attempt: a retry is the same message, and a relay that
+/// already accepted it must be able to say so rather than print the letter
+/// twice.
+fn webhook_id(delivery: &store::PendingDelivery) -> String {
+    format!("de.output.delivery/{}", delivery.delivery_id)
 }
 
 fn relay(url: Option<&str>, api_key: Option<secrecy::SecretString>) -> Option<Relay> {

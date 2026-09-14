@@ -1036,11 +1036,16 @@ that has none of those fields — it takes a BO4E `geschaeftspartner` — and go
 `201`. The customer was created with no name and no address, the invoice named
 nobody, and the demo passed.
 
-Every `Json<T>` request body now carries `#[serde(deny_unknown_fields)]`, so the
-same mistake is a `422` naming the field. The same guard enforces it, with four
-documented exemptions: three that carry `#[serde(flatten)]`, which serde refuses
-to combine with it, and `SmgwTyp2Push`, whose payload BSI TR-03109 defines
-rather than mako.
+Every `Json<T>` request body carries `#[serde(deny_unknown_fields)]`, so the
+same mistake is a `422` naming the field. The same guard enforces it, with eight
+documented exemptions, each argued in writing: `IssueDocumentRequest` and
+`RenderApiRequest` carry a `#[serde(flatten)]` field, which serde refuses to
+combine with it; `SmgwTyp2Push` carries a payload BSI TR-03109 defines rather
+than mako; and five BDEW **Energy API** schemas — `IdentificationParameter`,
+`MaloIdentResultPositive` (the `energy-api` model and its client-side mirror),
+`MaloIdentResultNegative` and `ApiRecord` — belong to the BDEW, whose forward
+compatibility is not mako's to redefine by refusing a counterparty's whole
+document over one added field.
 
 **A nested value is not a third case.** A COM or standalone BO read out of the
 extension map of the object that carried it — `ZeitvariablePreisposition` under

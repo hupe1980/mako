@@ -238,6 +238,9 @@ impl Daemon for Marktd {
             )
             .merge(swagger_ui())
             .with_state(state)
+            .layer(Extension(mako_service::oidc::ExpectedTenant(
+                cfg.markt.tenant.clone(),
+            )))
             .layer(Extension(verifier))
             .layer(Extension(InboundWebhookSecret(inbound_secret)))
             .layer(Extension(cedar))

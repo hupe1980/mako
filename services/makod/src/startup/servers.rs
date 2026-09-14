@@ -372,6 +372,11 @@ pub(crate) struct WebdiensteServerConfig {
     /// Drops the auth layer. Only sound behind a proxy that terminates mTLS
     /// with the BDEW PKI CA and enforces access there.
     pub allow_unauthenticated: bool,
+    /// Take the caller's Marktpartner-ID from `x-mako-client-mp-id`.
+    ///
+    /// Only sound where a proxy sets that header and strips any copy the client
+    /// sent; otherwise the value is the caller's own claim about who it is.
+    pub trust_client_mp_id_header: bool,
 }
 
 /// Build and start the BDEW API-Webdienste Strom server.
@@ -403,13 +408,18 @@ pub(crate) async fn serve_webdienste(
         })
     };
 
-    let app = webdienste::build_app(handler, auth, cfg.max_body_bytes)
-        .merge(health::router(deps.health_state.clone()))
-        // Per-peer rate limit, same GCRA policy as the AS4 port, and W3C
-        // trace-context capture. Merged routes first: `Router::layer` wraps only
-        // what is already in the router.
-        .layer(axum::middleware::from_fn(as4_ingest::rate_limit_middleware))
-        .layer(axum::middleware::from_fn(super::trace_ctx_middleware));
+    let app = webdienste::build_app(
+        handler,
+        auth,
+        cfg.max_body_bytes,
+        cfg.trust_client_mp_id_header,
+    )
+    .merge(health::router(deps.health_state.clone()))
+    // Per-peer rate limit, same GCRA policy as the AS4 port, and W3C
+    // trace-context capture. Merged routes first: `Router::layer` wraps only
+    // what is already in the router.
+    .layer(axum::middleware::from_fn(as4_ingest::rate_limit_middleware))
+    .layer(axum::middleware::from_fn(super::trace_ctx_middleware));
 
     info!(
         addr = %cfg.addr,

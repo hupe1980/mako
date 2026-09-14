@@ -4,6 +4,11 @@
 port   = 9380
 tenant = "9912345000005"
 
+# Demo only. Without it accountingd refuses to start with no `[oidc]` and no
+# `erp_hmac_secret`, which is the correct production posture — these are the
+# endpoints that move money, and the inbound webhook books ledger entries.
+allow_insecure_no_auth = true
+
 # Receives de.accounting.payment.due and the Jahresabschluss refund events.
 erp_webhook_url = "http://webhook:8000/events"
 

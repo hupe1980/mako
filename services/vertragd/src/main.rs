@@ -70,8 +70,12 @@ impl Daemon for Vertragd {
             // profiles and bank details across the tenant. Without it any token
             // valid for this deployment reaches those tools, and a portal
             // customer's token is one.
-            auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant)
-                .with_cedar(Arc::clone(&enforcer)),
+            auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
+                &cfg.mcp,
+                oidc.clone(),
+                Some(Arc::clone(&enforcer)),
+                &cfg.tenant,
+            ),
         });
 
         let handler_ctx = Arc::new(handlers::Ctx {

@@ -22,9 +22,10 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 **Page:** <https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/831_gpke/gpke_node.html>
 
 **Current ruling:**
-- **BK6-24-174** (Beschluss 24.10.2024) — GPKE Teil 1–3 (Anlagen 1a–1c) + MaBiS.
-  **Not WiM**: the Wechselprozesse im Messwesen were not reissued here — see
-  [WiM](#wim-wechselprozesse-im-messwesen) below.
+- **BK6-24-174** (Beschluss 24.10.2024) — GPKE Teil 1–3 (Anlagen 1a–1c), MaBiS
+  (Anlage 3) and, through Tenorziffer 2, the amendments to **WiM** Teil 1 and
+  Teil 2 (Anlagen 2a/2b) — see [WiM](#wim-wechselprozesse-im-messwesen) below.
+  WiM keeps its own Aktenzeichen, BK6-09-034.
 - **BK6-22-024** (Beschluss 21.03.2024) — **LFW24-Festlegung** („beschleunigter werktäglicher
   Lieferantenwechsel in 24 Stunden", statutory anchor **§20a EnWG**): re-issued GPKE Teil 2
   und Teil 4 and absorbed the MPES processes into the GPKE (effective 06.06.2025).
@@ -115,7 +116,7 @@ siehe unten.
 | BK6-24-210-1 | MaBiS-Hub — Messwertverarbeitung / Pseudonymisierung | 02.10.2024 |
 | BK6-24-210-2 | MaBiS-Hub — Abrechnung | 02.10.2024 |
 
-> **MaBiS-Hub:** no Beschluss yet (the H1-2026 target slipped; -1 consultation closed 17.11.2025); Hub go-live still planned H2 2028.
+> **MaBiS-Hub:** no Beschluss. The BK6-24-210-1 consultation closed 17.11.2025; Hub go-live is scheduled for H2 2028.
 
 **Selected Mitteilungen:**
 
@@ -132,8 +133,11 @@ siehe unten.
 **Page:** <https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/834_wim/BK6_WiM_node_neu.html>
 
 **Current ruling:**
-- **BK6-22-024** — WiM was **not** reissued under BK6-24-174; that decision
-  covers GPKE and MaBiS. Cite BK6-22-024 for every WiM process.
+- **BK6-09-034** (Beschluss 09.09.2010) is the WiM Festlegung and keeps its own
+  Aktenzeichen. Its Anlage 1 — Teil 1 „Fokus Basis-Prozesse" und Teil 2 „Fokus
+  Übermittlung von Werten" — is amended by **BK6-24-174 Tenorziffer 2** through
+  that Beschluss's Anlagen 2a/2b; the amendment before it was **BK6-22-024**
+  (21.03.2024). Cite the Teil and chapter, and BK6-24-174 for the current text.
 
 **Process documents:**
 
@@ -152,7 +156,7 @@ siehe unten.
 - WiM-Rechnung (INVOIC, PID 31003) — Abrechnung von Dienstleistungen im Messwesen, beide Sparten
 - MSB-Rechnung (INVOIC, PID 31009) — Messstellenbetrieb an NB, LF oder ESA
 
-**Fristen (WiM Strom):** die fachliche Antwort ist **je Prozess** befristet — Kündigung (55039) **3 WT**, Anmeldung (55042) **5 WT**, Abmeldung (55051) **7 WT**, Verpflichtungsanfrage (55168) **1 WT** (BK6-22-024 Anlage 2a, Kap. 2.2.2 / 2.3.2 /
+**Fristen (WiM Strom):** die fachliche Antwort ist **je Prozess** befristet — Kündigung (55039) **3 WT**, Anmeldung (55042) **5 WT**, Abmeldung (55051) **7 WT**, Verpflichtungsanfrage (55168) **1 WT** (BK6-24-174 Anlage 2a, Kap. 2.2.2 / 2.3.2 /
 2.4.2 / **2.4.2 Nr. 4** — the Verpflichtungsanfrage is Prozessschritt 3 of the
 *Ende Messstellenbetrieb*, not of Kap. 2.5 „Verpflichtung gMSB"). Samstage, Sonntage und gesetzliche Feiertage sind keine Werktage.
 

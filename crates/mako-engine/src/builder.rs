@@ -2068,7 +2068,6 @@ where
                         //
                         // We emit a debug-level log here (not warn) because the vast majority
                         // of deployments are single-role and this overlap is expected/harmless.
-                        #[cfg(feature = "tracing")]
                         tracing::debug!(
                             pid,
                             previous_module = prev,
@@ -2076,7 +2075,6 @@ where
                             "PID registered by multiple modules with DeploymentRoles::all(); \
                              last module wins (use with_deployment_roles for strict routing)",
                         );
-                        let _ = prev; // suppress unused-variable warning when tracing is off
                     } else {
                         // Explicit roles: the FIRST module to register a PID retains ownership.
                         // Restore the previous (first) owner and emit a warning so the operator
@@ -2085,7 +2083,6 @@ where
                         // WiM billing; conversation-ID routing is the long-term solution, but
                         // first-wins gives correct behaviour for all current deployments.
                         pid_owners.insert(pid, prev); // restore first owner
-                        #[cfg(feature = "tracing")]
                         tracing::warn!(
                             pid,
                             first_module = prev,
@@ -2095,8 +2092,6 @@ where
                              Verify PID registration is correct for this deployment.",
                             module.name(),
                         );
-                        #[cfg(not(feature = "tracing"))]
-                        let _ = prev; // suppress unused-variable warning when tracing is off
                     }
                 }
             }

@@ -53,12 +53,72 @@ pub struct Config {
     pub subscription: SubscriptionConfig,
     #[serde(default)]
     pub worker: WorkerConfig,
+    /// OIDC token verification for the HTTP API. Without it every request is
+    /// admitted with synthetic dev-admin claims, which is a posture
+    /// [`Self::check_auth_posture`] refuses to start in.
     #[serde(default)]
     pub oidc: Option<OidcConfig>,
     /// MCP server authentication. Supports OIDC + API-key fallback, or dev mode.
     /// See `[mcp]` in TOML — e.g. `api_key = "env:OBSD_MCP_API_KEY"`.
     #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
+
+    /// Start without HTTP token verification and without inbound webhook
+    /// signing (dev/test only).
+    ///
+    /// Both doors lead to the process read model — who this operator deals
+    /// with, on which Marktlokation, and which Fristen it has missed — so the
+    /// posture is asked for by name.
+    #[serde(default)]
+    pub allow_insecure_no_auth: bool,
+}
+
+impl Config {
+    /// Refuse to start in a posture that leaves the process read model open.
+    ///
+    /// The two mechanisms are checked together because each guards a different
+    /// door into the same daemon: OIDC guards the REST and MCP surfaces, and
+    /// the inbound HMAC guards `POST /webhook`, the one route no bearer token
+    /// ever reaches.
+    ///
+    /// # Errors
+    ///
+    /// When either is unconfigured and `allow_insecure_no_auth` is not set.
+    pub fn check_auth_posture(&self) -> anyhow::Result<()> {
+        if self.allow_insecure_no_auth {
+            tracing::warn!(
+                "obsd: allow_insecure_no_auth is set — the process read model, the overdue \
+                 Fristen list and the § 7a Abs. 5 EnWG Gleichbehandlung report are served to \
+                 any caller, and POST /webhook accepts unsigned events into the projection"
+            );
+            return Ok(());
+        }
+        let mut fehlt = Vec::new();
+        if self.oidc.is_none() {
+            fehlt.push(
+                "[oidc] — without it every REST and MCP route is admitted with dev claims: \
+                 the process read model with its counterparties and Marktlokationen, the \
+                 list of breached Antwortfristen, and the § 7a Abs. 5 EnWG \
+                 Gleichbehandlung report"
+                    .to_owned(),
+            );
+        }
+        if self.webhook.inbound_secret.is_none() {
+            fehlt.push(
+                "webhook.inbound_secret — without it POST /webhook accepts any unsigned body, \
+                 and a forged event closes an open process or anchors a Frist that was never \
+                 owed"
+                    .to_owned(),
+            );
+        }
+        anyhow::ensure!(
+            fehlt.is_empty(),
+            "obsd refuses to start: {}. Configure them, or set \
+             allow_insecure_no_auth = true to accept an unauthenticated deployment.",
+            fehlt.join("; ")
+        );
+        Ok(())
+    }
 }
 
 impl mako_service::ServiceConfig for Config {

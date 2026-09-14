@@ -215,6 +215,11 @@ campaign) — call the same cores as their REST endpoints, which require
 inspects the tool name of each `tools/call` and enforces that same write action,
 so an LF-role token cannot escalate through MCP to a write it is refused on REST.
 
+A configured `[mcp]` key is held to the same rules. It authorizes as
+`User::"<key name>"` under the roles its `roles` list declares, so a key reaches
+the two destructive tools only where it carries `MSB`, `NB` or `ADMIN` — the
+gate does not lapse because the caller presented a key instead of a token.
+
 ### Outbound CloudEvents are signed
 
 Every edmd-originated CloudEvent — direct-push `stored`/`quality.warning`,
@@ -2352,7 +2357,7 @@ sequenceDiagram
 | `LIEFERENDE` | `vertragd` on Kündigung | Billing cutoff for final invoice |
 | `JAHRESABLESUNG` | NB background job or ERP | §40 EnWG annual billing accuracy |
 | `ZWISCHENABLESUNG` | LF or ERP | On-demand (tariff change, billing dispute) |
-| `SPERRUNG` | `sperrd` before disconnection | §41f EnWG (payment default; §19 StromGVV/GasGVV now covers only the illegal-use case) |
+| `SPERRUNG` | `sperrd` before disconnection | §41f EnWG (payment default; §19 StromGVV/GasGVV covers only the illegal-use case) |
 | `ENTSPERRUNG` | `sperrd` after reconnection | §41f Abs. 7 EnWG — Wiederherstellung unverzüglich |
 | `SONDERABLESUNG` | MSB on an INSRPT technische Änderung / Gerätebefund | Billing restart after meter replacement |
 | `INSRPT_STOERUNG` | MSB on an INSRPT Störungsmeldung (PID 23001) | Field service after a reported fault |
@@ -2693,12 +2698,10 @@ inbound_secret = "env:EDMD_INBOUND_SECRET"  # optional; omit for dev
 # Self-registers with marktd on startup — no manual curl required.
 webhook_url   = "http://edmd:8380/webhook"  # public URL marktd POSTs to
 subscriber_id = "edmd"                       # default
-# Exactly the two types edmd branches on. MSCONS reaches edmd through the
-# meter-read endpoints below, not through an event.
-event_types   = [
-  "de.mako.process.initiated",
-  "de.mako.process.completed",
-]
+# The subscribed event types are fixed in code — `de.mako.process.initiated`
+# and `de.mako.process.completed`, exactly the two edmd branches on. The block
+# takes no other key; MSCONS reaches edmd through the meter-read endpoints
+# below, not through an event.
 
 # [oidc]          # omit to disable auth (dev only — never omit in production)
 # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"

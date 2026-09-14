@@ -44,6 +44,18 @@ pub enum Vertragsart {
 }
 
 impl Vertragsart {
+    /// Every variant, in the order the schema lists them.
+    ///
+    /// The `from_db` fallback below cannot report an unknown value — it decodes
+    /// to `Sondervertrag` by design — so nothing at run time notices a
+    /// `CHECK` list that has drifted from this enum. `schema_enum_guard` holds
+    /// the two together instead.
+    pub const ALL: &'static [Self] = &[
+        Self::Grundversorgung,
+        Self::Ersatzversorgung,
+        Self::Sondervertrag,
+    ];
+
     /// Parse the stored column value; unknown text is a Sondervertrag, the
     /// regime with the *least* statutory privilege, so a typo cannot silently
     /// grant Grundversorgungs-Fristen.
@@ -94,6 +106,14 @@ pub enum Kuendigungsgrund {
 }
 
 impl Kuendigungsgrund {
+    /// Every variant, in the order the schema lists them.
+    pub const ALL: &'static [Self] = &[
+        Self::Ordentlich,
+        Self::Preisanpassung,
+        Self::Umzug,
+        Self::Lieferantenwechsel,
+    ];
+
     #[must_use]
     pub fn from_db(s: &str) -> Self {
         match s {

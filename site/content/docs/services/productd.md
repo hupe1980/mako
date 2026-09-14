@@ -68,9 +68,11 @@ publishing it: that needs a job-function axis, and `mako_roles` carries market
 roles only. `product_history` keeps every superseded version instead, so a price
 change is attributable where it is not separately approved.
 
-The `/mcp` surface is gated by the same verifier and the same policy — a JWT is
-checked for `use-mcp` — and a configured `[mcp]` key stays accepted for agent
-clients that mint no OIDC token. The two § 41c comparison-feed routes are public
+The `/mcp` surface is gated by the same verifier and the same policy, for both
+caller kinds: a JWT is checked for `use-mcp` under its `mako_roles`, and a
+configured `[mcp]` key under the roles its `roles` list declares. Because
+`use-mcp` here demands LF, MSB, ESA or ADMIN, a key for an agent client needs one
+of them spelled out — a role-less key is refused at the door. The two § 41c comparison-feed routes are public
 by statute — see [below](#ss-41c-enwg-comparison-feed).
 
 ---

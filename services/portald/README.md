@@ -80,6 +80,9 @@ marktd_url      = "http://marktd:8180"
 outputd_url     = "http://outputd:9880"   # the document inbox behind /dokumente
 # …_api_key = "env:…"  — opaque service Bearer tokens
 
+# Required — the MCP tools take a `malo_id` and carry no customer token, so
+# whoever reaches /mcp reads every customer in the tenant. portald refuses to
+# start without a key unless `allow_insecure_no_auth = true`.
 [mcp]
 api_key = "env:PORTALD_MCP_API_KEY"
 ```

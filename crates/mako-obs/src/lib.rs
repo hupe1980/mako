@@ -28,7 +28,7 @@
 //! | Process family | Regulatory deadline | Source |
 //! |---|---|---|
 //! | GPKE Strom | a clock time on the 1. WT nach dem ÜT (11:00 / 06:00 / 05:00 / 09:00) | BK6-24-174 GPKE Teil 2 |
-//! | WiM, beide Sparten | 3 / 5 / 7 / 1 Werktage je PID | BK6-22-024 Anlage 2a · AWH WiM Gas 2.0 |
+//! | WiM, beide Sparten | 3 / 5 / 7 / 1 Werktage je PID | BK6-24-174 Anlage 2a · AWH WiM Gas 2.0 |
 //! | GeLi Gas | Ablauf des 4. / 3. / 2. Werktags | BK7-24-01-009 |
 //!
 //! | Module | Content |

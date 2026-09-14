@@ -52,14 +52,25 @@ use std::path::{Path, PathBuf};
 /// Returns `true` when every timestamp on a wire is formatted.
 pub fn run(workspace_root: &Path) -> bool {
     let mut findings = Vec::new();
+    let mut scanned = 0usize;
     for dir in ["services", "crates"] {
-        collect(&workspace_root.join(dir), &mut findings);
+        collect(&workspace_root.join(dir), &mut scanned, &mut findings);
+    }
+
+    // A guard that read no file finds no offending field, and reports the
+    // clean line for it.
+    if scanned == 0 {
+        eprintln!(
+            "check-wire-timestamps: the scan read no source file under services/ or crates/ — \
+             the layout has probably changed"
+        );
+        return false;
     }
 
     if findings.is_empty() {
         println!(
-            "check-wire-timestamps: every `time` value on a JSON wire is formatted, \
-             not serialised as a component array"
+            "check-wire-timestamps: every `time` value on a JSON wire in {scanned} source \
+             file(s) is formatted, not serialised as a component array"
         );
         return true;
     }
@@ -80,8 +91,8 @@ pub fn run(workspace_root: &Path) -> bool {
     false
 }
 
-/// Every `.rs` file under `dir`.
-fn collect(dir: &Path, findings: &mut Vec<(PathBuf, usize, String)>) {
+/// Every `.rs` file under `dir`, counting what it read into `scanned`.
+fn collect(dir: &Path, scanned: &mut usize, findings: &mut Vec<(PathBuf, usize, String)>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -91,8 +102,9 @@ fn collect(dir: &Path, findings: &mut Vec<(PathBuf, usize, String)>) {
             if path.file_name().is_some_and(|n| n == "target") {
                 continue;
             }
-            collect(&path, findings);
+            collect(&path, scanned, findings);
         } else if path.extension().is_some_and(|e| e == "rs") {
+            *scanned += 1;
             scan(&path, findings);
         }
     }
@@ -372,6 +384,15 @@ fn named_field_type(line: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+
+    /// A scan that reaches no file has checked nothing, and must say so rather
+    /// than report the clean line.
+    #[test]
+    fn refuses_a_tree_it_found_nothing_in() {
+        assert!(!super::run(std::path::Path::new(
+            "/nonexistent/mako/workspace/root"
+        )));
+    }
     use super::{offending_lines, unformatted_derive_fields};
 
     /// The exact lines that shipped the bug, and the exact lines that fixed it.

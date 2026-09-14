@@ -85,7 +85,7 @@ pub struct PreisblattResponse {
     /// Wall-clock time (UTC) when this sheet was last written.
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
-    /// §14a Modul 2 time-variable NNE price positions (BNetzA BK6-22-300).
+    /// §14a Modul 2 time-variable NNE price positions (BNetzA BK8-22/010-A).
     ///
     /// Extracted from `data.zeitvariablePreispositionen` for explicit typed access.
     /// Contains ToU (time-of-use) discount bands for controllable loads
@@ -98,7 +98,7 @@ pub struct PreisblattResponse {
     /// `null` / empty = no ToU bands configured (pure static NNE tariff).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub zeitvariable_preispositionen: Vec<serde_json::Value>,
-    /// §14a Modul 3 load-variable NNE pricing formula (BNetzA BK6-22-300 Anlage 2 §3).
+    /// §14a Modul 3 load-variable NNE pricing formula (BNetzA BK8-22/010-A Tenor 3.).
     ///
     /// Extracted from `data.lastvariablePreispositionen` for typed ERP consumption.
     /// Each element is a `LastvariablePreisposition` BO4E COM describing the
@@ -238,7 +238,7 @@ pub async fn put_preisblatt(
         return (StatusCode::UNPROCESSABLE_ENTITY, Json(e.to_json())).into_response();
     }
 
-    // ── Validate lastvariablePreispositionen (§14a Modul 3, BK6-22-300 Anlage 2 §3) ──
+    // ── Validate lastvariablePreispositionen (§14a Modul 3, BK8-22/010-A Tenor 3.) ──
     //
     // Validates each element against `rubo4e::current::LastvariablePreisposition`.
     // Rules enforced beyond the BO4E schema:
@@ -608,7 +608,7 @@ pub async fn put_preisblatt_messung(
     // BDEW business rules that are NOT enforced by the BO4E schema:
     //
     // 1. Each element must deserialize as `ZeitvariablePreisposition`.
-    // 2. `zaehlzeitregister` MUST be non-empty (§14a Modul 2, BK6-22-300):
+    // 2. `zaehlzeitregister` MUST be non-empty (§14a Modul 2, BK8-22/010-A):
     //    An MSB with ToU pricing MUST identify each band code (e.g. "HT", "NT", "ST").
     //    Without it, `invoic-checker` cannot match INVOIC 31009 positions against bands.
     // 3. Reject `bandNummer` (does NOT exist in BO4E v202607 — pre-standardization field).
@@ -656,7 +656,7 @@ pub async fn put_preisblatt_messung(
                 }
             };
 
-            // Business rule (§14a Modul 2, BK6-22-300): `zaehlzeitregister` is mandatory.
+            // Business rule (§14a Modul 2, BK8-22/010-A): `zaehlzeitregister` is mandatory.
             // Without it, `invoicd` / `invoic-checker` cannot route INVOIC positions to bands.
             match zvp.zaehlzeitregister.as_deref() {
                 None | Some("") => {
@@ -665,7 +665,7 @@ pub async fn put_preisblatt_messung(
                         Json(serde_json::json!({
                             "error": format!(
                                 "zeitvariablePreispositionen[{}]: 'zaehlzeitregister' is \
-                                 mandatory per §14a Modul 2 (BK6-22-300) — set it to the \
+                                 mandatory per §14a Modul 2 (BK8-22/010-A) — set it to the \
                                  TOU band code (e.g. \"HT\", \"NT\", \"ST\")",
                                 i
                             )

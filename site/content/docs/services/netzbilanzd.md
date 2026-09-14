@@ -965,7 +965,7 @@ Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6 (valid 01.09.2025).
 | Messdienstleistung | `EntgeltMessungAblesung` | `9990001 00062 3` |
 | Blindmehrarbeit | `Blindmehrarbeit` | `9990001 00047 5` |
 | §19 StromNEV-Umlage | `Paragraf19StromNevUmlage` | — |
-| Offshore-Netzumlage | `OffshoreHaftungsumlage` *(the levy was renamed, the article number was not)* | — |
+| Offshore-Netzumlage | `OffshoreHaftungsumlage` *(the BO4E `BdewArtikelnummer` variant for this levy; its wire value is `OFFSHORE_HAFTUNGSUMLAGE`)* | — |
 | KWKG-Umlage | `AbgabeKwkg` | — |
 
 Four position kinds carry **no** Artikelnummer at all: an Abschlag (it prices nothing), the

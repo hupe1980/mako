@@ -3,9 +3,11 @@
 
 # crates/mako-wim
 
-- Governed by **BK6-22-024 Anlagen 2a/2b** (WiM Strom Teil 1 und Teil 2) and the
-  **AWH WiM Gas 2.0** (gültig ab 01.10.2026). WiM was *not* reissued under
-  BK6-24-174 — cite BK6-22-024.
+- Governed by **WiM (Az. BK6-09-034)**, whose Anlage 1 — Teil 1 „Fokus
+  Basis-Prozesse" und Teil 2 „Fokus Übermittlung von Werten" — is amended by
+  **BK6-24-174 Anlagen 2a/2b** (Tenorziffer 2), the amendment before it being
+  BK6-22-024. Cite BK6-24-174 plus the Teil and the chapter; the Fristen tables
+  are unchanged from the BK6-22-024 edition, the definitions are not. Gas follows the **AWH WiM Gas 2.0** (gültig ab 01.10.2026).
 - **One crate, both Sparten.** The Gas UTILMD PIDs 44039/44042/44051/44168/44183
   run the same workflows as their Strom twins; the Sparte picks the
   Entscheidungsbaum (`E_2000`…`E_2006` against `E_0200`…`E_0240`), the Codeliste
@@ -28,7 +30,13 @@
 
 - Never register a PID in more than one crate.
 - Never import workflow types from a sibling domain crate — use `mako-engine` traits and message types only.
-- Each crate depends on `mako-engine` and `edi-energy`; domain crates must not depend on each other.
+- Every domain crate depends on `mako-engine`. The EDIFACT ones also carry
+  `edi-energy` — `mako-gpke`, `mako-wim`, `mako-geli-gas` and `mako-mabis` as a
+  dev-dependency for the parse → validate → execute integration tests, while
+  production code uses `mako-engine`'s `ProfileRequirement`. `mako-gabi-gas`
+  carries `dvgw-edi` instead; `mako-redispatch` and `mako-emob` carry neither.
+- Shared decision and state-machine crates may be depended on: `mako-fristen`,
+  `mako-pruefung`, `mako-invoic`. Sibling **workflow** crates may not.
 
 The authoritative PID-ownership and APERAK-Fristen tables are in the
 root `AGENTS.md` under *Domain Rules*.

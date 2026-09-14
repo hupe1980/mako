@@ -121,7 +121,7 @@ let state = process.state_with_snapshot(&snapshot_store).await?;
 
 `execute_with_retry` reloads the full event stream on each attempt — stale state is never carried forward into a retry.
 
-`execute_and_collect` returns the fully-stamped [`OutboxMessage`] entries produced by `Workflow::handle`, with `causation_event_id` set to the `event_id` of the first persisted event — identical to what `execute_and_enqueue` writes into the `OutboxStore` atomically.  Use this in tests and render pipelines where you need the outbox messages after persisting without calling `handle()` a second time.
+`execute_and_collect` returns the fully-stamped `OutboxMessage` entries produced by `Workflow::handle`, with `causation_event_id` set to the `event_id` of the first persisted event — identical to what `execute_and_enqueue` writes into the `OutboxStore` atomically.  Use this in tests and render pipelines where you need the outbox messages after persisting without calling `handle()` a second time.
 
 ### Workflow state lifecycle
 
@@ -616,10 +616,11 @@ Each call to `catch_up_persistent` only writes streams whose cursors advanced, k
 
 ## `makod` production daemon
 
-`makod` assembles all modules into a production-ready process. For the complete
-configuration reference — all CLI flags, environment variables, TOML config,
-Docker/Kubernetes deployment, secrets management, and health checks — see the
-dedicated operator guide:
+`makod` assembles every `#[cfg]`-enabled domain module into one `EngineContext`
+— which modules those are follows from the Marktrolle features the binary was
+built with. For the complete configuration reference — all CLI flags,
+environment variables, TOML config, Docker/Kubernetes deployment, secrets
+management, and health checks — see the dedicated operator guide:
 
 **[`makod` Operator Guide →](@/docs/services/makod.md)**
 

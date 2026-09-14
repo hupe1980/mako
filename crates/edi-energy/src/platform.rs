@@ -219,6 +219,22 @@ impl Platform {
         )
     }
 
+    /// Read only the interchange header — the `UNB` envelope.
+    ///
+    /// Independent of whether the messages parse, so an envelope-level decision
+    /// — the Allgemeine Festlegungen § 3 test indicator above all — is not made
+    /// conditional on every message inside being well formed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when the bytes are not decodable EDIFACT, or carry no `UNB`.
+    pub fn parse_interchange_header(
+        &self,
+        data: &[u8],
+    ) -> Result<crate::interchange::InterchangeHeader, Error> {
+        crate::parse::Parser::with_config(ParseConfig::default()).parse_interchange_header(data)
+    }
+
     /// Fully parse a byte slice as an EDIFACT interchange, returning a
     /// [`ParsedInterchange`][crate::interchange::ParsedInterchange] that
     /// contains both the UNB envelope and all contained messages.

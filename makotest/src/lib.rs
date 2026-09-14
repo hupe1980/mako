@@ -24,6 +24,8 @@
 //! | [`edifact`] | `edi-energy` — build UTILMD/MSCONS/REMADV/ORDERS/ORDRSP/IFTSTA/QUOTES/APERAK/CONTRL, validate an interchange |
 //! | [`events`] | `mako-events` — the CloudEvents type catalog and its glob matcher |
 
+#![deny(unsafe_code)]
+
 pub mod antwortcodes;
 pub mod edifact;
 pub mod events;

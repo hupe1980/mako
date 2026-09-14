@@ -80088,7 +80088,7 @@
     "560": "Hinweis: Die Angabe Name und Adresse für die Ablesekarte wird nicht zur Identifikation genutzt",
     "566": "Hinweis: Altlieferant",
     "567": "Hinweis: Neulieferant",
-    "570": "Hinweis: Netzbetreiber Alt der Nachrichtenstruktur.",
+    "570": "Hinweis: Netzbetreiber Alt",
     "571": "Hinweis: Auslösender Marktpartner (LFA bei STS+7++ZG9, LFN bei STS+7++ZH0, NB bei STS+7++ZH1)",
     "572": "Hinweis: Kundenname aus Anmeldung Lieferant neu",
     "573": "Hinweis: Wenn keine andere Information für „Name und Adresse für die Ablesekarte“ vorliegt, wird das Segment aus dem Kundennamen im NAD+Z09 und der Adresse aus der Korrespondenzanschrift NAD+Z04 zusammengesetzt",
@@ -80131,7 +80131,7 @@
     "937": "Format: keine Nachkommastelle",
     "938": "Format: Möglicher Wert: <= 10",
     "950": "Format: Marktlokations- ID",
-    "951": "Format: Zählpunktbezeichnung stellt den ändern Stammdaten, übermittelt, oder unver- dargestellten vollzogenen rückwirkend",
+    "951": "Format: Zählpunktbezeichnung",
     "952": "Format: Gerätenummer nach DIN 43863-5",
     "953": "Format: Marktlokations- ID oder Zählpunktbezeichnung",
     "98": "Wenn MP-ID in SG2 NAD+MS (Nachrichtenabsender) in der Rolle NB"

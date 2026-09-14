@@ -615,7 +615,18 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
                     raw_aw
                 }
             }
-            _ => input.scheme.verguetungssatz_ct().unwrap_or(Decimal::ZERO),
+            _ => {
+                // §13a EnWG compensates the curtailed kWh at the rate the plant
+                // would have earned for them. A scheme that carries no such rate
+                // (PostEeg, sonstige Direktvermarktung) prices the Abregelung
+                // nowhere, and paying it at 0 ct/kWh would report the whole
+                // settlement as complete while the Entschädigung is dropped.
+                let Some(rate) = input.scheme.verguetungssatz_ct() else {
+                    result.status = SettlementStatus::PriceMissing;
+                    return result;
+                };
+                rate
+            }
         };
         let comp_eur = validated_eur(einsman_kwh * comp_rate_ct / Decimal::from(100));
         result.positions.push(crate::model::SettlePosition {
@@ -938,6 +949,64 @@ fn aw_cut_positions(
         .collect()
 }
 
+/// Refusal for a scheme whose own surcharge rate is absent.
+///
+/// Choosing the scheme *is* the statement that the provision applies. Falling
+/// back to zero keeps the base Vergütung and drops the surcharge without a
+/// trace, so the settlement reports `Calculated` for an amount the statute does
+/// not allow. The rate is a required price: absent, the settlement refuses.
+fn satz_fehlt(description: impl Into<String>, legal_basis: impl Into<String>) -> SettleOutput {
+    SettleOutput {
+        settlement_eur: None,
+        eligible_kwh: None,
+        positions: vec![SettlePosition {
+            description: description.into(),
+            legal_basis: legal_basis.into(),
+            kwh: Decimal::ZERO,
+            rate_ct_kwh: Decimal::ZERO,
+            eur: Decimal::ZERO,
+        }],
+        status: SettlementStatus::PriceMissing,
+        pflichtzahlung_eur: None,
+        pflichtzahlung_faelligkeitsdatum: None,
+        verlaengerungsanspruch_qh: 0,
+        dezentrale_einspeisung_anspruch_verloren: false,
+        billing_days_fraction_applied: None,
+        faelligkeitsdatum: None,
+    }
+}
+
+/// §50a refusal — the Flexibilitätszuschlag has no capacity to price.
+///
+/// §50a pays `leistung_kwp × rate / 12` on the *flexible* installed capacity, so
+/// that capacity is the whole basis of the claim. Absent it there is nothing to
+/// price: a zero would be settled as `Calculated` and rendered as a clean
+/// €0,00 Gutschrift, which is indistinguishable from a plant that is genuinely
+/// owed nothing. Same refusal the §24 block allocation makes for the same
+/// missing field.
+fn sect50a_ohne_leistung() -> SettleOutput {
+    SettleOutput {
+        settlement_eur: None,
+        eligible_kwh: None,
+        positions: vec![SettlePosition {
+            description: "§50a Flexibilitätszuschlag: leistung_kwp (flexible Leistung) fehlt — \
+                 keine Bemessungsgrundlage"
+                .to_owned(),
+            legal_basis: "§50a EEG 2023".to_owned(),
+            kwh: Decimal::ZERO,
+            rate_ct_kwh: Decimal::ZERO,
+            eur: Decimal::ZERO,
+        }],
+        status: SettlementStatus::NoData,
+        pflichtzahlung_eur: None,
+        pflichtzahlung_faelligkeitsdatum: None,
+        verlaengerungsanspruch_qh: 0,
+        dezentrale_einspeisung_anspruch_verloren: false,
+        billing_days_fraction_applied: None,
+        faelligkeitsdatum: None,
+    }
+}
+
 /// Core settlement body — executes AFTER all §52 sanction checks.
 /// Also called directly by the §52 Abs. 3 (-20%) path.
 fn settle_normal_body(input: &SettleInput) -> SettleOutput {
@@ -969,9 +1038,9 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             rate_eur_per_kw_year,
         } = &input.scheme
         {
-            // Route to model dispatch with kwh = ZERO (unused for capacity payments)
-            let kwh_dummy = Decimal::ZERO;
-            let kw = input.leistung_kwp.unwrap_or(Decimal::ZERO);
+            let Some(kw) = input.leistung_kwp else {
+                return sect50a_ohne_leistung();
+            };
             let rate_eur_per_kw_year = *rate_eur_per_kw_year;
             let monthly_eur = validated_eur(kw * rate_eur_per_kw_year / dec!(12));
             let positions = vec![SettlePosition {
@@ -984,7 +1053,6 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 rate_ct_kwh: rate_eur_per_kw_year,
                 eur: monthly_eur,
             }];
-            let _ = kwh_dummy; // unused
             return SettleOutput {
                 settlement_eur: Some(monthly_eur),
                 eligible_kwh: Some(kw),
@@ -1159,7 +1227,13 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 Some(n) => apply_negativpreis(kwh, n),
                 None => kwh,
             };
-            let zuschlag = mieter_zuschlag_ct.unwrap_or(Decimal::ZERO);
+            let Some(zuschlag) = *mieter_zuschlag_ct else {
+                return satz_fehlt(
+                    "§21 Abs. 3 Mieterstrom: mieter_zuschlag_ct fehlt — der Zuschlag ist \
+                     Bestandteil des Anspruchs, kein Aufschlag nach Ermessen",
+                    "§21 Abs. 3 EEG 2023",
+                );
+            };
             let base_desc = if neg_kwh.is_some() {
                 "Einspeiseverg\u{00fc}tung \u{00a7}21 EEG (\u{00a7}51 Negativpreisregel angewendet)"
             } else {
@@ -1539,7 +1613,13 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 Some(n) => apply_negativpreis(kwh, n),
                 None => kwh,
             };
-            let flex_ct = flex_praemie_ct_kwh.unwrap_or(Decimal::ZERO);
+            let Some(flex_ct) = *flex_praemie_ct_kwh else {
+                return satz_fehlt(
+                    "§50b Flexibilitätsprämie: flex_praemie_ct_kwh fehlt — die Prämie ist \
+                     Bestandteil des Anspruchs, kein Aufschlag nach Ermessen",
+                    "§50b EEG 2023",
+                );
+            };
             let base_desc = if neg_kwh.is_some() {
                 "Einspeiseverg\u{00fc}tung \u{00a7}21 EEG (\u{00a7}51 Negativpreisregel angewendet)"
             } else {
@@ -1581,7 +1661,9 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
         SettlementScheme::FlexibilitySurcharge {
             rate_eur_per_kw_year,
         } => {
-            let kw = input.leistung_kwp.unwrap_or(Decimal::ZERO);
+            let Some(kw) = input.leistung_kwp else {
+                return sect50a_ohne_leistung();
+            };
             let rate_eur_per_kw_year = *rate_eur_per_kw_year;
             let monthly_eur = validated_eur(kw * rate_eur_per_kw_year / dec!(12));
             let positions = vec![SettlePosition {
@@ -1606,6 +1688,103 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 billing_days_fraction_applied: None,
                 faelligkeitsdatum: None,
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+    use crate::model::SettleInput;
+
+    /// §50a prices the flexible capacity, so a settlement without it has no
+    /// basis: it refuses instead of reporting a €0,00 Gutschrift as calculated.
+    #[test]
+    fn sect50a_ohne_leistung_kwp_verweigert_statt_null_euro() {
+        for einspeisemenge_kwh in [None, Some(dec!(1000))] {
+            let out = crate::calculate_settlement(&SettleInput {
+                scheme: SettlementScheme::FlexibilitySurcharge {
+                    rate_eur_per_kw_year: dec!(100),
+                },
+                leistung_kwp: None,
+                einspeisemenge_kwh,
+                ..SettleInput::default()
+            });
+            assert_eq!(out.status, SettlementStatus::NoData);
+            assert_eq!(out.settlement_eur, None);
+            assert!(out.positions[0].legal_basis.contains("50a"));
+        }
+    }
+
+    /// A known flexible capacity settles §50a as `kw × rate / 12`.
+    #[test]
+    fn sect50a_mit_leistung_kwp_rechnet() {
+        let out = crate::calculate_settlement(&SettleInput {
+            scheme: SettlementScheme::FlexibilitySurcharge {
+                rate_eur_per_kw_year: dec!(120),
+            },
+            leistung_kwp: Some(dec!(200)),
+            ..SettleInput::default()
+        });
+        assert_eq!(out.status, SettlementStatus::Calculated);
+        assert_eq!(out.settlement_eur, Some(dec!(2000)));
+    }
+
+    /// Choosing §21 Abs. 3 Mieterstrom asserts the Zuschlag is owed, so an
+    /// absent rate refuses rather than degrading to the plain Einspeisevergütung.
+    #[test]
+    fn mieterstrom_ohne_zuschlagssatz_verweigert() {
+        let out = crate::calculate_settlement(&SettleInput {
+            scheme: SettlementScheme::TenantElectricity {
+                verguetungssatz_ct: dec!(8.11),
+                mieter_zuschlag_ct: None,
+            },
+            einspeisemenge_kwh: Some(dec!(500)),
+            ..SettleInput::default()
+        });
+        assert_eq!(out.status, SettlementStatus::PriceMissing);
+        assert_eq!(out.settlement_eur, None);
+    }
+
+    /// Choosing §50b asserts the Flexibilitätsprämie is owed, so an absent rate
+    /// refuses rather than degrading to the plain Einspeisevergütung.
+    #[test]
+    fn flexibilitaetspraemie_ohne_satz_verweigert() {
+        let out = crate::calculate_settlement(&SettleInput {
+            scheme: SettlementScheme::FlexibilityPremium {
+                verguetungssatz_ct: dec!(18.4),
+                flex_praemie_ct_kwh: None,
+            },
+            einspeisemenge_kwh: Some(dec!(500)),
+            ..SettleInput::default()
+        });
+        assert_eq!(out.status, SettlementStatus::PriceMissing);
+        assert_eq!(out.settlement_eur, None);
+    }
+
+    /// §13a EnWG pays the curtailed kWh at the rate the plant would have earned.
+    /// A scheme that carries no such rate refuses instead of compensating the
+    /// Abregelung at 0 ct/kWh.
+    #[test]
+    fn einspeisemanagement_ohne_satz_verweigert() {
+        for scheme in [
+            SettlementScheme::PostEeg { price_floor: None },
+            SettlementScheme::SonstigeDirektvermarktung,
+        ] {
+            let out = crate::calculate_settlement(&SettleInput {
+                scheme,
+                einspeisemenge_kwh: Some(dec!(1000)),
+                marktwert_ct_kwh: Some(dec!(6.0)),
+                einspeisemanagement_kwh: Some(dec!(300)),
+                ..SettleInput::default()
+            });
+            assert_eq!(out.status, SettlementStatus::PriceMissing);
+            assert!(
+                out.positions
+                    .iter()
+                    .all(|p| !p.legal_basis.contains("13a") || p.rate_ct_kwh != Decimal::ZERO),
+                "no §13a position may be booked at 0 ct/kWh"
+            );
         }
     }
 }

@@ -89,7 +89,7 @@ dispute every line.
 | `Warn` | warnings, auto-approved below `auto_dispute_threshold_eur` |
 | `Dispute` | rejected; the answer carries the findings as `ablehnungsgrund` |
 | `Resolved` | dispute closed by an operator |
-| `Dispatched` / `Paid` | self-issued document sent / settled |
+| `Dispatched` | self-issued document sent; awaiting the NB's REMADV |
 
 A `Warn` escalates to `Dispute` only when the invoice net total exceeds
 `auto_dispute_threshold_eur`. `0.0` (the default) approves every warning.

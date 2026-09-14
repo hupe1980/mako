@@ -189,9 +189,62 @@ fn prose_bleed(t: &str) -> bool {
     })
 }
 
+/// The alphabetic core of a token, with the AHB's punctuation peeled off.
+fn core_of(w: &str) -> &str {
+    w.trim_matches(|c: char| !c.is_alphabetic())
+}
+
+/// A word the column split across a line break, confirmed by the corpus.
+///
+/// `Nachrichtenempfänge r`, `Verwendungszeitra um`. No dictionary is needed: the
+/// profiles are their own evidence, and the correct spelling appears in them
+/// many times over while the fragment appears only where the wrap put it. The
+/// joined form must be common *and* clearly beat the left fragment, which no
+/// ordinary word sequence does — `Wirkarbeit und` would need the corpus to hold
+/// `Wirkarbeitund`.
+///
+/// `xtask`'s importer repairs these against the whole AHB, which is the larger
+/// corpus; what survives here is what even that could not confirm.
+fn split_word(t: &str, vocab: &BTreeMap<String, usize>) -> bool {
+    let w: Vec<&str> = t.split_whitespace().collect();
+    w.windows(2).any(|p| {
+        let (a, b) = (core_of(p[0]), core_of(p[1]));
+        if a.chars().count() < 5 || b.chars().count() > 5 || b.is_empty() {
+            return false;
+        }
+        if !a.ends_with(char::is_lowercase) || !b.starts_with(char::is_lowercase) {
+            return false;
+        }
+        if !a.chars().all(char::is_alphabetic) || !b.chars().all(char::is_alphabetic) {
+            return false;
+        }
+        let seen = vocab.get(&format!("{a}{b}")).copied().unwrap_or(0);
+        seen >= 3 && seen > 2 * vocab.get(a).copied().unwrap_or(0)
+    })
+}
+
+/// Every alphabetic word in every shipped condition, with how often it occurs.
+fn condition_vocabulary() -> BTreeMap<String, usize> {
+    let mut vocab: BTreeMap<String, usize> = BTreeMap::new();
+    for (_, v) in profiles() {
+        for text in conditions(&v).values() {
+            for w in text.split_whitespace() {
+                let w = w.trim_matches(|c: char| !c.is_alphabetic());
+                if !w.is_empty() && w.chars().all(char::is_alphabetic) {
+                    *vocab.entry(w.to_owned()).or_default() += 1;
+                }
+            }
+        }
+    }
+    vocab
+}
+
 /// Which damage signals a condition text carries.
-fn signals(t: &str) -> Vec<&'static str> {
+fn signals(t: &str, vocab: &BTreeMap<String, usize>) -> Vec<&'static str> {
     let mut out = Vec::new();
+    if split_word(t, vocab) {
+        out.push("split word");
+    }
     if has_duplicated_phrase(t) {
         out.push("duplicated phrase");
     }
@@ -210,9 +263,10 @@ fn signals(t: &str) -> Vec<&'static str> {
 /// Every damaged condition across all profiles.
 fn damaged() -> BTreeMap<Site, Vec<&'static str>> {
     let mut out = BTreeMap::new();
+    let vocab = condition_vocabulary();
     for (label, v) in profiles() {
         for (key, text) in conditions(&v) {
-            let s = signals(&text);
+            let s = signals(&text, &vocab);
             if !s.is_empty() {
                 out.insert((label.clone(), key), s);
             }
@@ -251,11 +305,16 @@ fn no_rule_cites_a_condition_whose_text_was_lost() {
 
 /// The damage budget. It may fall; it may not rise without a decision.
 ///
-/// Measured 2026-09-13 over the shipped profiles: 18 duplicated phrase,
-/// 11 ending on a conjunction, 10 unbalanced parentheses, 8 prose bleed —
-/// **44 distinct conditions** of 4 306 (1.0 %), some carrying more than one
-/// signal.
-const DAMAGE_BUDGET: usize = 44;
+/// Measured 2026-09-14 over the shipped profiles: 18 duplicated phrase,
+/// 11 ending on a conjunction, 8 unbalanced parentheses, 8 split word,
+/// 2 prose bleed — **46 distinct conditions** of 4 306 (1.1 %), some carrying
+/// more than one signal.
+///
+/// The figure went 38 → 46 when `split word` was added, which is more
+/// *measurement*, not more damage: the importer repairs that class against the
+/// whole AHB and 8 survive it. A budget rise is only ever a decision, so it is
+/// recorded here rather than absorbed.
+const DAMAGE_BUDGET: usize = 46;
 
 #[test]
 fn condition_damage_stays_within_budget() {
@@ -442,17 +501,17 @@ fn element_value_conditions_are_read_as_values() {
 
 /// How many DE-referencing conditions the evaluator reads as what they say.
 ///
-/// Measured 2026-09-13: **178 of 369**. 30 fall back to the segment's mere
-/// presence and 161 do not parse at all. What remains needs Voraussetzung
+/// Measured 2026-09-14: **179 of 371**. 30 fall back to the segment's mere
+/// presence and 162 do not parse at all. What remains needs Voraussetzung
 /// variants that do not exist yet — a length test („genau 11 Stellen"), a join
 /// between two places, and the ID-format semantics behind „die ID der
 /// Marktlokation". Each is a design decision, not a missing branch.
 ///
-/// The floor only rises. It went 78 → 178 when [`Voraussetzung::parse`] learned
+/// The floor only rises. It went 78 → 179 when [`Voraussetzung::parse`] learned
 /// the comparison shape („Wenn in diesem STS DE1131 = E_0526"), which the whole
 /// IFTSTA Antwortcode family is written in and which carries no „vorhanden" for
 /// the old gate to catch.
-const ELEMENT_VALUE_FLOOR: usize = 178;
+const ELEMENT_VALUE_FLOOR: usize = 179;
 
 /// Whether the text names a data element (`DE` followed by digits).
 fn mentions_de(t: &str) -> bool {

@@ -28647,7 +28647,7 @@
     "76": "Wenn in derselben SG29 mit Z54 in LIN DE1229 (Erforderliches Produkt der Marktlokation) das PIA+5 DE7140 mit einem Messprodukt aus Codeliste der Konfigu- rationen, Kapitel 2.1.1 „Standard-Messprodukt der Marktlokation mit der Wahlmög- lichkeit der Zuordnung einer Zählzeit“ vorhanden ist",
     "77": "Wenn im selben CCI im DE7059 der Code Z39 (Code der Zählzeitdefinition) vorhanden ist",
     "78": "Wenn in derselben SG29 mit Z55 in LIN DE1229 (Erforderliches Produkt der Netzlokation) das PIA+5 DE7140 mit einem Messprodukt aus Codeliste der Konfigu- rationen, Kapitel 2 „Codeliste der Standard-Messprodukt Strom für Werte nach Typ 1“ mit der Werteigenschaft „Blindarbeit“ vorhanden ist.",
-    "79": "Wenn eine andere SG29 mit Z54 in LIN DE1229 (Erforderliches Produkt der Marktlokation) mit PIA+5+9991000000078:Z11 (für Wirkarbeit Lastgang 1/4 stünd- lich) vorhanden ist",
+    "79": "Wenn eine andere SG29 mit Z54 in LIN DE1229 (Erforderliches Produkt der Marktlokation) mit PIA+5+9991000000078:Z11 (für Wirkarbeit Lastgang 1/4 stündlich) vorhanden ist",
     "80": "Wenn keine andere SG29 mit Z54 in LIN DE1229 (Erforderliches Produkt der Marktlokation) mit PIA+5+9991000000078:Z11 (Wirkarbeit Lastgang 1/4 stündlich) vorhanden ist",
     "81": "Wenn in derselben SG29 mit Z54 in LIN DE1229 (Erforderliches Produkt der Marktlokation), das PIA+5+9991000000078:Z11 (Wirkarbeit Lastgang 1/4 stündlich) vorhanden ist",
     "82": "Wenn eine andere SG29 mit Z54 in LIN DE1229 (Erforderliches Produkt der Marktlokation) mit PIA+5 DE7140 mit einem Messprodukt aus Codeliste der Konfigu- rationen, Kapitel 2.1.1 „Standard-Messprodukt der Marktlokation mit der Wahlmög- lichkeit der Zuordnung einer Zählzeit“ vorhanden ist",

@@ -596,6 +596,7 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
     let smgw_webhook_url = cfg.erp_webhook_url.clone();
     let smgw_webhook_secret = cfg.erp_webhook_secret.clone();
     let smgw_tenant = cfg.tenant.clone();
+    let expected_tenant = mako_service::oidc::ExpectedTenant(cfg.tenant.clone());
     let state = HandlerState {
         repo,
         typ2_repo,
@@ -701,6 +702,7 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
         .merge(
             router(state)
                 .nest("/api/v1/iceberg", iceberg_facade)
+                .layer(Extension(expected_tenant))
                 .layer(Extension(cfg.cedar))
                 .layer(Extension(cfg.oidc))
                 .layer(Extension(pool_arc.clone()))

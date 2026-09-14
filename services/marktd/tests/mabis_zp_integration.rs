@@ -69,6 +69,7 @@ fn cedar_policy_registers_the_mabis_zp_scopes() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_unassigned_territory_returns_none_rather_than_a_fallback() {
     let Some((pool, _c)) = test_pool().await else {
         eprintln!("skipping: Docker unavailable");
@@ -86,6 +87,7 @@ async fn an_unassigned_territory_returns_none_rather_than_a_fallback() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn upsert_is_idempotent_and_replaces_the_assignment() {
     let Some((pool, _c)) = test_pool().await else {
         eprintln!("skipping: Docker unavailable");
@@ -112,6 +114,7 @@ async fn upsert_is_idempotent_and_replaces_the_assignment() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_meldepunkt_can_never_equal_the_bilanzierungsgebiet() {
     let Some((pool, _c)) = test_pool().await else {
         eprintln!("skipping: Docker unavailable");
@@ -138,6 +141,7 @@ async fn the_meldepunkt_can_never_equal_the_bilanzierungsgebiet() {
 /// A Zählpunktbezeichnung is 33 characters and an EIC is 16, so the length is
 /// what separates them.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn another_territorys_eic_is_rejected_as_a_meldepunkt() {
     let Some((pool, _c)) = test_pool().await else {
         eprintln!("skipping: Docker unavailable");
@@ -162,6 +166,7 @@ async fn another_territorys_eic_is_rejected_as_a_meldepunkt() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_empty_meldepunkt_is_rejected() {
     let Some((pool, _c)) = test_pool().await else {
         eprintln!("skipping: Docker unavailable");
@@ -174,6 +179,7 @@ async fn an_empty_meldepunkt_is_rejected() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn assignments_are_tenant_scoped() {
     let Some((pool, _c)) = test_pool().await else {
         eprintln!("skipping: Docker unavailable");
@@ -208,6 +214,7 @@ async fn assignments_are_tenant_scoped() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn list_is_ordered_and_scoped() {
     let Some((pool, _c)) = test_pool().await else {
         eprintln!("skipping: Docker unavailable");

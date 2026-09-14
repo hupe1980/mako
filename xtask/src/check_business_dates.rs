@@ -54,12 +54,31 @@ const RULE_SITES: &[&str] = &[
 /// Returns `true` when every business date is a Berlin date.
 pub fn run(workspace_root: &Path) -> bool {
     let mut findings = Vec::new();
+    let mut scanned = 0usize;
     for dir in ["services", "crates", "xtask"] {
-        collect(&workspace_root.join(dir), workspace_root, &mut findings);
+        collect(
+            &workspace_root.join(dir),
+            workspace_root,
+            &mut scanned,
+            &mut findings,
+        );
+    }
+
+    // A guard that read no file finds no UTC date, and reports the clean line
+    // for it.
+    if scanned == 0 {
+        eprintln!(
+            "check-business-dates: the scan read no source file under services/, crates/ or \
+             xtask/ — the layout has probably changed"
+        );
+        return false;
     }
 
     if findings.is_empty() {
-        println!("check-business-dates: every business date is a Europe/Berlin date");
+        println!(
+            "check-business-dates: every business date in {scanned} source file(s) is a \
+             Europe/Berlin date"
+        );
         return true;
     }
 
@@ -78,8 +97,9 @@ pub fn run(workspace_root: &Path) -> bool {
     false
 }
 
-/// Every `.rs` and `.sql` file under `dir`.
-fn collect(dir: &Path, root: &Path, findings: &mut Vec<Finding>) {
+/// Every `.rs` and `.sql` file under `dir`, counting what it read into
+/// `scanned`.
+fn collect(dir: &Path, root: &Path, scanned: &mut usize, findings: &mut Vec<Finding>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -89,7 +109,7 @@ fn collect(dir: &Path, root: &Path, findings: &mut Vec<Finding>) {
             if path.file_name().is_some_and(|n| n == "target") {
                 continue;
             }
-            collect(&path, root, findings);
+            collect(&path, root, scanned, findings);
             continue;
         }
         let ext = path.extension().and_then(|e| e.to_str());
@@ -103,6 +123,7 @@ fn collect(dir: &Path, root: &Path, findings: &mut Vec<Finding>) {
         let Ok(src) = std::fs::read_to_string(&path) else {
             continue;
         };
+        *scanned += 1;
         for (line, i) in offending_lines(&src) {
             findings.push((path.clone(), i, line));
         }
@@ -337,6 +358,15 @@ fn civil_value_in_another_zone(squeezed: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// A scan that reaches no file has checked nothing, and must say so rather
+    /// than report the clean line.
+    #[test]
+    fn refuses_a_tree_it_found_nothing_in() {
+        assert!(!super::run(std::path::Path::new(
+            "/nonexistent/mako/workspace/root"
+        )));
+    }
     use super::{is_exempt, offending_lines};
     use std::path::Path;
 

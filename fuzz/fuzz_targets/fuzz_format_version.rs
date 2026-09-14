@@ -4,6 +4,7 @@
 //! sequences (including invalid UTF-8, truncated input, and malformed
 //! format-version strings).
 #![no_main]
+#![deny(unsafe_code)]
 
 use libfuzzer_sys::fuzz_target;
 use mako_engine::version::FormatVersion;

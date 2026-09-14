@@ -180,7 +180,7 @@ Bilanzierungsgebiet and Regelzone (Strom), Marktgebiet and Netzgebiet (Gas).
   Energiemarkt", Version 2.1**.
 - **BNetzA BK6-24-174**, Anlagen 1a–1c — GPKE Teil 1 bis 3, and **BK6-22-024**
   Anlage 1d — GPKE Teil 4: the Kap.-5 sequences reference Use-Cases from both.
-  BK6-22-024 also carries WiM Strom Teil 1 und 2 (Anlagen 2a/2b), which Kap. 7.5
+  BK6-24-174 also carries WiM Strom Teil 1 und 2 (Anlagen 2a/2b), which Kap. 7.5
   and Kap. 9.2 lean on.
 - **BNetzA BK6-24-174 Anlage 3** — MaBiS, the source of the Kap.-7.3
   Profil-Use-Cases.

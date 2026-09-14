@@ -452,6 +452,54 @@ pub(crate) fn validate_dispatch_completeness(router: &mako_engine::pid_router::P
     );
 }
 
+// ── MaBiS-ZP repeal reporting ────────────────────────────────────────────────
+
+/// Report MaBiS-Zählpunkte still activated for a series a Festlegung has ended.
+///
+/// Runs after each catch-up of the `MabisZpRegister` fold. Today that means one
+/// series: BK6-23-241 Tenorziffer 5 repeals MaBiS Kap. 17.2 with the end of
+/// 30.09.2026, and the tägliche Ausfallarbeitsüberführungszeitreihe is not
+/// republished as the Anlage zur BilAReM.
+///
+/// It **reports and does not act**. Sending a Deaktivierung would be a market
+/// message on a guess: the repealing Beschluss is not in the mirror and no
+/// source in hand says the NB owes one. What makod can say without guessing is
+/// that the MaBiS-ZP is switched on and its series is gone.
+///
+/// Logged once per tick rather than deduplicated across ticks: the set is the
+/// operator's work queue, it shrinks as they act, and a line that appears once
+/// at start-up is the one nobody sees.
+fn report_repealed_mabis_zp(register: &mako_mabis::zp_register::ZpRegister) {
+    let unlesbar = register.unlesbar();
+    if unlesbar > 0 {
+        tracing::warn!(
+            count = unlesbar,
+            "MaBiS-ZP register: events that did not decode — the active set is \
+             incomplete and under-reports",
+        );
+    }
+    let heute = mako_fristen::heute();
+    let betroffen = register.auf_beendeter_serie(heute);
+    if betroffen.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        count = betroffen.len(),
+        date = %heute,
+        "MaBiS-Zählpunkte are still activated for a series that no longer exists — \
+         no Summenzeitreihe will be exchanged for them",
+    );
+    for a in betroffen {
+        tracing::warn!(
+            mabis_zp_id = %a.mabis_zp_id,
+            serie = %a.serie.label(),
+            ende = ?a.serie.endet_am(),
+            abrechnungszeitraum = %a.billing_period,
+            "MaBiS-ZP activated on a repealed series",
+        );
+    }
+}
+
 // ── spawn_workers ─────────────────────────────────────────────────────────────
 
 /// Configuration for all background workers spawned after server bind.
@@ -755,6 +803,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
             Arc::clone(&cfg.mp_id_registry),
             cfg.http_client.clone(),
             malo_sender,
+            cfg.erp_webhook_secret.clone(),
         )
         .with_netzzugang(Arc::clone(&netzzugang_sender));
         info!(
@@ -872,37 +921,37 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
     );
 
     // ── Projection checkpoint workers ─────────────────────────────────────
+    //
+    // The prefix is `process/`, never a domain name. Every stream in this
+    // platform is `process/{tenant}/{process}` — `StreamId::for_process` builds
+    // no other shape — so a prefix like `gpke/` selects nothing and the
+    // projection folds zero events while its heartbeat reports it healthy. Two
+    // workers shipped exactly that way; `tests/projection_prefix_guard.rs`
+    // refuses it now. Since there is no per-domain prefix, each projection sees
+    // every workflow's events and filters on `event_type` itself.
     if cfg.projection_checkpoint_interval > 0 {
         let interval = Duration::from_secs(cfg.projection_checkpoint_interval);
 
+        // MaBiS-Zählpunkt register. Its reason to exist is a date: BK6-23-241
+        // Tenorziffer 5 repeals MaBiS Kap. 17.2 with the end of 30.09.2026, and
+        // a MaBiS-ZP activated for the tägliche AAÜZ before then is not
+        // repealed with it — it stops having a process behind it, and the
+        // Summenzeitreihe that never arrives is the only symptom. The observer
+        // names them; deactivating one is an operator's call, not makod's.
         let (proj1_hb, proj1_watch) = new_heartbeat(
-            "projection-worker:gpke-konfiguration",
+            "projection-worker:mabis-zp-register",
             (cfg.projection_checkpoint_interval * 5).max(300) as i64,
         );
         let worker = crate::projection_worker::ProjectionWorker::new(
             cfg.store.clone(),
-            mako_gpke::KonfigurationProjection::default(),
-            Some("gpke/"),
+            mako_mabis::zp_register::ZpRegister::default(),
+            Some("process/"),
             interval,
         )
         .with_heartbeat(proj1_hb.last_tick_raw())
-        .with_shutdown(cfg.shutdown_token.clone());
+        .with_shutdown(cfg.shutdown_token.clone())
+        .with_observer(report_repealed_mabis_zp);
         cfg.health_state.register_worker(proj1_watch);
-        handles.push(tokio::spawn(async move { worker.run().await }));
-
-        let (proj2_hb, proj2_watch) = new_heartbeat(
-            "projection-worker:gpke-supplier-change",
-            (cfg.projection_checkpoint_interval * 5).max(300) as i64,
-        );
-        let worker = crate::projection_worker::ProjectionWorker::new(
-            cfg.store.clone(),
-            mako_gpke::SupplierChangeProjection::default(),
-            Some("gpke/"),
-            interval,
-        )
-        .with_heartbeat(proj2_hb.last_tick_raw())
-        .with_shutdown(cfg.shutdown_token.clone());
-        cfg.health_state.register_worker(proj2_watch);
         handles.push(tokio::spawn(async move { worker.run().await }));
 
         info!(

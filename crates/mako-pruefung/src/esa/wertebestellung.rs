@@ -37,7 +37,7 @@
 //!
 //! # Sources
 //!
-//! - BK6-22-024 Anlage 2b, WiM Strom Teil 2 Kap. 4.1–4.3
+//! - BK6-24-174 Anlage 2b, WiM Strom Teil 2 Kap. 4.1–4.3
 //! - *Entscheidungsbaum-Diagramme und Codelisten* 4.3, Kap. 8.25–8.26
 //! - ORDRSP AHB 1.1b §4.15, ORDERS AHB 1.1b §4.15, ORDCHG AHB 1.1 §3.2
 

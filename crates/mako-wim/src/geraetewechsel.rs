@@ -1,6 +1,6 @@
 //! WiM Messstellenbetrieb — MSB change workflow (PIDs 55039, 55042, 55051, 55168).
 //!
-//! Covers the four MSB-Wechsel use cases of BK6-22-024 WiM Strom Teil 1: the
+//! Covers the four MSB-Wechsel use cases of BK6-24-174 WiM Strom Teil 1: the
 //! Kündigung between outgoing and incoming Messstellenbetreiber (Kap. 2.2), the
 //! Anmeldung of the incoming MSB at the Netzbetreiber (Kap. 2.3), the Abmeldung
 //! (Kap. 2.4), and the Verpflichtungsanfrage the NB puts to the grundzuständiger
@@ -24,7 +24,7 @@
 //! # Regulatory basis
 //!
 //! - **MsbG** — Messstellenbetriebsgesetz (Smart-Meter-Rollout)
-//! - **BNetzA BK6-22-024**, Anlage 2a — WiM Strom Teil 1 (Lesefassung)
+//! - **BNetzA BK6-24-174**, Anlage 2a — WiM Strom Teil 1 (Lesefassung)
 //! - **UTILMD S2.x** — EDI@Energy message format for metering processes
 //! - **APERAK 2.x** — application error acknowledgement
 
@@ -73,7 +73,7 @@ pub const ANTWORT_FRIST_WINDOW_LABEL: &str = "wim-device-change-antwort-frist";
 /// Prüfidentifikatoren that carry a WiM MSB-Wechsel UTILMD, **in both Sparten**.
 ///
 /// Directions are per *Anwendungsübersicht der Prüfidentifikatoren* 4.0, the
-/// BK6-22-024 WiM Strom Teil 1 Lesefassung and the BDEW *AWH Wechselprozesse im
+/// BK6-24-174 WiM Strom Teil 1 Lesefassung and the BDEW *AWH Wechselprozesse im
 /// Messwesen Gas 2.0* (gültig ab 01.10.2026). Note that they are **not**
 /// uniformly „MSB → NB" — the Kündigung never reaches the NB at all, and the
 /// Verpflichtungsanfrage addresses the gMSB:
@@ -214,7 +214,7 @@ pub const fn zuordnungs_stunde(sparte: Sparte) -> u8 {
 /// Antwortfrist in Werktagen for the counterparty's business response.
 ///
 /// **These differ per process** — a single flat window would fire early for the
-/// Kündigung and late for the Abmeldung. From BK6-22-024 WiM Teil 1
+/// Kündigung and late for the Abmeldung. From BK6-24-174 WiM Teil 1
 /// ("Unverzüglich, jedoch spätester ÜT ist der *n*. WT nach dem ÜT von Nr. 1"):
 ///
 /// | Request | Antwort | Frist | Fundstelle |
@@ -245,7 +245,7 @@ pub fn antwort_frist_werktage(request_pid: u32) -> Option<u32> {
 }
 
 /// Deadline label for the counterparty's response window on an **outbound**
-/// MSB-Wechsel order (WiM BK6-22-024).
+/// MSB-Wechsel order (WiM BK6-24-174).
 ///
 /// Sized per PID via [`antwort_frist_werktage`] — 3 / 5 / 7 / 1 WT, never flat.
 ///

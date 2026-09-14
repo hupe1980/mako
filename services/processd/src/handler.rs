@@ -77,7 +77,7 @@ pub fn answerable_pids() -> Vec<u32> {
     pids
 }
 
-/// WiM Steuerungsauftrag confirmation window in Werktage (BK6-22-024) — the
+/// WiM Steuerungsauftrag confirmation window in Werktage (BK6-24-174) — the
 /// Frist `makod` registers as `mako_wim::STEUERUNGSAUFTRAG_DEADLINE_LABEL`.
 #[cfg(feature = "role-msb")]
 const STEUERUNGSAUFTRAG_ANTWORT_FRIST_WT: u32 = 5;
@@ -447,7 +447,7 @@ pub async fn handle_webhook(
             .or_else(|| event["data"]["pid"].as_u64())
             .unwrap_or(0) as i32;
         // The operator window is the WiM Steuerungsauftrag confirmation Frist —
-        // 5 Werktage (BK6-22-024, the clock makod registers as
+        // 5 Werktage (BK6-24-174, the clock makod registers as
         // `mako_wim::STEUERUNGSAUFTRAG_DEADLINE_LABEL`) — less an hour of
         // headroom. An escalation must not expire before its own process.
         let sa_expires_at = {

@@ -123,6 +123,18 @@ pub struct PortaldConfig {
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
 }
 
+impl PortaldConfig {
+    /// Whether `[mcp]` carries a usable API key — primary or named.
+    ///
+    /// An empty string is not a key: `McpAuth::from_auth_config` skips it, so
+    /// treating it as configured would report a door as locked that is open.
+    #[must_use]
+    pub fn has_mcp_key(&self) -> bool {
+        self.mcp.api_key.as_ref().is_some_and(|k| !k.is_empty())
+            || self.mcp.named_keys.iter().any(|k| !k.api_key.is_empty())
+    }
+}
+
 fn default_port() -> u16 {
     9480
 }

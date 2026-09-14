@@ -123,6 +123,12 @@ billingd_url    = "{base}"
 accountingd_url = "{base}"
 einsd_url       = "{base}"
 marktd_url      = "{base}"
+
+# Last, because every bare key above is top-level and TOML binds a bare key to
+# the table header preceding it. The MCP door is a second door with its own
+# credential; these tests drive the portal routes, which is the first one.
+[mcp]
+api_key = "mcp-test-key"
 "#
     );
     let cfg: portald::config::PortaldConfig = toml::from_str(&toml_src).expect("config parses");
@@ -233,6 +239,53 @@ async fn a_deployment_without_an_authorization_authority_refuses_to_start() {
     assert!(
         msg.contains("allow_insecure_no_auth"),
         "the refusal must name the way to opt out deliberately: {msg}"
+    );
+}
+
+/// Starting without an `[mcp]` key is refused too.
+///
+/// The MCP tools take a `malo_id` and carry no customer token, so `vertragd`
+/// never sees the request and the ownership check above does not apply. With no
+/// key, `McpAuth` accepts a request with no `Authorization` header at all — a
+/// posture reached by leaving a config section out, which is why it has to be
+/// refused rather than warned about.
+#[tokio::test]
+async fn a_deployment_without_an_mcp_key_refuses_to_start() {
+    let cfg: portald::config::PortaldConfig = toml::from_str(
+        "port = 9480\ntenant = \"9900357000004\"\nvertragd_url = \"http://vertragd:9780\"\n",
+    )
+    .expect("config parses");
+    let ctx = mako_service::ServiceContext {
+        pool: None,
+        http: mako_service::http::default_client(),
+        shutdown: tokio_util::sync::CancellationToken::new(),
+    };
+    let err = <portald::server::Portald as mako_service::Daemon>::build(Arc::new(cfg), ctx)
+        .await
+        .expect_err("must refuse to start");
+    let msg = err.to_string();
+    assert!(msg.contains("api_key"), "{msg}");
+    assert!(
+        msg.contains("allow_insecure_no_auth"),
+        "the refusal must name the way to opt out deliberately: {msg}"
+    );
+}
+
+/// A configured key is what makes the door a door — an empty string is not one.
+#[test]
+fn an_empty_mcp_key_does_not_count_as_configured() {
+    let with_key: portald::config::PortaldConfig =
+        toml::from_str("port = 9480\ntenant = \"t\"\n[mcp]\napi_key = \"s3cret\"\n")
+            .expect("config parses");
+    assert!(with_key.has_mcp_key());
+
+    let empty: portald::config::PortaldConfig =
+        toml::from_str("port = 9480\ntenant = \"t\"\n[mcp]\napi_key = \"\"\n")
+            .expect("config parses");
+    assert!(
+        !empty.has_mcp_key(),
+        "`McpAuth` skips an empty key, so reporting it as configured names a locked \
+         door that is open"
     );
 }
 

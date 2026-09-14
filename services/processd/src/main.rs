@@ -32,6 +32,11 @@ impl Daemon for Processd {
     }
 
     async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<axum::Router> {
+        // Fail closed on both doors before anything else: the REST/MCP surfaces
+        // and the inbound webhook each decide what this operator answers a
+        // market partner.
+        cfg.check_auth_posture()?;
+
         // ── Resolve env-var references ────────────────────────────────────────
         let makod_api_key =
             config::resolve_env_secret(&cfg.makod.api_key).context("makod.api_key")?;

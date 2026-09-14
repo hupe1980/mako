@@ -97,7 +97,29 @@ class TestTheTable:
         """The set is pinned, not counted: a family appearing without a test
         of its own is a window nothing here checks the arithmetic of."""
         families = {o.family for o in antwort_obligations()}
-        assert families == {"emob", "geli-gas", "gpke", "wim", "wim-gas"}
+        assert families == {"emob", "geli-gas", "gpke", "mabis", "wim", "wim-gas"}
+
+    def test_mabis_answers_at_the_end_of_the_first_werktag(self):
+        """BK6-24-174 Anlage 3 (MaBiS) Kap. 17.3.3.1.2 SD Nr. 2: „Unverzüglich,
+        spätestens jedoch 1 WT nach Erhalt der Aktivierung".
+
+        End of the Werktag, not a 17:00 cut-off: MaBiS states the window in
+        Werktage without a clock time, unlike WiM. The four MaBiS-ZP AAÜZ
+        triggers share it, and only they — 55062/55063 are shared by eleven
+        Summenzeitreihen, five of which owe no answer at all, so a PID-keyed
+        window there would read a Vorlauffrist as a response deadline.
+        """
+        for pid in (55203, 55206, 55209, 55212):
+            o = antwort_obligation(pid)
+            assert o.family == "mabis", pid
+            assert o.shape == "end_of_werktag", pid
+            assert o.werktage == 1, pid
+            assert antwort_deadline(pid, MONDAY) == end_of_werktag_after(MONDAY, 1)
+
+        for pid in (55062, 55063, 55064):
+            assert antwort_obligation(pid) is None, (
+                f"{pid} is shared across families and publishes no answer window"
+            )
 
     def test_the_modell_2_windows_are_seven_and_three_werktage(self):
         """AWH „Zum Modell 2" V1.3: the Anmeldung answer is 7 WT (Kap. 2.1.2

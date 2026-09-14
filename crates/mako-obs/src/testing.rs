@@ -56,9 +56,18 @@ impl ProcessProjectionRepository for InMemoryProcessProjectionRepository {
         Ok(results)
     }
 
-    async fn get(&self, process_id: Uuid) -> Result<Option<ProcessProjection>, ObsError> {
+    async fn get(
+        &self,
+        process_id: Uuid,
+        tenant: &str,
+    ) -> Result<Option<ProcessProjection>, ObsError> {
         let guard = self.projections.lock().unwrap();
-        Ok(guard.get(&process_id).cloned())
+        // Filtered here too: a double that ignores the tenant reports every
+        // tenant-scoping test green whatever the production impl does.
+        Ok(guard
+            .get(&process_id)
+            .filter(|p| p.tenant == tenant)
+            .cloned())
     }
 
     async fn kpi_report(
@@ -167,9 +176,19 @@ mod tests {
             tenant: "9900357000004".into(),
         };
         repo.upsert(&proj).await.unwrap();
-        let found = repo.get(process_id).await.unwrap();
+        let found = repo.get(process_id, "9900357000004").await.unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().pid, 55001);
+
+        // The id alone is not entitlement: a process ID is a UUID any caller
+        // can hold, so the tenant is a predicate on the read.
+        assert!(
+            repo.get(process_id, "9900000000001")
+                .await
+                .unwrap()
+                .is_none(),
+            "a projection is readable only by the tenant that owns it"
+        );
     }
 
     #[tokio::test]

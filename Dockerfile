@@ -287,8 +287,8 @@ COPY --from=demo-builder --chown=root:root /usr/local/bin/marktd /usr/local/bin/
 
 EXPOSE 8180
 
-# Log output is always structured JSON; the level is the only knob.
-ENV MARKTD_LOG_LEVEL=info
+ENV MARKTD_LOG_FORMAT=json \
+    MARKTD_LOG_LEVEL=info
 
 # `--check` probes this instance's own /health/ready over loopback (a DB ping
 # plus the daemon's readiness), which is what a distroless image can do without

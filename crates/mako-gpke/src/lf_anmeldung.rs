@@ -40,8 +40,8 @@
 //! - **BDEW GPKE** — Geschäftsprozesse zur Kundenbelieferung mit Elektrizität
 //! - **BK6-24-174** — the Festlegung that states the NB's answer window: a
 //!   wall-clock instant on the 1. Werktag nach dem ÜT, per Prüfidentifikator
-//!   (GPKE Teil 2). BK6-22-024 still carries GPKE **Teil 4** and WiM, but none
-//!   of the Teil-2 Zuordnungsprozesse, and no 24-hour window anywhere.
+//!   (GPKE Teil 2). BK6-22-024 still carries GPKE **Teil 4**, but none of the
+//!   Teil-2 Zuordnungsprozesse, and no 24-hour window anywhere.
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format
 
 use mako_engine::types::Pruefidentifikator;

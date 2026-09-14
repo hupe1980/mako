@@ -14,7 +14,7 @@ no customer management. It pulls product definitions from `productd`, consumptio
 | **Categories** | 13: STROM, GAS, WAERME, WASSER, SOLAR, EEG, EINSPEISUNG, WAERMEPUMPE, WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, SHARING |
 | **§41a EPEX dynamic** | 15-min Lastgang × 15-min EPEX day-ahead (SDAC MTU) → `STROM` dynamic category |
 | **§41a iMSys guard** | Hard error when `dynamic_epex=true` and `MeteringMode != Imsys` — reachable now that the dynamic path resolves the meter reading |
-| **§14a discount** | `ControllableLoadProvider` — Modul 1 (pauschale Reduzierung), Modul 2 (prozentuale Arbeitspreisreduzierung), Modul 3 (zeitvariable Netzentgelte, three Tarifstufen). Modul 1 and Modul 2 are the two forms of the base module and exclude each other; Modul 3 adds to Modul 1 only, per BK6-22-300 |
+| **§14a discount** | `ControllableLoadProvider` — Modul 1 (pauschale Reduzierung), Modul 2 (prozentuale Arbeitspreisreduzierung), Modul 3 (zeitvariable Netzentgelte, three Tarifstufen). Modul 1 and Modul 2 are the two forms of the base module and exclude each other; Modul 3 adds to Modul 1 only, per BK8-22/010-A |
 | **§42b EnWG GGV** | `POST /api/v1/billing/ggv/{ggv_id}` — Gebäudestromnutzung: Aufteilungsschlüssel per Abs. 2 Nr. 1, residual grid supply per Abs. 3, whole run in one transaction |
 | **§42c Sharing** | `Product::Sharing(SharingProduct)` — community energy allocation credit via `EnergyShareProvider` |
 | **Gas H2-blend** | `gasqualitaet` field on `GasMeterInput` — annotates Rechnung as `ZusatzAttribut` (per DVGW G 260, measured Brennwert already reflects blend) |

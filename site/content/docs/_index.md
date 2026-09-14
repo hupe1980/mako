@@ -13,11 +13,11 @@ to do.
 | If you want to… | Go to |
 |---|---|
 | See it work end to end in a few minutes | [Getting started](@/docs/guide/getting-started.md) |
-| Understand how a message becomes a process | [Architecture](architecture/) |
-| Run a service in production | [Services](services/) |
-| Parse, validate or build EDIFACT yourself | [Reference](reference/) |
-| Trace a rule back to its Festlegung or § | [Regulatory](regulatory/) |
-| Take on a new annual BDEW release | [Release & compliance](compliance/) |
+| Understand how a message becomes a process | [Architecture](@/docs/architecture/_index.md) |
+| Run a service in production | [Services](@/docs/services/_index.md) |
+| Parse, validate or build EDIFACT yourself | [Reference](@/docs/reference/_index.md) |
+| Trace a rule back to its Festlegung or § | [Regulatory](@/docs/regulatory/_index.md) |
+| Take on a new annual BDEW release | [Release & compliance](@/docs/compliance/_index.md) |
 
 ## Find it by market role
 
@@ -65,16 +65,16 @@ import of new profiles rather than a change to process logic.
 
 ## Sections
 
-- **[Guide](guide/)** — install, run the demo stack, submit your first message.
-- **[Architecture](architecture/)** — the domain model, the workflow engine, ERP
+- **[Guide](@/docs/guide/_index.md)** — install, run the demo stack, submit your first message.
+- **[Architecture](@/docs/architecture/_index.md)** — the domain model, the workflow engine, ERP
   integration and the API-Webdienste transition.
-- **[Services](services/)** — one operator manual per service: endpoints,
+- **[Services](@/docs/services/_index.md)** — one operator manual per service: endpoints,
   configuration, emitted events, deployment.
-- **[Reference](reference/)** — EDIFACT parsing, validation, builders, the AS4
+- **[Reference](@/docs/reference/_index.md)** — EDIFACT parsing, validation, builders, the AS4
   profile, process catalogue, and the `makotest` Python toolkit.
-- **[Regulatory](regulatory/)** — BNetzA Festlegungen and the full
+- **[Regulatory](@/docs/regulatory/_index.md)** — BNetzA Festlegungen and the full
   Prüfidentifikator table with the crate and workflow that owns each one.
-- **[Release & compliance](compliance/)** — the annual release workflow, schema
+- **[Release & compliance](@/docs/compliance/_index.md)** — the annual release workflow, schema
   versioning, and licence inventory.
 
 ## Common tasks

@@ -27,7 +27,7 @@ graph LR
 
     subgraph strom ["Strom frameworks"]
         BK6_24["BK6-24-174<br/>GPKE + MaBiS"]
-        BK6_22["BK6-22-024<br/>LFW24 · GPKE Teil 2+4"]
+        BK6_22["BK6-22-024<br/>LFW24 · GPKE Teil 4"]
         BK6_20["BK6-20-059/060/061<br/>Redispatch 2.0"]
     end
 
@@ -68,8 +68,8 @@ graph LR
 
 | Regulation | Domain | Implementation |
 |---|---|---|
-| **BK6-24-174** (GPKE Teil 1–3 + MaBiS, in force 06.06.2025) | Strom | `mako-gpke`, `mako-mabis` |
-| **BK6-22-024** (GPKE Teil 4, WiM Teil 1/2) | Strom | `mako-gpke`, `mako-wim` |
+| **BK6-24-174** (GPKE Teil 1–3 = Anlagen 1a–1c, WiM Teil 1/2 = Anlagen 2a/2b, MaBiS = Anlage 3, in force 06.06.2025) | Strom | `mako-gpke`, `mako-wim`, `mako-mabis` |
+| **BK6-22-024** (GPKE Teil 4 = Anlage 1d) | Strom | `mako-gpke` |
 | **BK6-22-024** (LFW24 — 24h-Lieferantenwechsel, §20a EnWG; re-issued GPKE Teil 2 + Teil 4, MPES absorbed into GPKE, in force 06.06.2025) | Strom | `mako-gpke` |
 | **BK7-24-01-009** (GeLi Gas 3.0, BK7 Beschluss 12.09.2025) | Gas | `mako-geli-gas`, `mako-wim` |
 | **BK7-24-01-008** (GaBi Gas 2.1 — Kapazitätsabrechnung, DVGW) | Gas | `mako-gabi-gas`, `dvgw-edi` |

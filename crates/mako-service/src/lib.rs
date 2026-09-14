@@ -82,7 +82,7 @@ pub use error::{ApiError, ApiResult};
 pub use json::{DETAIL_SENTINEL, Json};
 pub use service::{Daemon, ServiceConfig, ServiceContext, run};
 pub use telemetry::{
-    ExtraLayer, OtelConfig, OtelGuard, init_tracing, init_tracing_from_env,
+    ExtraLayer, LogFormat, OtelConfig, OtelGuard, init_tracing, init_tracing_from_env,
     init_tracing_from_env_with, init_tracing_with,
 };
 

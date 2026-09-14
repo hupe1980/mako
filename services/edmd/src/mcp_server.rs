@@ -1719,8 +1719,9 @@ impl EdmdMcpHandler {
             "month_count": months.len(),
             "months": months,
             // MaBiS is **Anlage 3 to BK6-24-174**, the same Festlegung as GPKE.
-            // BK6-22-024 is where WiM Strom still lives — it was not reissued —
-            // and citing it for MaBiS sends a reader to the wrong document.
+            // Citing the WiM Aktenzeichen here sends a reader to the wrong
+            // document: WiM is BK6-09-034, and BK6-24-174 amends it through its
+            // own Anlagen 2a/2b rather than carrying it.
             "legal_basis": "MaBiS (BK6-24-174) Anlage 3 / GPKE (BK6-24-174) Teil 1 Kap. 8.4 Mehr-/Mindermengensaldo",
         }))
         .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))

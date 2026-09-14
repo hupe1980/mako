@@ -647,6 +647,7 @@ async fn dispatch_answer(
         Ok(_) => {
             if let Err(e) = pg::receipts::mark_dispatched(
                 &state.pool,
+                &state.tenant,
                 target.process_id,
                 time::OffsetDateTime::now_utc(),
             )
@@ -718,6 +719,10 @@ async fn fetch_receipts(
 /// handler state and MCP server, spawn the background workers, and register the
 /// `marktd` subscription.
 pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Router> {
+    // Fail closed on both doors before anything else: the REST API and the
+    // inbound webhook each reach the receipt store and the market answer.
+    cfg.check_auth_posture()?;
+
     let oidc = mako_service::oidc::OidcConfig::build_verifier(
         cfg.oidc.as_ref(),
         &ctx.http,
@@ -826,8 +831,10 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
         )
         .await;
 
+    let expected_tenant = mako_service::oidc::ExpectedTenant(state.tenant.clone());
     Ok(router(state)
         .layer(Extension(cedar))
+        .layer(Extension(expected_tenant))
         .layer(Extension(oidc))
         .merge(crate::mcp_server::router(mcp_state, ctx.shutdown.clone())))
 }

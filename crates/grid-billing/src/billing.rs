@@ -181,7 +181,7 @@ pub(crate) fn warn_if_straddles_turnover(
 /// |---|---|---|
 /// | 1 | Gas Grundpreis (Verrechnungspreis) | when `nne_grundpreis_eur_per_month` set (Gas only) |
 /// | next | Netznutzung Arbeit (§14a Modul 1 reduced) | Modul 1 flat reduction mode |
-/// | next | Netznutzung Arbeit HT + ST + NT (§14a Modul 3) | zeitvariables Netzentgelt (BK6-22-300) |
+/// | next | Netznutzung Arbeit HT + ST + NT (§14a Modul 3) | zeitvariables Netzentgelt (BK8-22/010-A) |
 /// | next | Netznutzung Arbeit (§14a Modul 2, reduzierter Arbeitspreis) | prozentuale Reduzierung |
 /// | next | Netznutzung Arbeit je Dispatch-Intervall (§14a Modul 3 Spot) | spot-priced mode |
 /// | next | Netznutzung Arbeit | flat mode (no §14a) |
@@ -192,9 +192,9 @@ pub(crate) fn warn_if_straddles_turnover(
 ///
 /// - Gas Grundpreis position → `GasNEV §14`
 /// - Arbeit positions → `StromNEV §21` (or `GasNEV §14` for Gas)
-/// - §14a Modul 1 positions → `Sect14aEnwg { module: Modul1 }` + `BNetzA BK6-22-300`
-/// - §14a Modul 2 position → `Sect14aEnwg { module: Modul2 }` + `BNetzA BK6-22-300`
-/// - §14a Modul 3 positions (HT/ST/NT and Spot) → `Sect14aEnwg { module: Modul3 }` + `BNetzA BK6-22-300`
+/// - §14a Modul 1 positions → `Sect14aEnwg { module: Modul1 }` + `BNetzA BK8-22/010-A`
+/// - §14a Modul 2 position → `Sect14aEnwg { module: Modul2 }` + `BNetzA BK8-22/010-A`
+/// - §14a Modul 3 positions (HT/ST/NT and Spot) → `Sect14aEnwg { module: Modul3 }` + `BNetzA BK8-22/010-A`
 /// - Leistung position → `StromNEV §17` (Abs. 2 — a Jahresleistungspreis)
 /// - Konzessionsabgabe → `KAV §2 Abs. 2`
 ///
@@ -204,7 +204,7 @@ pub(crate) fn warn_if_straddles_turnover(
 /// amount and the fraction of a year the period covers: the energy is billed at
 /// the full Arbeitspreis and the pauschale is credited pro rata alongside it.
 ///
-/// **Known limitation.** BK6-22-300 permits Modul 1 alongside Modul 3, but
+/// **Known limitation.** BK8-22/010-A permits Modul 1 alongside Modul 3, but
 /// `ArbeitspreisModell` holds one model at a time, so that combination is not
 /// yet representable. Modul 2 with Modul 3 is genuinely forbidden and stays
 /// unrepresentable by design — see [`Sect14aModule::combinable_with`].
@@ -500,7 +500,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                             module: Sect14aModule::Modul3,
                         },
                         LegalReference::BnetzaDecision {
-                            reference: "BK6-22-300",
+                            reference: "BK8-22/010-A",
                         },
                     ],
                     tariff_src.clone(),
@@ -532,7 +532,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                         module: Sect14aModule::Modul1,
                     },
                     LegalReference::BnetzaDecision {
-                        reference: "BK6-22-300",
+                        reference: "BK8-22/010-A",
                     },
                 ],
                 tariff_src.clone(),
@@ -578,7 +578,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                             module: Sect14aModule::Modul1,
                         },
                         LegalReference::BnetzaDecision {
-                            reference: "BK6-22-300",
+                            reference: "BK8-22/010-A",
                         },
                     ],
                     tariff_source: tariff_src.clone(),
@@ -630,7 +630,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                             module: Sect14aModule::Modul2,
                         },
                         LegalReference::BnetzaDecision {
-                            reference: "BK6-22-300",
+                            reference: "BK8-22/010-A",
                         },
                     ],
                     tariff_source: tariff_src.clone(),
@@ -1144,7 +1144,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     }
 
     // ── §14a Modul 3: per-dispatch-interval Spotpreis-NNE ─────────────────────
-    // BNetzA BK6-22-300 Anlage 2 §3: One position per 15-min dispatch interval.
+    // One position per 15-min dispatch interval, priced from the NB's Preisblatt.
     // The rate is pre-calculated by the caller from the spot-price formula in
     // `PreisblattNetznutzung.lastvariablePreispositionen`.
     // Each position carries a `LastvariablePreisposition` JSON for ERP validation.
@@ -1211,13 +1211,13 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                         module: Sect14aModule::Modul3,
                     },
                     LegalReference::BnetzaDecision {
-                        reference: "BK6-22-300",
+                        reference: "BK8-22/010-A",
                     },
                     arbeit_ref.clone(),
                 ],
                 tariff_source: tariff_src.clone(),
                 regulatory_reduction_factor: None,
-                rounding_note: Some("rate ct→EUR 6 dp; net 5 dp; BK6-22-300 Anlage 2 §3"),
+                rounding_note: Some("rate ct→EUR 6 dp; net 5 dp"),
             },
         };
         total += p.net_eur;
@@ -2816,7 +2816,7 @@ mod tests {
         };
         let r = settle_nne(&i).unwrap();
         assert_eq!(r.total_eur, d("48.00"));
-        // BK6-22-300 defines three Tarifstufen; the ST band carries no energy
+        // BK8-22/010-A defines three Tarifstufen; the ST band carries no energy
         // here but is still billed, so the invoice shows the full structure.
         assert_eq!(r.positions.len(), 3);
         assert_eq!(r.positions[0].text, "Netznutzung Arbeit HT (§14a Modul 3)");
@@ -3338,8 +3338,8 @@ mod tests {
             "expected §14a EnWG reference, got: {refs:?}"
         );
         assert!(
-            refs.iter().any(|r| r.contains("BK6-22-300")),
-            "expected BK6-22-300 reference, got: {refs:?}"
+            refs.iter().any(|r| r.contains("BK8-22/010-A")),
+            "expected BK8-22/010-A reference, got: {refs:?}"
         );
     }
 
@@ -3899,7 +3899,7 @@ mod tests {
                 paragraph: "§§6–7"
             },
             LegalReference::BnetzaDecision {
-                reference: "BK6-22-300",
+                reference: "BK8-22/010-A",
             },
             LegalReference::BdewAhb {
                 reference: "GPKE BK6-22-024",
@@ -4397,7 +4397,7 @@ mod tests {
         assert_eq!(storno.recomputed_total(), storno.total_eur);
     }
 
-    // ── §14a Modul 1 (BNetzA BK6-22-300 flat reduction) ──────────────────────
+    // ── §14a Modul 1 (BNetzA BK8-22/010-A flat reduction) ──────────────────────
 
     /// Modul 1 is a *pauschale* reduction: the energy is billed at the full
     /// Arbeitspreis and a flat annual amount is credited pro rata alongside it.
@@ -4437,7 +4437,7 @@ mod tests {
         );
         let refs = r.all_legal_refs();
         assert!(refs.iter().any(|x| x.contains("Modul 1")));
-        assert!(refs.iter().any(|x| x.contains("BK6-22-300")));
+        assert!(refs.iter().any(|x| x.contains("BK8-22/010-A")));
     }
 
     /// Doubling the consumption does not double the credit — the defining
@@ -5317,10 +5317,10 @@ mod modul3_tests {
             refs.iter().any(|r| matches!(
                 r,
                 LegalReference::BnetzaDecision {
-                    reference: "BK6-22-300"
+                    reference: "BK8-22/010-A"
                 }
             )),
-            "must reference BK6-22-300"
+            "must reference BK8-22/010-A"
         );
     }
 
@@ -5428,7 +5428,7 @@ mod modul3_tests {
         assert_eq!(i.arbeitspreis.sect14a_modul(), Some(Sect14aModule::Modul1));
 
         // A spot-linked Netzentgelt replaces Modul 1 rather than adding to it —
-        // and is not itself one of the three modules BK6-22-300 defines.
+        // and is not itself one of the three modules BK8-22/010-A defines.
         i.arbeitspreis = ArbeitspreisModell::SpotpreisNetzentgelt {
             intervalle: vec![SpotpreisInterval {
                 period_from: base,

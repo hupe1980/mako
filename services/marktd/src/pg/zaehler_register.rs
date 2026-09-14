@@ -68,17 +68,27 @@ impl ZaehlzeitRepository for PgZaehlzeitRepository {
         rows.iter().map(row_to_register).collect()
     }
 
+    /// Upsert one season window of a register.
+    ///
+    /// `zaehler_saisons` carries no tenant of its own — it is scoped through
+    /// its `zaehler_register` parent, so the row is written only against a
+    /// register that exists, and a caller-supplied `id` may only ever move
+    /// within the register it already belongs to.
     async fn upsert_saison(&self, rec: &ZaehlzeitSaisonRecord) -> Result<(), MdmError> {
-        sqlx::query(
+        let written: Option<Uuid> = sqlx::query_scalar(
             r"INSERT INTO zaehler_saisons
                   (id, register_id, saison, wochentage, zeit_von, zeit_bis, updated_at)
-              VALUES ($1, $2, $3, $4, $5, $6, now())
+              SELECT $1::uuid, r.id, $3::text, $4::smallint[], $5::time, $6::time, now()
+                FROM zaehler_register r
+               WHERE r.id = $2
               ON CONFLICT (id) DO UPDATE
               SET saison     = EXCLUDED.saison,
                   wochentage = EXCLUDED.wochentage,
                   zeit_von   = EXCLUDED.zeit_von,
                   zeit_bis   = EXCLUDED.zeit_bis,
-                  updated_at = now()",
+                  updated_at = now()
+              WHERE zaehler_saisons.register_id = EXCLUDED.register_id
+              RETURNING id",
         )
         .bind(rec.id)
         .bind(rec.register_id)
@@ -86,24 +96,36 @@ impl ZaehlzeitRepository for PgZaehlzeitRepository {
         .bind(&rec.wochentage)
         .bind(rec.zeit_von)
         .bind(rec.zeit_bis)
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
-        Ok(())
+        // Nothing written means the register does not exist, or the id names a
+        // window of a different register. Both are refusals, never a silent
+        // `Ok` that reports a stored window there is none of.
+        written.map(|_| ()).ok_or(MdmError::NotFound {
+            resource_type: "zaehler_register",
+            id: rec.register_id.to_string(),
+        })
     }
 
+    /// The season windows of one register, scoped through the register's own
+    /// tenant: `zaehler_saisons` carries none, and `register_id` reaches this
+    /// from a request path.
     async fn list_saisons_by_register(
         &self,
         register_id: Uuid,
-        _tenant: &str,
+        tenant: &str,
     ) -> Result<Vec<ZaehlzeitSaisonRecord>, MdmError> {
         let rows = sqlx::query(
-            r"SELECT id, register_id, saison, wochentage, zeit_von, zeit_bis, updated_at
-              FROM zaehler_saisons
-              WHERE register_id = $1
-              ORDER BY saison, zeit_von",
+            r"SELECT s.id, s.register_id, s.saison, s.wochentage,
+                     s.zeit_von, s.zeit_bis, s.updated_at
+              FROM zaehler_saisons  s
+              JOIN zaehler_register r ON r.id = s.register_id
+              WHERE s.register_id = $1 AND r.tenant = $2
+              ORDER BY s.saison, s.zeit_von",
         )
         .bind(register_id)
+        .bind(tenant)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;

@@ -25,12 +25,17 @@ const SELECT_COLS: &str = "contract_id, malo_id, nb_mp_id, sparte, netzebene, \
 
 impl NbContractRepository for PgNbContractRepository {
     async fn upsert(&self, rec: NbContractRecord) -> Result<i64, MdmError> {
-        let current: Option<i64> =
-            sqlx::query_scalar("SELECT version FROM nb_contracts WHERE contract_id = $1")
-                .bind(&rec.contract_id)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| MdmError::Internal(e.to_string()))?;
+        // Scoped like every other read here: `contract_id` comes from the
+        // request path and is unique across the whole table, so the version a
+        // tenant-less read returns is another tenant's.
+        let current: Option<i64> = sqlx::query_scalar(
+            "SELECT version FROM nb_contracts WHERE contract_id = $1 AND tenant = $2",
+        )
+        .bind(&rec.contract_id)
+        .bind(&rec.tenant)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
 
         let new_version = current.map_or(1, |v| v + 1);
 
@@ -43,6 +48,10 @@ impl NbContractRepository for PgNbContractRepository {
                 data, vertragsart, vertragsstatus)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(),
                        $14, $15, $16)
+               -- `contract_id` is the global primary key and arrives in the
+               -- request path. The predicate keeps a write inside the tenant
+               -- that owns the row: a collision across tenants updates nothing
+               -- rather than overwriting a stranger's network contract.
                ON CONFLICT (contract_id) DO UPDATE
                SET malo_id               = EXCLUDED.malo_id,
                    nb_mp_id              = EXCLUDED.nb_mp_id,
@@ -58,7 +67,9 @@ impl NbContractRepository for PgNbContractRepository {
                    updated_at            = now(),
                    data                  = EXCLUDED.data,
                    vertragsart           = EXCLUDED.vertragsart,
-                   vertragsstatus        = EXCLUDED.vertragsstatus"#,
+                   vertragsstatus        = EXCLUDED.vertragsstatus
+               WHERE nb_contracts.tenant = EXCLUDED.tenant
+               RETURNING version"#,
         )
         .bind(&rec.contract_id)
         .bind(&rec.malo_id)
@@ -76,9 +87,15 @@ impl NbContractRepository for PgNbContractRepository {
         .bind(&rec.data)
         .bind(&rec.vertragsart)
         .bind(&rec.vertragsstatus)
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await
-        .map_err(super::write_error)?;
+        .map_err(super::write_error)?
+        // No row means the conflicting `contract_id` belongs to another
+        // tenant. Answered rather than swallowed: a silent `Ok` here reports a
+        // write that did not happen.
+        .ok_or(MdmError::Forbidden {
+            reason: "contract_id belongs to another tenant",
+        })?;
 
         Ok(new_version)
     }

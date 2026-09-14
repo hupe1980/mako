@@ -65,6 +65,14 @@ fn runner_routes(workspace_root: &Path) -> Vec<String> {
 /// Daemons that drive their own `main` and so merge nothing from the runner.
 const EXEMPT: &[&str] = &["makod"];
 
+/// The spellings of the runner entry point.
+///
+/// `mako_service` re-exports `service::run`, so a daemon may call it by either
+/// path. Matching only the short one leaves the daemons that spell it out
+/// invisible to this guard — and an invisible daemon is one that registers
+/// `/metrics` and panics at boot with the guard green.
+const ENTRY_POINTS: &[&str] = &["mako_service::run::<", "mako_service::service::run::<"];
+
 /// Check every runner-hosted daemon.
 ///
 /// Returns `true` when no daemon router claims a runner route.
@@ -98,7 +106,7 @@ pub fn run(workspace_root: &Path) -> bool {
         // Only daemons the runner assembles a router for.
         if !files.iter().any(|f| {
             std::fs::read_to_string(f)
-                .map(|s| s.contains("mako_service::run::<"))
+                .map(|s| ENTRY_POINTS.iter().any(|entry| s.contains(entry)))
                 .unwrap_or(false)
         }) {
             continue;
@@ -123,6 +131,15 @@ pub fn run(workspace_root: &Path) -> bool {
                 }
             }
         }
+    }
+
+    // "0 runner-hosted daemon(s)" reads like a pass and checks nothing.
+    if checked == 0 {
+        eprintln!(
+            "check-runner-routes: the scan found no runner-hosted daemon under services/ — \
+             the layout has probably changed"
+        );
+        return false;
     }
 
     if findings.is_empty() {
@@ -157,5 +174,17 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
         } else if path.extension().is_some_and(|e| e == "rs") {
             out.push(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A scan that reaches no file has checked nothing, and must say so rather
+    /// than report the clean line.
+    #[test]
+    fn refuses_a_tree_it_found_nothing_in() {
+        assert!(!super::run(std::path::Path::new(
+            "/nonexistent/mako/workspace/root"
+        )));
     }
 }

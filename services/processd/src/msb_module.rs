@@ -42,7 +42,7 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BK6-22-024 Anlage 2a** (WiM Strom Teil 1) — Kap. 2.2–2.4
+//! - **BK6-24-174 Anlage 2a** (WiM Strom Teil 1) — Kap. 2.2–2.4
 //! - **AWH WiM Gas 2.0** (gültig ab 01.10.2026) — Kap. 3.3, 3.5, 3.6
 //! - **Entscheidungsbaum-Diagramme und Codelisten 4.3** — Kap. 8
 //! - **§ 5 MsbG** — freie Wahl des Messstellenbetreibers

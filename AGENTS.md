@@ -18,7 +18,7 @@ neither is restated here. This file is what an agent needs before touching code.
   plausible one is the most expensive mistake available here; see the
   known-wrong citations in *Domain Rules* below.
 - **A defect class becomes a guard.** When something is found, the deliverable is
-  the check that makes it unrepresentable — which is why `just ci` carries 26 of
+  the check that makes it unrepresentable — which is why `just ci` carries 30 of
   them and the list grows with the defect list, not the feature list.
 
 ## Build and test
@@ -28,12 +28,12 @@ neither is restated here. This file is what an agent needs before touching code.
 
 ```bash
 just check      # cargo check --all-targets --all-features — the minimum
-just ci         # the gate: test, doctests, clippy, deny, 25 guards, site-free
+just ci         # the gate: test, doctests, clippy, deny, 30 guards, site-free
 just check-site # mermaid + link + zola checks; NOT part of `just ci`
 just test-db    # schema-per-test suites against real PostgreSQL (needs Docker)
 ```
 
-Three traps, each of which has produced a false "green":
+Four traps, each of which has produced a false "green" or a stalled run:
 
 - **Never pipe `just ci` through `tail`/`grep` for the verdict** — the pipe masks
   the exit code. Run `just ci > log 2>&1; echo EXIT:$?`, then grep the log for
@@ -44,6 +44,10 @@ Three traps, each of which has produced a false "green":
 - **Set `CARGO_TARGET_DIR` when a `Cargo.toml` has just changed.** rust-analyzer
   rebuilds the workspace into the default `target/` and will race a CI run into
   a fingerprint write failure that looks like a build error.
+- **`cargo clean` between long sessions.** `target/` reaches ~85 GB and a full
+  disk fails as `No space left on device` inside a compile — which reads like a
+  build error and is not one. Never clean while a run is in flight; it deletes
+  the artifacts underneath it.
 
 `cargo test --all-targets` **excludes doctests**; `just test-doc` is the recipe
 that runs them.
@@ -69,11 +73,6 @@ that runs them.
 | Architecture, domain model, engine | `site/content/docs/architecture/**` |
 | Which PID belongs to which crate and workflow | `site/content/docs/regulatory/pid-reference.md` |
 | Licence governance | `site/content/docs/compliance/licenses.md` |
-| The regulatory source corpus (index + download URLs) | `regulatories/README.md` |
-
-Deeper design notes may exist under `concepts/` — role docs, billing, EDMD, the
-agent plane, the backlog. That directory is **not tracked**, so it is absent from
-a fresh clone and nothing here depends on it.
 
 Per-area guidance lives in a nested `AGENTS.md`: `crates/edi-energy/`,
 `crates/mako-engine/`, `services/makod/`, `xtask/`, and the domain-workflow
@@ -228,7 +227,7 @@ Every daemon builds on the `mako-service` SDK. Do **not** hand-roll the lifecycl
 | 44022–44024 | `mako-geli-gas` `geli-gas-stornierung` (any Nb role: 44022 inbound) / `geli-gas-stornierung-lf` (any Lf role: 44023/44024 inbound) — one owner for the GeLi Gas *and* the WiM Gas Use-Case | BK7-24-01-009 |
 | 37000–37006 | `mako-gpke` (PARTIN Strom Kommunikationsdaten) | PARTIN AHB 1.0f |
 | 37008–37014 | `mako-geli-gas` (PARTIN Gas Kommunikationsdaten) | PARTIN AHB 1.0f |
-| 17115–17117 (Sperrung Strom, ORDERS) | `mako-gpke` | BK6-22-024 |
+| 17115–17117 (Sperrung Strom, ORDERS) | `mako-gpke` | BK6-24-174 Anlage 1b Kap. 3.5 |
 | 17115–17117 (Sperrung Gas, ORDERS) | `mako-geli-gas` | BK7-24-01-009 |
 | 44039–44044, 44051–44053, 44168/44169, 44183 | `mako-wim` `wim-device-change` (same workflow as Strom 55039/55042/55051/55168) | AWH WiM Gas 2.0 |
 | 31001–31002, 31005–31006 | `mako-gpke` (MMM-Rechnung / MMM-selbst ausgest. Rechnung Strom, NB → LF) | BK6-24-174 |
@@ -242,7 +241,7 @@ Every daemon builds on the `mako-service` SDK. Do **not** hand-roll the lifecycl
 | 31011 | `mako-geli-gas` (Rechnung sonstige Leistung, AWH Sperrprozesse Gas, NB → LF) | BK7-24-01-009 |
 | 17134–17135 | `mako-gpke` (ORDERS Konfiguration, GPKE Teil 3) | BK6-22-024 |
 | 19001–19002 | `mako-wim` (ORDRSP Geräteübernahme, WiM Strom) **and** `mako-gpke` (ORDRSP Konfiguration, NB role) — multi-domain: both "WiM Gas" and "WiM Strom Teil 1" per BDEW PID 3.3/4.0 xlsx | BK6-24-174 |
-| 23001–23012 | `mako-wim` `wim-insrpt` — one workflow, beide Sparten; die Frist folgt Messtechnik (Strom) bzw. ist flach (Gas) | BK6-22-024 Anlage 2b / AWH WiM Gas 2.0 Kap. 4.3 |
+| 23001–23012 | `mako-wim` `wim-insrpt` — one workflow, beide Sparten; die Frist folgt Messtechnik (Strom) bzw. ist flach (Gas) | BK6-24-174 Anlage 2b / AWH WiM Gas 2.0 Kap. 4.3 |
 | 23005, 23009 | `mako-wim` `wim-insrpt` — Gas-only Informationsmeldungen an den NB | AWH WiM Gas 2.0 Kap. 4.3 |
 
 **PIDs that do NOT exist — never register:**
@@ -390,7 +389,7 @@ there — a literal beside a call site is how the two come to disagree.
 |---|---|---|
 | GPKE Strom | **a clock time on the 1. WT nach dem ÜT** — 11:00 Anmeldung (55001/55077), 06:00 Abmeldung (55004), 05:00 Lieferende NB→LF (55007), 09:00 Beendigung der Zuordnung (55010) | BK6-24-174 GPKE Teil 2 |
 | GeLi Gas | Ablauf des **4. WT** Anmeldung (44001), **3. WT** Abmeldung (44004), **2. WT** Ersatz-/Grundversorgung (44013), **3. WT** Kündigung (44016) | BK7-24-01-009 Kap. 3.1–3.3 |
-| WiM, beide Sparten | **3 / 5 / 7 / 1 Werktage je PID** (55039/55042/55051/55168 resp. 44039/44042/44051/44168) | BK6-22-024 Anlage 2a Kap. 2.2.2–2.5.2 · AWH WiM Gas 2.0 |
+| WiM, beide Sparten | **3 / 5 / 7 / 1 Werktage je PID** (55039/55042/55051/55168 resp. 44039/44042/44051/44168) | BK6-24-174 Anlage 2a Kap. 2.2.2–2.5.2 · AWH WiM Gas 2.0 |
 | MaBiS (Prüfmitteilung) | **1 Werktag** | BK6-24-174 Anlage 3 §13.8 |
 
 **Saturday is not a Werktag.** GPKE Teil 1 Kap. 1.7: „alle Tage …, die kein
@@ -438,8 +437,9 @@ engine it silently becomes money.
 | "Zuschlag-Erlöschen = §35a EEG (or §33, or §55 Pönalen)" | Expiry for want of timely commissioning is **technology-specific**: §36e Wind an Land, §37e Solaranlagen des ersten Segments, §39e Biomasseanlagen. §35a is **Entwertung von Zuschlägen** (a BNetzA act); §33 is **Ausschluss von Geboten** (before any award exists); §55 Pönalen are a bidder↔ÜNB obligation outside settlement entirely |
 | "A `None` from a period-rate helper can fall back to a default rate" | Those helpers return `None` to say **no single rate is correct for the period**. Answering it with `.unwrap_or(default)` bills part of the period wrong and reads exactly like a correct invoice downstream — a silent customer overcharge. Refuse the period and name the Stichtage (`steuer_stichtage_im_zeitraum`) |
 | "§40c EnWG's three-week deadline follows from a short billing period" | The three weeks attach to **§40b Abs. 1 monthly billing** — the agreed cadence — not to the period's length. A Schlussrechnung always has six weeks, measured from the end of the **Lieferverhältnis**, however short the final period is |
-| "§14a EnWG Modul 2 = zeitvariable/HT-NT Netzentgelte; Modul 3 = Spotpreis or Steuerungsentschädigung" | BNetzA **BK6-22-300** numbers them: **Modul 1** = pauschale Reduzierung des Netzentgelts (default, no extra metering); **Modul 2** = prozentuale Reduzierung des Arbeitspreises on the device's *separately metered* energy; **Modul 3** = zeitvariable Netzentgelte with **three** Tarifstufen HT/ST/NT, offered from 01.04.2025, requires iMSys. **Modul 2 and Modul 3 are mutually exclusive**; Modul 1 combines with either. A Steuerungsentschädigung is not a module — all three modules are rate reductions, not payments for a dispatch. Both `energy-billing` and `grid-billing` once had this shuffled, differently from each other |
-| "The ESA Werteanfrage shares REQOTE 35002 with the Preisanfrage, because no ESA-specific REQOTE PID exists" | It is **35003**. REQOTE AHB 1.1 §4.3 gives the Kommunikation as *ESA an MSB* and labels `SG1 RFF+Z13` "35003 Anfrage von Werten für ESA"; §4.2 **35002** is "Anfrage zur Rechnungsabwicklung des Messstellenbetriebs über den LF", **LF → MSB**, WiM Teil 1. The wrong PID manufactured a collision that a sender-role classifier then had to resolve. Corroboration: `PIA` is *mandatory* on 35003 — exactly the segment the old heuristic sniffed for. REQOTE↔QUOTES pair 3500n → 1500n |
+| "§14a EnWG Modul 2 = zeitvariable/HT-NT Netzentgelte; Modul 3 = Spotpreis or Steuerungsentschädigung" | BNetzA **BK8-22/010-A** (NSAVER, Beschluss 23.11.2023) numbers them — not BK6-22-300, which is the companion Festlegung for the netzorientierte Steuerung: **Modul 1** = pauschale Reduzierung des Netzentgelts (default, no extra metering); **Modul 2** = prozentuale Reduzierung des Arbeitspreises on the device's *separately metered* energy; **Modul 3** = zeitvariable Netzentgelte with **three** Tarifstufen HT/ST/NT, offered from 01.04.2025, requires iMSys. **Modul 2 and Modul 3 are mutually exclusive**; Modul 1 combines with either. A Steuerungsentschädigung is not a module — all three modules are rate reductions, not payments for a dispatch. |
+| "the Modul-2 percentage is the Netzbetreiber's to publish" | **BK8-22/010-A Tenor 2. b) fixes it**: „Der reduzierte Arbeitspreis entspricht **40%** des Arbeitspreises für die Entnahme ohne Leistungsmessung des Netzbetreibers in der Niederspannung.“ Tenor 2. c) makes Modul 2 verpflichtend ab 01.01.2024 and Tenor 2. d) forbids a Grundpreis on such a Marktlokation. Only the *reference* Arbeitspreis is the operator's; the percentage is not |
+| "The ESA Werteanfrage shares REQOTE 35002 with the Preisanfrage, because no ESA-specific REQOTE PID exists" | It is **35003**. REQOTE AHB 1.1 §4.3 gives the Kommunikation as *ESA an MSB* and labels `SG1 RFF+Z13` "35003 Anfrage von Werten für ESA"; §4.2 **35002** is "Anfrage zur Rechnungsabwicklung des Messstellenbetriebs über den LF", **LF → MSB**, WiM Teil 1. Corroboration: `PIA` is *mandatory* on 35003 — exactly the segment the old heuristic sniffed for. REQOTE↔QUOTES pair 3500n → 1500n |
 | "WiM MSB-Wechsel responses are 5 Werktage" | **Per PID, from four separate Use-Cases**: Kündigung 55039 **3 WT** (WiM Teil 1 Kap. 2.2.2 Nr. 2), Beginn 55042 **5 WT** (2.3.2 Nr. 2), Ende 55051 **7 WT** (2.4.2 Nr. 2), Verpflichtungsanfrage 55168 **1 WT** (Kap. **2.5**.2 Nr. 4 — not 2.4). A flat window escalates the Abmeldung two days early and hides a missed Verpflichtungsanfrage for four. Distinct again from the **APERAK** acknowledgement: 45 minutes for Strom UTILMD (APERAK AHB §2.4.1), never Werktage |
 | "INVOIC 31009 (MSB-Rechnung) is NB → MSB" | It is **MSB → NB / LF / ESA** — the MSB is the invoicer in all **seven** Anwendungsfälle of the PID overview 4.0 (GPKE Teil 3 ×2, WiM Teil 1 ×2, WiM Teil 2 ×1, AWH Änderung Technik ×2), Strom only. Modelling it inverted names the party owed money as the one billing for it. The recipient's role varies, so it cannot be a bare `nb_mp_id` |
 | "A MIG defines where a data element sits in a segment" | A MIG lists which elements a profile **uses**; the **position** is fixed by the UN/EDIFACT directory and is what the counterparty writes. Generating positions from the MIG's list order shifts everything after an omitted element — REQOTE's `FTX.C108` landed at 2 instead of 4 and mako **rejected valid inbound** `FTX+ACB+++text`. A missing element is a different defect: fix the profile against the MIG PDF, never work around it in a builder |

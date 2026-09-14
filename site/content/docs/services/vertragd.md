@@ -187,7 +187,10 @@ The two inbound webhooks (`POST /api/v1/events`,
 by the `inbound_secret` HMAC — so they carry no Cedar action either.
 
 `use-mcp` is an operator's despite being read-only by construction: it reads
-customer profiles and bank details across the whole tenant.
+customer profiles and bank details across the whole tenant. It is a role grant,
+so a configured `[mcp]` key needs its `roles` list to name one of LF, MSB, ESA
+or ADMIN — the key authorizes as `User::"<key name>"` under exactly those roles,
+and a role-less one is refused at the door.
 
 ### Why the operator split stops here
 
@@ -212,6 +215,14 @@ Kunde (B2C: Haushalt/SLP, B2B: Unternehmen/RLM/HV)
 `vertrags_nr` and `rahmenvertrag_nr` come from a sequence, so no contract exists
 without the number § 41 Abs. 1 Nr. 1 EnWG expects it to identify itself by — and
 that every invoice, Mahnung and support call quotes.
+
+`vertragsart`, `kuendigung_grund` and the outbound task `kind` are
+`CHECK`-constrained columns written from Rust enums, and
+`tests/schema_enum_guard.rs` holds the two together in both directions. The read
+direction is why: `Vertragsart::from_db` answers `SONDERVERTRAG` for anything it
+does not recognise — deliberately, so a typo cannot grant Grundversorgungs-Fristen
+— so a `CHECK` value the enum lost would silently reclassify a contract's
+statutory regime rather than fail.
 
 ### Contract status
 

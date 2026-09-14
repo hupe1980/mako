@@ -2,7 +2,7 @@
   "ahb_version": "1.1",
   "anwendungsfaelle": [
     {
-      "chapter": "4.1.1 SG6 Verwendungszeitraum der Daten",
+      "chapter": "5 Anwendungsfall Übermittlung der Berechnungsformel",
       "communication": "NB an MSB / LF",
       "elements": [
         {
@@ -996,7 +996,7 @@
       ]
     },
     {
-      "chapter": "4.1.1 SG6 Verwendungszeitraum der Daten",
+      "chapter": "5 Anwendungsfall Übermittlung der Berechnungsformel",
       "communication": "MSB an NB",
       "elements": [
         {
@@ -1496,7 +1496,7 @@
       ]
     },
     {
-      "chapter": "6.3 Hinweis zum Anwendungsfall „Übermittlung Übersicht Leistungskurvendefinitionen“",
+      "chapter": "7 Anwendungsfall Übermittlung Übersicht Definitionen",
       "communication": "NB an LF /",
       "elements": [
         {
@@ -2288,7 +2288,7 @@
       ]
     },
     {
-      "chapter": "6.3 Hinweis zum Anwendungsfall „Übermittlung Übersicht Leistungskurvendefinitionen“",
+      "chapter": "7 Anwendungsfall Übermittlung Übersicht Definitionen",
       "communication": "NB an LF /",
       "elements": [
         {
@@ -2851,7 +2851,7 @@
       ]
     },
     {
-      "chapter": "6.3 Hinweis zum Anwendungsfall „Übermittlung Übersicht Leistungskurvendefinitionen“",
+      "chapter": "7 Anwendungsfall Übermittlung Übersicht Definitionen",
       "communication": "NB an LF /",
       "elements": [
         {
@@ -3414,7 +3414,7 @@
       ]
     },
     {
-      "chapter": "8.6 Befüllungslogik der DTM-Segmente einer ausgerollten Leistungskurvendefinition",
+      "chapter": "9 Anwendungsfall Übermittlung der ausgerollten Definitionen",
       "communication": "NB an LF /",
       "elements": [
         {
@@ -3980,7 +3980,7 @@
       ]
     },
     {
-      "chapter": "8.6 Befüllungslogik der DTM-Segmente einer ausgerollten Leistungskurvendefinition",
+      "chapter": "9 Anwendungsfall Übermittlung der ausgerollten Definitionen",
       "communication": "NB an LF /",
       "elements": [
         {
@@ -4558,7 +4558,7 @@
       ]
     },
     {
-      "chapter": "8.6 Befüllungslogik der DTM-Segmente einer ausgerollten Leistungskurvendefinition",
+      "chapter": "9 Anwendungsfall Übermittlung der ausgerollten Definitionen",
       "communication": "NB an LF /",
       "elements": [
         {
@@ -5145,10 +5145,10 @@
     "1": "Nur MP-ID aus Sparte Strom",
     "10": "wenn vorhanden",
     "11": "Wenn in SG8 SEQ+Z37 SG9 CCI+++Z86 CAV+Z69/Z70 (Addition / Subtraktion) vorhanden, darf es in dem Vorgang beliebig viele weitere SG8 SEQ+Z37 mit identi- schem Rechenschrittidentifikator mit derselben Zeitraum-ID geben, die jedoch aus- schließlich die Operatoren Z69/Z70 enthalten dürfen",
-    "12": "Wenn in SG8 SEQ+Z37 SG9 CCI+++Z86 CAV+Z83 (Positivwert) vorhanden, darf es in dem Vorgang keine weitere SG8 SEQ+Z37 mit identischem Rechenschrittidentifi- kator und derselben Zeitraum-ID geben",
-    "13": "Wenn in SG8 SEQ+Z37 SG9 CCI+++Z86 CAV+Z80/Z81 (Divisor / Dividend) vorhan- den, muss in diesem Vorgang genau eine zweite SG8 SEQ+Z37 mit identischen Re- chenschrittidentifikator und derselben Zeitraum-ID vorhanden sein, sodass das eine SG8 SEQ+Z37 den Operator Z80 (Divisor) und das andere SG8 SEQ+Z37 den Operator Z81 (Dividend) enthält",
+    "12": "Wenn in SG8 SEQ+Z37 SG9 CCI+++Z86 CAV+Z83 (Positivwert) vorhanden, darf es in dem Vorgang keine weitere SG8 SEQ+Z37 mit identischem Rechenschrittidentifikator und derselben Zeitraum-ID geben",
+    "13": "Wenn in SG8 SEQ+Z37 SG9 CCI+++Z86 CAV+Z80/Z81 (Divisor / Dividend) vorhanden, muss in diesem Vorgang genau eine zweite SG8 SEQ+Z37 mit identischen Re- chenschrittidentifikator und derselben Zeitraum-ID vorhanden sein, sodass das eine SG8 SEQ+Z37 den Operator Z80 (Divisor) und das andere SG8 SEQ+Z37 den Operator Z81 (Dividend) enthält",
     "14": "Wenn in SG8 SEQ+Z37 SG9 CCI+++Z86 CAV+Z82 (Faktor) vorhanden, darf es in dem Vorgang beliebig viele weitere SG8 SEQ+Z37 mit identischem Rechenschritti- dentifikator und derselben Zeitraum-ID geben, die jedoch ausschließlich CAV+Z82 enthalten",
-    "15": "Wenn in einem SG5 IDE+24 nur eine SEQ+Z37 mit einer SG8 RFF+Z19 (Messloka- tion) und derselben Zeitraum-ID vorhanden ist",
+    "15": "Wenn in einem SG5 IDE+24 nur eine SEQ+Z37 mit einer SG8 RFF+Z19 (Messlokation) und derselben Zeitraum-ID vorhanden ist",
     "2": "Wenn SG5 STS+Z23+Z34 (Berechnungsformel muss beim Absender angefragt werden) in einem SG5 IDE vorhanden",
     "2001": "Segment bzw. Segmentgruppe ist genau einmal anzugeben",
     "2002": "Für jeden Code der Zählzeit aus SG8 SEQ+Z42 (Zählzeitdefinition) SG9 CCI+Z39 (Code der Zählzeitdefinition) sind mindestens zwei Register anzugeben, bei denen in dieser SG8 das SG8 RFF+Z27 mit diesem Code gefüllt ist",
@@ -5206,7 +5206,7 @@
     "524": "Hinweis: Es ist der Code einer Zählzeitdefinition anzugeben",
     "525": "Hinweis: Es ist der Code einer Schaltzeitdefinition anzugeben",
     "526": "Hinweis: Es ist der Code einer Leistungskurvendefinition anzugeben",
-    "527": "Hinweis: Dieser Code ist anzugeben, wenn es sich um eine einmalig zu über- mittelnde Definition handelt Formel zur Berechnung der Werte der Markt- bzw. Netzloka- Messlokationen und weiterer notwendiger Parameter dar. der einzelnen Messlokationen zur Berechnung der Werte sind. der Werte der Markt- bzw. Netzlokation nicht im Rah- übermittelt werden kann, ist im Segment der Code Z34 „Berechnungsformel muss beim Absen- Zusätzlich muss in diesem Fall ein Ansprechpartner des NB Übermittlung der Berechnungsformel durchführen zu der Werte der Markt- bzw. Netzlokation keine Rechen- besitzt und somit die Energiemenge der Markt- bzw. gemessen wird, ist im Segment STS+Z23 Messloka- der Code Z40 „Berechnungsformel besitzt keine Rechen- der Werte der Markt- bzw. Netzlokation für einen Ver- ist, da die Energiemenge der Markt- bzw. Netzlokation wird, ist im Segment STS+Z23 Messlokation „Status der Be- nicht erforderlich“ anzugeben.",
+    "527": "Hinweis: Dieser Code ist anzugeben, wenn es sich um eine einmalig zu über- mittelnde Definition handelt",
     "528": "Hinweis: Dieser Code ist anzugeben, wenn es sich um eine jährlich zu übermit- telnde Definition handelt",
     "529": "Hinweis: Verwendung der ID der Netzlokation",
     "53": "Wenn im DE3155 in demselben COM der Code EM vorhanden ist",

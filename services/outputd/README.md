@@ -101,6 +101,10 @@ audience = "outputd"
 # each is an HTTP relay answering 2xx on acceptance. Configure none and the
 # PORTAL channel still works, which is the one § 41 Abs. 5 EnWG and § 126b BGB
 # actually ask for — Textform on a durable medium, not registered post.
+#
+# Each `*_relay_url` requires its `*_api_key`: the key is both the bearer token
+# and the Standard Webhooks signing key over the pushed document, and startup
+# refuses a URL without one.
 [delivery]
 enabled            = true
 email_relay_url    = "http://mail-relay:8000/send"

@@ -146,7 +146,11 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
-    async fn revoke_expired(&self, now: time::Date) -> Result<Vec<EinwilligungRecord>, MdmError> {
+    async fn revoke_expired(
+        &self,
+        now: time::Date,
+        tenant: &str,
+    ) -> Result<Vec<EinwilligungRecord>, MdmError> {
         // One statement, so selecting and closing cannot race: a concurrent
         // sweep or an operator revocation takes the row first and this returns
         // nothing for it, which is what keeps the 17008 to one per consent.
@@ -156,10 +160,12 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         // it, and `< $1` is that boundary.
         sqlx::query(
             "UPDATE esa_einwilligungen SET revoked_at = now(), updated_at = now() \
-             WHERE revoked_at IS NULL AND valid_to IS NOT NULL AND valid_to < $1 \
+             WHERE tenant = $2 AND revoked_at IS NULL AND valid_to IS NOT NULL \
+               AND valid_to < $1 \
              RETURNING *",
         )
         .bind(now)
+        .bind(tenant)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?

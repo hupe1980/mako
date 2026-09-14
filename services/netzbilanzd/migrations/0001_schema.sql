@@ -313,10 +313,14 @@ CREATE TABLE kostenblatt_records (
 
     kosten_json             JSONB,      -- typed BO4E Kosten for CIM export
 
+    -- The record's lifecycle as this service drives it: quantified, then
+    -- submitted to the ÜNB. `confirmed` / `disputed` / `paid` are deliberately
+    -- absent — they are the ÜNB's answer, and netzbilanzd has no leg that
+    -- receives one. Listing a state nothing can write makes the schema claim a
+    -- lifecycle the code does not have, and a reader cannot tell the difference
+    -- between "not implemented" and "never reached".
     status                  TEXT        NOT NULL DEFAULT 'pending'
-                            CHECK (status IN (
-                                'pending', 'submitted', 'confirmed', 'disputed', 'paid'
-                            )),
+                            CHECK (status IN ('pending', 'submitted')),
     submitted_at            TIMESTAMPTZ,
     dispatch_ref            TEXT,
 

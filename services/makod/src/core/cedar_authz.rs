@@ -23,7 +23,7 @@
 //!   Cedar principal (`MaKo::Principal::"<name>"`).
 //! - A compiled policy set — operator-supplied policies from
 //!   `--cedar-policy-dir`, over the embedded default policy unless
-//!   `--cedar-no-default-policy` omits it.
+//!   it is installed only by `--cedar-permit-all`.
 //! - The compiled **schema** for validation.
 //!
 //! ## Identity model
@@ -43,7 +43,7 @@
 //! does, so while that baseline is in the policy set an operator `permit`
 //! grants nothing that is not already granted — only `forbid` narrows it. To
 //! build up from nothing instead, start `makod` with
-//! `--cedar-no-default-policy` ([`DefaultPolicy::Deny`]); the baseline is then
+//! the default ([`DefaultPolicy::Deny`]); the baseline is then
 //! omitted and `--cedar-policy-dir` becomes the only source of access. That is
 //! the mode `cedar/conservative.cedar` and § 6a EnWG role separation require.
 //!
@@ -372,7 +372,7 @@ impl CedarAuthorizer {
         // of serving 403 to everything.
         if default_policy == DefaultPolicy::Deny && extra_policies.is_none() {
             return Err(AuthzBuildError::PolicyParse(
-                "--cedar-no-default-policy omits the permit-all baseline, so every request \
+                "authorization is default-deny without the permit-all baseline, so every request \
                  would be denied. Supply your own grants with --cedar-policy-dir (see the \
                  shipped conservative.cedar for a least-privilege starting point)."
                     .to_owned(),

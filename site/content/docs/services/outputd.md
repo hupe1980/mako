@@ -621,6 +621,11 @@ audience = "outputd"
 # How issued documents reach the customer. Every outbound channel is an HTTP
 # relay pointed at whatever the operator already runs; with none configured,
 # documents are still stored and served and the portal channel still delivers.
+#
+# A relay URL requires its key: the body carries the document, the recipient's
+# name, e-mail, MaLo and Kundennummer, and the key is both the bearer token and
+# the Standard Webhooks signing key. `outputd` refuses to start on a URL
+# without one.
 [delivery]
 enabled             = true          # default
 max_attempts        = 8             # default; with the doubling backoff, ~half a day

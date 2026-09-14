@@ -22,6 +22,7 @@
 //! ```
 
 #![no_main]
+#![deny(unsafe_code)]
 
 use edi_energy::{AnyMessage, EdiEnergyMessage};
 use libfuzzer_sys::fuzz_target;

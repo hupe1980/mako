@@ -223,7 +223,7 @@ their codes with the Ebene and Positionsnummer. Which family is decided by
 (`A25` against **`AC1`**) and the two Preisblatt-only Kopf-Prüfschritte 80/90.
 
 `E_0566` and `E_0210` — the Messstellenbetriebs-Rechnung toward an NB resp. an
-LF — resolve to the right tree and their Codelisten now ship, so an inbound
+LF — resolve to the right tree and their Codelisten ship, so an inbound
 REMADV under one of them is read with its published Bedeutung and Cluster rather
 than as an opaque string. What is not there is the **walk**: these trees are not
 the ESA/Preisblatt-B one renamed (`E_0210` has 37 Prüfschritte to `E_0264`'s 26
@@ -620,12 +620,16 @@ hmac_secret = "env:INVOICD_ERP_HMAC_SECRET"
 url = "http://edmd:8380"
 # api_key = "env:INVOICD_EDMD_API_KEY"
 
-# [oidc]          # omit to disable auth (dev only — never omit in production)
+# Required. Omitting it is a startup refusal unless `allow_insecure_no_auth`
+# is set, which is how a dev stack opts out deliberately rather than by leaving
+# a section out.
+[oidc]
 # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 # audience = "api://mako-invoicd"
 # jwks_refresh_secs = 300
 
-# [mcp]           # MCP authentication: API key, OIDC, or dev mode
+# [mcp]           # MCP authentication: an API key beside the OIDC verifier
+#                 # above, for agent clients that mint no token
 # api_key = "env:INVOICD_MCP_API_KEY"
 
 ```
@@ -766,7 +770,7 @@ SELECT
   direction,     -- 'inbound' | 'outbound'
   sender_mp_id,  -- NB/MSB MP-ID
   outcome,       -- 'Ok' | 'AcceptedPartial' | 'Warn' | 'Dispute'
-                 -- | 'Resolved' | 'Dispatched' | 'Paid'
+                 -- | 'Resolved' | 'Dispatched'  (the verdict, never payment)
   pay_by,        -- Zahlungsziel from INVOIC SG8 DTM+265
   received_at,   -- first ingest timestamp
   dispatched_at, -- when the answer went out

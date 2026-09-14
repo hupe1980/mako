@@ -63,20 +63,32 @@ const EXEMPT: &[(&str, &str)] = &[];
 pub fn run(workspace_root: &Path) -> bool {
     let mut findings: Vec<String> = Vec::new();
     let exempt: BTreeSet<&str> = EXEMPT.iter().map(|(p, _)| *p).collect();
+    let mut scanned = 0usize;
 
     for dir in ["crates", "services"] {
         collect(
             &workspace_root.join(dir),
             workspace_root,
             &exempt,
+            &mut scanned,
             &mut findings,
         );
     }
 
+    // A guard that read no file finds no hand-assembled document, and reports
+    // the clean line for it.
+    if scanned == 0 {
+        eprintln!(
+            "check-bo4e-discriminants: the scan read no shipped source file under crates/ or \
+             services/ — the layout has probably changed"
+        );
+        return false;
+    }
+
     if findings.is_empty() {
         println!(
-            "check-bo4e-discriminants: no BO4E document assembled by hand in shipped code \
-             ({} documented exemption(s))",
+            "check-bo4e-discriminants: no BO4E document assembled by hand in {scanned} \
+             shipped source file(s) ({} documented exemption(s))",
             EXEMPT.len()
         );
         return true;
@@ -99,7 +111,14 @@ pub fn run(workspace_root: &Path) -> bool {
     false
 }
 
-fn collect(dir: &Path, root: &Path, exempt: &BTreeSet<&str>, findings: &mut Vec<String>) {
+/// Every shipped `.rs` file under `dir`, counting what it read into `scanned`.
+fn collect(
+    dir: &Path,
+    root: &Path,
+    exempt: &BTreeSet<&str>,
+    scanned: &mut usize,
+    findings: &mut Vec<String>,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -109,7 +128,7 @@ fn collect(dir: &Path, root: &Path, exempt: &BTreeSet<&str>, findings: &mut Vec<
             if path.file_name().is_some_and(|n| n == "target") {
                 continue;
             }
-            collect(&path, root, exempt, findings);
+            collect(&path, root, exempt, scanned, findings);
             continue;
         }
         if path.extension().is_none_or(|e| e != "rs") {
@@ -134,6 +153,7 @@ fn collect(dir: &Path, root: &Path, exempt: &BTreeSet<&str>, findings: &mut Vec<
         let Ok(src) = std::fs::read_to_string(&path) else {
             continue;
         };
+        *scanned += 1;
         for (line_no, hit) in offending_lines(&src, exempt.contains(rel.as_str())) {
             findings.push(format!("{rel}:{line_no}  {hit}"));
         }
@@ -338,6 +358,15 @@ fn was_cfg_test(src: &str, idx: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// A scan that reaches no file has checked nothing, and must say so rather
+    /// than report the clean line.
+    #[test]
+    fn refuses_a_tree_it_found_nothing_in() {
+        assert!(!super::run(std::path::Path::new(
+            "/nonexistent/mako/workspace/root"
+        )));
+    }
     use super::{offending_lines, writes_a_bo4e_field, writes_typ};
 
     /// The value is not the point. `T::TYP_WIRE` beside hand-spelled fields is

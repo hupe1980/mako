@@ -130,7 +130,7 @@ pub async fn handle_webhook(
 
     // Look up existing projection to preserve started_at. A read failure is not
     // "no row": treating it as one re-anchors the deadline on this event.
-    let (started_at, existing) = match state.repo.get(process_id).await {
+    let (started_at, existing) = match state.repo.get(process_id, &state.tenant).await {
         Ok(Some(existing)) => (existing.started_at, Some(existing)),
         Ok(None) => (event_time, None),
         Err(err) => {

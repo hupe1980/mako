@@ -67,7 +67,7 @@ Three things the daemon refuses to start without, all visible above:
 
 - **Durability.** Omitting `[storage] data_dir` needs `allow_volatile = true`. Without it `makod` refuses to start, so a production deployment cannot lose its event store by accident.
 - **A credential on every authenticated port.** `[http] addr` submits commands and triggers migrations; it never runs open. Supply `auth_keys` or an `[oidc]` issuer.
-- **A path for outbound EDIFACT.** With neither AS4 signing material nor `[erp] edifact_outbox_webhook_url`, every outbound message would be logged and rescheduled forever. `allow_no_signing = true` makes that a deliberate development choice instead of a silent regulatory failure.
+- **A path for outbound EDIFACT.** With neither AS4 signing material nor `[erp] edifact_outbox_webhook_url`, every outbound message would be logged and rescheduled forever. `allow_no_signing = true` makes that a deliberate development choice instead of a silent regulatory failure. The webhook path additionally requires `[erp] webhook_secret`: it carries the rendered market message, and it stands in for a transport that authenticates both ends.
 
 ### Production — durable SlateDB on local disk
 
@@ -168,7 +168,7 @@ Set `terminationGracePeriodSeconds` above `--shutdown-timeout-secs` + 10.
 | `--oidc-audience <AUD>` | `MAKOD_OIDC_AUDIENCE` | Expected JWT `aud` claim (required when `--oidc-issuer` is set). |
 | `--oidc-jwks-refresh-secs <N>` | `MAKOD_OIDC_JWKS_REFRESH_SECS` | JWKS key-set refresh interval in seconds (default: 300). |
 | `--cedar-policy-dir <DIR>` | `MAKOD_CEDAR_POLICY_DIR` | Directory of extra `.cedar` policy files appended to the built-in default policy. |
-| `--cedar-no-default-policy` | `MAKOD_CEDAR_NO_DEFAULT_POLICY` | Omit the built-in permit-all baseline so only `--cedar-policy-dir` grants access. |
+| `--cedar-permit-all` | `MAKOD_CEDAR_PERMIT_ALL` | **Development only.** Add the built-in permit-all baseline. Authorization is default-deny without it, and `--cedar-policy-dir` is then the only source of access. |
 | `--as4-addr <ADDR>` | `MAKOD_AS4_ADDR` | Enable AS4/ebMS3 inbound transport. |
 | `--api-webdienste-addr <ADDR>` | `MAKOD_API_WEBDIENSTE_ADDR` | Enable API-Webdienste Strom port. |
 | `--erp-webhook-url <URL>` | `MAKOD_ERP_WEBHOOK_URL` | CloudEvents 1.0 webhook for ERP integration. |
@@ -188,12 +188,13 @@ set. The built-in `default.cedar` policy grants all actions to every authenticat
 principal — suitable for single-tenant deployments.
 
 A Cedar request is allowed when any `permit` matches and no `forbid` does, so an
-added `permit` cannot narrow that baseline — only `forbid` can. For a
-least-privilege deployment (and for §§6a/7a EnWG role separation in a combined-role
-VIU install) pass `--cedar-no-default-policy`, which drops the baseline and makes
-`--cedar-policy-dir` the only source of access. `conservative.cedar` ships as a
-starting point. The flag requires a policy directory; without one `makod` refuses
-to start rather than denying every request.
+added `permit` cannot narrow that baseline — only `forbid` can, which is why the
+baseline is a development opt-in (`--cedar-permit-all`) and not the default.
+Without it `--cedar-policy-dir` is the only source of access, which is what
+§§ 6a/7a EnWG role separation needs in a combined-role VIU install.
+`conservative.cedar` ships as a starting point. A default-deny deployment
+requires a policy directory; without one `makod` refuses to start rather than
+denying every request.
 
 ### Provisioning API keys
 
@@ -239,9 +240,9 @@ unless { action == MaKo::Action::"AdminMaloStats" };
 makod --cedar-policy-dir /etc/makod/cedar ...
 ```
 
-That example uses `forbid` because it narrows the permit-all baseline. To deny by
-default and grant back only what is listed, copy `conservative.cedar` into the
-directory and add `--cedar-no-default-policy`.
+That example uses `forbid` because it narrows the permit-all baseline, which only
+`--cedar-permit-all` installs. Denying by default and granting back what is
+listed is the default posture: copy `conservative.cedar` into the directory.
 
 Cedar policies are validated at startup against the built-in schema using the
 Cedar Validator in strict mode — a policy with type errors prevents startup. This

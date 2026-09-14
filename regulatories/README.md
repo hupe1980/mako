@@ -91,7 +91,7 @@ BDEW catalogue and are maintained by hand; `sync-regulatories` reports them as
 | Folder | Content |
 |---|---|
 | `bdew-mako/` | EDI@Energy format documents (MIG/AHB/EBD/Codelisten, AS4-Profil, API-Guideline) and BDEW Anwendungshilfen |
-| `bentza/` | **BK6-24-174** Lesefassungen (GPKE Teil 1–3 = Anlagen 1a–1c, MaBiS = Anlage 3) and **BK6-22-024** Anlagen (GPKE Teil 4 = 1d, WiM Strom Teil 1/2 = 2a/2b — WiM was *not* reissued under BK6-24-174, so cite BK6-22-024 for it), GaBi Gas 2.1 Lesefassung, GeLi Gas 2.0 AWH |
+| `bentza/` | **BK6-24-174** Anlagen (GPKE Teil 1–3 = 1a–1c, WiM Strom Teil 1/2 = 2a/2b per Tenorziffer 2, MaBiS = Anlage 3), **BK6-22-024** Anlage 1d (GPKE Teil 4), GaBi Gas 2.1 Lesefassung, GeLi Gas 2.0 AWH. The `Anlage2a_/Anlage2b_` files are the superseded BK6-22-024 WiM edition, kept because a correction settled for an earlier period is read against the text in force then. |
 | `bnetza-festlegungen/` | Other BNetzA/GBK Festlegungen (e.g. GBK-25-02 vermiedene Netzentgelte) |
 | `dvgw/` | DVGW gas message formats (ALOCAT, NOMINT, NOMRES, …) |
 | `eeg/` | EEG 2017/2021/2023 law texts |

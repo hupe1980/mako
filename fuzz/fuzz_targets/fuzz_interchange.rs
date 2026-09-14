@@ -32,6 +32,7 @@
 //! ```
 
 #![no_main]
+#![deny(unsafe_code)]
 
 use edi_energy::{EdiEnergyMessage, Platform};
 use libfuzzer_sys::fuzz_target;

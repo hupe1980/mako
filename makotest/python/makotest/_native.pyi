@@ -59,6 +59,8 @@ class MessageReport:
     is_valid: bool
     rules_applied: bool
     """`False` when this PID has no AHB rules, so `is_valid` means nothing."""
+    vorgaenge: list[Vorgang]
+    """The SG4 Vorgänge this message carries, in wire order."""
     findings: list[Finding]
     def by_rule(self, prefix: str) -> list[Finding]: ...
     @property

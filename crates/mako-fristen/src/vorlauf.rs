@@ -30,7 +30,7 @@
 //!
 //! # Sources
 //!
-//! - BK6-22-024 Anlage 2a — WiM Strom Teil 1 (Lesefassung), Kap. 2.3–3.3
+//! - BK6-24-174 Anlage 2a — WiM Strom Teil 1 (Lesefassung), Kap. 2.3–3.3
 //! - EDI@Energy Entscheidungsbaum-Diagramme und Codelisten 4.3 — `E17`
 
 use time::Date;
@@ -857,13 +857,26 @@ pub fn vorlauf(key: &str) -> Option<&'static VorlaufObligation> {
 /// the ordinary one for a Neuanlage rejects a valid Anmeldung eight Werktage
 /// early; picking the short one for a Wechsel confirms a date the NB cannot
 /// honour, because the Realisierungskorridor around it no longer fits.
+///
+/// Reads [`WIM`] rather than rebuilding the shape from the same constants. A
+/// helper that rebuilds it is a second copy of a published window, and the two
+/// have no runtime dependency to keep them equal — editing one leaves the
+/// checker disagreeing with the Fundstelle its own refusal cites.
+///
+/// # Panics
+///
+/// Panics if the catalogued row is missing, which means the key was renamed
+/// without this helper. `catalogued_rows_back_every_helper` pins it.
 #[must_use]
-pub const fn anmeldung_vorlauf(erstmalige_einrichtung: bool) -> VorlaufShape {
-    VorlaufShape::LatestWerktageBefore(if erstmalige_einrichtung {
-        ANMELDUNG_ERSTMALIG_WT
+pub fn anmeldung_vorlauf(erstmalige_einrichtung: bool) -> VorlaufShape {
+    let key = if erstmalige_einrichtung {
+        "wim.anmeldung-msb.erstmalige-einrichtung"
     } else {
-        ANMELDUNG_WT
-    })
+        "wim.anmeldung-msb"
+    };
+    vorlauf(key)
+        .unwrap_or_else(|| panic!("{key} is catalogued in WIM"))
+        .shape
 }
 
 /// The Realisierungskorridor around a confirmed Zuordnungstermin, as a closed
@@ -1017,26 +1030,21 @@ mod tests {
         assert_eq!(keys.len(), n, "duplicate Vorlauffrist key");
     }
 
-    /// Every convenience helper must return the shape the published table
-    /// carries for the same Prozessschritt.
+    /// Every convenience helper resolves against a row the table still has.
     ///
-    /// The helpers build their shape from the same constants the table does, not
-    /// from the table entry — so editing one and not the other leaves the
-    /// checker silently disagreeing with the window this crate publishes, and
-    /// with the Fundstelle a refusal cites. There is no runtime dependency
-    /// between them to catch it, only this.
+    /// `anmeldung_vorlauf` reads [`WIM`] by key, so a renamed key turns it from
+    /// a wrong answer into a panic — this is what keeps that panic out of
+    /// production rather than merely documenting it.
     #[test]
-    fn the_helpers_agree_with_the_table_they_stand_for() {
-        for (key, shape) in [
-            ("wim.anmeldung-msb", anmeldung_vorlauf(false)),
-            (
-                "wim.anmeldung-msb.erstmalige-einrichtung",
-                anmeldung_vorlauf(true),
-            ),
-        ] {
-            let published = vorlauf(key).unwrap_or_else(|| panic!("{key} is catalogued"));
-            assert_eq!(published.shape, shape, "{key}");
-        }
+    fn catalogued_rows_back_every_helper() {
+        assert_eq!(
+            anmeldung_vorlauf(false),
+            VorlaufShape::LatestWerktageBefore(ANMELDUNG_WT)
+        );
+        assert_eq!(
+            anmeldung_vorlauf(true),
+            VorlaufShape::LatestWerktageBefore(ANMELDUNG_ERSTMALIG_WT)
+        );
 
         // `realisierungskorridor` returns a date range rather than a shape, so
         // it is held against the window the table states.

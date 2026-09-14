@@ -24,7 +24,7 @@ field.
 
 ## §14a — all three modules
 
-BK6-22-300 defines exactly three, and their numbering matters — it is printed on
+BK8-22/010-A defines exactly three, and their numbering matters — it is printed on
 the invoice and shared with the NB-side `grid-billing` engine:
 
 | Modul | What it is | Fields |
@@ -33,7 +33,7 @@ the invoice and shared with the NB-side `grid-billing` engine:
 | **2** | *prozentuale Reduzierung des Arbeitspreises* — attaches to the device's **separately metered** energy | `sect14a_modul2_nne_reduktion_ct_per_kwh` |
 | **3** | *zeitvariable Netzentgelte* (from 01.04.2025) — **three** Tarifstufen HT/ST/NT, requires an iMSys | `sect14a_modul3_nne_*` + `Sect14aModul3Verbrauch` |
 
-**`Modul 1 + Modul 3` is the only pair BK6-22-300 offers.** Modul 1 and Modul 2 are
+**`Modul 1 + Modul 3` is the only pair BK8-22/010-A offers.** Modul 1 and Modul 2 are
 the two forms the base module takes and the Anschlussnutzer picks one; configuring
 both raises the Error-severity `MODUL1_AND_MODUL2` and the run is refused. Modul 2 and
 Modul 3 both re-price the Arbeitspreis, so holding both reduces the same network usage
@@ -44,7 +44,7 @@ The Modul 3 bands *replace* the flat NNE Arbeitspreis; setting both raises
 
 A **Steuerungsentschädigung** (`sect14a_steuerungsentschaedigung_*`) is compensation
 for a dispatch that actually happened. It is deliberately not numbered: all three
-BK6-22-300 modules are rate reductions, none of them a payment for a Steuerungseingriff. The bands come from the
+BK8-22/010-A modules are rate reductions, none of them a payment for a Steuerungseingriff. The bands come from the
 Netzbetreiber's time windows, which is why they are not derived from the
 supplier's own HT/NT split.
 
@@ -698,7 +698,7 @@ let comparison = Sect41aAnnualComparison::compute(
 
 ```toml
 energy-billing = { path = "…", features = ["eeg"] }   # full eeg-billing accuracy
-energy-billing = { path = "…", features = ["full"] }  # all optional features
+# energy-billing = { path = "…", features = ["full"] }  # …or every optional feature
 ```
 
 | Feature | Pulls in | Enables |
@@ -756,7 +756,7 @@ if invoice.has_errors() {
 | §25 Nr. 4 MessEV | Brennwertkorrektur m³ → kWh_Hs |
 | §12 Abs. 2 Nr. 1 UStG | Reduced 7% MwSt for Anlage-2 goods (Trinkwasser) — NOT district heating |
 | §19 UStG | 0% USt on the feed-in Gutschrift (Kleinunternehmer election) |
-| §14a EnWG | Controllable loads, Modul 1/2/3 (BNetzA BK6-22-300) via `ControllableLoadProvider` |
+| §14a EnWG | Controllable loads, Modul 1/2/3 (BNetzA BK8-22/010-A) via `ControllableLoadProvider` |
 | § 40a Abs. 2 EnWG | Estimated reading notice on invoice |
 | §40 / §40b EnWG | Mandatory ct/kWh; structured price-comparison data in JSON |
 | §40 EnWG | Invoice content (Netzbetreiber, Energiemix §42) |

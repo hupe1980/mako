@@ -143,8 +143,11 @@ in the policy that no handler checks is a dead grant — an endpoint that lost i
 check, or one that no longer exists. `services/processd/tests/authorization_guard.rs`
 pins both, plus the `Claims` extractor on every route.
 
-Omitting `[oidc]` disables authentication entirely and accepts every request
-with synthetic dev-admin claims. That is a local-development mode; never ship it.
+`processd` refuses to start without `[oidc]` and without a
+`[webhook] inbound_secret`: the first admits every request with synthetic
+dev-admin claims, the second lets a forged CloudEvent queue a decision or anchor
+a Frist. `allow_insecure_no_auth = true` accepts both — a local-development mode
+that has to be written down, rather than one reached by leaving a section out.
 
 ---
 
@@ -296,7 +299,10 @@ Veräußerungsform)`. The *angemeldete* one is `SG10 CCI+Z22` on the wire; the
 `[nb] einsd_url`) — wire code `Z90` covers both the uneingeschränkte
 Einspeisevergütung and the Ausfallvergütung, whose Fristen differ by a month
 versus five Werktage. The same call answers `E_0623` Prüfschritt 540. A missing
-fact escalates and is named; the statutory anchor for the Monatserster rule is
+fact escalates and is named; a `CCI+Z22` code outside the published four is
+dropped at ingest with a warning rather than stored, because
+`neuanlage_faelle.veraeusserungsform` is `CHECK`-constrained and a refused
+INSERT would leave the Anmeldung unanswered altogether; the statutory anchor for the Monatserster rule is
 **§ 21b Abs. 1 Satz 2 EEG 2023**, not § 10c.
 
 **Gas** (`G_0011`) runs the `A03`/`A04`/`A16`/`A17` identification checks first,
@@ -927,7 +933,10 @@ default_transaktionsgrund = "ZT6"         # SG4 STS DE9013 for automatic Anmeldu
 warn_days_before_expiry   = 14            # §38 Abs. 4 3-month warning lead
 # notify_webhook_url      = "https://erp.example/hooks/eog"   # ersatz-auslaufend CloudEvents
 
-# [oidc]                # omit to disable auth (dev only — never omit in production)
+# Required. Omitting it is a startup refusal unless `allow_insecure_no_auth`
+# is set, which is how a dev stack opts out deliberately rather than by leaving
+# a section out.
+[oidc]
 # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 # audience = "api://mako-processd"
 # jwks_refresh_secs = 300

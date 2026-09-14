@@ -21,6 +21,9 @@ Commands:
   check-release-coverage  Fail when no profile covers the current (or --date) date
   check-prompt-tools  Refuse a procedure step naming a tool the agent cannot reach
   check-crate-lints   Every crate root denies `unsafe_code`
+  check-db-suites     Every real-PostgreSQL suite is ignored and run by a recipe
+  check-expected-tenant  A service reading `Claims` pins the tenant it expects
+  check-vorlauf-consulted  Every catalogued Mindestvorlaufzeit is read by something
   check-runner-routes No daemon claims a route `mako_service::run` already mounts
                               (`Router::merge` panics on those at startup)
   check-sql           Every service's SQL literals prepare against its own schema
@@ -68,7 +71,9 @@ mod check_bo4e_examples;
 mod check_business_dates;
 mod check_citations;
 mod check_crate_lints;
+mod check_db_suites;
 mod check_dep_versions;
+mod check_expected_tenant;
 mod check_licenses;
 mod check_malo_ids;
 mod check_prompt_tools;
@@ -80,6 +85,7 @@ mod check_routes;
 mod check_runner_routes;
 mod check_sql;
 mod check_tool_grants;
+mod check_vorlauf_consulted;
 mod check_wire_timestamps;
 mod import_profiles;
 mod pid_overview;
@@ -96,6 +102,9 @@ fn main() {
         Some("check-release-coverage") => check_release_coverage::check_release_coverage(),
         Some("check-prompt-tools") => check_prompt_tools(),
         Some("check-crate-lints") => check_crate_lints(),
+        Some("check-db-suites") => check_db_suites(),
+        Some("check-expected-tenant") => check_expected_tenant(),
+        Some("check-vorlauf-consulted") => check_vorlauf_consulted(),
         Some("check-routes") => check_routes(),
         Some("check-runner-routes") => check_runner_routes(),
         Some("check-sql") => check_sql(),
@@ -181,6 +190,27 @@ fn bump_version() {
 fn check_crate_lints() {
     let (workspace_root, _) = workspace_info();
     if !check_crate_lints::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_db_suites() {
+    let (workspace_root, _) = workspace_info();
+    if !check_db_suites::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_expected_tenant() {
+    let (workspace_root, _) = workspace_info();
+    if !check_expected_tenant::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_vorlauf_consulted() {
+    let (workspace_root, _) = workspace_info();
+    if !check_vorlauf_consulted::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

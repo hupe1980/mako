@@ -1,20 +1,22 @@
-//! The three MaBiS workflows must actually reach their dispatch arms.
+//! The three MaBiS workflows must actually reach their dispatch arms — and
+//! reach the *right* one.
 //!
-//! `e2e_dispatch_coverage_guard` cannot cover them. It drives each registered
-//! PID with a real fixture, and a fixture only exists where the PID has an AHB
-//! profile entry — `generate-fixtures` skips the rest. All 35 PIDs behind
-//! `mabis-zp-lifecycle`, `mabis-anforderung` and `mabis-listenabgleich` are in
-//! `KNOWN_PROFILE_GAPS`, so that guard silently exercises none of them.
+//! `e2e_dispatch_coverage_guard` asks one question of every registered PID: was
+//! the message silently dropped? That is the widest net in the suite and the
+//! thinnest assertion. A PID answers it just as well by spawning a process it
+//! had no business spawning, by resuming one that should have spawned, or by
+//! being refused for a reason that has nothing to do with the Prüfidentifikator.
 //!
-//! Which means the wiring for these three workflows — adapter, ingest arm,
-//! router registration — was verified by nothing. The domain state machines have
-//! unit tests, but a state machine nobody can reach is not a feature. This test
-//! closes that hole with hand-built interchanges, and it asserts more than the
-//! coverage guard does: not only that the PID reaches an arm, but *which*
-//! outcome it produces.
+//! This file asserts the outcome instead. Every process in these three families
+//! has a direction — 55062 spawns, 55064 resumes, 55205 is addressed to a role
+//! this deployment does not hold — and the direction is what the domain state
+//! machines are built on. A state machine reachable through the wrong door is
+//! not the state machine its unit tests describe.
 //!
-//! When these PIDs gain AHB profiles the coverage guard will start exercising
-//! them too, and this file becomes redundant rather than wrong.
+//! The interchanges are hand-built rather than taken from the fixture corpus so
+//! each one carries exactly the segments the assertion is about: the `SG10` pair
+//! that names a Summenzeitreihe, or the `SG4 STS+E01` pair that carries an
+//! Antwortcode and the tree it is drawn from.
 
 use std::sync::Arc;
 
@@ -165,18 +167,118 @@ async fn every_zp_lifecycle_anfrage_reaches_its_arm() {
     }
 }
 
+/// A UTILMD Antwort announcing `pid`, carrying `SG4 STS+E01+<code>:<ebd>`.
+///
+/// Both halves are required: DE 9013 is the Antwortcode and DE 1131 the
+/// Entscheidungsbaum it is drawn from, and the same code means opposite things
+/// in two trees.
+fn utilmd_antwort(pid: u32, code: &str, ebd: &str) -> String {
+    format!(
+        "UNB+UNOC:3+{SENDER_MP}:14+{OWN_MP}:14+230101:0000+1'\
+UNH+1+UTILMD:D:11A:UN:S2.1'\
+BGM+E01:::+000{pid}::+9'\
+DTM+137:202301010000?+00:303'\
+RFF+Z13:REF001'\
+NAD+MS+{SENDER_MP}::293'\
+NAD+MR+{OWN_MP}::293'\
+IDE+24+{LOC}'\
+STS+E01++{code}:{ebd}'\
+UNT+9+1'\
+UNZ+1+1'"
+    )
+}
+
+/// Prozessschritt 2 resumes the Anfrage this participant sent.
+///
+/// „Der NB aktiviert einen MaBiS-ZP … und sendet die entsprechende Information
+/// an den BIKO, die vom BIKO nach einer formalen Prüfung (Stammdaten)
+/// angenommen oder abgelehnt wird" (BK6-24-174 Anlage 3). The answer is not a
+/// new lifecycle, so it must **not** spawn — and it must not be dropped either,
+/// which is what it was before the requester side existed.
 #[tokio::test]
-async fn zp_lifecycle_answer_pids_resume_rather_than_spawn() {
-    // 55064 answers both 55062 and 55063. Spawning a process on it would
-    // answer an answer; it must resume a process this side already started.
-    let outcome = dispatch(&utilmd(55064), "mabis-zp-lifecycle", 55064).await;
+async fn a_zp_lifecycle_answer_pid_resumes_rather_than_spawning() {
+    let zustimmung =
+        mako_pruefung::mabis::codes::zustimmung("E_0020").expect("E_0020 publishes a Zustimmung");
+    let outcome = dispatch(
+        &utilmd_antwort(55064, zustimmung.code, "E_0020"),
+        "mabis-zp-lifecycle",
+        55064,
+    )
+    .await;
+
+    assert!(
+        !was_dropped(&outcome),
+        "an Antwort PID must reach the arm, not be reported as a coverage gap: {outcome:?}"
+    );
+    assert!(
+        !matches!(outcome, IngestOutcome::Spawned { .. }),
+        "an answer opens no process of its own: {outcome:?}"
+    );
+    // No Anfrage was sent in this test, so the resume finds nothing — which is
+    // the arm's own decision and exactly what `resume_by_key` reports.
     match outcome {
-        IngestOutcome::Skipped { reason, .. } => assert_eq!(
-            reason, "answer_pid_resumes_only",
-            "an answer PID must be recognised as resume-only, not dropped"
-        ),
-        other => panic!("expected a resume-only skip for 55064, got {other:?}"),
+        IngestOutcome::Skipped { reason, .. } => assert_eq!(reason, "process_not_found"),
+        other => panic!("expected the resume to report an orphan answer, got {other:?}"),
     }
+}
+
+/// The Weiterleitung of Prozessschritt 4 goes to the **BKV**.
+///
+/// „Der BIKO leitet nur den nicht abgelehnten MaBiS-ZP an den BKV (des LF)
+/// weiter" — a Netzbetreiber is neither the BIKO that forwards nor the BKV that
+/// receives, so it stays a coverage-gap skip rather than being given a command
+/// it has no role for.
+#[tokio::test]
+async fn a_zp_lifecycle_weiterleitung_pid_is_reported_as_a_coverage_gap() {
+    for pid in [55205_u32, 55208, 55211, 55214] {
+        let outcome = dispatch(&utilmd(pid), "mabis-zp-lifecycle", pid).await;
+        match outcome {
+            IngestOutcome::Skipped { reason, .. } => assert_eq!(
+                reason, "pid_not_in_zp_lifecycle_for_this_role",
+                "Weiterleitung {pid} is addressed to the BKV"
+            ),
+            other => panic!("expected a coverage-gap skip for {pid}, got {other:?}"),
+        }
+    }
+}
+
+/// An Antwort whose Entscheidungsbaum this workspace has not catalogued is
+/// refused by name rather than read as a refusal.
+///
+/// The four monatliche-AAÜZ trees resolve, and a code they do not publish is
+/// still refused rather than guessed.
+///
+/// `E_0071`/`E_0078` (Aktivierung, `A13` = Zustimmung) and `E_0072`/`E_0079`
+/// (Deaktivierung, `A07` = Zustimmung) differ in exactly one Prüfschritt, so a
+/// resolver keyed on the code alone would answer the same for all four. It is
+/// keyed on the pair, and `A13` is not a code `E_0072` publishes at all.
+#[tokio::test]
+async fn the_aauez_answer_trees_resolve_and_an_unpublished_code_does_not() {
+    for (pid, code, ebd) in [
+        (55_204, "A13", "E_0071"),
+        (55_207, "A07", "E_0072"),
+        (55_210, "A13", "E_0078"),
+        (55_213, "A07", "E_0079"),
+    ] {
+        let outcome = dispatch(&utilmd_antwort(pid, code, ebd), "mabis-zp-lifecycle", pid).await;
+        assert!(
+            !was_dropped(&outcome),
+            "{ebd} {code} on PID {pid} did not reach its arm"
+        );
+    }
+
+    // `A13` belongs to the Aktivierung trees; the Deaktivierung pair stops at
+    // `A07`. Reading it as a Zustimmung would close a MaBiS-Zählpunkt on a code
+    // its own tree never published.
+    let msg =
+        edi_energy::parse(utilmd_antwort(55_207, "A13", "E_0072").as_bytes()).expect("parses");
+    let err = dispatcher()
+        .await
+        .dispatch(&msg, "mabis-zp-lifecycle", 55_207)
+        .await
+        .expect_err("a code the tree does not publish must not be guessed");
+    let text = format!("{err}");
+    assert!(text.contains("E_0072"), "the error names the tree: {text}");
 }
 
 #[tokio::test]
@@ -231,7 +333,7 @@ async fn every_listenabgleich_list_reaches_its_arm() {
 }
 
 #[tokio::test]
-async fn listenabgleich_reply_pids_resume_rather_than_spawn() {
+async fn listenabgleich_reply_pids_are_reported_as_coverage_gaps() {
     for familie in mako_mabis::LISTEN_FAMILIEN {
         let outcome = dispatch(
             &utilmd(familie.antwort),
@@ -241,12 +343,12 @@ async fn listenabgleich_reply_pids_resume_rather_than_spawn() {
         .await;
         match outcome {
             IngestOutcome::Skipped { reason, .. } => assert_eq!(
-                reason, "reply_pid_resumes_only",
-                "reply PID {} must be resume-only",
+                reason, "pid_not_in_listenabgleich_listen",
+                "reply PID {} has no command, so it must be reported as a coverage gap",
                 familie.antwort
             ),
             other => panic!(
-                "expected a resume-only skip for {}, got {other:?}",
+                "expected a coverage-gap skip for {}, got {other:?}",
                 familie.antwort
             ),
         }

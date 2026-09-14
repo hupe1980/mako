@@ -802,6 +802,7 @@ coverage_table! {
     mabis_profil_registry,
     mabis_registry,
     mabis_summenzeitreihe_registry,
+    mabis_zp_lifecycle_antwort_registry,
     mabis_zp_lifecycle_registry,
     wim_geraeteubernahme_registry(mako_engine::types::Sparte::Strom),
     wim_insrpt_registry(mako_engine::types::Sparte::Strom, mako_fristen::antwort::Messtechnik::RlmOderImsMsHs),

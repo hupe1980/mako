@@ -181,6 +181,49 @@ async fn consent_check_gates_inbound_messages() {
     assert!(!d.allowed);
 }
 
+/// The expiry sweep is tenant-scoped.
+///
+/// It runs on a timer with no caller-supplied input, so an unscoped statement
+/// would revoke every tenant's consents and publish their `anschlussnutzer_ref`
+/// and `location_ids` in an event routed to this deployment's subscribers.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_expiry_sweep_does_not_reach_another_tenant() {
+    let Some((pool, _pg)) = test_pool("expiry-tenant").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool);
+    let today = time::macros::date!(2026 - 06 - 15);
+    let other = "9905550000005";
+
+    let mine = EinwilligungRecord {
+        valid_to: Some(time::macros::date!(2026 - 06 - 14)),
+        ..consent("AN-MINE", &["51238696012"])
+    };
+    let theirs = EinwilligungRecord {
+        tenant: other.to_owned(),
+        valid_to: Some(time::macros::date!(2026 - 06 - 14)),
+        ..consent("AN-THEIRS", &["51238696013"])
+    };
+    repo.grant(mine).await.unwrap();
+    let theirs_id = repo.grant(theirs).await.unwrap();
+
+    let expired = repo.revoke_expired(today, TENANT).await.expect("sweep");
+    assert_eq!(
+        expired.len(),
+        1,
+        "only this tenant's lapsed consent closes: {expired:?}"
+    );
+    assert_eq!(expired[0].anschlussnutzer_ref, "AN-MINE");
+
+    // The other tenant's consent is untouched and still theirs to close.
+    let still_open = repo.get(other, theirs_id).await.unwrap().expect("present");
+    assert!(
+        still_open.revoked_at.is_none(),
+        "another tenant's consent must survive this deployment's sweep"
+    );
+}
+
 /// Tenant isolation: another tenant cannot read or revoke a consent.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
@@ -520,7 +563,7 @@ async fn an_expired_consent_is_closed_and_returned_for_the_abbestellung() {
         .await
         .unwrap();
 
-    let expired = repo.revoke_expired(today).await.expect("sweep");
+    let expired = repo.revoke_expired(today, TENANT).await.expect("sweep");
     assert_eq!(
         expired.len(),
         1,
@@ -537,7 +580,10 @@ async fn an_expired_consent_is_closed_and_returned_for_the_abbestellung() {
     // Idempotent: the 17008 goes out once per consent, so a second sweep must
     // return nothing.
     assert!(
-        repo.revoke_expired(today).await.expect("sweep").is_empty(),
+        repo.revoke_expired(today, TENANT)
+            .await
+            .expect("sweep")
+            .is_empty(),
         "a closed consent must not be swept twice"
     );
 

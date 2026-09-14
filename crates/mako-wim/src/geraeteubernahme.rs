@@ -1,7 +1,7 @@
 //! WiM Geräteübernahme und Gerätewechsel — the two ORDERS/ORDRSP legs the
 //! **abgebender** Messstellenbetreiber (MSBA) answers, in both Sparten.
 //!
-//! Models WiM Strom Teil 1 (Anlage 2a zu BK6-22-024) Kap. 3.1 and 3.2, and the
+//! Models WiM Strom Teil 1 (Anlage 2a zu BK6-24-174) Kap. 3.1 and 3.2, and the
 //! identical AWH WiM Gas 2.0 Kap. 4.1 and 4.2.
 //!
 //! # Two Use-Cases, one Messlokation
@@ -52,7 +52,7 @@
 //!
 //! # Regulatory basis
 //!
-//! - **WiM Strom Teil 1 Kap. 3.1/3.2** (Anlage 2a zu BK6-22-024)
+//! - **WiM Strom Teil 1 Kap. 3.1/3.2** (Anlage 2a zu BK6-24-174)
 //! - **AWH WiM Gas 2.0 Kap. 4.1/4.2** (gültig ab 01.10.2026)
 //! - **ORDRSP AHB 1.1b Kap. 4** — `SG2 AJT` DE 4465 (code) und DE 1082 (Codeliste)
 //! - **EBD 4.3** Kap. 8.4/8.5 (Strom) und 14.4/14.5 (Gas)

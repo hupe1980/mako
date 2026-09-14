@@ -48,6 +48,13 @@ use sqlx::PgPool;
 /// periodic worker that queues up behind its own previous run turns a slow
 /// cycle into an unbounded backlog.
 ///
+/// A database fault also yields `None`, because there is no cycle to run
+/// without a connection — but it is logged at `error!` rather than passed off
+/// as contention. The two are the same value and opposite situations: a
+/// contended cycle is the design working, while an unreachable database skips
+/// every sweep a caller owns for as long as it lasts, and a `debug!` reading
+/// "another replica holds it" is how that goes unnoticed.
+///
 /// Release it with [`release_worker_lock`] **on the same connection**: the lock
 /// belongs to the session, so releasing it from another connection does
 /// nothing. Dropping the connection also releases it, which is what makes a
@@ -56,12 +63,33 @@ pub async fn try_worker_lock(
     pool: &PgPool,
     key: i64,
 ) -> Option<sqlx::pool::PoolConnection<sqlx::Postgres>> {
-    let mut conn = pool.acquire().await.ok()?;
-    let got: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+    let mut conn = match pool.acquire().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                lock_key = key,
+                "worker lock: no database connection — the cycle is skipped, and will \
+                 stay skipped while this lasts",
+            );
+            return None;
+        }
+    };
+    let got: bool = match sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
         .bind(key)
         .fetch_one(&mut *conn)
         .await
-        .ok()?;
+    {
+        Ok(got) => got,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                lock_key = key,
+                "worker lock: pg_try_advisory_lock failed — the cycle is skipped",
+            );
+            return None;
+        }
+    };
     if got { Some(conn) } else { None }
 }
 

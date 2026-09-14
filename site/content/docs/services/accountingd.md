@@ -1807,17 +1807,14 @@ valid `Authorization: Bearer <token>` never reaches it. There is no global auth
 middleware: authentication is the extractor, which is why a handler that forgets
 it would be served to anyone — and why a guard test checks for it.
 
-When `[oidc]` is not configured the verifier is *disabled*: every request is
-accepted and given synthetic dev-admin claims (tenant = the configured tenant,
-all market roles plus `ADMIN`), so the Cedar checks below pass rather than
-fail. A startup warning says so:
+`accountingd` refuses to start without `[oidc]` and without `erp_hmac_secret`.
+Absent, the verifier would be *disabled* — every request accepted and given
+synthetic dev-admin claims (tenant = the configured tenant, all market roles
+plus `ADMIN`), so the Cedar checks below pass rather than fail — and `POST
+/webhook` would book a ledger entry from any unsigned body.
 
-```
-[WARN] OIDC disabled -- financial write endpoints accept all requests (dev mode)
-```
-
-Unlike `outputd` and `sperrd`, accountingd does **not** refuse to start without
-`[oidc]`. Treat the warning as the production alarm it is.
+`allow_insecure_no_auth = true` accepts both for a development stack. It has to
+be written down, rather than reached by leaving a section out.
 
 ### Authorization (Cedar)
 
@@ -1895,9 +1892,10 @@ aging list (`list_overdue`) through MCP after their REST twins refused.
 
 `use-mcp` is the weakest grant in the policy — permission to open the surface,
 list the tools and read a prompt — and on its own reaches no balance, no IBAN and
-no ledger write. An API-key caller is a deployment-trusted boundary the shared
-middleware handles on its own, so an `[mcp]` key is as powerful as the tools it
-can name: scope it at the ingress.
+no ledger write. An `[mcp]` key is held to the same policy: it authorizes as
+`User::"<key name>"` carrying the roles its `roles` list declares, so
+`read-banking` and the five writes are as closed to a role-less key as to a
+role-less token.
 
 `tests/authorization_guard.rs` pins both halves: every declared tool has a
 mapping, and any tool whose body reaches a mutating pg/ledger call must map to a
@@ -1910,7 +1908,9 @@ write action rather than to one of the three reads.
 `POST /webhook` verifies the Standard Webhooks (`webhook-signature`) header when `erp_hmac_secret`
 is configured. Requests with a missing or invalid signature are rejected with HTTP 403.
 
-Dev mode (no `erp_hmac_secret`): all webhooks accepted, WARN emitted on each request.
+`erp_hmac_secret` is required: without it the daemon refuses to start, because an
+unsigned body reaching this route books a ledger entry against a customer's
+account. `allow_insecure_no_auth = true` is the deliberate development opt-out.
 
 ```toml
 erp_hmac_secret = "env:ACCOUNTINGD_INBOUND_HMAC_SECRET"
@@ -1930,11 +1930,6 @@ port                  = 9380
 tenant                = "9910000000002"
 erp_webhook_url       = "http://erp:8000/webhooks/accounting"
 erp_hmac_secret       = "env:ACCOUNTINGD_INBOUND_HMAC_SECRET"
-
-# OIDC authentication (optional — dev mode when absent, all writes accepted)
-[oidc]
-issuer   = "https://keycloak:8080/realms/mako"
-audience = "accountingd"
 
 # Dunning fees per Mahnstufe
 dunning_fee_stufe1_ct = 0     # no fee for first reminder
@@ -2003,6 +1998,18 @@ bank_api_key    = "env:BANK_API_KEY"
 [database]
 url = "postgresql://accountingd:secret@db:5432/accountingd"
 # pool_size = 10   # optional (min_connections, acquire/idle/max_lifetime also available)
+
+# OIDC authentication. Required: omitting it is a startup refusal unless
+# `allow_insecure_no_auth` is set, which is how a dev stack opts out
+# deliberately rather than by leaving a section out. The same refusal covers
+# `erp_hmac_secret`, without which POST /webhook books a ledger entry from any
+# unsigned body.
+# Keep every table block last: in TOML a bare key after a table header belongs
+# to that table, so a top-level setting written below one is read as a member
+# of it and never reaches AccountingdConfig.
+[oidc]
+issuer   = "https://keycloak:8080/realms/mako"
+audience = "accountingd"
 ```
 
 > **`creditor_iban` is required.** Missing or invalid `creditor_iban` causes `POST /sepa/run`

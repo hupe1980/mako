@@ -746,7 +746,9 @@ impl ServerHandler for InvoicdMcpHandler {
              - `Resolved`        — dispute closed by operator (POST /resolve-dispute)\n\
              - `AcceptedPartial` — Stornorechnung (PID 31004, any Sparte) arithmetic-only check passed\n\
              - `Dispatched`      — outbound 31006 selbstausgestellt sent; awaiting NB REMADV\n\
-             - `Paid`            — outbound 31006 settled by NB",
+             \n\
+             Payment is a separate axis: `payment_confirmed_at`, not an outcome. \n\
+             An invoice can be disputed and still paid, or `Ok` and unpaid.",
         )
     }
 }

@@ -20,9 +20,9 @@ use super::*;
 // explicit `cmd_*` stub function that returns `NotImplemented`.
 //
 // Sources:
-// - BDEW GPKE AHB (BK6-22-024, LFW24)
+// - BDEW GPKE AHB (BK6-24-174 Teil 1-3; LFW24 = BK6-22-024)
 // - BDEW GeLi Gas AHB (BK7-24-01-009)
-// - BDEW WiM AHB (BK6-22-024, Anlagen 2a/2b)
+// - BDEW WiM AHB (BK6-24-174, Anlagen 2a/2b)
 // - BDEW MABIS AHB (BK6-24-174)
 
 pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[

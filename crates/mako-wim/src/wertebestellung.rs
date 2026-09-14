@@ -1,7 +1,7 @@
 //! WiM ESA Wertebestellung — ordering, cancellation and termination of value
 //! delivery to an Energieserviceanbieter.
 //!
-//! Implements **WiM Strom Teil 2 (Anlage 2b zu BK6-22-024), Kapitel 4** —
+//! Implements **WiM Strom Teil 2 (Anlage 2b zu BK6-24-174), Kapitel 4** —
 //! "Anfrage und Übermittlung von Werten durch und an den ESA" — from the MSB
 //! side. §34 Abs. 2 S. 2 Nr. 10 MsbG makes serving an ESA a mandatory,
 //! non-discriminatory Zusatzleistung, so an MSB deployment must be able to

@@ -255,8 +255,27 @@ fn mieterstrom_base_plus_zuschlag() {
     assert!(out.positions[1].legal_basis.contains("21 Abs. 3"));
 }
 
+/// A Mieterstrom settlement whose Zuschlag rate is zero credits the base
+/// Vergütung alone — the zero is a stated rate, and the position it would
+/// produce carries nothing.
 #[test]
-fn mieterstrom_without_zuschlag_produces_one_position() {
+fn mieterstrom_with_a_zero_zuschlag_produces_one_position() {
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::TenantElectricity {
+            verguetungssatz_ct: dec!(8.11),
+            mieter_zuschlag_ct: Some(Decimal::ZERO),
+        },
+        einspeisemenge_kwh: Some(dec!(500)),
+        ..SettleInput::default()
+    });
+    assert_eq!(out.positions.len(), 1);
+    assert_eq!(out.settlement_eur, Some(dec!(40.55)));
+}
+
+/// Choosing §21 Abs. 3 Mieterstrom is the statement that the Zuschlag is owed.
+/// An absent rate refuses rather than degrading to the plain Einspeisevergütung.
+#[test]
+fn mieterstrom_ohne_zuschlagssatz_verweigert() {
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::TenantElectricity {
             verguetungssatz_ct: dec!(8.11),
@@ -265,8 +284,8 @@ fn mieterstrom_without_zuschlag_produces_one_position() {
         einspeisemenge_kwh: Some(dec!(500)),
         ..SettleInput::default()
     });
-    assert_eq!(out.positions.len(), 1);
-    assert_eq!(out.settlement_eur, Some(dec!(40.55)));
+    assert_eq!(out.status, SettlementStatus::PriceMissing);
+    assert_eq!(out.settlement_eur, None);
 }
 
 // ── §20 EEG — Gleitende Marktprämie ──────────────────────────────────────────
@@ -771,17 +790,20 @@ fn flexibilitaet_zuschlag_monthly_payment() {
     assert!(out.positions[0].legal_basis.contains("50a"));
 }
 
+/// §50a pays on the flexible capacity, so a settlement handed none has no
+/// basis. It refuses — a €0,00 Gutschrift reported as `Calculated` renders as
+/// an ordinary document and is indistinguishable from a plant owed nothing.
 #[test]
-fn flexibilitaet_zuschlag_zero_capacity_returns_zero() {
+fn flexibilitaet_zuschlag_ohne_leistung_verweigert() {
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FlexibilitySurcharge {
             rate_eur_per_kw_year: dec!(100),
         },
-        leistung_kwp: None, // no capacity → zero payment
+        leistung_kwp: None,
         ..SettleInput::default()
     });
-    assert_eq!(out.status, SettlementStatus::Calculated);
-    assert_eq!(out.settlement_eur, Some(Decimal::ZERO));
+    assert_eq!(out.status, SettlementStatus::NoData);
+    assert_eq!(out.settlement_eur, None);
 }
 
 // ── §23b EEG 2023 — PostEegSpot Jahresmarktwert-Deckel (10 ct cap) ─────────

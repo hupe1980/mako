@@ -88,6 +88,7 @@ pub mod profile;
 pub mod summenzeitreihe;
 pub mod zeitreihen;
 pub mod zp_lifecycle;
+pub mod zp_register;
 
 pub use anforderung::{
     ANFORDERUNG_PIDS, AbonnementVorgang, AnforderungCommand, AnforderungData, AnforderungEvent,
@@ -135,8 +136,9 @@ pub use summenzeitreihe::{
 pub use zp_lifecycle::{
     MabisZpLifecycleWorkflow, TAEGLICHE_AAUEZ_ENDE, WORKFLOW_NAME as ZP_LIFECYCLE_WORKFLOW_NAME,
     ZP_FAMILIEN, ZpFamilie, ZpLifecycleCommand, ZpLifecycleData, ZpLifecycleEvent,
-    ZpLifecycleState, ZpSerie, ZpVorgang, all_pids as zp_lifecycle_pids, familie_for,
-    serien_fuer_pid,
+    ZpLifecycleState, ZpSerie, ZpVorgang, all_pids as zp_lifecycle_pids,
+    antwort_ist_zustimmung as zp_antwort_ist_zustimmung, familie_for, ist_antwort_pid,
+    ist_weiterleitung_pid, serien_fuer_pid,
 };
 
 // ── EngineModule ──────────────────────────────────────────────────────────────

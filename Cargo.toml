@@ -122,7 +122,12 @@ figment-file-provider-adapter = { version = "0.1", package = "figment_file_provi
 schemars                  = { version = "1.2.1" }
 
 # ── Internal workspace crates (path + version so domain crates can be published) ─
-edi-energy       = { path = "crates/edi-energy",  version = "0.20" }
+# `tracing` on: the crate gates its own log sites behind it, and two of them
+# report on the production path — an unrecognised BDEW release code falling back
+# to the Opaque track, and a release code several profiles share. Off, those
+# decisions are taken silently. External consumers of the published crate still
+# choose for themselves; every build in this workspace gets them.
+edi-energy       = { path = "crates/edi-energy",  version = "0.20", features = ["tracing"] }
 mako-engine      = { path = "crates/mako-engine",      version = "0.20" }
 mako-markt       = { path = "crates/mako-markt",       version = "0.20" }
 mako-events      = { path = "crates/mako-events",      version = "0.20" }

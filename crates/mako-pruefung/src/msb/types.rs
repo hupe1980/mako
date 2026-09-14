@@ -48,7 +48,7 @@ impl Einrichtungsart {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Sparte {
-    /// WiM Strom Teil 1 (BK6-22-024 Anlage 2a) — UTILMD 55xxx.
+    /// WiM Strom Teil 1 (BK6-24-174 Anlage 2a) — UTILMD 55xxx.
     #[default]
     Strom,
     /// AWH WiM Gas 2.0 — UTILMD 44xxx.

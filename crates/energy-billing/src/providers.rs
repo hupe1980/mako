@@ -818,7 +818,9 @@ impl ElectricityProvider {
 ///
 /// ## Legal basis
 ///
-/// §14a Abs. 1 EnWG, as BNetzA **BK6-22-300** and **BK8-22/010-A** implement it:
+/// §14a Abs. 1 EnWG, as BNetzA **BK8-22/010-A** implements it — the Netzentgelt
+/// modules; **BK6-22-300** is the companion Festlegung and governs the
+/// netzorientierte Steuerung a Betreiber must take part in to qualify:
 /// DSOs must offer controllable load (Steuerbare Verbrauchseinrichtungen)
 /// customers a reduced NNE (Modul 1, 2 or 3).
 /// The LF reflects this reduction as a credit on the retail invoice.
@@ -832,6 +834,27 @@ impl ControllableLoadProvider {
     pub fn new(product: ControllableLoadProduct, grid: GridInput) -> Self {
         Self { product, grid }
     }
+
+    /// The §14a Modul 3 Tarifstufen, labelled, in HT/ST/NT order.
+    fn modul3_baender(&self) -> [(&'static str, Option<Decimal>); 3] {
+        [
+            ("HT", self.product.sect14a_modul3_nne_ht_ct_per_kwh),
+            ("ST", self.product.sect14a_modul3_nne_st_ct_per_kwh),
+            ("NT", self.product.sect14a_modul3_nne_nt_ct_per_kwh),
+        ]
+    }
+
+    /// Whether this product is on §14a Modul 3 at all.
+    ///
+    /// Any one priced band is the statement that the device is billed on the
+    /// zeitvariables Netzentgelt: the three bands are one tariff, not three
+    /// independent options. Every Modul 3 precondition therefore keys on the
+    /// whole triple — keyed on HT alone, a product that prices ST and NT only
+    /// escapes all of them, including the one that forbids a flat NNE beside
+    /// the bands, and the invoice carries no network charge at all.
+    fn modul3_konfiguriert(&self) -> bool {
+        self.modul3_baender().iter().any(|(_, ct)| ct.is_some())
+    }
 }
 
 impl BillingProvider for ControllableLoadProvider {
@@ -844,7 +867,7 @@ impl BillingProvider for ControllableLoadProvider {
         let base = ElectricityProvider::new(self.product.base.clone(), self.grid.clone());
         let mut w = base.validate_warnings(ctx, quantities);
 
-        // BK6-22-300 offers one base module and one optional addition. Modul 1
+        // BK8-22/010-A offers one base module and one optional addition. Modul 1
         // and Modul 2 are the two forms the base takes and the Anschlussnutzer
         // picks one; Modul 3 adds to Modul 1 alone. So `Modul 1 + Modul 3` is
         // the only pair, and the three other pairings each reduce the same
@@ -860,7 +883,7 @@ impl BillingProvider for ControllableLoadProvider {
                 severity: WarningSeverity::Error,
                 message: "§14a EnWG Modul 1 (pauschale Reduzierung) and Modul 2 \
                           (prozentuale Arbeitspreisreduzierung) are both configured — \
-                          BK6-22-300 offers them as alternative base modules, so the \
+                          BK8-22/010-A offers them as alternative base modules, so the \
                           Anschlussnutzer holds one. Billing both grants the same \
                           Steuerbarkeit two reductions."
                     .to_owned(),
@@ -871,14 +894,14 @@ impl BillingProvider for ControllableLoadProvider {
             .product
             .sect14a_modul2_nne_reduktion_ct_per_kwh
             .is_some()
-            && self.product.sect14a_modul3_nne_ht_ct_per_kwh.is_some()
+            && self.modul3_konfiguriert()
         {
             w.push(BillingWarning {
                 code: "MODUL2_AND_MODUL3",
                 severity: WarningSeverity::Error,
                 message: "§14a EnWG Modul 2 (prozentuale Arbeitspreisreduzierung) and \
                           Modul 3 (zeitvariable Netzentgelte) are both configured — \
-                          BK6-22-300 makes them mutually exclusive; both would reduce \
+                          BK8-22/010-A makes them mutually exclusive; both would reduce \
                           the same network usage twice"
                     .to_owned(),
             });
@@ -886,9 +909,7 @@ impl BillingProvider for ControllableLoadProvider {
 
         // The Modul 3 bands *replace* the flat NNE Arbeitspreis. Both at once
         // bill the device's network usage twice.
-        if self.product.sect14a_modul3_nne_ht_ct_per_kwh.is_some()
-            && self.grid.nne_arbeitspreis_ct_per_kwh.is_some()
-        {
+        if self.modul3_konfiguriert() && self.grid.nne_arbeitspreis_ct_per_kwh.is_some() {
             w.push(BillingWarning {
                 code: "MODUL3_AND_FLAT_NNE",
                 severity: WarningSeverity::Error,
@@ -899,18 +920,18 @@ impl BillingProvider for ControllableLoadProvider {
             });
         }
 
-        // BK6-22-300: "Das Modul 3 kann nur in Kombination mit Modul 1
+        // BK8-22/010-A: "Das Modul 3 kann nur in Kombination mit Modul 1
         // ausgewählt werden." Modul 3 alone is not an offer the NB makes, so a
         // product carrying only the bands prices a tariff that does not exist —
         // and the customer loses the Modul 1 reduction they are entitled to.
-        if self.product.sect14a_modul3_nne_ht_ct_per_kwh.is_some()
+        if self.modul3_konfiguriert()
             && self.product.sect14a_modul1_pauschale_eur_per_year.is_none()
         {
             w.push(BillingWarning {
                 code: "MODUL3_OHNE_MODUL1",
                 severity: WarningSeverity::Error,
                 message: "§14a EnWG Modul 3 (zeitvariable Netzentgelte) is configured \
-                          without Modul 1 — BK6-22-300 offers Modul 3 only in combination \
+                          without Modul 1 — BK8-22/010-A offers Modul 3 only in combination \
                           with Modul 1, so this prices a tariff the Netzbetreiber does \
                           not offer and drops the Modul 1 reduction the customer is due"
                     .to_owned(),
@@ -918,10 +939,10 @@ impl BillingProvider for ControllableLoadProvider {
         }
 
         // Modul 3 bills per time band, which needs a meter that resolves them:
-        // BK6-22-300 makes an intelligentes Messsystem a precondition. The same
+        // BK8-22/010-A makes an intelligentes Messsystem a precondition. The same
         // guard §41a carries, for the same reason — a band-priced invoice off an
         // SLP meter is priced against a profile, not against measurement.
-        if self.product.sect14a_modul3_nne_ht_ct_per_kwh.is_some()
+        if self.modul3_konfiguriert()
             && quantities
                 .electricity
                 .as_ref()
@@ -931,9 +952,65 @@ impl BillingProvider for ControllableLoadProvider {
                 code: "MODUL3_IMSYS_REQUIRED",
                 severity: WarningSeverity::Error,
                 message: "§14a EnWG Modul 3 requires an intelligentes Messsystem \
-                          (BK6-22-300) — the metering point reports SLP or RLM. The \
+                          (BK8-22/010-A) — the metering point reports SLP or RLM. The \
                           time bands cannot be measured, so the reduction cannot be \
                           billed against them."
+                    .to_owned(),
+            });
+        }
+
+        // The three bands are one tariff. A product that prices some of them
+        // emits positions for those and silently drops the rest, and the
+        // dropped band's kWh carry no network charge at all — `MODUL3_AND_FLAT_NNE`
+        // forbids a flat NNE beside the bands, so nothing else picks them up.
+        // A band that genuinely costs nothing is priced `0.0`; absent, it is a
+        // mapping defect, and a rate band silently omitted from the invoice is
+        // indistinguishable from one that was never priced.
+        if self.modul3_konfiguriert() {
+            let fehlend: Vec<&str> = self
+                .modul3_baender()
+                .iter()
+                .filter(|(_, ct)| ct.is_none())
+                .map(|(label, _)| *label)
+                .collect();
+            if !fehlend.is_empty() {
+                w.push(BillingWarning {
+                    code: "MODUL3_BAND_UNVOLLSTAENDIG",
+                    severity: WarningSeverity::Error,
+                    message: format!(
+                        "§14a EnWG Modul 3 is configured but the Tarifstufe(n) {} carry no \
+                         rate — the bands are one tariff and replace the flat NNE \
+                         Arbeitspreis, so the unpriced band's kWh would carry no network \
+                         charge at all. Price every band, or 0.0 where the Netzbetreiber \
+                         charges nothing.",
+                        fehlend.join(", ")
+                    ),
+                });
+            }
+        }
+
+        // The Steuerungsentschädigung per kW/Jahr and per kWh both price the
+        // dimmed capacity, so both need the Spitzenleistung the device was
+        // dimmed from. Without it neither branch fires and the compensation the
+        // Anschlussnutzer is owed for a measured dimming leaves no trace.
+        if quantities.electricity.as_ref().is_some_and(|m| {
+            m.steuerung_stunden.is_some_and(|h| h > Decimal::ZERO) && m.spitzenleistung_kw.is_none()
+        }) && (self
+            .product
+            .sect14a_steuerungsentschaedigung_eur_per_kw_year
+            .is_some()
+            || self
+                .product
+                .sect14a_steuerungsentschaedigung_ct_per_kwh
+                .is_some())
+        {
+            w.push(BillingWarning {
+                code: "STEUERUNGSENTSCHAEDIGUNG_OHNE_SPITZENLEISTUNG",
+                severity: WarningSeverity::Error,
+                message: "§14a EnWG Steuerungsentschädigung is configured and the meter \
+                          reports dimming hours, but no Spitzenleistung — both rate bases \
+                          price the dimmed capacity, so the compensation would silently \
+                          not be credited. Supply spitzenleistung_kw."
                     .to_owned(),
             });
         }
@@ -978,10 +1055,12 @@ impl BillingProvider for ControllableLoadProvider {
         let kwh = meter.arbeitsmenge_kwh;
         let p = &self.product;
 
-        // ── §14a Modul 3 — zeitvariables Netzentgelt (BK6-22-300) ─────────────
+        // ── §14a Modul 3 — zeitvariables Netzentgelt (BK8-22/010-A) ─────────────
         // Three Tarifstufen replace the flat NNE Arbeitspreis for the device.
         // A zero band still produces a position: a rate band silently omitted
         // from the invoice is indistinguishable from one that was never priced.
+        // An incomplete triple never reaches here: `MODUL3_BAND_UNVOLLSTAENDIG`
+        // refuses the run before any position is generated.
         if let (Some(ht), Some(st), Some(nt)) = (
             p.sect14a_modul3_nne_ht_ct_per_kwh,
             p.sect14a_modul3_nne_st_ct_per_kwh,
@@ -1004,7 +1083,7 @@ impl BillingProvider for ControllableLoadProvider {
                     band_kwh,
                     "kWh",
                     rate_ct / dec!(100),
-                    "§14a EnWG, BK6-22-300 Anlage 2 §2",
+                    "§14a EnWG, BK8-22/010-A Tenor 3.",
                 );
                 positions.push(
                     pos.with_legal_basis("§14a EnWG")
@@ -1034,7 +1113,7 @@ impl BillingProvider for ControllableLoadProvider {
             );
         }
 
-        // Modul 1 — a flat annual amount, prorated by the period. BK6-22-300
+        // Modul 1 — a flat annual amount, prorated by the period. BK8-22/010-A
         // sets it as `80 EUR + 3 750 kWh × Arbeitspreis × 0,2`, so it carries no
         // per-kW component and needs no Spitzenleistung: that is what makes it
         // the module a household heat pump on an SLP meter can have at all.
@@ -1083,7 +1162,10 @@ impl BillingProvider for ControllableLoadProvider {
             p.sect14a_steuerungsentschaedigung_ct_per_kwh,
             meter.steuerung_stunden,
         ) {
-            let kw = meter.spitzenleistung_kw.unwrap_or(Decimal::ZERO);
+            // An absent Spitzenleistung is refused by
+            // `STEUERUNGSENTSCHAEDIGUNG_OHNE_SPITZENLEISTUNG` before this runs;
+            // a zero here would price a measured dimming at nothing.
+            let kw = meter.spitzenleistung_kw.unwrap_or_default();
             if modul3_ct > Decimal::ZERO && steuerung_h > Decimal::ZERO && kw > Decimal::ZERO {
                 let steuerung_kwh = kw * steuerung_h;
                 positions.push(
@@ -2426,6 +2508,54 @@ impl EegProvider {
 }
 
 impl BillingProvider for EegProvider {
+    fn validate_warnings(
+        &self,
+        _ctx: &BillingContext,
+        quantities: &Quantities,
+    ) -> Vec<BillingWarning> {
+        // The `KEIN_ARBEITSPREIS` invariant on the paying side. A Gutschrift
+        // settles a measured Einspeisung, and the rate it is settled at is
+        // mapped from `productd`'s price positions the same way an Arbeitspreis
+        // is — a renamed or missing position maps to `None` in silence. With no
+        // rate the provider emits no credit position and the generator receives
+        // a Rechnung over €0,00 that looks like a month with no production.
+        //
+        // Error severity, so `bill()` refuses: the consumption side of the same
+        // defect blocks the run, and a settlement that underpays a generator is
+        // not the milder case.
+        //
+        // The Managementprämie does not count — it is the contractual
+        // Direktvermarktungsentgelt, a *deduction* dressed as a credit, and on
+        // its own it settles no energy.
+        #[cfg(feature = "eeg")]
+        if quantities.eeg_full.is_some() {
+            // The full path prices from `SettleInput`, not from the product.
+            return Vec::new();
+        }
+        let kwh = quantities
+            .eeg
+            .as_ref()
+            .map_or(Decimal::ZERO, |m| m.einspeisung_kwh);
+        let p = &self.product;
+        let has_verguetung = p.eeg_verguetungssatz_ct_per_kwh.is_some()
+            || p.eeg_marktpraemie_ct_per_kwh.is_some()
+            || p.kwkg_zuschlag_ct_per_kwh.is_some();
+        if kwh > Decimal::ZERO && !has_verguetung {
+            return vec![BillingWarning {
+                code: "KEIN_VERGUETUNGSSATZ",
+                severity: WarningSeverity::Error,
+                message: format!(
+                    "es wurden {kwh} kWh eingespeist, das Produkt nennt aber weder \
+                     Einspeisevergütung (eeg_verguetungssatz_ct_per_kwh) noch Marktprämie \
+                     (eeg_marktpraemie_ct_per_kwh) noch KWKG-Zuschlag — die Gutschrift \
+                     enthielte keine einzige Vergütungsposition. Satz hinterlegen, oder \
+                     0.0 setzen, wenn für diesen Zeitraum tatsächlich nichts zu vergüten ist."
+                ),
+            }];
+        }
+        Vec::new()
+    }
+
     // `ctx` is consumed only by the eeg-feature path below.
     #[cfg_attr(not(feature = "eeg"), allow(unused_variables))]
     fn bill(
@@ -2599,6 +2729,40 @@ impl EinspeisungProvider {
 }
 
 impl BillingProvider for EinspeisungProvider {
+    fn validate_warnings(
+        &self,
+        _ctx: &BillingContext,
+        quantities: &Quantities,
+    ) -> Vec<BillingWarning> {
+        // The `KEIN_ARBEITSPREIS` invariant on the paying side. The Marktwert is
+        // the whole price of a Direktvermarktungs-Gutschrift: without it the
+        // provider emits only the Vermarktungsgebühr — a settlement that charges
+        // the generator a fee and pays nothing for the energy — or, with no fee
+        // either, a Rechnung over €0,00 that reads like a month with no
+        // production.
+        //
+        // Error severity, so `bill()` refuses, the same way the consumption side
+        // refuses a product that cannot price its commodity.
+        let kwh = quantities
+            .einspeisung
+            .as_ref()
+            .map_or(Decimal::ZERO, |m| m.einspeisung_kwh);
+        if kwh > Decimal::ZERO && self.product.marktwert_ct_per_kwh.is_none() {
+            return vec![BillingWarning {
+                code: "KEIN_MARKTWERT",
+                severity: WarningSeverity::Error,
+                message: format!(
+                    "es wurden {kwh} kWh eingespeist, das Produkt nennt aber keinen \
+                     Marktwert (marktwert_ct_per_kwh) — die Gutschrift enthielte allein \
+                     die Vermarktungsgebühr und nichts für die eingespeiste Energie. \
+                     Monatsmarktwert hinterlegen, oder 0.0 setzen, wenn er für diesen \
+                     Zeitraum tatsächlich null ist."
+                ),
+            }];
+        }
+        Vec::new()
+    }
+
     fn bill(
         &self,
         _ctx: &BillingContext,
@@ -2671,6 +2835,64 @@ impl HemsProvider {
 }
 
 impl BillingProvider for HemsProvider {
+    fn validate_warnings(
+        &self,
+        _ctx: &BillingContext,
+        quantities: &Quantities,
+    ) -> Vec<BillingWarning> {
+        // The `KEIN_ARBEITSPREIS` invariant on the HEMS side. Events are counted
+        // off the system and are as measured as a meter reading; priced at
+        // nothing they drop out of the invoice without a trace, and a
+        // subscription whose fee did not map bills an empty document.
+        //
+        // A plan that genuinely includes the events says so with a `0.0`.
+        let usage = quantities.hems.as_ref();
+        let p = &self.product;
+        let mut w = Vec::new();
+        let fehlend = [
+            (
+                usage.and_then(|u| u.optimization_events).unwrap_or(0),
+                p.hems_optimization_event_eur,
+                "Optimierungsereignisse",
+                "hems_optimization_event_eur",
+            ),
+            (
+                usage.and_then(|u| u.readout_events).unwrap_or(0),
+                p.hems_readout_event_eur,
+                "Ablesungen",
+                "hems_readout_event_eur",
+            ),
+        ];
+        for (count, preis, was, feld) in fehlend {
+            if count > 0 && preis.is_none() {
+                w.push(BillingWarning {
+                    code: "KEIN_HEMS_EREIGNISPREIS",
+                    severity: WarningSeverity::Error,
+                    message: format!(
+                        "es wurden {count} {was} erfasst, das Produkt nennt aber keinen \
+                         Preis ({feld}) — die Positionen fielen ersatzlos aus der Rechnung. \
+                         Preis hinterlegen, oder 0.0 setzen, wenn sie in der Grundgebühr \
+                         enthalten sind."
+                    ),
+                });
+            }
+        }
+        if p.hems_subscription_eur_per_month.is_none()
+            && p.hems_optimization_event_eur.is_none()
+            && p.hems_readout_event_eur.is_none()
+        {
+            w.push(BillingWarning {
+                code: "KEIN_HEMS_PREIS",
+                severity: WarningSeverity::Error,
+                message: "das HEMS-Produkt nennt weder Grundgebühr noch Ereignispreise — \
+                          die Rechnung enthielte keine einzige Position für die Leistung. \
+                          Preise hinterlegen, oder 0.0 setzen, wenn sie unentgeltlich ist."
+                    .to_owned(),
+            });
+        }
+        w
+    }
+
     fn bill(
         &self,
         _ctx: &BillingContext,
@@ -4051,6 +4273,39 @@ impl EnergyShareProvider {
 }
 
 impl BillingProvider for EnergyShareProvider {
+    fn validate_warnings(
+        &self,
+        _ctx: &crate::context::BillingContext,
+        quantities: &crate::quantities::Quantities,
+    ) -> Vec<BillingWarning> {
+        // The `KEIN_ARBEITSPREIS` invariant on the §42c side. The allocated kWh
+        // are computed from the community's metered generation, so they are a
+        // measured figure; with no Gutschriftsatz the provider returns an empty
+        // position list and the participant is billed full grid consumption with
+        // the sharing credit missing entirely — an overcharge that leaves no
+        // trace on the document.
+        //
+        // A community that genuinely credits nothing states `0.0`.
+        let allocated = quantities
+            .energy_share
+            .as_ref()
+            .map_or(Decimal::ZERO, |s| s.allocated_kwh);
+        if allocated > Decimal::ZERO && self.product.sharing_credit_ct_per_kwh.is_none() {
+            return vec![BillingWarning {
+                code: "KEIN_SHARING_GUTSCHRIFTSATZ",
+                severity: WarningSeverity::Error,
+                message: format!(
+                    "es wurden {allocated} kWh aus der Energiegemeinschaft zugeteilt, das \
+                     Produkt nennt aber keinen Gutschriftsatz (sharing_credit_ct_per_kwh) — \
+                     die Rechnung enthielte den vollen Netzbezug ohne die §42c-Gutschrift. \
+                     Satz hinterlegen, oder 0.0 setzen, wenn tatsächlich nichts \
+                     gutgeschrieben wird."
+                ),
+            }];
+        }
+        Vec::new()
+    }
+
     fn bill(
         &self,
         _ctx: &crate::context::BillingContext,
@@ -4060,8 +4315,12 @@ impl BillingProvider for EnergyShareProvider {
         let product = &self.product;
         let mut positions: Vec<BillingPosition> = Vec::new();
 
-        // Sharing credit rate from tariff sheet.
-        let credit_rate_ct = product.sharing_credit_ct_per_kwh.unwrap_or(Decimal::ZERO);
+        // Sharing credit rate from tariff sheet. A declared `0.0` credits
+        // nothing and needs no position; an absent rate is a data defect the
+        // `KEIN_SHARING_GUTSCHRIFTSATZ` guard refuses before this runs.
+        let Some(credit_rate_ct) = product.sharing_credit_ct_per_kwh else {
+            return Ok(positions);
+        };
         if credit_rate_ct.is_zero() {
             return Ok(positions);
         }

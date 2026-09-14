@@ -42,7 +42,7 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BK6-22-024 Anlage 2b** (WiM Strom Teil 2) — Kap. 4.1–4.3
+//! - **BK6-24-174 Anlage 2b** (WiM Strom Teil 2) — Kap. 4.1–4.3
 //! - **Entscheidungsbaum-Diagramme und Codelisten 4.3** — Kap. 8.25–8.26
 //! - **§34 Abs. 2 S. 2 Nr. 10 MsbG** — the mandatory Zusatzleistung
 //! - **§49 Abs. 2 Nr. 9 MsbG** — the ESA's consent-derived entitlement

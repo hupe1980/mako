@@ -32,7 +32,7 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BK6-22-024** — WiM Strom Teil 1 Kap. 3.3 (Messlokationsänderung)
+//! - **BK6-24-174** — WiM Strom Teil 1 Kap. 3.3 (Messlokationsänderung)
 //! - **BDEW AWH Prozesse zur Änderung der Technik an Lokationen** V1.1 (31.03.2025)
 //! - **Entscheidungsbaum-Diagramme und Codelisten 4.3** Kap. 8.6, 8.7, 9.1, 9.2
 //! - Antwortfrist: **10 Werktage** (WiM Strom Teil 1 Kap. 3.3.1.2 / 3.3.2.2

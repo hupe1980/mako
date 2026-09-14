@@ -220,7 +220,7 @@ environment, which is what a container image can set.
 | `--check` | argv | — | Probe the **already-running** instance: `GET /health/ready` on loopback, exit 0 when ready. The distroless-friendly `HEALTHCHECK` — the image carries no shell or `curl`. It does not start the service, and it is not a config validator. |
 | Config path | `MARKTD_CONFIG` | `./marktd.toml` | Absolute or relative path to the TOML file |
 | Log level | `MARKTD_LOG_LEVEL`, else `LOG_LEVEL`, else `RUST_LOG` | `info` | Env-filter directive (`info`, `debug`, `marktd=trace`) |
-| Log format | `LOG_FORMAT` | JSON | Structured-log encoding |
+| Log format | `MARKTD_LOG_FORMAT` | `json` | `json` \| `pretty` \| `compact` |
 
 ---
 
@@ -592,7 +592,7 @@ lives in `bezugswert` (a `Mengeneinheit`) and the what-it-is-a-price-of in
 the time bands live in the `zaehlzeitdefinition` this position's
 `zaehlzeitregister` code points into. If the price sheet has no ToU tariffs the field is omitted
 (serialized with `#[serde(skip_serializing_if = "Vec::is_empty")]`). This array
-is consumed by `netzbilanzd` for §14a Modul 2 ToU billing (BNetzA BK6-22-300).
+is consumed by `netzbilanzd` for §14a Modul 3 ToU billing (BNetzA BK8-22/010-A).
 
 Query parameter: `?date=YYYY-MM-DD` (defaults to today in CET/CEST).
 
@@ -1723,7 +1723,7 @@ For MSBs that operate under §14a Modul 2 (time-of-use pricing for controllable 
 
 | Validation | Error |
 |-----------|-------|
-| Missing `zaehlzeitregister` | 422 — mandatory per §14a Modul 2 (BK6-22-300) |
+| Missing `zaehlzeitregister` | 422 — mandatory per §14a Modul 3 (BK8-22/010-A) |
 | `bandNummer` field present | 422 — does not exist in BO4E v202607 |
 | Invalid BO4E schema | 422 — `serde_json` schema error |
 
@@ -2141,7 +2141,7 @@ The `?valid_only=true` query parameter restricts the response to currently valid
 two endpoints and assemble the hierarchy themselves. The endpoint returns canonical BO4E
 that can be schema-validated client-side.
 
-**§14a Modul 2 context.** Under BK6-22-300, the NB assigns HT/NT registers to controllable
+**§14a Modul 3 context.** Under BK8-22/010-A, the NB assigns HT/NT registers to controllable
 loads at specific switching times communicated via WiM Stammdaten (ORDERS 17102–17133 ZAK+ZE segments).
 `marktd` auto-populates the underlying data from those events; this endpoint exposes it in
 BO4E form. See also [`billingd`](@/docs/services/billingd.md) §14a Modul 2 billing.

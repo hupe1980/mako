@@ -184,6 +184,62 @@ const SEND_ONLY_PIDS: &[(u32, &str, &str)] = &[
         "wim-technik-aenderung",
         "Bestellung Konfigurationsänderung (MSB → MSB) — MSB receiver not implemented",
     ),
+    // ── MaBiS Listenabgleich replies ─────────────────────────────────────────
+    // mako implements the *receiver of the list*: it ingests 55065/55195/55201/
+    // 55223 and answers with `mabis.liste.korrigieren` / `mabis.liste.ablehnen`.
+    // The four Antwort codes are registered so the router resolves them, but the
+    // leg that *reads* an incoming Korrekturliste — mako standing as the NB or
+    // ÜNB that sent the list — has no command.
+    (
+        55066,
+        "mabis-listenabgleich",
+        "Korrekturliste zur Lieferantenclearingliste (LF → NB/ÜNB) — list-sender receiver not implemented",
+    ),
+    (
+        55196,
+        "mabis-listenabgleich",
+        "Korrekturliste zur Bilanzierungsgebietsclearingliste (NB → ÜNB) — list-sender receiver not implemented",
+    ),
+    (
+        55202,
+        "mabis-listenabgleich",
+        "Korrekturliste zur LF-AACL (LF → NB) — list-sender receiver not implemented",
+    ),
+    (
+        55224,
+        "mabis-listenabgleich",
+        "Korrekturliste zur DZÜ-Liste (NB → ÜNB) — list-sender receiver not implemented",
+    ),
+    // ── MaBiS ZP-lifecycle Weiterleitungen ───────────────────────────────────
+    // Prozessschritt 4 is addressed to the **BKV**: „Der BIKO leitet nur den
+    // nicht abgelehnten MaBiS-ZP an den BKV … weiter" (BK6-24-174 Anlage 3
+    // Kap. 10.4.2 / 17.3.3.1.2 Nr. 4). mako stands as the NB, which is neither
+    // the BIKO that forwards nor the BKV that receives, so these codes have no
+    // inbound leg here at all — they stay registered because the answering side
+    // of this workflow *emits* them.
+    //
+    // The Antwort codes are no longer on this list: 55064, 55204, 55207, 55210,
+    // 55213 and 55237 answer an Anfrage mako sent and now resume its process.
+    (
+        55205,
+        "mabis-zp-lifecycle",
+        "Weiterleitung monatliche AAÜZ, BKV des LF — addressed to the BKV, not to this deployment",
+    ),
+    (
+        55208,
+        "mabis-zp-lifecycle",
+        "Weiterleitung monatliche AAÜZ, BKV des LF (Deaktivierung) — addressed to the BKV, not to this deployment",
+    ),
+    (
+        55211,
+        "mabis-zp-lifecycle",
+        "Weiterleitung monatliche AAÜZ, BKV des anfNB — addressed to the BKV, not to this deployment",
+    ),
+    (
+        55214,
+        "mabis-zp-lifecycle",
+        "Weiterleitung monatliche AAÜZ, BKV des anfNB (Deaktivierung) — addressed to the BKV, not to this deployment",
+    ),
 ];
 
 /// A conformant message carrying `pid`, addressed to this tenant: the newest
@@ -263,8 +319,14 @@ NAD+MS+4012345000023::293'NAD+MR+9900357000004::293'UNS+D'UNT+8+1'UNZ+1+1'"
 ///   first shape hid seven `wim-technik-aenderung` PIDs behind a single stub
 ///   arm.
 ///
-/// Every other reason (`no_correlation_key`, `process_not_found`, `*_resumes_only`)
-/// means the PID *did* reach its arm and the arm made a domain decision.
+/// Every other reason (`no_correlation_key`, `process_not_found`) means the PID
+/// *did* reach its arm and the arm made a domain decision.
+///
+/// A reason naming the arm's own intent — "this PID only resumes" — is not one
+/// of those: it describes what the arm would do, and an arm that returns a skip
+/// did not do it. Such a reason has to carry the `pid_not_in_` prefix like any
+/// other drop, or the guard is satisfied by the wording rather than by the
+/// behaviour.
 fn is_silent_drop(reason: &str) -> bool {
     reason.starts_with("pid_not_in_")
         || reason == "phase2_dispatch_not_yet_implemented"

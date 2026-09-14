@@ -21,6 +21,14 @@ const PROJECTION_COLUMNS: &str = "process_id, pid, family, workflow_name, state,
      partner_mp_id, mdm_role, deadline_at, deadline_source, deadline_risk, started_at, \
      last_event_at, erc_code, initiator_is_affiliate, tenant";
 
+/// The single-row read, scoped to the tenant that owns the row.
+///
+/// `process_id` is a UUID a caller puts in the path: without the `tenant`
+/// predicate the route answers with any tenant's process to anyone the
+/// deployment authenticates. The Cedar check upstream compares the *caller*
+/// against the deployment's tenant and can say nothing about the row.
+const GET_SQL: &str = "WHERE process_id = $1 AND tenant = $2";
+
 /// Upsert with a terminal-state guard.
 ///
 /// The projection is fed by an at-least-once fan-out, so events arrive
@@ -105,7 +113,7 @@ const KPI_SQL: &str = r"SELECT
   WHERE pid = $1
     AND started_at::date >= $2
     AND started_at::date <= $3
-    AND ($4::text IS NULL OR tenant = $4)";
+    AND tenant = $4";
 
 #[derive(Clone, Debug)]
 pub struct PgProcessProjectionRepository {
@@ -122,6 +130,29 @@ impl PgProcessProjectionRepository {
     #[must_use]
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    /// Read one projection, scoped to the tenant that owns it.
+    ///
+    /// # Errors
+    ///
+    /// [`ObsError::Internal`] when `tenant` is empty, [`ObsError::Database`] on
+    /// a read failure.
+    pub async fn get(
+        &self,
+        process_id: Uuid,
+        tenant: &str,
+    ) -> Result<Option<ProcessProjection>, ObsError> {
+        let row = sqlx::query(&format!(
+            "SELECT {PROJECTION_COLUMNS} FROM process_projections {GET_SQL}"
+        ))
+        .bind(process_id)
+        .bind(require_tenant(tenant)?)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| ObsError::Database(e.to_string()))?;
+
+        row.map(|r| row_to_projection(&r)).transpose()
     }
 }
 
@@ -151,6 +182,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
     }
 
     async fn query(&self, q: &ObsQuery) -> Result<Vec<ProcessProjection>, ObsError> {
+        let tenant = require_tenant(q.tenant.as_deref().unwrap_or_default())?;
         let rows = sqlx::query(&format!(
             "SELECT {PROJECTION_COLUMNS}
               FROM process_projections
@@ -159,7 +191,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
                 AND ($3::text IS NULL OR partner_mp_id = $3)
                 AND ($4::text IS NULL OR mdm_role = $4)
                 AND ($5::timestamptz IS NULL OR started_at >= $5)
-                AND ($6::text IS NULL OR tenant = $6)
+                AND tenant = $6
                 AND ($7::text IS NULL OR family = $7)
               ORDER BY last_event_at DESC
               LIMIT $8"
@@ -169,7 +201,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
         .bind(&q.partner_mp_id)
         .bind(&q.mdm_role)
         .bind(q.since)
-        .bind(&q.tenant)
+        .bind(tenant)
         .bind(&q.family)
         .bind(i64::from(q.limit))
         .fetch_all(&self.pool)
@@ -181,16 +213,12 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
             .collect::<Result<Vec<_>, _>>()
     }
 
-    async fn get(&self, process_id: Uuid) -> Result<Option<ProcessProjection>, ObsError> {
-        let row = sqlx::query(&format!(
-            "SELECT {PROJECTION_COLUMNS} FROM process_projections WHERE process_id = $1"
-        ))
-        .bind(process_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| ObsError::Database(e.to_string()))?;
-
-        row.map(|r| row_to_projection(&r)).transpose()
+    async fn get(
+        &self,
+        process_id: Uuid,
+        tenant: &str,
+    ) -> Result<Option<ProcessProjection>, ObsError> {
+        PgProcessProjectionRepository::get(self, process_id, tenant).await
     }
 
     /// KPIs for one PID over a calendar period, bucketed by `started_at`.
@@ -214,7 +242,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
             .bind(i32::try_from(pid).unwrap_or(0))
             .bind(from)
             .bind(to)
-            .bind(tenant_filter(tenant))
+            .bind(require_tenant(tenant)?)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| ObsError::Database(e.to_string()))?;
@@ -265,12 +293,12 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
               WHERE state NOT IN ({TERMINAL_STATE_SQL})
                 AND deadline_at IS NOT NULL
                 AND deadline_at < $1
-                AND ($2::text IS NULL OR tenant = $2)
+                AND tenant = $2
               ORDER BY deadline_at ASC
               LIMIT $3"
         ))
         .bind(now)
-        .bind(tenant_filter(tenant))
+        .bind(require_tenant(tenant)?)
         .bind(OVERDUE_LIMIT)
         .fetch_all(&self.pool)
         .await
@@ -289,8 +317,18 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
 /// the length against this.
 pub const OVERDUE_LIMIT: i64 = 500;
 
-fn tenant_filter(tenant: &str) -> Option<&str> {
-    (!tenant.is_empty()).then_some(tenant)
+/// The tenant every read is scoped by, or a refusal.
+///
+/// An empty tenant is not "all tenants": it is a deployment that failed to say
+/// whose data it serves, and answering it with the whole table is the failure
+/// the predicate exists to prevent.
+fn require_tenant(tenant: &str) -> Result<&str, ObsError> {
+    if tenant.is_empty() {
+        return Err(ObsError::Internal(
+            "a projection read without a tenant is refused".to_owned(),
+        ));
+    }
+    Ok(tenant)
 }
 
 // ── Row mapping ───────────────────────────────────────────────────────────────
@@ -432,5 +470,101 @@ mod tests {
     #[test]
     fn the_upsert_carries_the_deadline_source_with_the_deadline() {
         assert!(UPSERT_SQL.contains("deadline_source"));
+    }
+
+    /// Every read is scoped by the tenant that owns the row.
+    ///
+    /// `process_id` and `pid` are caller-supplied; without the predicate the
+    /// route hands one tenant's process to another's caller, and the Cedar
+    /// check upstream cannot see it because it compares the caller against the
+    /// deployment, not against the row.
+    #[test]
+    fn every_projection_read_is_tenant_scoped() {
+        assert!(
+            GET_SQL.contains("tenant = $2"),
+            "the single-row read must carry the tenant predicate: {GET_SQL}"
+        );
+        assert!(
+            KPI_SQL.contains("AND tenant = $4"),
+            "the KPI report must be scoped to one tenant"
+        );
+        for sql in [GET_SQL, KPI_SQL] {
+            assert!(
+                !sql.contains("IS NULL OR tenant"),
+                "an absent tenant must not widen a read to every tenant: {sql}"
+            );
+        }
+    }
+
+    /// The same predicate, over every statement obsd sends.
+    ///
+    /// Holding the two constants above proves only the reads that happen to be
+    /// named here. The widening shape is one line and can be written into any
+    /// query in the service — including a background sweep, which runs on a
+    /// timer with no caller to notice.
+    #[test]
+    fn no_obsd_statement_widens_on_an_absent_tenant() {
+        const SOURCES: &[(&str, &str)] = &[
+            ("pg/projection.rs", include_str!("projection.rs")),
+            ("worker.rs", include_str!("../worker.rs")),
+            ("server.rs", include_str!("../server.rs")),
+            ("handler.rs", include_str!("../handler.rs")),
+            ("mcp_server.rs", include_str!("../mcp_server.rs")),
+        ];
+        for (name, src) in SOURCES {
+            for (i, line) in src.lines().enumerate() {
+                // A line that *tests* for the shape is not the shape. Both
+                // guards in this module name the marker in a `contains(…)`
+                // predicate, and matching those would make this fail on itself.
+                if line.contains("contains(") {
+                    continue;
+                }
+                assert!(
+                    !line.contains("IS NULL OR tenant"),
+                    "{name}:{} widens to every tenant when the tenant is absent: {}",
+                    i + 1,
+                    line.trim()
+                );
+            }
+        }
+    }
+
+    /// A pool that is never connected: these calls are refused before any
+    /// statement is sent, so the assertion is about the guard and not about a
+    /// database being reachable.
+    fn unconnected() -> PgProcessProjectionRepository {
+        PgProcessProjectionRepository::new(
+            sqlx::postgres::PgPoolOptions::new()
+                .connect_lazy("postgres://obsd:obsd@127.0.0.1:1/obsd")
+                .expect("a lazy pool needs no server"),
+        )
+    }
+
+    /// An empty tenant is a deployment that failed to say whose data it serves.
+    /// Every read refuses it rather than answering with the whole table.
+    #[tokio::test]
+    async fn a_read_without_a_tenant_is_refused() {
+        let repo = unconnected();
+        let id = Uuid::new_v4();
+
+        assert!(matches!(repo.get(id, "").await, Err(ObsError::Internal(_))));
+        assert!(matches!(
+            repo.query(&ObsQuery::default()).await,
+            Err(ObsError::Internal(_))
+        ));
+        assert!(matches!(
+            repo.kpi_report(55001, Date::MIN, Date::MAX, "").await,
+            Err(ObsError::Internal(_))
+        ));
+        assert!(matches!(
+            repo.overdue_processes(OffsetDateTime::now_utc(), "").await,
+            Err(ObsError::Internal(_))
+        ));
+        // The trait shape carries the tenant too, so it refuses the same way
+        // rather than being a second, unscoped door onto the same table.
+        assert!(matches!(
+            ProcessProjectionRepository::get(&repo, id, "").await,
+            Err(ObsError::Internal(_))
+        ));
     }
 }

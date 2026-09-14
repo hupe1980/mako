@@ -31,3 +31,29 @@ fn the_demo_configs_name_no_key_the_service_ignores() {
         }
     }
 }
+
+/// A demo config the service refuses to start with is a broken demo.
+///
+/// The sibling test asks only whether every key is one the struct declares. A
+/// config can pass that and still be refused at startup: the auth posture is a
+/// second gate, and `allow_insecure_no_auth` is how a demo stack opts out of it
+/// deliberately.
+#[test]
+fn the_demo_configs_start() {
+    for rel in DEMO_CONFIGS {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(rel);
+        let src = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} is not readable: {e}", path.display()));
+        let Ok(cfg) = toml::from_str::<vertragd::config::VertragdConfig>(&src) else {
+            continue;
+        };
+        if let Err(e) = cfg.check_auth_posture() {
+            panic!(
+                "{rel} parses but `vertragd` refuses to start with it. Set \
+                 `allow_insecure_no_auth = true` in the demo, or configure the door:\n{e}"
+            );
+        }
+    }
+}

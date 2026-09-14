@@ -429,7 +429,7 @@ already makes a second change within one month impossible.
 | `Wasserkraft` | Hydro | §40 — seven tiers by Bemessungsleistung |
 | `Geothermie` | Geothermal | §45 — flat 25,20 ct |
 | `Gezeiten` | Tidal, wave, salinity gradient, current | §40 — these *are* Wasserkraft (§3 Nr. 21 lit. a); there is no §41a EEG |
-| `Kwk` | CHP/BHKW | KWKG, not EEG — priced by [`kwkg`], not by a rate table |
+| `Kwk` | CHP/BHKW | KWKG, not EEG — priced by `kwkg`, not by a rate table |
 
 ## The statutory rates
 

@@ -203,7 +203,7 @@ auth_keys_file = "/etc/makod/auth-keys"         # NAME=TOKEN per line
 
 [authz]
 # cedar_policy_dir  = "/etc/makod/cedar"        # extra *.cedar policy files
-# no_default_policy = false                     # drop the permit-all baseline
+# permit_all = false                            # dev-only: add the permit-all baseline
 
 [oidc]
 # issuer            = "https://login.microsoftonline.com/{tenant-id}/v2.0"
@@ -255,7 +255,8 @@ partner_cert_files = [
 [erp]
 webhook_url         = "https://erp.example.com/mako/events"
 webhook_secret_file = "/etc/makod/erp-webhook.secret"
-# edifact_outbox_webhook_url = "http://webhook:8000"  # dev transport substitute
+# edifact_outbox_webhook_url = "http://webhook:8000"  # dev transport substitute;
+#                                                     # requires webhook_secret above
 # netzzugang_endpoint_url    = "https://…"            # §20b EnWG platform
 
 [marktd]
@@ -826,7 +827,7 @@ BNetzA audit.
 | `auth_keys` | `MAKOD_AUTH_KEYS` | `--auth-key` | *(none)* | Named API keys `NAME=TOKEN`. Repeatable. At least one key or an `[oidc]` issuer is required when the port is enabled. |
 | `auth_keys_file` | — | — | *(none)* | File of `NAME=TOKEN` lines; keeps tokens out of the config file and out of `ps` |
 | `authz.cedar_policy_dir` | `MAKOD_CEDAR_POLICY_DIR` | `--cedar-policy-dir` | *(none)* | Directory of extra `.cedar` policy files appended to the built-in policy |
-| `authz.no_default_policy` | `MAKOD_CEDAR_NO_DEFAULT_POLICY` | `--cedar-no-default-policy` | `false` | Omit the built-in permit-all baseline; requires a policy directory |
+| `authz.permit_all` | `MAKOD_CEDAR_PERMIT_ALL` | `--cedar-permit-all` | `false` | **Development only.** Add the built-in permit-all baseline, making every authenticated principal full admin. Without it authorization is default-deny and a policy directory is required |
 
 `makod` **refuses to start** when `--http-addr` is set and neither `--auth-key`
 nor `--oidc-issuer` is provided. The `/health` probes are always public. Every other
@@ -868,7 +869,7 @@ statements cannot lower: layering policies on top can only *remove* access, via
 | Goal | How |
 |---|---|
 | Carve exceptions out of a broadly trusted deployment | Keep the baseline, add `forbid` rules via `--cedar-policy-dir` |
-| Grant nothing that is not written down | `--cedar-no-default-policy` — the baseline is omitted and `--cedar-policy-dir` becomes the only source of access |
+| Grant nothing that is not written down | the default — `--cedar-policy-dir` is the only source of access, and `makod` refuses to start without one |
 
 The second is required for least privilege and for § 6a EnWG role separation; the
 shipped `conservative.cedar` is written for it. `makod` refuses to start if the
@@ -919,9 +920,9 @@ with policy alone — an NB-scoped principal can be limited to NB-side workflows
 and never sees LF process state. It governs both process-reading MCP tools:
 `get_process` denies as `not_found` to avoid an existence oracle, and
 `list_overdue_deadlines` filters entries per workflow, since a missed
-regulatory window names the process it belongs to. Role separation needs
-`--cedar-no-default-policy`; under the permit-all baseline a workflow-scoped
-`permit` adds nothing and both tools stay readable by every principal. On the MCP transport, `UseMcp` only opens the
+regulatory window names the process it belongs to. Role separation is the default posture; under
+`--cedar-permit-all` a workflow-scoped `permit` adds nothing and both tools stay
+readable by every principal. On the MCP transport, `UseMcp` only opens the
 endpoint; `submit_command` additionally evaluates the same `SubmitCommand`
 action as the REST handler, with the identity the transport authenticated.
 
@@ -1000,9 +1001,10 @@ unless { action == MaKo::Action::"AdminMaloStats" };
 makod --cedar-policy-dir /etc/makod/cedar ...
 ```
 
-That example uses `forbid` because it narrows the permit-all baseline. To go the
-other way — deny everything and grant back only what is listed — copy the shipped
-`conservative.cedar` into the directory and add `--cedar-no-default-policy`.
+That example uses `forbid` because it narrows the permit-all baseline, which
+only `--cedar-permit-all` installs. The default is the other way round — nothing
+is granted but what a policy lists — and `conservative.cedar` ships as the
+starting point to copy into the directory.
 
 Or via the environment variable:
 
@@ -1220,9 +1222,14 @@ set, outbound messages leave through `WebhookEdifactSender` instead of AS4: each
 rendered interchange is POSTed as a CloudEvents 1.0 structured-mode JSON body of
 type **`de.mako.edifact.outbound`**, carrying `message_type`, `recipient` and the
 `edifact` bytes, with the outbox message id as both the CloudEvent `id` and the
-`X-Idempotency-Key` header. It is the development and ERP-integration path — the
-production `BdewAs4Sender` emits no such event — and `MaloIdentCallback` messages
-still go to the MaLo-ID sender unchanged.
+`X-Idempotency-Key` header, and **signed with Standard Webhooks** under
+`[erp] webhook_secret` — the same key the ERP notifier uses, because a receiver
+authenticates every mako CloudEvent the same way whichever emitter sent it.
+`makod` refuses to start when the URL is set without that secret: the body is the
+rendered market message, and this path stands in for AS4, which authenticates
+both ends. It is the development and ERP-integration path — the production
+`BdewAs4Sender` emits no such event — and `MaloIdentCallback` messages still go
+to the MaLo-ID sender unchanged.
 
 ### Who owns an outbox message
 
@@ -1286,6 +1293,7 @@ cargo test -p makod --test as4_security
 |---|---|---|---|
 | `addr` | `MAKOD_API_WEBDIENSTE_ADDR` | `--api-webdienste-addr` | TCP listen address |
 | `allow_unauthenticated` | `MAKOD_WEBDIENSTE_ALLOW_UNAUTHENTICATED` | `--webdienste-allow-unauthenticated` | Disable the built-in bearer/OIDC + Cedar auth layer on `:8090` — only behind an mTLS-terminating proxy |
+| `trust_client_mp_id_header` | `MAKOD_WEBDIENSTE_TRUST_CLIENT_MP_ID_HEADER` | `--webdienste-trust-client-mp-id-header` | Read the caller's Marktpartner-ID from `X-Mako-Client-MP-ID`. Implied by `allow_unauthenticated` |
 
 > **Authentication & mTLS**: By default every `:8090` route sits behind
 > bearer/OIDC authentication and the Cedar `UseWebdienste` action — the same
@@ -1316,11 +1324,20 @@ forward the certificate's Marktpartner-ID:
 proxy_set_header X-Mako-Client-MP-ID $ssl_client_s_dn_cn;
 ```
 
-A request without it is refused with `400`: the Endantwort to a §14a EnWG
-Steuerungsauftrag and the Bestätigung to a WiM Anmeldung are addressed to
-whoever sent them, so an order whose originator cannot be established has
-nowhere to be answered. The value must be a 13-digit Marktpartner-ID or a
-16-character EIC; anything else is treated as absent.
+**Reading that header is a deployment declaration.** It says whose name a §14a
+Steuerungsauftrag or a WiM Anmeldung is placed in, and it is evidence only where
+the proxy sets it *and strips any copy the client sent* — which `makod` cannot
+verify from the request. So `trust_client_mp_id_header` (implied by
+`allow_unauthenticated`, which already declares a fronting proxy) has to be set
+before the header is read at all. Without it the header is ignored and a route
+that needs a caller refuses, rather than attributing an order to whoever asked.
+
+A request without an establishable caller is refused with `400`: the Endantwort
+to a §14a EnWG Steuerungsauftrag and the Bestätigung to a WiM Anmeldung are
+addressed to whoever sent them, so an order whose originator cannot be
+established has nowhere to be answered. The value must be a 13-digit
+Marktpartner-ID or a 16-character EIC; anything else is treated as absent, and a
+**repeated** header is a `400` rather than first-wins.
 
 The WiM Order API also carries `netzbetreiber_id` in its request body. That is
 an assertion, not an authentication, so the two must agree — a body naming a
@@ -2693,13 +2710,12 @@ heartbeat, and a watch that goes stale flips `/health/ready` to 503:
 | `outbox-worker` | 120 s | Outbound EDIFACT stops leaving the queue |
 | `erp-webhook-worker` | 120 s | ERP stops receiving CloudEvents |
 | `erp-log-worker` | 120 s | Registered instead of the above when `--erp-webhook-url` is unset; ERP-targeted outbox entries accumulate |
-| `projection-worker:gpke-konfiguration` | 5 × checkpoint interval (min 300 s) | Read models serve stale data |
-| `projection-worker:gpke-supplier-change` | 5 × checkpoint interval (min 300 s) | Read models serve stale data |
+| `projection-worker:mabis-zp-register` | 5 × checkpoint interval (min 300 s) | The register of activated MaBiS-Zählpunkte goes stale, so a MaBiS-ZP on a repealed series stops being reported |
 | `retention-purge-worker` | 26 h | AS4 dedup entries and `Idempotency-Key` records accumulate — storage grows without bound |
 
 The purge window is deliberately loose: the loop ticks daily, so a tighter
 threshold would flap on a slow purge over a large store. A stalled purge is the
-mildest of the six — deduplication keeps working, entries simply are not
+mildest of the five — deduplication keeps working, entries simply are not
 reclaimed — but it is the one that degrades silently over weeks.
 
 In Kubernetes, target the `--http-addr` port with `/health/live` for liveness and
@@ -2746,8 +2762,33 @@ graph LR
 | **OutboxWorker** | Continuous, exponential backoff | Drains `OutboxStore` and delivers EDIFACT via AS4 or MaLo callbacks |
 | **OutboxErpWorker** | Continuous (optional, `--erp-webhook-url`) | POSTs BO4E CloudEvents from the outbox to the ERP webhook |
 | **DeadlineScheduler** | Every 30 s (`--deadline-poll-interval-secs`) | Fires overdue process deadlines (APERAK Frist, Zahlungsfrist) |
-| **Projection checkpoint** | `--projection-checkpoint-interval` | Persists projection checkpoints for crash-safe replay |
+| **MabisZpRegister projection** | `--projection-checkpoint-interval` | Folds the MaBiS-ZP lifecycle into the set of activated Zählpunkte, and reports any whose series a Festlegung has ended |
 | **retention-purge-worker** | Daily | Evicts expired AS4 dedup entries and spent `Idempotency-Key` records |
+
+
+### The MaBiS-ZP register reports a repealed series
+
+BK6-23-241 Tenorziffer 5 repeals MaBiS Kap. 17.2 with the end of **30.09.2026**,
+and the tägliche Ausfallarbeitsüberführungszeitreihe (55197/55198) is not
+republished as the Anlage zur BilAReM. Two halves follow from that, and they
+need different mechanisms:
+
+- **Opening one** is refused already: `ReceiveAnfrage` rejects an Aktivierung
+  whose Abrechnungszeitraum starts after the series ends.
+- **One already open** is not repealed with the chapter. It stays activated, no
+  Summenzeitreihe is exchanged for it, and nothing about the process looks
+  wrong. The `MabisZpRegister` projection folds every `mabis-zp-lifecycle`
+  stream into the current set and logs, after each tick, every MaBiS-ZP whose
+  series has ended — Zählpunkt, series, end date and Abrechnungszeitraum.
+
+makod **reports and does not act** here. Sending a Deaktivierung would be a
+market message on a guess: nothing in the sources in hand says the Netzbetreiber
+owes one. Whether to deactivate, and when, is the operator's call.
+
+A family that defines no Antwort — the tägliche AAÜZ is one — counts as
+activated on the recorded Anfrage alone, because there is no answering party to
+confirm anything. Counting only confirmed answers would report zero active
+Zählpunkte for exactly the series this is about.
 
 A JWKS refresh loop also runs when OIDC is enabled (see [OIDC](#oidc-jwt-authentication)).
 

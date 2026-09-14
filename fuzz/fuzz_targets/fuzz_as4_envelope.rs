@@ -40,6 +40,7 @@
 //! ```
 
 #![no_main]
+#![deny(unsafe_code)]
 
 use asx_rs::{
     core::SessionContext,

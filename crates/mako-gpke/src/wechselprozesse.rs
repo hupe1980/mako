@@ -7,8 +7,8 @@
 //!
 //! | Festlegung | Carries |
 //! |---|---|
-//! | **BK6-24-174** | GPKE **Teil 1–3** = Anlagen 1a–1c; MaBiS = Anlage 3 |
-//! | **BK6-22-024** | LFW24 (§ 20a EnWG); GPKE **Teil 4** = Anlage 1d; WiM Strom Teil 1/2 = Anlagen 2a/2b |
+//! | **BK6-24-174** | GPKE **Teil 1–3** = Anlagen 1a–1c; WiM Strom Teil 1/2 = Anlagen 2a/2b; MaBiS = Anlage 3 |
+//! | **BK6-22-024** | LFW24 (§ 20a EnWG); GPKE **Teil 4** = Anlage 1d |
 //!
 //! Everything in this module is Teil 1–3, so cite BK6-24-174.
 //!

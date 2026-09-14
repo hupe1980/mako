@@ -46,7 +46,7 @@
 //!
 //! # Sources
 //!
-//! - BK6-22-024 Anlage 2b, WiM Strom Teil 2 Kap. 4.5
+//! - BK6-24-174 Anlage 2b, WiM Strom Teil 2 Kap. 4.5
 //! - BDEW *AWH Prozesse zur Änderung der Technik an Lokationen* V1.1, Kap. 9.3/9.4
 //! - *Entscheidungsbaum-Diagramme und Codelisten* 4.3, Kap. 8.27 und 9.3/9.4
 //! - REMADV AHB 1.0a § 3.1.1 / § 3.1.2, COMDIS AHB 1.0h, INVOIC AHB 1.0b

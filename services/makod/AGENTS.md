@@ -5,7 +5,7 @@
 
 ## Role
 
-`makod` is the only binary crate that assembles all domain workflow crates (`mako-gpke`, `mako-wim`, `mako-geli-gas`, `mako-gabi-gas`, `mako-mabis`, `mako-redispatch`) into a single `EngineContext`. It owns:
+`makod` is the only binary crate that assembles the domain workflow crates (`mako-gpke`, `mako-wim`, `mako-geli-gas`, `mako-gabi-gas`, `mako-mabis`, `mako-emob`, `mako-redispatch`) into a single `EngineContext`. `production_modules()` in `src/startup/mod.rs` is the list, and each entry is `#[cfg]`-gated on the Marktrolle features the build selected. It owns:
 - Persistence backend selection (in-memory vs. SlateDB)
 - Object store configuration (local / S3 / GCS)
 - OTLP instrumentation setup
@@ -28,10 +28,20 @@ The `testing` feature must **never** appear in production builds. Use it only in
 
 ## Configuration
 
-All configuration is driven by CLI flags with `MAKOD_*` environment variable overrides. Key flags:
+The primary surface is **`makod.toml`**, deserialized into
+`makod::core::config::ConfigFile` (`src/core/config.rs`, `deny_unknown_fields`)
+and selected with `-c` / `--config <FILE>` or `MAKOD_CONFIG`. Several blocks
+exist only there and have no CLI equivalent: `[[party]]` (operator identity —
+at least one entry is required), `[storage.s3]`, `[authz]`, `[engine]`,
+`[webdienste]`, `[marktd]`, `[maloid]`, and the `as4.*_pem_file` paths that keep
+key material off the command line and out of the environment.
+
+A subset of settings also has a CLI flag with a `MAKOD_*` environment override.
+Precedence is **CLI flag → environment variable → config file → default**.
 
 | Flag | Env var | Notes |
 |---|---|---|
+| `-c`, `--config <FILE>` | `MAKOD_CONFIG` | Path to `makod.toml` |
 | `--data-dir <DIR>` | `MAKOD_DATA_DIR` | Omitting enables volatile in-memory mode — not for production |
 | `--object-store <BACKEND>` | `MAKOD_OBJECT_STORE` | `local` / `s3` / `gcs` / `azure` (default `local`) |
 | `--s3-bucket` / `--s3-endpoint` | `MAKOD_S3_BUCKET` / `MAKOD_S3_ENDPOINT` | S3/MinIO |
@@ -39,6 +49,10 @@ All configuration is driven by CLI flags with `MAKOD_*` environment variable ove
 | `--azure-container` / `--azure-account` | `MAKOD_AZURE_CONTAINER` / `MAKOD_AZURE_ACCOUNT` | Azure Blob Storage |
 | `--log-level <LEVEL>` | `MAKOD_LOG_LEVEL` | default `info` |
 | `--log-format <FORMAT>` | `MAKOD_LOG_FORMAT` | `pretty` / `json` |
+
+Every CLI field must be reachable from the TOML file: the
+`cli_fields_are_reachable_from_toml` guard test in `src/main.rs` fails the build
+for a flag `apply_config_file` never reads.
 
 ## Health Checks
 
@@ -50,9 +64,9 @@ All configuration is driven by CLI flags with `MAKOD_*` environment variable ove
 
 ## Observability
 
-- OTLP traces and metrics: configure via `OTEL_EXPORTER_OTLP_ENDPOINT` (standard OpenTelemetry env vars).
+- OTLP **traces** are pushed to the exporter named by `OTEL_EXPORTER_OTLP_ENDPOINT` (standard OpenTelemetry env vars) when one is configured.
+- Prometheus **metrics** are **scraped**: `makod` mounts `GET /metrics` itself (`src/api/metrics_api.rs`, Prometheus text format, authenticated through Cedar).
 - Structured logs: JSON format (`--log-format json`) for production; `pretty` for local development.
-- Metrics are exposed via OTLP push, not a scrape endpoint.
 
 ## Integration Tests
 

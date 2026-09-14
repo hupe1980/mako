@@ -720,8 +720,12 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
 fi
 
 # ── netzbilanzd smoke tests ────────────────────────────────────────────────────
-# Tests NNE billing draft generation, health, summary, and audit endpoints.
-# Requires NETZBILANZD_URL to be set (e.g. http://localhost:8680).
+# NNE billing draft generation, health, summary and audit endpoints.
+#
+# Unset by default, and unlike MARKTD_URL/WEBHOOK_URL above that is not an
+# opt-out: this demo's `docker-compose.yml` starts no netzbilanzd, so there is
+# nothing here to point at. Give NETZBILANZD_URL an externally running instance
+# to include the block.
 
 NETZBILANZD_URL="${NETZBILANZD_URL:-}"
 if [[ -n "$NETZBILANZD_URL" ]]; then

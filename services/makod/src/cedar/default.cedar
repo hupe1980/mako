@@ -8,7 +8,7 @@
 // fine-grained ABAC rules. Because the catch-all below already permits
 // everything, only `forbid` statements narrow it — an added `permit` grants
 // nothing new. To build up from a deny-all baseline instead, start makod with
-// `--cedar-no-default-policy`, which omits this file entirely and makes the
+// the default posture, which omits this file entirely and makes the
 // policy directory the only source of access (see conservative.cedar).
 //
 // Examples, all in the layer-on-top form:

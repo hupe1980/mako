@@ -17897,7 +17897,7 @@
       ]
     },
     {
-      "chapter": "4.16 Bearbeitungsstand zur Bestellung Änderung von Abrechnungsdaten",
+      "chapter": "5 Anwendungsübersicht MaBiS",
       "communication": "ÜNB an BKV",
       "elements": [
         {
@@ -19317,7 +19317,7 @@
     "28": "Wenn AJT+A99 vorhanden",
     "29": "MP-ID nur aus Sparte Gas",
     "3": "Wenn MP-ID in SG3 NAD+MS mit Rolle NB vorhanden",
-    "30": "MP-ID nur aus Sparte Strom tabellarisch der Bilanzkreissum-",
+    "30": "MP-ID nur aus Sparte Strom",
     "31": "MP-ID mit Rolle MSB",
     "32": "MP-ID mit Rolle NB",
     "33": "Wenn AJT+A02/A03+E_0488 vorhanden",

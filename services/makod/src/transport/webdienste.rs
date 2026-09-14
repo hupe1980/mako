@@ -95,6 +95,11 @@ use tracing::{info, warn};
 /// the request body carries it, because the specification does not put it there.
 pub const CLIENT_MP_ID_HEADER: &str = "x-mako-client-mp-id";
 
+/// Whether the deployment has declared that a proxy sets
+/// [`CLIENT_MP_ID_HEADER`] and strips any copy the client sent.
+#[derive(Clone, Copy)]
+pub struct TrustClientMpId(pub bool);
+
 tokio::task_local! {
     /// Marktpartner-ID of the authenticated caller for the current request.
     ///
@@ -389,7 +394,7 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
     /// 2. Inbox idempotency guard — rejects duplicate `tx_id` values.
     /// 3. Converts the REST payload to a `DeviceChangeCommand::ReceiveRestOrder`.
     /// 4. Spawns a `WimDeviceChangeWorkflow` process.
-    /// 5. Registers the per-PID response deadline (BDEW WiM / BK6-22-024).
+    /// 5. Registers the per-PID response deadline (BDEW WiM / BK6-24-174).
     /// 6. Registers a correlated index under `tx_id` for later ERP lookup.
     /// 7. Returns `Ok(())` → axum sends `202 Accepted`.
     fn on_anmeldung(
@@ -473,7 +478,7 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
 /// Registers a 5-Werktage deadline and a correlated index under `tx_id`.
 /// The business-answer Frist for the order this command opens.
 ///
-/// The MSB-Wechsel windows differ per Prüfidentifikator (BK6-22-024 WiM Teil 1):
+/// The MSB-Wechsel windows differ per Prüfidentifikator (BK6-24-174 WiM Teil 1):
 /// 55039 → 3 WT, 55042 → 5 WT, 55051 → 7 WT, 55168 → 1 WT. `mako_wim` owns the
 /// table so the REST and AS4 doors cannot drift apart.
 ///
@@ -538,7 +543,7 @@ async fn spawn_device_change(
     let identity = process.identity();
 
     // Business-answer Frist, sized from the order's own Prüfidentifikator —
-    // 55039 → 3 WT, 55042 → 5 WT, 55051 → 7 WT, 55168 → 1 WT (BK6-22-024 WiM
+    // 55039 → 3 WT, 55042 → 5 WT, 55051 → 7 WT, 55168 → 1 WT (BK6-24-174 WiM
     // Teil 1, Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2). This REST door has to agree
     // with the AS4 door; a flat 5 WT here would give the same order two
     // different deadlines depending on which transport it arrived on.
@@ -587,7 +592,7 @@ async fn spawn_device_change(
 ///
 /// Uses the latest BDEW format version from the compiled `edi-energy` registry.
 /// Also registers the Steuerungsauftrag's 5-Werktage confirmation deadline
-/// (BDEW WiM / BK6-22-024).
+/// (BDEW WiM / BK6-24-174).
 async fn spawn_steuerungsauftrag(
     store: SlateDbStore,
     tenant_id: TenantId,
@@ -657,13 +662,20 @@ async fn spawn_steuerungsauftrag(
     Ok(process_id)
 }
 
-/// Latest BDEW format version from the `edi-energy` registry.
+/// The latest BDEW format version **in force today**, for stamping an outbound
+/// process.
+///
+/// Not simply the registry's newest: a profile is compiled in as soon as BDEW
+/// publishes it, six months before its Anwendungszeitpunkt (Allgemeine
+/// Festlegungen 6.1d § 2.5). EDIFACT has no Übergangsfrist, so a message
+/// stamped with the next release before its Stichtag is refused by the
+/// counterparty — the registry is filtered to `valid_from <= heute()` first.
 fn latest_format_version() -> mako_engine::version::FormatVersion {
     edi_energy::registry::ReleaseRegistry::global()
-        .format_versions()
+        .format_versions_in_force_on(mako_fristen::heute())
         .into_iter()
         .filter_map(|s| mako_engine::version::FormatVersion::parse(&s).ok())
-        .max_by(|a, b| a.as_str().cmp(b.as_str()))
+        .max()
         .unwrap_or_else(|| {
             mako_engine::version::FormatVersion::parse("FV2025-10-01")
                 .expect("fallback FV is valid")
@@ -696,18 +708,27 @@ pub fn router(handler: Arc<MakodApiHandler>) -> Router {
 /// every route open — valid only behind a proxy terminating mTLS against the
 /// BDEW PKI CA.
 ///
+/// `trust_client_mp_id_header` decides whether the caller's Marktpartner-ID is
+/// read from [`CLIENT_MP_ID_HEADER`]. False, the header is ignored and a
+/// handler that needs a caller refuses, because nothing distinguishes a proxy's
+/// assertion from a value the client set itself.
+///
 /// Health routes are deliberately **not** included: the caller merges them
 /// afterwards so that Kubernetes probes stay reachable without a token.
 pub fn build_app(
     handler: Arc<MakodApiHandler>,
     auth: Option<WebdiensteAuthState>,
     max_body_bytes: usize,
+    trust_client_mp_id_header: bool,
 ) -> Router {
     let routes = router(handler)
         .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
         // Below the auth layer, so the identity is in scope for the handlers
         // whether or not `makod` itself checks a bearer token.
-        .layer(axum::middleware::from_fn(client_identity_middleware));
+        .layer(axum::middleware::from_fn_with_state(
+            TrustClientMpId(trust_client_mp_id_header),
+            client_identity_middleware,
+        ));
     match auth {
         Some(state) => routes.layer(axum::middleware::from_fn_with_state(
             state,
@@ -737,14 +758,36 @@ pub struct WebdiensteAuthState {
 /// A malformed value is dropped rather than propagated: the handlers treat a
 /// missing caller as a refusal, which is the safe reading of "the proxy did not
 /// give me a usable identity".
+///
+/// A **repeated** header is refused outright instead. The value decides whose
+/// name a § 14a Steuerungsauftrag or a WiM Anmeldung is placed in, so resolving
+/// it first-wins would let a second copy ride along behind the proxy's — the
+/// same reason every other identity header here goes through
+/// [`mako_service::headers::single_str`].
 pub async fn client_identity_middleware(
+    axum::extract::State(TrustClientMpId(trusted)): axum::extract::State<TrustClientMpId>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    let mp_id = request
-        .headers()
-        .get(CLIENT_MP_ID_HEADER)
-        .and_then(|v| v.to_str().ok())
+    use axum::response::IntoResponse as _;
+    if !trusted {
+        // No proxy has declared itself, so the header is the caller's own claim
+        // about which Marktpartner it is. Scope `None`: the handlers treat an
+        // absent caller as a refusal, which is the safe reading.
+        return CLIENT_MP_ID.scope(None, next.run(request)).await;
+    }
+    let raw = match mako_service::headers::single_str(request.headers(), CLIENT_MP_ID_HEADER) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(header = %e.name, count = e.count, "API-Webdienste: repeated caller-identity header — refusing");
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                format!("{} must appear at most once", CLIENT_MP_ID_HEADER),
+            )
+                .into_response();
+        }
+    };
+    let mp_id = raw
         .map(str::trim)
         .filter(|v| {
             (v.len() == 13 && v.bytes().all(|b| b.is_ascii_digit()))

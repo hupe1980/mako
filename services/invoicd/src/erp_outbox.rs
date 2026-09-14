@@ -148,6 +148,7 @@ async fn flush(
                 // remaining rows in the batch still deserve their deliveries.
                 if let Err(e) = crate::pg::receipts::mark_erp_notified(
                     pool,
+                    tenant,
                     row.process_id,
                     time::OffsetDateTime::now_utc(),
                 )
@@ -170,7 +171,9 @@ async fn flush(
                 // row spends its remaining budget re-POSTing bytes the ERP has
                 // already refused before it dead-letters itself. Visible, but
                 // wasteful and wrong, so it is logged rather than discarded.
-                if let Err(db) = crate::pg::receipts::dead_letter_erp(pool, row.process_id).await {
+                if let Err(db) =
+                    crate::pg::receipts::dead_letter_erp(pool, tenant, row.process_id).await
+                {
                     error!(
                         error = %db, process_id = %row.process_id,
                         "invoicd: could not dead-letter a permanently rejected ERP notification — \
@@ -187,9 +190,13 @@ async fn flush(
                 // counter), so the row simply retries at the lease interval
                 // instead of its backoff — a hot retry against an ERP that is
                 // probably already struggling, which is worth knowing about.
-                if let Err(db) =
-                    crate::pg::receipts::record_erp_failure(pool, row.process_id, row.erp_attempts)
-                        .await
+                if let Err(db) = crate::pg::receipts::record_erp_failure(
+                    pool,
+                    tenant,
+                    row.process_id,
+                    row.erp_attempts,
+                )
+                .await
                 {
                     warn!(
                         error = %db, process_id = %row.process_id,

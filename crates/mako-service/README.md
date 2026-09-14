@@ -29,9 +29,9 @@ code focuses on domain logic instead of plumbing.
 | `error` | `ApiError`, `ApiResult` | Shared HTTP error → JSON problem body (`?`-friendly) |
 | `config` | `load_config`, `DatabaseConfig`, `HttpConfig` | Layered TOML + env-var config loading |
 | `shutdown` | `token()`, `serve()` | Graceful shutdown — SIGINT **and** SIGTERM |
-| `oidc` | `OidcConfig`, `OidcVerifier`, `Claims` | OIDC/JWT verification + `build_verifier()` factory |
+| `oidc` | `OidcConfig`, `OidcVerifier`, `Claims`, `ExpectedTenant` | OIDC/JWT verification + `build_verifier()` factory |
 | `mcp_auth` | `McpAuth`, `McpAuthConfig`, `McpApiKey`, `McpIdentity` | Unified MCP server authentication (needs `cedar` **and** `oidc`) |
-| `telemetry` | `init_tracing`, `init_tracing_from_env`, `OtelConfig` | Structured JSON logging and the OTLP exporter |
+| `telemetry` | `init_tracing`, `init_tracing_from_env`, `LogFormat`, `OtelConfig` | Structured logging (JSON by default) and the OTLP exporter |
 | `cedar` | `CedarEnforcer` | Cedar ABAC policy enforcement |
 | `health` | `health_routes` | `/health/live` + `/health/ready` endpoints |
 | `http` | `default_client` | `reqwest::Client` with connect + request timeouts |
@@ -142,12 +142,14 @@ pool_size = 10
 addr = "0.0.0.0:9080"
 
 [mcp]
-api_key = "env:MY_SERVICE_MCP_API_KEY"   # Bearer token for agentd LLM client
+api_key       = "env:MY_SERVICE_MCP_API_KEY"   # Bearer token for agentd LLM client
+api_key_roles = ["LF"]                         # roles Cedar evaluates the key under
 
 # Optional named keys for per-caller audit:
 [[mcp.named_keys]]
 name    = "billing-bot"
 api_key = "env:BILLING_BOT_KEY"
+roles   = ["LF"]
 
 [oidc]                   # omit section → dev mode (no auth required)
 issuer   = "https://login.microsoftonline.com/{tid}/v2.0"
@@ -215,6 +217,18 @@ async fn mcp_auth_middleware(
 On success, `McpAuth` injects `McpIdentity { name, method }` as an Axum extension
 so handlers can audit which caller (OIDC `sub`, API-key name, or `"dev-mode"`) made the request.
 
+### API keys are Cedar principals
+
+A named key is evaluated by the same policy as a token: principal `User::"<key name>"`,
+tenant the deployment's own, and `context.principal_roles` the roles the key's
+`roles` list declares. So the blanket `use-mcp` gate and each destructive tool's
+own action both apply to key callers, and an operator narrows a key by writing
+policy rather than by trusting the key's holder.
+
+A key that declares no roles is refused by every role-testing `permit`. That is
+the intended shape for a read-only agent: give it the roles its work needs, and
+nothing else.
+
 ---
 
 ## Graceful shutdown
@@ -237,6 +251,28 @@ get `SIGTERM` first.
 
 ---
 
+## Tenant pinning
+
+`Claims` refuses a token carrying no `mako_tenant`. Whether that tenant is *this
+deployment's* is a second question, and the answer is one layer:
+
+```rust,no_run
+# use axum::{Router, Extension};
+# fn build(oidc: mako_service::oidc::OidcVerifier, tenant: String) -> Router {
+Router::new()
+    // …routes…
+    .layer(Extension(mako_service::oidc::ExpectedTenant(tenant)))
+    .layer(Extension(oidc))
+# }
+```
+
+Without it, a token signed by the *same realm* for a different operator extracts
+cleanly, and the only thing left between it and the data is that every Cedar rule
+remembered to carry `context.principal_tenant == context.resource_tenant`. With
+it, the comparison happens once at extraction and the policies keep theirs as
+defence in depth. `cargo xtask check-expected-tenant` holds every service that
+reads `Claims` to it.
+
 ## Telemetry
 
 `run::<D>()` installs the subscriber before anything else, so a service
@@ -245,6 +281,7 @@ configures telemetry through the environment rather than through its TOML:
 | Variable | Effect |
 |---|---|
 | `<SERVICE>_LOG_LEVEL`, else `LOG_LEVEL`, else `RUST_LOG` | Filter directive; `info` when unset |
+| `<SERVICE>_LOG_FORMAT`, else `LOG_FORMAT` | `json` (default), `pretty` or `compact`. An unrecognised value falls back to `json` and says so on stderr — a log-encoding typo must not stop a daemon |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/gRPC collector. Unset → no exporter, no overhead |
 | `OTEL_SERVICE_NAME` | `service.name` on the spans; the daemon's own name when unset |
 
@@ -427,7 +464,7 @@ so the table stays small.
 
 | Feature | What it enables |
 |---|---|
-| `oidc` | `OidcVerifier`, `Claims` extractor, JWKS background refresh |
+| `oidc` | `OidcVerifier`, `Claims` extractor, `ExpectedTenant`, JWKS background refresh |
 | `cedar` | `CedarEnforcer`, Cedar ABAC policy evaluation |
 | `otel` | OpenTelemetry OTLP/gRPC traces via `tracing-opentelemetry` |
 | `metrics` | Real Prometheus `/metrics` + `mako_http_requests_total`, `mako_http_request_duration_seconds` and `mako_bo4e_decimal_from_json_number_total` |

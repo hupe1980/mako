@@ -220,6 +220,45 @@ jobs:
       - run: cargo xtask sync-regulatories --offline
 
 
+  # ── SQL against a real schema ───────────────────────────────────────────────
+  #
+  # mako uses `sqlx::query`, which prepares at run time. Nothing in the build or
+  # the test suite sees the SQL, so a statement Postgres will not accept
+  # compiles, ships, and fails on the first request that reaches it. Two did —
+  # a `melo.tenant` column that does not exist, and an INSERT naming nineteen
+  # columns against eighteen placeholders.
+  #
+  # `just ci` cannot run this: it starts a container, and the gate refuses
+  # rather than reporting green when there is no daemon. So it ran nowhere. A
+  # service container gives the runner a server on a port, and
+  # `MAKO_CHECK_SQL_URL` points the check at it instead of `docker run`.
+  check-sql:
+    name: SQL parses against its own schema
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: check-sql
+        ports:
+          - 5432:5432
+        # Without this the job races the server's first boot: the first `psql`
+        # arrives before Postgres is listening and the check reports every
+        # statement broken.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask check-sql
+        env:
+          MAKO_CHECK_SQL_URL: postgres://postgres:check-sql@localhost:5432/postgres
+
+
   # ── Examples ────────────────────────────────────────────────────────────────
   #
   # `cargo check --all-targets` compiles the examples but never runs them, which
@@ -381,6 +420,22 @@ jobs:
       - run: cargo run -p xtask -- check-dep-versions
       # The licence governance page against deny.toml's allow list.
       - run: cargo run -p xtask -- check-licenses
+      # `#![deny(unsafe_code)]` is a crate attribute and cannot be inherited, so
+      # a new crate root is outside the lint until this says so.
+      - run: cargo run -p xtask -- check-crate-lints
+      # A container suite that is not `#[ignore]`d prints `ok` on a runner with
+      # no Docker daemon, having returned early from every test; one no recipe
+      # names is run by nothing at all.
+      - run: cargo run -p xtask -- check-db-suites
+      # Without `ExpectedTenant` a token signed by the same realm for another
+      # operator extracts cleanly, leaving the tenant comparison to every rule.
+      - run: cargo run -p xtask -- check-expected-tenant
+      # A daemon registering a route the runner already mounts panics
+      # `Router::merge` at startup, before the listener binds.
+      - run: cargo run -p xtask -- check-runner-routes
+      # A Festlegung cited in a form the Beschlusskammer does not publish names
+      # no document.
+      - run: cargo run -p xtask -- check-citations
       # `rubo4e::v202xyy::` pins a BO4E version alias; `rubo4e::current::` is
       # the one that moves with the crate.
       - name: No hardcoded rubo4e version alias
@@ -416,6 +471,14 @@ jobs:
           # The docker-manifest matrix.
           matrix=$(grep -oE '^ *- service: [a-z0-9-]+' .github/workflows/release.yml \
                    | awk '{print $3}' | sort -u)
+
+          # Three empty extractions compare equal, and the job passes having
+          # compared nothing. Each list is read out of a file whose shape may
+          # change, so each has to be non-empty before the comparison means
+          # anything.
+          test -n "$baked" || { echo "::error::no targets in the docker-bake.hcl default group"; exit 1; }
+          test -n "$looped" || { echo "::error::no digest-export loop found in release.yml"; exit 1; }
+          test -n "$matrix" || { echo "::error::no docker-manifest matrix found in release.yml"; exit 1; }
 
           fail=0
           for name in looped matrix; do

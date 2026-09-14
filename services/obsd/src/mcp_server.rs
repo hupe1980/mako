@@ -146,8 +146,6 @@ impl ObsdMcpHandler {
         &self,
         Parameters(p): Parameters<GetProcessParams>,
     ) -> Result<CallToolResult, McpError> {
-        use mako_obs::repository::ProcessProjectionRepository as _;
-
         let process_id: uuid::Uuid = p
             .process_id
             .parse()
@@ -155,11 +153,9 @@ impl ObsdMcpHandler {
 
         let repo = crate::pg::PgProcessProjectionRepository::new(self.state.pool.clone());
         let found = repo
-            .get(process_id)
+            .get(process_id, &self.state.tenant)
             .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            // The repository is not tenant-scoped on `get`; this surface is.
-            .filter(|row| row.tenant == self.state.tenant);
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         match found {
             Some(r) => ContentBlock::json(projection_json(&r))

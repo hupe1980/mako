@@ -88,9 +88,8 @@ impl Daemon for Sperrd {
 
         // ── Cedar ABAC ────────────────────────────────────────────────────
         // Authentication says *who* is calling; this says what they may do.
-        // sperrd enabled the `cedar` feature and enforced nothing, so every
-        // route took `_claims: Claims` and discarded it — a valid token from any
-        // tenant could order a disconnection in this operator's name.
+        // Both are required on every Sperrung route: a token valid for this
+        // deployment is not by itself authority to order a disconnection.
         let cedar = Arc::new(
             mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
                 "../policies/sperrd.cedar"
@@ -126,7 +125,10 @@ impl Daemon for Sperrd {
             .layer(Extension(config::Tenant(cfg.tenant.clone())))
             .layer(Extension(cfg.inbound_hmac_secret.clone()))
             .layer(Extension(ctx.pool().clone()))
-            .layer(Extension(oidc));
+            .layer(Extension(mako_service::oidc::ExpectedTenant(
+                cfg.tenant.clone(),
+            )))
+            .layer(Extension(oidc.clone()));
 
         // ── IFTSTA 21039 retry worker ─────────────────────────────────────
         // A terminal order whose IFTSTA never went out leaves the Lieferant
@@ -141,7 +143,17 @@ impl Daemon for Sperrd {
         let mcp_state = Arc::new(mcp_server::SperrdMcpState {
             pool: ctx.pool().clone(),
             tenant: cfg.tenant.clone(),
-            auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
+            // The same verifier and the same policy as the REST surface.
+            // Built with `from_auth_config` instead, `/mcp` runs in dev mode
+            // whenever `[mcp]` carries no key — serving the tenant's
+            // Sperraufträge to any caller, on a service that refuses to start
+            // without `[oidc]` precisely because it disconnects customers.
+            auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
+                &cfg.mcp,
+                oidc.clone(),
+                Some(Arc::clone(&cedar)),
+                &cfg.tenant,
+            ),
         });
         Ok(app.merge(mcp_server::router(mcp_state, ctx.shutdown.clone())))
     }

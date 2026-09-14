@@ -104,6 +104,11 @@ pub struct PreflightInput<'a> {
     pub allow_no_as4_signing: bool,
     /// `--edifact-outbox-webhook-url`.
     pub edifact_outbox_webhook_url: Option<&'a str>,
+    /// Whether a webhook signing secret is configured at all.
+    ///
+    /// A bool rather than the value: the preflight decides whether the door is
+    /// credentialed, and never needs to read the credential.
+    pub erp_webhook_secret_set: bool,
     /// `--erp-webhook-url`.
     pub erp_webhook_url: Option<&'a str>,
     /// `--netzzugang-endpoint-url`.
@@ -120,8 +125,8 @@ pub struct PreflightInput<'a> {
     pub auth_keys: &'a [String],
     /// Concatenated `*.cedar` policy text from `--cedar-policy-dir`.
     pub cedar_policies: Option<String>,
-    /// `--cedar-no-default-policy`.
-    pub cedar_no_default_policy: bool,
+    /// `--cedar-permit-all`.
+    pub cedar_permit_all: bool,
     /// `--oidc-issuer`.
     pub oidc_issuer: Option<&'a str>,
     /// `--oidc-audience`.
@@ -214,11 +219,29 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
             .map_err(|e| anyhow::anyhow!("{e}"))
     };
     let auth_keys = parse_keys()?;
-    let cedar_default_policy = if input.cedar_no_default_policy {
-        DefaultPolicy::Deny
-    } else {
+    // Default-deny, like every other service in the platform. The permit-all
+    // baseline is an explicit development opt-in, because an operator's own
+    // `permit` statements cannot narrow it — beside it, a least-privilege policy
+    // set grants nothing it did not already grant.
+    let cedar_default_policy = if input.cedar_permit_all {
         DefaultPolicy::PermitAll
+    } else {
+        DefaultPolicy::Deny
     };
+    // Deny with no grants authorises nothing: every route answers 403 and the
+    // deployment reads as broken rather than as unconfigured.
+    anyhow::ensure!(
+        input.cedar_permit_all
+            || input
+                .cedar_policies
+                .as_ref()
+                .is_some_and(|p| !p.trim().is_empty()),
+        "authorization is default-deny and no Cedar policies are configured, so every \
+         request would be refused. Point --cedar-policy-dir (authz.cedar_policy_dir) at \
+         a policy set — `services/makod/src/cedar/conservative.cedar` is the \
+         least-privilege starting point — or pass --cedar-permit-all to run without \
+         authorization (development only)."
+    );
     // Compile the policy set now. Building the real authorizer later needs an
     // OIDC verifier, which needs the network; the policy text does not, and a
     // policy that fails to parse is the failure this catches. `NamedKey` holds a
@@ -453,6 +476,23 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
         })
         .transpose()?;
 
+    if input.edifact_outbox_webhook_url.is_some() {
+        // The body is the rendered market message — the MaLo-IDs, the
+        // counterparty and the customer data the Vorgang is about. Unsigned,
+        // the receiver cannot tell a mako delivery from anything else that can
+        // reach the URL, and mako cannot tell that it was read by the ERP it
+        // meant. This is the AS4 substitute: the real transport authenticates
+        // both ends, so the substitute has to authenticate one.
+        anyhow::ensure!(
+            input.erp_webhook_secret_set,
+            "--edifact-outbox-webhook-url is set but no webhook signing secret is \
+             configured. Outbound EDIFACT would be POSTed unsigned, carrying the \
+             rendered market message and the customer data in it. Set \
+             erp.webhook_secret_file in makod.toml (preferred), erp.webhook_secret, \
+             or --erp-webhook-secret."
+        );
+    }
+
     if input.marktd_url.is_some() {
         // An empty key is worse than no marktd at all. The ESA consent gate and
         // the M1 Konfigurationsprodukt guard both **fail open** on a lookup
@@ -558,6 +598,7 @@ mod tests {
             allow_no_as4_trust_anchor: false,
             allow_no_as4_signing: true,
             edifact_outbox_webhook_url: None,
+            erp_webhook_secret_set: true,
             erp_webhook_url: None,
             netzzugang_endpoint_url: None,
             maloid_partner: &[],
@@ -566,7 +607,9 @@ mod tests {
             marktd_api_key: None,
             auth_keys: &[],
             cedar_policies: None,
-            cedar_no_default_policy: false,
+            // The baseline, because these fixtures are about the other doors.
+            // The authorization posture has its own tests below.
+            cedar_permit_all: true,
             oidc_issuer: None,
             oidc_audience: None,
         }
@@ -692,6 +735,72 @@ mod tests {
         assert!(err.contains("no API key is configured"), "{err}");
     }
 
+    /// The webhook sender is the AS4 substitute, and it carries the same
+    /// payload AS4 would. AS4 authenticates both ends; an unsigned webhook
+    /// authenticates neither.
+    /// Authorization is default-deny, and deny with no grants authorises
+    /// nothing — every route answers 403 and the deployment reads as broken.
+    #[test]
+    fn default_deny_without_a_policy_set_is_rejected() {
+        let keys = vec!["erp=token".to_owned()];
+        let input = PreflightInput {
+            auth_keys: &keys,
+            cedar_permit_all: false,
+            cedar_policies: None,
+            ..base()
+        };
+        let err = rejection(&input);
+        assert!(err.contains("default-deny"), "{err}");
+        assert!(
+            err.contains("--cedar-policy-dir"),
+            "the refusal must name what to configure: {err}"
+        );
+    }
+
+    #[test]
+    fn default_deny_with_a_policy_set_passes() {
+        let keys = vec!["erp=token".to_owned()];
+        let input = PreflightInput {
+            auth_keys: &keys,
+            cedar_permit_all: false,
+            cedar_policies: Some(
+                "permit(principal, action == MaKo::Action::\"IngestEdifact\", resource);"
+                    .to_owned(),
+            ),
+            ..base()
+        };
+        preflight(&input).expect("a least-privilege deployment is startable");
+    }
+
+    #[test]
+    fn an_edifact_webhook_without_a_signing_secret_is_rejected() {
+        let keys = vec!["erp=token".to_owned()];
+        let input = PreflightInput {
+            auth_keys: &keys,
+            edifact_outbox_webhook_url: Some("https://erp.example/edifact"),
+            erp_webhook_secret_set: false,
+            ..base()
+        };
+        let err = rejection(&input);
+        assert!(err.contains("no webhook signing secret"), "{err}");
+        assert!(
+            err.contains("unsigned"),
+            "the refusal must say what goes out unprotected: {err}"
+        );
+    }
+
+    #[test]
+    fn an_edifact_webhook_with_a_signing_secret_passes() {
+        let keys = vec!["erp=token".to_owned()];
+        let input = PreflightInput {
+            auth_keys: &keys,
+            edifact_outbox_webhook_url: Some("https://erp.example/edifact"),
+            erp_webhook_secret_set: true,
+            ..base()
+        };
+        preflight(&input).expect("a signed EDIFACT webhook is startable");
+    }
+
     #[test]
     fn marktd_with_an_api_key_passes() {
         let keys = vec!["erp=token".to_owned()];
@@ -736,6 +845,7 @@ mod tests {
                 "--edifact-outbox-webhook-url",
                 PreflightInput {
                     edifact_outbox_webhook_url: Some("not a url"),
+                    erp_webhook_secret_set: true,
                     ..base()
                 },
             ),

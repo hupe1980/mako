@@ -70,6 +70,11 @@ impl Daemon for Accountingd {
         cfg: Arc<config::AccountingdConfig>,
         ctx: ServiceContext,
     ) -> anyhow::Result<Router> {
+        // Fail closed on both doors before anything else: the REST API and the
+        // inbound webhook each reach the ledger and the personal data behind
+        // it.
+        cfg.check_auth_posture()?;
+
         // Validate SEPA schema-version config at startup — a bank-incompatible
         // schema version must fail loudly here, not silently on a rejected batch
         // downstream.
@@ -89,17 +94,18 @@ impl Daemon for Accountingd {
                 .context("OIDC verifier init")?;
         if oidc.is_disabled() {
             tracing::warn!(
-                "[WARN] OIDC disabled -- financial write endpoints accept all requests (dev mode)"
+                "accountingd: OIDC disabled — financial write endpoints accept all requests \
+                 (allow_insecure_no_auth, dev mode)"
             );
         }
 
         // ── Cedar ABAC ────────────────────────────────────────────────────
         // Authentication says *who* is calling; this says what they may do.
-        // accountingd enabled the `cedar` feature and enforced nothing, and
-        // twenty-four endpoints named no `Claims` extractor at all — so customer
-        // balances, full Kontokorrent histories, SEPA mandates, IBANs, the aging
-        // list for the whole book and generated pain.001 payout XML were served
-        // to any caller that could open a socket.
+        // Both are required on every route: customer balances, full
+        // Kontokorrent histories, SEPA mandates, IBANs, the aging list for the
+        // whole book and generated pain.001 payout XML are behind this surface,
+        // and a token valid for the deployment is not by itself authority over
+        // any of them.
         let cedar = Arc::new(
             mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
                 "../policies/accountingd.cedar"
@@ -406,6 +412,9 @@ impl Daemon for Accountingd {
             .layer(Extension(Arc::clone(&ledger)))
             .layer(Extension(iban_hash_key))
             // OIDC verifier extension — enables Claims extractor on write endpoints
+            .layer(Extension(mako_service::oidc::ExpectedTenant(
+                cfg.tenant.clone(),
+            )))
             .layer(Extension(oidc.clone()));
 
         // ── MCP server ────────────────────────────────────────────────────────────
@@ -722,13 +731,33 @@ impl Daemon for Accountingd {
                                 if let Some(id) = run_id {
                                     match pool_sepa.begin().await {
                                         Ok(mut tx) => {
-                                            let claimed =
-                                                accountingd::pg::mark_sepa_collection_dispatched(
-                                                    &mut *tx, id,
-                                                )
-                                                .await
-                                                .unwrap_or(false);
+                                            // `Ok(false)` is the idempotency guard —
+                                            // another replica or an earlier run of the
+                                            // same day already claimed it. An `Err` is
+                                            // not that: collapsing the two commits an
+                                            // empty transaction, and because the next
+                                            // cycle computes a different `target_date`
+                                            // this day's pain.008 would never be
+                                            // retried. Roll back instead, so the run
+                                            // stays unclaimed and the next cycle can
+                                            // take it.
                                             let mut commit = true;
+                                            let claimed = match accountingd::pg::mark_sepa_collection_dispatched(
+                                                &mut *tx, id,
+                                            )
+                                            .await
+                                            {
+                                                Ok(claimed) => claimed,
+                                                Err(e) => {
+                                                    tracing::error!(
+                                                        error = %e,
+                                                        due_date = %target_date,
+                                                        "accountingd: SEPA N-5 — claiming the run failed; rolling back so the run stays unclaimed"
+                                                    );
+                                                    commit = false;
+                                                    false
+                                                }
+                                            };
                                             if claimed {
                                                 if cfg_sepa.erp_webhook_url.is_some() {
                                                     let ce = mako_service::CloudEvent::new(

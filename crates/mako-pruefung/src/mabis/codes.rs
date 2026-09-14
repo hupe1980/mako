@@ -786,6 +786,300 @@ pub const E_0901_CODES: &[AntwortCode] = &[
 
 // ═════════════════════════════════════════════════════════════════════════════
 
+// ═════════════════════════════════════════════════════════════════════════════
+// MaBiS-Zählpunkt für die AAÜZ — Aktivierung und Deaktivierung
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Four trees the **BIKO** runs, not the NB: activating a MaBiS-ZP for the
+// monatliche Ausfallarbeitsüberführungszeitreihe asserts a Redispatch-Bilanzkreis
+// on top of everything `E_0020` already asserts, and only the BIKO holds the
+// Regelzone's register of those.
+//
+// They come in two pairs that differ in exactly one Prüfschritt. `E_0071`/`E_0072`
+// run between NB and BKV(LF) and check the **Bilanzkreis des LF** at Nr. 9;
+// `E_0078`/`E_0079` run between NB and anfNB and check the **Redispatch-Bilanzkreis
+// des anfNB** there instead. Everything else, including the code numbering, is
+// identical — which is why they are written out rather than aliased: a reader
+// resolving `A09` must land on the wording their own tree publishes.
+//
+// Source: EBD 4.3 Kap. 7.60.1, 7.61.1, 7.65.1, 7.66.1.
+
+/// `E_0071` — MaBiS-ZP AAÜZ Aktivierung prüfen (NB ↔ BKV(LF)). Rolle: **BIKO**.
+pub const EBD_ZP_AAUEZ_AKTIVIERUNG: &str = "E_0071";
+/// `E_0072` — MaBiS-ZP AAÜZ Deaktivierung prüfen (NB ↔ BKV(LF)). Rolle: **BIKO**.
+pub const EBD_ZP_AAUEZ_DEAKTIVIERUNG: &str = "E_0072";
+/// `E_0078` — MaBiS-ZP AAÜZ Aktivierung prüfen (NB ↔ anfNB). Rolle: **BIKO**.
+pub const EBD_ZP_AAUEZ_AKTIVIERUNG_ANFNB: &str = "E_0078";
+/// `E_0079` — MaBiS-ZP AAÜZ Deaktivierung prüfen (NB ↔ anfNB). Rolle: **BIKO**.
+pub const EBD_ZP_AAUEZ_DEAKTIVIERUNG_ANFNB: &str = "E_0079";
+
+/// `E_0071` — MaBiS-ZP AAÜZ Aktivierung prüfen (NB ↔ BKV(LF)).
+///
+/// `A13` is the Zustimmung; `A01`–`A12` are all Ablehnung. The tree is one step
+/// wider than `E_0020` because it checks the Redispatch-Bilanzkreis of the ANB
+/// *and* the Bilanzkreis of the LF.
+pub const E_0071_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG),
+        Ablehnung,
+        "Fristüberschreitung"
+    ),
+    code!(
+        "A02",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG),
+        Ablehnung,
+        "Gewählter Zeitpunkt nicht zulässig"
+    ),
+    code!(
+        "A03",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG),
+        Ablehnung,
+        "Regelzone falsch"
+    ),
+    code!(
+        "A04",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG),
+        Ablehnung,
+        "Bilanzierungsgebiet nicht gültig"
+    ),
+    code!(
+        "A05",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG),
+        Ablehnung,
+        "Redispatch-Bilanzkreis des ANB nicht gültig"
+    ),
+    code!(
+        "A06",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG),
+        Ablehnung,
+        "Keine Berechtigung"
+    ),
+    code!(
+        "A07",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG),
+        Ablehnung,
+        "Abweichender MaBiS-ZP bereits vorhanden"
+    ),
+    code!(
+        "A08",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG),
+        Ablehnung,
+        "Abweichende ID zum MaBiS-ZP bereits vorhanden"
+    ),
+    code!(
+        "A09",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG),
+        Ablehnung,
+        "Bilanzkreis nicht gültig"
+    ),
+    code!(
+        "A10",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG),
+        Ablehnung,
+        "ZRT Aktivierung nicht berechtigt"
+    ),
+    code!(
+        "A11",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG),
+        Ablehnung,
+        "Medium nicht passend"
+    ),
+    code!(
+        "A12",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG),
+        Ablehnung,
+        "MaBiS-ZP bereits aktiviert"
+    ),
+    code!(
+        "A13",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG),
+        Zustimmung,
+        "Aktivierung durchgeführt"
+    ),
+];
+
+/// `E_0072` — MaBiS-ZP AAÜZ Deaktivierung prüfen (NB ↔ BKV(LF)).
+///
+/// `A07` is the Zustimmung.
+pub const E_0072_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        Some(EBD_ZP_AAUEZ_DEAKTIVIERUNG),
+        Ablehnung,
+        "Fristüberschreitung"
+    ),
+    code!(
+        "A02",
+        Some(EBD_ZP_AAUEZ_DEAKTIVIERUNG),
+        Ablehnung,
+        "Gewählter Zeitpunkt nicht zulässig"
+    ),
+    code!(
+        "A03",
+        Some(EBD_ZP_AAUEZ_DEAKTIVIERUNG),
+        Ablehnung,
+        "Bilanzierungsgebiet nicht gültig"
+    ),
+    code!(
+        "A04",
+        Some(EBD_ZP_AAUEZ_DEAKTIVIERUNG),
+        Ablehnung,
+        "Redispatch-Bilanzkreis des ANB nicht gültig"
+    ),
+    code!(
+        "A05",
+        Some(EBD_ZP_AAUEZ_DEAKTIVIERUNG),
+        Ablehnung,
+        "MaBiS-ZP bereits deaktiviert"
+    ),
+    code!(
+        "A06",
+        Some(EBD_ZP_AAUEZ_DEAKTIVIERUNG),
+        Ablehnung,
+        "Deaktivierung, Zeitreihen vorhanden"
+    ),
+    code!(
+        "A07",
+        Some(EBD_ZP_AAUEZ_DEAKTIVIERUNG),
+        Zustimmung,
+        "Deaktivierung durchgeführt"
+    ),
+];
+
+/// `E_0078` — MaBiS-ZP AAÜZ Aktivierung prüfen (NB ↔ anfNB).
+///
+/// `E_0071` with Nr. 9 asking after the anfNB's Redispatch-Bilanzkreis rather
+/// than the LF's Bilanzkreis. `A13` is the Zustimmung.
+pub const E_0078_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "Fristüberschreitung"
+    ),
+    code!(
+        "A02",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "Gewählter Zeitpunkt nicht zulässig"
+    ),
+    code!(
+        "A03",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "Regelzone falsch"
+    ),
+    code!(
+        "A04",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "Bilanzierungsgebiet nicht gültig"
+    ),
+    code!(
+        "A05",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "Redispatch-Bilanzkreis des ANB nicht gültig"
+    ),
+    code!(
+        "A06",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "Keine Berechtigung"
+    ),
+    code!(
+        "A07",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "Abweichender MaBiS-ZP bereits vorhanden"
+    ),
+    code!(
+        "A08",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "Abweichende ID zum MaBiS-ZP bereits vorhanden"
+    ),
+    code!(
+        "A09",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "Redispatch-Bilanzkreis des anfNB nicht gültig"
+    ),
+    code!(
+        "A10",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "ZRT Aktivierung nicht berechtigt"
+    ),
+    code!(
+        "A11",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "Medium nicht passend"
+    ),
+    code!(
+        "A12",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "MaBiS-ZP bereits aktiviert"
+    ),
+    code!(
+        "A13",
+        Some(EBD_ZP_AAUEZ_AKTIVIERUNG_ANFNB),
+        Zustimmung,
+        "Aktivierung durchgeführt"
+    ),
+];
+
+/// `E_0079` — MaBiS-ZP AAÜZ Deaktivierung prüfen (NB ↔ anfNB).
+///
+/// Identical in substance to `E_0072`; `A07` is the Zustimmung.
+pub const E_0079_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        Some(EBD_ZP_AAUEZ_DEAKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "Fristüberschreitung"
+    ),
+    code!(
+        "A02",
+        Some(EBD_ZP_AAUEZ_DEAKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "Gewählter Zeitpunkt nicht zulässig"
+    ),
+    code!(
+        "A03",
+        Some(EBD_ZP_AAUEZ_DEAKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "Bilanzierungsgebiet nicht gültig"
+    ),
+    code!(
+        "A04",
+        Some(EBD_ZP_AAUEZ_DEAKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "Redispatch-Bilanzkreis des ANB nicht gültig"
+    ),
+    code!(
+        "A05",
+        Some(EBD_ZP_AAUEZ_DEAKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "MaBiS-ZP bereits deaktiviert"
+    ),
+    code!(
+        "A06",
+        Some(EBD_ZP_AAUEZ_DEAKTIVIERUNG_ANFNB),
+        Ablehnung,
+        "Deaktivierung, Zeitreihen vorhanden"
+    ),
+    code!(
+        "A07",
+        Some(EBD_ZP_AAUEZ_DEAKTIVIERUNG_ANFNB),
+        Zustimmung,
+        "Deaktivierung durchgeführt"
+    ),
+];
+
 /// Every MaBiS and Redispatch tree catalogued here, as `(ebd, codes)`.
 pub const MABIS_TREES: &[(&str, &[AntwortCode])] = &[
     (EBD_LF_SZR_A, E_0007_CODES),
@@ -811,6 +1105,10 @@ pub const MABIS_TREES: &[(&str, &[AntwortCode])] = &[
     (EBD_ZP_DEAKTIVIERUNG, E_0010_CODES),
     (EBD_ZP_ZUORDNUNG, E_0102_CODES),
     (EBD_ZP_BEENDIGUNG, E_0103_CODES),
+    (EBD_ZP_AAUEZ_AKTIVIERUNG, E_0071_CODES),
+    (EBD_ZP_AAUEZ_DEAKTIVIERUNG, E_0072_CODES),
+    (EBD_ZP_AAUEZ_AKTIVIERUNG_ANFNB, E_0078_CODES),
+    (EBD_ZP_AAUEZ_DEAKTIVIERUNG_ANFNB, E_0079_CODES),
     (EBD_PROFILE, E_0100_CODES),
     (EBD_EINZELANFORDERUNG_NB, E_0068_CODES),
     (EBD_LISTENINHALT_NB, E_0104_CODES),

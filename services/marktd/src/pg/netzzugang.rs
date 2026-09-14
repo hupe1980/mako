@@ -126,6 +126,7 @@ impl PgNetzzugangRepository {
                submitted_at = COALESCE(EXCLUDED.submitted_at, netzzugang_antraege.submitted_at), \
                version      = netzzugang_antraege.version + 1, \
                updated_at   = now() \
+             WHERE netzzugang_antraege.tenant = EXCLUDED.tenant \
              RETURNING id, version",
         )
         .bind(id)
@@ -140,9 +141,16 @@ impl PgNetzzugangRepository {
         .bind(&rec.platform_ref)
         .bind(created_at)
         .bind(rec.submitted_at)
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await
-        .map_err(|e| MdmError::Internal(e.to_string()))?;
+        .map_err(|e| MdmError::Internal(e.to_string()))?
+        // No row means the conflicting `id` belongs to another tenant. The
+        // caller supplies `id` in the body, so this is the predicate that keeps
+        // a write inside the tenant it came from — and a refusal rather than a
+        // silent success, which would report a stored request that is not.
+        .ok_or(MdmError::Forbidden {
+            reason: "id belongs to another tenant",
+        })?;
         let id: Uuid = row
             .try_get("id")
             .map_err(|e| MdmError::Internal(e.to_string()))?;

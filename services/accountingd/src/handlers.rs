@@ -584,33 +584,44 @@ pub async fn ingest_webhook(
                 .and_then(|v| v.as_str())
                 .unwrap_or(&ce_id)
                 .to_owned();
-            let account_id = upsert_account(&pool, malo_id, lf_mp_id, &cfg.tenant)
-                .await
-                .ok();
+            // The receivable is posted against this row. Answering 200 with no
+            // account means the invoice is never booked and the sender is told
+            // it landed — so a failure here is a 500 that earns a redelivery,
+            // the same choice the ledger write below makes.
+            let account_id = match upsert_account(&pool, malo_id, lf_mp_id, &cfg.tenant).await {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        malo_id,
+                        "accountingd: account upsert FAILED — returning 500 so the sender redelivers"
+                    );
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
 
             // Learn the commodity from the invoice. It drives the ISO 20022
             // `Purp/Cd` on the next direct debit (`ELEC` / `GASB` / `WTER`) —
             // what the debtor's statement and their accounting software read to
             // categorise the collection. Best-effort: a failure here must never
             // hold up the receivable.
-            if let Some(account_id) = account_id
-                && let Some(sparte) = data
-                    .and_then(|d| d.get("rechnung"))
-                    .and_then(|r| r.get("sparte"))
-                    .and_then(|v| v.as_str())
-                    .filter(|s| {
-                        matches!(
-                            *s,
-                            "STROM" | "GAS" | "FERNWAERME" | "NAHWAERME" | "WASSER" | "ABWASSER"
-                        )
-                    })
+            if let Some(sparte) = data
+                .and_then(|d| d.get("rechnung"))
+                .and_then(|r| r.get("sparte"))
+                .and_then(|v| v.as_str())
+                .filter(|s| {
+                    matches!(
+                        *s,
+                        "STROM" | "GAS" | "FERNWAERME" | "NAHWAERME" | "WASSER" | "ABWASSER"
+                    )
+                })
                 && let Err(e) =
                     crate::pg::set_account_sparte(&pool, account_id, &cfg.tenant, sparte).await
             {
                 tracing::warn!(error = %e, malo_id, "accountingd: could not record account Sparte");
             }
 
-            if account_id.is_some() && amount_ct != 0 {
+            if amount_ct != 0 {
                 let record_id = data
                     .and_then(|d| d.get("record_id"))
                     .and_then(|v| v.as_str());
@@ -708,12 +719,18 @@ pub async fn ingest_webhook(
                     })
                 })
                 .unwrap_or(0);
-            if !malo_id.is_empty()
-                && settlement_ct != 0
-                && upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant)
-                    .await
-                    .is_ok()
-            {
+            if !malo_id.is_empty() && settlement_ct != 0 {
+                // A failed upsert is not "nothing to book": the entry below is
+                // posted against this row, so swallowing it would answer 200
+                // for a settlement that was never recorded.
+                if let Err(e) = upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant).await {
+                    tracing::error!(
+                        error = %e,
+                        malo_id,
+                        "accountingd: account upsert FAILED — returning 500 so the sender redelivers"
+                    );
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
                 #[allow(clippy::collapsible_if)]
                 if let Err(e) = crate::pg::post_entry(
                     &ledger,
@@ -795,10 +812,21 @@ pub async fn ingest_webhook(
                     })
                 })
                 .unwrap_or(0);
-            let account_id = upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant)
-                .await
-                .unwrap_or(Uuid::nil());
-            if account_id != Uuid::nil() && amount_ct != 0 {
+            // A nil account is not "nothing to do" — the entry below is posted
+            // against this row, so a failed upsert has to earn a redelivery
+            // rather than a 200 for a credit that was never booked.
+            let account_id = match upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant).await {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        malo_id,
+                        "accountingd: account upsert FAILED — returning 500 so the sender redelivers"
+                    );
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
+            if amount_ct != 0 {
                 if let Err(e) = crate::pg::post_entry(
                     &ledger,
                     &pool,
@@ -937,12 +965,17 @@ pub async fn ingest_webhook(
                     })
                 })
                 .unwrap_or(0);
-            if !malo_id.is_empty()
-                && amount_ct != 0
-                && upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant)
-                    .await
-                    .is_ok()
-            {
+            if !malo_id.is_empty() && amount_ct != 0 {
+                // The entry below is posted against this row: swallowing a
+                // failed upsert would answer 200 for a payment never booked.
+                if let Err(e) = upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant).await {
+                    tracing::error!(
+                        error = %e,
+                        malo_id,
+                        "accountingd: account upsert FAILED — returning 500 so the sender redelivers"
+                    );
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
                 #[allow(clippy::collapsible_if)]
                 if let Err(e) = crate::pg::post_entry(
                     &ledger,

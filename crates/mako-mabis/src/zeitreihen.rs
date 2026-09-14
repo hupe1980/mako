@@ -22,12 +22,20 @@
 //!
 //! # The Kapitel-17 series are on a clock
 //!
-//! Three Ausfallarbeit series come from MaBiS Anlage 1 **Kapitel 17**, which
-//! BK6-23-241 Tenorziffer 5 repeals with the end of **30.09.2026**. Kap. 17.1
-//! and 17.3 continue from 01.10.2026 as the „Anlage zur BilAReM"; Kap. **17.2**
-//! — the tägliche AAÜZ — and Kap. **17.3.2.1** do not. [`Familie::endet_am`]
-//! carries that date, so a deployment can refuse to open a settlement for a
-//! series that will not exist when the month it covers is due.
+//! Three Ausfallarbeit series come from MaBiS **Kapitel 17**, which BK6-23-241
+//! Tenorziffer 5 repeals with the end of **30.09.2026**. Kap. 17.1 and 17.3
+//! continue from 01.10.2026 as the „Anlage zur BilAReM"; Kap. **17.2** — the
+//! tägliche AAÜZ — and Kap. **17.3.2.1** do not. [`Familie::endet_am`] carries
+//! that date, so a deployment can refuse to open a settlement for a series that
+//! will not exist when the month it covers is due.
+//!
+//! **Only the tägliche AAÜZ is dated, and the near miss is worth naming.**
+//! Kap. 17.3.2.1 is „Übermittlung der monatlichen Ausfallarbeitszeitreihe je
+//! Marktlokation" — the per-MaLo MSCONS 13022 series, which is not a
+//! Summenzeitreihe and so has no [`Familie`] at all. The LF-AASZR is Kap.
+//! 17.3.2.**2**/.3/.4, which the repeal does not touch. Reading the two as one
+//! would end 55199/55200 a settlement period early. Verified against the
+//! chapter headings of `BK6-24-174_MaBiS_Lesefassung.pdf` (Anlage 3).
 //!
 //! # Kategorie is not decoration
 //!

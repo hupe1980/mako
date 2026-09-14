@@ -306,8 +306,11 @@ impl Daemon for Billingd {
                 "/api/v1/billing/{id}/ubl",
                 axum::routing::get(handlers::get_ubl),
             )
-            .layer(Extension(oidc))
-            .layer(Extension(cedar))
+            .layer(Extension(mako_service::oidc::ExpectedTenant(
+                cfg.tenant.clone(),
+            )))
+            .layer(Extension(oidc.clone()))
+            .layer(Extension(Arc::clone(&cedar)))
             .layer(Extension(Arc::clone(&deps)))
             .layer(Extension(pool.clone()));
 
@@ -315,7 +318,17 @@ impl Daemon for Billingd {
         let mcp_state = std::sync::Arc::new(mcp_server::BillingdMcpState {
             pool: pool.clone(),
             tenant: cfg.tenant.clone(),
-            auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
+            // The same verifier and the same policy as the REST surface: a
+            // JWT is verified and checked for `use-mcp`. Built with
+            // `from_auth_config` instead, `/mcp` runs in dev mode whenever
+            // `[mcp]` carries no key — serving the tenant's billing records to
+            // any caller.
+            auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
+                &cfg.mcp,
+                oidc.clone(),
+                Some(Arc::clone(&cedar)),
+                &cfg.tenant,
+            ),
             deps: Arc::clone(&deps),
         });
         Ok(app.merge(mcp_server::router(mcp_state, ctx.shutdown.clone())))

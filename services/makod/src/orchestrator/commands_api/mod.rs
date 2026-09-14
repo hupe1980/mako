@@ -534,10 +534,17 @@ fn current_workflow_id() -> WorkflowId {
     )
 }
 
-/// Return the latest BDEW format version known to the compiled `edi-energy` registry.
+/// The latest BDEW format version **in force today**, for stamping an outbound
+/// process.
+///
+/// Not simply the registry's newest: a profile is compiled in as soon as BDEW
+/// publishes it, six months before its Anwendungszeitpunkt (Allgemeine
+/// Festlegungen 6.1d § 2.5). EDIFACT has no Übergangsfrist, so a message
+/// stamped with the next release before its Stichtag is refused by the
+/// counterparty — the registry is filtered to `valid_from <= heute()` first.
 fn latest_format_version() -> mako_engine::version::FormatVersion {
     edi_energy::registry::ReleaseRegistry::global()
-        .format_versions()
+        .format_versions_in_force_on(mako_fristen::heute())
         .into_iter()
         .filter_map(|s| mako_engine::version::FormatVersion::parse(&s).ok())
         .max()

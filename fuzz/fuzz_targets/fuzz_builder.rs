@@ -21,6 +21,7 @@
 //! ```
 
 #![no_main]
+#![deny(unsafe_code)]
 
 use edi_energy::{
     Platform, Pruefidentifikator, Release,

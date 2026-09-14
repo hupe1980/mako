@@ -195,7 +195,7 @@ could forget:
 | Rule | Enforced by |
 |---|---|
 | Exactly one Arbeitspreis form (einheitlich, Modul 1 pauschal, Modul 2 prozentual, Modul 3 zeitvariabel, or spot-linked) | `ArbeitspreisModell` — one variant at a time; each replaces the flat position, so the same energy is never billed twice |
-| `Modul 1 + Modul 3` is the only combination BK6-22-300 offers | `ArbeitspreisModell` holds one variant at a time, so every pair is unrepresentable — which is right for Modul 1/Modul 2 (alternative base modules) and for Modul 2/Modul 3, and is a limitation for the Modul 1 + Modul 3 pair the Festlegung permits. See `Sect14aModule::combinable_with` |
+| `Modul 1 + Modul 3` is the only combination BK8-22/010-A offers | `ArbeitspreisModell` holds one variant at a time, so every pair is unrepresentable — which is right for Modul 1/Modul 2 (alternative base modules) and for Modul 2/Modul 3, and is a limitation for the Modul 1 + Modul 3 pair the Festlegung permits. See `Sect14aModule::combinable_with` |
 | Reduction factors in `(0, 1]` | `Reduktionsfaktor` enforces the range at construction |
 | Leistungspreis needs both peak and rate, and names its Leistungspreissystem | `Leistungspreis` — a pair plus `LeistungspreisSystem` |
 | Grundpreis needs both rate and months | `Grundpreis` — a pair |
@@ -393,7 +393,7 @@ and `KA_CHARGED_WHILE_EXEMPT` when a rate is applied to a §2 Abs. 7 exemption.
 
 - **NNE Strom** (PID 31002, NN-Rechnung) — flat-rate Arbeit, Leistung (RLM), Konzessionsabgabe
 - **NNE Gas** (PID 31002, NN-Rechnung) — GasNEV §14 legal basis, auto-set when `Sparte::Gas`
-- **§14a modules** — Modul 1 (pauschale Reduzierung), Modul 2 (prozentuale Reduzierung des Arbeitspreises), Modul 3 (zeitvariable Netzentgelte HT/ST/NT, opt-in since 01.04.2025) — BNetzA BK6-22-300 / BK8-22/010-A
+- **§14a modules** — Modul 1 (pauschale Reduzierung), Modul 2 (prozentuale Reduzierung des Arbeitspreises), Modul 3 (zeitvariable Netzentgelte HT/ST/NT, opt-in since 01.04.2025) — BNetzA BK8-22/010-A / BK8-22/010-A
 - **MMM Strom** (PID 31005) — Mehr-/Mindermengensaldo, GPKE (BK6-24-174) Teil 1 Kap. 8.4
 - **MMM Gas** (PID 31005) — Gas imbalance, GaBi Gas 2.1 (BK7-24-01-008)
 - **NNE Gas** (PID 31002) — GasNEV §14 Arbeits-/Grundpreis and §15 Kapazitätsentgelt
@@ -641,7 +641,7 @@ pub enum LegalReference {
     EnFG     { paragraph: &'static str },       // "§§21 ff." Letztverbrauchergruppe
     Sect14aEnwg { module: Sect14aModule },      // Modul1 | Modul2 | Modul3
     MsbG     { paragraph: &'static str },       // "§§6–7"
-    BnetzaDecision { reference: &'static str }, // "BK6-22-300"
+    BnetzaDecision { reference: &'static str }, // "BK8-22/010-A"
     BdewAhb  { reference: &'static str },       // "GPKE BK6-22-024"
     StromNzv { paragraph: &'static str },       // "§13 Abs. 3" — außer Kraft seit 01.01.2026
     GasNzv   { paragraph: &'static str },       // "§25" — außer Kraft seit 01.01.2026
@@ -666,7 +666,7 @@ pub enum Sect14aModule {
 ```
 
 `Sect14aModule::Modul1.label()` = `"§14a EnWG Modul 1 (pauschale Reduzierung)"`;
-`.bnentza_reference()` = `"BK6-22-300"` for all three modules.
+`.bnentza_reference()` = `"BK8-22/010-A"` for all three modules.
 
 ### `TariffSource`
 
@@ -1171,8 +1171,8 @@ is what it is — and what a §20 EnWG audit or an LF dispute is answered from.
 | # | Position text | Unit | `kind` | Condition | Legal basis | Artikelnummer |
 |---|---|---|---|---|---|---|
 | 1 | `Netznutzung Arbeit` | kWh | `NneArbeit` | `arbeitspreis: ArbeitspreisModell::Einheitlich` | StromNEV §21 (Strom) · GasNEV §14 (Gas) | `Wirkarbeit` (Gas); `artikel_id` (Strom) |
-| 1–2 | `Netznutzung Arbeit (§14a Modul 1)` + `§14a Modul 1 pauschale Reduzierung` | kWh · Jahr | `NneArbeitModul1` | `arbeitspreis: ArbeitspreisModell::Modul1Pauschal` | §14a EnWG Modul 1 · BK6-22-300 | same as NneArbeit |
-| 1–3 | `Netznutzung Arbeit HT/ST/NT (§14a Modul 3)` | kWh | `NneArbeitHt` / `NneArbeitSt` / `NneArbeitNt` | `arbeitspreis: ArbeitspreisModell::Modul3ZeitVariabel` | §14a EnWG Modul 3 · BK6-22-300 | same as NneArbeit |
+| 1–2 | `Netznutzung Arbeit (§14a Modul 1)` + `§14a Modul 1 pauschale Reduzierung` | kWh · Jahr | `NneArbeitModul1` | `arbeitspreis: ArbeitspreisModell::Modul1Pauschal` | §14a EnWG Modul 1 · BK8-22/010-A | same as NneArbeit |
+| 1–3 | `Netznutzung Arbeit HT/ST/NT (§14a Modul 3)` | kWh | `NneArbeitHt` / `NneArbeitSt` / `NneArbeitNt` | `arbeitspreis: ArbeitspreisModell::Modul3ZeitVariabel` | §14a EnWG Modul 3 · BK8-22/010-A | same as NneArbeit |
 | opt | `Netzentgelt Grundpreis Gas` | Monat | `NneGasGrundpreis` | `grundpreis` set | GasNEV §14 | `Grundpreis` |
 | next | `Netznutzung Leistung` | kW | `NneLeistung` | `leistungspreis` set (RLM) — the Jahresleistungspreis pro-rated by calendar days | StromNEV §17 Abs. 2 | `Leistung` (Gas); `artikel_id` (Strom) |
 | next | `Blindmehrarbeit` | kvarh | `Blindmehrarbeit` | `blindarbeit` set **and** the draw exceeds the free share | StromNEV §17 (Preisblatt) | `Blindmehrarbeit` |

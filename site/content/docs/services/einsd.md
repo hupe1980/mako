@@ -1664,7 +1664,7 @@ is default-deny, so cross-tenant access needs no `forbid` clause: no policy perm
 | `jahresmarktwert_import_interval_secs` | no | `86400` | How often to poll it. The worker also runs once 60 s after startup |
 | `auto_settle_from_day` | no | `7` | Earliest day of month the auto-settle worker settles the previous month. The ÜNB publishes the Marktwert around the 5th, so running earlier writes `price_missing` receipts for plants that were merely early |
 | `auto_settle_catchup_months` | no | `3` | How many months back each sweep revisits (clamped 1–24), so a period the service was down for is not left unpaid |
-| `[mcp]` | no | — | MCP `/mcp` authentication — API key, OIDC, or dev mode (`api_key = "env:EINSD_MCP_API_KEY"`) |
+| `[mcp]` | no | — | MCP `/mcp` authentication — an API key beside the OIDC verifier, for agent clients that mint no token (`api_key = "env:EINSD_MCP_API_KEY"`) |
 | `[oidc]` | yes | — | OIDC token verification for the REST API; required unless `allow_insecure_no_auth` |
 | `allow_insecure_no_auth` | no | `false` | Serve every REST route unauthenticated — local development only |
 

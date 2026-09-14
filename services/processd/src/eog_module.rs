@@ -300,13 +300,30 @@ async fn handle_eog_begonnen(
         .as_str()
         .and_then(|s| s.parse::<mako_markt::domain::Sparte>().ok())
         .unwrap_or(mako_markt::domain::Sparte::Strom);
-    let eog_art = data["eog_art"].as_str().map(|s| {
-        // marktd emits the LieferStatus Display form; normalise to the
-        // SCREAMING_SNAKE wire labels used in eog_activations.
-        match s {
-            "Ersatzversorgung" => "ERSATZVERSORGUNG".to_owned(),
-            "Grundversorgung" => "GRUNDVERSORGUNG".to_owned(),
-            other => other.to_uppercase(),
+    // marktd emits the `LieferStatus` Display form; normalise to the
+    // SCREAMING_SNAKE labels `eog_activations.eog_art` is `CHECK`-constrained to.
+    //
+    // The two statutory regimes and nothing else. `Versorgungsart` has a third
+    // value — `ZE3` Ersatzbelieferung, which is also how the §38a
+    // Übergangsversorgung arrives — but that is a contract regime outside the
+    // statutory fallback, so marktd deliberately does not emit it and says so
+    // (`event_ingest.rs`, „no automatic status transition"); an operator records
+    // it through the REST upsert instead.
+    //
+    // This used to end in `other => other.to_uppercase()`. Nothing marktd sends
+    // reaches that arm, but the column would refuse whatever it produced — and a
+    // refused INSERT here loses the §38 Abs. 4 activation entirely, so the arm
+    // was a hazard resting on a claim about a different service.
+    let eog_art = data["eog_art"].as_str().and_then(|s| match s {
+        "Ersatzversorgung" | "ERSATZVERSORGUNG" => Some("ERSATZVERSORGUNG".to_owned()),
+        "Grundversorgung" | "GRUNDVERSORGUNG" => Some("GRUNDVERSORGUNG".to_owned()),
+        other => {
+            tracing::warn!(
+                eog_art = other,
+                "eog: non-statutory Versorgungsart — the activation is recorded \
+                 without it rather than refused by the column"
+            );
+            None
         }
     });
     // §38 Abs. 4 S. 1 EnWG runs from the Zuordnungsbeginn, which may be

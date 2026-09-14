@@ -146,6 +146,9 @@ impl Daemon for Netzbilanzd {
                 post(handlers::post_remadv_webhook),
             )
             .merge(mcp_server::router(mcp_state, shutdown))
+            .layer(Extension(mako_service::oidc::ExpectedTenant(
+                cfg.tenant.clone(),
+            )))
             .layer(Extension(oidc))
             .layer(Extension(cedar))
             .layer(Extension(Arc::clone(&cfg)))

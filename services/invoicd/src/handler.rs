@@ -1069,9 +1069,13 @@ async fn dispatch(
     };
     match state.makod.post_command(&key, &cmd).await {
         Ok(_) => {
-            if let Err(err) =
-                pg::receipts::mark_dispatched(&state.pool, process_id, OffsetDateTime::now_utc())
-                    .await
+            if let Err(err) = pg::receipts::mark_dispatched(
+                &state.pool,
+                &state.tenant,
+                process_id,
+                OffsetDateTime::now_utc(),
+            )
+            .await
             {
                 warn!(%err, %process_id, "invoicd: answer sent but receipt not marked dispatched");
             }
@@ -1190,6 +1194,7 @@ pub async fn emit_receipt_event(state: &HandlerState, ctx: &PaymentEventCtx<'_>)
             // propagate it.
             if let Err(e) = pg::receipts::mark_erp_notified(
                 &state.pool,
+                &state.tenant,
                 ctx.process_id,
                 OffsetDateTime::now_utc(),
             )
@@ -1217,7 +1222,9 @@ pub async fn emit_receipt_event(state: &HandlerState, ctx: &PaymentEventCtx<'_>)
             // an unbounded retry. Logged anyway, because "the next component
             // will handle it" is exactly the assumption that should leave a
             // trace when it turns out to be wrong.
-            if let Err(db) = pg::receipts::dead_letter_erp(&state.pool, ctx.process_id).await {
+            if let Err(db) =
+                pg::receipts::dead_letter_erp(&state.pool, &state.tenant, ctx.process_id).await
+            {
                 warn!(
                     error = %db, process_id = %ctx.process_id,
                     "invoicd: could not dead-letter the rejected ERP notification inline — \
@@ -1232,7 +1239,9 @@ pub async fn emit_receipt_event(state: &HandlerState, ctx: &PaymentEventCtx<'_>)
             );
             // Same reasoning: only the 30 s back-off is at stake, and the
             // worker's next tick re-attempts the row regardless.
-            if let Err(db) = pg::receipts::record_erp_failure(&state.pool, ctx.process_id, 0).await
+            if let Err(db) =
+                pg::receipts::record_erp_failure(&state.pool, &state.tenant, ctx.process_id, 0)
+                    .await
             {
                 warn!(
                     error = %db, process_id = %ctx.process_id,
@@ -1494,6 +1503,8 @@ fn dispute_reason(findings: &[invoic_checker::Finding]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use invoic_checker::{EuroAmount, Finding, FindingKind, amount::RoundingStrategy};
 
     use super::*;
@@ -1765,32 +1776,90 @@ mod tests {
         );
     }
 
-    /// Every label the verdict produces must satisfy the `outcome` CHECK, or
-    /// the receipt insert is rejected at runtime by a schema the compiler never
-    /// sees. `direction` failed exactly this way with a capitalised literal.
-    #[test]
-    fn every_verdict_label_is_in_the_outcome_check() {
-        const ALLOWED: &[&str] = &[
-            "Ok",
-            "AcceptedPartial",
-            "Warn",
-            "Dispute",
-            "Resolved",
-            "Dispatched",
-            "Paid",
-        ];
+    /// The values of the `CHECK (outcome IN (…))` list, read from the schema.
+    ///
+    /// SQL line comments go first — this schema annotates every entry — and
+    /// whitespace is collapsed, because the list is wrapped and aligned with
+    /// runs of spaces. An empty result is an assertion, not a pass: an anchor
+    /// that stops matching would otherwise turn the guard below into a no-op.
+    fn outcome_check_values() -> Vec<String> {
         let schema = include_str!("../migrations/0001_schema.sql");
+        let uncommented: String = schema
+            .lines()
+            .map(|l| l.split_once("--").map_or(l, |(code, _)| code))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let sql: String = uncommented.split_whitespace().collect::<Vec<_>>().join(" ");
+        let anchor = "CHECK (outcome IN (";
+        let at = sql.find(anchor).expect("the outcome CHECK list");
+        let start = at + anchor.len();
+        let end = start + sql[start..].find("))").expect("unterminated CHECK list");
+        let values: Vec<String> = sql[start..end]
+            .split(',')
+            .filter_map(|t| {
+                let t = t.trim();
+                t.strip_prefix('\'')
+                    .and_then(|t| t.strip_suffix('\''))
+                    .map(ToOwned::to_owned)
+            })
+            .collect();
+        assert!(
+            !values.is_empty(),
+            "the outcome CHECK list parsed to nothing"
+        );
+        values
+    }
+
+    /// Every `outcome` this service writes, from all three places that write one.
+    ///
+    /// `Verdict::of` produces four of them; the other two are inline literals —
+    /// `selbstausstellen` marks an outbound document `Dispatched`, and
+    /// `resolve_dispute`'s SQL sets `Resolved`.
+    fn written_outcomes() -> BTreeSet<&'static str> {
+        let mut out = BTreeSet::from(["Dispatched", "Resolved"]);
         for outcome in [CheckOutcome::Ok, CheckOutcome::Warn, CheckOutcome::Dispute] {
             for rechnung in [plain(), storno()] {
                 for threshold in [0i64, 1] {
-                    let label = Verdict::of(&report(outcome, "500"), threshold, &rechnung).label;
-                    assert!(ALLOWED.contains(&label), "unknown label {label:?}");
-                    assert!(
-                        schema.contains(&format!("'{label}'")),
-                        "the schema's outcome CHECK does not list {label:?}"
-                    );
+                    out.insert(Verdict::of(&report(outcome, "500"), threshold, &rechnung).label);
                 }
             }
+        }
+        out
+    }
+
+    /// The `outcome` CHECK and the values this service writes agree **both ways**.
+    ///
+    /// The forward direction is the obvious one: a label the CHECK omits is an
+    /// insert Postgres rejects at run time, against a schema the compiler never
+    /// sees — `direction` failed exactly that way with a capitalised literal.
+    ///
+    /// The reverse direction is the one that hid a defect. This test used to
+    /// check the labels against a hard-coded `ALLOWED` list that itself listed
+    /// `'Paid'`, so it could not notice that nothing ever wrote `'Paid'`:
+    /// `confirm_payment` sets `payment_confirmed_at` and leaves `outcome`
+    /// alone, which is right — `outcome` is the plausibility verdict and
+    /// settlement is a separate axis, so writing `'Paid'` would overwrite the
+    /// check result. A value in the CHECK that nothing writes is either a
+    /// missing feature or a category error, and it should have to be one on
+    /// purpose.
+    #[test]
+    fn the_outcome_check_and_the_written_labels_agree_both_ways() {
+        let listed = outcome_check_values();
+        let written = written_outcomes();
+
+        for label in &written {
+            assert!(
+                listed.iter().any(|l| l == label),
+                "the outcome CHECK does not list {label:?}, which this service writes — \
+                 the insert would be rejected. Listed: {listed:?}"
+            );
+        }
+        for value in &listed {
+            assert!(
+                written.contains(value.as_str()),
+                "the outcome CHECK allows {value:?} and nothing writes it — remove it, or \
+                 write it. Written: {written:?}"
+            );
         }
     }
 
@@ -1998,7 +2067,7 @@ mod tests {
             ursprungsantwort,
         };
 
-        // Paid → confirm with the Zahlungsavis, which carries no code.
+        // Zugestimmt → confirm with the Zahlungsavis, which carries no code.
         let zugestimmt = pruefe_stornorechnung(&facts(UrsprungsAntwort::Zugestimmt));
         assert_eq!(zugestimmt.remadv_pid(), Some(33_001));
         assert!(
@@ -2095,7 +2164,7 @@ mod tests {
             ce_type_for("Dispatched"),
             mako_events::invoic::RECEIPT_DISPATCHED
         );
-        for settled in ["Ok", "Warn", "AcceptedPartial", "Resolved", "Paid"] {
+        for settled in ["Ok", "Warn", "AcceptedPartial", "Resolved"] {
             assert_eq!(
                 ce_type_for(settled),
                 mako_events::invoic::RECEIPT_SETTLED,

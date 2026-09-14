@@ -11,7 +11,7 @@
 //! # Regulatory basis
 //!
 //! - **BDEW API-Guideline 1.0a** — API-Webdienste Strom, `controlMeasuresV1.yaml`
-//! - **BK6-22-024** — WiM Strom Teil 1. Saturdays, Sundays and gesetzliche
+//! - **BK6-24-174** — WiM Strom Teil 1. Saturdays, Sundays and gesetzliche
 //!   Feiertage are **not** Werktage (GPKE Teil 1 Kap. 1.7).
 //!
 //! # Lifecycle trace (Konfiguration — positive)
@@ -347,7 +347,7 @@ async fn e2e_wim_steuerungsauftrag_duplicate_receive_rejected() {
 /// WiM Steuerungsauftrag — guard: 5-Werktage deadline fires → Rejected.
 ///
 /// If the MSB does not send a final response within the 5-Werktage window
-/// (BK6-22-024), the deadline fires and the process transitions to `Rejected`.
+/// (BK6-24-174), the deadline fires and the process transitions to `Rejected`.
 #[tokio::test]
 async fn e2e_wim_steuerungsauftrag_deadline_fires_rejected() {
     let msb = MockMsb::new();

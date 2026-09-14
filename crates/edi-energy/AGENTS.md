@@ -34,12 +34,24 @@ let hdr = edi_energy::parse_envelope_only(input)?;
 ## Validation
 
 ```rust
-let report = msg.validate()?;               // validates against the bundled profile
-let report = msg.validate_against(&profile)?; // validates against a custom profile
+use edi_energy::{EdiEnergyMessage, Release};
 
-// A valid report still carries warnings — always inspect severity:
-if report.is_valid() { … }
-for finding in report.findings() { println!("{:?}", finding.severity()); }
+// Against the profile registered for the release the message declares:
+let report = msg.validate()?;
+
+// Against an explicit release, overriding the detected one — the argument is a
+// `&Release`, not a `&Profile`:
+let report = msg.validate_against(&Release::new("S2.1"))?;   // UTILMD Strom 2.1
+
+// A valid report still carries warnings — always inspect severity.
+if report.is_valid() { /* … */ }
+
+// `iter_issues()` walks every issue; `errors()`, `criticals()`, `warnings()`
+// and `infos()` take one bucket. `severity` and `rule_id` are **fields** on
+// `edifact_rs::ValidationIssue`, not methods.
+for issue in report.iter_issues() {
+    println!("{:?} {:?}: {}", issue.severity, issue.rule_id, issue.message);
+}
 ```
 
 Rule ids name the place: `MIG-<Nr>-<TAG>-REQUIRED|MAX|-<DE>-REQUIRED|NOTUSED|FORMAT|CODE`, `MIG-STRUCTURE`, `AHB-<pid>-<Nr>-<TAG>-MISSING|NOT-PERMITTED`, `AHB-<pid>-<Nr>-<TAG>-<DE>-MISSING|CODE|NOT-PERMITTED`, `AHB-UNKNOWN-PID`. MIG `M` always binds; MIG `R` yields to the selected column (a place the column does not list is not to be used).

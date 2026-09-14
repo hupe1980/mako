@@ -12,9 +12,15 @@ fn makod() -> Command {
 
 /// The flags a startable minimal configuration needs beyond `[[party]]`.
 ///
-/// An ingest transport, a credential for it, and an acknowledgement that
-/// outbound EDIFACT has nowhere to go. Each is a real requirement of the
-/// running daemon, so `--check` demands them too.
+/// An ingest transport, a credential for it, an acknowledgement that outbound
+/// EDIFACT has nowhere to go, and an authorization posture. Each is a real
+/// requirement of the running daemon, so `--check` demands them too.
+///
+/// `--cedar-permit-all` is here because authorization is default-deny: a
+/// deployment that configures no policies would refuse every request, so
+/// startup asks for one of the two answers rather than picking the open one.
+/// These tests are about the exit-code contract, not about authorization, so
+/// they give the development answer.
 const STARTABLE: &[&str] = &[
     "--allow-volatile",
     "--http-addr",
@@ -22,6 +28,7 @@ const STARTABLE: &[&str] = &[
     "--auth-key",
     "erp-prod=0123456789abcdef0123456789abcdef",
     "--allow-no-as4-signing",
+    "--cedar-permit-all",
 ];
 
 fn write_config(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
@@ -110,6 +117,7 @@ primary = true
             "--auth-key",
             "erp-prod=0123456789abcdef0123456789abcdef",
             "--allow-no-as4-signing",
+            "--cedar-permit-all",
             "--check",
         ])
         .output()
@@ -151,6 +159,7 @@ primary = true
             "--allow-no-as4-signing",
             "--api-webdienste-addr",
             "127.0.0.1:18090",
+            "--cedar-permit-all",
             "--check",
         ])
         .output()
@@ -360,6 +369,7 @@ primary = true
             "127.0.0.1:18080",
             "--auth-key",
             "erp-prod=0123456789abcdef0123456789abcdef",
+            "--cedar-permit-all",
             "--check",
         ])
         .output()
@@ -405,6 +415,11 @@ allow_volatile = true
 allow_no_signing   = true
 partners           = ["9900001000002=https://partner.example/as4/inbox"]
 partner_cert_files = ["9900001000002={}"]
+
+# Authorization is default-deny; this test is about the AS4 key material, so it
+# takes the development posture through the config file rather than the flag.
+[authz]
+permit_all = true
 "#,
             cert.display()
         ),
@@ -548,6 +563,7 @@ primary = true
             "--as4-signing-key-pem=-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\n",
             "--as4-signing-cert-pem=-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
             "--allow-unencrypted-as4",
+            "--cedar-permit-all",
             "--check",
         ])
         .output()

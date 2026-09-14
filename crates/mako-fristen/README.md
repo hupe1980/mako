@@ -75,6 +75,12 @@ chapter it was read from. A window with no source is absent from the table
 rather than filled with a plausible default: a fabricated Frist fails silently,
 in whichever direction it was guessed.
 
+A sourced window has the opposite failure mode, and it is quieter: the citation
+sitting beside the number reads as evidence the window is applied. `cargo xtask
+check-vorlauf-consulted` separates the two — it holds every `vorlauf` row to
+having a reader outside this crate, and lists the rest with what each still
+needs. That list may only shrink.
+
 ## Related crates
 
 The crates below read their deadlines from here rather than carrying a copy of them.

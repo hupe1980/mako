@@ -15,6 +15,42 @@
 //!  step 1        step 2          step 4
 //! ```
 //!
+//! # Both directions live here
+//!
+//! Which side of that line a deployment stands on is a property of the
+//! *series*, not of the workflow, so this module models both:
+//!
+//! - **Requester** — [`ZpLifecycleCommand::SendAnfrage`] raises the
+//!   Aktivierung/Deaktivierung and [`ZpLifecycleCommand::ReceiveAntwort`]
+//!   consumes the answer. A Netzbetreiber activates its own MaBiS-Zählpunkte
+//!   at the BIKO (BK6-24-174 Anlage 3 Kap. 5.2.2, 9.2.2, 10.4.2, 11.2.2,
+//!   12.2.2, 17.3.3.1.2, 17.3.3.2.2, 17.3.5.1.2, 17.3.5.2.2, Nr. 1).
+//! - **Answering party** — [`ZpLifecycleCommand::ReceiveAnfrage`],
+//!   [`ZpLifecycleCommand::SendAntwort`] and
+//!   [`ZpLifecycleCommand::SendWeiterleitung`].
+//!
+//! Both are reachable in one deployment because the **Netzzeitreihe axis is
+//! NB → NB**: the verantwortlicher NB activates the MaBiS-ZP at the
+//! benachbarter NB, so a Netzbetreiber both sends 55062/55063 and receives
+//! them (Kap. 5.2.2 Nr. 1 and Nr. 4).
+//!
+//! ## Prozessschritt 2 is a published 1-Werktag window
+//!
+//! Every Use-Case in this family that has an Antwort step states it as
+//! „Unverzüglich, spätestens jedoch **1 WT nach Erhalt** der Aktivierung"
+//! resp. „der Deaktivierung", and the Hinweis adds that an Ablehnung „erfolgt
+//! … **mit einer Begründung**". Hence [`ZpLifecycleCommand::ReceiveAntwort`]
+//! refuses a rejection that carries none, exactly as
+//! [`ZpLifecycleCommand::SendAntwort`] does.
+//!
+//! The window itself is published per Anfrage PID in
+//! [`mako_fristen::antwort`] for the four monatliche-AAÜZ Use-Cases, whose
+//! Anfrage codes belong to one series each. It is **not** published for
+//! 55062/55063: those are shared by eleven series, five of which have no
+//! Antwort step at all, and the „1 WT" that appears in *their* SD is a
+//! Vorlauffrist „1 WT **vor** dem Versand" — a different clock in the opposite
+//! direction.
+//!
 //! Only three of the six families carry an Antwort PID, and only two carry a
 //! Weiterleitung. A family without an Antwort is **record-only**: the message
 //! is validated and stored, and the process is terminal on arrival. Modelling
@@ -32,8 +68,10 @@
 //!
 //! This is the trap the family table exists to close. **55062 „Aktivierung von
 //! ZP" and 55063 „Deaktivierung von ZP" are used for eleven different
-//! Summenzeitreihen**, and 55064 „Antwort" answers all of them — out of
-//! **twelve different Entscheidungsbäume**:
+//! Summenzeitreihen.** Six of the eleven owe a 55064 „Antwort" and five are
+//! record-only, and the six are answered out of **twelve different
+//! Entscheidungsbäumen** — a series with two directions gets one tree per
+//! direction:
 //!
 //! | Serie | Achse | Antwort | EBD Aktivierung | EBD Deaktivierung |
 //! |-------|-------|--------:|-----------------|-------------------|
@@ -98,14 +136,25 @@
 //!
 //! # State machine
 //!
+//! Two arms leave `New`, one per direction.
+//!
 //! ```text
 //! New
-//!  └─ AnfrageErhalten ─┬─ (validation failed) ─→ ValidationFailed  (terminal)
-//!                      ├─ (no Antwort PID)    ─→ Erfasst           (terminal)
-//!                      └─ AntwortGesendet ────┬─ (abgelehnt) ──────→ Abgelehnt (terminal)
-//!                                             └─ (bestätigt) ──────→ Bestaetigt
-//!                                                  └─ WeiterleitungGesendet → Weitergeleitet (terminal)
+//!  ├─ AnfrageErhalten ─┬─ (validation failed) ─→ ValidationFailed  (terminal)
+//!  │   (we answer)     ├─ (no Antwort PID)    ─→ Erfasst           (terminal)
+//!  │                   └─ AntwortGesendet ────┬─ (abgelehnt) ──────→ Abgelehnt (terminal)
+//!  │                                          └─ (bestätigt) ──────→ Bestaetigt
+//!  │                                               └─ WeiterleitungGesendet → Weitergeleitet (terminal)
+//!  └─ AnfrageGesendet ─── AntwortErhalten ────┬─ (abgelehnt) ──────→ Abgelehnt         (terminal)
+//!      (we ask)                               └─ (bestätigt) ──────→ AntwortBestaetigt (terminal)
 //! ```
+//!
+//! The two positive outcomes are separate states because only the **answering**
+//! party forwards. `SendWeiterleitung` is Prozessschritt 4 of the party that
+//! ran the Prüfung — „Der BIKO leitet nur den nicht abgelehnten MaBiS-ZP an den
+//! BKV … weiter" — so a requester that reached agreement by *receiving* an
+//! Antwort must not be able to reach it. Folding both into `Bestaetigt` would
+//! make that dispatch representable.
 
 //! # On the wire
 //!
@@ -646,6 +695,26 @@ pub fn serien_fuer_pid(anfrage: u32) -> Vec<ZpSerie> {
         .collect()
 }
 
+/// Whether `pid` is an **Antwort** code of some family (Prozessschritt 2).
+///
+/// Asked after [`serien_fuer_pid`]: the two spaces do not overlap today, and
+/// the Anfrage question is the one that must be answered first, because for the
+/// eleven generic series Prozessschritt 4 re-uses the *request* code.
+#[must_use]
+pub fn ist_antwort_pid(pid: u32) -> bool {
+    ZP_FAMILIEN.iter().any(|f| f.antwort == Some(pid))
+}
+
+/// Whether `pid` is a **Weiterleitung** code of some family (Prozessschritt 4).
+///
+/// `true` for 55062/55063/55235/55236 as well, which are Anfrage codes
+/// re-addressed downstream — so a caller routing an inbound message asks
+/// [`serien_fuer_pid`] first and this only for what is left.
+#[must_use]
+pub fn ist_weiterleitung_pid(pid: u32) -> bool {
+    ZP_FAMILIEN.iter().any(|f| f.weiterleitung == Some(pid))
+}
+
 /// Every PID this workflow is registered for — Anfragen, Antworten and
 /// Weiterleitungen alike.
 ///
@@ -662,6 +731,22 @@ pub fn all_pids() -> Vec<u32> {
     v.sort_unstable();
     v.dedup();
     v
+}
+
+/// Whether the Antwortcode `code`, read against the Entscheidungsbaum `ebd`,
+/// agrees with the Anfrage.
+///
+/// `None` when `ebd` is a tree this workspace has not catalogued, or when the
+/// tree publishes no such code. Both mean the same thing to a caller: the
+/// Cluster is **unknown**, and it must not be assumed. The code alone cannot
+/// supply it — `A01` is an Ablehnung in `E_0071` and a Zustimmung elsewhere —
+/// so a caller that reads `None` as „Ablehnung" refuses answers that agreed.
+///
+/// Of the sixteen trees [`ZP_FAMILIEN`] names, `mako_pruefung::mabis` publishes
+/// `E_0010`, `E_0020`, `E_0102` and `E_0103`.
+#[must_use]
+pub fn antwort_ist_zustimmung(ebd: &str, code: &str) -> Option<bool> {
+    mako_pruefung::mabis::codes::lookup(ebd, code).and_then(|c| c.ist_zustimmung())
 }
 
 /// Stable workflow name for process routing.
@@ -720,6 +805,40 @@ pub enum ZpLifecycleEvent {
         /// EDIFACT message reference.
         message_ref: MessageRef,
     },
+    /// Outbound Anfrage dispatched to the answering party.
+    AnfrageGesendet {
+        /// Prüfidentifikator of the Anfrage, taken from [`ZP_FAMILIEN`].
+        pruefidentifikator: Pruefidentifikator,
+        /// Activation or deactivation.
+        vorgang: ZpVorgang,
+        /// Series affected.
+        serie: ZpSerie,
+        /// MaBiS-Zählpunkt the Anfrage names.
+        mabis_zp_id: crate::MabisZaehlpunktId,
+        /// GLN of this participant, the requesting party.
+        sender: MarktpartnerCode,
+        /// GLN of the answering party.
+        empfaenger: MarktpartnerCode,
+        /// Billing period the activation takes effect in.
+        billing_period: BillingPeriod,
+        /// EDIFACT document date (`YYYYMMDD`).
+        document_date: String,
+        /// EDIFACT message reference.
+        message_ref: MessageRef,
+    },
+    /// Inbound Antwort to an Anfrage this participant sent.
+    AntwortErhalten {
+        /// Antwort Prüfidentifikator that arrived.
+        antwort_pid: Pruefidentifikator,
+        /// EBD the Antwortcode was read against — `SG4 STS+E01` DE 1131.
+        ebd: String,
+        /// `true` when the Anfrage was confirmed.
+        bestaetigt: bool,
+        /// Begründung, when `bestaetigt` is `false`.
+        grund: Option<String>,
+        /// EDIFACT message reference of the Antwort.
+        message_ref: MessageRef,
+    },
     /// Anfrage recorded with no Antwort obligation (terminal for that family).
     Erfasst {
         /// Reference of the recorded message.
@@ -755,6 +874,8 @@ impl EventPayload for ZpLifecycleEvent {
     fn event_type(&self) -> &'static str {
         match self {
             Self::AnfrageErhalten { .. } => "MabisZpAnfrageErhalten",
+            Self::AnfrageGesendet { .. } => "MabisZpAnfrageGesendet",
+            Self::AntwortErhalten { .. } => "MabisZpAntwortErhalten",
             Self::Erfasst { .. } => "MabisZpErfasst",
             Self::AntwortGesendet { .. } => "MabisZpAntwortGesendet",
             Self::WeiterleitungGesendet { .. } => "MabisZpWeiterleitungGesendet",
@@ -774,6 +895,17 @@ pub enum ZpLifecycleState {
     New,
     /// Anfrage received; an Antwort is owed.
     AnfrageErhalten(Box<ZpLifecycleData>),
+    /// Anfrage sent; the answering party owes the Antwort.
+    ///
+    /// Also the resting state of a family with no Antwort PID: the message was
+    /// sent and nothing further is owed in either direction.
+    AnfrageGesendet(Box<ZpLifecycleData>),
+    /// The answering party confirmed an Anfrage this participant sent
+    /// (terminal).
+    ///
+    /// Distinct from [`Self::Bestaetigt`] because Prozessschritt 4 belongs to
+    /// the party that ran the Prüfung, never to the requester.
+    AntwortBestaetigt(Box<ZpLifecycleData>),
     /// Anfrage recorded; the family defines no Antwort (terminal).
     Erfasst(Box<ZpLifecycleData>),
     /// Antwort sent confirming the Anfrage.
@@ -799,6 +931,8 @@ impl ZpLifecycleState {
         match self {
             Self::New => "New",
             Self::AnfrageErhalten(_) => "AnfrageErhalten",
+            Self::AnfrageGesendet(_) => "AnfrageGesendet",
+            Self::AntwortBestaetigt(_) => "AntwortBestaetigt",
             Self::Erfasst(_) => "Erfasst",
             Self::Bestaetigt(_) => "Bestaetigt",
             Self::Abgelehnt { .. } => "Abgelehnt",
@@ -812,6 +946,8 @@ impl ZpLifecycleState {
     pub fn data(&self) -> Option<&ZpLifecycleData> {
         match self {
             Self::AnfrageErhalten(d)
+            | Self::AnfrageGesendet(d)
+            | Self::AntwortBestaetigt(d)
             | Self::Erfasst(d)
             | Self::Bestaetigt(d)
             | Self::Weitergeleitet(d) => Some(d),
@@ -865,6 +1001,67 @@ pub enum ZpLifecycleCommand {
         validation_passed: bool,
         /// Validation errors collected by the AHB validator.
         validation_errors: Vec<String>,
+    },
+    /// Raise the Aktivierung/Deaktivierung as the requesting party.
+    ///
+    /// The Prüfidentifikator is **not** an input: on this side it is ours to
+    /// get right, and [`ZP_FAMILIEN`] already pairs it with the (series,
+    /// Vorgang) the caller names.
+    SendAnfrage {
+        /// Which Summenzeitreihe — and axis — the MaBiS-Zählpunkt belongs to.
+        serie: ZpSerie,
+        /// Activation or deactivation.
+        vorgang: ZpVorgang,
+        /// MaBiS-Zählpunkt to activate or deactivate.
+        ///
+        /// The validated [`MabisZaehlpunktId`](crate::MabisZaehlpunktId) rather
+        /// than the `String`
+        /// [`ReceiveAnfrage`](Self::ReceiveAnfrage) keeps: this value is
+        /// **ours**, produced from mako's own master data, so a Bilanzierungs­
+        /// gebiet EIC in the Meldepunkt field must be a compile-time
+        /// impossibility rather than a settlement filed against the wrong
+        /// point. The same reasoning [`crate::Summenzeitreihe`] is built on.
+        mabis_zp_id: crate::MabisZaehlpunktId,
+        /// GLN of this participant.
+        sender: MarktpartnerCode,
+        /// GLN of the party that answers — the BIKO, or the benachbarter NB on
+        /// the Netzzeitreihe axis.
+        empfaenger: MarktpartnerCode,
+        /// Billing period the activation takes effect in.
+        billing_period: BillingPeriod,
+        /// EDIFACT document date (`YYYYMMDD`) — the Bilanzierungsbeginn on an
+        /// Aktivierung, the Bilanzierungsende on a Deaktivierung.
+        document_date: String,
+        /// EDIFACT message reference of the Anfrage.
+        message_ref: MessageRef,
+    },
+    /// Apply the Antwort to an Anfrage this participant sent.
+    ///
+    /// Prozessschritt 2 of every Use-Case in this family: „Unverzüglich,
+    /// spätestens jedoch 1 WT nach Erhalt der Aktivierung" resp. „der
+    /// Deaktivierung".
+    ReceiveAntwort {
+        /// Antwort Prüfidentifikator of the inbound UTILMD.
+        ///
+        /// Checked against the family the Anfrage was sent for: an answer
+        /// carrying another family's code is a routing error, not a variant.
+        pid: Pruefidentifikator,
+        /// `true` when the Anfrage was confirmed.
+        ///
+        /// A cluster, not a code. The inbound `SG4 STS+E01` DE 9013 is resolved
+        /// against the Entscheidungsbaum DE 1131 names *before* the command is
+        /// built, because the same code means opposite things in two trees.
+        bestaetigt: bool,
+        /// Begründung — required when `bestaetigt` is `false`.
+        ///
+        /// „Im Falle einer Ablehnung der Aktivierung durch den BIKO, erfolgt
+        /// diese mit einer Begründung", so a rejection without one is an
+        /// incomplete answer rather than a terse one.
+        grund: Option<String>,
+        /// EBD the Antwortcode was read against — `SG4 STS+E01` DE 1131.
+        ebd: String,
+        /// EDIFACT message reference of the Antwort.
+        message_ref: MessageRef,
     },
     /// Send the Antwort for a received Anfrage.
     SendAntwort {
@@ -926,6 +1123,47 @@ impl Workflow for MabisZpLifecycleWorkflow {
                 document_date: document_date.clone(),
                 message_ref: message_ref.clone(),
             })),
+
+            ZpLifecycleEvent::AnfrageGesendet {
+                pruefidentifikator,
+                vorgang,
+                serie,
+                mabis_zp_id,
+                sender,
+                empfaenger,
+                billing_period,
+                document_date,
+                message_ref,
+            } => ZpLifecycleState::AnfrageGesendet(Box::new(ZpLifecycleData {
+                pruefidentifikator: *pruefidentifikator,
+                vorgang: *vorgang,
+                serie: *serie,
+                // One shape for both directions: `ZpLifecycleData` records what
+                // is on the wire, and the wire carries a Zählpunktbezeichnung
+                // either way. The typed identifier is what the *command* takes,
+                // which is where a wrong value can still be refused.
+                mabis_zp_id: mabis_zp_id.as_str().to_owned(),
+                sender: sender.clone(),
+                receiver: empfaenger.clone(),
+                billing_period: billing_period.clone(),
+                document_date: document_date.clone(),
+                message_ref: message_ref.clone(),
+            })),
+
+            ZpLifecycleEvent::AntwortErhalten {
+                bestaetigt, grund, ..
+            } => match state {
+                ZpLifecycleState::AnfrageGesendet(d) => {
+                    if *bestaetigt {
+                        ZpLifecycleState::AntwortBestaetigt(d)
+                    } else {
+                        ZpLifecycleState::Abgelehnt {
+                            grund: grund.clone().unwrap_or_default(),
+                        }
+                    }
+                }
+                other => other,
+            },
 
             ZpLifecycleEvent::Erfasst { .. } => match state {
                 ZpLifecycleState::AnfrageErhalten(d) => ZpLifecycleState::Erfasst(d),
@@ -1048,6 +1286,152 @@ impl Workflow for MabisZpLifecycleWorkflow {
                 }
 
                 Ok(vec![erhalten].into())
+            }
+
+            ZpLifecycleCommand::SendAnfrage {
+                serie,
+                vorgang,
+                mabis_zp_id,
+                sender,
+                empfaenger,
+                billing_period,
+                document_date,
+                message_ref,
+            } => {
+                if !matches!(state, ZpLifecycleState::New) {
+                    // Idempotent: a retried dispatch is a no-op.
+                    return Ok(vec![].into());
+                }
+
+                let Some(familie) = familie_for(serie, vorgang) else {
+                    return Err(WorkflowError::rejected(format!(
+                        "{} kennt keinen Vorgang {vorgang:?}",
+                        serie.label()
+                    )));
+                };
+
+                // The same end-date rule the receiving side applies, and it
+                // binds harder here: refusing our *own* Aktivierung inside the
+                // submission window is cheaper than a Summenzeitreihe the BIKO
+                // will never settle.
+                if vorgang == ZpVorgang::Aktivierung
+                    && let Some(beginn) = abrechnungszeitraum_beginn(billing_period.as_str())
+                    && !serie.gilt_am(beginn)
+                {
+                    return Err(WorkflowError::rejected(format!(
+                        "{} endet am {} und kann für den Abrechnungszeitraum {} \
+                         nicht mehr aktiviert werden",
+                        serie.label(),
+                        serie
+                            .endet_am()
+                            .expect("gilt_am was false, so there is an end date"),
+                        billing_period.as_str()
+                    )));
+                }
+
+                let pid = Pruefidentifikator::new(familie.anfrage).map_err(|e| {
+                    WorkflowError::rejected(format!("invalid Anfrage PID {}: {e}", familie.anfrage))
+                })?;
+
+                // The keys are the UTILMD renderer's, and the same ones
+                // `SendAntwort` writes: a MaBiS Vorgang names a MaBiS-Zählpunkt
+                // and no Marktlokation, and `SG4 DTM+158` carries the
+                // Bilanzierungsbeginn on an Aktivierung, `DTM+159` the
+                // Bilanzierungsende on a Deaktivierung (UTILMD AHB Strom 2.2
+                // Kap. 13.3).
+                let mut payload = serde_json::json!({
+                    "pid": familie.anfrage,
+                    "sender": sender.as_str(),
+                    "receiver": empfaenger.as_str(),
+                    "mabis_zaehlpunkt": mabis_zp_id.as_str(),
+                });
+                let datum_key = match vorgang {
+                    ZpVorgang::Aktivierung => "bilanzierungsbeginn",
+                    ZpVorgang::Deaktivierung => "bilanzierungsende",
+                };
+                payload[datum_key] = serde_json::Value::String(document_date.clone());
+                let outbox = PendingOutbox::new("UTILMD", empfaenger.as_str(), payload);
+
+                Ok(WorkflowOutput {
+                    events: vec![ZpLifecycleEvent::AnfrageGesendet {
+                        pruefidentifikator: pid,
+                        vorgang: familie.vorgang,
+                        serie: familie.serie,
+                        mabis_zp_id,
+                        sender,
+                        empfaenger,
+                        billing_period,
+                        document_date,
+                        message_ref,
+                    }],
+                    outbox: vec![outbox],
+                    deadlines: vec![],
+                })
+            }
+
+            ZpLifecycleCommand::ReceiveAntwort {
+                pid,
+                bestaetigt,
+                grund,
+                ebd,
+                message_ref,
+            } => {
+                let data = match state {
+                    ZpLifecycleState::AnfrageGesendet(data) => data,
+                    // A redelivered Antwort is a no-op, like a redelivered
+                    // Anfrage.
+                    ZpLifecycleState::AntwortBestaetigt(_) | ZpLifecycleState::Abgelehnt { .. } => {
+                        return Ok(vec![].into());
+                    }
+                    other => {
+                        return Err(WorkflowError::rejected(format!(
+                            "ReceiveAntwort requires state AnfrageGesendet, got {}",
+                            other.label()
+                        )));
+                    }
+                };
+
+                let familie = familie_for(data.serie, data.vorgang).ok_or_else(|| {
+                    WorkflowError::rejected(format!(
+                        "keine Familie für {} / {:?}",
+                        data.serie.label(),
+                        data.vorgang
+                    ))
+                })?;
+
+                // A record-only family has no Prozessschritt 2, so an answer to
+                // one is a message the Festlegung does not define. Applying it
+                // would close a process on an obligation that never existed.
+                let Some(antwort_pid_code) = familie.antwort else {
+                    return Err(WorkflowError::rejected(format!(
+                        "{} (Anfrage {}) definiert keine Antwort",
+                        familie.serie.label(),
+                        familie.anfrage
+                    )));
+                };
+
+                if antwort_pid_code != pid.as_u32() {
+                    return Err(WorkflowError::rejected(format!(
+                        "Antwort-PID {pid} passt nicht zu {} / {:?} — erwartet {antwort_pid_code}",
+                        familie.serie.label(),
+                        familie.vorgang
+                    )));
+                }
+
+                if !bestaetigt && grund.as_ref().is_none_or(|g| g.trim().is_empty()) {
+                    return Err(WorkflowError::rejected(
+                        "a rejecting Antwort requires a reason".to_owned(),
+                    ));
+                }
+
+                Ok(vec![ZpLifecycleEvent::AntwortErhalten {
+                    antwort_pid: pid,
+                    ebd,
+                    bestaetigt,
+                    grund,
+                    message_ref,
+                }]
+                .into())
             }
 
             ZpLifecycleCommand::SendAntwort { bestaetigt, grund } => {
@@ -1242,6 +1626,38 @@ mod tests {
             *billing_period = BillingPeriod::new(period);
         }
         cmd
+    }
+
+    const ZP: &str = "DE0001112223334445556667778889990";
+
+    fn send(serie: ZpSerie, vorgang: ZpVorgang) -> ZpLifecycleCommand {
+        ZpLifecycleCommand::SendAnfrage {
+            serie,
+            vorgang,
+            mabis_zp_id: crate::MabisZaehlpunktId::new(ZP).expect("33 characters"),
+            sender: mp("9900987654321"),
+            empfaenger: mp("9900123456789"),
+            billing_period: BillingPeriod::new("2026-07"),
+            document_date: "20260701".to_owned(),
+            message_ref: MessageRef::new("MSG-OUT-1"),
+        }
+    }
+
+    /// Drive `serie`/`vorgang` to `AnfrageGesendet`.
+    fn gesendet(serie: ZpSerie, vorgang: ZpVorgang) -> ZpLifecycleState {
+        let out = MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, send(serie, vorgang))
+            .expect("accepted");
+        fold(&out.events)
+    }
+
+    fn antwort(pid: u32, bestaetigt: bool, grund: Option<&str>) -> ZpLifecycleCommand {
+        ZpLifecycleCommand::ReceiveAntwort {
+            pid: Pruefidentifikator::new(pid).expect("valid PID"),
+            bestaetigt,
+            grund: grund.map(ToOwned::to_owned),
+            ebd: "E_0071".to_owned(),
+            message_ref: MessageRef::new("MSG-IN-1"),
+        }
     }
 
     fn fold(events: &[ZpLifecycleEvent]) -> ZpLifecycleState {
@@ -1530,6 +1946,265 @@ mod tests {
         )
         .expect("weiterleitung");
         assert_eq!(out.outbox[0].payload["pid"], 55205);
+    }
+
+    // ── Requester side ──────────────────────────────────────────────────────
+
+    #[test]
+    fn sending_an_anfrage_emits_the_familys_pid_and_one_utilmd() {
+        let out = MabisZpLifecycleWorkflow::handle(
+            &ZpLifecycleState::New,
+            send(ZpSerie::MonatlicheAauezBkvLf, ZpVorgang::Aktivierung),
+        )
+        .expect("accepted");
+
+        assert_eq!(out.outbox.len(), 1);
+        assert_eq!(out.outbox[0].payload["pid"], 55203);
+        assert_eq!(out.outbox[0].payload["mabis_zaehlpunkt"], ZP);
+        assert_eq!(out.outbox[0].payload["bilanzierungsbeginn"], "20260701");
+        assert_eq!(out.outbox[0].recipient.as_ref(), "9900123456789");
+
+        let state = fold(&out.events);
+        assert_eq!(state.label(), "AnfrageGesendet");
+        assert_eq!(state.data().expect("carries data").mabis_zp_id, ZP);
+    }
+
+    /// A Deaktivierung states `SG4 DTM+159` Bilanzierungsende, never a
+    /// Bilanzierungsbeginn (UTILMD AHB Strom 2.2 Kap. 13.3).
+    #[test]
+    fn a_sent_deaktivierung_states_the_bilanzierungsende() {
+        let out = MabisZpLifecycleWorkflow::handle(
+            &ZpLifecycleState::New,
+            send(ZpSerie::MonatlicheAauezBkvLf, ZpVorgang::Deaktivierung),
+        )
+        .expect("accepted");
+        assert_eq!(out.outbox[0].payload["pid"], 55206);
+        assert_eq!(out.outbox[0].payload["bilanzierungsende"], "20260701");
+        assert!(out.outbox[0].payload.get("bilanzierungsbeginn").is_none());
+    }
+
+    /// The end-date rule binds on the side that *sends*, too: activating a
+    /// repealed series is refused inside the submission window rather than
+    /// discovered when the Abrechnung never arrives.
+    #[test]
+    fn a_repealed_series_cannot_be_sent_for_a_period_after_its_end() {
+        let mut cmd = send(ZpSerie::TaeglicheAauez, ZpVorgang::Aktivierung);
+        if let ZpLifecycleCommand::SendAnfrage {
+            ref mut billing_period,
+            ..
+        } = cmd
+        {
+            *billing_period = BillingPeriod::new("202610");
+        }
+        let err = MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, cmd)
+            .expect_err("the series is repealed with the end of 30.09.2026");
+        assert!(format!("{err}").contains("2026-09-30"), "got: {err}");
+    }
+
+    #[test]
+    fn a_confirming_antwort_closes_the_process_the_anfrage_opened() {
+        let state = gesendet(ZpSerie::MonatlicheAauezBkvLf, ZpVorgang::Aktivierung);
+        let out = MabisZpLifecycleWorkflow::handle(&state, antwort(55204, true, None))
+            .expect("the BIKO confirmed");
+        assert!(out.outbox.is_empty(), "an answer is not answered");
+
+        let state = out
+            .events
+            .iter()
+            .fold(state, MabisZpLifecycleWorkflow::apply);
+        assert_eq!(state.label(), "AntwortBestaetigt");
+    }
+
+    /// The requester must not be able to run Prozessschritt 4: „Der BIKO leitet
+    /// nur den nicht abgelehnten MaBiS-ZP an den BKV … weiter" — the
+    /// Weiterleitung is the answering party's step.
+    #[test]
+    fn a_requester_cannot_forward_what_it_asked_for() {
+        let state = gesendet(ZpSerie::MonatlicheAauezBkvLf, ZpVorgang::Aktivierung);
+        let out = MabisZpLifecycleWorkflow::handle(&state, antwort(55204, true, None))
+            .expect("confirmed");
+        let state = out
+            .events
+            .iter()
+            .fold(state, MabisZpLifecycleWorkflow::apply);
+
+        let err = MabisZpLifecycleWorkflow::handle(
+            &state,
+            ZpLifecycleCommand::SendWeiterleitung {
+                empfaenger: mp("9900555555555"),
+            },
+        )
+        .expect_err("only the answering party forwards");
+        assert!(format!("{err}").contains("Bestaetigt"), "got: {err}");
+    }
+
+    #[test]
+    fn a_rejecting_antwort_carries_its_begruendung_into_the_state() {
+        let state = gesendet(ZpSerie::MonatlicheAauezBkvAnfNb, ZpVorgang::Aktivierung);
+        let out = MabisZpLifecycleWorkflow::handle(
+            &state,
+            antwort(55210, false, Some("Bilanzierungsgebiet nicht gültig")),
+        )
+        .expect("rejections are applied");
+        let state = out
+            .events
+            .iter()
+            .fold(state, MabisZpLifecycleWorkflow::apply);
+        assert_eq!(state.label(), "Abgelehnt");
+        let ZpLifecycleState::Abgelehnt { grund } = state else {
+            panic!("expected Abgelehnt");
+        };
+        assert_eq!(grund, "Bilanzierungsgebiet nicht gültig");
+    }
+
+    /// „Im Falle einer Ablehnung … erfolgt diese mit einer Begründung"
+    /// (BK6-24-174 Anlage 3 SD Nr. 2, Hinweis). A bare refusal is an incomplete
+    /// answer, and accepting it drops the only lead the NB gets for the manual
+    /// Fehlerklärung of Prozessschritt 3.
+    #[test]
+    fn an_inbound_rejection_without_a_begruendung_is_refused() {
+        let state = gesendet(ZpSerie::MonatlicheAauezBkvLf, ZpVorgang::Aktivierung);
+        for grund in [None, Some("   ")] {
+            let err = MabisZpLifecycleWorkflow::handle(&state, antwort(55204, false, grund))
+                .expect_err("must refuse");
+            assert!(format!("{err}").contains("reason"), "got: {err}");
+        }
+    }
+
+    /// A record-only family has no Prozessschritt 2, so there is no answer to
+    /// apply — accepting one would close a process on an obligation the
+    /// Festlegung never created.
+    #[test]
+    fn a_record_only_family_takes_no_antwort() {
+        let state = gesendet(ZpSerie::LfAaszr, ZpVorgang::Aktivierung);
+        let err = MabisZpLifecycleWorkflow::handle(&state, antwort(55204, true, None))
+            .expect_err("55199 owes no answer");
+        let msg = format!("{err}");
+        assert!(msg.contains("definiert keine Antwort"), "got: {msg}");
+        assert!(msg.contains("55199"), "the error names the Anfrage: {msg}");
+    }
+
+    /// An answer code from another family is a routing error, not a variant.
+    #[test]
+    fn an_antwort_pid_that_contradicts_the_family_is_refused() {
+        let state = gesendet(ZpSerie::MonatlicheAauezBkvLf, ZpVorgang::Aktivierung);
+        let err = MabisZpLifecycleWorkflow::handle(&state, antwort(55210, true, None))
+            .expect_err("55210 answers the anfNB family");
+        assert!(format!("{err}").contains("55204"), "got: {err}");
+    }
+
+    #[test]
+    fn an_antwort_without_a_question_is_refused_and_a_redelivered_one_is_a_no_op() {
+        // Nothing was sent, so there is no Anfrage this answers.
+        let err =
+            MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, antwort(55204, true, None))
+                .expect_err("an orphan answer");
+        assert!(format!("{err}").contains("AnfrageGesendet"), "got: {err}");
+
+        // Delivered twice, applied once.
+        let state = gesendet(ZpSerie::MonatlicheAauezBkvLf, ZpVorgang::Aktivierung);
+        let out = MabisZpLifecycleWorkflow::handle(&state, antwort(55204, true, None))
+            .expect("confirmed");
+        let state = out
+            .events
+            .iter()
+            .fold(state, MabisZpLifecycleWorkflow::apply);
+        let again = MabisZpLifecycleWorkflow::handle(&state, antwort(55204, true, None))
+            .expect("idempotent");
+        assert!(again.events.is_empty());
+    }
+
+    /// The two directions are separate processes over one family table: the
+    /// answering side never reaches `AnfrageGesendet` and the requesting side
+    /// never reaches `Bestaetigt`.
+    #[test]
+    fn the_two_directions_do_not_share_a_positive_state() {
+        let answering = {
+            let out = MabisZpLifecycleWorkflow::handle(
+                &ZpLifecycleState::New,
+                receive(ZpSerie::MonatlicheAauezBkvLf, ZpVorgang::Aktivierung),
+            )
+            .expect("accepted");
+            let state = fold(&out.events);
+            let out = MabisZpLifecycleWorkflow::handle(
+                &state,
+                ZpLifecycleCommand::SendAntwort {
+                    bestaetigt: true,
+                    grund: None,
+                },
+            )
+            .expect("answered");
+            out.events
+                .iter()
+                .fold(state, MabisZpLifecycleWorkflow::apply)
+        };
+        assert_eq!(answering.label(), "Bestaetigt");
+
+        let requesting = {
+            let state = gesendet(ZpSerie::MonatlicheAauezBkvLf, ZpVorgang::Aktivierung);
+            let out = MabisZpLifecycleWorkflow::handle(&state, antwort(55204, true, None))
+                .expect("confirmed");
+            out.events
+                .iter()
+                .fold(state, MabisZpLifecycleWorkflow::apply)
+        };
+        assert_eq!(requesting.label(), "AntwortBestaetigt");
+    }
+
+    /// The PID-space questions the ingest dispatcher asks, in the order it must
+    /// ask them: for the eleven generic series Prozessschritt 4 re-uses the
+    /// request code, so 55062 is both.
+    #[test]
+    fn the_generic_request_codes_are_also_weiterleitung_codes() {
+        for pid in [55062_u32, 55063] {
+            assert!(!serien_fuer_pid(pid).is_empty(), "{pid} is an Anfrage");
+            assert!(ist_weiterleitung_pid(pid), "{pid} is also a Weiterleitung");
+            assert!(!ist_antwort_pid(pid), "{pid} is never an Antwort");
+        }
+        for pid in [55064_u32, 55204, 55207, 55210, 55213, 55237] {
+            assert!(ist_antwort_pid(pid), "{pid} is an Antwort");
+            assert!(serien_fuer_pid(pid).is_empty(), "{pid} is no Anfrage");
+            assert!(!ist_weiterleitung_pid(pid), "{pid} is no Weiterleitung");
+        }
+        for pid in [55205_u32, 55208, 55211, 55214] {
+            assert!(ist_weiterleitung_pid(pid), "{pid} is a Weiterleitung");
+            assert!(!ist_antwort_pid(pid), "{pid} is no Antwort");
+            assert!(serien_fuer_pid(pid).is_empty(), "{pid} is no Anfrage");
+        }
+    }
+
+    /// The Cluster comes from the **pair**, never from the code alone.
+    ///
+    /// `A12` is the Zustimmung of `E_0020` and an Ablehnung („MaBiS-ZP bereits
+    /// aktiviert") in `E_0071`. A resolver keyed on the code would answer
+    /// „aktiviert" to a refusal, and the missing Summenzeitreihe would be the
+    /// only symptom. A code the tree does not publish resolves to `None` rather
+    /// than defaulting in either direction.
+    #[test]
+    fn the_antwort_cluster_needs_both_the_tree_and_the_code() {
+        for ebd in ["E_0020", "E_0071", "E_0072", "E_0078", "E_0079"] {
+            let zustimmung = mako_pruefung::mabis::codes::zustimmung(ebd)
+                .unwrap_or_else(|| panic!("{ebd} publishes a Zustimmung"));
+            assert_eq!(
+                antwort_ist_zustimmung(ebd, zustimmung.code),
+                Some(true),
+                "{ebd} {}",
+                zustimmung.code
+            );
+        }
+
+        // The same code, opposite meanings.
+        assert_eq!(antwort_ist_zustimmung("E_0020", "A12"), Some(true));
+        assert_eq!(antwort_ist_zustimmung("E_0071", "A12"), Some(false));
+
+        // Neither an unknown tree nor an unpublished code is guessed.
+        assert_eq!(antwort_ist_zustimmung("E_0020", "ZZZ"), None);
+        assert_eq!(
+            antwort_ist_zustimmung("E_0072", "A13"),
+            None,
+            "A13 is the Aktivierung trees' Zustimmung; E_0072 stops at A07"
+        );
+        assert_eq!(antwort_ist_zustimmung("E_9999", "A01"), None);
     }
 
     #[test]

@@ -52,7 +52,7 @@ entire point of the Clearingphase.
 The version is not a counter. IFTSTA MIG 2.1 `SG4 RFF+AUU`, DE 1154 `an17`:
 „Die Versionsangabe erfolgt über den **Erstellungszeitpunkt**, der in der MSCONS
 übermittelt wurde. Beispiel: `RFF+AUU:20110503121544?+00`". It is the key both
-ends match on, so [`SzrVersion`] holds the 17 characters verbatim.
+ends match on, so `SzrVersion` holds the 17 characters verbatim.
 
 ### 3. 55062 / 55063 / 55064 are generic codes
 
@@ -262,12 +262,53 @@ The **inbound** side deliberately keeps a plain `String`
 (`ZpLifecycleCommand::ReceiveAnfrage`). A counterparty's malformed Meldepunkt has
 to be representable before it can be rejected — parsing into a type belongs on
 values this system produces, not on ones it receives.
+`ZpLifecycleCommand::SendAnfrage` takes the validated `MabisZaehlpunktId` for the
+same reason read the other way: that Zählpunkt comes from mako's own master
+data.
 
 ## MaBiS-ZP lifecycle
 
 Every process has the same shape — an **Anfrage**, optionally an **Antwort**,
 optionally a **Weiterleitung** — but which of the three exist depends on the
 *series*, not on the PID.
+
+### Both directions are modelled
+
+Which side of the Anfrage a deployment stands on is a property of the series,
+so `zp_lifecycle` carries both legs:
+
+| Direction | Commands | Terminal states |
+|---|---|---|
+| requester | `SendAnfrage`, `ReceiveAntwort` | `AntwortBestaetigt`, `Abgelehnt` |
+| answering party | `ReceiveAnfrage`, `SendAntwort`, `SendWeiterleitung` | `Erfasst`, `Weitergeleitet`, `Abgelehnt`, `ValidationFailed` |
+
+Both are reachable in one deployment because the **Netzzeitreihe axis is
+NB → NB**: the verantwortlicher NB activates the MaBiS-ZP at the benachbarter
+NB and then at the BIKO, so a Netzbetreiber both sends and receives 55062/55063
+(BK6-24-174 Anlage 3 Kap. 5.2.2 Nr. 1 and Nr. 4).
+
+The two positive outcomes are separate states on purpose. Prozessschritt 4
+belongs to the party that ran the Prüfung — „Der BIKO leitet nur den nicht
+abgelehnten MaBiS-ZP an den BKV … weiter" — so a requester that reached
+agreement by *receiving* an Antwort cannot reach `SendWeiterleitung` at all.
+
+### Prozessschritt 2 is one Werktag
+
+Every Use-Case in the family that has an Antwort step states it identically:
+„Unverzüglich, spätestens jedoch **1 WT nach Erhalt** der Aktivierung"
+resp. „… der Deaktivierung", and an Ablehnung „erfolgt … **mit einer
+Begründung**" (BK6-24-174 Anlage 3 Kap. 5.2.2, 9.2.2, 10.4.2, 11.2.2, 12.2.2,
+17.3.3.1.2, 17.3.3.2.2, 17.3.5.1.2, 17.3.5.2.2, SD Nr. 2). A rejection without
+a Begründung is refused on both legs.
+
+`mako_fristen::antwort::MABIS` publishes the window for the four
+monatliche-AAÜZ Anfragen — 55203, 55206, 55209 and 55212, answered by 55204,
+55207, 55210 and 55213. It is **not** published for 55062/55063, and not
+because the Festlegung is silent: those codes are shared by eleven
+Summenzeitreihen, five of which have no Antwort step at all, and the „1 WT"
+printed in *their* SDs is a Vorlauffrist „1 WT **vor** dem Versand". A row keyed
+on the PID would read a lead time as a response deadline for five processes that
+owe no response.
 
 ### The eleven series sharing 55062 / 55063 / 55064
 
@@ -300,6 +341,14 @@ party, not a distinct PID.
 | monatliche AAÜZ, BKV des anfNB | 55209 / 55212 | 55210 / 55213 | `E_0078` / `E_0079` | 55211 / 55214 |
 | Zuordnung ZP der NGZ zur NZR (verantw. NB → benachb. NB) | 55235 / 55236 | 55237 | `E_0102` / `E_0103` | 55235 / 55236 |
 
+The Antwortcode of an inbound Antwort is read as a **pair**: `SG4 STS+E01`
+DE 9013 the code and DE 1131 the Entscheidungsbaum, resolved through
+`zp_antwort_ist_zustimmung`. The code alone decides nothing — the same letter
+means opposite things in two trees — so a tree `mako_pruefung::mabis::codes`
+does not publish yields `None` and the message is refused by name rather than
+read as a refusal. Of the sixteen trees above, `E_0010`, `E_0020`, `E_0102` and
+`E_0103` are catalogued.
+
 > **55218 and 55220 are not MaBiS.** They are GPKE Teil 2 (Abr.-Daten NNA).
 > 55215–55217, 55219, 55221 and 55222 are unassigned. None is routed here.
 
@@ -312,8 +361,8 @@ and it is sequenced *after* the neighbouring NB has confirmed.
 
 ## The Kapitel-17 series expire
 
-Three Ausfallarbeit series come from MaBiS Anlage 1 **Kapitel 17**, which
-BK6-23-241 Tenorziffer 5 repeals with the end of **30.09.2026**:
+Three Ausfallarbeit series come from MaBiS **Kapitel 17** (BK6-24-174 Anlage 3),
+which BK6-23-241 Tenorziffer 5 repeals with the end of **30.09.2026**:
 
 | Kapitel | Content | From 01.10.2026 |
 |---|---|---|
@@ -321,10 +370,26 @@ BK6-23-241 Tenorziffer 5 repeals with the end of **30.09.2026**:
 | **17.2** | Bilanzkreismonitoring, tägliche AAÜZ (55197/55198) | **gone** |
 | **17.3.2.1** | monatliche Ausfallarbeitszeitreihe je MaLo, NB → LF | **gone** |
 
+**17.3.2.1 is not the LF-AASZR.** It is „Übermittlung der monatlichen
+Ausfallarbeitszeitreihe je Marktlokation" — the per-MaLo MSCONS 13022 series,
+which is no Summenzeitreihe and has no `Familie`. The
+Lieferantenausfallarbeitssummenzeitreihe is Kap. 17.3.2.**2**/.3/.4, which the
+repeal does not touch; reading the two as one would end 55199/55200 a settlement
+period early.
+
 `ZpSerie::endet_am` and `Familie::endet_am` carry the date, so a deployment can
 refuse to activate a Zählpunkt for a series that will not exist when the month it
-settles is due. Everything else in Kapitel 17 continues unchanged until the
-EDI@Energy documents of BK6-23-241 Tenorziffer 8 apply.
+settles is due. That closes the inbound half only. A MaBiS-ZP activated *before*
+the date is not repealed with the chapter — it stops having a process behind it,
+and the Summenzeitreihe that never arrives is the only symptom. `zp_register`
+folds the lifecycle events into the set of currently activated Zählpunkte and
+`ZpRegister::auf_beendeter_serie` names those whose series has ended; makod
+logs them after every projection tick. It reports and does not act: no source in
+hand says the NB owes a Deaktivierung, and one nobody asked for is a market
+message sent on a guess.
+
+Everything else in Kapitel 17 continues unchanged until the EDI@Energy documents
+of BK6-23-241 Tenorziffer 8 apply.
 
 ## MaBiS Anforderungen
 

@@ -1392,7 +1392,7 @@ mod tests {
 
 // ── Sect14aModul3Verbrauch ────────────────────────────────────────────────────
 
-/// Energy per §14a Modul 3 Tarifstufe (zeitvariable Netzentgelte, BK6-22-300).
+/// Energy per §14a Modul 3 Tarifstufe (zeitvariable Netzentgelte, BK8-22/010-A).
 ///
 /// All three bands are present by construction — a Modul 3 metering
 /// configuration reports every window, and a zero band is a real zero, not an

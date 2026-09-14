@@ -329,7 +329,7 @@ impl MeteredInterval {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Sparte {
-    /// Electricity (Strom) — BK6-24-174 GPKE, BK6-22-024 WiM Strom.
+    /// Electricity (Strom) — BK6-24-174 GPKE Teil 1–3 and WiM Strom.
     Strom,
     /// Natural gas (Gas) — BK7-24-01-009 GeLi Gas 3.0 / AWH WiM Gas 2.0.
     Gas,

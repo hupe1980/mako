@@ -32,6 +32,7 @@
 //! `fuzz/corpus/fuzz_tariff_input/` to guide coverage-guided mutation.
 
 #![no_main]
+#![deny(unsafe_code)]
 
 use energy_billing::{
     BillingContext, BillingPeriod, GridInput, InvoiceType, Product, Quantities, RegulatoryRates,

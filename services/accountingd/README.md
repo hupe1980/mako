@@ -82,7 +82,7 @@ reports `sealed_through`.
 
 ## Security
 
-- **OIDC/JWT**: all financial write endpoints require a valid Bearer token; dev mode emits `[WARN]`
+- **OIDC/JWT**: all financial write endpoints require a valid Bearer token. Startup refuses a deployment without `[oidc]` or without `erp_hmac_secret` unless `allow_insecure_no_auth = true`
 - **Inbound HMAC**: `POST /webhook` verifies Standard Webhooks (`webhook-signature`); constant-time comparison
 - **SecretString**: `erp_hmac_secret` never appears in logs or debug output
 

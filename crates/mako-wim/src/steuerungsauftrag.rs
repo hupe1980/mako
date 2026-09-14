@@ -20,7 +20,7 @@
 //! ## Regulatory basis
 //!
 //! - **BDEW API-Guideline 1.0a** — API-Webdienste Strom, `controlMeasuresV1.yaml`
-//! - **BK6-22-024** — WiM Strom (Anlagen 2a/2b), the Festlegung the Fristen come from
+//! - **BK6-24-174** — WiM Strom (Anlagen 2a/2b), the Festlegung the Fristen come from
 //!
 //! ## Frist
 //!
@@ -56,7 +56,7 @@ use rubo4e::identifiers::{NeloId, SrId};
 /// Stable workflow name used in `WorkflowId` and `ProcessRegistry`.
 pub const WORKFLOW_NAME: &str = "wim-steuerungsauftrag";
 
-/// Deadline label for the 5-Werktage response confirmation window (WiM BK6-22-024).
+/// Deadline label for the 5-Werktage response confirmation window (WiM BK6-24-174).
 ///
 /// Register a `Deadline` with this label immediately after `KonfigurationReceived`
 /// or `InitialZustandReceived`:

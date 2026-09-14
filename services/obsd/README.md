@@ -70,7 +70,9 @@ subscriber_id = "obsd"
 #                "de.mako.aperak.accepted", "de.mako.aperak.timeout",
 #                "de.mako.process.failed", "de.mako.aperak.rejected"]
 
-# [oidc]                                  # omit for dev mode
+# Required: omitting it is a startup refusal unless `allow_insecure_no_auth`
+# is set, which is how a dev stack opts out deliberately.
+[oidc]
 # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 # audience = "api://mako-obsd"
 ```

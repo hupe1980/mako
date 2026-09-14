@@ -298,21 +298,23 @@ struct Cli {
     #[arg(long, value_name = "DIR", env = "MAKOD_CEDAR_POLICY_DIR")]
     cedar_policy_dir: Option<std::path::PathBuf>,
 
-    /// Drop the built-in permit-all baseline and grant access only from
-    /// `--cedar-policy-dir`.
+    /// Add the built-in permit-all baseline: every authenticated principal may
+    /// perform every action. **Development only.**
     ///
-    /// `src/cedar/default.cedar` permits every authenticated principal to
-    /// perform every action. A Cedar request is allowed when *any* `permit`
-    /// matches and no `forbid` does, so operator-supplied `permit` statements
-    /// cannot narrow that baseline — without this flag a least-privilege policy
-    /// set has no effect. Required to run `conservative.cedar` as intended, and
-    /// to enforce § 6a EnWG role separation in a combined-role (VIU) deployment.
+    /// Authorization is default-deny. `src/cedar/default.cedar` is the opposite
+    /// of that, and it cannot be narrowed: a Cedar request is allowed when *any*
+    /// `permit` matches and no `forbid` does, so an operator's least-privilege
+    /// `permit` statements have no effect beside it and only a `forbid` can take
+    /// anything back. With this flag a single valid API key is full admin over
+    /// every route, every command, every partner record and every MaLo.
     ///
-    /// Refuses to start unless `--cedar-policy-dir` supplies the grants.
+    /// Without it, access comes only from `--cedar-policy-dir`, which is what
+    /// `conservative.cedar` is written for and what § 6a EnWG role separation
+    /// needs in a combined-role (VIU) deployment.
     ///
-    /// Can also be set via `MAKOD_CEDAR_NO_DEFAULT_POLICY`.
-    #[arg(long, env = "MAKOD_CEDAR_NO_DEFAULT_POLICY")]
-    cedar_no_default_policy: bool,
+    /// Can also be set via `MAKOD_CEDAR_PERMIT_ALL`.
+    #[arg(long, env = "MAKOD_CEDAR_PERMIT_ALL")]
+    cedar_permit_all: bool,
 
     /// OIDC issuer URL for JWT bearer token validation.
     ///
@@ -596,6 +598,18 @@ struct Cli {
     /// terminates mTLS with the BDEW PKI CA and enforces access itself.
     #[arg(long, env = "MAKOD_WEBDIENSTE_ALLOW_UNAUTHENTICATED")]
     webdienste_allow_unauthenticated: bool,
+
+    /// Take the calling Marktpartner's identity from the `x-mako-client-mp-id`
+    /// header on the `:8090` port.
+    ///
+    /// That value decides whose name a § 14a Steuerungsauftrag or a WiM
+    /// Anmeldung is placed in. It is evidence only when a fronting proxy
+    /// terminates mTLS, sets it, and strips any copy the client sent — which
+    /// `makod` cannot verify. Without this the header is ignored and a handler
+    /// that needs a caller refuses. Implied by
+    /// `--webdienste-allow-unauthenticated`.
+    #[arg(long, env = "MAKOD_WEBDIENSTE_TRUST_CLIENT_MP_ID_HEADER")]
+    webdienste_trust_client_mp_id_header: bool,
 
     /// Register a trading-partner AS4 endpoint for outbound EDIFACT delivery.
     ///
@@ -975,6 +989,16 @@ enum LogFormat {
     Json,
 }
 
+impl From<LogFormat> for mako_service::telemetry::LogFormat {
+    fn from(f: LogFormat) -> Self {
+        match f {
+            LogFormat::Pretty => Self::Pretty,
+            LogFormat::Compact => Self::Compact,
+            LogFormat::Json => Self::Json,
+        }
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() -> anyhow::Result<()> {
@@ -1219,6 +1243,10 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         allow_no_as4_trust_anchor: cli.allow_no_as4_trust_anchor,
         allow_no_as4_signing: cli.allow_no_as4_signing,
         edifact_outbox_webhook_url: cli.edifact_outbox_webhook_url.as_deref(),
+        erp_webhook_secret_set: cli
+            .erp_webhook_secret
+            .as_ref()
+            .is_some_and(|s| !secrecy::ExposeSecret::expose_secret(s).trim().is_empty()),
         erp_webhook_url: cli.erp_webhook_url.as_deref(),
         netzzugang_endpoint_url: cli.netzzugang_endpoint_url.as_deref(),
         maloid_partner: &cli.maloid_partner,
@@ -1227,7 +1255,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         marktd_api_key: cli.marktd_api_key.as_deref(),
         auth_keys: &cli.auth_keys,
         cedar_policies: extra_policies,
-        cedar_no_default_policy: cli.cedar_no_default_policy,
+        cedar_permit_all: cli.cedar_permit_all,
         oidc_issuer: cli.oidc_issuer.as_deref(),
         oidc_audience: cli.oidc_audience.as_deref(),
     };
@@ -1463,6 +1491,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
                     addr,
                     max_body_bytes: cli.http_max_body_bytes,
                     allow_unauthenticated: cli.webdienste_allow_unauthenticated,
+                    trust_client_mp_id_header: cli.webdienste_trust_client_mp_id_header
+                        || cli.webdienste_allow_unauthenticated,
                 },
             )
             .await?,
@@ -1828,8 +1858,8 @@ fn apply_config_file(
         if cli.cedar_policy_dir.is_none() {
             cli.cedar_policy_dir = authz.cedar_policy_dir;
         }
-        if authz.no_default_policy {
-            cli.cedar_no_default_policy = true;
+        if authz.permit_all {
+            cli.cedar_permit_all = true;
         }
     }
 
@@ -1855,6 +1885,9 @@ fn apply_config_file(
         }
         if wd.allow_unauthenticated {
             cli.webdienste_allow_unauthenticated = true;
+        }
+        if wd.trust_client_mp_id_header {
+            cli.webdienste_trust_client_mp_id_header = true;
         }
     }
 
@@ -2313,21 +2346,35 @@ async fn open_store(cli: &Cli) -> anyhow::Result<SlateDbStore> {
 fn init_tracing(cli: &Cli) -> Option<mako_service::telemetry::OtelGuard> {
     use tracing_subscriber::{EnvFilter, fmt};
 
-    if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
-        return Some(mako_service::telemetry::init_tracing_from_env("makod"));
-    }
-    if let Some(endpoint) = cli.otel_endpoint.clone() {
-        let otel = mako_service::telemetry::OtelConfig {
+    // `--log-format` is honoured on every path, OTel or not. Resolving the
+    // format only on the plain path would make the flag depend on whether an
+    // exporter happens to be configured.
+    let format: mako_service::telemetry::LogFormat = cli.log_format.into();
+
+    let otel = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .ok()
+        .map(|endpoint| mako_service::telemetry::OtelConfig {
             endpoint,
-            service_name: cli
-                .otel_service_name
+            service_name: std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "makod".to_owned()),
+        })
+        .or_else(|| {
+            cli.otel_endpoint
                 .clone()
-                .unwrap_or_else(|| "makod".to_owned()),
-        };
-        return Some(mako_service::telemetry::init_tracing(
+                .map(|endpoint| mako_service::telemetry::OtelConfig {
+                    endpoint,
+                    service_name: cli
+                        .otel_service_name
+                        .clone()
+                        .unwrap_or_else(|| "makod".to_owned()),
+                })
+        });
+    if let Some(otel) = otel {
+        return Some(mako_service::telemetry::init_tracing_with(
             "makod",
             cli.log_level.as_filter().as_str(),
+            format,
             Some(&otel),
+            None,
         ));
     }
 

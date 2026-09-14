@@ -619,6 +619,9 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             put(rest::set_neuanlage_identifikation),
         )
         .with_state(state)
+        .layer(axum::Extension(mako_service::oidc::ExpectedTenant(
+            cfg.tenant.clone(),
+        )))
         .layer(axum::Extension(cfg.oidc.clone()))
         .layer(axum::Extension(cfg.cedar.clone()))
         .layer(axum::Extension(pool.clone()))

@@ -216,8 +216,8 @@ Never enable `testing` in production builds.
   the Gleichbehandlungsbeauftragte files by 31 March for the preceding calendar year
 - **BK6-24-174** — GPKE Strom process framework and Fristen (Teil 2 states the
   answer windows as clock times on the 1. Werktag nach dem Übertragungstag)
-- **BK6-22-024** — WiM (Messstellenbetrieb), Anlage 2a; the WiM Fristen for
-  **both** Sparten, never BK6-24-174
+- **BK6-24-174 Anlage 2a** — WiM Strom Teil 1; the per-PID Fristen, never a flat
+  5 or 10 Werktage
 - **BK7-24-01-009** — GeLi Gas 3.0 process framework and Fristen (WiM Gas adds
   AWH WiM Gas V2.0)
 

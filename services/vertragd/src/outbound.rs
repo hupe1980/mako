@@ -54,6 +54,18 @@ pub enum TaskKind {
 }
 
 impl TaskKind {
+    /// Every variant, in the order the schema lists them.
+    ///
+    /// `kind` is a `CHECK`-constrained column and this enum is what writes it;
+    /// `schema_enum_guard` holds the two together.
+    pub const ALL: &'static [Self] = &[
+        Self::Lieferbeginn,
+        Self::Lieferende,
+        Self::AblesungBeginn,
+        Self::AblesungEnde,
+        Self::Abrechnungskonto,
+    ];
+
     #[must_use]
     pub const fn as_db(self) -> &'static str {
         match self {

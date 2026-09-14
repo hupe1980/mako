@@ -44,10 +44,16 @@ impl EdifactIngestDispatcher {
                 }),
             },
             // ── MaBiS-ZP lifecycle — Aktivierung/Deaktivierung ────────────────
-            // Only the Anfrage PIDs spawn. The Antwort and Weiterleitung codes
-            // are registered so the router resolves them, but they arrive on a
-            // process this side started, so they resume rather than spawn — and
-            // spawning on one would answer an answer.
+            //
+            // Both directions arrive. This participant activates its own
+            // MaBiS-Zählpunkte at the BIKO and answers the Anfragen of the
+            // benachbarter NB on the Netzzeitreihe axis, so an Anfrage spawns
+            // and an Antwort resumes.
+            //
+            // The order of the three questions is load-bearing: for the eleven
+            // generic Summenzeitreihen Prozessschritt 4 re-uses the *request*
+            // code, so 55062/55063 are both an Anfrage PID and a Weiterleitung
+            // PID and must be asked about as Anfragen first.
             //
             // 55062/55063 are shared by eleven Summenzeitreihen, so membership
             // is checked against the PID set rather than resolved to a family —
@@ -57,8 +63,11 @@ impl EdifactIngestDispatcher {
                 if !mako_mabis::serien_fuer_pid(pid).is_empty() {
                     let cmd = adapters::mabis_zp_lifecycle_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // No APERAK Frist: BK6-24-174 defines no response window for
-                    // the lifecycle Anfragen themselves.
+                    // No deadline is registered on the Anfrage this participant
+                    // *receives*. The 1-Werktag window of SD Nr. 2 is the
+                    // answering party's, and it is armed on the process the
+                    // Anfrage this participant *sends* opens — see
+                    // `mako_fristen::antwort::MABIS`.
                     self.spawn_or_resume::<MabisZpLifecycleWorkflow>(
                         malo_id.as_str(),
                         "mabis-zp-lifecycle",
@@ -67,17 +76,45 @@ impl EdifactIngestDispatcher {
                         &[],
                     )
                     .await
+                } else if mako_mabis::ist_antwort_pid(pid) {
+                    // Prozessschritt 2 — „angenommen oder abgelehnt"
+                    // (BK6-24-174 Anlage 3 Kap. 5.2.2 / 10.4.2 / 17.3.3.1.2
+                    // Nr. 2). It answers an Anfrage this participant sent, so it
+                    // resumes that process rather than spawning: an answer with
+                    // no question is an orphan, not a new lifecycle.
+                    let cmd = adapters::mabis_zp_lifecycle_antwort_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.resume_by_key::<MabisZpLifecycleWorkflow>(
+                        malo_id.as_str(),
+                        "mabis-zp-lifecycle",
+                        cmd,
+                    )
+                    .await
+                } else if mako_mabis::ist_weiterleitung_pid(pid) {
+                    // Prozessschritt 4 is addressed to the **BKV**, not to this
+                    // deployment: „Der BIKO leitet nur den nicht abgelehnten
+                    // MaBiS-ZP an den BKV … weiter." A Netzbetreiber is neither
+                    // the BIKO that forwards nor the BKV that receives, so there
+                    // is no command to build. It stays a coverage-gap skip so it
+                    // dead-letters — the router resolved the PID, which means
+                    // the transport was told this message is handled, and an
+                    // acknowledged inbound message that is not processed is a
+                    // § 147 AO / GoBD record.
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "mabis-zp-lifecycle",
+                        reason: "pid_not_in_zp_lifecycle_for_this_role",
+                    })
                 } else {
                     Ok(IngestOutcome::Skipped {
                         workflow_name: "mabis-zp-lifecycle",
-                        reason: "answer_pid_resumes_only",
+                        reason: "pid_not_in_zp_lifecycle_anfragen",
                     })
                 }
             }
             // ── MaBiS Listenabgleich — list + Korrekturliste ──────────────────
-            // Only the list PIDs spawn; the reply codes are registered so the
-            // router resolves them, but they arrive on a process this side
-            // started and resume it instead.
+            // Only the list PIDs are handled. The reply codes are registered so
+            // the router resolves them and the adapter covers the list leg only,
+            // so an inbound reply has no command to apply and dead-letters.
             "mabis-listenabgleich" => {
                 if mako_mabis::listenabgleich::familie_for(pid).is_some() {
                     let cmd = adapters::mabis_listenabgleich_registry().dispatch(raw, &fv)?;
@@ -93,7 +130,7 @@ impl EdifactIngestDispatcher {
                 } else {
                     Ok(IngestOutcome::Skipped {
                         workflow_name: "mabis-listenabgleich",
-                        reason: "reply_pid_resumes_only",
+                        reason: "pid_not_in_listenabgleich_listen",
                     })
                 }
             }

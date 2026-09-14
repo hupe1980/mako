@@ -285,7 +285,7 @@ the prefixed form (`services/makod/src/main.rs:470`).
 
 To keep the key material out of the environment entirely, mount it as a file and
 name the path in the config instead. Each PEM key has a `*_file` companion,
-resolved by `either_inline_or_file` (`services/makod/src/core/config.rs:533`);
+resolved by `either_inline_or_file` (`services/makod/src/core/config.rs:565`);
 giving both is an error, not a precedence:
 
 ```toml

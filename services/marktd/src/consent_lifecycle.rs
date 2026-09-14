@@ -128,7 +128,7 @@ async fn sweep(
     tenant: &str,
 ) {
     let today = mako_fristen::heute();
-    let expired = match repo.revoke_expired(today).await {
+    let expired = match repo.revoke_expired(today, tenant).await {
         Ok(rows) => rows,
         Err(e) => {
             tracing::warn!(error = %e, "marktd: ESA consent expiry sweep failed");

@@ -52,12 +52,31 @@ const KAUFMAENNISCH: &str = "MidpointAwayFromZero";
 /// Returns `true` when every rounding is kaufmännisch.
 pub fn run(workspace_root: &Path) -> bool {
     let mut findings = Vec::new();
+    let mut scanned = 0usize;
     for dir in ["services", "crates", "xtask", "makotest"] {
-        collect(&workspace_root.join(dir), workspace_root, &mut findings);
+        collect(
+            &workspace_root.join(dir),
+            workspace_root,
+            &mut scanned,
+            &mut findings,
+        );
+    }
+
+    // A guard that read no file finds no banker's rounding, and reports the
+    // clean line for it.
+    if scanned == 0 {
+        eprintln!(
+            "check-rounding: the scan read no source file under services/, crates/, xtask/ or \
+             makotest/ — the layout has probably changed"
+        );
+        return false;
     }
 
     if findings.is_empty() {
-        println!("check-rounding: every Decimal rounding is kaufmännisch (DIN 1333)");
+        println!(
+            "check-rounding: every Decimal rounding in {scanned} source file(s) is \
+             kaufmännisch (DIN 1333)"
+        );
         return true;
     }
 
@@ -77,8 +96,9 @@ pub fn run(workspace_root: &Path) -> bool {
     false
 }
 
-/// Every `.rs` file under `dir`, skipping build output.
-fn collect(dir: &Path, root: &Path, findings: &mut Vec<Finding>) {
+/// Every `.rs` file under `dir`, skipping build output and counting what it
+/// read into `scanned`.
+fn collect(dir: &Path, root: &Path, scanned: &mut usize, findings: &mut Vec<Finding>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -88,7 +108,7 @@ fn collect(dir: &Path, root: &Path, findings: &mut Vec<Finding>) {
             if path.file_name().is_some_and(|n| n == "target") {
                 continue;
             }
-            collect(&path, root, findings);
+            collect(&path, root, scanned, findings);
             continue;
         }
         if path.extension().and_then(|e| e.to_str()) != Some("rs") {
@@ -101,6 +121,7 @@ fn collect(dir: &Path, root: &Path, findings: &mut Vec<Finding>) {
         let Ok(src) = std::fs::read_to_string(&path) else {
             continue;
         };
+        *scanned += 1;
         for (line, i) in offending_lines(&src) {
             findings.push((path.clone(), i, line));
         }
@@ -293,6 +314,15 @@ fn strip_decimal_literals(expr: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// A scan that reaches no file has checked nothing, and must say so rather
+    /// than report the clean line.
+    #[test]
+    fn refuses_a_tree_it_found_nothing_in() {
+        assert!(!super::run(std::path::Path::new(
+            "/nonexistent/mako/workspace/root"
+        )));
+    }
     use super::offending_lines;
 
     #[test]

@@ -7,9 +7,11 @@
 //!
 //! # Idempotency
 //!
-//! Inserts use `ON CONFLICT (process_id) DO UPDATE`, so a redelivered
+//! Inserts use `ON CONFLICT (tenant, process_id) DO UPDATE`, so a redelivered
 //! CloudEvent is safe: the second delivery refreshes the check result and
-//! leaves `received_at` alone.
+//! leaves `received_at` alone. The conflict key is the **pair**: `process_id`
+//! is read from the inbound event's `subject`, so on its own it would let one
+//! sender's redelivery overwrite another tenant's receipt.
 
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -80,21 +82,14 @@ pub struct ReceiptRow {
     pub tenant: String,
 }
 
-/// Insert or refresh a receipt.
-///
-/// # Errors
-///
-/// Returns `sqlx::Error` on database failure. The caller must **not** dispatch
-/// the market answer when this fails: an answered invoice missing from the
-/// audit trail is the failure this table exists to prevent.
-pub async fn upsert_receipt(pool: &PgPool, row: &ReceiptRow) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        r"INSERT INTO invoic_receipts
+/// The receipt upsert, named so the conflict key is assertable without a
+/// database — `invoic_receipts_tenant_process` is the index it relies on.
+const UPSERT_SQL: &str = r"INSERT INTO invoic_receipts
             (process_id, invoice_ref, rechnungsnummer, pid, direction, sender_mp_id,
              receiver_gln, malo_id, rechnung, bo4e_version, outcome, findings,
              pay_by, received_at, checked_at, dispatched_at, tenant)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-          ON CONFLICT (process_id) DO UPDATE SET
+          ON CONFLICT (tenant, process_id) DO UPDATE SET
             outcome         = EXCLUDED.outcome,
             findings        = EXCLUDED.findings,
             pay_by          = EXCLUDED.pay_by,
@@ -105,27 +100,36 @@ pub async fn upsert_receipt(pool: &PgPool, row: &ReceiptRow) -> Result<(), sqlx:
             -- recorded — the second is what a re-dispatch routes by.
             malo_id         = COALESCE(EXCLUDED.malo_id, invoic_receipts.malo_id),
             invoice_ref     = COALESCE(EXCLUDED.invoice_ref, invoic_receipts.invoice_ref),
-            rechnungsnummer = COALESCE(EXCLUDED.rechnungsnummer, invoic_receipts.rechnungsnummer)",
-    )
-    .bind(row.process_id)
-    .bind(row.invoice_ref.as_deref())
-    .bind(row.rechnungsnummer.as_deref())
-    .bind(row.pid)
-    .bind(&row.direction)
-    .bind(&row.sender_mp_id)
-    .bind(&row.receiver_gln)
-    .bind(row.malo_id.as_deref())
-    .bind(&row.rechnung)
-    .bind(&row.bo4e_version)
-    .bind(&row.outcome)
-    .bind(&row.findings)
-    .bind(row.pay_by)
-    .bind(row.received_at)
-    .bind(row.checked_at)
-    .bind(row.dispatched_at)
-    .bind(&row.tenant)
-    .execute(pool)
-    .await?;
+            rechnungsnummer = COALESCE(EXCLUDED.rechnungsnummer, invoic_receipts.rechnungsnummer)";
+
+/// Insert or refresh a receipt, keyed on `(tenant, process_id)`.
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` on database failure. The caller must **not** dispatch
+/// the market answer when this fails: an answered invoice missing from the
+/// audit trail is the failure this table exists to prevent.
+pub async fn upsert_receipt(pool: &PgPool, row: &ReceiptRow) -> Result<(), sqlx::Error> {
+    sqlx::query(UPSERT_SQL)
+        .bind(row.process_id)
+        .bind(row.invoice_ref.as_deref())
+        .bind(row.rechnungsnummer.as_deref())
+        .bind(row.pid)
+        .bind(&row.direction)
+        .bind(&row.sender_mp_id)
+        .bind(&row.receiver_gln)
+        .bind(row.malo_id.as_deref())
+        .bind(&row.rechnung)
+        .bind(&row.bo4e_version)
+        .bind(&row.outcome)
+        .bind(&row.findings)
+        .bind(row.pay_by)
+        .bind(row.received_at)
+        .bind(row.checked_at)
+        .bind(row.dispatched_at)
+        .bind(&row.tenant)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -166,12 +170,11 @@ pub async fn rechnungsnummer_bereits_verwendet(
     rechnungsnummer: &str,
     process_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
-    // No cancellation filter: `outcome` has no stornierte state — the seven
-    // values are Ok / AcceptedPartial / Warn / Dispute / Resolved / Dispatched
-    // / Paid, and a Storno arrives as its own receipt rather than mutating the
-    // original's. So a number whose invoice was later cancelled still counts as
-    // used, which is the § 14 Abs. 4 Nr. 4 UStG reading anyway: the
-    // Rechnungsnummer is einmalig vergeben, not einmalig *wirksam*.
+    // No cancellation filter: `outcome` has no stornierte state, and a Storno
+    // arrives as its own receipt rather than mutating the original's. So a
+    // number whose invoice was later cancelled still counts as used, which is
+    // the § 14 Abs. 4 Nr. 4 UStG reading anyway: the Rechnungsnummer is
+    // einmalig vergeben, not einmalig *wirksam*.
     let found: Option<(bool,)> = sqlx::query_as(
         r"SELECT true
             FROM invoic_receipts
@@ -211,14 +214,19 @@ pub async fn receipt_outcome(
 
 pub async fn mark_dispatched(
     pool: &PgPool,
+    tenant: &str,
     process_id: Uuid,
     dispatched_at: OffsetDateTime,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE invoic_receipts SET dispatched_at = $1 WHERE process_id = $2")
-        .bind(dispatched_at)
-        .bind(process_id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE invoic_receipts SET dispatched_at = $1 \
+         WHERE tenant = $3 AND process_id = $2",
+    )
+    .bind(dispatched_at)
+    .bind(process_id)
+    .bind(tenant)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -272,14 +280,19 @@ pub async fn dispatch_target(
 /// Returns `sqlx::Error` on database failure.
 pub async fn mark_erp_notified(
     pool: &PgPool,
+    tenant: &str,
     process_id: Uuid,
     delivered_at: OffsetDateTime,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE invoic_receipts SET erp_notified_at = $1 WHERE process_id = $2")
-        .bind(delivered_at)
-        .bind(process_id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE invoic_receipts SET erp_notified_at = $1 \
+         WHERE tenant = $3 AND process_id = $2",
+    )
+    .bind(delivered_at)
+    .bind(process_id)
+    .bind(tenant)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -307,6 +320,7 @@ pub async fn mark_erp_notified(
 /// Returns `sqlx::Error` on database failure.
 pub async fn record_erp_failure(
     pool: &PgPool,
+    tenant: &str,
     process_id: Uuid,
     attempts: i16,
 ) -> Result<(), sqlx::Error> {
@@ -319,10 +333,11 @@ pub async fn record_erp_failure(
     sqlx::query(
         r"UPDATE invoic_receipts
           SET erp_next_attempt_at = now() + ($1 * INTERVAL '1 second')
-          WHERE process_id = $2",
+          WHERE tenant = $3 AND process_id = $2",
     )
     .bind(delay_secs)
     .bind(process_id)
+    .bind(tenant)
     .execute(pool)
     .await?;
     Ok(())
@@ -338,12 +353,20 @@ pub async fn record_erp_failure(
 /// # Errors
 ///
 /// Returns `sqlx::Error` on database failure.
-pub async fn dead_letter_erp(pool: &PgPool, process_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE invoic_receipts SET erp_attempts = $2 WHERE process_id = $1")
-        .bind(process_id)
-        .bind(DEAD_LETTER_ATTEMPTS)
-        .execute(pool)
-        .await?;
+pub async fn dead_letter_erp(
+    pool: &PgPool,
+    tenant: &str,
+    process_id: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE invoic_receipts SET erp_attempts = $2 \
+         WHERE tenant = $3 AND process_id = $1",
+    )
+    .bind(process_id)
+    .bind(DEAD_LETTER_ATTEMPTS)
+    .bind(tenant)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -518,4 +541,38 @@ pub async fn confirm_payment(pool: &PgPool, id: Uuid, tenant: &str) -> Result<bo
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UPSERT_SQL;
+
+    /// The receipt upsert conflicts on the pair, never on `process_id` alone.
+    ///
+    /// `process_id` is read from the inbound CloudEvent's `subject` — a value a
+    /// sender chooses. Keyed globally, a redelivery from one market partner
+    /// rewrites the outcome, the findings and the Zahlungsziel of another
+    /// tenant's Buchungsbeleg.
+    #[test]
+    fn the_receipt_upsert_conflicts_on_tenant_and_process() {
+        assert!(
+            UPSERT_SQL.contains("ON CONFLICT (tenant, process_id)"),
+            "the conflict key must be the pair: {UPSERT_SQL}"
+        );
+    }
+
+    /// The schema's uniqueness must be the same pair the upsert names, or the
+    /// statement fails at runtime for want of a matching unique index.
+    #[test]
+    fn the_schema_declares_that_pair_unique() {
+        let schema = include_str!("../../migrations/0001_schema.sql");
+        assert!(
+            schema.contains("ON invoic_receipts (tenant, process_id)"),
+            "no unique index backs `ON CONFLICT (tenant, process_id)`"
+        );
+        assert!(
+            !schema.contains("process_id              UUID        NOT NULL UNIQUE"),
+            "a globally unique process_id lets one tenant's event reach another's receipt"
+        );
+    }
 }

@@ -102,6 +102,7 @@ async fn insert_projection(
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn deadline_sweep_alerts_once_for_approaching_open_processes() {
     let Some((pool, _pg)) = pg_pool().await else {
         return;
@@ -178,6 +179,7 @@ async fn deadline_sweep_alerts_once_for_approaching_open_processes() {
 /// A downed webhook target must not consume the warning: nothing is stamped, so
 /// the next sweep retries the same processes.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn deadline_sweep_does_not_stamp_when_the_emit_fails() {
     let Some((pool, _pg)) = pg_pool().await else {
         return;
@@ -217,6 +219,7 @@ async fn deadline_sweep_does_not_stamp_when_the_emit_fails() {
 }
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn parity_sweep_alerts_when_affiliate_is_favoured_beyond_threshold() {
     let Some((pool, _pg)) = pg_pool().await else {
         return;
@@ -264,6 +267,7 @@ async fn parity_sweep_alerts_when_affiliate_is_favoured_beyond_threshold() {
 /// window is exactly the one most likely to miss the answer too. Excluding these
 /// would also disagree with `list_overdue_processes`, which does not.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_aperak_timeout_still_gets_its_antwortfrist_alert() {
     let Some((pool, _pg)) = pg_pool().await else {
         return;
@@ -296,6 +300,7 @@ async fn an_aperak_timeout_still_gets_its_antwortfrist_alert() {
 /// A process with no published Antwortfrist carries no deadline and is
 /// therefore never breached against an instant nobody can cite.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_process_without_a_published_frist_is_never_alerted() {
     let Some((pool, _pg)) = pg_pool().await else {
         return;
@@ -316,6 +321,7 @@ async fn a_process_without_a_published_frist_is_never_alerted() {
 /// The alert carries the Fundstelle, so a recipient can name the Festlegung
 /// rather than trusting an instant.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_alert_carries_the_festlegung_it_came_from() {
     let Some((pool, _pg)) = pg_pool().await else {
         return;
@@ -365,6 +371,7 @@ const _: fn() -> SweepOutcome = SweepOutcome::default;
 /// and `deadline_risk` (which *is* written unconditionally) reclassifies the
 /// process against a deadline it does not have.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_redelivered_initiated_event_does_not_move_the_frist() {
     let Some((pool, _pg)) = pg_pool().await else {
         return;

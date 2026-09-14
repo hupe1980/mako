@@ -98,7 +98,7 @@ pub async fn handle_process_initiated(
             pid: payload.pid as i32,
             lf_mp_id: payload.lf_mp_id.clone(),
             marktlokationsart: payload.marktlokationsart,
-            veraeusserungsform: payload.veraeusserungsform.clone(),
+            veraeusserungsform: payload.veraeusserungsform,
             uebertragungstag,
             zuordnungsbeginn: payload.zuordnungsbeginn,
             letzter_pruefungstag,
@@ -348,7 +348,7 @@ struct NeuanlagePayload {
     grid_operator_gln: String,
     zuordnungsbeginn: Date,
     marktlokationsart: Marktlokationsart,
-    veraeusserungsform: Option<String>,
+    veraeusserungsform: Option<Veraeusserungsform>,
     received_at: OffsetDateTime,
 }
 
@@ -395,7 +395,26 @@ impl NeuanlagePayload {
             veraeusserungsform: data
                 .get("veraeusserungsform")
                 .and_then(|v| v.as_str())
-                .map(ToOwned::to_owned),
+                .filter(|s| !s.is_empty())
+                .and_then(|code| {
+                    let parsed = Veraeusserungsform::from_wire_code(code);
+                    if parsed.is_none() {
+                        // Not a silent drop: the column is `CHECK`-constrained,
+                        // so storing the code raw made Postgres refuse the whole
+                        // INSERT and the Anmeldung was never answered. Opening
+                        // the case without it is the lesser failure — `E_0608`
+                        // then escalates for want of a Veräußerungsform instead
+                        // of the LF hearing nothing — but it is still a failure,
+                        // so it is said out loud.
+                        tracing::warn!(
+                            code,
+                            pid,
+                            "neuanlage: CCI+Z22 DE 7037 names a Veräußerungsform \
+                             outside Z90/Z91/Z92/Z94 — the case opens without it"
+                        );
+                    }
+                    parsed
+                }),
             received_at,
         })
     }
@@ -409,6 +428,53 @@ fn parse_civil_date(raw: &str) -> Option<Date> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Veräußerungsform outside the published four opens the case anyway.
+    ///
+    /// It used to reach the INSERT verbatim, and `veraeusserungsform` is a
+    /// `CHECK`-constrained column — so Postgres refused the whole statement and
+    /// the LF's Anmeldung was never answered. Silence on a regulated process is
+    /// worse than a case missing one field.
+    #[test]
+    fn an_unknown_veraeusserungsform_does_not_sink_the_case() {
+        let event = serde_json::json!({
+            "makopid": 55_601,
+            "subject": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+            "time": "2026-04-01T08:00:00Z",
+            "data": {
+                "new_supplier": "9900357000004",
+                "grid_operator": "9900000000001",
+                "process_date": "20260501",
+                "veraeusserungsform": "Z93"
+            }
+        });
+        let p = NeuanlagePayload::parse(&event).expect("the case still opens");
+        assert_eq!(p.pid, 55_601);
+        assert_eq!(
+            p.veraeusserungsform, None,
+            "an unreadable code is dropped rather than written into a CHECK column"
+        );
+    }
+
+    /// An absent or empty Veräußerungsform is not an error — a 55600 carries none.
+    #[test]
+    fn a_missing_veraeusserungsform_is_none() {
+        for value in [serde_json::json!(null), serde_json::json!("")] {
+            let event = serde_json::json!({
+                "makopid": 55_600,
+                "subject": "3f2504e0-4f89-11d3-9a0c-0305e82c3302",
+                "time": "2026-04-01T08:00:00Z",
+                "data": {
+                    "new_supplier": "9900357000004",
+                    "grid_operator": "9900000000001",
+                    "process_date": "20260501",
+                    "veraeusserungsform": value
+                }
+            });
+            let p = NeuanlagePayload::parse(&event).expect("parses");
+            assert_eq!(p.veraeusserungsform, None);
+        }
+    }
 
     #[test]
     fn parses_a_neuanlage_event_and_takes_the_pid_branch() {
@@ -426,7 +492,11 @@ mod tests {
         let p = NeuanlagePayload::parse(&event).expect("parses");
         assert_eq!(p.pid, 55_601);
         assert_eq!(p.marktlokationsart, Marktlokationsart::Erzeugend);
-        assert_eq!(p.veraeusserungsform.as_deref(), Some("Z91"));
+        assert_eq!(
+            p.veraeusserungsform,
+            Some(Veraeusserungsform::Marktpraemie),
+            "the wire code is parsed at the boundary, not carried as text"
+        );
         assert_eq!(
             p.zuordnungsbeginn,
             Date::from_calendar_date(2026, time::Month::May, 1).expect("valid")

@@ -674,7 +674,7 @@ async fn answered_order_absorbs_the_response_deadline() {
 
 /// The Antwortfrist differs per process and must not be flattened to one value.
 ///
-/// BK6-22-024 WiM Teil 1: Kap. 2.2.2 Nr. 2 (3 WT), Kap. 2.3.2 Nr. 2 (5 WT),
+/// BK6-24-174 WiM Teil 1: Kap. 2.2.2 Nr. 2 (3 WT), Kap. 2.3.2 Nr. 2 (5 WT),
 /// Kap. 2.4.2 Nr. 2 (7 WT), Kap. 2.5.2 Nr. 4 (1 WT).
 #[test]
 fn antwortfrist_is_per_process_not_flat() {

@@ -35,7 +35,7 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BNetzA BK6-22-024 Anlage 2a** — WiM Strom Teil 1, Kap. 3.6.3.8 / 3.7 / 6
+//! - **BNetzA BK6-24-174 Anlage 2a** — WiM Strom Teil 1, Kap. 3.6.3.8 / 3.7 / 6
 //! - **AWH WiM Gas 2.0** — Kap. 4.7 (Abrechnung von Dienstleistungen)
 //! - **INVOIC AHB 1.0b** — EDI@Energy invoice message format
 

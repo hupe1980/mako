@@ -73,7 +73,7 @@ Both report as `ValidationFailure { path, message }`. A rule belongs there
 | Principle | Detail |
 |---|---|
 | **Stateless library** | No axum, no sqlx, no async runtime in this crate. All I/O lives in `services/marktd`. |
-| **Validated domain identifiers** | [`MaloId`], [`MeloId`], and [`MarktpartnerId`] validate format and checksum at construction time — invalid IDs are rejected at the system boundary. |
+| **Validated domain identifiers** | `MaloId`, `MeloId`, and `MarktpartnerId` validate format and checksum at construction time — invalid IDs are rejected at the system boundary. |
 | **Temporal role assignments** | `rollenzuordnung` entries carry `valid_from`/`valid_to` date ranges. Queries are always resolved against a reference date (German local time, CET/CEST). |
 | **Generic `AppState`** | One generic type parameter per repository trait — fully static dispatch with no `dyn Trait` overhead. |
 | **AFIT** | All repository traits use `async fn in trait` (stable since Rust 1.75, MSRV 1.94). |

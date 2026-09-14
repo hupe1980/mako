@@ -5359,7 +5359,7 @@ fn the_promised_warnings_fire() {
 /// §14a Modul 2 bills three Tarifstufen that replace the flat NNE Arbeitspreis.
 ///
 /// Only Modul 1 (flat reduction) and Modul 3 (dispatch compensation) existed;
-/// the zeitvariables Netzentgelt — BK6-22-300 Anlage 2 §2, with *three* bands,
+/// the zeitvariables Netzentgelt — BK8-22/010-A Tenor 3., with *three* bands,
 /// not two — was absent from the retail engine entirely.
 #[test]
 fn sect14a_modul3_bills_three_bands() {
@@ -5368,7 +5368,7 @@ fn sect14a_modul3_bills_three_bands() {
     let product: energy_billing::Product = serde_json::from_value(serde_json::json!({
         "category": "WAERMEPUMPE",
         "arbeitspreis_ct_per_kwh": "20.0",
-        // BK6-22-300: Modul 3 is only offered in combination with Modul 1, and
+        // BK8-22/010-A: Modul 3 is only offered in combination with Modul 1, and
         // only against an iMSys — both are preconditions the engine enforces.
         "sect14a_modul1_pauschale_eur_per_year": "0.0",
         "sect14a_modul3_nne_ht_ct_per_kwh": "12.0",
@@ -5577,7 +5577,7 @@ fn billing_period_refuses_inversion() {
     assert!(parsed.is_err(), "deserialization must validate too");
 }
 
-/// BK6-22-300 makes §14a Modul 2 and Modul 3 mutually exclusive.
+/// BK8-22/010-A makes §14a Modul 2 and Modul 3 mutually exclusive.
 ///
 /// Both re-price the Netzentgelt-Arbeitspreis — Modul 2 as a percentage on the
 /// device's separately metered energy, Modul 3 through three time bands — so a
@@ -5622,7 +5622,7 @@ fn sect14a_modul2_and_modul3_together_are_refused() {
     assert!(msg.contains("mutually exclusive"), "{msg}");
 }
 
-/// Modul 1 and Modul 2 are the two forms of the BK6-22-300 base module and the
+/// Modul 1 and Modul 2 are the two forms of the BK8-22/010-A base module and the
 /// Anschlussnutzer holds one. Billing both grants the same Steuerbarkeit a
 /// pauschale reduction *and* a percentage off the Arbeitspreis.
 #[test]
@@ -5657,7 +5657,7 @@ fn sect14a_modul1_and_modul2_together_are_refused() {
 }
 
 /// Modul 1 is a flat reduction needing no metering, so it composes with the
-/// time-variable Modul 3 — the combination BK6-22-300 explicitly allows.
+/// time-variable Modul 3 — the combination BK8-22/010-A explicitly allows.
 #[test]
 fn sect14a_modul1_combines_with_modul3() {
     use energy_billing::Sect14aModul3Verbrauch;
@@ -6353,7 +6353,7 @@ fn a_dynamic_invoice_carries_the_same_display_duties_as_a_static_one() {
     assert_eq!(invoice.positions_by_tag("verbrauchshistorie").count(), 2);
 }
 
-/// BK6-22-300 offers Modul 3 **only in combination with Modul 1**, and only
+/// BK8-22/010-A offers Modul 3 **only in combination with Modul 1**, and only
 /// against an intelligentes Messsystem. Neither precondition was checked: a
 /// product carrying the bands alone priced a tariff no Netzbetreiber offers and
 /// dropped the Modul 1 reduction the customer was entitled to, and an SLP meter
@@ -6414,7 +6414,7 @@ fn modul3_needs_modul1_and_an_imsys() {
     product
         .build_engine(&no_grid(), &rates_2026())
         .bill(ctx_for(f, t), &q(MeteringMode::Imsys))
-        .expect("Modul 1 + Modul 3 on an iMSys is the combination BK6-22-300 offers");
+        .expect("Modul 1 + Modul 3 on an iMSys is the combination BK8-22/010-A offers");
 }
 
 /// A `minimum_invoice_eur_brutto` top-up must actually reach the minimum.
@@ -7052,7 +7052,7 @@ fn a_zero_consumption_gas_period_still_carries_the_nne_grundpreis() {
 /// § 14a EnWG Modul 1 is a flat annual amount, so it bills without a
 /// Spitzenleistung.
 ///
-/// BK6-22-300 fixes it as `80 EUR + 3 750 kWh × Arbeitspreis × 0,2` — no per-kW
+/// BK8-22/010-A fixes it as `80 EUR + 3 750 kWh × Arbeitspreis × 0,2` — no per-kW
 /// component. An SLP heat pump reports no Spitzenleistung, and it is exactly
 /// the case the module exists for, so requiring one would refuse every
 /// household invoice the reduction applies to.

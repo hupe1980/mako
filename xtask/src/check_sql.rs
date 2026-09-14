@@ -32,8 +32,13 @@
 //! anything else is a runtime value; that call site is counted as unresolved
 //! and never guessed at, so the gap is a number rather than an assumption.
 //!
-//! It needs a Docker daemon, which is why it runs from `just test-db` rather
-//! than `just ci`, and it says so loudly instead of reporting green from a skip.
+//! **Where the server comes from.** `MAKO_CHECK_SQL_URL` names one that is
+//! already running and the check connects to it; otherwise it starts a
+//! throwaway container and removes it afterwards. Neither available is a
+//! refusal, never a green — a gate that reports success from a skip is not a
+//! gate. `just test-db` takes the container path locally; CI takes the URL,
+//! because a hosted runner has `services: postgres` and `psql` but no daemon a
+//! job can reliably `docker exec` into.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -80,15 +85,7 @@ pub fn run(workspace_root: &Path) -> bool {
         return false;
     }
 
-    if !docker_available() {
-        eprintln!(
-            "check-sql: needs a Docker daemon to start {IMAGE} and has not run.\n\
-             This is a skip, not a pass — start Docker and run it again."
-        );
-        return false;
-    }
-
-    let Some(guard) = Postgres::start() else {
+    let Some(guard) = Postgres::open() else {
         return false;
     };
 
@@ -448,6 +445,16 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Whether a `psql` client is on `PATH`.
+fn psql_available() -> bool {
+    Command::new("psql")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 fn docker_available() -> bool {
     Command::new("docker")
         .arg("info")
@@ -457,10 +464,85 @@ fn docker_available() -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// A throwaway server, removed when this value is dropped.
-struct Postgres;
+/// Environment variable naming an already-running server.
+///
+/// Set it and `check-sql` connects with `psql "$URL"` instead of starting a
+/// container of its own. That is what lets CI run this gate: a GitHub runner
+/// has no Docker daemon a job can `docker exec` into reliably, but
+/// `services: postgres` gives it a server on a port and `psql` on `PATH`.
+const URL_ENV: &str = "MAKO_CHECK_SQL_URL";
+
+/// Where the statements are prepared.
+///
+/// `Container` owns the server and removes it on drop. `Url` borrows one this
+/// process did not start, so dropping it does nothing — deleting someone
+/// else's database is not this guard's business.
+enum Postgres {
+    /// A throwaway container, removed when this value is dropped.
+    Container,
+    /// A server reachable at this URL, started and owned elsewhere.
+    Url(String),
+}
 
 impl Postgres {
+    /// The server to prepare against, or `None` when neither is available.
+    fn open() -> Option<Self> {
+        if let Ok(url) = std::env::var(URL_ENV)
+            && !url.trim().is_empty()
+        {
+            if !psql_available() {
+                eprintln!(
+                    "check-sql: {URL_ENV} is set but `psql` is not on PATH — install the \
+                     PostgreSQL client, or unset {URL_ENV} to use a container."
+                );
+                return None;
+            }
+            println!("check-sql: preparing against the server named by {URL_ENV}");
+            return Some(Self::Url(url));
+        }
+        if !docker_available() {
+            eprintln!(
+                "check-sql: needs a Docker daemon to start {IMAGE}, or {URL_ENV} pointing \
+                 at a running server, and has not run.\n\
+                 This is a skip, not a pass — start Docker and run it again."
+            );
+            return None;
+        }
+        Self::start()
+    }
+
+    /// The command that feeds a script to the server on stdin.
+    ///
+    /// Streams merged through `sh -c` in both cases: `\echo` writes the marker
+    /// to stdout and an error goes to stderr, so reading them apart loses the
+    /// interleaving that says which statement failed.
+    fn psql(&self) -> Command {
+        match self {
+            Self::Container => {
+                let mut c = Command::new("docker");
+                c.args([
+                    "exec",
+                    "-i",
+                    CONTAINER,
+                    "sh",
+                    "-c",
+                    "psql -U postgres -q -f - 2>&1",
+                ]);
+                c
+            }
+            Self::Url(url) => {
+                let mut c = Command::new("sh");
+                // The URL is an operator-supplied connection string; single-quote
+                // it so a `&` or `?` in a password cannot reach the shell.
+                c.args([
+                    "-c",
+                    &format!("psql '{}' -q -f - 2>&1", url.replace('\'', r"'\''")),
+                ]);
+                c
+            }
+        }
+    }
+
     fn start() -> Option<Self> {
         let _ = Command::new("docker")
             .args(["rm", "-f", CONTAINER])
@@ -483,7 +565,7 @@ impl Postgres {
             eprintln!("check-sql: could not start {IMAGE}");
             return None;
         }
-        let guard = Self;
+        let guard = Self::Container;
         for _ in 0..60 {
             let ready = Command::new("docker")
                 .args(["exec", CONTAINER, "pg_isready", "-U", "postgres"])
@@ -521,18 +603,8 @@ impl Postgres {
             script.push_str(&format!("DEALLOCATE p{i};\n"));
         }
 
-        // Through `sh -c` with the streams merged: `\echo` writes the marker to
-        // stdout and an error goes to stderr, so reading them apart loses the
-        // interleaving that says which statement failed.
-        let out = Command::new("docker")
-            .args([
-                "exec",
-                "-i",
-                CONTAINER,
-                "sh",
-                "-c",
-                "psql -U postgres -q -f - 2>&1",
-            ])
+        let out = self
+            .psql()
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -586,10 +658,14 @@ impl Postgres {
 
 impl Drop for Postgres {
     fn drop(&mut self) {
-        let _ = Command::new("docker")
-            .args(["rm", "-f", CONTAINER])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+        // Only a container this process started. A `Url` server belongs to
+        // whoever started it.
+        if matches!(self, Self::Container) {
+            let _ = Command::new("docker")
+                .args(["rm", "-f", CONTAINER])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
     }
 }

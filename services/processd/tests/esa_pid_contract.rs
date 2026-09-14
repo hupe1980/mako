@@ -1,7 +1,7 @@
 //! Guards that the ESA module listens for the PIDs `makod` actually spawns from.
 //!
-//! Same failure class the LF module once had (see `pid_contract.rs`): a module
-//! keyed on an *answer* PID never matches an event and silently never runs.
+//! The failure class `pid_contract.rs` guards for the LF module: a module keyed
+//! on an *answer* PID never matches an event and silently never runs.
 //! The ESA handshake makes that especially easy to get wrong, because the MSB
 //! both receives and sends within one process — 17007 arrives, 19011 leaves,
 //! and both are plausible `u32`s that appear in the same AHB chapter.

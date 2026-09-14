@@ -617,3 +617,67 @@ fn no_profile_is_valid_from_its_publication_date() {
         );
     }
 }
+
+/// A sender may only pick a Formatversion whose Anwendungszeitpunkt has passed.
+///
+/// Profiles are compiled in as soon as BDEW publishes them, six months before
+/// they take effect (Allgemeine Festlegungen 6.1d § 2.5), so the registry's
+/// newest entry is routinely one release ahead of the one in force. EDIFACT
+/// publishes no Übergangsfrist, so stamping that one is a refusal at the
+/// counterparty rather than a newer dialect it tolerates.
+#[test]
+#[cfg(feature = "utilmd")]
+fn versions_in_force_exclude_a_release_that_has_not_taken_effect() {
+    use edi_energy::registry::ReleaseRegistry;
+
+    let registry = ReleaseRegistry::global();
+    let all = registry.format_versions();
+
+    // The day before the newest Anwendungszeitpunkt in the registry: that
+    // version must not be offered, every earlier one must.
+    let newest = registry
+        .all_profiles()
+        .iter()
+        .filter_map(|p| p.valid_from())
+        .max()
+        .expect("the registry ships dated profiles");
+    let day_before = newest.previous_day().expect("not the minimum date");
+
+    let in_force = registry.format_versions_in_force_on(day_before);
+    let newest_fv = format!(
+        "FV{:04}-{:02}-{:02}",
+        newest.year(),
+        newest.month() as u8,
+        newest.day()
+    );
+    assert!(
+        all.contains(&newest_fv),
+        "the unfiltered list is the registry's own"
+    );
+    assert!(
+        !in_force.contains(&newest_fv),
+        "{newest_fv} takes effect on {newest}; it must not be selectable on {day_before}"
+    );
+    // Derived, not assumed: more than one release can share an
+    // Anwendungszeitpunkt, and a future import can add a second future date.
+    let still_ahead = registry
+        .all_profiles()
+        .iter()
+        .filter_map(|p| p.valid_from())
+        .filter(|d| *d > day_before)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        all.len() - in_force.len(),
+        still_ahead.len(),
+        "the filter must drop exactly the versions not yet in force on {day_before}"
+    );
+
+    // On the Anwendungszeitpunkt itself the version is in force — the boundary
+    // is inclusive, because a format applies *from* that date.
+    assert!(
+        registry
+            .format_versions_in_force_on(newest)
+            .contains(&newest_fv),
+        "{newest_fv} applies from {newest}, not after it"
+    );
+}

@@ -20,7 +20,7 @@ from its own Codeliste. This crate is those rules, executable.
 | `esa` | MSB (Bestellung) **und** Energieserviceanbieter (Abrechnung) | Wertebestellung (`E_0252`, `E_0256`, `E_0257`, `E_0254`); the Kap. 4.5 Abrechnung (`E_0264`–`E_0267`) is `rechnung::ESA` bound |
 | `rechnung` (ungated) | ESA, LF **und** NB | One invoice walk, three families: `E_0264`–`E_0267` (ESA), `E_0270`–`E_0272`/`E_0276` (Preisblatt B ↔ LF), `E_0273`–`E_0275`/`E_0277` (↔ NB) |
 | `emob` | NB (VNB) **und** LF | NZR-EMob / Modell 2 (`E_0510`–`E_0513`): Anmeldung, Beendigung der Zuordnung, Abmeldung |
-| `mabis` | NB, LF **und** BKV | Summenzeitreihen (`E_0007`, `E_0040`–`E_0041`, `E_0062`–`E_0065`, `E_0093`, `E_0098`/`E_0099`), Listenabgleich (`E_0004`, `E_0014`, `E_0017`, `E_0047`, `E_0049`, `E_0052`, `E_0070`, `E_0096`, `E_0097`), MaBiS-ZP (`E_0010`, `E_0020`, `E_0102`, `E_0103`), Profile (`E_0100`), Einzelanforderung/Listeninhalt (`E_0068`, `E_0104`), Redispatch-Ausfallarbeit (`E_0901`, `E_0902`) — 28 trees in `mabis::codes::MABIS_TREES` |
+| `mabis` | NB, LF **und** BKV | Summenzeitreihen (`E_0007`, `E_0040`–`E_0041`, `E_0062`–`E_0065`, `E_0093`, `E_0098`/`E_0099`), Listenabgleich (`E_0004`, `E_0014`, `E_0017`, `E_0047`, `E_0049`, `E_0052`, `E_0070`, `E_0096`, `E_0097`), MaBiS-ZP (`E_0010`, `E_0020`, `E_0102`, `E_0103`), MaBiS-ZP für die monatliche AAÜZ (`E_0071`/`E_0072` NB↔BKV(LF), `E_0078`/`E_0079` NB↔anfNB), Profile (`E_0100`), Einzelanforderung/Listeninhalt (`E_0068`, `E_0104`), Redispatch-Ausfallarbeit (`E_0901`, `E_0902`) — 32 trees in `mabis::codes::MABIS_TREES` |
 
 The `msb` module is named for the process family, not one Marktrolle: WiM Teil 1
 has the NB answer the Anmeldung and the Abmeldung, while the abgebender MSB
@@ -52,7 +52,7 @@ here are the **process** answers — the messages that move a Marktlokation
 between suppliers. Of the Rechnungsprüfung family only the ESA's is executable
 (`E_0264`–`E_0267`); `E_0406`'s codes are catalogued in part and the rest
 (`E_0210`/`E_0211`/`E_0243`, `E_0259`–`E_0261`, `E_0566`–`E_0569`, …) are named
-by [`codes::rechnungspruefung`] — keyed on (PID, Empfänger, Gegenstand), because
+by `codes::rechnungspruefung` — keyed on (PID, Empfänger, Gegenstand), because
 PID 31009 alone carries five Use-Cases — so an answer can state the right tree
 without claiming codes this crate does not carry. Stammdatenänderung (`E_0408`)
 is a separate obligation and is not walked here at all.

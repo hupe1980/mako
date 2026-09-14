@@ -79,6 +79,39 @@ pub struct DeliveryConfig {
     pub max_attempts: i32,
 }
 
+impl DeliveryConfig {
+    /// Relay URLs configured without a credential, by config key.
+    ///
+    /// A relay body carries a customer's document — the invoice or Mahnung
+    /// itself, base64-encoded, with their name, e-mail address, MaLo and
+    /// Kundennummer beside it. Without a credential the push is neither
+    /// authenticated nor signed, so the receiver cannot tell it from anything
+    /// else that reached the URL and anybody who can is served the document.
+    #[must_use]
+    pub fn unsigned_relays(&self) -> Vec<&'static str> {
+        let configured = |url: &Option<String>| url.as_deref().is_some_and(|u| !u.is_empty());
+        let mut open = Vec::new();
+        for (url, key, name) in [
+            (
+                &self.email_relay_url,
+                &self.email_relay_api_key,
+                "email_relay_api_key",
+            ),
+            (
+                &self.postal_relay_url,
+                &self.postal_relay_api_key,
+                "postal_relay_api_key",
+            ),
+            (&self.erp_webhook_url, &self.erp_api_key, "erp_api_key"),
+        ] {
+            if configured(url) && key.is_none() {
+                open.push(name);
+            }
+        }
+        open
+    }
+}
+
 const fn default_true() -> bool {
     true
 }

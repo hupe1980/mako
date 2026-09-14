@@ -107,6 +107,7 @@ async fn skip_list(pool: &sqlx::PgPool, corrects: Option<Uuid>) -> Vec<String> {
 /// the BIKO already acked. An acked Summenzeitreihe cannot be withdrawn, so that
 /// is a second binding filing for a settled month, not a duplicate.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_retry_does_not_re_file_what_the_biko_already_acked() {
     let (pool, _guard) = pool_or_skip!();
     let first = a_run(&pool).await;
@@ -178,6 +179,7 @@ async fn a_retry_does_not_re_file_what_the_biko_already_acked() {
 /// `NULL`. Without that in the key a correction would skip the very territory it
 /// exists to correct.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_correction_re_files_what_a_retry_would_skip() {
     let (pool, _guard) = pool_or_skip!();
     let first = a_run(&pool).await;
@@ -243,6 +245,7 @@ async fn a_correction_re_files_what_a_retry_would_skip() {
 /// auditor at a message this run never sent. The row-level constraint that
 /// forbids that on a *series* must not be extended to the run.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_run_that_filed_nothing_is_acked_without_a_reference() {
     let (pool, _guard) = pool_or_skip!();
     let run_id = a_run(&pool).await;
@@ -266,6 +269,7 @@ async fn a_run_that_filed_nothing_is_acked_without_a_reference() {
 /// Without the reference there is nothing to correlate the BIKO's Datenstatus
 /// or Prüfmitteilung against, so the filing exists and cannot be followed.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_acked_series_cannot_omit_its_message_reference() {
     let (pool, _guard) = pool_or_skip!();
     let run_id = a_run(&pool).await;
@@ -296,6 +300,7 @@ async fn an_acked_series_cannot_omit_its_message_reference() {
 /// filed. (`acked_territories_for_period` de-duplicates across runs, because a
 /// territory is legitimately filed once per run of a month.)
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_territory_appears_at_most_once_per_run() {
     let (pool, _guard) = pool_or_skip!();
     let run_id = a_run(&pool).await;
@@ -314,6 +319,7 @@ async fn a_territory_appears_at_most_once_per_run() {
 /// Deleting a run takes its series with it — the audit trail is the run, and a
 /// series orphaned from it says nothing.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn series_are_owned_by_their_run() {
     let (pool, _guard) = pool_or_skip!();
     let run_id = a_run(&pool).await;

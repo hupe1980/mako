@@ -60,10 +60,25 @@ pub fn run(workspace_root: &Path) -> bool {
 
     let mut conflicts = Vec::new();
     let mut untyped_tools = Vec::new();
+    let mut literals_seen = 0usize;
     for dir in ["services", "crates"] {
         collect(&workspace_root.join(dir), &mut findings);
-        collect_conflicts(&workspace_root.join(dir), &mut conflicts);
+        collect_conflicts(
+            &workspace_root.join(dir),
+            &mut literals_seen,
+            &mut conflicts,
+        );
         collect_untyped_mcp_params(&workspace_root.join(dir), &mut untyped_tools);
+    }
+
+    // Route literals are what every one of the three rules reads. A scan that
+    // found none reports the clean line while checking nothing.
+    if literals_seen == 0 {
+        eprintln!(
+            "check-routes: the scan found no route literal under services/ or crates/ — \
+             the layout has probably changed"
+        );
+        return false;
     }
 
     if !untyped_tools.is_empty() {
@@ -98,8 +113,9 @@ pub fn run(workspace_root: &Path) -> bool {
 
     if findings.is_empty() && conflicts.is_empty() && untyped_tools.is_empty() {
         println!(
-            "check-routes: every route literal uses axum 0.8 `{{param}}` syntax, no two put \
-             different captures at one position, and every MCP tool has a typed parameter"
+            "check-routes: all {literals_seen} route literal(s) use axum 0.8 `{{param}}` \
+             syntax, no two put different captures at one position, and every MCP tool has a \
+             typed parameter"
         );
         return true;
     }
@@ -153,7 +169,11 @@ fn collect_untyped_mcp_params(dir: &Path, out: &mut Vec<(std::path::PathBuf, usi
 /// Grouped per crate directly under the scanned root: a router is assembled
 /// from one crate's sources, and two crates may legitimately serve the same
 /// shape under different capture names.
-fn collect_conflicts(root: &Path, out: &mut Vec<(String, String, String)>) {
+fn collect_conflicts(
+    root: &Path,
+    literals_seen: &mut usize,
+    out: &mut Vec<(String, String, String)>,
+) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
@@ -171,6 +191,7 @@ fn collect_conflicts(root: &Path, out: &mut Vec<(String, String, String)>) {
         gather_route_literals(&path, &mut literals);
         literals.sort();
         literals.dedup();
+        *literals_seen += literals.len();
         // A capture's *name* is what may differ; everything else must match.
         for (i, a) in literals.iter().enumerate() {
             for b in &literals[i + 1..] {
@@ -303,4 +324,16 @@ fn string_literals(line: &str) -> Vec<String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    /// A scan that reaches no file has checked nothing, and must say so rather
+    /// than report the clean line.
+    #[test]
+    fn refuses_a_tree_it_found_nothing_in() {
+        assert!(!super::run(std::path::Path::new(
+            "/nonexistent/mako/workspace/root"
+        )));
+    }
 }

@@ -594,8 +594,8 @@ The catalogue serves **three wires**: `SG4 STS+E01` on a UTILMD, `AJT` on a
 REMADV, `SG2 AJT` on an ORDRSP. One `antwort_code(tree, code)` for all of them.
 
 Which matters because an obligation whose answer message type cannot be built is
-one no test can answer. All **61** published obligations are answerable — UTILMD
-36, ORDRSP 11, IFTSTA 7, QUOTES 5, ORDERS 2 — and
+one no test can answer. All **65** published obligations are answerable — UTILMD
+40, ORDRSP 11, IFTSTA 7, QUOTES 5, ORDERS 2 — and
 `TestCoverage::test_every_published_obligation_is_answerable`
 (`makotest/tests/test_wim_esa.py:187`) holds it there.
 

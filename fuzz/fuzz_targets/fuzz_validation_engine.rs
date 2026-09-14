@@ -20,6 +20,7 @@
 //! ```
 
 #![no_main]
+#![deny(unsafe_code)]
 
 use libfuzzer_sys::{Corpus, fuzz_target};
 use metering::{MeterInterval, QualityFlag, ValidationConfig, validate_intervals};

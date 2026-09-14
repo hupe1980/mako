@@ -24,8 +24,13 @@ CREATE OR REPLACE FUNCTION heute() RETURNS date
 CREATE TABLE invoic_receipts (
     id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    -- Business key: one row per billing process.
-    process_id              UUID        NOT NULL UNIQUE,
+    -- Business key: one row per billing process, per tenant.
+    --
+    -- The uniqueness is the pair, never `process_id` alone: it is read from the
+    -- inbound CloudEvent `subject`, so a globally unique key lets one sender's
+    -- event reach another tenant's receipt through the upsert. Same rule as
+    -- `invoic_dlq_process` below.
+    process_id              UUID        NOT NULL,
 
     -- The EDIFACT INVOIC message reference (BGM 1004) — the business key makod
     -- routes an answer command by, so a re-dispatch that has only the receipt
@@ -60,9 +65,14 @@ CREATE TABLE invoic_receipts (
                                 'Warn',             -- warnings, auto-approved
                                 'Dispute',          -- rejected
                                 'Resolved',         -- dispute closed by an operator
-                                'Dispatched',       -- outbound sent; awaiting the NB's REMADV
-                                'Paid'              -- outbound settled by the NB
+                                'Dispatched'        -- outbound sent; awaiting the NB's REMADV
                             )),
+                            -- No 'Paid': `outcome` is the plausibility verdict on
+                            -- the invoice, and settlement is a different axis —
+                            -- an invoice can be disputed and still paid, or Ok
+                            -- and unpaid. Payment lives in `payment_confirmed_at`
+                            -- below, which also records *when*. Writing 'Paid'
+                            -- here would overwrite the check result.
 
     -- invoic_checker findings (Vec<Finding> as JSONB).
     findings                JSONB       NOT NULL DEFAULT '[]',
@@ -114,6 +124,9 @@ COMMENT ON TABLE invoic_receipts IS
 COMMENT ON COLUMN invoic_receipts.invoice_ref IS
     'EDIFACT INVOIC message reference (BGM 1004) — the business key makod routes the answer command by.';
 
+-- The business key the ingest upserts on.
+CREATE UNIQUE INDEX invoic_receipts_tenant_process
+    ON invoic_receipts (tenant, process_id);
 -- Per-counterparty billing history.
 CREATE INDEX invoic_sender_received   ON invoic_receipts (sender_mp_id, received_at DESC);
 -- Prüfschritt 50 („Rechnungsnummer wurde bereits verwendet", `A05`) of every
@@ -131,7 +144,7 @@ CREATE INDEX invoic_malo_tenant       ON invoic_receipts (tenant, malo_id)
     WHERE malo_id IS NOT NULL;
 -- Exception queue (skips the majority of settled rows).
 CREATE INDEX invoic_outcome           ON invoic_receipts (tenant, outcome)
-    WHERE outcome NOT IN ('Ok', 'Paid');
+    WHERE outcome NOT IN ('Ok', 'Resolved');
 -- Zahlungsziel approaching without a dispatched answer.
 CREATE INDEX invoic_pay_by_pending    ON invoic_receipts (tenant, pay_by)
     WHERE pay_by IS NOT NULL AND dispatched_at IS NULL;

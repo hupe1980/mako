@@ -294,7 +294,7 @@ async fn lokationsbuendel_codes_are_extracted_into_typed_columns() {
             &malo_id(MALO_A),
             Sparte::Strom,
             &bo4e_malo(serde_json::json!({
-                "lokationsbuendelObjektcode": "9992000000125"
+                "lokationsbuendelObjektcode": "9992000001016"
             })),
             vec![],
             None,
@@ -309,7 +309,7 @@ async fn lokationsbuendel_codes_are_extracted_into_typed_columns() {
         .expect("malo stored");
     assert_eq!(
         malo.lokationsbuendel_objektcode.as_deref(),
-        Some("9992000000125")
+        Some("9992000001016")
     );
 
     // MeLo: data.lokationsbuendelObjektcode → typed column.
@@ -318,7 +318,7 @@ async fn lokationsbuendel_codes_are_extracted_into_typed_columns() {
             &melo_id(MELO),
             Some(&malo_id(MALO_A)),
             &bo4e_melo(serde_json::json!({
-                "lokationsbuendelObjektcode": "9992000000125"
+                "lokationsbuendelObjektcode": "9992000001032"
             })),
             None,
             "v202607.0.0",
@@ -332,10 +332,12 @@ async fn lokationsbuendel_codes_are_extracted_into_typed_columns() {
         .expect("melo stored");
     assert_eq!(
         melo.lokationsbuendel_objektcode.as_deref(),
-        Some("9992000000125")
+        Some("9992000001032")
     );
 
     // Edge: data.lokationsbuendelcode → typed column, returned by the graph API.
+    // A *structure* code (Codeliste Kap. 2.2), not an object code: the two are
+    // the same shape and name different catalogues.
     lz.upsert_edge(
         TENANT,
         MALO_A,

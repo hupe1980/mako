@@ -169,6 +169,20 @@ pub fn run(workspace_root: &Path) -> bool {
     }
 
     let body_types = json_body_types(&files);
+
+    // Both counts are what the success line reports. A scan that found no
+    // source file, or no JSON body type in any of them, checks nothing, and
+    // "0 JSON body type(s) deny unknown fields" reads exactly like a pass.
+    if files.is_empty() || body_types.is_empty() {
+        eprintln!(
+            "check-request-bodies: the scan found {} source file(s) and {} JSON body type(s) \
+             under crates/ and services/ — the layout has probably changed",
+            files.len(),
+            body_types.len()
+        );
+        return false;
+    }
+
     let mut missing_deny = Vec::new();
     let mut ungated = Vec::new();
     let mut escapes = Vec::new();
@@ -685,6 +699,15 @@ fn collect_rs(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) {
 
 #[cfg(test)]
 mod tests {
+
+    /// A scan that reaches no file has checked nothing, and must say so rather
+    /// than report the clean line.
+    #[test]
+    fn refuses_a_tree_it_found_nothing_in() {
+        assert!(!super::run(std::path::Path::new(
+            "/nonexistent/mako/workspace/root"
+        )));
+    }
     use super::{
         has_unicode_escape, json_body_types, names_a_bo4e_type, strip_test_modules, structs,
     };

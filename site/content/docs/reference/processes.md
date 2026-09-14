@@ -103,13 +103,13 @@ Quick reference across all process families. Each row is a top-level domain.
 | **GPKE Abrechnungsdaten** | ⚡ | `mako-gpke` `gpke-abrechnungsdaten` | UTILMD 55156/55220/55673 → IFTSTA 21047 | **2 WT** | BK6-24-174 Teil 2 § 3.1 |
 | **GPKE Zuordnungs-Meldungen** | ⚡ | `mako-gpke` `gpke-zuordnungsmeldung` | UTILMD 55036/55037/55038 | — Meldepflicht, **keine Antwortnachricht** (Sendefrist in `mako_fristen::meldung`) | BK6-24-174 Teil 2 |
 | **PARTIN Strom Kommunikationsdaten** | ⚡ | `mako-gpke` `gpke-partin` | PARTIN 37000–37006 | — | PARTIN AHB 1.0f |
-| **WiM MSB-Wechsel** | ⚡ 🔥 | `mako-wim` `wim-device-change` | UTILMD 55039/55042/55051/55168 resp. 44039/44042/44051/44168 (out+in) und ihre Antworten | 3/5/7/1 WT — see below | BK6-22-024 · AWH WiM Gas 2.0 |
-| **WiM Geräteübernahme** | ⚡ 🔥 | `mako-wim` `wim-geraeteubernahme` | ORDERS 17001 · 17002 · 17009 · ORDRSP 19001/19002 · 19003/19004 · 19015/19016 | 4 WT Angebot · 2 WT Bestellung · Gerätewechseltermin frühestens am 4. WT, Antwort 2 WT davor | BK6-22-024 Kap. 3.1.2 / 3.2.2 |
-| **WiM Abrechnung** | ⚡ 🔥 | `mako-wim` `wim-invoic` | INVOIC 31009 · 31003 · 31004 · REMADV 33001–33004 · COMDIS 29001 | zum Zahlungsziel; NB bei 31009: 4. WT davor | BK6-22-024 Kap. 3.6.3.8 / 3.7 / 6 |
-| **WiM Rechnungsabwicklung MSB über LF** | ⚡ | `mako-wim` `wim-rechnungsabwicklung` | REQOTE 35002 → QUOTES 15002 · ORDERS 17005/17006 · ORDRSP 19009/19010 | 5 WT Angebot · **8 WT** Antwort/Beendigung | BK6-22-024 Kap. 3.6.3.4–3.6.3.7 |
-| **WiM Stammdaten** | ⚡🔥 | `mako-wim` `wim-stammdaten` | UTILMD Stammdaten beider Sparten | per PID, `mako_fristen::antwort` | BK6-22-024 · AWH WiM Gas 2.0 |
-| **WiM Weiterverpflichtung** | ⚡🔥 | `mako-wim` `wim-weiterverpflichtung` | ORDERS 17002 → ORDRSP 19003/19004 | **1 WT** (MSBA antwortet) | BK6-22-024 |
-| **WiM INSRPT Störungsbehebung** | ⚡ 🔥 | `mako-wim` `wim-insrpt` | INSRPT 23001 · 23003/23004 · 23005 · 23008 · 23009 · 23011/23012 | 3/1 WT je Messtechnik · Ergebnisbericht 7/4/2 WT · Weiterleitung 1 WT | BK6-22-024 Anlage 2b Kap. 1.2 |
+| **WiM MSB-Wechsel** | ⚡ 🔥 | `mako-wim` `wim-device-change` | UTILMD 55039/55042/55051/55168 resp. 44039/44042/44051/44168 (out+in) und ihre Antworten | 3/5/7/1 WT — see below | BK6-24-174 · AWH WiM Gas 2.0 |
+| **WiM Geräteübernahme** | ⚡ 🔥 | `mako-wim` `wim-geraeteubernahme` | ORDERS 17001 · 17002 · 17009 · ORDRSP 19001/19002 · 19003/19004 · 19015/19016 | 4 WT Angebot · 2 WT Bestellung · Gerätewechseltermin frühestens am 4. WT, Antwort 2 WT davor | BK6-24-174 Kap. 3.1.2 / 3.2.2 |
+| **WiM Abrechnung** | ⚡ 🔥 | `mako-wim` `wim-invoic` | INVOIC 31009 · 31003 · 31004 · REMADV 33001–33004 · COMDIS 29001 | zum Zahlungsziel; NB bei 31009: 4. WT davor | BK6-24-174 Kap. 3.6.3.8 / 3.7 / 6 |
+| **WiM Rechnungsabwicklung MSB über LF** | ⚡ | `mako-wim` `wim-rechnungsabwicklung` | REQOTE 35002 → QUOTES 15002 · ORDERS 17005/17006 · ORDRSP 19009/19010 | 5 WT Angebot · **8 WT** Antwort/Beendigung | BK6-24-174 Kap. 3.6.3.4–3.6.3.7 |
+| **WiM Stammdaten** | ⚡🔥 | `mako-wim` `wim-stammdaten` | UTILMD Stammdaten beider Sparten | per PID, `mako_fristen::antwort` | BK6-24-174 · AWH WiM Gas 2.0 |
+| **WiM Weiterverpflichtung** | ⚡🔥 | `mako-wim` `wim-weiterverpflichtung` | ORDERS 17002 → ORDRSP 19003/19004 | **1 WT** (MSBA antwortet) | BK6-24-174 |
+| **WiM INSRPT Störungsbehebung** | ⚡ 🔥 | `mako-wim` `wim-insrpt` | INSRPT 23001 · 23003/23004 · 23005 · 23008 · 23009 · 23011/23012 | 3/1 WT je Messtechnik · Ergebnisbericht 7/4/2 WT · Weiterleitung 1 WT | BK6-24-174 Anlage 2b Kap. 1.2 |
 | **MaBiS Bilanzkreisabrechnung** | ⚡ | `mako-mabis` `mabis-billing` | MSCONS 13003; IFTSTA 21000–21005 | 1 WT (§13.8) | BK6-24-174 |
 | **MaBiS Clearingliste** | ⚡ | `mako-mabis` `mabis-clearingliste` | UTILMD 55065/55069/55070 | — | BK6-24-174 |
 | **MaBiS-ZP Lifecycle** | ⚡ | `mako-mabis` `mabis-zp-lifecycle` | UTILMD 55062–55064, 55071/55072, 55197–55200, 55203–55214 | — | BK6-24-174 |
@@ -571,8 +571,8 @@ workflow for correlation; no separate receipt-only workflow exists.
 
 > **Why are 17134/17135/17121/17128–17131 NB→MSB PIDs in GPKE, not WiM?**
 > GPKE governs *what metering configuration is required* after a supplier change
-> and *who can authorize disconnection* (BK6-22-024). WiM governs *which company
-> provides the metering service* (BK6-22-024). These are orthogonal obligations:
+> and *who can authorize disconnection* (BK6-24-174). WiM governs *which company
+> provides the metering service* (BK6-24-174 Anlage 2a). These are orthogonal obligations:
 > GPKE Teil 3/4 obligates the NB to configure the MSB after confirming
 > `Lieferbeginn`; WiM Teil 1 governs the MSB-Wechsel process itself. A combined
 > Stadtwerke NB+MSB operator implements both crates simultaneously.
@@ -581,7 +581,7 @@ workflow for correlation; no separate receipt-only workflow exists.
 
 ## WiM — Messstellenbetrieb
 
-**Regulatory basis:** BK6-22-024, Anlage 2a (WiM Teil 1) und Anlage 2b (WiM Teil 2)
+**Regulatory basis:** BK6-24-174, Anlage 2a (WiM Teil 1) und Anlage 2b (WiM Teil 2)
 für Strom; **AWH WiM Gas 2.0** (gültig ab 01.10.2026) für Gas. Beide Sparten
 laufen in `mako-wim` durch dieselben Workflows.
 
@@ -607,7 +607,7 @@ Gas kennt keine 44170: die Ablehnung der Verpflichtungsanfrage läuft über
 dieselbe 44169 wie die Bestätigung, unterschieden durch den Antwortcode.
 Zusätzlich meldet der Gas-NB das Ende des Messstellenbetriebs mit **44183**.
 
-The **Antwortfrist differs per process** (BK6-22-024 WiM Strom Teil 1 Kap. 2.2.2 /
+The **Antwortfrist differs per process** (BK6-24-174 WiM Strom Teil 1 Kap. 2.2.2 /
 2.3.2 / 2.4.2 / 2.5.2; AWH WiM Gas 2.0 Kap. 4.1–4.4) and is distinct from the
 APERAK window. `mako_fristen::antwort` is the single source for these values.
 
@@ -642,7 +642,7 @@ ist bis zum **2. WT vor** dem Zahlungsziel fällig. Das Zahlungsziel selbst darf
 
 ### Rechnungsabwicklung MSB über LF
 
-**Workflow:** `wim-rechnungsabwicklung` (crate `mako-wim`) — BK6-22-024 Kap. 3.6.3.4–3.6.3.7
+**Workflow:** `wim-rechnungsabwicklung` (crate `mako-wim`) — BK6-24-174 Kap. 3.6.3.4–3.6.3.7
 
 The LF can take over invoice processing for the MSB ("Rechnungsabwicklung des
 Messstellenbetriebs über den Lieferanten"). The exchange starts with a

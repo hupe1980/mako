@@ -14708,7 +14708,7 @@
       ]
     },
     {
-      "chapter": "7.7 Bearbeitungsstandsmeldung",
+      "chapter": "8 IFTSTA-Anwendungsfälle in den Redispatch-Prozessen",
       "communication": "NB an BTR",
       "elements": [
         {
@@ -15771,7 +15771,7 @@
       ]
     },
     {
-      "chapter": "7.7 Bearbeitungsstandsmeldung",
+      "chapter": "8 IFTSTA-Anwendungsfälle in den Redispatch-Prozessen",
       "communication": "BTR an NB",
       "elements": [
         {
@@ -16719,7 +16719,7 @@
     "51": "Es sind nur Codes aus dem EBD-Cluster \"Abweisung\" möglich.",
     "510": "Hinweis: Es ist neben der Information über die Ablehnung auch der unverändert gebliebene Datenstatus informell mitzugeben.",
     "512": "Hinweis: Aus MSCONS BGM DE1004",
-    "519": "Hinweis: Aus ORDERS BGM DE1004 den jeweiligen",
+    "519": "Hinweis: Aus ORDERS BGM DE1004",
     "52": "Wenn STS+Z27+Z32 vorhanden",
     "520": "Hinweis: Zeitpunkt, zu dem der Wechsel erfolgt, falls er zustande kommt",
     "521": "Hinweis: Zeitpunkt, ab dem der MSBN tatsächlich den Messstellenbetrieb übernimmt",
@@ -16777,7 +16777,7 @@
     "94": "Wenn STS+Z37+Z14 vorhanden, dann sind nur Codes aus dem EBD- Cluster \"erfolgreich\" möglich.",
     "95": "Wenn in diesem STS DE1131 = E_0499",
     "950": "Format: Marktlokations- ID",
-    "951": "Format: Zählpunktbezeichnu ng",
+    "951": "Format: Zählpunktbezeichnung",
     "96": "Wenn in diesem STS DE1131 = E_0487",
     "960": "Format: Netzlokations-ID",
     "961": "Format: SR-ID",

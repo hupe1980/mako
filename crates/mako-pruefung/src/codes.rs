@@ -776,8 +776,8 @@ const E_0406: Option<&'static str> = Some(EBD_NETZNUTZUNGSRECHNUNG);
 
 /// The `E_0406` codes this crate resolves.
 ///
-/// **Partial by design.** The published tree has 205 Prüfschritte across three
-/// levels (Kopf, Position, Summe) and 87 codes, and its result is a *set* of
+/// **Partial by design.** The published tree has 211 Prüfschritte across three
+/// levels (Kopf, Position, Summe) and 124 codes, and its result is a *set* of
 /// (Positionsnummer, code) pairs rather than one code. The entries here are the
 /// ones an arithmetic invoice check can land on without walking the tree:
 /// the Summen- and Positions-level catch-alls, and the sum check that has an

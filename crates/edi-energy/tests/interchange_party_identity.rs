@@ -185,3 +185,61 @@ fn the_buffered_iterator_accepts_a_consistent_interchange() {
     );
     assert_eq!(results.len(), 1);
 }
+
+// ── The envelope is decided before the messages ───────────────────────────────
+
+/// The `UNB` test indicator is readable when the interchange as a whole is not.
+///
+/// Allgemeine Festlegungen V6.1d §3 forbids processing a test interchange on a
+/// production endpoint, and that decision belongs to the envelope. Taking it
+/// from a full parse makes it conditional on the whole interchange being
+/// acceptable — so an interchange that is both flagged **and** defective, the
+/// one least worth trusting, would be the one the guard does not see.
+///
+/// The §2.13 party mismatch is the defect used here because it is one of the
+/// several a full parse refuses *after* the segments decode cleanly. Bytes that
+/// do not decode into segments at all carry no readable `UNB` either, and there
+/// is nothing to decide from.
+#[test]
+fn the_test_indicator_survives_an_interchange_a_full_parse_refuses() {
+    // DE 0035 is element 10 of UNB; this fixture ends its UNB at element 4, so
+    // six separators carry the flag into position. `NAD+MS` names a third party.
+    let flagged_and_defective = format!(
+        "UNB+UNOC:3+{SENDER}:500+{RECEIVER}:500+260804:1045+REF1++++++1'\
+UNH+MSG1+REQOTE:D:10A:UN:1.3c'BGM+311+35003'DTM+137:202608041045?+00:303'\
+RFF+Z13:35003'NAD+MS+{IMPOSTOR}::293'NAD+MR+{RECEIVER}::293'\
+UNT+7+MSG1'UNZ+1+REF1'"
+    )
+    .into_bytes();
+
+    let platform = edi_energy::Platform::with_all_profiles();
+
+    // The premise: a full parse refuses this interchange.
+    assert!(
+        platform
+            .parse_interchange_full(&flagged_and_defective)
+            .is_err(),
+        "the fixture must be one a full parse refuses, or the test proves nothing"
+    );
+
+    let header = platform
+        .parse_interchange_header(&flagged_and_defective)
+        .expect("the UNB is intact and must still be readable");
+    assert!(
+        header.test_indicator,
+        "DE 0035 = 1 must be visible without the interchange parsing as a whole"
+    );
+    assert_eq!(&*header.sender_id, SENDER);
+    assert_eq!(&*header.control_ref, "REF1");
+}
+
+/// The same envelope without the flag reads as production, so the test above is
+/// about DE 0035 and not about the rewritten `UNB`.
+#[test]
+fn an_unflagged_envelope_reads_as_production() {
+    let wire = interchange(SENDER, SENDER);
+    let header = edi_energy::Platform::with_all_profiles()
+        .parse_interchange_header(&wire)
+        .expect("a well-formed interchange has a readable header");
+    assert!(!header.test_indicator);
+}

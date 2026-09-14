@@ -3,7 +3,7 @@
 **WiM — Wechselprozesse im Messwesen, Strom und Gas**
 
 Process engine workflows for the German metering-point-operator change
-processes in **both Sparten**: **BK6-22-024 Anlagen 2a/2b** (WiM Strom Teil 1
+processes in **both Sparten**: **BK6-24-174 Anlagen 2a/2b** (WiM Strom Teil 1
 and Teil 2) and the **AWH WiM Gas 2.0** (gültig ab 01.10.2026), plus the
 EDI@Energy AHBs that carry them.
 
@@ -285,7 +285,7 @@ The [`esa`](src/esa.rs) module holds the *Codeliste der Konfigurationen* 1.4
 Kapitel 4.6 catalogue — the only Messprodukte the role may order — as data:
 delivery path (4.6.1 EDIFACT back-end vs 4.6.2 SM-PKI from the iMS),
 Lokationsebene, Werteart, Energieflussrichtung, cadence, and whether BNetzA
-*Mitteilung Nr. 3* makes the product mandatory. A [`Bestellgegenstand`] pairs a
+*Mitteilung Nr. 3* makes the product mandatory. A `Bestellgegenstand` pairs a
 Messprodukt-Code with the `DTM+76` Wunschtermin and the `IMD+7081` Abonnement
 mode, and is carried through both aggregates: without it the process could not
 say what a confirmed delivery is supposed to contain.
@@ -316,7 +316,7 @@ UC 4.1.1 has the ESA asking for „die Übermittlung von Werten **und die damit
 verbundenen Kosten**". QUOTES AHB 1.1a §4.3 makes the substance Muss — `SG4 CUX`,
 one to three `SG27 PIA+Z02` Artikel-IDs, one `SG31 PRI+CAL` each (`Z01`
 Einrichtungs- / `Z02` Transaktions- / `Z03` Betriebspreis) and one to 23
-`PIA+5 … :SRW` OBIS-Kennzahlen — so [`esa::Angebot`] carries all of it and the
+`PIA+5 … :SRW` OBIS-Kennzahlen — so `esa::Angebot` carries all of it and the
 process keeps it past the Bestellung: it is what the INVOIC 31009 is checked
 against and what a delivery-surveillance sweep expects to arrive.
 
@@ -363,7 +363,7 @@ Zählwerk and belong to `edmd`.
 Prüfschritt code in DE 4465 with its EBD in DE 1082. Conditions [17]/[18] require
 the code to sit in that tree's Zustimmungs- resp. Ablehnungs-Cluster, so **the
 cluster selects the answer PID**. The MSB commands therefore take an
-`antwort_code` resolved against [`mako_pruefung::esa::wertebestellung`], never an `accept`
+`antwort_code` resolved against `mako_pruefung::esa::wertebestellung`, never an `accept`
 flag alongside it.
 
 **And it is the whole content of a refusal on the receiving side too.** Those
@@ -372,7 +372,7 @@ conformant 19011 may carry is `SG27 FTX+Z27` — the MSB's IP address, Muss when
 the confirmed order named a Kapitel-4.6.2 SMGW product (`FTX+Z28` for a range),
 and the source the ESA has to admit before the iMS can reach it.
 
-The ESA side therefore records [`esa::Antwort`], the typed `(Antwortcode, EBD)`
+The ESA side therefore records `esa::Antwort`, the typed `(Antwortcode, EBD)`
 pair, rather than prose — that is what tells `A08` (Einwilligung abgelaufen:
 renew and re-order) from `A10` (Lokationsbündel: split the request) from `A09`
 (Gerätetechnik: nothing to retry). `Antwort::widerspricht_pid` flags a code whose
@@ -422,7 +422,7 @@ one-shot order, and `E_0257` refuses a Stornierung of a started delivery with
 
 - BDEW WiM Wechselprozesse im Messwesen
 - MsbG — Messstellenbetriebsgesetz
-- BNetzA **BK6-22-024** Anlagen 2a/2b (WiM Strom Teil 1 und Teil 2)
+- BNetzA **BK6-24-174** Anlagen 2a/2b (WiM Strom Teil 1 und Teil 2)
 - BDEW/VKU/GEODE/FNBGas **AWH WiM Gas 2.0** (gültig ab 01.10.2026)
 - EDI@Energy UTILMD Strom **AHB 2.2** (MIG release S2.2, `FV2026-10-01`)
 - EDI@Energy **APERAK AHB 1.1** (`FV2026-10-01`) — § 2.4.1 Strom, § 2.3.1 Gas.

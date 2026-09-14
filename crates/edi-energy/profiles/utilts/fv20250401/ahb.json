@@ -2,7 +2,7 @@
   "ahb_version": "1.0",
   "anwendungsfaelle": [
     {
-      "chapter": "4.1.1 SG6 Verwendungszeitraum der Daten",
+      "chapter": "5 Anwendungsfall Übermittlung der Berechnungsformel",
       "communication": "NB an MSB / LF",
       "elements": [
         {
@@ -996,7 +996,7 @@
       ]
     },
     {
-      "chapter": "4.1.1 SG6 Verwendungszeitraum der Daten",
+      "chapter": "5 Anwendungsfall Übermittlung der Berechnungsformel",
       "communication": "MSB an NB",
       "elements": [
         {
@@ -1496,7 +1496,7 @@
       ]
     },
     {
-      "chapter": "6.3 Hinweis zum Anwendungsfall „Übermittlung Übersicht Leistungskurvendefinitionen“",
+      "chapter": "7 Anwendungsfall Übermittlung Übersicht Definitionen",
       "communication": "NB an LF /",
       "elements": [
         {
@@ -2361,7 +2361,7 @@
       ]
     },
     {
-      "chapter": "6.3 Hinweis zum Anwendungsfall „Übermittlung Übersicht Leistungskurvendefinitionen“",
+      "chapter": "7 Anwendungsfall Übermittlung Übersicht Definitionen",
       "communication": "NB an LF /",
       "elements": [
         {
@@ -2997,7 +2997,7 @@
       ]
     },
     {
-      "chapter": "6.3 Hinweis zum Anwendungsfall „Übermittlung Übersicht Leistungskurvendefinitionen“",
+      "chapter": "7 Anwendungsfall Übermittlung Übersicht Definitionen",
       "communication": "NB an LF /",
       "elements": [
         {
@@ -3633,7 +3633,7 @@
       ]
     },
     {
-      "chapter": "8.6 Befüllungslogik der DTM-Segmente einer ausgerollten Leistungskurvendefinition",
+      "chapter": "9 Anwendungsfall Übermittlung der ausgerollten Definitionen",
       "communication": "NB an LF /",
       "elements": [
         {
@@ -4272,7 +4272,7 @@
       ]
     },
     {
-      "chapter": "8.6 Befüllungslogik der DTM-Segmente einer ausgerollten Leistungskurvendefinition",
+      "chapter": "9 Anwendungsfall Übermittlung der ausgerollten Definitionen",
       "communication": "NB an LF /",
       "elements": [
         {
@@ -4923,7 +4923,7 @@
       ]
     },
     {
-      "chapter": "8.6 Befüllungslogik der DTM-Segmente einer ausgerollten Leistungskurvendefinition",
+      "chapter": "9 Anwendungsfall Übermittlung der ausgerollten Definitionen",
       "communication": "NB an LF /",
       "elements": [
         {
@@ -5662,7 +5662,7 @@
     "6": "Wenn das SG8 RFF+Z23 (Referenz auf Rechenschritt) in derselben SG8 SEQ+Z37 nicht vorhanden",
     "61": "Wenn in einem STS+E01 im DE9013 (Status der Antwort) ein Antwortcode aus dem Cluster Ablehnung vorhanden ist",
     "62": "Wenn MP-ID in SG2 NAD+MR (Nachrichtenempfänger) in der Rolle MSB",
-    "63": "Wenn MP-ID in SG2 NAD+MR (Nachrichtenempfänger) in der Rolle NB Formel zur Berechnung der Werte der Markt- bzw. Netzloka- Messlokationen und weiterer notwendiger Parameter dar. der einzelnen Messlokationen zur Berechnung der Werte sind. der Werte der Markt- bzw. Netzlokation nicht im Rah- übermittelt werden kann, ist im Segment der Code Z34 „Berechnungsformel muss beim Absen- Zusätzlich muss in diesem Fall ein Ansprechpartner des NB Übermittlung der Berechnungsformel durchführen zu der Werte der Markt- bzw. Netzlokation keine Rechen- besitzt und somit die Energiemenge der Markt- bzw. gemessen wird, ist im Segment STS+Z23 der Code Z40 „Berechnungsformel besitzt keine der Werte der Markt- bzw. Netzlokation für einen Ver- ist, da die Energiemenge der Markt- bzw. Netzlokation wird, ist im Segment STS+Z23 Messlokation „Status der Be- nicht erforderlich“ anzugeben.",
+    "63": "Wenn MP-ID in SG2 NAD+MR (Nachrichtenempfänger) in der Rolle NB",
     "7": "Wenn in derselben SG8 SEQ+Z37 das SG8 RFF+Z19 (Referenz auf eine Messlokation) vorhanden",
     "8": "Rechenschrittidentifikator aus einem SG8 SEQ+Z37 (Bestandteil des Rechenschritts) DE1050 desselben SG5 IDE+24 und derselben Zeitraum-ID wie bei diesem SG8",
     "9": "Der hier angegebene Rechenschrittidentifikator darf nicht identisch mit dem Rechenschrittidentifikator aus diesem SG8 SEQ+Z37 DE1050 sein",

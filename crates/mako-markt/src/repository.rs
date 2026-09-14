@@ -4042,7 +4042,11 @@ pub trait EinwilligungRepository: Send + Sync {
     /// Idempotent by construction: it stamps `revoked_at` in the same statement
     /// that selects, so a second sweep returns nothing and the 17008 is sent
     /// once per consent.
-    async fn revoke_expired(&self, now: time::Date) -> Result<Vec<EinwilligungRecord>, MdmError>;
+    async fn revoke_expired(
+        &self,
+        now: time::Date,
+        tenant: &str,
+    ) -> Result<Vec<EinwilligungRecord>, MdmError>;
 
     /// Upsert a framework agreement.
     async fn upsert_framework(&self, rec: EsaFrameworkAgreement) -> Result<(), MdmError>;
@@ -4277,34 +4281,6 @@ pub struct NetzzugangAntrag {
 
 fn default_netzzugang_status() -> NetzzugangStatus {
     NetzzugangStatus::Erfasst
-}
-
-/// Registry of §20b EnWG Netzzugangsplattform requests.
-#[allow(async_fn_in_trait)]
-pub trait NetzzugangRepository: Send + Sync {
-    /// Insert or update a request by id (tenant-scoped). Returns the id.
-    async fn upsert(&self, rec: NetzzugangAntrag) -> Result<Uuid, MdmError>;
-
-    /// Fetch a request by id (tenant-scoped).
-    async fn get(&self, tenant: &str, id: Uuid) -> Result<Option<NetzzugangAntrag>, MdmError>;
-
-    /// List requests, optionally filtered by status and/or Netzanschluss.
-    async fn list(
-        &self,
-        tenant: &str,
-        status: Option<NetzzugangStatus>,
-        netzanschluss_id: Option<&str>,
-    ) -> Result<Vec<NetzzugangAntrag>, MdmError>;
-
-    /// Update lifecycle state (and optionally the platform reference).
-    /// Returns the updated record when it existed.
-    async fn set_status(
-        &self,
-        tenant: &str,
-        id: Uuid,
-        status: NetzzugangStatus,
-        platform_ref: Option<String>,
-    ) -> Result<Option<NetzzugangAntrag>, MdmError>;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

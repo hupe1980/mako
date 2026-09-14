@@ -3,7 +3,7 @@
 // This file is NOT loaded automatically.  Enable it by passing BOTH
 //
 //   --cedar-policy-dir <dir>      (this file, or a symlink, lives in <dir>)
-//   --cedar-no-default-policy     (drops the built-in permit-all baseline)
+//   (the default — the built-in permit-all baseline is opt-in)
 //
 // Both are required.  `default.cedar` is compiled into the binary and its
 // catch-all `permit(principal is MaKo::Principal, action, resource)` is part of
@@ -17,7 +17,7 @@
 // The default.cedar "permit all authenticated principals" policy is suitable
 // for development and single-tenant deployments where all API keys are trusted
 // equally.  In production, a leaked or compromised key should not grant
-// full admin access.  Run with `--cedar-no-default-policy` and this file
+// full admin access.  Run without `--cedar-permit-all` and this file
 // becomes the entire policy set: four named role grants, each covering only
 // the actions needed for that role, and nothing else reaches an allow.
 //
@@ -51,7 +51,7 @@
 //
 // IMPORTANT: do NOT add `permit(principal is MaKo::Principal, action, resource)`
 // (the default.cedar catch-all) alongside this file, and do not drop
-// `--cedar-no-default-policy` — either one restores the catch-all and defeats
+// `--cedar-permit-all` — either one restores the catch-all and defeats
 // this baseline entirely.
 
 // ── erp-operator: submit workflow commands + full MaLo admin ─────────────────
@@ -137,7 +137,7 @@ permit(
 
 // ── Process reads: workflow-scoped (§ 6a EnWG Informatorisches Unbundling) ──────
 // The context carries the process's workflow name, so a VIU site running with
-// `--cedar-no-default-policy` can split process reads into role-scoped
+// a default-deny deployment can split process reads into role-scoped
 // principals — an NB operator sees grid-side workflows and nothing else:
 //
 //   permit(principal == MaKo::Principal::"nb-operator",

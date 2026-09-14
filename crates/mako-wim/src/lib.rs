@@ -257,7 +257,7 @@ impl mako_engine::builder::EngineModule for WimModule {
         // UTILMD WiM MSB-Wechsel family (PIDs 55039, 55042, 55051, 55168).
         //
         // 55039 — Kündigung MSB (MSBN → MSBA): contract layer between the two MSB;
-        //         non-constitutive per BK6-22-024 WiM Teil 1 Kap. 2.1.3 — the NB is not a party.
+        //         non-constitutive per BK6-24-174 WiM Teil 1 Kap. 2.1.3 — the NB is not a party.
         // 55042 — Anmeldung MSB (MSBN → NB): new MSB initiates change.
         // 55051 — Ende MSB / Abmeldung (MSBA → NB): NB terminates MSB relationship.
         // 55168 — Verpflichtungsanfrage / Aufforderung (NB → gMSB).
@@ -509,7 +509,7 @@ impl mako_engine::builder::EngineModule for WimModule {
         // the makod router disambiguates shared REMADV PIDs by conversation ID
         // (invoice correlation), not by PID alone.
         //
-        // Source: REMADV AHB 1.0a §3, WiM Strom Teil 1 (BK6-22-024).
+        // Source: REMADV AHB 1.0a §3, WiM Strom Teil 1 (BK6-24-174).
         for &pid in invoic::WIM_REMADV_PIDS {
             router.register(pid, "wim-invoic");
         }
@@ -519,7 +519,7 @@ impl mako_engine::builder::EngineModule for WimModule {
         // Shared PID with GPKE billing. The router dispatches to the correct
         // workflow instance via conversation ID correlation.
         //
-        // Source: COMDIS AHB 1.0, WiM Strom Teil 1 (BK6-22-024 Anlage 2a).
+        // Source: COMDIS AHB 1.0, WiM Strom Teil 1 (BK6-24-174 Anlage 2a).
         //
         // Sparte-qualified for the same reason GPKE is: 29001 is also a GaBi Gas
         // PID, and only the recipient's Sparte separates the two families. Which

@@ -38,8 +38,14 @@ pub fn parse(raw: &str) -> Option<Date> {
         return Date::parse(raw, time::macros::format_description!("[year][month][day]")).ok();
     }
     // `YYYY-MM-DD`, optionally with a time suffix a JSON producer appended.
+    //
+    // `get` rather than a slice: byte 10 need not be a character boundary. The
+    // value reaches this from a webhook body, so a multi-byte character
+    // straddling the cut is inbound data, not a programming error — and a
+    // slice there panics the handler. A cut that lands mid-character yields
+    // the whole string, which then fails to parse, which is the answer.
     Date::parse(
-        &raw[..raw.len().min(10)],
+        raw.get(..10).unwrap_or(raw),
         time::macros::format_description!("[year]-[month]-[day]"),
     )
     .ok()
@@ -78,5 +84,17 @@ mod tests {
     fn a_malformed_stamp_is_refused() {
         assert_eq!(parse("2026100100000000"), None);
         assert_eq!(parse("20261001abcd+00"), None);
+    }
+
+    /// A multi-byte character straddling the cut is refused, not a panic.
+    ///
+    /// `"2026-10-0ü"` is eleven bytes with `ü` spanning 9..11, so byte 10 is
+    /// inside a character. The value arrives in a `de.mako.process.initiated`
+    /// body, which makes this reachable from the wire.
+    #[test]
+    fn a_date_cut_inside_a_character_is_refused() {
+        assert_eq!(parse("2026-10-0ü"), None);
+        assert_eq!(parse("2026-10-01ü"), Some(date!(2026 - 10 - 01)));
+        assert_eq!(parse("ÄÖÜäöüß"), None);
     }
 }

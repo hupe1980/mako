@@ -10,6 +10,11 @@
 # It subscribes to marktd for de.mako.process.initiated events and self-registers
 # on startup — no manual curl call is required.
 
+# Demo only. Without it processd refuses to start with no `[oidc]` and no
+# `[webhook] inbound_secret`, which is the correct production posture: the
+# decision queues and the market answer are behind both doors.
+allow_insecure_no_auth = true
+
 [http]
 addr = "0.0.0.0:8580"
 

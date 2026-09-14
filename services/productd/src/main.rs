@@ -226,6 +226,9 @@ impl Daemon for Productd {
                 "/api/v1/comparison-feed/bo4e",
                 get(handlers::get_comparison_feed_bo4e),
             )
+            .layer(Extension(mako_service::oidc::ExpectedTenant(
+                cfg.tenant.clone(),
+            )))
             .layer(Extension(oidc))
             .layer(Extension(cedar))
             .layer(Extension(Arc::clone(&cfg)))

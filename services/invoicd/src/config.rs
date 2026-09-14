@@ -73,15 +73,72 @@ pub struct Config {
     /// Optional ERP webhook for outbound payment CloudEvents (A8).
     #[serde(default)]
     pub erp: ErpConfig,
+    /// OIDC token verification for the HTTP API. Without it every request is
+    /// admitted with synthetic dev-admin claims, which is a posture
+    /// [`Self::check_auth_posture`] refuses to start in.
     #[serde(default)]
     pub oidc: Option<OidcConfig>,
     /// MCP server authentication. Supports OIDC + API-key fallback, or dev mode.
     /// See `[mcp]` in TOML — e.g. `api_key = "env:INVOICD_MCP_API_KEY"`.
     #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
+
+    /// Start without HTTP token verification and without inbound webhook
+    /// signing (dev/test only).
+    ///
+    /// Both doors lead to the § 147 AO receipt store and to the answer this
+    /// service sends a market partner, so the posture is asked for by name.
+    #[serde(default)]
+    pub allow_insecure_no_auth: bool,
 }
 
 impl Config {
+    /// Refuse to start in a posture that leaves the invoice register and the
+    /// market answer open.
+    ///
+    /// The two mechanisms are checked together because each guards a different
+    /// door into the same daemon: OIDC guards the REST API, and the inbound
+    /// HMAC guards `POST /webhook`, the one route no bearer token ever reaches.
+    ///
+    /// # Errors
+    ///
+    /// When either is unconfigured and `allow_insecure_no_auth` is not set.
+    pub fn check_auth_posture(&self) -> anyhow::Result<()> {
+        if self.allow_insecure_no_auth {
+            tracing::warn!(
+                "invoicd: allow_insecure_no_auth is set — the § 147 AO receipt register, the \
+                 Zahlungsstatus of every MaLo and the re-dispatch route are served to any \
+                 caller, and POST /webhook accepts unsigned INVOIC events"
+            );
+            return Ok(());
+        }
+        let mut fehlt = Vec::new();
+        if self.oidc.is_none() {
+            fehlt.push(
+                "[oidc] — without it every REST route is admitted with dev claims: the \
+                 § 147 AO / § 14b UStG receipt register with its stored Rechnungen, the \
+                 Zahlungsstatus of every MaLo, and the route that re-dispatches a \
+                 REMADV/COMDIS answer to a market partner"
+                    .to_owned(),
+            );
+        }
+        if self.webhook.inbound_secret.is_none() {
+            fehlt.push(
+                "webhook.inbound_secret — without it POST /webhook accepts any unsigned body, \
+                 and a forged INVOIC event writes a Buchungsbeleg and sends the market \
+                 partner an answer in this operator's name"
+                    .to_owned(),
+            );
+        }
+        anyhow::ensure!(
+            fehlt.is_empty(),
+            "invoicd refuses to start: {}. Configure them, or set \
+             allow_insecure_no_auth = true to accept an unauthenticated deployment.",
+            fehlt.join("; ")
+        );
+        Ok(())
+    }
+
     #[must_use]
     pub fn check_config(&self) -> CheckConfig {
         CheckConfig {

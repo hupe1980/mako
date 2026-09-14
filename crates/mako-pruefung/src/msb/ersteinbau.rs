@@ -29,7 +29,7 @@
 //!
 //! # Sources
 //!
-//! - BK6-22-024 Anlage 2a, WiM Strom Teil 1 Kap. 3.5
+//! - BK6-24-174 Anlage 2a, WiM Strom Teil 1 Kap. 3.5
 //! - *Entscheidungsbaum-Diagramme und Codelisten* 4.3 Kap. 8.8.2
 //! - §§ 5, 19 Abs. 5, 29 MsbG
 //! - Anwendungsübersicht der Prüfidentifikatoren 4.0, lfd. Nr. 30790–30890

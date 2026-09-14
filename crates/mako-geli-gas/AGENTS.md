@@ -12,7 +12,13 @@
 
 - Never register a PID in more than one crate.
 - Never import workflow types from a sibling domain crate — use `mako-engine` traits and message types only.
-- Each crate depends on `mako-engine` and `edi-energy`; domain crates must not depend on each other.
+- Every domain crate depends on `mako-engine`. The EDIFACT ones also carry
+  `edi-energy` — `mako-gpke`, `mako-wim`, `mako-geli-gas` and `mako-mabis` as a
+  dev-dependency for the parse → validate → execute integration tests, while
+  production code uses `mako-engine`'s `ProfileRequirement`. `mako-gabi-gas`
+  carries `dvgw-edi` instead; `mako-redispatch` and `mako-emob` carry neither.
+- Shared decision and state-machine crates may be depended on: `mako-fristen`,
+  `mako-pruefung`, `mako-invoic`. Sibling **workflow** crates may not.
 
 The authoritative PID-ownership and APERAK-Fristen tables are in the
 root `AGENTS.md` under *Domain Rules*.

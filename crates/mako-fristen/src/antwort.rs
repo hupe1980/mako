@@ -30,7 +30,9 @@
 //!
 //! - BK6-24-174 GPKE Teil 2 — the SD Fristen per Prozessschritt
 //! - BK7-24-01-009 GeLi Gas 3.0, Kap. 2.6 / 3.1 / 3.2.2 / 3.2.3 / 3.3.2
-//! - BK6-22-024 Anlage 2a — WiM Strom Teil 1, Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2
+//! - BK6-24-174 Anlage 2a — WiM Strom Teil 1, Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2
+//! - BK6-24-174 Anlage 3 (MaBiS), Kap. 17.3.3.1.2 / 17.3.3.2.2 / 17.3.5.1.2 /
+//!   17.3.5.2.2
 //! - BK7-24-01-009 / AWH WiM Gas V2.0
 //! - EDI@Energy Anwendungsübersicht der Prüfidentifikatoren 4.0 — roles, EBDs
 
@@ -71,7 +73,7 @@ pub enum Family {
     Gpke,
     /// GeLi Gas — BK7-24-01-009.
     GeliGas,
-    /// WiM Strom (Messstellenbetrieb) — BK6-22-024 Anlage 2a/2b.
+    /// WiM Strom (Messstellenbetrieb) — BK6-24-174 Anlage 2a/2b.
     Wim,
     /// WiM Gas (Messstellenbetrieb Gas) — BK7-24-01-009 / AWH WiM Gas V2.0.
     WimGas,
@@ -83,6 +85,13 @@ pub enum Family {
     /// not a Lieferantenwechsel, and its windows are day-granular Werktage
     /// rather than the GPKE wall-clock instants.
     Emob,
+    /// MaBiS — BK6-24-174 Anlage 3.
+    ///
+    /// The Bilanzkreisabrechnung windows, which answer to a different clock
+    /// from the Lieferantenwechsel ones: most of MaBiS is anchored on the
+    /// Bilanzierungsmonat rather than on an arrival instant, and only the
+    /// Prozessschritte that *are* answers to an inbound message appear here.
+    Mabis,
 }
 
 impl Family {
@@ -95,6 +104,7 @@ impl Family {
             Self::Wim => "wim",
             Self::WimGas => "wim-gas",
             Self::Emob => "emob",
+            Self::Mabis => "mabis",
         }
     }
 }
@@ -1454,8 +1464,94 @@ pub const EMOB: &[AntwortObligation] = &[
     },
 ];
 
+/// The BIKO's window to answer a MaBiS-ZP Aktivierung/Deaktivierung, in
+/// Werktage.
+///
+/// „Unverzüglich, spätestens jedoch 1 WT nach Erhalt der Aktivierung"
+/// resp. „… der Deaktivierung" — BK6-24-174 Anlage 3 (MaBiS), SD Nr. 2 of every
+/// Use-Case in the family.
+pub const MABIS_ZP_ANTWORT_WERKTAGE: u32 = 1;
+
+/// MaBiS — the answer windows of the MaBiS-Zählpunkt lifecycle.
+///
+/// | Anfrage | Process | Answerer | Antwort | Frist |
+/// |---|---|---|---|---|
+/// | 55203 | Aktivierung MaBiS-ZP mtl. AAÜZ, BKV (des LF) | BIKO | 55204 | Ablauf des 1. WT |
+/// | 55206 | Deaktivierung MaBiS-ZP mtl. AAÜZ, BKV (des LF) | BIKO | 55207 | Ablauf des 1. WT |
+/// | 55209 | Aktivierung MaBiS-ZP mtl. AAÜZ, BKV (anfNB) | BIKO | 55210 | Ablauf des 1. WT |
+/// | 55212 | Deaktivierung MaBiS-ZP mtl. AAÜZ, BKV (anfNB) | BIKO | 55213 | Ablauf des 1. WT |
+///
+/// Each Antwort code answers **both** clusters — MaBiS pairs one PID with one
+/// Entscheidungsbaum instead of splitting Bestätigung and Ablehnung across two
+/// codes the way GPKE does — so `antwort_pids` carries the same value twice.
+///
+/// # Why 55062 / 55063 are absent
+///
+/// Not because the Festlegung is silent: Kap. 5.2.2, 9.2.2, 10.4.2, 11.2.2 and
+/// 12.2.2 each state the same „spätestens jedoch 1 WT nach Erhalt der
+/// Aktivierung" at SD Nr. 2. It is because **55062/55063 are shared by eleven
+/// Summenzeitreihen and five of them have no Antwort step at all** — the
+/// Lieferantensummenzeitreihe on both axes, the Abrechnungssummenzeitreihe, and
+/// the two täglichen Summenzeitreihen. A PID-keyed row would put a 1-Werktag
+/// obligation on those five, and the SDs of exactly those five *do* print „1
+/// WT" — as a Vorlauffrist „1 WT **vor** dem Versand", a lead time on the
+/// sender running the other way. Publishing the window here would read that
+/// number as a response deadline for five processes that owe no response.
+///
+/// The series is what resolves it, and only the message body carries the series
+/// (`SG10 CCI+++ZB4 / CAV` DE 7111 with `CCI+6` DE 7037). That is a lookup this
+/// table cannot do, so the obligation stays with
+/// `mako_mabis::zp_lifecycle`, which knows the family.
+pub const MABIS: &[AntwortObligation] = &[
+    AntwortObligation {
+        trigger_pid: 55_203,
+        name: "Aktivierung eines MaBiS-ZP für die monatliche AAÜZ (BKV des LF)",
+        answered_by: "BIKO",
+        antwort_pids: (55_204, 55_204),
+        ebd: Some("E_0071"),
+        frist: FristShape::EndOfWerktag(MABIS_ZP_ANTWORT_WERKTAGE),
+        family: Family::Mabis,
+        source: "BK6-24-174 Anlage 3 (MaBiS) Kap. 17.3.3.1.2 SD Nr. 2 — „Unverzüglich, \
+                 spätestens jedoch 1 WT nach Erhalt der Aktivierung\"; die Ablehnung \
+                 „erfolgt … mit einer Begründung\"",
+    },
+    AntwortObligation {
+        trigger_pid: 55_206,
+        name: "Deaktivierung eines MaBiS-ZP für die monatliche AAÜZ (BKV des LF)",
+        answered_by: "BIKO",
+        antwort_pids: (55_207, 55_207),
+        ebd: Some("E_0072"),
+        frist: FristShape::EndOfWerktag(MABIS_ZP_ANTWORT_WERKTAGE),
+        family: Family::Mabis,
+        source: "BK6-24-174 Anlage 3 (MaBiS) Kap. 17.3.3.2.2 SD Nr. 2 — „Unverzüglich, \
+                 spätestens jedoch 1 WT nach Erhalt der Deaktivierung\"",
+    },
+    AntwortObligation {
+        trigger_pid: 55_209,
+        name: "Aktivierung eines MaBiS-ZP für die monatliche AAÜZ (BKV des anfNB)",
+        answered_by: "BIKO",
+        antwort_pids: (55_210, 55_210),
+        ebd: Some("E_0078"),
+        frist: FristShape::EndOfWerktag(MABIS_ZP_ANTWORT_WERKTAGE),
+        family: Family::Mabis,
+        source: "BK6-24-174 Anlage 3 (MaBiS) Kap. 17.3.5.1.2 SD Nr. 2 — „Unverzüglich, \
+                 spätestens jedoch 1 WT nach Erhalt der Aktivierung\"",
+    },
+    AntwortObligation {
+        trigger_pid: 55_212,
+        name: "Deaktivierung eines MaBiS-ZP für die monatliche AAÜZ (BKV des anfNB)",
+        answered_by: "BIKO",
+        antwort_pids: (55_213, 55_213),
+        ebd: Some("E_0079"),
+        frist: FristShape::EndOfWerktag(MABIS_ZP_ANTWORT_WERKTAGE),
+        family: Family::Mabis,
+        source: "BK6-24-174 Anlage 3 (MaBiS) Kap. 17.3.5.2.2 SD Nr. 2 — „Unverzüglich, \
+                 spätestens jedoch 1 WT nach Erhalt der Deaktivierung\"",
+    },
+];
+
 /// Every published obligation, in consult order.
-const TABLES: &[&[AntwortObligation]] = &[GPKE, GELI_GAS, WIM, WIM_GAS, EMOB];
+const TABLES: &[&[AntwortObligation]] = &[GPKE, GELI_GAS, WIM, WIM_GAS, EMOB, MABIS];
 
 /// Every published obligation across all families.
 pub fn all() -> impl Iterator<Item = &'static AntwortObligation> {
@@ -1886,6 +1982,54 @@ mod tests {
             assert!(
                 antwortfrist(answer, received).is_none(),
                 "answer PID {answer} must not start a window"
+            );
+        }
+    }
+
+    /// The four MaBiS-ZP lifecycle windows are one Werktag, and each answer
+    /// rides a single Prüfidentifikator for both clusters.
+    #[test]
+    fn the_mabis_zp_answers_are_one_werktag_on_one_pid() {
+        for (anfrage, antwort, ebd) in [
+            (55_203_u32, 55_204_u32, "E_0071"),
+            (55_206, 55_207, "E_0072"),
+            (55_209, 55_210, "E_0078"),
+            (55_212, 55_213, "E_0079"),
+        ] {
+            let o = antwort_obligation(anfrage).unwrap_or_else(|| panic!("{anfrage} published"));
+            assert_eq!(o.family, Family::Mabis, "PID {anfrage}");
+            assert_eq!(o.answered_by, "BIKO", "PID {anfrage}");
+            assert_eq!(
+                o.frist,
+                FristShape::EndOfWerktag(MABIS_ZP_ANTWORT_WERKTAGE),
+                "PID {anfrage}"
+            );
+            assert_eq!(
+                o.antwort_pids,
+                (antwort, antwort),
+                "MaBiS answers both clusters on one code"
+            );
+            assert_eq!(o.ebd, Some(ebd), "PID {anfrage}");
+            assert!(o.source.contains("Nr. 2"), "PID {anfrage}: {}", o.source);
+        }
+    }
+
+    /// The generic MaBiS-ZP codes carry no row, and the reason is not silence.
+    ///
+    /// Kap. 5.2.2, 9.2.2, 10.4.2, 11.2.2 and 12.2.2 all state the same 1 WT at
+    /// SD Nr. 2 — but 55062/55063 are shared by eleven Summenzeitreihen, five of
+    /// which have no Antwort step, and those five print „1 WT" in their own SD
+    /// as a Vorlauffrist **before** the Versand. A row keyed on the PID would
+    /// turn a lead time into a response deadline for five processes that owe no
+    /// response, which is why the window stays with the series in
+    /// `mako_mabis::zp_lifecycle`.
+    #[test]
+    fn the_shared_mabis_zp_codes_carry_no_window() {
+        let received = utc(2026, Month::March, 2, 9);
+        for pid in [55_062_u32, 55_063, 55_064] {
+            assert!(
+                antwortfrist(pid, received).is_none(),
+                "PID {pid} is shared by eleven Summenzeitreihen and cannot be keyed here"
             );
         }
     }

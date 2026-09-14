@@ -291,11 +291,12 @@ pub struct HttpConfig {
 pub struct AuthzConfig {
     /// Directory of additional `*.cedar` policy files, loaded in name order.
     pub cedar_policy_dir: Option<PathBuf>,
-    /// Drop the built-in permit-all baseline so only `cedar_policy_dir` grants
-    /// access. Required for a least-privilege deployment and for § 6a EnWG role
-    /// separation in a combined-role (VIU) deployment.
+    /// Add the built-in permit-all baseline, making every authenticated
+    /// principal full admin. **Development only** — authorization is
+    /// default-deny, and a baseline `permit` cannot be narrowed by an
+    /// operator's own `permit` statements, only by a `forbid`.
     #[serde(default)]
-    pub no_default_policy: bool,
+    pub permit_all: bool,
 }
 
 /// `[oidc]` — OIDC/JWT bearer token authentication.
@@ -335,6 +336,22 @@ pub struct WebdiensteConfig {
     /// behind a proxy that terminates mTLS against the BDEW PKI CA.
     #[serde(default)]
     pub allow_unauthenticated: bool,
+    /// Take the calling Marktpartner's identity from the
+    /// `x-mako-client-mp-id` request header.
+    ///
+    /// The BDEW API-Webdienste identify the caller by their mTLS client
+    /// certificate, which a fronting proxy terminates and forwards in that
+    /// header. The value decides whose name a § 14a Steuerungsauftrag or a WiM
+    /// Anmeldung is placed in, so it is only evidence when a proxy sets it and
+    /// **strips any copy the client sent**. `makod` cannot tell the two apart,
+    /// which is why trusting it is a deployment declaration rather than a
+    /// default: without this, the header is ignored and a handler that needs a
+    /// caller refuses.
+    ///
+    /// Implied by [`Self::allow_unauthenticated`], which already declares that
+    /// a proxy authenticates this port.
+    #[serde(default)]
+    pub trust_client_mp_id_header: bool,
 }
 
 /// `[engine]` — engine-level and worker settings.

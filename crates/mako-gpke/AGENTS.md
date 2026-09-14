@@ -4,14 +4,24 @@
 # crates/mako-gpke
 
 - Governed by **BK6-24-174** (Teil 1–3, eff. 2025-06-06) and **BK6-22-024** (Teil 4 Konfiguration).
-- Source modules: `wechselprozesse`, `lf_anmeldung`, `lf_abmeldung`, `neuanlage`, `abrechnung`, `sperrung`, `konfiguration`, `post_acceptance`.
+- `GpkeModule::workflow_names()` (`src/lib.rs`) is the authoritative list of the
+  workflows this crate registers — 23 of them, each entry the owning module's own
+  `WORKFLOW_NAME` constant. Read it there; a list restated here drifts, and
+  `EngineBuilder::build` only checks `workflow_names()` against what
+  `register_pids_with_roles` routes to.
 - The `ForwardCompatible` version policy is mandatory for all GPKE workflows.
 
 ## Cross-crate rules
 
 - Never register a PID in more than one crate.
 - Never import workflow types from a sibling domain crate — use `mako-engine` traits and message types only.
-- Each crate depends on `mako-engine` and `edi-energy`; domain crates must not depend on each other.
+- Every domain crate depends on `mako-engine`. The EDIFACT ones also carry
+  `edi-energy` — `mako-gpke`, `mako-wim`, `mako-geli-gas` and `mako-mabis` as a
+  dev-dependency for the parse → validate → execute integration tests, while
+  production code uses `mako-engine`'s `ProfileRequirement`. `mako-gabi-gas`
+  carries `dvgw-edi` instead; `mako-redispatch` and `mako-emob` carry neither.
+- Shared decision and state-machine crates may be depended on: `mako-fristen`,
+  `mako-pruefung`, `mako-invoic`. Sibling **workflow** crates may not.
 
 The authoritative PID-ownership and APERAK-Fristen tables are in the
 root `AGENTS.md` under *Domain Rules*.

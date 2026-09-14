@@ -111,16 +111,30 @@ pub struct WebhookEdifactSender {
     http_client: reqwest::Client,
     malo_sender: MaloIdentSender,
     netzzugang_sender: Option<Arc<crate::netzzugang::NetzzugangSender>>,
+    /// Standard Webhooks signing key for the POSTed CloudEvent.
+    ///
+    /// The body carries the **rendered market message** — MaLo-IDs, the
+    /// counterparty and the customer data the Vorgang is about — so the
+    /// receiver has to be able to tell a mako delivery from anything else that
+    /// can reach the URL. The same key the ERP adapter uses, because the
+    /// receiver authenticates every mako CloudEvent the same way regardless of
+    /// which emitter sent it.
+    shared_secret: Option<secrecy::SecretString>,
 }
 
 impl WebhookEdifactSender {
     /// Create a new `WebhookEdifactSender`.
+    ///
+    /// `shared_secret` signs every POST with Standard Webhooks. `None` sends
+    /// the market message unsigned, which the preflight refuses unless the
+    /// operator asked for it by name.
     #[must_use]
     pub fn new(
         webhook_url: impl Into<Arc<str>>,
         mp_id_registry: Arc<MpIdRegistry>,
         http_client: reqwest::Client,
         malo_sender: MaloIdentSender,
+        shared_secret: Option<secrecy::SecretString>,
     ) -> Self {
         Self {
             webhook_url: webhook_url.into(),
@@ -128,6 +142,7 @@ impl WebhookEdifactSender {
             http_client,
             malo_sender,
             netzzugang_sender: None,
+            shared_secret,
         }
     }
 
@@ -157,6 +172,7 @@ impl As4Sender for WebhookEdifactSender {
         let http_client = self.http_client.clone();
         let malo_sender = self.malo_sender.clone();
         let netzzugang_sender = self.netzzugang_sender.clone();
+        let shared_secret = self.shared_secret.clone();
         let msg_owned = msg.clone();
 
         async move {
@@ -226,10 +242,27 @@ impl As4Sender for WebhookEdifactSender {
                 EngineError::Serialization(format!("EDIFACT_OUTBOUND CloudEvent: {e}"))
             })?;
 
-            let resp = http_client
+            let mut builder = http_client
                 .post(webhook_url.as_ref())
                 .header("Content-Type", "application/cloudevents+json")
-                .header("X-Idempotency-Key", msg_owned.message_id.to_string())
+                .header("X-Idempotency-Key", msg_owned.message_id.to_string());
+
+            // Standard Webhooks over the same body the receiver verifies, keyed
+            // on the idempotency key it already deduplicates by — the one
+            // canonical signer, shared with the ERP adapter.
+            if let Some(secret) = &shared_secret {
+                use secrecy::ExposeSecret as _;
+                for (name, value) in mako_service::webhook::headers(
+                    secret.expose_secret().as_bytes(),
+                    &msg_owned.message_id.to_string(),
+                    time::OffsetDateTime::now_utc().unix_timestamp(),
+                    &body,
+                ) {
+                    builder = builder.header(name, value);
+                }
+            }
+
+            let resp = builder
                 .body(body)
                 .send()
                 .await

@@ -166,7 +166,7 @@ fn every_published_scope_claim_matches_the_registry() {
 
 /// The answer-obligation catalogue, split the way the docs split it.
 ///
-/// A total alone does not hold: `mako_fristen::antwort::all()` folds five
+/// A total alone does not hold: `mako_fristen::antwort::all()` folds six
 /// family tables, and an obligation moved from one to another leaves the total
 /// right and both family figures wrong — which is what happened to GPKE and
 /// WiM. Both the per-family and the per-answer-message split are stated, so
@@ -187,6 +187,7 @@ fn the_answer_obligation_split_matches_the_catalogue() {
                 Family::GeliGas => "GeLi Gas",
                 Family::WimGas => "WiM Gas",
                 Family::Emob => "EMob",
+                Family::Mabis => "MaBiS",
             })
             .or_default() += 1;
         // The answer's Prüfidentifikator names its message type by range; the
@@ -211,12 +212,13 @@ fn the_answer_obligation_split_matches_the_catalogue() {
             "../../concepts/MAKOTEST.md",
             format!(
                 "into **{total}** obligations (GPKE {}, WiM {}, GeLi Gas {}, WiM Gas {}, \
-                 EMob {})",
+                 EMob {}, MaBiS {})",
                 by_family["GPKE"],
                 by_family["WiM"],
                 by_family["GeLi Gas"],
                 by_family["WiM Gas"],
                 by_family["EMob"],
+                by_family["MaBiS"],
             ),
         ),
         (

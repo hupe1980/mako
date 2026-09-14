@@ -59,7 +59,7 @@
 //!
 //! # Sources
 //!
-//! - BK6-22-024 Anlage 2a, WiM Strom Teil 1 Kap. 2.2–2.4
+//! - BK6-24-174 Anlage 2a, WiM Strom Teil 1 Kap. 2.2–2.4
 //! - Entscheidungsbaum-Diagramme und Codelisten 4.3, Kap. 8
 //! - MsbG §§ 5, 9, 14 (freie Wahl des MSB, Rahmenvertrag, Wechselrecht)
 

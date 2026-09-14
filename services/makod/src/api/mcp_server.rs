@@ -1438,7 +1438,7 @@ impl ServerHandler for MakodMcpHandler {
              | Process | Deadline | Source |\n\
              |---|---|---|\n\
              | GPKE Strom | a clock time on the 1. WT nach dem ÜT — 11:00 Anmeldung, 06:00 Abmeldung, 05:00 Lieferende NB→LF, 09:00 Beendigung der Zuordnung | BK6-24-174 GPKE Teil 2 |\n\
-             | WiM, both Sparten | 3 / 5 / 7 / 1 Werktage per PID | BK6-22-024 Anlage 2a · AWH WiM Gas 2.0 |\n\
+             | WiM, both Sparten | 3 / 5 / 7 / 1 Werktage per PID | BK6-24-174 Anlage 2a · AWH WiM Gas 2.0 |\n\
              | GeLi Gas | Ablauf des 4. / 3. / 2. Werktags | BK7-24-01-009 |\n\
              | MaBiS | keine Antwortfrist — Clearingfenster, BK6-24-174 Anlage 3 Kap. 3.10 Tabelle 2 |\n\
              | INVOIC | zum Zahlungsziel (`SG8 DTM+265`) | per Festlegung |\n\

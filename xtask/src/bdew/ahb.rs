@@ -139,7 +139,11 @@ pub fn parse(lines: &[Line], mig: &MigDoc) -> Result<AhbDoc, String> {
         .map(|s| (s.nr.as_str(), s))
         .collect();
 
-    let heading = Regex::new(r"^\s*(\d+(?:\.\d+)+)\s+(\S.*?)\s*$").unwrap();
+    // A section heading closes whatever table precedes it. Both shapes occur:
+    // „4.2.1 Something" and the top-level „3 Ausprägungen von REMADV-Nachrichten".
+    // The bare form needs two spaces and a non-zero first digit, or it would
+    // swallow a `Nr` cell (`00001 …`) and a format note (`1 bis n`).
+    let heading = Regex::new(r"^\s*(?:(\d+(?:\.\d+)+)\s+|([1-9]\d?)\s{2,})(\S.*?)\s*$").unwrap();
     let group_row = Regex::new(r"^\s*(SG\d+)(?:\s+(.*))?$").unwrap();
     let seg_row = Regex::new(r"^\s*(?:(SG\d+)\s+)?([A-Z]{3})\s+(\d{5})\b(.*)$").unwrap();
     let de_row = Regex::new(r"^\s*(?:(SG\d+)\s+)?([A-Z]{3})\s+(\d{4})\b(.*)$").unwrap();
@@ -219,6 +223,11 @@ pub fn parse(lines: &[Line], mig: &MigDoc) -> Result<AhbDoc, String> {
         }
         if in_packages && let Some(pt) = packages {
             if heading.is_match(line) {
+                // Body prose follows. The Bedingungen column ends with the
+                // table, and an entry left open would keep collecting every
+                // wrapped line that reaches its x.
+                commit_condition(&mut cur_cond, &mut doc.conditions);
+                cur_cond = None;
                 in_packages = false;
                 cur_package = None;
             } else {
@@ -314,20 +323,24 @@ pub fn parse(lines: &[Line], mig: &MigDoc) -> Result<AhbDoc, String> {
             continue;
         }
         if let Some(c) = heading.captures(line)
+            && let Some(num) = c.get(1).or_else(|| c.get(2))
             // A chapter heading starts at the margin; a Bedingung wrapping onto
             // a line that opens with a date (`01.08.2025 für …`) does not.
             && table
                 .as_ref()
-                .is_none_or(|t| c.get(1).map_or(0, |m| line[..m.start()].chars().count()) + 4 < t.desc_x)
+                .is_none_or(|t| line[..num.start()].chars().count() + 4 < t.desc_x)
         {
             if table.as_ref().is_none_or(|t| t.header_done) {
-                chapter = Some(format!("{} {}", &c[1], collapse(&c[2])));
+                chapter = Some(format!("{} {}", num.as_str(), collapse(&c[3])));
             }
             if table.as_ref().is_some_and(|t| t.header_done) {
                 // Prose between tables.
                 flush_pending(&mut pending_status, &mut doc);
                 table = None;
             }
+            // The Bedingungen column ends with the table it belongs to.
+            commit_condition(&mut cur_cond, &mut doc.conditions);
+            cur_cond = None;
             continue;
         }
         let Some(tb) = table.as_mut() else { continue };
@@ -810,7 +823,92 @@ pub fn parse(lines: &[Line], mig: &MigDoc) -> Result<AhbDoc, String> {
         infer_missing_statuses(af, &by_nr);
     }
     infer_missing_operands(&mut doc);
+    rejoin_split_words(&mut doc, lines);
     Ok(doc)
+}
+
+/// Rejoin a word the column split across a line break.
+///
+/// The Bedingungen column is narrow, so a long compound wraps mid-word and the
+/// halves arrive as two tokens — „Nachrichtenempfänge r", „Verwendungszeitra
+/// um", „Zählpunktbezeichnu ng". A split word still reads as prose, so nothing
+/// downstream refuses it; it simply makes the Bedingung unsearchable and its
+/// element references harder to resolve.
+///
+/// No dictionary is needed, because the document is its own evidence: the whole
+/// AHB is the vocabulary, and the correct spelling appears in it many times
+/// over (`Nachrichtenempfänger` 63×) while the fragment appears only where the
+/// wrap put it. A pair is joined when the corpus knows the joined form well and
+/// clearly prefers it to the left fragment, which no ordinary word sequence
+/// satisfies — joining „Wirkarbeit und" would need the corpus to hold
+/// „Wirkarbeitund".
+///
+/// A hyphen the wrap left behind („über- mittelnde") is tested the same way,
+/// against the joined form without it. A real German suspended compound
+/// („Markt- bzw. Netzlokation") is safe: no corpus holds „Marktbzw".
+fn rejoin_split_words(doc: &mut AhbDoc, lines: &[Line]) {
+    let mut vocab: BTreeMap<&str, usize> = BTreeMap::new();
+    for line in lines {
+        for w in line.text.split_whitespace() {
+            let w = w.trim_matches(|c: char| !c.is_alphabetic() && c != '-');
+            if w.chars().any(char::is_alphabetic) {
+                *vocab.entry(w).or_default() += 1;
+            }
+        }
+    }
+    let joined_is_the_word = |a: &str, b: &str| -> Option<String> {
+        let (a_pre, a_core, a_post) = peel(a);
+        let (b_pre, b_core, b_post) = peel(b);
+        // Punctuation *between* the halves means the AHB put it there.
+        if !a_post.is_empty() || !b_pre.is_empty() {
+            return None;
+        }
+        let stem = a_core.strip_suffix('-').unwrap_or(a_core);
+        if stem.chars().count() < 5 || b_core.chars().count() > 5 || b_core.is_empty() {
+            return None;
+        }
+        if !stem.ends_with(|c: char| c.is_lowercase())
+            || !b_core.starts_with(|c: char| c.is_lowercase())
+        {
+            return None;
+        }
+        if !stem.chars().all(char::is_alphabetic) || !b_core.chars().all(char::is_alphabetic) {
+            return None;
+        }
+        let joined = format!("{stem}{b_core}");
+        let seen = vocab.get(joined.as_str()).copied().unwrap_or(0);
+        (seen >= 3 && seen > 2 * vocab.get(a_core).copied().unwrap_or(0))
+            .then(|| format!("{a_pre}{joined}{b_post}"))
+    };
+    for text in doc.conditions.values_mut() {
+        let words: Vec<&str> = text.split_whitespace().collect();
+        let mut out: Vec<String> = Vec::with_capacity(words.len());
+        let mut i = 0;
+        while i < words.len() {
+            if i + 1 < words.len()
+                && let Some(joined) = joined_is_the_word(words[i], words[i + 1])
+            {
+                out.push(joined);
+                i += 2;
+            } else {
+                out.push(words[i].to_owned());
+                i += 1;
+            }
+        }
+        *text = out.join(" ");
+    }
+}
+
+/// A word split into its leading punctuation, its alphabetic core and its
+/// trailing punctuation — „(Nachrichtenempfäng" is `("(", "Nachrichtenempfäng", "")`.
+fn peel(w: &str) -> (&str, &str, &str) {
+    let start = w.find(char::is_alphabetic).unwrap_or(w.len());
+    let end = w[start..]
+        .rfind(|c: char| c.is_alphabetic() || c == '-')
+        .map_or(start, |i| {
+            start + i + w[start + i..].chars().next().map_or(0, char::len_utf8)
+        });
+    (&w[..start], &w[start..end], &w[end..])
 }
 
 /// An operand cell printed without its operand letter takes the letter another
@@ -2282,5 +2380,43 @@ mod tests {
     #[test]
     fn the_first_reading_is_always_taken() {
         assert!(super::better_reading("anything", ""));
+    }
+
+    /// The corpus decides, so both directions need pinning: a real split is
+    /// joined and an ordinary word sequence is left alone.
+    #[test]
+    fn a_wrapped_word_is_rejoined_and_a_word_pair_is_not() {
+        let lines: Vec<super::Line> = [
+            // The AHB says the word plainly, many times over.
+            "Nachrichtenempfänger ist der Nachrichtenempfänger",
+            "Nachrichtenempfänger und Wirkarbeit und Wirkarbeit und",
+        ]
+        .iter()
+        .map(|t| super::Line {
+            text: (*t).to_string(),
+            metrics: Vec::new(),
+        })
+        .collect();
+        let mut doc = super::AhbDoc {
+            anwendungsfaelle: Vec::new(),
+            conditions: std::collections::BTreeMap::new(),
+            packages: std::collections::BTreeMap::new(),
+        };
+        doc.conditions.insert(
+            "1".to_owned(),
+            "Wenn MP-ID in NAD+MR (Nachrichtenempfäng er) vorhanden".to_owned(),
+        );
+        doc.conditions
+            .insert("2".to_owned(), "Wenn Wirkarbeit und vorhanden".to_owned());
+        super::rejoin_split_words(&mut doc, &lines);
+        assert_eq!(
+            doc.conditions["1"], "Wenn MP-ID in NAD+MR (Nachrichtenempfänger) vorhanden",
+            "the split halves rejoin and the AHB's own brackets survive"
+        );
+        assert_eq!(
+            doc.conditions["2"], "Wenn Wirkarbeit und vorhanden",
+            "an ordinary word sequence must never be glued: the corpus holds no \
+             `Wirkarbeitund`"
+        );
     }
 }

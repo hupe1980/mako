@@ -763,7 +763,9 @@ just check      # cargo check, all targets & features
 just test       # full test suite
 just ci         # the complete CI gate (check + test + clippy incl. role-scoped builds + fmt + deny + profile/PID validation)
 just test-db           # every real-PostgreSQL integration suite (testcontainers)
-just test-accountingd-db  # …or one at a time: edmd, einsd, accountingd, billingd, outputd, vertragd, productd, marktd, processd, sperrd
+just test-accountingd-db  # …or one at a time: edmd, einsd, accountingd, billingd, outputd,
+                          # vertragd, productd, marktd, processd, sperrd, invoicd,
+                          # mabis-syncd, netzbilanzd, obsd, outbox
 ```
 
 The `test-*-db` suites self-manage PostgreSQL via **testcontainers** — a throwaway

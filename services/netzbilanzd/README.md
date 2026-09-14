@@ -147,7 +147,7 @@ twelve times the 0.11 ct/kWh ceiling a Sondervertragskunde may be charged.
 ### §14a EnWG
 
 Pass the module instead of a flat rate. The three are mutually exclusive by construction
-(BK6-22-300 / BK8-22/010-A):
+(BK8-22/010-A):
 
 ```jsonc
 // Modul 1 — pauschale Reduzierung: the energy is billed in full and a flat

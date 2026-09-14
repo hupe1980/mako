@@ -23402,7 +23402,7 @@
     "3": "wenn vorhanden",
     "30": "Wenn SG4 NAD+Z36 (Energieserviceanbieter) DE3207 mit Code „DE“ vorhanden",
     "31": "Wenn SG4 NAD+Z31 (Übertragungsnetzbetreiber) DE3207 mit Code „DE“ nicht vorhanden",
-    "32": "Wenn SG4 NAD+Z34 (Bilanzkoordinator) DE3207 mit Code „DE“ nicht vorhan- den",
+    "32": "Wenn SG4 NAD+Z34 (Bilanzkoordinator) DE3207 mit Code „DE“ nicht vorhanden",
     "33": "Wenn SG4 NAD+Z35 (Bilanzkreisverantwortlicher) DE3207 mit Code „DE“ nicht vorhanden",
     "34": "Wenn SG4 NAD+Z36 (Energieserviceanbieter) DE3207 mit Code „DE“ nicht vor- handen",
     "35": "Wenn MP-ID in SG2 NAD+MR (Nachrichtenempfänger) in der Rolle ÜNB",
@@ -23424,7 +23424,7 @@
     "504": "Hinweis: Es ist mindestens die Umsatzsteuer- bzw. Steuernummer zu nennen, die in der INVOIC genutzt wird.",
     "505": "Wenn eine Vorgängerversion (RFF+ACW) angegeben ist, so muss der Wert in diesem DE1056 mindestens um 1 höher sein, als der Wert aus DE1056 der Vorgängerversion (RFF+ACW).",
     "506": "Hinweis: Das Datenelement ist so zu füllen, dass sein Inhalt den Vorgaben des USt.-Gesetzes genügt, so dass der Empfänger diese Daten in einer INVOIC nutzen kann.",
-    "508": "Hinweis: Der LF in seiner Funktion als Grund- und Ersatzversorger muss den NB, in deren Netzgebiet der LF als Grund- und Ersatzversorger ist, einen Bilanzkreis für verbrauchende Marktlokationen übermitteln, um dem NB die Möglichkeit zu ge- ben, eine Zuordnung bei fehlender Antwort auf die EoG Anmeldung durchführen zu können. Kommunikationsdaten und Kommunikationsparameter auszutauschenden Kommunikationsdaten und Kommunikationsparameter zwischen den einzelnen Marktrollen aufge- im entsprechendem Anwendungsfall diese Information vom Absender an den Empfänger aufgeführt ist, eine Aus- oder Bedingungen am Segment im Anwendungsfall kann aus der Tabelle nicht entnommen werden. Ein „-“ in zwischen dem Absender und Empfänger nicht ausgetauscht wird. Übersicht der vorhandenen Kommunikationswege und den darin auszutauschenden Informationen. Falls es zwischen inhaltliche Differenzen geben sollte, sind immer die Aussagen im Anwendungsfall für die Übermittlung der Daten",
+    "508": "Hinweis: Der LF in seiner Funktion als Grund- und Ersatzversorger muss den NB, in deren Netzgebiet der LF als Grund- und Ersatzversorger ist, einen Bilanzkreis für verbrauchende Marktlokationen übermitteln, um dem NB die Möglichkeit zu ge- ben, eine Zuordnung bei fehlender Antwort auf die EoG Anmeldung durchführen zu können.",
     "509": "Hinweis: Falls die Umsatzsteuer- bzw. Steuernummer in einem bilateral ausgetauschten Dokument (z.B. Wiederverkäufernachweis eines LF) ausgetauscht wurde, ist zwingend diese ohne Veränderungen (z.B. Umrechnung auf die bundeseinheitliche Steuernummer) zu nutzen.",
     "51": "Wenn DTM+137 (Nachrichtendatum) im DE2380 ≤ 202812312300?+00",
     "6": "wenn im DE3155 im demselben COM der Code EM vorhanden ist",
@@ -23433,7 +23433,7 @@
     "908": "Format: Mögliche Werte: 1 bis n",
     "931": "Format: ZZZ = +00",
     "939": "Format: Die Zeichenkette muss die Zeichen @ und . enthalten",
-    "940": "Format: Die Zeichenkette muss mit dem Zeichen + beginnen und danach dürfen nur noch Ziffern folgen Anwendungsfällen"
+    "940": "Format: Die Zeichenkette muss mit dem Zeichen + beginnen und danach dürfen nur noch Ziffern folgen"
   },
   "message_type": "PARTIN",
   "packages": {

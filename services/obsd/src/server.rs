@@ -200,7 +200,7 @@ async fn get_process(
         Err(_) => return (StatusCode::BAD_REQUEST, "invalid UUID").into_response(),
     };
 
-    match state.repo.get(process_id).await {
+    match state.repo.get(process_id, &state.tenant).await {
         Ok(Some(p)) => Json(serde_json::to_value(p).unwrap_or_default()).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "process not found").into_response(),
         Err(err) => {
@@ -320,6 +320,10 @@ async fn get_overdue(
 /// The runner ([`mako_service::run`]) owns the pool, migrations, the health /
 /// metrics infra routes, bind and graceful serve — none of those live here.
 pub async fn build_router(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Router> {
+    // Fail closed on both doors before anything else: the REST/MCP surfaces
+    // and the inbound webhook each reach the process read model.
+    cfg.check_auth_posture()?;
+
     let oidc = mako_service::oidc::OidcConfig::build_verifier(
         cfg.oidc.as_ref(),
         &ctx.http,
@@ -442,8 +446,10 @@ pub async fn build_router(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Resu
         );
     }
 
+    let expected_tenant = mako_service::oidc::ExpectedTenant(state.tenant.clone());
     Ok(router(state)
         .layer(Extension(cedar))
+        .layer(Extension(expected_tenant))
         .layer(Extension(oidc))
         .merge(crate::mcp_server::router(mcp_state, ctx.shutdown.clone())))
 }

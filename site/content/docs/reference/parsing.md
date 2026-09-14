@@ -58,8 +58,15 @@ println!("pid:  {}", msg.detect_pruefidentifikator()?.as_u32());
 
 The Prüfidentifikator does **not** live in the same place in every message type:
 it rides `SG1 RFF+Z13` in fifteen of the seventeen, and `BGM` DE 1004 only in
-APERAK and CONTRL. Each profile records which in its `pid_source`, and
-`detect_pruefidentifikator` follows it (`crates/edi-energy/src/pid_scan.rs:48`).
+APERAK and CONTRL. Each profile records which in its `pid_source`, and that is a
+*hint*, not a rule: `pid_scan::detect` reads the declared location first and the
+other one second, because reading only the declared one makes a conformant
+partner's message undetectable — and an undetectable message is dropped without
+an APERAK. Both demand a plausible five-digit code, since `BGM` DE 1004
+legitimately carries a Dokumentennummer that would otherwise beat the real PID.
+Every path — full parse, envelope-only routing, typed deserialization — goes
+through that one function, so routing and parsing cannot resolve different codes
+from the same bytes.
 
 ---
 
