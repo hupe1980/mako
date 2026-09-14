@@ -12,6 +12,14 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # A hosted runner has ~14 GB free and a debug build of this workspace with
+  # every feature does not fit — `preflight` alone runs clippy, test and check
+  # over `--all-features`, three full builds into one target directory. It died
+  # on `No space left on device` linking `typenum`. Same settings and same
+  # reasoning as `ci.yml`, which carries the measurements.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  CARGO_INCREMENTAL: 0
 
 jobs:
   # ── Pre-flight checks ────────────────────────────────────────────────────────
@@ -20,6 +28,12 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYO3_PYTHON: python3
+      # One value for the whole job. cargo fingerprints on RUSTFLAGS, so setting
+      # it on the warning gate alone made that step rebuild the entire workspace
+      # into the same target directory — a second complete set of artefacts, and
+      # the reason this job ran the runner out of disk. Job-scoped rather than
+      # workflow-scoped: `publish` must not deny warnings it does not own.
+      RUSTFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +56,13 @@ jobs:
 
       - name: Install protoc
         run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
+
+      - name: Reclaim runner disk
+        run: |
+          df -h /
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
 
       # The tag names the release; the workspace version names the artifacts.
       # `makotest`'s wheel version is `dynamic`, so maturin takes it from
@@ -76,8 +97,6 @@ jobs:
         run: cargo test --workspace --all-features --exclude edi-energy --exclude makod
 
       - name: Warning gate
-        env:
-          RUSTFLAGS: "-D warnings"
         run: cargo check --all-targets --all-features
 
   # ── Profile validation ───────────────────────────────────────────────────────
@@ -108,6 +127,15 @@ jobs:
 
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@v2
+
+      # 25 `cargo publish` runs share one target directory, and each verifies by
+      # building the packaged crate.
+      - name: Reclaim runner disk
+        run: |
+          df -h /
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
 
       - name: Publish edi-energy
         env:
