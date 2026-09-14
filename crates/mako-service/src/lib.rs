@@ -45,6 +45,7 @@ pub mod health;
 pub mod http;
 pub mod json;
 pub mod outbox;
+pub mod schema_check;
 pub mod service;
 pub mod shutdown;
 pub mod telemetry;

@@ -25,6 +25,17 @@ pub enum NeuanlageStatus {
 }
 
 impl NeuanlageStatus {
+    /// Every state, in lifecycle order.
+    ///
+    /// The statements below write the column with inline SQL literals rather
+    /// than a bound parameter, so this enum is not on the write path and cannot
+    /// be. What it is instead is the **declared vocabulary**:
+    /// `schema_enum_guard` holds both the column's `CHECK` list and every
+    /// `status = '…'` literal in this file against it, so the three cannot
+    /// drift apart. Without that it was decorative — a type that looked like
+    /// the authority and governed nothing.
+    pub const ALL: &'static [Self] = &[Self::Offen, Self::Beantwortet, Self::Eskaliert];
+
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {

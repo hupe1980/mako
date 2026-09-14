@@ -42,6 +42,7 @@ code focuses on domain logic instead of plumbing.
 | `metrics` | Prometheus handler | `GET /metrics` |
 | `rate_limit` | `RateLimitConfig` | GCRA rate limiting |
 | `worker_lock` | Postgres advisory locks | One runner per periodic background worker across replicas |
+| `schema_check` | `check_values_in`, `assert_agrees_in` | Reads a SQL `CHECK (col IN (…))` list, so a test can hold it against the Rust that writes the column |
 
 ---
 
@@ -228,6 +229,41 @@ policy rather than by trusting the key's holder.
 A key that declares no roles is refused by every role-testing `permit`. That is
 the intended shape for a read-only agent: give it the roles its work needs, and
 nothing else.
+
+---
+
+## Schema `CHECK` lists are guarded, not trusted
+
+A `CHECK (status IN ('draft','sent'))` list is opaque text to the compiler.
+Nothing ties it to the enum or the literal on the other side of the column, and
+drift is silent in both directions:
+
+- a value the Rust writes and the list omits is a write Postgres refuses;
+- a value the list allows and nothing writes is a claim the schema makes and the
+  code does not honour;
+- a value the list allows and the Rust *decoder* does not know is worst — it
+  decodes to whatever the fallback says.
+
+`schema_check` reads the list so a service test can assert both directions:
+
+```rust,ignore
+use mako_service::schema_check::assert_agrees_in;
+
+assert_agrees_in(
+    include_str!("../migrations/0001_schema.sql"),
+    "invoice_drafts",
+    "status",
+    &["draft", "dispatched", "paid", "disputed", "rejected"],
+);
+```
+
+It is shared rather than copied because the parser is the part that goes wrong,
+and it goes wrong by *passing*. Use `*_in` wherever a column name repeats across
+tables — an unscoped lookup answers with the first match in the file. The
+spellings these migrations actually use, each of which defeated a hand-rolled
+copy: `IS NULL OR c IN (…)`, `c IN (…) OR c IS NULL`, unquoted integer lists,
+and `--` comments between the values. An empty parse is a panic, never an empty
+list.
 
 ---
 

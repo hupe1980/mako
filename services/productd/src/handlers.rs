@@ -2793,13 +2793,25 @@ pub fn build_tarifinfo(row: &crate::pg::ProductRow, lf_mp_id: &str) -> Tarifinfo
     });
 
     // ── Kundentypen ───────────────────────────────────────────────────────────
-    let kundentypen: Option<Vec<Kundentyp>> = row.kundentyp.as_deref().map(|kt| {
+    //
+    // The column allows seven values and BO4E names two of them exactly. The
+    // rest resolve to `Sonstige`, never to `Privat`: a Ladesäulen- or
+    // Wärmepumpen-Tarif published as `PRIVAT` is a wrong statement about who
+    // may buy it, and § 41 Abs. 1 EnWG contract terms are read off this.
+    // `Haushalt` is `HAUSHALT`, the § 3 Nr. 22 EnWG term, not `PRIVAT`.
+    //
+    // An unrecognised value answers `None` — the same shape as `Sparte` above,
+    // and the reason `schema_enum_guard` holds the arms against the column.
+    let kundentypen: Option<Vec<Kundentyp>> = row.kundentyp.as_deref().and_then(|kt| {
         let variant = match kt {
-            "Haushalt" => Kundentyp::Privat,
+            "Haushalt" => Kundentyp::Haushalt,
             "Gewerbe" | "Gewerbe_RLM" => Kundentyp::Gewerbe,
-            _ => Kundentyp::Privat,
+            "Ladesaeule" => Kundentyp::Ladesaeule,
+            // BO4E publishes no variant for these three.
+            "Waermepumpe" | "Einspeiser" | "HEMS" => Kundentyp::Sonstige,
+            _ => return None,
         };
-        vec![variant]
+        Some(vec![variant])
     });
 
     // ── Registeranzahl ────────────────────────────────────────────────────────

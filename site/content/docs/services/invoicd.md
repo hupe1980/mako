@@ -278,17 +278,25 @@ German MGV.
 | 1 | **Storno reference** — `ist_storno=true` must name `original_rechnungsnummer` | `StorniertWithoutReference` | `Dispute` |
 | 2 | **Billing period validity** — boundaries present and consistent | `PeriodInvalid` | `Dispute` |
 | 3 | **Zahlungsziel** — `faelligkeitsdatum` not before `rechnungsdatum`, and within `max_zahlungsziel_days` | `ZahlungszielInvalid` · `ZahlungszielExceeded` | `Dispute` · `Warn` |
+| 3a | **WiM 31003 send window** — a Dienstleistungsrechnung dated more than 20 Werktage after the period it bills (WiM Teil 1 Kap. 3.7.2 Nr. 1) | `RechnungZuSpaet` | `Warn` |
 | 4 | **Currency agreement** — every monetary field on one currency | `WaehrungMismatch` | `Dispute` |
 | 5 | **Position arithmetic** — quantity × unit price = line net | `ArithmeticError` | `Dispute` |
 | 6 | **Document total** — Σ line nets = `gesamtnetto` | `TotalMismatch` | `Warn` |
 | 7 | **Umsatzsteuer** — the § 14 Abs. 4 Nr. 8 UStG block: a rate and an amount, `gesamtbrutto = gesamtnetto + gesamtsteuer`, and no tax stated on a reverse-charge invoice | `SteuerMissing` · `SteuerMismatch` · `ReverseChargeStatesTax` | `Dispute` |
 | 8 | **Tariff / Angebot** — the unit price against the published Preisblatt, or against the accepted ESA offer | `TariffDeviation` · `TariffNotFound` · `AngebotDeviation` · `AngebotPositionUnknown` | `Warn` or `Dispute` |
 
-Stage 3 is skipped when `max_zahlungsziel_days = 0`. Stage 8 is skipped for a
-Stornorechnung, which carries the original's negated amounts rather than tariff
-positions. Stage 4 runs **before** the arithmetic on purpose: a `Betrag` marked
-`CHF` would otherwise be read as EUR and every later comparison would come out
-consistent.
+Stage 3 is skipped when `max_zahlungsziel_days = 0`, and stage 3a runs only for
+PID 31003 — no other invoice family publishes that window. Stage 8 is skipped
+for a Stornorechnung, which carries the original's negated amounts rather than
+tariff positions. Stage 4 runs **before** the arithmetic on purpose: a `Betrag`
+marked `CHF` would otherwise be read as EUR and every later comparison would come
+out consistent.
+
+`RechnungZuSpaet` is the one warning the `auto_dispute_threshold_eur`
+escalation does **not** pick up. The threshold exists because the money at stake
+justifies a human reading the arithmetic; a late invoice is no more late for
+being a large one, and escalating it would refuse a correct document with an
+Antwortcode no REMADV tree publishes for lateness.
 
 Which price basis stage 8 uses is the routing table's decision, not the stage's:
 

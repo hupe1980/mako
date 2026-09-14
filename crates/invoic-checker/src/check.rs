@@ -6,7 +6,7 @@
 //!
 //! # Check stages
 //!
-//! Eight stages, in this order. The order matters twice: the currency check
+//! Eight stages plus one PID-specific one, in this order. The order matters twice: the currency check
 //! runs before the arithmetic that would otherwise compare a CHF amount against
 //! a EUR one, and the tariff check runs last because it is the only stage that
 //! reaches outside the document.
@@ -16,6 +16,7 @@
 //! | 1 | Storno reference | [`FindingKind::StorniertWithoutReference`] | `Dispute` |
 //! | 2 | Period validity | [`FindingKind::PeriodInvalid`] | `Dispute` |
 //! | 3 | Zahlungsziel | [`FindingKind::ZahlungszielInvalid`] · [`FindingKind::ZahlungszielExceeded`] | `Dispute` · `Warn` |
+//! | 3a | WiM 31003 send window | [`FindingKind::RechnungZuSpaet`] | `Warn` |
 //! | 4 | Currency agreement | [`FindingKind::WaehrungMismatch`] | `Dispute` |
 //! | 5 | Position arithmetic | [`FindingKind::ArithmeticError`] | `Dispute` |
 //! | 6 | Document total | [`FindingKind::TotalMismatch`] | `Warn` |
@@ -141,7 +142,7 @@ pub enum CheckOutcome {
 ///
 /// Each variant maps to a specific regulatory dispute reason that can be cited
 /// in a REMADV or COMDIS.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FindingKind {
     /// A billing period is invalid (start ≥ end, or missing a boundary).
     PeriodInvalid,
@@ -165,6 +166,20 @@ pub enum FindingKind {
     ZahlungszielExceeded,
     /// `faelligkeitsdatum` (DTM+265) is in the past or before `rechnungsdatum`.
     ZahlungszielInvalid,
+    /// A WiM-Dienstleistungsrechnung (31003) was issued more than 20 Werktage
+    /// after the period it bills.
+    ///
+    /// Basis: WiM Strom Teil 1 Kap. 3.7.2 Nr. 1 — „Unverzüglich, jedoch
+    /// spätester ÜT ist der 20. WT nach …". The SD names four anchors, one per
+    /// Abrechnungsart (Beendigung der temporären Fortführung, Überlassung der
+    /// Einrichtung, Ende des Abrechnungszeitraums, Versand der Ablesung); all
+    /// four are the end of the thing being billed, which on the wire is the
+    /// invoice's own `rechnungsperiode`.
+    ///
+    /// A `Warn`, not a `Dispute`: the window binds the **sender**, and no
+    /// REMADV tree publishes a code for lateness, so refusing on it would
+    /// invent one.
+    RechnungZuSpaet,
     /// The invoice states no Umsatzsteuer at all.
     ///
     /// §14 Abs. 4 Nr. 8 UStG requires the rate and the tax amount, or a note
@@ -390,6 +405,27 @@ pub fn is_stornierung(rechnung: &Rechnung) -> bool {
     rechnung.ist_storno == Some(true)
 }
 
+impl FindingKind {
+    /// Whether a `Warn` of this kind gets more serious as the invoice gets
+    /// larger.
+    ///
+    /// A recipient escalates warnings above a money threshold because the
+    /// amount at stake justifies a human looking at the *arithmetic*. That
+    /// reasoning does not reach a finding about a **procedural** window: a late
+    /// invoice is no more or less late for being a large one, and the sender —
+    /// not the recipient — is who the window binds.
+    ///
+    /// It matters concretely. Escalating [`Self::RechnungZuSpaet`] would turn a
+    /// correct invoice into a refusal, and the REMADV would have to carry a
+    /// code; no tree publishes one for lateness, so it would go out as the
+    /// Summenebene catch-all `A99` — refusing a document for a reason the
+    /// answer cannot state.
+    #[must_use]
+    pub const fn escalates_with_value(self) -> bool {
+        !matches!(self, Self::RechnungZuSpaet)
+    }
+}
+
 /// Stateless INVOIC plausibility check engine.
 ///
 /// All logic is in [`InvoicCheckEngine::check`], which is a pure function over
@@ -449,6 +485,11 @@ impl InvoicCheckEngine {
         if config.max_zahlungsziel_days > 0 {
             Self::check_zahlungsziel(rechnung, config, &mut findings);
         }
+
+        // ── Stage 3a: the WiM 31003 send window ───────────────────────────────
+        // Only this PID: the 20 Werktage are WiM Teil 1 Kap. 3.7.2's, and no
+        // other invoice family publishes them.
+        Self::check_wim_dienstleistung_frist(pid, rechnung, &mut findings);
 
         // ── Stage 4: Currency agreement ───────────────────────────────────────
         // Before the arithmetic, which would otherwise read a CHF `Betrag` as
@@ -543,6 +584,83 @@ impl InvoicCheckEngine {
                 deviation_pct: Some(days as f64 - max as f64),
             });
         }
+    }
+
+    /// The WiM Prüfidentifikator whose send window Kap. 3.7.2 Nr. 1 states.
+    ///
+    /// 31009 is **not** this window: it bills the Messstellenbetrieb and its
+    /// Fristen are Kap. 6.2 / 3.6.3.8.2, which count *back* from the
+    /// Zahlungsziel rather than forward from a period end.
+    const WIM_DIENSTLEISTUNG_PID: u32 = 31_003;
+
+    /// Stage 3a: a WiM-Dienstleistungsrechnung issued too long after the period
+    /// it bills.
+    ///
+    /// WiM Strom Teil 1 Kap. 3.7.2 Nr. 1 gives the sender „unverzüglich, jedoch
+    /// spätester ÜT ist der 20. WT nach" the end of what is being billed. The SD
+    /// names that end four ways — Beendigung der temporären Fortführung des
+    /// Messstellenbetriebes, Überlassung der Einrichtung, Ende des jeweiligen
+    /// Abrechnungszeitraums, Versand der Zusatz-/Kontrollablesung — and a
+    /// recipient cannot tell which Abrechnungsart it holds. All four are the end
+    /// of the billed thing, so the invoice's own `rechnungsperiode` end is the
+    /// anchor for every one of them.
+    ///
+    /// # Why it is a `Warn`
+    ///
+    /// The window binds the **sender**. Kap. 3.7.2 Nr. 2 gives the recipient one
+    /// answer, „zum angegebenen Zahlungsziel", and the trees behind it publish
+    /// no Antwortcode for a late invoice — so a `Dispute` here would refuse a
+    /// document with a reason no REMADV can carry. What lateness does change is
+    /// the recipient's own planning, which is what a warning is for.
+    ///
+    /// # Why the window is read rather than written
+    ///
+    /// `mako_fristen::vorlauf` publishes it as `wim.rechnung-dienstleistungen`
+    /// with its Fundstelle. Restating `20` here would be a second copy of a
+    /// published window with nothing holding the two together — the defect this
+    /// crate exists to catch, one level up.
+    fn check_wim_dienstleistung_frist(pid: u32, rechnung: &Rechnung, findings: &mut Vec<Finding>) {
+        if pid != Self::WIM_DIENSTLEISTUNG_PID {
+            return;
+        }
+        let (Some(period_end), Some(rechnungs_datum)) =
+            (rechnung.period_end(), rechnung.rechnungsdatum_date())
+        else {
+            // No period or no invoice date: stage 2 and the § 14 UStG checks own
+            // those defects. Nothing to measure from is not lateness.
+            return;
+        };
+
+        let obligation = mako_fristen::vorlauf::vorlauf("wim.rechnung-dienstleistungen")
+            .expect("wim.rechnung-dienstleistungen is catalogued in mako_fristen::vorlauf");
+        let werktage = match obligation.shape {
+            mako_fristen::vorlauf::VorlaufShape::LatestWerktageAfter(n) => n,
+            other => unreachable!("the catalogued shape is LatestWerktageAfter, not {other:?}"),
+        };
+        let spaetester = mako_fristen::add_werktage(
+            period_end,
+            werktage,
+            mako_fristen::HolidayCalendar::BdewMaKo,
+        );
+        if rechnungs_datum <= spaetester {
+            return;
+        }
+        let ueberschritten = mako_fristen::werktage_between(
+            spaetester,
+            rechnungs_datum,
+            mako_fristen::HolidayCalendar::BdewMaKo,
+        );
+        findings.push(Finding::warn(
+            FindingKind::RechnungZuSpaet,
+            format!(
+                "Rechnungsdatum {rechnungs_datum} liegt {ueberschritten} Werktage nach dem \
+                 spätesten ÜT {spaetester} ({werktage} WT nach dem Ende des \
+                 Abrechnungszeitraums {period_end}) — WiM Teil 1 Kap. 3.7.2 Nr. 1",
+            ),
+            None,
+            None,
+            None,
+        ));
     }
 
     /// Stage 2: Verify that every billing period is orientated forwards.
@@ -2655,6 +2773,113 @@ mod tests {
             .find(|f| f.kind == FindingKind::ZahlungszielExceeded)
             .unwrap_or_else(|| panic!("no ZahlungszielExceeded in {:#?}", report.findings));
         assert!(!finding.is_dispute, "ZahlungszielExceeded is a warning");
+    }
+
+    // ── WiM 31003 send window (Kap. 3.7.2 Nr. 1) ─────────────────────────────
+
+    /// A Rechnung whose period ends and whose date is `days_after` Werktage on.
+    fn wim_dienstleistung(period_end: &str, rechnungsdatum: &str) -> Rechnung {
+        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw_units(100_000_000)));
+        r.rechnungsperiode = Some(periode("2026-06-01", period_end));
+        r.rechnungsdatum = Some(parse_dt(rechnungsdatum));
+        r
+    }
+
+    fn late_findings(pid: u32, r: &Rechnung) -> Vec<Finding> {
+        let mut f = Vec::new();
+        InvoicCheckEngine::check_wim_dienstleistung_frist(pid, r, &mut f);
+        f
+    }
+
+    /// The 20th Werktag after a 2026-06-30 period end is 2026-07-28.
+    ///
+    /// Computed from the BDEW calendar rather than asserted as a guess: the
+    /// point of reading `vorlauf` is that the window and the calendar are one
+    /// source, so the fixture derives the boundary the same way the check does.
+    fn spaetester_uet(period_end: &str) -> time::Date {
+        mako_fristen::add_werktage(
+            parse_date(period_end),
+            20,
+            mako_fristen::HolidayCalendar::BdewMaKo,
+        )
+    }
+
+    /// On the last lawful day there is no finding; one Werktag later there is.
+    #[test]
+    fn the_send_window_closes_on_the_twentieth_werktag() {
+        let end = "2026-06-30";
+        let last = spaetester_uet(end);
+        let ok = wim_dienstleistung(end, &last.to_string());
+        assert!(
+            late_findings(31_003, &ok).is_empty(),
+            "the 20th Werktag itself is still inside the window"
+        );
+
+        let day_after =
+            mako_fristen::add_werktage(last, 1, mako_fristen::HolidayCalendar::BdewMaKo);
+        let late = wim_dienstleistung(end, &day_after.to_string());
+        let f = late_findings(31_003, &late);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].kind, FindingKind::RechnungZuSpaet);
+        assert!(
+            !f[0].is_dispute,
+            "lateness binds the sender; no tree refuses it"
+        );
+        assert!(
+            f[0].message.contains("Kap. 3.7.2"),
+            "the finding cites its Fundstelle: {}",
+            f[0].message
+        );
+    }
+
+    /// The window is read from `mako_fristen`, not restated here.
+    ///
+    /// If the catalogued row ever moved off 20 Werktage this would fail rather
+    /// than silently keep checking the old number — which is the whole reason
+    /// the check looks the window up.
+    #[test]
+    fn the_window_comes_from_the_published_catalogue() {
+        let row =
+            mako_fristen::vorlauf::vorlauf("wim.rechnung-dienstleistungen").expect("catalogued");
+        assert_eq!(
+            row.shape,
+            mako_fristen::vorlauf::VorlaufShape::LatestWerktageAfter(20),
+            "WiM Teil 1 Kap. 3.7.2 Nr. 1 states 20 Werktage"
+        );
+        assert_eq!(row.pid, Some(31_003));
+        assert_eq!(row.pid_gas, Some(31_003), "beide Sparten");
+    }
+
+    /// No other invoice family carries this window.
+    ///
+    /// 31009 is the one that could plausibly be confused with it, and its
+    /// Fristen count *back* from the Zahlungsziel instead.
+    #[test]
+    fn only_31003_is_measured() {
+        let very_late = wim_dienstleistung("2026-06-30", "2027-01-15");
+        assert_eq!(late_findings(31_003, &very_late).len(), 1);
+        for pid in [31_001, 31_002, 31_004, 31_005, 31_009, 31_011] {
+            assert!(
+                late_findings(pid, &very_late).is_empty(),
+                "PID {pid} does not publish the Kap. 3.7.2 window"
+            );
+        }
+    }
+
+    /// Nothing to measure from is not lateness.
+    ///
+    /// A missing period or invoice date is a defect stage 2 and the § 14 UStG
+    /// checks already name; reporting it again as "too late" would be a second
+    /// finding for one cause, and a wrong one.
+    #[test]
+    fn a_missing_anchor_is_not_reported_as_late() {
+        let mut no_period = wim_dienstleistung("2026-06-30", "2027-01-15");
+        no_period.rechnungsperiode = None;
+        assert!(late_findings(31_003, &no_period).is_empty());
+
+        let mut no_date = wim_dienstleistung("2026-06-30", "2027-01-15");
+        no_date.rechnungsdatum = None;
+        assert!(late_findings(31_003, &no_date).is_empty());
     }
 
     /// A breakdown that does add up passes — including one split across rates.

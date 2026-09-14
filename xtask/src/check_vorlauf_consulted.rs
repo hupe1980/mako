@@ -25,8 +25,8 @@
 //! a helper in the catalogue's own file — `anmeldung_vorlauf` resolves two rows
 //! by key — so a helper counts as a reader **only when something outside
 //! `mako-fristen` calls the helper**. That second condition is not bookkeeping:
-//! `rechnung_antwort_spaetester_uet` reads three rows and has no production
-//! caller at all, so crediting it would have hidden three orphans behind one.
+//! `rechnung_antwort_spaetester_uet` reads three rows, and crediting it before
+//! `makod` called it would have hidden three orphans behind one.
 //!
 //! Test code is excluded deliberately. A row exercised only by a unit test of
 //! its own arithmetic is the defect, not the refutation of it.
@@ -57,19 +57,13 @@ const SCANNED: &[&str] = &["crates", "services"];
 /// This list may only shrink.
 const UNCHECKED: &[(&str, &str)] = &[
     (
-        "wim.antwort-rechnung",
-        "REMADV 33001 — `rechnung_antwort_spaetester_uet` covers the same window for the \
-         LF/MSB branch by returning the Zahlungsziel unchanged, so it never names this row",
-    ),
-    (
         "wim.mitteilung-rechnung-korrekt",
-        "COMDIS 29001 — `MITTEILUNG_RECHNUNG_KORREKT_WT` is the MSB↔NB window; only the \
-         ESA twin `esa_comdis_spaetester_uet` has a caller, and it reads a different constant",
-    ),
-    (
-        "wim.antwort-geraetewechselabsicht",
-        "ORDRSP 19015 — `antwort::WIM` already holds the same two Werktage for this PID and \
-         is what makod registers; this row restates it for callers reading the Vorlauf side",
+        "COMDIS 29001 — a *send-side* window: it binds mako as the invoice issuer, which \
+         has until the 2. WT vor dem Zahlungsziel to say the refused invoice was correct. \
+         `mako-invoic` receives a COMDIS (`ReceiveComdis`) but registers no deadline when a \
+         REMADV Ablehnung arrives, and its families carry one `DEADLINE_LABEL` each — the \
+         settlement window. `esa_comdis_spaetester_uet` is the Teil 2 twin on a separate \
+         constant and has no caller either, so neither leg is wired",
     ),
     (
         "wim.verpflichtungsanfrage",
@@ -96,11 +90,6 @@ const UNCHECKED: &[(&str, &str)] = &[
          send-side deadline rather than an inbound check",
     ),
     (
-        "wim.information-bestandsschutz-eigenausbau",
-        "IFTSTA 21030/21031 — the answer leg is already held to the same three Werktage by \
-         `antwort::WIM`; this row duplicates it for callers holding the answer PID",
-    ),
-    (
         "wim.vorabinformation-ersteinbau-ims.an-lf-und-nb",
         "has no PID: the 3-Monats-Vorabinformation to LF and NB is mako's own outbound \
          obligation when it plays gMSB",
@@ -123,11 +112,6 @@ const UNCHECKED: &[(&str, &str)] = &[
     (
         "wim.preisblatt-nb.aenderung",
         "PRICAT 27002, anchored on the Inkrafttreten of the operator's own price change",
-    ),
-    (
-        "wim.rechnung-dienstleistungen",
-        "INVOIC 31003 — needs the Leistungsende, which the invoice carries per position \
-         rather than per Vorgang",
     ),
 ];
 

@@ -1021,8 +1021,18 @@ impl Verdict {
             CheckOutcome::Ok => false,
             // A warning escalates only when the money at stake justifies a
             // human looking at it. `0` (the default) approves every warning.
+            //
+            // And only warnings the amount is *about*: a procedural finding —
+            // the sender missed its own send window — is no more serious on a
+            // large invoice, and escalating it would refuse a correct document
+            // with an Antwortcode no tree publishes for lateness. See
+            // `FindingKind::escalates_with_value`.
             CheckOutcome::Warn => {
                 threshold_raw > 0
+                    && report
+                        .findings
+                        .iter()
+                        .any(|f| f.kind.escalates_with_value())
                     && report
                         .total_net_invoic
                         .is_some_and(|t| t.to_raw() > threshold_raw)
@@ -1459,9 +1469,10 @@ fn abweichungsgrund(
 /// Everything else lands on the catch-alls, which the BDEW requires to carry a
 /// written Erläuterung — supplied here from the finding text.
 ///
-/// The full tree — 205 Prüfschritte over Kopf-, Positions- und Summenebene,
-/// answering with a *set* of (Positionsnummer, code) pairs — is not walked
-/// here; see `mako_pruefung::codes::E_0406_CODES`. The ESA tree `E_0264` **is**
+/// The full tree — Kopf-, Positions- und Summenebene, answering with a *set* of
+/// (Positionsnummer, code) pairs — is not walked here; see
+/// `mako_pruefung::codes::E_0406_CODES`, which owns the tree and states its
+/// size. This comment carried a second count and the two disagreed. The ESA tree `E_0264` **is**
 /// walked, in `invoic_checker::rechnung`.
 fn netznutzung_antwortcode(findings: &[invoic_checker::Finding]) -> &'static str {
     use invoic_checker::FindingKind;
@@ -1509,10 +1520,35 @@ mod tests {
 
     use super::*;
 
+    /// One finding of a kind, at a severity.
+    fn finding(kind: FindingKind, is_dispute: bool) -> invoic_checker::Finding {
+        invoic_checker::Finding {
+            kind,
+            is_dispute,
+            message: "fixture".to_owned(),
+            line_number: None,
+            expected: None,
+            actual: None,
+            deviation_pct: None,
+        }
+    }
+
+    /// A report whose findings agree with its outcome.
+    ///
+    /// The outcome is *derived* from the findings, so a `Warn` report with an
+    /// empty `findings` vec cannot occur — and a fixture that builds one tests a
+    /// state the checker never produces. It hid a real question: whether the
+    /// money threshold escalates a warning *about the arithmetic* or any
+    /// warning at all.
     fn report(outcome: CheckOutcome, total_eur: &str) -> CheckReport {
+        let findings = match outcome {
+            CheckOutcome::Ok => Vec::new(),
+            CheckOutcome::Warn => vec![finding(FindingKind::TotalMismatch, false)],
+            CheckOutcome::Dispute => vec![finding(FindingKind::ArithmeticError, true)],
+        };
         CheckReport {
             outcome,
-            findings: Vec::new(),
+            findings,
             pid: 31002,
             total_net_invoic: EuroAmount::from_decimal_rounded(
                 total_eur.parse().expect("decimal"),
@@ -1741,6 +1777,37 @@ mod tests {
         }
     }
 
+    /// A procedural warning does not escalate, however large the invoice.
+    ///
+    /// The threshold exists because the money at stake justifies a human
+    /// looking at the arithmetic. A late 31003 is no more late for being large,
+    /// and escalating it would refuse a correct invoice — the REMADV would then
+    /// need an Antwortcode, and no tree publishes one for lateness, so it would
+    /// go out as the Summenebene catch-all `A99`.
+    #[test]
+    fn a_late_invoice_does_not_escalate_on_its_value() {
+        let threshold = 250 * 100_000; // 250,00 EUR in 10⁻⁵ EUR units
+        let mut late = report(CheckOutcome::Warn, "100000.00");
+        late.findings = vec![finding(FindingKind::RechnungZuSpaet, false)];
+        let verdict = Verdict::of(&late, threshold, &plain());
+        assert!(
+            !verdict.dispute,
+            "a hundred-thousand-euro late invoice is still only late"
+        );
+        assert_eq!(verdict.label, "Warn");
+
+        // Beside an arithmetic warning, the arithmetic one still escalates.
+        let mut both = report(CheckOutcome::Warn, "100000.00");
+        both.findings = vec![
+            finding(FindingKind::RechnungZuSpaet, false),
+            finding(FindingKind::TotalMismatch, false),
+        ];
+        assert!(
+            Verdict::of(&both, threshold, &plain()).dispute,
+            "lateness must not shield a finding that would have escalated"
+        );
+    }
+
     /// A warning escalates strictly above the threshold. Exactly at it is not
     /// above it — the boundary decides whether a human looks at the invoice.
     #[test]
@@ -1774,40 +1841,6 @@ mod tests {
             Verdict::of(&report(CheckOutcome::Dispute, "0"), 0, &storno()).label,
             "Dispute"
         );
-    }
-
-    /// The values of the `CHECK (outcome IN (…))` list, read from the schema.
-    ///
-    /// SQL line comments go first — this schema annotates every entry — and
-    /// whitespace is collapsed, because the list is wrapped and aligned with
-    /// runs of spaces. An empty result is an assertion, not a pass: an anchor
-    /// that stops matching would otherwise turn the guard below into a no-op.
-    fn outcome_check_values() -> Vec<String> {
-        let schema = include_str!("../migrations/0001_schema.sql");
-        let uncommented: String = schema
-            .lines()
-            .map(|l| l.split_once("--").map_or(l, |(code, _)| code))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let sql: String = uncommented.split_whitespace().collect::<Vec<_>>().join(" ");
-        let anchor = "CHECK (outcome IN (";
-        let at = sql.find(anchor).expect("the outcome CHECK list");
-        let start = at + anchor.len();
-        let end = start + sql[start..].find("))").expect("unterminated CHECK list");
-        let values: Vec<String> = sql[start..end]
-            .split(',')
-            .filter_map(|t| {
-                let t = t.trim();
-                t.strip_prefix('\'')
-                    .and_then(|t| t.strip_suffix('\''))
-                    .map(ToOwned::to_owned)
-            })
-            .collect();
-        assert!(
-            !values.is_empty(),
-            "the outcome CHECK list parsed to nothing"
-        );
-        values
     }
 
     /// Every `outcome` this service writes, from all three places that write one.
@@ -1844,23 +1877,13 @@ mod tests {
     /// purpose.
     #[test]
     fn the_outcome_check_and_the_written_labels_agree_both_ways() {
-        let listed = outcome_check_values();
-        let written = written_outcomes();
-
-        for label in &written {
-            assert!(
-                listed.iter().any(|l| l == label),
-                "the outcome CHECK does not list {label:?}, which this service writes — \
-                 the insert would be rejected. Listed: {listed:?}"
-            );
-        }
-        for value in &listed {
-            assert!(
-                written.contains(value.as_str()),
-                "the outcome CHECK allows {value:?} and nothing writes it — remove it, or \
-                 write it. Written: {written:?}"
-            );
-        }
+        let written: Vec<&str> = written_outcomes().into_iter().collect();
+        mako_service::schema_check::assert_agrees_in(
+            include_str!("../migrations/0001_schema.sql"),
+            "invoic_receipts",
+            "outcome",
+            &written,
+        );
     }
 
     /// The Antwortcode is the machine-readable half of the same obligation.

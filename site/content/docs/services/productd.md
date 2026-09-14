@@ -374,7 +374,7 @@ curl -s "http://productd:9080/api/v1/comparison-feed/bo4e?sparte=STROM&kundentyp
       "bezeichnung": "Mako Strom Premium",
       "anbietername": "9900357000004",
       "sparte": "STROM",
-      "kundentypen": ["PRIVAT"],
+      "kundentypen": ["HAUSHALT"],
       "registeranzahl": "EINTARIF",
       "tariftyp": "SONDERTARIF",
       "tarifmerkmale": ["FESTPREIS"],
@@ -400,7 +400,7 @@ curl -s "http://productd:9080/api/v1/comparison-feed/bo4e?sparte=STROM&kundentyp
 | `anbietername` | `lf_mp_id` |
 | `_id` | `product.product_code` |
 | `sparte` | `product.sparte` → `rubo4e::Sparte`; `WAERME` maps to `FERNWAERME`, which is what BO4E defines |
-| `kundentypen` | `product.kundentyp` → `[rubo4e::Kundentyp]`; the seven internal segments collapse to `PRIVAT` / `GEWERBE` |
+| `kundentypen` | `product.kundentyp` → `[rubo4e::Kundentyp]`; `Haushalt`→`HAUSHALT`, `Ladesaeule`→`LADESAEULE`, `Gewerbe`/`Gewerbe_RLM`→`GEWERBE`, the other three→`SONSTIGE`. An unrecognised value drops the field rather than defaulting |
 | `registeranzahl` | `product.register_count` → `rubo4e::Registeranzahl` |
 | `tariftyp` | `data.tariftyp` → `rubo4e::Tariftyp` |
 | `tarifmerkmale` | Derived: `FESTPREIS` if preisgarantie set; `PAKET` if BUNDLE; `ONLINE` if dynamic; `STANDARD` when none applies |

@@ -51,13 +51,14 @@ Zahlungsavis.
 
 ## The checks
 
-The pipeline is eight stages, in this order:
+The pipeline is eight stages plus one PID-specific one, in this order:
 
 | # | Rule | Outcome on failure |
 |---|---|---|
 | 1 | **Storno reference** — `ist_storno = true` must name an `original_rechnungsnummer` | `Dispute` |
 | 2 | **Period validity** — `rechnungsperiode_start < end`, both within plausible range | `Dispute` |
 | 3 | **Zahlungsziel** — `faelligkeitsdatum < rechnungsdatum` (invalid) or beyond `max_zahlungsziel_days` (exceeded; default 30 per §7 Allg. Festlegungen) | `Dispute` · `Warn` |
+| 3a | **WiM 31003 send window** — a Dienstleistungsrechnung dated more than 20 Werktage after the period it bills (WiM Teil 1 Kap. 3.7.2 Nr. 1). Only PID 31003 | `Warn` |
 | 4 | **Currency agreement** — the document totals, every position's `gesamtpreis` and every `steuerbetraege` entry agree on one currency. Runs *before* the arithmetic, because every amount is read as EUR and a `CHF` field would otherwise compare silently right | `Dispute` |
 | 5 | **Position arithmetic** — every `Rechnungsposition` satisfies `menge × einzelpreis ≈ gesamtpreis`. An unrepresentable product is itself a finding, not a panic | `Dispute` |
 | 6 | **Document total** — the positions sum to `gesamtnetto` | `Warn` |
@@ -160,6 +161,28 @@ if is_stornierung(&rechnung) {
 configured `max_zahlungsziel_days` (default: 30, per §7 Allgemeine Festlegungen V6.1d).
 Set `max_zahlungsziel_days = 0` in `CheckConfig` to disable this check.
 
+### Stage 3a — the WiM 31003 send window
+
+WiM Strom Teil 1 Kap. 3.7.2 Nr. 1 gives the sender „unverzüglich, jedoch
+spätester ÜT ist der 20. WT nach" the end of what is being billed. The SD names
+that end four ways — Beendigung der temporären Fortführung des
+Messstellenbetriebes, Überlassung der Einrichtung, Ende des jeweiligen
+Abrechnungszeitraums, Versand der Zusatz-/Kontrollablesung — and a recipient
+cannot tell which Abrechnungsart it holds. All four are the end of the billed
+thing, which on the wire is the invoice's own `rechnungsperiode`.
+
+It is a **`Warn`**, and deliberately one that does **not** escalate on the
+invoice's value. The window binds the *sender*; Kap. 3.7.2 Nr. 2 gives the
+recipient one answer, „zum angegebenen Zahlungsziel", and no REMADV tree
+publishes an Antwortcode for lateness — so a refusal would have to go out under
+a Summenebene catch-all meaning something else. `FindingKind::escalates_with_value`
+is what keeps a large late invoice a warning.
+
+The 20 Werktage are read from `mako_fristen::vorlauf`'s
+`wim.rechnung-dienstleistungen` row, with the BDEW MaKo calendar, rather than
+restated here: a second copy of a published window is the defect this crate
+exists to catch, one level up.
+
 ### Stage 8 — ToU-aware tariff matching
 
 For a time-of-use Preisblatt (§ 14a Modul 3, BK8-22/010-A Tenor 3.), the bands come from
@@ -225,6 +248,7 @@ tax block (`TAX`/`MOA`) **Muss** on 31003 and 31009 just as on 31001/31002, and
 | `PeriodInvalid` | 2 | ✓ | Billing period start ≥ end |
 | `ZahlungszielInvalid` | 3 | ✓ | `faelligkeitsdatum` before `rechnungsdatum` |
 | `ZahlungszielExceeded` | 3 | ✗ | Payment term exceeds `max_zahlungsziel_days` |
+| `RechnungZuSpaet` | 3a | ✗ | 31003 issued > 20 WT after the billed period ended |
 | `WaehrungMismatch` | 4 | ✓ | The document, a position or a tax entry names a currency the others do not |
 | `ArithmeticError` | 5 | ✓ | Line `menge × einzelpreis ≠ gesamtpreis` |
 | `TotalMismatch` | 6 | ✗ | Σ line nets ≠ `gesamtnetto` |

@@ -167,6 +167,13 @@ pub fn familie_fuer(
 /// states the same rule from the sender's side („Das Zahlungsziel darf 10 WT
 /// nach Empfang der Rechnung nicht unterschreiten"), which is why this is a
 /// refusal and not a warning: the MSB had the rule too.
+///
+/// **The rule is not only the ESA's.** WiM Teil 1 Kap. 3.7.2 Nr. 1 states the
+/// identical sentence three times — once for each Abrechnungsart of the
+/// Dienstleistungsrechnung (Messstellenbetrieb, Geräteübernahme,
+/// Zusatz-/Kontrollablesung) — so it binds PID **31003** as well. These walks
+/// cover the 31009 families only, and 31003's own tree is not walked at all
+/// (`E_0566`/`E_0210`), so nothing enforces it there yet.
 pub const ZAHLUNGSZIEL_MINDEST_WT: u32 = 10;
 
 /// Which level of the EBD a Befund came from.

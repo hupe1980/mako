@@ -19,62 +19,13 @@
 
 use std::path::PathBuf;
 
+use mako_service::schema_check::check_values;
 use vertragd::domain::{Kuendigungsgrund, Vertragsart};
 use vertragd::outbound::TaskKind;
 
 fn migration_sql() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations/0001_schema.sql");
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
-}
-
-/// The quoted values of the `CHECK (<column> ... IN (…))` list.
-///
-/// Both spellings the migration uses are accepted — the nullable
-/// `CHECK (col IS NULL OR col IN (…))` and the bare `CHECK (col IN (…))`. A
-/// parser knowing only one would report "no CHECK list" for every column
-/// written the other way, which is a guard that passes by not looking.
-///
-/// Whitespace is collapsed first: the migration aligns columns with runs of
-/// spaces and wraps long lists over several lines, so an anchor written with
-/// single spaces would miss by one character. SQL line comments go with it —
-/// this schema annotates most list entries with `-- …`.
-fn check_values(sql: &str, column: &str) -> Vec<String> {
-    let uncommented: String = sql
-        .lines()
-        .map(|l| l.split_once("--").map_or(l, |(code, _)| code))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let sql: String = uncommented.split_whitespace().collect::<Vec<_>>().join(" ");
-
-    let anchors = [
-        format!("CHECK ({column} IS NULL OR {column} IN ("),
-        format!("CHECK ({column} IN ("),
-    ];
-    let (anchor, at) = anchors
-        .iter()
-        .find_map(|a| sql.find(a.as_str()).map(|i| (a, i)))
-        .unwrap_or_else(|| panic!("no CHECK list found for column `{column}`"));
-    let start = at + anchor.len();
-    let end = start
-        + sql[start..]
-            .find("))")
-            .unwrap_or_else(|| panic!("unterminated CHECK list for `{column}`"));
-
-    let values: Vec<String> = sql[start..end]
-        .split(',')
-        .filter_map(|tok| {
-            let t = tok.trim();
-            t.strip_prefix('\'')
-                .and_then(|t| t.strip_suffix('\''))
-                .map(ToOwned::to_owned)
-        })
-        .collect();
-    assert!(
-        !values.is_empty(),
-        "the CHECK list for `{column}` parsed to nothing — the anchor matched but the \
-         values did not, which is a guard that passes by not looking"
-    );
-    values
 }
 
 /// Hold one enum against one column, in both directions.
@@ -160,12 +111,12 @@ fn task_kind_matches_its_check_list() {
     });
 }
 
-/// The parser reads a real list, so a silent "no values" cannot pass.
+/// The three lists are the ones this file believes it is reading.
 ///
-/// Both spellings are exercised: `kind` is the bare form and `kuendigung_grund`
-/// the nullable one.
+/// `mako_service::schema_check` refuses an empty parse, so this is not about
+/// that — it is about the anchors resolving to *these* columns.
 #[test]
-fn the_parser_reads_both_check_spellings() {
+fn the_guard_reads_the_lists_it_names() {
     let sql = migration_sql();
     assert_eq!(check_values(&sql, "kind").len(), 5);
     assert_eq!(check_values(&sql, "kuendigung_grund").len(), 4);

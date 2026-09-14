@@ -1148,16 +1148,18 @@ COMDIS **29001** is the other direction and is not part of this flow: it is the
 is wrong (COMDIS AHB 1.0). The same number is also the APERAK PID for a technical
 processing failure, which is a different message on a different clock.
 
-### The eight-stage plausibility pipeline
+### The plausibility pipeline
 
-`InvoicCheckEngine::check` runs eight stages in a fixed order, each appending to
-one `Vec<Finding>`. Where the order is load-bearing, the row says so.
+`InvoicCheckEngine::check` runs eight stages in a fixed order, plus one that
+runs for a single PID, each appending to one `Vec<Finding>`. Where the order is
+load-bearing, the row says so.
 
 | # | Stage | What it verifies |
 |---|---|---|
 | 1 | Storno reference | `ist_storno = true` must name the original in `original_rechnungsnummer`. Source: BK6-24-174 §5; Allgemeine Festlegungen §8 |
 | 2 | Period validity | `rechnungsperiode.startdatum` ≤ `enddatum`; line-item periods via `lieferungszeitraum` |
 | 3 | Zahlungsziel | `faelligkeitsdatum` is not before `rechnungsdatum` (dispute) and does not exceed `max_zahlungsziel_days` — 30 days by default (warn). Source: §7 Allgemeine Festlegungen V6.1d |
+| 3a | WiM 31003 send window | A Dienstleistungsrechnung dated more than 20 Werktage after the period it bills. Source: WiM Teil 1 Kap. 3.7.2 Nr. 1. Only PID 31003, and a `Warn` that does not escalate on the invoice's value |
 | 4 | Currency agreement | Runs **before** the arithmetic, which would otherwise read a CHF `Betrag` as EUR and find every later comparison consistent |
 | 5 | Position arithmetic | `position.positions_menge × einzelpreis` ≈ `gesamtpreis` (within `arithmetic_tolerance`) |
 | 6 | Document total | Sum of `rechnungspositionen[*].gesamtpreis` ≈ `gesamtnetto` (within `total_tolerance`) |

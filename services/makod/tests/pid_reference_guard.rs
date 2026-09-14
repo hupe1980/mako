@@ -45,9 +45,18 @@ const NOT_ROUTED_BY_DESIGN: &[(u32, &str)] = &[
         19_007,
         "Werteanforderung answer; no workflow covers that leg",
     ),
-    // ── Not yet wired: constants exist, nothing registers them.
-    (17_134, "konfiguration::ORDERS_PIDS exists; not registered"),
-    (17_135, "konfiguration::ORDERS_PIDS exists; not registered"),
+    // The NB's ORDERS opening a Konfigurationseinrichtung. mako holds the NB
+    // side and sends these (`konfiguration::ORDERS_PIDS`); what it receives is
+    // the MSB's ORDRSP 19001/19002, which `gpke-konfiguration` registers. The
+    // MSB side — receiving a 17134 — is not implemented.
+    (
+        17_134,
+        "outbound-only: NB sends, answered by ORDRSP 19001/19002",
+    ),
+    (
+        17_135,
+        "outbound-only: NB sends, answered by ORDRSP 19001/19002",
+    ),
     // **44170 does not exist under FV2026-10-01.** PID-Übersicht 4.0 publishes
     // the Gas Verpflichtungsanfrage as 44168 → 44169 and no Ablehnungs-PID; the
     // 44170 of PID 3.3 was withdrawn. `E_2006` still publishes the Ablehnungs-

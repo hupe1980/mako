@@ -242,6 +242,10 @@ pub const ERSTEINBAU_VORABINFORMATION_PID: u32 = 21_029;
 /// The same three Werktage the Vorlauffrist table states from the sender's
 /// side, and deliberately one number: the wMSB's answer is what the gMSB's
 /// „3 Monate und 3 WT" lead time buys, so the two must not drift.
+///
+/// `vorlauf`'s `wim.information-bestandsschutz-eigenausbau` row reads this
+/// constant, so they cannot. It used to be a second literal `3` in another file
+/// under a comment saying they must agree.
 pub const ERSTEINBAU_ANTWORT_WERKTAGE: u32 = 3;
 
 /// The MSB's window to answer an Anfrage einer Konfiguration with a QUOTES

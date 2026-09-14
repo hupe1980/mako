@@ -504,9 +504,17 @@ pub const MSB_RECHNUNG_PID: u32 = 31_009;
 /// received by an **ESA** (WiM Teil 2 Kap. 4.5.2 Nr. 2). The LF answers *zum*
 /// Zahlungsziel, and so does every other WiM invoice PID.
 ///
+/// Resolves all three windows from [`WIM`] by key rather than rebuilding them
+/// from the same constants. The LF/MSB window is a *zero* lead, which is why it
+/// used to be a bare `return zahlungsziel` naming no row at all — and a row no
+/// caller names is the orphan [`WIM`] exists to make visible, whatever its
+/// value.
+///
 /// # Panics
 ///
-/// Panics only if date arithmetic overflows the Gregorian calendar.
+/// Panics if a catalogued row is missing or is not a `LatestWerktageBefore`
+/// window, which means the key was renamed without this helper, and only if
+/// date arithmetic overflows the Gregorian calendar.
 #[must_use]
 pub fn rechnung_antwort_spaetester_uet(
     pid: u32,
@@ -514,16 +522,25 @@ pub fn rechnung_antwort_spaetester_uet(
     zahlungsziel: Date,
     cal: HolidayCalendar,
 ) -> Date {
-    if pid != MSB_RECHNUNG_PID {
-        return zahlungsziel;
-    }
-    match empfaenger {
-        RechnungEmpfaenger::Netzbetreiber => {
-            crate::sub_werktage(zahlungsziel, ANTWORT_IMS_RECHNUNG_NB_WT, cal)
+    let key = if pid == MSB_RECHNUNG_PID {
+        match empfaenger {
+            RechnungEmpfaenger::Netzbetreiber => "wim.antwort-rechnung-ims-nb",
+            RechnungEmpfaenger::Esa => "wim.antwort-rechnung-esa",
+            RechnungEmpfaenger::LieferantOderMsb => "wim.antwort-rechnung",
         }
-        RechnungEmpfaenger::Esa => crate::sub_werktage(zahlungsziel, ANTWORT_ESA_RECHNUNG_WT, cal),
-        RechnungEmpfaenger::LieferantOderMsb => zahlungsziel,
-    }
+    } else {
+        // Every other WiM invoice PID answers *zum* Zahlungsziel — the same row
+        // the LF/MSB branch of 31009 uses (Kap. 3.6.3.8.2 and Kap. 3.7.2 state
+        // it once for both).
+        "wim.antwort-rechnung"
+    };
+    let VorlaufShape::LatestWerktageBefore(wt) = vorlauf(key)
+        .unwrap_or_else(|| panic!("{key} is catalogued in WIM"))
+        .shape
+    else {
+        panic!("{key} must be a LatestWerktageBefore window")
+    };
+    crate::sub_werktage(zahlungsziel, wt, cal)
 }
 
 /// The latest Übertragungstag for the **COMDIS 29001** with which the MSB tells
@@ -709,12 +726,17 @@ pub const WIM: &[VorlaufObligation] = &[
         // 21031 rides the same window, and `crate::antwort::WIM` carries the
         // pair keyed on the trigger 21029 — this entry exists so a caller
         // holding the answer PID finds the same three Werktage.
+        //
+        // It reads `antwort`'s constant rather than restating `3`. Both tables
+        // publish this one window from opposite sides, `ERSTEINBAU_ANTWORT_WERKTAGE`
+        // says in as many words that the two must not drift, and until this line
+        // nothing stopped them: two literal `3`s in two files.
         key: "wim.information-bestandsschutz-eigenausbau",
         pid: Some(21_030),
         pid_gas: None,
         name: "Information Bestandsschutz / Eigenausbau iMS (wMSB → gMSB)",
         anchor: Anchor::Uebertragungstag,
-        shape: VorlaufShape::LatestWerktageAfter(3),
+        shape: VorlaufShape::LatestWerktageAfter(crate::antwort::ERSTEINBAU_ANTWORT_WERKTAGE),
         source: "WiM Strom Teil 1 Kap. 3.5.2 Nr. 2 — spätester ÜT ist der 3. WT nach dem ÜT \
                  der Vorabinformation",
     },
@@ -796,6 +818,16 @@ pub const WIM: &[VorlaufObligation] = &[
         anchor: Anchor::Zahlungsziel,
         shape: VorlaufShape::LatestWerktageBefore(ANTWORT_IMS_RECHNUNG_NB_WT),
         source: "WiM Strom Teil 1 Kap. 6.2 Nr. 2 — spätester ÜT ist der 4. WT vor dem \
+                 Zahlungsziel in der Rechnung",
+    },
+    VorlaufObligation {
+        key: "wim.antwort-rechnung-esa",
+        pid: Some(33_001),
+        pid_gas: None,
+        name: "Antwort des ESA auf die Rechnung einer für ihn erbrachten Leistung (REMADV)",
+        anchor: Anchor::Zahlungsziel,
+        shape: VorlaufShape::LatestWerktageBefore(ANTWORT_ESA_RECHNUNG_WT),
+        source: "WiM Strom Teil 2 Kap. 4.5.2 Nr. 2 — spätester ÜT ist der 4. WT vor dem \
                  Zahlungsziel in der Rechnung",
     },
     VorlaufObligation {

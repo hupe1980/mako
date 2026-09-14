@@ -133,14 +133,20 @@ pub const BESTELLUNG_FRIST_WT: u32 = 3;
 /// der 2. WT nach dem ÜT von Nr. 3" (Kap. 3.2.2 Nr. 4 / AWH 4.2.2 Nr. 4).
 pub const BESTAETIGUNG_FRIST_WT: u32 = 2;
 
-/// Werktage **before** the Gerätewechseltermin by which the MSBA must answer an
-/// Anzeige Gerätewechselabsicht (Kap. 3.1.2 Nr. 2 / AWH 4.1.2 Nr. 2).
+/// The [`mako_fristen::vorlauf`] key for the window in which the MSBA must
+/// answer an Anzeige Gerätewechselabsicht
+/// (Kap. 3.1.2 Nr. 2 / AWH 4.1.2 Nr. 2 — spätester ÜT ist der 2. WT davor).
 ///
 /// A Vorlauffrist, not an Antwortfrist: it is anchored on the Termin the
 /// *message* carries, so it can already be in the past when the Anzeige
 /// arrives. That is not an error in the arithmetic — it is a Vorlauffrist the
 /// MSBN failed to observe, and `E17` is the code for it.
-pub const GERAETEWECHSELABSICHT_ANTWORT_WT: u32 = 2;
+///
+/// Read from the table for the same reason as
+/// [`GERAETEWECHSEL_TERMIN_VORLAUF_KEY`]: the `2` was a second copy of the
+/// Festlegung here, and the catalogued row — citation and all — was the copy
+/// nothing reached.
+pub const GERAETEWECHSELABSICHT_ANTWORT_KEY: &str = "wim.antwort-geraetewechselabsicht";
 
 /// The [`mako_fristen::vorlauf`] key for the Mindestvorlaufzeit between the
 /// Anzeige der Gerätewechselabsicht and the Gerätewechseltermin
@@ -815,11 +821,14 @@ fn antwort_deadline(
                         .to_owned(),
                 ));
             };
-            let due = mako_fristen::sub_werktage(
-                datum,
-                GERAETEWECHSELABSICHT_ANTWORT_WT,
-                HolidayCalendar::BdewMaKo,
-            );
+            let mako_fristen::vorlauf::VorlaufShape::LatestWerktageBefore(wt) =
+                mako_fristen::vorlauf::vorlauf(GERAETEWECHSELABSICHT_ANTWORT_KEY)
+                    .expect("wim.antwort-geraetewechselabsicht is catalogued")
+                    .shape
+            else {
+                unreachable!("{GERAETEWECHSELABSICHT_ANTWORT_KEY} is a LatestWerktageBefore window")
+            };
+            let due = mako_fristen::sub_werktage(datum, wt, HolidayCalendar::BdewMaKo);
             Ok(PendingDeadline::new(
                 GERAETEWECHSELABSICHT_DEADLINE_LABEL,
                 mako_fristen::berlin_at(
