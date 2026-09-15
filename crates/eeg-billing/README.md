@@ -207,7 +207,9 @@ by different rules depending on the day they were commissioned. Derive the regim
 | 2023-01-01 – 2025-02-24 | staged 4-3-2-1 h | < 400 kW | ausschreibungspflichtige only |
 | ≥ 2025-02-25 | first negative ¼h | < 100 kW until iMSys · < 2 kW pending §85 Abs. 2 Nr. 12 | all plants |
 
-Pilotwindenergieanlagen (§3 Nr. 37) are exempt under every version at any size
+Pilotwindenergieanlagen (§3 Nr. 37) are exempt up to and including the EEG 2023
+Fassung at any size; the Solarspitzengesetz §51 Abs. 2 (since 25.02.2025) names
+no plant category, so they are in scope under it
 (`ist_pilotwindanlage`).
 
 `derive_negativpreis` applies the run-length threshold to a quarter-hour series;

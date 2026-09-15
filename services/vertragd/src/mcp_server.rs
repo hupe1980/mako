@@ -795,7 +795,9 @@ impl VertragdMcpHandler {
                  → Automatically dispatches GPKE Lieferbeginn (Strom) or GeLi Gas (Gas) to processd.\n\n\
                  **Step 4** — Add portal users:\n\
                  `POST /api/v1/kunden/{id}/identitaeten` for each OIDC user.\n\
-                 Set `rolle=ADMIN` for CEO, `rolle=FINANZEN` for accountant, `standort_filter=Werk Nord` for site manager.\n\n\
+                 `standort_filter=Werk Nord` scopes a site manager to matching MaLos.\n\
+                 `rolle` is recorded but **not enforced** — it narrows nothing today, so do \
+                 not rely on it to restrict an identity.\n\n\
                  **Step 5** — Set Preisgarantie if applicable:\n\
                  `PUT /api/v1/vertraege/{id}/preisgarantie` with BO4E Preisgarantie COM.\n\n\
                  **Monitoring:** Use `find_stuck_workflows` after 5 Werktage (Strom) / 10 Werktage (Gas) — ANGEMELDET = MaKo not yet confirmed.",

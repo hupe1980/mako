@@ -57,14 +57,14 @@ impl RoundMoney for Decimal {
 /// | 2023 | 30   | 0.5442 |
 /// | 2024 | 45   | 0.8163 |
 /// | 2025 | 55   | 0.9977 |
-/// | 2026 | 65   | 1.1791 |
+/// | 2026 | 60   | 1.0884 |
 const BEHG_EUR_PER_T: &[(i32, u32)] = &[
     (2021, 25),
     (2022, 30),
     (2023, 30),
     (2024, 45),
     (2025, 55),
-    (2026, 65),
+    (2026, 60),
 ];
 
 // ── Erdgas emission factor (EBeV Anlage) ─────────────────────────────────────
@@ -269,8 +269,10 @@ impl Default for RegulatoryRates {
         Self {
             stromsteuer_ct_per_kwh: dec!(2.05),
             energiesteuer_gas_ct_per_kwh: dec!(0.55),
-            // 65 EUR/t (2026, BEHG §10) × 0.18139464 kg_CO₂/kWh_Hs ÷ 10
-            behg_gas_ct_per_kwh: dec!(1.17906516),
+            // 60 EUR/t — § 4 Abs. 1 Nr. 2 CO2KostAufG bills the *Mittelwert* of
+            // the § 10 Abs. 2 BEHG 55–65 corridor, not its Höchstpreis —
+            // × 0.18139464 kg_CO₂/kWh_Hs ÷ 10
+            behg_gas_ct_per_kwh: dec!(1.08836784),
             mwst_rate: dec!(0.19),
             mwst_rate_reduced: dec!(0.07),
         }
@@ -390,13 +392,27 @@ impl RegulatoryRates {
 mod tests {
     use super::*;
 
+    /// 2026 bills the corridor **midpoint**, not its ceiling.
+    ///
+    /// § 4 Abs. 1 Nr. 2 CO2KostAufG: „Dem **Mittelwert** des Preiskorridors nach
+    /// § 10 Absatz 2 Satz 4 des Brennstoffemissionshandelsgesetzes". § 10 Abs. 2
+    /// BEHG sets that corridor at „einem Mindestpreis von 55 Euro … und einem
+    /// Höchstpreis von 65 Euro", so the price a supplier must bill is 60 EUR/t.
+    /// Taking 65 — the price a supplier may *pay* at auction — overcharged the
+    /// CO₂ line of every 2026 gas invoice by 8.33 %.
     #[test]
-    fn behg_year_table_2026_matches_expected() {
+    fn behg_year_table_2026_is_the_corridor_midpoint_not_the_ceiling() {
         let ct = behg_ct_per_kwh_for_year(2026).unwrap();
-        // 65 EUR/t × 0.18139464 kg/kWh_Hs ÷ 10 = 1.17906516 ct/kWh
-        let expected = dec!(65) * dec!(0.18139464) / dec!(10);
+        // 60 EUR/t × 0.18139464 kg/kWh_Hs ÷ 10 = 1.08836784 ct/kWh
+        let expected = dec!(60) * dec!(0.18139464) / dec!(10);
         assert_eq!(ct, expected);
-        assert_eq!(ct, dec!(1.17906516));
+        assert_eq!(ct, dec!(1.08836784));
+        assert_ne!(
+            ct,
+            dec!(65) * dec!(0.18139464) / dec!(10),
+            "65 EUR/t is the § 10 Abs. 2 BEHG Höchstpreis, not the § 4 Abs. 1 \
+             Nr. 2 CO2KostAufG Mittelwert"
+        );
     }
 
     #[test]

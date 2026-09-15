@@ -96,6 +96,10 @@ pub struct KundenIdentitaetRow {
     pub oidc_sub: String,
     pub email: Option<String>,
     pub display_name: Option<String>,
+    /// The identity's recorded role.
+    ///
+    /// **Not an access control.** No read or write path compares it;
+    /// `standort_filter` is the field that narrows what an identity sees.
     pub rolle: String,
     pub standort_filter: Option<String>,
     pub aktiv: bool,

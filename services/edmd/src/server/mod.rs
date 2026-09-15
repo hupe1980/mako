@@ -320,13 +320,13 @@ pub(crate) struct SimpleTimeParams {
 
 /// How far back a read reaches when the caller names no `from`.
 ///
-/// Every time-series endpoint used to default to `OffsetDateTime::UNIX_EPOCH`,
-/// so `GET /api/v1/lastgang/{malo_id}` with no parameters asked for **every
-/// interval ever stored** for that MaLo across both tiers. At quarter-hour
-/// resolution a decade is 350 000 rows, materialised into a `Vec<MeterRead>` and
-/// then into BO4E JSON — one unparameterised request from a dashboard is a
-/// tenant-wide outage. A month is the window an interactive caller almost always
-/// means; anything longer is asked for explicitly.
+/// A time-series endpoint must never default to `OffsetDateTime::UNIX_EPOCH`:
+/// that makes `GET /api/v1/lastgang/{malo_id}` with no parameters ask for
+/// **every interval ever stored** for that MaLo across both tiers. At
+/// quarter-hour resolution a decade is 350 000 rows, materialised into a
+/// `Vec<MeterRead>` and then into BO4E JSON — one unparameterised request from a
+/// dashboard is a tenant-wide outage. A month is the window an interactive
+/// caller almost always means; anything longer is asked for explicitly.
 pub(crate) const DEFAULT_READ_WINDOW: time::Duration = time::Duration::days(31);
 
 /// The longest window a single request may ask for.
@@ -658,20 +658,12 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
                         mako_events::mako::PROCESS_COMPLETED,
                         mako_events::mako::PROCESS_INITIATED,
                     ],
-                    // Empty on purpose: `marktd` has no PID filter. Its
-                    // `subscriptions` table narrows on `roles`, `event_types` and
-                    // `sparten` only, and `SubscriptionUpsertRequest` declares no
-                    // `makopid_filter` field — so the key this client puts in the
-                    // body is dropped by serde on arrival, silently, because the
-                    // DTO does not deny unknown fields.
-                    //
-                    // Sending `MSCONS_PIDS` here would read as server-side
-                    // narrowing without being it, and would be the wrong set if
-                    // it ever started working: `handler.rs` branches on
-                    // `ALL_MSCONS_PIDS`, a strict superset adding the Redispatch
-                    // PIDs 13020–13023/13026. The narrowing that actually runs
-                    // is there, on every event marktd fans out.
-                    makopid_filter: &[],
+                    // No PID filter exists to send: `marktd`'s `subscriptions`
+                    // table narrows on `roles`, `event_types` and `sparten` only.
+                    // The narrowing that actually runs is `handler.rs`'s branch on
+                    // `ALL_MSCONS_PIDS` — a strict superset of `MSCONS_PIDS`
+                    // adding the Redispatch PIDs 13020–13023/13026 — applied to
+                    // every event marktd fans out.
                     active: true,
                 },
             )

@@ -2216,7 +2216,7 @@ pub async fn escalate_dunning(
     let stufe: i16 = body.get("stufe").and_then(|v| v.as_i64()).unwrap_or(1) as i16;
     let amount_due_ct = account.balance_ct.max(0);
     let due_days: i64 = body.get("due_days").and_then(|v| v.as_i64()).unwrap_or(14);
-    let due_date = (OffsetDateTime::now_utc() + time::Duration::days(due_days)).date();
+    let due_date = mako_fristen::heute() + time::Duration::days(due_days);
 
     // Manual escalation announces the Mahnstufe exactly like the auto-dunning
     // worker — a case opened by an operator is no less material to the ERP or
@@ -2942,7 +2942,7 @@ pub async fn run_sepa(
     };
 
     // Ad-hoc runs collect at the SDD CORE minimum lead time (D-1, submit today).
-    let collection_date = (time::OffsetDateTime::now_utc() + time::Duration::days(2)).date();
+    let collection_date = mako_fristen::heute() + time::Duration::days(2);
 
     let dd_schema = match crate::sepa::resolve_pain008_schema(cfg.pain008_schema.as_deref()) {
         Ok(s) => s,

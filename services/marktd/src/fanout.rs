@@ -206,10 +206,13 @@ where
         // harmless: the claim below re-checks that the row is still pending.
         let mut resolved = Vec::with_capacity(rows.len());
         for row in rows {
-            let role = row.marktrole.as_deref().unwrap_or("");
             match self
                 .sub_repo
-                .list_matching(&row.ce_type, role, row.sparte.as_deref())
+                .list_matching(
+                    &row.ce_type,
+                    row.marktrole.as_deref(),
+                    row.sparte.as_deref(),
+                )
                 .await
             {
                 Ok(subs) => resolved.push((row, subs)),

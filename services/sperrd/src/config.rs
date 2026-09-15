@@ -27,6 +27,14 @@ pub struct SperrdConfig {
     /// Absent → the webhook accepts unsigned events with a startup warning. That
     /// is a dev-mode setting: the webhook queues physical disconnections.
     pub inbound_hmac_secret: Option<SecretString>,
+    /// ERP webhook the `de.sperr.*` CloudEvents are delivered to.
+    ///
+    /// `events.rs` enqueues all seven types into `event_outbox` transactionally.
+    /// Without a URL nothing drains that table: the Sperrung, Entsperrung and
+    /// Ankündigung notices accumulate undelivered, which is why startup says so.
+    pub erp_webhook_url: Option<String>,
+    /// HMAC secret the outbound `de.sperr.*` deliveries are signed with.
+    pub erp_hmac_secret: Option<SecretString>,
     /// MCP server authentication. Supports API-key, OIDC, or dev mode.
     #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,

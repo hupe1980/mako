@@ -36,10 +36,7 @@ pub fn parse_sparte(raw: &str) -> Option<Sparte> {
 /// handler routes on [`ALL_MSCONS_PIDS`], and there is no subscription-level PID
 /// filter anywhere — `marktd` narrows a webhook subscription by `roles`,
 /// `event_types` and `sparten` only, so every fan-out edmd is subscribed to
-/// arrives whatever its PID. edmd used to send this set to `marktd` as a
-/// `makopid_filter`, which read as server-side narrowing, was dropped by serde
-/// on arrival, and would have suppressed the Ausfallarbeit deliveries below if
-/// it had ever taken effect.
+/// arrives whatever its PID.
 ///
 /// What the set still states is *ownership*: these are the Messwesen
 /// Anwendungsfälle edmd is the process home for, as against

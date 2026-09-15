@@ -12,8 +12,8 @@ keywords         = ["energy", "mako", "bdew", "market-data", "bo4e"]
 categories       = ["data-structures", "web-programming"]
 
 [features]
-## Enables `InMemoryMaloRepository`, `InMemoryCorrelationIndex`, and other
-## in-memory test doubles.  Must never appear in production builds.
+## Enables the two in-memory test doubles — `InMemoryVersorgungsStatusRepository`
+## and `InMemoryNbEnergiemixRepository`.  Must never appear in production builds.
 testing = []
 ## Enables `MakodClient` — the typed HTTP client for the `makod` admin and
 ## command APIs.  Pulls in `reqwest` (TLS, JSON).  Enable this only in

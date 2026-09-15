@@ -1514,9 +1514,11 @@ impl Workflow for WimDeviceChangeWorkflow {
                     DeviceChangeEvent::Initiated {
                         melo_id,
                         incoming_msb: sender_mp_id,
-                        // REST orders target the MSB (self); grid_operator is
-                        // not known at this point — carry device_category in
-                        // document_date for now (process_date holds the date).
+                        // REST orders target the MSB (self) and the grid
+                        // operator is not known at this point. The command
+                        // carries no field for the Gerätekategorie, so it rides
+                        // `document_date` under a `|category=` suffix that the
+                        // reader splits off; `process_date` holds the date.
                         grid_operator: MarktpartnerCode::new(""),
                         device_id,
                         document_date: format!("{process_date}|category={device_category}"),

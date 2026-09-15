@@ -268,7 +268,10 @@ pub async fn handle_webhook(
                 );
             }
             Err(e) => {
+                // marktd treats any 2xx as delivered, so acknowledging here
+                // loses the reading order permanently. 500 lets fan-out retry.
                 warn!(error = %e, malo_id = %malo_id, "edmd: failed to create {description} reading order");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         }
         return StatusCode::NO_CONTENT.into_response();
@@ -352,7 +355,9 @@ pub async fn handle_webhook(
                 }
                 Ok(_) => debug!(malo_id = %malo_id, "edmd: {label} reading order already exists"),
                 Err(e) => {
-                    warn!(error = %e, malo_id = %malo_id, "edmd: failed to create {label} reading order")
+                    // As above: a 2xx here would be read as delivered by marktd.
+                    warn!(error = %e, malo_id = %malo_id, "edmd: failed to create {label} reading order");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
             }
         }

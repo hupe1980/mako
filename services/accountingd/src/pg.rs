@@ -1671,6 +1671,13 @@ pub struct CreateMandateRequest {
     pub bic: Option<String>,
     pub kontoinhaber: Option<String>,
     pub mandatsref: String,
+    /// `FRST` on a new mandate, then `RCUR` once one collection has cleared.
+    ///
+    /// Defaulted because the sequence is this service's to track across the
+    /// mandate's life rather than a caller's input — `portald` states exactly
+    /// that and omits it, which made every customer-facing mandate
+    /// registration a 422.
+    #[serde(default = "default_sequence_type")]
     pub sequence_type: String,
     /// `CORE` (default) or `B2B`.
     ///
@@ -1690,6 +1697,12 @@ pub struct CreateMandateRequest {
 
 fn default_scheme() -> String {
     "CORE".to_owned()
+}
+
+/// A mandate that has never been collected is `FRST`; `create_mandate` is the
+/// only place a mandate is born, so this is the only correct starting value.
+fn default_sequence_type() -> String {
+    "FRST".to_owned()
 }
 
 pub async fn create_mandate(

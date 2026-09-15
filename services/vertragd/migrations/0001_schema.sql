@@ -109,12 +109,16 @@ CREATE TABLE kunden_identitaeten (
     oidc_sub        TEXT        NOT NULL,
     email           TEXT,
     display_name    TEXT,
+    -- NOT AN ACCESS CONTROL. Nothing compares this column: it is written,
+    -- returned on the identity, and never consulted on any read or write path.
+    -- `standort_filter` below is the one that actually narrows what an identity
+    -- sees. Do not provision a restricted role expecting it to restrict.
     rolle           TEXT        NOT NULL DEFAULT 'VOLLZUGRIFF' CHECK (rolle IN (
-                        'VOLLZUGRIFF',  -- B2C default: full read access to own data
-                        'ADMIN',        -- B2B: full read + self-service
-                        'FINANZEN',     -- B2B: invoices + balance only
-                        'TECHNIK',      -- B2B: meter data + Lastgang only
-                        'READONLY'      -- any: read-only, no self-service
+                        'VOLLZUGRIFF',  -- B2C default
+                        'ADMIN',        -- B2B
+                        'FINANZEN',     -- B2B, intended: invoices + balance
+                        'TECHNIK',      -- B2B, intended: meter data + Lastgang
+                        'READONLY'      -- intended: no self-service
                     )),
     -- B2B site-scoped access: only sees MaLos matching this standort_bezeichnung
     standort_filter TEXT,

@@ -98,7 +98,7 @@ impl SubscriptionRepository for PgSubscriptionRepository {
     async fn list_matching(
         &self,
         event_type: &str,
-        role: &str,
+        role: Option<&str>,
         sparte: Option<&str>,
     ) -> Result<Vec<Subscription>, MdmError> {
         // Push role and sparte filters to SQL; wildcard event_type matching
@@ -106,7 +106,7 @@ impl SubscriptionRepository for PgSubscriptionRepository {
         let rows: Vec<PgRow> = sqlx::query(&format!(
             r#"SELECT {SELECT_COLS} FROM subscriptions
                WHERE active = true
-                 AND (roles   = '{{}}' OR $1 = ANY(roles))
+                 AND ($1::text IS NULL OR roles = '{{}}' OR $1 = ANY(roles))
                  AND ($2::text IS NULL OR sparten = '{{}}' OR $2 = ANY(sparten))
                ORDER BY subscriber_id"#
         ))

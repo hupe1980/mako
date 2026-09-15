@@ -643,6 +643,11 @@ impl Daemon for Accountingd {
                                         "accountingd: SEPA N-5 — creditor_iban not configured; \
                                      pain.008 generation BLOCKED. Set creditor_iban in accountingd.toml."
                                     );
+                                    accountingd::pg::release_worker_lock(
+                                        &mut wlock,
+                                        accountingd::pg::LOCK_SEPA_N5,
+                                    )
+                                    .await;
                                     tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600))
                                         .await;
                                     continue;
@@ -661,6 +666,11 @@ impl Daemon for Accountingd {
                                  configured; the EPC rulebook mandates CdtrSchmeId. \
                                  pain.008 generation BLOCKED."
                                 );
+                                accountingd::pg::release_worker_lock(
+                                    &mut wlock,
+                                    accountingd::pg::LOCK_SEPA_N5,
+                                )
+                                .await;
                                 tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600))
                                     .await;
                                 continue;
@@ -684,6 +694,11 @@ impl Daemon for Accountingd {
                                         error = %e,
                                         "accountingd: SEPA N-5 — pain.008 generation failed"
                                     );
+                                    accountingd::pg::release_worker_lock(
+                                        &mut wlock,
+                                        accountingd::pg::LOCK_SEPA_N5,
+                                    )
+                                    .await;
                                     tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600))
                                         .await;
                                     continue;

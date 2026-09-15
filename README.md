@@ -197,7 +197,7 @@ is [mako docs · Services](https://hupe1980.github.io/mako/docs/services/).
 | Category | Detail |
 |---|---|
 | 🆔 **Validated domain IDs** | `MaloId` (11-digit BDEW check-digit), `MeloId` (DE+31-char), `MarktpartnerId` (13-digit; auto-derives NAD DE3055 agency code `293`/`332`/`9` from prefix) |
-| 🗂️ **30 repository traits** | One trait per aggregate — `MaloRepository`, `MeloRepository`, `NbContractRepository`, `PartnerRepository`, `LokationszuordnungRepository`, `TechnischeRessourceRepository`, `SteuerbareRessourceRepository`, `CorrelationIndex`, … — AFIT, no `dyn Trait` overhead |
+| 🗂️ **29 repository traits** | One trait per aggregate — `MaloRepository`, `MeloRepository`, `NbContractRepository`, `PartnerRepository`, `LokationszuordnungRepository`, `TechnischeRessourceRepository`, `SteuerbareRessourceRepository`, `CorrelationIndex`, … — AFIT, no `dyn Trait` overhead |
 | ⏳ **Temporal role assignments** | `Rollenzuordnung` with `valid_from`/`valid_to` — evaluated against CET/CEST German calendar date at query time |
 | 📨 **CloudEvents 1.0** | Outbound events (`MarktEvent`) with HMAC-SHA256 signing; `InboundMakoEvent` for receiving `makod` lifecycle events |
 | 🧪 **`testing` feature** | Two in-memory doubles — `InMemoryVersorgungsStatusRepository` (§§ 36/38 EnWG supply status) and `InMemoryNbEnergiemixRepository` (§ 42 EnWG disclosure). Deliberately only two: a hand-written double is a second implementation of the same contract and the two drift, so every other repository is checked against real PostgreSQL in `marktd`'s testcontainers suites |
@@ -209,7 +209,7 @@ is [mako docs · Services](https://hupe1980.github.io/mako/docs/services/).
 
 | Category | Detail |
 |---|---|
-| 📦 **Typed responses** | `GET /api/v1/malos` → `Marktlokation`; `GET /api/v1/melos` → `Messlokation`; `GET /api/v1/zaehler` → `Zaehler`; `GET /api/v1/geraete` → `Geraet` — all canonical BO4E camelCase |
+| 📦 **Typed responses** | `GET /api/v1/malos` → `Marktlokation`; `GET /api/v1/melos/{melo_id}` → `Messlokation`; `GET /api/v1/melos/{melo_id}/zaehler` → `Zaehler`; `GET /api/v1/zaehler/{zaehler_id}/geraete` → `Geraet` — all canonical BO4E camelCase. Only MaLos have a collection route; the rest are addressed per id or nested under their parent |
 | 🔍 **One gate on write** | `mako_markt::bo4e::decode` at every endpoint: `_typ` → typed deserialization → strict enums by JSON-path → the rules BO4E states in prose and enforces nowhere. Every refusal is a 422 with the same `code` |
 | 🧬 **The gate is in the type** | A BO4E field in a request body is a `Bo4e<T>`, which runs all four stages inside `Deserialize` — there is no constructor that skips them. A `serde_json::Value` documented as a BO4E payload is refused by `cargo xtask check-request-bodies`, with an empty exemption list |
 | 🧩 **Lokationsbündel, audited against the BDEW codelist** | EDI@Energy's *Codeliste der Lokationsbündelstrukturen* — 15 structures, 27 object codes — decides which structure a bundle declares and where each object sits in it. An object code standing for another object type is a `422` |
@@ -501,7 +501,7 @@ match &msg {
         }
     }
     AnyMessage::Mscons(m) => {
-        println!("Consumption report, {} segments", m.raw_segments().len());
+        println!("Consumption report, {} segments", m.segments().len());
     }
     AnyMessage::Unknown { message_type_code, .. } => {
         println!("Unrecognised type: {message_type_code}");

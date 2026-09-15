@@ -387,6 +387,8 @@ impl Workflow for GpkeStornierungWorkflow {
                         "unsupported GPKE Stornierung PID {pid} (expected one of: {STORNIERUNG_PIDS:?})",
                     )));
                 }
+                let sender_mp_id = sender.clone();
+                let receiver_gln = receiver.clone();
                 let mut events = vec![GpkeStornierungEvent::StornierungReceived {
                     pruefidentifikator: pid,
                     sender,
@@ -397,12 +399,29 @@ impl Workflow for GpkeStornierungWorkflow {
                 }];
                 if validation_passed {
                     events.push(GpkeStornierungEvent::ValidationPassed { message_ref });
+                    Ok(WorkflowOutput::events(events))
                 } else {
+                    let reason = validation_errors.join("; ");
                     events.push(GpkeStornierungEvent::ValidationFailed {
                         errors: validation_errors,
                     });
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
+                    // It has to be emitted here: `ValidationFailed` folds to
+                    // `Rejected`, which is terminal, and `DispatchAperak`
+                    // requires `ValidationPassed` — so a refusal raised later
+                    // is unreachable and the counterparty gets no answer.
+                    let outbox = vec![
+                        PendingOutbox::aperak_fehler(
+                            receiver_gln.as_str(),
+                            sender_mp_id.as_str(),
+                            message_ref.as_str(),
+                            mako_engine::erc::codes::Z29,
+                            reason,
+                        )
+                        .caused_by(0),
+                    ];
+                    Ok(WorkflowOutput::with_outbox(events, outbox))
                 }
-                Ok(WorkflowOutput::events(events))
             }
 
             GpkeStornierungCommand::DispatchAperak { positive, reason } => {
@@ -503,6 +522,23 @@ mod tests {
             .iter()
             .fold(state, GpkeStornierungWorkflow::apply);
         assert!(matches!(state, GpkeStornierungState::ValidationPassed(_)));
+    }
+
+    /// A refused Stornierung must answer with the negative APERAK.
+    ///
+    /// APERAK AHB 1.0 § 2.1.1 makes it mandatory, and it has to be emitted on
+    /// this transition: `ValidationFailed` folds to `Rejected`, which is
+    /// terminal, and `DispatchAperak` requires `ValidationPassed` — so a refusal
+    /// raised anywhere later is unreachable and the counterparty waits with no
+    /// answer at all. The GeLi Gas twin has always emitted it here.
+    #[test]
+    fn a_refused_stornierung_answers_with_the_negative_aperak() {
+        let out =
+            GpkeStornierungWorkflow::handle(&GpkeStornierungState::New, stornierung_cmd(55022, false))
+                .unwrap();
+        assert_eq!(out.outbox.len(), 1, "exactly one APERAK");
+        assert_eq!(out.outbox[0].message_type.as_ref(), "APERAK");
+        assert_eq!(out.outbox[0].payload["error_code"], "Z29");
     }
 
     #[test]

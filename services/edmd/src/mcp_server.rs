@@ -1164,198 +1164,12 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
             Err(McpError::internal_error(json.to_string(), None))
         }
     }
-}
-
-#[prompt_router]
-impl EdmdMcpHandler {
-    #[prompt(
-        name = "analyze-consumption",
-        description = "Step-by-step: analyze meter readings and consumption for a MaLo"
-    )]
-    async fn analyze_consumption_prompt(&self) -> Vec<PromptMessage> {
-        vec![
-            PromptMessage::new_text(
-                Role::User,
-                "How do I analyze energy consumption data for a MaLo?",
-            ),
-            PromptMessage::new_text(
-                Role::Assistant,
-                "1. Use `get_timeseries` with malo_id and time range to fetch MSCONS data.\n\
-                 2. Key OBIS codes:\n\
-                    - 1-0:1.8.0 (Wirkenergie Bezug gesamt, SLP/RLM consumption)\n\
-                    - 1-0:2.8.0 (Wirkenergie Einspeisung, feed-in)\n\
-                    - 1-0:1.8.1 / 1-0:1.8.2 (HT / NT for Zweitarif billing)\n\
-                 3. Use `get_billing_period` for MeterBillingPeriod (arbeitsmenge_kwh, brennwert/zustandszahl).\n\
-                 4. Compare billing period totals against the INVOIC in invoicd.\n\
-                 5. Discrepancies > 3% trigger INVOIC dispute (invoic-checker check 2).",
-            ),
-        ]
-    }
-
-    #[prompt(
-        name = "submit-mscons",
-        description = "Step-by-step: submit MSCONS meter readings into edmd"
-    )]
-    async fn submit_mscons_prompt(&self) -> Vec<PromptMessage> {
-        vec![
-            PromptMessage::new_text(Role::User, "How do I submit MSCONS meter readings to edmd?"),
-            PromptMessage::new_text(
-                Role::Assistant,
-                "MSCONS readings arrive via makod's EDIFACT pipeline automatically.\n\
-                 For manual injection or testing:\n\
-                 1. POST /api/v1/deliveries with the MSCONS BO4E Energiemenge payload.\n\
-                 2. Required: malo_id, messlokation_id, obis_code, zeitreihe (time series).\n\
-                 3. edmd validates the OBIS code and persists the time series.\n\
-                 4. Use `get_timeseries` to verify the ingestion was correct.\n\n\
-                 For Iceberg archive queries (bulk historical data):\n\
-                 GET /api/v1/archive/{malo_id}?from=...&to=... returns Parquet-backed results.",
-            ),
-        ]
-    }
-
-    #[prompt(
-        name = "quality-assessment",
-        description = "Step-by-step: assess meter read quality for a MaLo using the Hampel filter"
-    )]
-    async fn quality_assessment_prompt(&self) -> Vec<PromptMessage> {
-        vec![
-            PromptMessage::new_text(
-                Role::User,
-                "How do I assess the quality of meter readings for a MaLo?",
-            ),
-            PromptMessage::new_text(
-                Role::Assistant,
-                "Quality scoring uses the **Hampel filter** (window k=3, threshold t=3.0 robust sigma) — \n\
-                 sliding-window median/MAD outlier detection robust to the outliers it detects.\n\n\
-                 ## Steps\n\
-                 1. Call `get_quality_warnings(malo_id, from, to)` to see existing quality issues.\n\
-                 2. Check `grade` field: A (clean) | B (minor) | C (significant) | F (unusable).\n\
-                 3. If you suspect historical data was stored without quality scoring (pre-M7), \n\
-                    retroactively rescore: `POST /api/v1/quality-score/{malo_id}?from=&to=`.\n\
-                 4. Investigate:\n\
-                    - `outlier_intervals` — Hampel-flagged timestamps (robust to contamination)\n\
-                    - `spike_intervals` — values > 10× window median (decimal-point errors)\n\
-                    - `gaps_detected` — discontinuities (missing intervals)\n\
-                    - `zero_run_length` — consecutive zero reads (meter fault / firmware bug)\n\
-                    - `intervals_consistent` — mixed interval lengths (SLP/RLM mix-up)\n\
-                    - `coverage_pct` — < 95% signals incomplete MSCONS delivery\n\n\
-                 ## Why Hampel?\n\
-                 Global 3-sigma is contaminated by the very outliers it tries to detect.\n\
-                 The Hampel filter uses local median + MAD, immune to up to 50% contamination.\n\
-                 MAD scale factor 1.4826 ensures equivalence to Gaussian σ for clean data.\n\n\
-                 ## Grades\n\
-                 | Grade | Billing action |\n\
-                 |---|---|\n\
-                 | A | Normal billing run |\n\
-                 | B | Proceed with note in INVOIC |\n\
-                 | C | Manual review before billing |\n\
-                 | F | Block billing — data unusable |",
-            ),
-        ]
-    }
-
-    #[prompt(
-        name = "jahresablesung-workflow",
-        description = "§ 40b Abs. 1 EnWG Jahresablesung: annual SLP meter reading campaign"
-    )]
-    async fn jahresablesung_workflow_prompt(&self) -> Vec<PromptMessage> {
-        vec![
-            PromptMessage::new_text(
-                Role::User,
-                "How do I run the § 40b Abs. 1 EnWG Jahresablesung campaign?",
-            ),
-            PromptMessage::new_text(
-                Role::Assistant,
-                "## § 40b Abs. 1 EnWG — Annual SLP Meter Reading\n\n\
-                 The NB must ensure all SLP meters are read at least once per year.\n\
-                 Failure → estimated SLP billing → Mehr-/Mindermengendisputes with the LF.\n\n\
-                 ### Step 1: Check compliance status\n\
-                 `list_overdue_reading_orders` (filter by anlass=JAHRESABLESUNG)\n\
-                 → Shows all SLP meters past their reading deadline.\n\n\
-                 ### Step 2: Launch the campaign\n\
-                 ```http\n\
-                 POST /api/v1/reading-orders/campaign\n\
-                 { \"nb_mp_id\": \"9910000000002\", \"campaign_year\": 2026 }\n\
-                 ```\n\
-                 → Creates JAHRESABLESUNG reading orders for all unscheduled SLP MaLos.\n\
-                 → Idempotent: re-running skips already-scheduled MaLos.\n\
-                 → Default: geplant_am = Dec 31, ausfuehrt_bis = Jan 31 next year.\n\n\
-                 ### Step 3: Dispatch to field service\n\
-                 `list_reading_orders(malo_id, status=OFFEN)` for individual MaLos.\n\
-                 Update status via `PUT /api/v1/reading-orders/{id}/complete` with Zählerstand.\n\n\
-                 ### Step 4: Verify completion\n\
-                 `list_overdue_reading_orders` after campaign deadline.\n\
-                 Count of JAHRESABLESUNG overdue = § 40b Abs. 1 EnWG compliance gap.\n\n\
-                 ### Step 5: Billing impact\n\
-                 `get_billing_period(malo_id, from=Jan 1, to=Dec 31)` shows the full-year\n\
-                 arbeitsmenge_kwh used for SLP Mehr-/Mindermengensaldo.\n\
-                 Missing reads → arbeitsmenge_kwh is estimated → dispute risk.",
-            ),
-        ]
-    }
-
-    #[prompt(
-        name = "reading-order-lifecycle",
-        description = "Ablesesteuerung: reading order lifecycle from creation to billing"
-    )]
-    async fn reading_order_lifecycle_prompt(&self) -> Vec<PromptMessage> {
-        vec![
-            PromptMessage::new_text(
-                Role::User,
-                "How does the reading order lifecycle work in edmd?",
-            ),
-            PromptMessage::new_text(
-                Role::Assistant,
-                "## Ablesesteuerung — Reading Order Lifecycle\n\n\
-                 Reading orders track physical meter reads for all three market roles.\n\n\
-                 ```\n\
-                 OFFEN → BEAUFTRAGT → AUSGEFUEHRT   (reading taken, obligation met)\n\
-                    └──────────────→ STORNIERT      (no longer owed)\n\
-                    └──────────────→ FEHLGESCHLAGEN (Ablesehindernis — still owed)\n\
-                 ```\n\n\
-                 `STORNIERT` and `FEHLGESCHLAGEN` are both terminal, but only\n\
-                 `STORNIERT` discharges the obligation. A `FEHLGESCHLAGEN` order\n\
-                 past `ausfuehrt_bis` keeps appearing in\n\
-                 `list_overdue_reading_orders` until the reading is re-dispatched\n\
-                 or the quantity is estimated under §40a EnWG.\n\n\
-                 ```http\n\
-                 PUT /api/v1/reading-orders/{id}/fail\n\
-                 { \"grund\": \"KEIN_ZUTRITT\", \"notiz\": \"3x angetroffen, niemand vor Ort\" }\n\
-                 ```\n\
-                 Gründe: KEIN_ZUTRITT · ZAEHLER_UNZUGAENGLICH · ZAEHLER_DEFEKT ·\n\
-                 ZAEHLER_NICHT_AUFFINDBAR · KUNDE_VERWEIGERT · ABLESUNG_UNPLAUSIBEL ·\n\
-                 SONSTIGES\n\n\
-                 ### Triggers (automatic)\n\
-                 | Event | Reading order created |\n\
-                 |---|---|\n\
-                 | INSRPT 23001 Störungsmeldung | `INSRPT_STOERUNG` (WiM Störungsmeldung; die MSB-Antwort ist 3 bzw. 1 Werktag je Messtechnik, WiM Teil 2 Kap. 1.2 Nr. 2) |\n\
-                 | INSRPT 23003/23008 Technische Änderung | `SONDERABLESUNG` at handover date |\n\
-                 | GPKE 55001 Lieferbeginn | `LIEFERBEGINN` at Lieferbeginndatum |\n\
-                 | GPKE 55004/55007 Abmeldung/Beendigung der Zuordnung | `LIEFERENDE` at Lieferendedatum |\n\
-                 | NB campaign | `JAHRESABLESUNG` (§ 40b Abs. 1 EnWG) |\n\n\
-                 ### Manual creation\n\
-                 ```http\n\
-                 POST /api/v1/reading-orders\n\
-                 {\n\
-                   \"malo_id\": \"51238696781\",\n\
-                   \"anlass\": \"ZWISCHENABLESUNG\",\n\
-                   \"auftraggeber_rolle\": \"LF\",\n\
-                   \"geplant_am\": \"2026-08-01\"\n\
-                 }\n\
-                 ```\n\n\
-                 ### Completing a reading\n\
-                 ```http\n\
-                 PUT /api/v1/reading-orders/{id}/complete\n\
-                 { \"zaehlerstand_kwh\": \"12345.678\", \"mscons_ref\": \"MSG-001\" }\n\
-                 ```\n\n\
-                 ### Querying\n\
-                 `list_reading_orders(malo_id, status=OFFEN)` → pending orders\n\
-                 `list_overdue_reading_orders()` → compliance gap report",
-            ),
-        ]
-    }
-
-    // ── New Phase-2 tools ─────────────────────────────────────────────────────
+    // ── Phase-2 tools ─────────────────────────────────────────────────────
+    //
+    // These carry `#[tool(…)]`, so they belong to the `#[tool_router]` impl:
+    // `#[prompt_router]` collects only `#[prompt]` fns, and a tool declared
+    // there is never added to the router — `list_tools` omits it and
+    // `call_tool` rejects it, while agent manifests still grant it.
 
     /// `get_correction_history` — list retroactive corrections for a MaLo (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD)).
     ///
@@ -1888,6 +1702,200 @@ impl EdmdMcpHandler {
         .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
         .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
+
+}
+
+#[prompt_router]
+impl EdmdMcpHandler {
+    #[prompt(
+        name = "analyze-consumption",
+        description = "Step-by-step: analyze meter readings and consumption for a MaLo"
+    )]
+    async fn analyze_consumption_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "How do I analyze energy consumption data for a MaLo?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "1. Use `get_timeseries` with malo_id and time range to fetch MSCONS data.\n\
+                 2. Key OBIS codes:\n\
+                    - 1-0:1.8.0 (Wirkenergie Bezug gesamt, SLP/RLM consumption)\n\
+                    - 1-0:2.8.0 (Wirkenergie Einspeisung, feed-in)\n\
+                    - 1-0:1.8.1 / 1-0:1.8.2 (HT / NT for Zweitarif billing)\n\
+                 3. Use `get_billing_period` for MeterBillingPeriod (arbeitsmenge_kwh, brennwert/zustandszahl).\n\
+                 4. Compare billing period totals against the INVOIC in invoicd.\n\
+                 5. Discrepancies > 3% trigger INVOIC dispute (invoic-checker check 2).",
+            ),
+        ]
+    }
+
+    #[prompt(
+        name = "submit-mscons",
+        description = "Step-by-step: submit MSCONS meter readings into edmd"
+    )]
+    async fn submit_mscons_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(Role::User, "How do I submit MSCONS meter readings to edmd?"),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "MSCONS readings arrive via makod's EDIFACT pipeline automatically.\n\
+                 For manual injection or testing:\n\
+                 1. POST /api/v1/deliveries with the MSCONS BO4E Energiemenge payload.\n\
+                 2. Required: malo_id, messlokation_id, obis_code, zeitreihe (time series).\n\
+                 3. edmd validates the OBIS code and persists the time series.\n\
+                 4. Use `get_timeseries` to verify the ingestion was correct.\n\n\
+                 For Iceberg archive queries (bulk historical data):\n\
+                 GET /api/v1/archive/{malo_id}?from=...&to=... returns Parquet-backed results.",
+            ),
+        ]
+    }
+
+    #[prompt(
+        name = "quality-assessment",
+        description = "Step-by-step: assess meter read quality for a MaLo using the Hampel filter"
+    )]
+    async fn quality_assessment_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "How do I assess the quality of meter readings for a MaLo?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "Quality scoring uses the **Hampel filter** (window k=3, threshold t=3.0 robust sigma) — \n\
+                 sliding-window median/MAD outlier detection robust to the outliers it detects.\n\n\
+                 ## Steps\n\
+                 1. Call `get_quality_warnings(malo_id, from, to)` to see existing quality issues.\n\
+                 2. Check `grade` field: A (clean) | B (minor) | C (significant) | F (unusable).\n\
+                 3. If you suspect historical data was stored without quality scoring (pre-M7), \n\
+                    retroactively rescore: `POST /api/v1/quality-score/{malo_id}?from=&to=`.\n\
+                 4. Investigate:\n\
+                    - `outlier_intervals` — Hampel-flagged timestamps (robust to contamination)\n\
+                    - `spike_intervals` — values > 10× window median (decimal-point errors)\n\
+                    - `gaps_detected` — discontinuities (missing intervals)\n\
+                    - `zero_run_length` — consecutive zero reads (meter fault / firmware bug)\n\
+                    - `intervals_consistent` — mixed interval lengths (SLP/RLM mix-up)\n\
+                    - `coverage_pct` — < 95% signals incomplete MSCONS delivery\n\n\
+                 ## Why Hampel?\n\
+                 Global 3-sigma is contaminated by the very outliers it tries to detect.\n\
+                 The Hampel filter uses local median + MAD, immune to up to 50% contamination.\n\
+                 MAD scale factor 1.4826 ensures equivalence to Gaussian σ for clean data.\n\n\
+                 ## Grades\n\
+                 | Grade | Billing action |\n\
+                 |---|---|\n\
+                 | A | Normal billing run |\n\
+                 | B | Proceed with note in INVOIC |\n\
+                 | C | Manual review before billing |\n\
+                 | F | Block billing — data unusable |",
+            ),
+        ]
+    }
+
+    #[prompt(
+        name = "jahresablesung-workflow",
+        description = "§ 40b Abs. 1 EnWG Jahresablesung: annual SLP meter reading campaign"
+    )]
+    async fn jahresablesung_workflow_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "How do I run the § 40b Abs. 1 EnWG Jahresablesung campaign?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "## § 40b Abs. 1 EnWG — Annual SLP Meter Reading\n\n\
+                 The NB must ensure all SLP meters are read at least once per year.\n\
+                 Failure → estimated SLP billing → Mehr-/Mindermengendisputes with the LF.\n\n\
+                 ### Step 1: Check compliance status\n\
+                 `list_overdue_reading_orders` (filter by anlass=JAHRESABLESUNG)\n\
+                 → Shows all SLP meters past their reading deadline.\n\n\
+                 ### Step 2: Launch the campaign\n\
+                 ```http\n\
+                 POST /api/v1/reading-orders/campaign\n\
+                 { \"nb_mp_id\": \"9910000000002\", \"campaign_year\": 2026 }\n\
+                 ```\n\
+                 → Creates JAHRESABLESUNG reading orders for all unscheduled SLP MaLos.\n\
+                 → Idempotent: re-running skips already-scheduled MaLos.\n\
+                 → Default: geplant_am = Dec 31, ausfuehrt_bis = Jan 31 next year.\n\n\
+                 ### Step 3: Dispatch to field service\n\
+                 `list_reading_orders(malo_id, status=OFFEN)` for individual MaLos.\n\
+                 Update status via `PUT /api/v1/reading-orders/{id}/complete` with Zählerstand.\n\n\
+                 ### Step 4: Verify completion\n\
+                 `list_overdue_reading_orders` after campaign deadline.\n\
+                 Count of JAHRESABLESUNG overdue = § 40b Abs. 1 EnWG compliance gap.\n\n\
+                 ### Step 5: Billing impact\n\
+                 `get_billing_period(malo_id, from=Jan 1, to=Dec 31)` shows the full-year\n\
+                 arbeitsmenge_kwh used for SLP Mehr-/Mindermengensaldo.\n\
+                 Missing reads → arbeitsmenge_kwh is estimated → dispute risk.",
+            ),
+        ]
+    }
+
+    #[prompt(
+        name = "reading-order-lifecycle",
+        description = "Ablesesteuerung: reading order lifecycle from creation to billing"
+    )]
+    async fn reading_order_lifecycle_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "How does the reading order lifecycle work in edmd?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "## Ablesesteuerung — Reading Order Lifecycle\n\n\
+                 Reading orders track physical meter reads for all three market roles.\n\n\
+                 ```\n\
+                 OFFEN → BEAUFTRAGT → AUSGEFUEHRT   (reading taken, obligation met)\n\
+                    └──────────────→ STORNIERT      (no longer owed)\n\
+                    └──────────────→ FEHLGESCHLAGEN (Ablesehindernis — still owed)\n\
+                 ```\n\n\
+                 `STORNIERT` and `FEHLGESCHLAGEN` are both terminal, but only\n\
+                 `STORNIERT` discharges the obligation. A `FEHLGESCHLAGEN` order\n\
+                 past `ausfuehrt_bis` keeps appearing in\n\
+                 `list_overdue_reading_orders` until the reading is re-dispatched\n\
+                 or the quantity is estimated under §40a EnWG.\n\n\
+                 ```http\n\
+                 PUT /api/v1/reading-orders/{id}/fail\n\
+                 { \"grund\": \"KEIN_ZUTRITT\", \"notiz\": \"3x angetroffen, niemand vor Ort\" }\n\
+                 ```\n\
+                 Gründe: KEIN_ZUTRITT · ZAEHLER_UNZUGAENGLICH · ZAEHLER_DEFEKT ·\n\
+                 ZAEHLER_NICHT_AUFFINDBAR · KUNDE_VERWEIGERT · ABLESUNG_UNPLAUSIBEL ·\n\
+                 SONSTIGES\n\n\
+                 ### Triggers (automatic)\n\
+                 | Event | Reading order created |\n\
+                 |---|---|\n\
+                 | INSRPT 23001 Störungsmeldung | `INSRPT_STOERUNG` (WiM Störungsmeldung; die MSB-Antwort ist 3 bzw. 1 Werktag je Messtechnik, WiM Teil 2 Kap. 1.2 Nr. 2) |\n\
+                 | INSRPT 23003/23008 Technische Änderung | `SONDERABLESUNG` at handover date |\n\
+                 | GPKE 55001 Lieferbeginn | `LIEFERBEGINN` at Lieferbeginndatum |\n\
+                 | GPKE 55004/55007 Abmeldung/Beendigung der Zuordnung | `LIEFERENDE` at Lieferendedatum |\n\
+                 | NB campaign | `JAHRESABLESUNG` (§ 40b Abs. 1 EnWG) |\n\n\
+                 ### Manual creation\n\
+                 ```http\n\
+                 POST /api/v1/reading-orders\n\
+                 {\n\
+                   \"malo_id\": \"51238696781\",\n\
+                   \"anlass\": \"ZWISCHENABLESUNG\",\n\
+                   \"auftraggeber_rolle\": \"LF\",\n\
+                   \"geplant_am\": \"2026-08-01\"\n\
+                 }\n\
+                 ```\n\n\
+                 ### Completing a reading\n\
+                 ```http\n\
+                 PUT /api/v1/reading-orders/{id}/complete\n\
+                 { \"zaehlerstand_kwh\": \"12345.678\", \"mscons_ref\": \"MSG-001\" }\n\
+                 ```\n\n\
+                 ### Querying\n\
+                 `list_reading_orders(malo_id, status=OFFEN)` → pending orders\n\
+                 `list_overdue_reading_orders()` → compliance gap report",
+            ),
+        ]
+    }
+
+    // ── New Phase-2 tools ─────────────────────────────────────────────────────
+
 }
 
 #[tool_handler]

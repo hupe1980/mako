@@ -1221,7 +1221,8 @@ overlapping interval at `Error` severity, and a bidirectional delivery could not
 be ingested cleanly at all.
 
 **The thresholds are the commodity's, and the cadence is observed.** They come
-from `metering::QualityConfig::for_sparte`, not from the electricity defaults:
+from `metering::QualityConfig::for_sparte`, which returns a commodity-specific
+config for Gas, Wärme and Wasser and the crate default for Strom:
 
 | Sparte | V05 `zero_run_threshold` | Grid | Why |
 |---|---|---|---|
@@ -1230,9 +1231,11 @@ from `metering::QualityConfig::for_sparte`, not from the electricity defaults:
 | Wärme | 721 | 3600 s | Unheated months are ordinary, and the resolution is coarse |
 | Wasser | 721 | 86400 s | A vacant flat reads exactly zero indefinitely; the litre resolution also needs the smallest sigma floor (0.001) |
 
-The Hampel grader's own `max_zero_run_allowed` sits one below each threshold —
-2 · 48 · 720 · 720 — so a run the grader is told to tolerate is not still
-reported as a finding.
+The Hampel grader's own `max_zero_run_allowed` — 2 · 48 · 720 · 720 — sits
+below each threshold, so a run the grader is told to tolerate is not still
+reported as a finding. One below for Gas, Wärme and Wasser; two below for Strom,
+where `for_sparte` returns the crate default (2) against a `zero_run_threshold`
+of 4.
 
 The cadence comes from `detect_interval_length`, not from an assumed 900 s. With
 the assumption, every interval of an hourly gas series tripped V06, and a

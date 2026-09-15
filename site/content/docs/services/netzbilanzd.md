@@ -8,7 +8,7 @@ its counterparties, and carries the Redispatch 2.0 cost sheets. It is the outbou
 the NB role: what the operator bills, under which paragraph, and what happened to the money.
 
 **Port:** `:8680`
-**Storage:** PostgreSQL — `invoice_drafts`, `invoice_number_seq`, `kostenblatt_records`, `fremdkosten_records`
+**Storage:** PostgreSQL — `invoice_drafts`, `invoice_number_seq`, `abschlag_verrechnungen`, `kostenblatt_records`, `fremdkosten_records`
 **Role:** NB / GNB only
 
 1. TOC

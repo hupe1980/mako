@@ -425,8 +425,19 @@ pub async fn post_ggv_billing(
             period_from,
             period_to,
         )
-        .await
-        .ok();
+        .await;
+        // Only "this participant has no product assignment" may fall back to the
+        // tenant-supplied tariff. An upstream failure must not: collapsing it
+        // into the same `None` bills every participant at whatever Arbeitspreis
+        // the request body carried — under a real invoice number — and silently
+        // bypasses the mid-period tariff-change refusal below.
+        let assigned_legs = match assigned_legs {
+            Ok(legs) => Some(legs),
+            Err(BillingError::Upstream { service, message }) => {
+                return Err(BillingError::Upstream { service, message });
+            }
+            Err(_) => None,
+        };
         if assigned_legs.as_ref().is_some_and(|l| l.len() > 1) {
             return Err(BillingError::unprocessable(
                 "TARIFWECHSEL_OHNE_TEILMENGEN",

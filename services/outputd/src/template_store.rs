@@ -67,9 +67,9 @@ pub enum StoreError {
 
 /// Which document a template renders.
 ///
-/// The Textform kinds share this store and (once it exists) the same engine with
-/// `Invoice`: an operator maintaining two template systems for one brand is how
-/// a logo change reaches the invoice and not the Mahnung.
+/// Every kind shares one store and one engine, deliberately: an operator
+/// maintaining two template systems for one brand is how a logo change reaches
+/// the invoice and not the Mahnung.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum TemplateKind {

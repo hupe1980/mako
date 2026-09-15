@@ -1716,7 +1716,7 @@ are all properties of the doubleentry engine.
 | Column | Notes |
 |--------|-------|
 | `mandatsref` | UNIQUE per `(tenant, mandatsref)` — no cross-tenant namespace collisions |
-| `sequence_type` | `FRST` / `RCUR` / `FNAL` / `OOFF` |
+| `sequence_type` | `FRST` / `RCUR` / `FNAL` / `OOFF`. Optional on create and defaults to `FRST`: a mandate that has never been collected is by definition the first, and the sequence is `accountingd`'s to track across the mandate's life rather than a registering caller's input |
 | `signed_at` | Datum der Unterzeichnung |
 | `revoked_at` | Set by `DELETE /api/v1/sepa/mandates/{id}` |
 | `created_at` | Mandate creation timestamp (audit trail) |

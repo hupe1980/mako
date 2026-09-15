@@ -811,10 +811,9 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
         );
     }
 
-    // The PIDs registered as the subscription filter come from the routing
-    // table, so a PID added there starts arriving without a second edit — and
-    // one removed stops being delivered.
-    let pids: Vec<u32> = crate::routing::ROUTES.iter().map(|r| r.pid).collect();
+    // No PID filter is sent: `marktd` narrows on `roles`, `event_types` and
+    // `sparten` only. invoicd receives every `process.initiated` fan-out and
+    // routes it through `crate::routing::ROUTES` on arrival.
     marktd
         .put_subscription(
             &cfg.subscription.subscriber_id,
@@ -825,7 +824,6 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
                     s.expose_secret()
                 }),
                 event_types: &[mako_events::mako::PROCESS_INITIATED],
-                makopid_filter: &pids,
                 active: true,
             },
         )

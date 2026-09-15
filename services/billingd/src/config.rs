@@ -17,7 +17,9 @@ pub struct RatesConfig {
     /// Energiesteuer Erdgas §2 Nr. 3 EnergieStG — ct/kWh_Hs (default 0.55).
     pub energiesteuer_gas_ct_per_kwh: Option<Decimal>,
     /// CO₂-Abgabe BEHG Erdgas — ct/kWh_Hs
-    /// (default 1.17906516 = 65 EUR/t × 0.18139464 kg/kWh_Hs ÷ 10, 2026).
+    /// (default 1.08836784 = 60 EUR/t × 0.18139464 kg/kWh_Hs ÷ 10, 2026 —
+    /// § 4 Abs. 1 Nr. 2 CO2KostAufG bills the *Mittelwert* of the § 10 Abs. 2
+    /// BEHG 55–65 corridor, not its Höchstpreis).
     /// From 2026 the nEHS price is set by auction inside the §10 BEHG corridor;
     /// configure the operator's actual procurement cost here.
     pub behg_gas_ct_per_kwh: Option<Decimal>,
@@ -526,7 +528,7 @@ impl BillingdConfig {
                 .unwrap_or(dec!(0.55)),
             behg_gas_ct_per_kwh: r
                 .and_then(|r| r.behg_gas_ct_per_kwh)
-                .unwrap_or(dec!(1.17906516)),
+                .unwrap_or(dec!(1.08836784)),
             mwst_rate: r.and_then(|r| r.mwst_rate).unwrap_or(dec!(0.19)),
             mwst_rate_reduced: r.and_then(|r| r.mwst_rate_reduced).unwrap_or(dec!(0.07)),
         }

@@ -76,7 +76,7 @@ CREATE TABLE accounts (
     -- §40 Abs. 1 EnWG: Abschlag must reflect estimated consumption
     abschlag_ct         BIGINT      NOT NULL DEFAULT 0,
     -- Day of month for automated Abschlag booking (1–28)
-    billing_day         SMALLINT    NOT NULL DEFAULT 1,
+    billing_day         SMALLINT    NOT NULL DEFAULT 1 CHECK (billing_day BETWEEN 1 AND 28),
     -- The USt rate this account's Abschlagsforderungen are raised at, as a
     -- fraction (0.19 = 19 %). § 14 Abs. 5 Satz 2 UStG: the settling invoice
     -- deducts the advances *and the tax attributable to them*, and one raised

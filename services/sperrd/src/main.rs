@@ -71,6 +71,20 @@ impl Daemon for Sperrd {
                  deployment."
             );
         }
+        // `POST /webhook` is not behind OIDC — it is authenticated by the
+        // inbound HMAC alone, and `verify_request(None, …)` returns `Ok`. So an
+        // absent secret is not a degraded mode here, it is an open write into
+        // `create_order_pg`: any caller that can reach the port can queue a
+        // physical disconnection, bypassing the `create-sperr-order` NB-role
+        // gate in `sperrd.cedar`. Hold it to the same rule as [oidc].
+        if cfg.inbound_hmac_secret.is_none() && !cfg.allow_insecure_no_auth {
+            anyhow::bail!(
+                "no inbound_hmac_secret configured. POST /webhook takes ORDERS 17115/17117 \
+                 and queues a physical disconnection, and it is verified by that secret \
+                 alone — without it the route accepts unsigned bodies from any caller. \
+                 Configure inbound_hmac_secret, or set allow_insecure_no_auth = true."
+            );
+        }
         if cfg.allow_insecure_no_auth {
             tracing::warn!(
                 "sperrd: allow_insecure_no_auth is set — any caller that can open a socket \
@@ -139,6 +153,26 @@ impl Daemon for Sperrd {
             cfg.tenant.clone(),
             ctx.shutdown.clone(),
         ));
+
+        // ── de.sperr.* CloudEvents → ERP ──────────────────────────────────
+        // `events.rs` enqueues into `event_outbox` inside the same transaction
+        // as the state change. Nothing drained it, so every Sperrung notice sat
+        // there with `delivered_at IS NULL` and the table grew without bound.
+        if let Some(url) = cfg.erp_webhook_url.clone() {
+            tokio::spawn(
+                mako_service::outbox::OutboxWorker::new(
+                    ctx.pool().clone(),
+                    url,
+                    cfg.erp_hmac_secret.clone(),
+                )
+                .run(ctx.shutdown.clone()),
+            );
+        } else {
+            tracing::warn!(
+                "sperrd: no erp_webhook_url — the de.sperr.* notices accumulate in \
+                 event_outbox undelivered"
+            );
+        }
 
         let mcp_state = Arc::new(mcp_server::SperrdMcpState {
             pool: ctx.pool().clone(),

@@ -256,13 +256,13 @@ on the Sparte-neutral 17115 / 17117 row (`mako_fristen::antwort`).
 use mako_geli_gas::{
     GeliGasSperrungLfWorkflow, GasSperrungLfCommand, GasSperrungAuftragData,
 };
-use mako_engine::{ids::MaloId, types::MarktpartnerCode};
+use mako_engine::types::{MaLo, MarktpartnerCode};
 
 // Initiate a gas disconnection order (LF → GNB):
 let cmd = GasSperrungLfCommand::InitiateSperrung {
     pid: Pruefidentifikator::new(17115).expect("Sperrauftrag"),
     gnb_gln: MarktpartnerCode::new("9900357000004"),
-    location_id: MaloId::parse("50123456721").expect("valid MaLo"),
+    location_id: MaLo::new("50123456721"),
     message_ref: MessageRef::from("MSG-2025-001"),
 };
 let out = process.execute(cmd).await?;
@@ -346,10 +346,10 @@ New ──ReceiveSperrung(valid)──► ValidationPassed ──BestaetigueSper
 ### Gas Datenabruf (Brennwert / Zustandszahl)
 
 ```rust
-use mako_geli_gas::{GeliGasDatenabrufWorkflow, DatenabrufCommand};
+use mako_geli_gas::{GeliGasDatenabrufWorkflow, GeliGasDatenabrufCommand};
 
 // Request billing combustion values (LF → NB/MSB, ORDERS 17103):
-let cmd = DatenabrufCommand::InitiateAnfrage {
+let cmd = GeliGasDatenabrufCommand::InitiateAnfrage {
     pid: Pruefidentifikator::new(17103).expect("valid PID"),
     // …
 };

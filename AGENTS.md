@@ -13,12 +13,26 @@ neither is restated here. This file is what an agent needs before touching code.
   backward compatibility, SQL schema edited in place with no migration.
 - **Docs and comments state current truth only** — no changelogs, no "used to",
   no backlog pointers. Open work lives in one backlog, nowhere else.
+
+  The rule bites hardest on a regression test, where narrating the incident is
+  the natural way to justify the test — and it is the wrong way, because a reader
+  skimming past tense cannot tell which half is live. **State the invariant, then
+  the failure it prevents, in the present.** The rationale is wanted; the history
+  is not:
+
+  ```text
+  ✗  It used to scan `meter_billing_periods` — the cache — so a MaLo whose
+     aggregate had never been requested was invisible to discovery.
+  ✓  Discovery must not run off `meter_billing_periods`: that table is the
+     cache, so a MaLo whose aggregate has never been requested has no row
+     there and would be invisible to discovery.
+  ```
 - **Every regulatory claim cites a primary source** — document, chapter, page.
   A `§` reaches the codebase from a published document or not at all. Guessing a
   plausible one is the most expensive mistake available here; see the
   known-wrong citations in *Domain Rules* below.
 - **A defect class becomes a guard.** When something is found, the deliverable is
-  the check that makes it unrepresentable — which is why `just ci` carries 30 of
+  the check that makes it unrepresentable — which is why `just ci` carries 28 of
   them and the list grows with the defect list, not the feature list.
 
 ## Build and test
@@ -28,7 +42,7 @@ neither is restated here. This file is what an agent needs before touching code.
 
 ```bash
 just check      # cargo check --all-targets --all-features — the minimum
-just ci         # the gate: test, doctests, clippy, deny, 30 guards, site-free
+just ci         # the gate: test, doctests, clippy, deny, 28 xtask guards, site-free
 just check-site # mermaid + link + zola checks; NOT part of `just ci`
 just test-db    # schema-per-test suites against real PostgreSQL (needs Docker)
 ```
@@ -107,10 +121,21 @@ Format releases ship on a **semi-annual cadence (April + October)**. Profiles ar
 a message type only gets a new fv directory when its format actually changes in a
 release.
 
-| Release | Binding | Message types with changed formats |
+**Five** releases are active at once — a message type's newest profile stays
+binding until a release changes that message type, so the oldest rows below are
+as live as the newest.
+
+| Release | Binding | Message types whose profile this release supplies |
 |---|---|---|
+| `fv20250401` | since 2025-04-01 | ORDCHG, UTILTS |
+| `fv20251001` | since 2025-10-01 | APERAK, IFTSTA, PRICAT, QUOTES, REQOTE, UTILMD |
+| `fv20260101` | since 2026-01-01 | CONTRL, INSRPT |
 | `fv20260401` | since 2026-04-01 | COMDIS, INVOIC, MSCONS, ORDERS, ORDRSP, PARTIN, REMADV, UTILMD Gas |
-| `fv20261001` | from 2026-10-01 | APERAK, IFTSTA, INVOIC, MSCONS, ORDCHG, ORDERS, ORDRSP, PARTIN, PRICAT, QUOTES, REMADV, REQOTE, UTILMD, UTILTS |
+| `fv20261001` | from 2026-10-01 | APERAK, IFTSTA, INVOIC, MSCONS, ORDCHG, ORDERS, ORDRSP, PARTIN, PRICAT, QUOTES, REQOTE, UTILMD, UTILMD Gas, UTILTS |
+
+REMADV is **not** in the 2026-10-01 release: BDEW published no REMADV AHB or MIG
+with that Anwendungszeitpunkt, so `remadv/fv20260401` (AHB 1.0a / MIG 2.9e) stays
+binding. `crates/edi-energy/profiles/sources.json` is the authority for every row.
 
 The `fv` date is the **Anwendungszeitpunkt**, six months after the document's Publikationsdatum (Allgemeine Festlegungen 6.1d §2.5). `mig.json` carries both: `publikationsdatum` (source metadata) and `valid_from` (normative).
 
@@ -200,7 +225,7 @@ Every daemon builds on the `mako-service` SDK. Do **not** hand-roll the lifecycl
   inside the same transaction as the business write, drained by a background `OutboxWorker`. This is
   the Postgres `event_outbox` mechanism for **service→ERP/webhook** events — distinct from the
   mako-engine `AtomicAppend::append_with_outbox` slatedb outbox for **protocol APERAK/CONTRL** (below).
-- **HMAC.** Sign and verify webhooks only through `webhook::sign` / `webhook::verify_hmac`
+- **HMAC.** Sign and verify webhooks only through `webhook::sign` / `webhook::verify_request`
   ([Standard Webhooks](https://www.standardwebhooks.com/): `webhook-id`,
   `webhook-timestamp`, `webhook-signature: v1,<base64>` over
   `{id}.{timestamp}.{body}`). Never hand-roll the check: `verify_request` also
@@ -233,7 +258,7 @@ Every daemon builds on the `mako-service` SDK. Do **not** hand-roll the lifecycl
 | 31001–31002, 31005–31006 | `mako-gpke` (MMM-Rechnung / MMM-selbst ausgest. Rechnung Strom, NB → LF) | BK6-24-174 |
 | 31007–31008 | `mako-gabi-gas` (Aggreg. MMM-Rechnung Gas / selbst ausgest., NB → MGV; Gas-only; MGV is a Gas-domain role) | BK7-24-01-008 |
 | 13013 | `mako-gabi-gas` `gabi-gas-mmma` (Allokationsliste Gas, MMMA, Gas-only) | BK7-24-01-008 |
-| 17110, 19110 | `mako-gabi-gas` `gabi-gas-mmma` (ORDERS/ORDRSP Allokationsliste Gas, Gas-only; ⚡=— in AHB 1.0) | BK7-24-01-008 |
+| 17110, 19110 | `mako-gpke` `gpke-allokationsliste` (ORDERS/ORDRSP Anforderung bilanzierte Menge, Gas twins of 17114/19115). `mako-gabi-gas` names them informational and registers MSCONS 13013 only — the ORDERS/ORDRSP AHB puts their formal home in the Gas MMMA process | BK7-24-01-008 |
 | 31009 | `mako-wim` (MSB-Rechnung, multi-domain: GPKE Teil 3 / WiM Strom Teil 1 — routed via wim-invoic to avoid double-registration) | BK6-24-174 |
 | 31003 | `mako-wim` `wim-invoic` (WiM-Rechnung Gas) | AWH WiM Gas 2.0 Kap. 4.7 |
 | 31004 | `mako-wim` `wim-invoic` (Stornorechnung, Sparte-neutral) | INVOIC AHB §3.1.2 |
@@ -241,14 +266,16 @@ Every daemon builds on the `mako-service` SDK. Do **not** hand-roll the lifecycl
 | 31011 | `mako-geli-gas` (Rechnung sonstige Leistung, AWH Sperrprozesse Gas, NB → LF) | BK7-24-01-009 |
 | 17134–17135 | `mako-gpke` (ORDERS Konfiguration, GPKE Teil 3) | BK6-22-024 |
 | 19001–19002 | `mako-wim` (ORDRSP Geräteübernahme, WiM Strom) **and** `mako-gpke` (ORDRSP Konfiguration, NB role) — multi-domain: both "WiM Gas" and "WiM Strom Teil 1" per BDEW PID 3.3/4.0 xlsx | BK6-24-174 |
-| 23001–23012 | `mako-wim` `wim-insrpt` — one workflow, beide Sparten; die Frist folgt Messtechnik (Strom) bzw. ist flach (Gas) | BK6-24-174 Anlage 2b / AWH WiM Gas 2.0 Kap. 4.3 |
+| 23001, 23003, 23004, 23005, 23008, 23009, 23011, 23012 | `mako-wim` `wim-insrpt` — one workflow, beide Sparten; die Frist folgt Messtechnik (Strom) bzw. ist flach (Gas). Not a span: 23002, 23006, 23007 and 23010 are unassigned | BK6-24-174 Anlage 2b / AWH WiM Gas 2.0 Kap. 4.3 |
 | 23005, 23009 | `mako-wim` `wim-insrpt` — Gas-only Informationsmeldungen an den NB | AWH WiM Gas 2.0 Kap. 4.3 |
 
 **PIDs that do NOT exist — never register:**
 - 56001–56010: these PIDs were never assigned in any BDEW AHB document (confirmed absent from PID 3.3, 3.3 KL, PID 4.0, and all UTILMD AHB PDFs)
 - 44555: does not exist in PID 3.3 or PID 4.0; Gas Sperrung process uses ORDERS PIDs 17115–17117
 - 11001–11003: legacy pre-reform PIDs, superseded by 55039/55042/55051/55168
-- 11004–11099: reserved but not in current WiM AHB
+- 11004–11020 and 11024–11099: not in any WiM AHB. **11021–11023 do exist** —
+  they are BDEW API-Webdienste PIDs, not EDIFACT ones, and `energy-api` serves
+  them (`server/wim_order.rs`, `mako-wim::geraetewechsel`)
 - 56101–56123 and 56201–56202: provisional Energy-Sharing PIDs. No BDEW AHB
   publishes them; § 42c runs inside the existing Lieferanten-/Bilanzkreis-
   zuordnung and introduces no new message family (BNetzA Mitteilung Nr. 73)
@@ -446,14 +473,17 @@ engine it silently becomes money.
 | "Blindmehrarbeit rests on StromNEV §18" | §18 StromNEV is the **Entgelt für dezentrale Erzeugung** (the crate's own `sect18.rs` says so). Reactive-energy excess is charged from the Netzbetreiber's **Preisblatt**, formed under StromNEV §17. §19 is Sonderformen der Netznutzung. The free share (cos φ 0,9 → tan φ ≈ 0,4843, often rounded to 50 %) is a price-sheet term and must be an input, not a constant |
 | "Parse-don't-validate applies uniformly to inbound and outbound" | It does not. A value the system **produces** should be a validating newtype (`MabisZaehlpunktId`) so a malformed one is unconstructible. A value it **receives** must stay representable — requiring the type on an inbound command leaves the workflow unable to record what arrived and therefore unable to reject it properly. Type the outbound side; keep the inbound side raw and refuse explicitly |
 | "A DB `CHECK` is enough to protect an identifier that reaches the wire" | A `CHECK` only guards rows written to *that* table. A payload assembled from a fixture, a replay, or a caller passing a value straight through never meets it. MSCONS SG6's `LOC+172`/`107`/`237` are free text at the MIG level, so a swapped pair parses, validates and is **accepted by the BIKO** — the guard has to live in the pure crate as well (`Summenzeitreihe::validate_identifiers`) |
-| "A dependency's `validate()` enforces our profile's security mandate" | Library validation encodes the *generic* floor, not your profile's mandate. `asx-rs` rejects an AS4 policy layer only when it disables signing **and** encryption; BDEW AS4-Profil v1.2 §2.2.6.2.2 requires **both**, so a sign-only override validated cleanly and would have sent messages in the clear. Assert the domain mandate yourself over base *and* every override layer (`BdewAs4Profile::ensure_bdew_security`), and pin the gap with a test that asserts the upstream check still accepts what you reject |
+| "A dependency's `validate()` enforces our profile's security mandate" | Library validation encodes the *generic* floor, not your profile's mandate. `asx-rs` rejects an AS4 policy layer only when it disables signing **and** encryption; BDEW AS4-Profil v1.2 §2.2.6.2.2 requires **both**, so a sign-only override validated cleanly and would have sent messages in the clear. Assert the domain mandate yourself over base *and* every override layer (`BdewAs4Profile::validate`, which reports `ProfileValidationCode::SecurityFloorViolation`), and pin the gap with a test that asserts the upstream check still accepts what you reject |
 | "§13a Abs. 2 EnWG compensation uses one Ausfallarbeit basis" | The counterfactual differs by redispatch case: **Duldungsfall** derives it from the measured Lastgang (the NB steered, so nothing was transmitted), **Aufforderungsfall** from the schedule transmitted to the EIV (that schedule *is* the counterfactual). Resolving both from the Lastgang settles an Aufforderungsfall against what happened rather than what was instructed — a money error nothing downstream detects. `AusfallarbeitBasis` is a required input, carried into the result and trace |
 | "§12 Abs. 3 UStG 0 % applies to PV electricity / feed-in ≤ 30 kWp" | §12 Abs. 3 zero-rates the **supply of the PV system** (modules/storage/installation), NOT electricity or feed-in remuneration. A retail **consumption** supply is always standard-rated even for a prosumer. A small operator's **feed-in Gutschrift** is 0 % only via the **Kleinunternehmerregelung §19 UStG** — an election (`kleinunternehmer_19_ustg`), not a function of plant size |
 
 ## Licenses
 
-Only these SPDX identifiers are allowed (enforced by `cargo deny`):
-MIT, Apache-2.0, Apache-2.0 WITH LLVM-exception, BSD-2-Clause, BSD-3-Clause,
-ISC, Unicode-3.0, Zlib, CDLA-Permissive-2.0, MIT-0.
+`deny.toml` holds the allow-list — thirteen SPDX identifiers, each permissive,
+three of them (`0BSD`, `bzip2-1.0.6`, `CC0-1.0`) carrying a note on the
+transitive dependency that introduced it. `cargo deny` enforces it and
+`check-licenses` pins the operator-facing copy in
+`site/content/docs/compliance/licenses.md`. Read `deny.toml`; do not keep a
+fourth copy of the list here.
 
 ---

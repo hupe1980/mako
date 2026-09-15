@@ -40,7 +40,7 @@ and `elements` (per `nr` and data element, the operands on its codes or on the
 value — `X`, `X [UB1]`, `M [7]`). **CONTRL** is the one message type whose AHB
 publishes no Prüfidentifikatoren: its three columns carry no `pid` and are named
 `col1`–`col3`, selected by best fit. APERAK does publish them — `29001`
-Annahme and `29002` Ablehnung.
+Fehlermeldung and `29002` Anerkennungsmeldung.
 
 ## What the runtime does with them
 

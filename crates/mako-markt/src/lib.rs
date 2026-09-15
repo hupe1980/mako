@@ -22,7 +22,7 @@
 //! | [`commands`] | ERP command-name constants shared between `makod`'s registry and dispatching services (`processd`, …) |
 //! | [`makod_client`] | Typed HTTP client for `makod` admin + command APIs (reqwest-backed); requires `makod-client` feature |
 //! | [`error`] | `MdmError` — all domain-level error variants |
-//! | [`testing`] | In-memory test doubles (behind `testing` feature): incl. `InMemoryVersorgungsStatusRepository`, `InMemoryMaloGridRepository` |
+//! | [`testing`] | The two in-memory test doubles (behind `testing` feature): `InMemoryVersorgungsStatusRepository`, `InMemoryNbEnergiemixRepository` |
 
 #![deny(unsafe_code)]
 #![warn(clippy::pedantic)]

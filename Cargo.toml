@@ -142,8 +142,8 @@ mako-gpke        = { path = "crates/mako-gpke",        version = "0.20" }
 mako-invoic      = { path = "crates/mako-invoic",      version = "0.20" }
 mako-geli-gas    = { path = "crates/mako-geli-gas",    version = "0.20" }
 # Every Frist in one leaf crate: BDEW Werktage, the MaKo holiday calendar, and
-# the per-Prüfidentifikator Antwortfrist tables. `mako-engine` re-exports it as
-# `mako_engine::fristen`, so existing call sites are unchanged.
+# the per-Prüfidentifikator Antwortfrist tables. Depended on directly — there is
+# no re-export through `mako-engine`, so a caller names `mako_fristen`.
 mako-fristen     = { path = "crates/mako-fristen",     version = "0.20" }
 # AS4/ebMS3 stack behind the BDEW MaKo profile. Declared once here because
 # mako-as4 and makod both depend on it: independent declarations drift onto two

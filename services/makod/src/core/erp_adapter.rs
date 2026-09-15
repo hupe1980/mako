@@ -717,8 +717,7 @@ fn map_message_type_to_erp_event(msg_type: &str) -> Option<mako_engine::erp::Erp
         "AperakRejected" => ErpEventType::AperakRejected { erc_code: None },
         "AperakTimeout" => ErpEventType::AperakTimeout,
         "ContrlReceived" => ErpEventType::ContrlReceived,
-        // Accept both the canonical name and the legacy typo.
-        "ProcessCompleted" | "ProcessComplete" => ErpEventType::ProcessCompleted,
+        "ProcessCompleted" => ErpEventType::ProcessCompleted,
         "ProcessInitiated" => ErpEventType::ProcessInitiated,
         "MaloIdentified" => ErpEventType::MaloIdentified,
         // WiM Steuerungsauftrag positive Endantwort (PID 55168) — triggers VPP billing.
@@ -858,7 +857,6 @@ mod terminal_outcome_tests {
         for erp_type in [
             "ProcessInitiated",
             "ProcessCompleted",
-            "ProcessComplete",
             "AperakAccepted",
             "AperakRejected",
             "AperakTimeout",

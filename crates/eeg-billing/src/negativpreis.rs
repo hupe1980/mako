@@ -24,7 +24,10 @@
 //! | 2023-01-01 – 2025-02-24 | staged 4-3-2-1 h | < 400 kW | ausschreibungspflichtige only |
 //! | ≥ 2025-02-25 | first negative quarter-hour | < 100 kW bis zum Ablauf des iMSys-Jahres · < 2 kW until §85 Abs. 2 Nr. 12 | all plants |
 //!
-//! Pilotwindenergieanlagen (§3 Nr. 37 EEG 2023) are exempt under every version.
+//! Pilotwindenergieanlagen (§3 Nr. 37 EEG 2023) are exempt **up to and including
+//! the EEG 2023 Fassung**. The Solarspitzengesetz replaced §51 Abs. 2 wholesale:
+//! the Fassung in force since 25.02.2025 exempts only „weniger als 100 Kilowatt"
+//! (Nr. 1) and „weniger als 2 Kilowatt" (Nr. 2), and names no plant category.
 //!
 //! ### Sources
 //! - §51 EEG i.d.F. des Solarspitzengesetzes (BGBl. 2025 I Nr. 55), in force 25.02.2025
@@ -253,8 +256,13 @@ impl NegativpreisRegime {
         let Some(grenze) = self.kw_grenze(art) else {
             return true; // §51 does not exist for this vintage
         };
-        // Pilotwindenergieanlagen are carved out of §51 in every Fassung.
-        if ist_pilotwindanlage {
+        // Pilotwindenergieanlagen were carved out by the EEG 2021 §51 Abs. 2.
+        // The Solarspitzengesetz replaced that Absatz wholesale: the Fassung in
+        // force since 25.02.2025 exempts only „weniger als 100 Kilowatt" (Nr. 1)
+        // and „weniger als 2 Kilowatt" (Nr. 2), and names no plant category at
+        // all. Exempting a pilot turbine under it pays the full anzulegender
+        // Wert for quarter-hours the statute values at null.
+        if ist_pilotwindanlage && self != Self::Solarspitzen {
             return true;
         }
         let Some(kw) = leistung_kwp else {
@@ -534,13 +542,19 @@ mod tests {
         ));
     }
 
+    /// The Pilotwind carve-out ends with the EEG 2023 Fassung.
+    ///
+    /// § 51 Abs. 2 EEG i.d.F. des Solarspitzengesetzes exempts exactly two
+    /// categories — „weniger als 100 Kilowatt" (Nr. 1) and „weniger als 2
+    /// Kilowatt" (Nr. 2) — and names no plant type at all. Exempting a 5 MW
+    /// pilot turbine under it pays the full anzulegender Wert for every
+    /// negative-price quarter-hour the statute values at null.
     #[test]
-    fn a_pilotwindanlage_is_exempt_under_every_version() {
+    fn a_pilotwindanlage_is_exempt_up_to_eeg2023_and_in_scope_after_it() {
         for r in [
             NegativpreisRegime::Eeg2017,
             NegativpreisRegime::Eeg2021,
             NegativpreisRegime::Eeg2023Gestaffelt { stunden: 3 },
-            NegativpreisRegime::Solarspitzen,
         ] {
             assert!(
                 r.ist_befreit(
@@ -549,9 +563,19 @@ mod tests {
                     true,
                     true
                 ),
-                "{r:?}"
+                "{r:?} carried the §3 Nr. 37 carve-out"
             );
         }
+        assert!(
+            !NegativpreisRegime::Solarspitzen.ist_befreit(
+                Some(dec!(5000)),
+                Some(ErzeugungsArt::WindOnshore),
+                true,
+                true
+            ),
+            "§51 Abs. 2 i.d.F. des Solarspitzengesetzes names only the 100 kW \
+             and 2 kW thresholds — a 5 MW pilot turbine is in scope"
+        );
     }
 
     /// An unknown capacity must not buy an exemption.

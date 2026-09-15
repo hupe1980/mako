@@ -278,7 +278,16 @@ Customer logs into portald
   → portald scopes every later request to those MaLos
 ```
 
-| rolle | Portal access |
+**`standort_filter` is the scope that is enforced.** It narrows an identity to
+the MaLos whose `standort_bezeichnung` matches, on every read that returns
+customer data.
+
+**`rolle` is recorded, not enforced.** No read or write path compares it, so all
+five values currently grant the same access and the intent below is a label
+rather than a restriction. Do not provision a restricted role expecting it to
+restrict; scope with `standort_filter`, or gate in the portal.
+
+| rolle | Intended access (not enforced) |
 |---|---|
 | `VOLLZUGRIFF` | Full read/write |
 | `ADMIN` | All data + identity management |
@@ -495,7 +504,8 @@ answers what each code costs on its own dates and does not know who is on it.
 **`jahresverbrauch_kwh` rides with the slice** because it is what selects a
 Preisstaffel, and the only reader that needs it is the one pricing that leg. It
 is the **expected** year the tariff was agreed against — a contract fact on
-`vertragskomponenten`, set from the offer's `gesamtmengeAngebotsteil` where one
+`vertragskomponenten`, set from the offer's `gesamtmengeangebotsteil` — BO4E spells this one
+all-lowercase, unlike its camelCase neighbours — where one
 was accepted — not the billed period's consumption: a tier agreed for the year
 does not move because a quarter came in cold. A flat-priced product ignores it;
 a tiered one without it is refused by `billingd` (`422

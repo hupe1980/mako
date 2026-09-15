@@ -175,7 +175,7 @@ impl OutputdClient {
         }
     }
 
-    /// `POST /api/v1/documents/MAHNUNG` — render, record and queue.
+    /// `POST /api/v1/documents/issue/MAHNUNG` — render, record and queue.
     ///
     /// # Errors
     ///
@@ -193,7 +193,7 @@ impl OutputdClient {
             "ident":       req.ident,
         });
         self.up
-            .json(self.up.post("/api/v1/documents/MAHNUNG").json(&body))
+            .json(self.up.post("/api/v1/documents/issue/MAHNUNG").json(&body))
             .await
             .context("outputd POST document MAHNUNG")?
             .context("outputd answered 404 for the document endpoint — is it on this version?")

@@ -627,7 +627,26 @@ impl OutboundWorker {
                     &self.cfg.accountingd_url,
                     self.cfg.accountingd_api_key.as_deref(),
                 );
-                self.post_json(&accountingd, "accounts", payload).await?;
+                // `PUT /api/v1/accounts/{malo_id}?lf_mp_id=…`: both identifiers
+                // are addressing, not body fields. `UpdateAccountRequest` denies
+                // unknown fields, so sending them would be a 422.
+                let malo_id = payload
+                    .get("malo_id")
+                    .and_then(serde_json::Value::as_str)
+                    .context("Abrechnungskonto task carries no malo_id")?;
+                let lf_mp_id = payload
+                    .get("lf_mp_id")
+                    .and_then(serde_json::Value::as_str)
+                    .context("Abrechnungskonto task carries no lf_mp_id")?;
+                anyhow::ensure!(
+                    malo_id.chars().all(|c| c.is_ascii_alphanumeric())
+                        && lf_mp_id.chars().all(|c| c.is_ascii_alphanumeric()),
+                    "Abrechnungskonto identifiers must be alphanumeric \
+                     (malo_id={malo_id}, lf_mp_id={lf_mp_id})",
+                );
+                let path = format!("accounts/{malo_id}?lf_mp_id={lf_mp_id}");
+                self.put_json(&accountingd, &path, &serde_json::json!({}))
+                    .await?;
                 Ok(())
             }
         }
@@ -655,11 +674,38 @@ impl OutboundWorker {
         body: &serde_json::Value,
     ) -> Result<serde_json::Value> {
         let path = format!("/api/v1/{path}");
-        Ok(up
-            .json(up.post(&path).json(body))
+        up.json(up.post(&path).json(body))
             .await
             .context("outbound task dispatch")?
-            .unwrap_or(serde_json::Value::Null))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{} answered 404 for POST {path} — the obligation stays open rather \
+                     than being acknowledged against an endpoint that does not exist",
+                    up.name(),
+                )
+            })
+    }
+
+    /// PUT a task's payload to `/api/v1/{path}` on `up`.
+    ///
+    /// Same rule as [`Self::post_json`]: a `404` is a failure, not absence.
+    async fn put_json(
+        &self,
+        up: &Upstream,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/{path}");
+        up.json(up.put(&path).json(body))
+            .await
+            .context("outbound task dispatch")?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{} answered 404 for PUT {path} — the obligation stays open rather \
+                     than being acknowledged against an endpoint that does not exist",
+                    up.name(),
+                )
+            })
     }
 }
 

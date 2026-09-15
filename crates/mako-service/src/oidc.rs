@@ -36,7 +36,7 @@
 //!
 //! | Claim | Type | Required | Description |
 //! |---|---|---|---|
-//! | `mako_tenant` | `string` | **yes** (for the [`Claims`] extractor) | Operator GLN or tenant slug — data-isolation boundary |
+//! | `mako_tenant` | `string` | **yes** (for the [`Claims`] extractor) | Data-isolation key — typically the operator's BDEW-/DVGW-Codenummer, but any stable unique string is valid |
 //! | `mako_roles`  | `string[]` | no | Energy-market roles: `"NB"`, `"LF"`, `"MSB"`, … |
 //! | `mako_sparte` | `string[]` | no | Grid commodity: `"STROM"`, `"GAS"` |
 
@@ -77,8 +77,9 @@ const ALLOWED_ALGORITHMS: &[Algorithm] = &[
 pub struct JwtClaims {
     /// `sub` — unique user identifier; used as the Cedar principal entity ID.
     pub sub: String,
-    /// Custom claim `mako_tenant` — data-isolation boundary (operator GLN or
-    /// tenant slug).  `None` when the IDP does not emit the claim; the
+    /// Custom claim `mako_tenant` — the data-isolation key written to every
+    /// database row.  Typically the operator's BDEW-/DVGW-Codenummer, but any
+    /// stable unique string is valid.  `None` when the IDP does not emit it; the
     /// [`Claims`] Axum extractor rejects such tokens with 401, while services
     /// that authorize on `sub` alone (e.g. `makod`'s Cedar layer) accept them.
     pub mako_tenant: Option<String>,
@@ -259,7 +260,7 @@ struct Inner {
     /// When `true`, all requests are accepted with synthetic dev-admin claims.
     /// Never use in production.
     disabled: bool,
-    /// Tenant GLN for synthetic claims (only used when `disabled = true`).
+    /// Tenant key for synthetic claims (only used when `disabled = true`).
     disabled_tenant: String,
 }
 
@@ -1105,7 +1106,7 @@ mod tests {
     #[test]
     fn claims_tenant_defaults_to_empty_for_tenantless_token() {
         // Hand-constructed Claims without a tenant deny by default ("" never
-        // equals a real tenant GLN).  The Axum extractor never produces this.
+        // equals a real tenant key).  The Axum extractor never produces this.
         let claims = Claims(JwtClaims {
             sub: "u".to_owned(),
             mako_tenant: None,

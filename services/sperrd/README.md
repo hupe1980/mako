@@ -133,10 +133,19 @@ tenant         = "9900357000004"
 makod_url      = "http://makod:8080"
 makod_api_key  = "env:SPERRD_MAKOD_API_KEY"
 
-# Verifies webhook-signature on the market ingest. Absent → unsigned events are
-# accepted with a startup warning; the webhook queues physical disconnections,
-# so that is a development setting.
+# Verifies webhook-signature on the market ingest. `POST /webhook` sits outside
+# OIDC and is authenticated by this secret alone, so without it the route accepts
+# unsigned bodies from any caller that can reach the port — and it queues physical
+# disconnections. Startup refuses without it unless `allow_insecure_no_auth` is
+# set explicitly.
 inbound_hmac_secret = "env:SPERRD_INBOUND_HMAC_SECRET"
+
+# Where the de.sperr.* CloudEvents are delivered. Every Sperrung, Entsperrung and
+# Ankündigung is enqueued into `event_outbox` in the same transaction as the state
+# change; this is what drains it. Without a URL they accumulate undelivered and
+# startup says so.
+erp_webhook_url = "http://erp.internal/hooks/mako"
+erp_hmac_secret = "env:SPERRD_ERP_HMAC_SECRET"
 
 [database]
 url       = "env:SPERRD_DATABASE_URL"

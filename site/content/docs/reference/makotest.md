@@ -181,9 +181,9 @@ next_werktag("2026-11-07")     # '2026-11-09' — Saturday rolls to Monday
 
 ### Which moment — and there is no single formula
 
-"A Werktage Frist expires at 17:00 Europe/Berlin" is true of 42 of the 61
-published obligations and false of the other 19 — and the 42 are not one family:
-19 are WiM, 4 WiM Gas, and **19 are GPKE** (the Sperr-/Entsperraufträge,
+"A Werktage Frist expires at 17:00 Europe/Berlin" is true of 42 of the 65
+published obligations and false of the other 23 — and the 42 are not one family:
+20 are WiM, 4 WiM Gas, and **18 are GPKE** (the Sperr-/Entsperraufträge,
 Bearbeitungsstände and Stammdatenänderungen of Teil 2 §3.5/§3.1 and Teil 4).
 Guessing the shape from the family is the mistake this table exists to prevent:
 
@@ -221,7 +221,7 @@ o.bestaetigung_pid, o.ablehnung_pid, o.ebd   # 55002, 55003, 'E_0622'
 o.source        # 'BK6-24-174 GPKE Teil 2, SD Lieferbeginn Prozessschritte 5/6'
 o.due_at("2026-03-02T09:00:00Z")   # '2026-03-03T11:00:00+01:00'
 
-antwort_obligations()              # every published obligation, five families
+antwort_obligations()              # every published obligation, six families
 assert_deadline_is(response["deadline"], received=received, pid=55001)
 ```
 

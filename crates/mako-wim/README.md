@@ -197,7 +197,7 @@ inventories cites.
 | `geraetewechsel`   | PIDs 55039/55042/55051/55168 and their Gas twins 44039/44042/44051/44168, plus 44183 and IFTSTA 21007/21009–21013/21015/21018/21036, of which 21009–21013 are the Gesamtvorgang leg (`GESAMTVORGANG_PIDS`) — MSB-Wechsel workflow + projection. Handles both directions: inbound UTILMD (`ReceiveUtilmd` → APERAK → `DispatchAntwort` → `ReceiveGesamtvorgang` → `DispatchZuordnung`) and ERP-initiated outbound orders (`InitiateDeviceChange` → `ReceiveAntwort` → `MeldeGesamtvorgang` → `ReceiveZuordnungsantwort`). Antwortfrist per process via `antwort_frist_werktage()`; the Realisierungskorridor is enforced on the Gesamtvorgang date. |
 | `geraeteubernahme` | ORDERS 17001 → ORDRSP 19001/19002 (Bestellbestätigung/Ablehnung) and ORDERS 17009 → 19015/19016 (Eigenausbau ja/nein) — WiM Teil 1 Kap. 3.1/3.2. The 17009 Mindestvorlaufzeit is checked against `mako_fristen::vorlauf` before the answer window opens: a Gerätewechseltermin closer than the 4. Werktag is refused with `E17` naming the earliest date still reachable, rather than accepted with a window that expired before the message arrived |
 | `weiterverpflichtung` | ORDERS 17002 → ORDRSP 19003/19004 — the NB keeping the abgebender MSB on the Messlokation while the gMSB prepares to take over (Kap. 2.4.2 Nr. 5/6, `E_0203`) |
-| `technik_aenderung` | REQOTE 35005 → QUOTES 15005 / IFTSTA 21033, ORDERS 17011/17118 → ORDRSP 19005/19006, IFTSTA 21025/21027 — Messlokationsänderung auf **beiden** Wegen; **10 WT** Antwort, **20 WT** Vorlauffrist nur auf der direkten Beauftragung (Kap. 3.3 / AWH Änd. Technik) |
+| `technik_aenderung` | REQOTE 35005 → QUOTES 15005, ORDERS 17011/17118 → ORDRSP 19005/19006, IFTSTA 21025/21027 — Messlokationsänderung auf **beiden** Wegen (IFTSTA 21033 is routed by `mako-gpke`, not here); **10 WT** Antwort, **20 WT** Vorlauffrist nur auf der direkten Beauftragung (Kap. 3.3 / AWH Änd. Technik) |
 | `ersteinbau` | IFTSTA 21029 → 21030/21031 — Ersteinbau eines iMS in eine bestehende Messlokation, **3 WT** Antwort aus `E_0233` (Kap. 3.5, Strom only) |
 | `stammdaten`       | PIDs 17102–17133, 17132 — Stammdaten Anforderung / Übermittlung           |
 | `wertebestellung`  | PIDs 35003/15003/17007/17008, ORDCHG 39002 (Stornierung, answered by ORDRSP 19013/19014), ORDRSP 19011/19012, IFTSTA 21042 — **ESA Wertebestellung** (WiM Teil 2 Kap. 4): Anfrage → Angebot → Bestellung → Stornierung/Abbestellung, plus MSB-initiated termination. Fristen keyed on the positive AS4-Zustellquittung (ÜT); answers carry an `E_0254`/`E_0256`/`E_0257` Antwortcode. |
@@ -226,7 +226,8 @@ Gas Ablehnungs-Entscheidungsbaum.
 use mako_wim::{WimDeviceChangeWorkflow, DeviceChangeCommand};
 use mako_engine::{builder::EngineBuilder, event_store::InMemoryEventStore};
 
-// In tests (requires `testing` feature or `#[cfg(test)]`):
+// In tests (this crate declares no features; the doubles come from
+// `mako-engine/testing`, enabled as a dev-dependency feature):
 #[cfg(test)]
 let ctx = EngineBuilder::new()
     .with_event_store(InMemoryEventStore::new())

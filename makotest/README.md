@@ -208,7 +208,7 @@ assert_antwort_code(reply.antwort_code, ebd="E_0622", accepted=False)
 
 The catalogue serves three wires — `SG4 STS+E01` on a UTILMD, `AJT` on a REMADV
 and an ORDRSP — with one lookup for all of them. That is what makes **every one
-of the 61** published answer obligations answerable: a Frist and an Antwortcode
+of the 65** published answer obligations answerable: a Frist and an Antwortcode
 are of no use if the answer's message type cannot be built.
 `tests/test_wim_esa.py::TestCoverage` asserts the unanswerable set is empty, so
 binding a further message type or losing one shows up as a failing assertion

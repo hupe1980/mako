@@ -672,10 +672,14 @@ pub trait SubscriptionRepository: Send + Sync {
     /// Return all active subscriptions that match a given event type and role.
     ///
     /// Used by the fan-out worker to select delivery targets.
+    ///
+    /// `role` and `sparte` are both `None` when the event does not carry one.
+    /// That means *not scoped by this axis* and matches every subscriber —
+    /// an event with no Marktrolle is not an event for the empty Marktrolle.
     fn list_matching(
         &self,
         event_type: &str,
-        role: &str,
+        role: Option<&str>,
         sparte: Option<&str>,
     ) -> impl Future<Output = Result<Vec<Subscription>, MdmError>> + Send;
 }

@@ -595,7 +595,7 @@ Peppol publishes no CII Schematron at all. Empty is correct — do not "fix" it
 by omitting the element. The XRechnung-profile specimen validates with zero
 findings.
 
-> **Version note:** `en16931`/`en16931-formats` are pinned exactly at **0.6.0**.
+> **Version note:** `en16931`/`en16931-formats` are pinned exactly at **0.7.0**.
 > The ZUGFeRD PDF/A-3 carrier is written by `document::facturx` on top of Typst's
 > PDF/A enforcement; the `en16931-formats` `zugferd` feature is the *reader* the
 > publish gate checks the result with.

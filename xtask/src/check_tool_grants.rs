@@ -258,6 +258,21 @@ fn mcp_tools(workspace_root: &Path) -> BTreeMap<String, bool> {
             let Ok(src) = std::fs::read_to_string(&path) else {
                 continue;
             };
+            // A `#[tool(…)]` outside the `#[tool_router]` impl is unreachable:
+            // `rmcp` builds the router from that block alone, so the tool is
+            // absent from `list_tools` and refused by `call_tool` while a
+            // manifest granting it still looks satisfied. Fail here rather than
+            // certify a surface no client can call.
+            let misplaced = misplaced_tools_in(&src);
+            assert!(
+                misplaced.is_empty(),
+                "{}: {} declared `#[tool(…)]` outside the `#[tool_router]` impl — \
+                 rmcp never registers those, so `list_tools` omits them and \
+                 `call_tool` rejects them: {}",
+                path.display(),
+                misplaced.len(),
+                misplaced.join(", "),
+            );
             for (tool, read_only) in tools_in(&src) {
                 out.insert(format!("{service}/{tool}"), read_only);
             }
@@ -746,7 +761,20 @@ fn specialist_count(workspace_root: &Path) -> usize {
 /// The wire name is `name = "…"` when the attribute overrides it — `einsd`
 /// declares `get_marktwert_tool` as `get_marktwert`, and a check reading the
 /// function name would report a grant that is in fact correct.
+///
+/// **Only the `#[tool_router]` impl is scanned.** `rmcp` builds the router from
+/// that block alone; a `#[tool(…)]` sitting in the `#[prompt_router]` impl is
+/// collected by nothing, so `list_tools` omits it and `call_tool` rejects it —
+/// while a manifest granting it still looks satisfied. Reading the whole file
+/// made this guard certify six `edmd` tools that no client could reach, four of
+/// them granted. [`misplaced_tools_in`] is the other half: it fails on a tool
+/// declared outside the router rather than silently skipping it.
 fn tools_in(src: &str) -> Vec<(String, bool)> {
+    tools_in_unscoped(tool_router_block(src))
+}
+
+/// [`tools_in`] over whatever slice it is handed, with no router scoping.
+fn tools_in_unscoped(src: &str) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     let bytes = src.as_bytes();
     let mut at = 0usize;
@@ -794,6 +822,59 @@ fn tools_in(src: &str) -> Vec<(String, bool)> {
         out.push((wire, attr.contains("read_only_hint = true")));
     }
     out
+}
+
+/// Byte offset of an attribute written at column 0, i.e. the real one.
+///
+/// Matching the bare string finds the *mentions* too: `makod` documents its own
+/// generated fields with `// used by the #[tool_router] macro…`, and a search
+/// that accepts those puts the block boundary 25 lines above the impl and calls
+/// every tool in the file misplaced.
+fn attr_at_line_start(src: &str, attr: &str) -> Option<usize> {
+    if src.starts_with(attr) {
+        return Some(0);
+    }
+    let needle = format!("\n{attr}");
+    src.find(&needle).map(|at| at + 1)
+}
+
+/// The body of the `#[tool_router]` impl, or the whole file when there is none.
+///
+/// Bounded by the next `#[prompt_router]` / `#[tool_handler]` attribute, which
+/// is how every mako MCP server is laid out.
+fn tool_router_block(src: &str) -> &str {
+    let Some(start) = attr_at_line_start(src, "#[tool_router]") else {
+        return src;
+    };
+    let rest = &src[start..];
+    let end = ["#[prompt_router]", "#[tool_handler]"]
+        .iter()
+        .filter_map(|m| attr_at_line_start(rest, m))
+        .min()
+        .unwrap_or(rest.len());
+    &rest[..end]
+}
+
+/// Tool names declared **outside** the `#[tool_router]` impl.
+///
+/// Such a tool compiles, reads as registered and is unreachable: `rmcp` never
+/// adds it to the router. Returning them lets the caller fail rather than
+/// quietly narrowing what it certifies.
+fn misplaced_tools_in(src: &str) -> Vec<String> {
+    let Some(start) = attr_at_line_start(src, "#[tool_router]") else {
+        return Vec::new();
+    };
+    let rest = &src[start..];
+    let router_end = ["#[prompt_router]", "#[tool_handler]"]
+        .iter()
+        .filter_map(|m| attr_at_line_start(rest, m))
+        .min()
+        .unwrap_or(rest.len());
+    let outside = format!("{}{}", &src[..start], &rest[router_end..]);
+    tools_in_unscoped(&outside)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
 }
 
 #[cfg(test)]

@@ -187,9 +187,8 @@ are pinned to **v0.6.0**; cross-check against KoSIT/Mustang before production B2
 `GET /api/v1/billing/{id}/pdf` is the ZUGFeRD file: a page a person reads with
 the EN 16931 invoice embedded inside it, both from the same stored model.
 Rendering lives in **outputd** (`services/outputd`), the customer-communications
-daemon extracted from billingd 2026-08-10 — the operator's Typst templates, the
-PDF/A-3 carrier, the publish gates and the append-only template store are all
-documented there.
+daemon — the operator's Typst templates, the PDF/A-3 carrier, the publish gates
+and the append-only template store are all documented there.
 
 billingd's half of the boundary is everything about what the document *says*:
 
@@ -440,7 +439,9 @@ url = "postgresql://billingd:secret@db:5432/billingd"
 [rates]
 stromsteuer_ct_per_kwh        = 2.05   # §3 StromStG
 energiesteuer_gas_ct_per_kwh  = 0.55   # § 2 Abs. 3 S. 1 Nr. 4 EnergieStG (constant since 2003)
-behg_gas_ct_per_kwh           = 1.179  # BEHG §10, 65 EUR/t × 0.18139464 kg/kWh_Hs (2026)
+behg_gas_ct_per_kwh           = 1.088  # 60 EUR/t × 0.18139464 kg/kWh_Hs (2026);
+                                       # § 4 Abs. 1 Nr. 2 CO2KostAufG = Mittelwert des
+                                       # § 10 Abs. 2 BEHG Korridors 55–65, nicht der Höchstpreis
 mwst_rate                     = 0.19   # § 12 Abs. 1 UStG
 mwst_rate_reduced             = 0.07   # § 12 Abs. 2 UStG — Trinkwasser (Anlage 2 Nr. 34)
 

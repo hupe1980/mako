@@ -200,9 +200,11 @@ evidence and a clean result is not proof.
 
 ### Stage 8 — MMM settlement price
 
-`InvoicCheckEngine::check_mmm_settlement()` fetches the monthly Mehr-/Mindermengenpreis
-(Gas or Strom) from `marktd`'s MMMA store and compares it against the invoice's
-`mehr_preis` / `minder_preis` fields.
+`InvoicCheckEngine::check_mmm_settlement()` takes the monthly Mehr-/Mindermengenpreis
+(Gas or Strom) from `marktd`'s MMMA store and compares it against the
+`einzelpreis` of every position whose `positionstext` names „mehrmengen" or
+„mindermengen". BO4E models no Mehr-/Mindermengen field, so the position text is
+the only carrier the wire gives.
 
 ### The MSB path — PIDs 31003 and 31009
 
@@ -235,7 +237,6 @@ tax block (`TAX`/`MOA`) **Muss** on 31003 and 31009 just as on 31001/31002, and
 | 31009 | MSB-Rechnung | MSB → LF |
 | 31003 | WiM-Rechnung (Dienstleistungen im Messwesen) | NB ↔ MSBN, beide Sparten |
 | 31004 | Stornorechnung — Sparte-neutral, routed to `check_storno` | as the original |
-| 31010 | Kapazitätsrechnung Gas | FNB/VNB → BKV |
 | 31011 | AWH Sperrprozesse Gas | GNB → LFG |
 
 ---

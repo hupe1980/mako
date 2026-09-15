@@ -524,8 +524,7 @@ Only generates for MaLo accounts that have an IBAN + signed mandate (sequence_ty
                     .creditor_name
                     .as_deref()
                     .unwrap_or(&self.state.tenant);
-                let collection_date =
-                    (time::OffsetDateTime::now_utc() + time::Duration::days(2)).date();
+                let collection_date = mako_fristen::heute() + time::Duration::days(2);
                 let creditor = crate::sepa::CreditorIdentity {
                     iban: creditor_iban,
                     name: creditor_name,

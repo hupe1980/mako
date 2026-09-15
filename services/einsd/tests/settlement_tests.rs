@@ -1378,14 +1378,26 @@ fn negativpreis_solarspitzen_is_the_first_quarter_hour() {
     );
 }
 
-/// §3 Nr. 37 — a Pilotwindenergieanlage is outside §51 whatever its size.
+/// §3 Nr. 37 — the Pilotwind carve-out ends with the EEG 2023 Fassung.
+///
+/// §51 Abs. 2 i.d.F. des Solarspitzengesetzes (in force 25.02.2025) exempts
+/// „weniger als 100 Kilowatt" und „weniger als 2 Kilowatt" and names no plant
+/// category, so a 6 MW pilot turbine commissioned under it is in scope.
 #[test]
-fn negativpreis_pilotwindanlage_is_always_exempt() {
+fn negativpreis_pilotwindanlage_is_exempt_up_to_eeg2023_only() {
+    assert!(
+        !Regime::fuer_inbetriebnahme(date!(2026 - 06 - 01)).ist_befreit(
+            Some(Decimal::from(6000)),
+            Some(ErzeugungsArt::WindOnshore),
+            true,
+            true
+        ),
+        "the Solarspitzengesetz Fassung names only the 100 kW and 2 kW thresholds"
+    );
     for ibn in [
         date!(2017 - 06 - 01),
         date!(2021 - 06 - 01),
         date!(2024 - 06 - 01),
-        date!(2026 - 06 - 01),
     ] {
         assert!(
             Regime::fuer_inbetriebnahme(ibn).ist_befreit(

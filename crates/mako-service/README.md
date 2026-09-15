@@ -132,11 +132,24 @@ struct MyConfig {
 }
 ```
 
+### `env:` indirection
+
+Any string value may be written `env:VARIABLE`. `load_config` resolves every one
+of them — at any depth, inside tables and arrays alike — before the config is
+deserialised, and an unset variable fails startup naming it.
+
+Resolution belongs to the loader rather than to each service on purpose. A
+service that had to remember, and forgot, shipped the placeholder **as the
+value**. For an API key that is merely loud (a 401). For an HMAC secret it is
+silent and worse than having no secret at all: `verify_request` runs the whole
+comparison against the literal string `env:SVC_INBOUND_SECRET`, which is a
+constant anyone can read, so a forged webhook verifies.
+
 ### TOML example
 
 ```toml
 [database]
-url       = "env:DATABASE_URL"   # defer to env at runtime
+url       = "env:DATABASE_URL"   # resolved by load_config; unset → startup fails
 pool_size = 10
 
 [http]

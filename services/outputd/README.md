@@ -19,16 +19,18 @@ Port: `:9880`
 
 | Capability | Where |
 |---|---|
-| **Render API** | `POST /api/v1/render/{kind}` — `{model \| view, template_hash?, attachment?: {xml, specification_id}, date, ident}` → PDF + `X-Mako-Template-Hash` for the caller to pin. An `INVOICE` sends the **EN 16931 model** and outputd projects the page view from it; a Textform kind sends its own view. Stores nothing |
-| **Document API** | `POST /api/v1/documents/{kind}` — the same render, **recorded** and queued for delivery. Idempotent on `subject_ref` (a Rechnungsnummer, a dunning-case id, a slice id), so a retrying issuer cannot send a second notice. `GET /documents` is the customer's inbox; `/documents/{id}/content` reproduces the bytes as issued (§ 14 Abs. 1 UStG, § 147 AO — never a re-render) |
-| **Delivery** | One track per (document, channel) with backoff, an attempt ceiling (`max_attempts`, default 8) and evidence. `PORTAL`, `EMAIL`, `POST`, `ERP` — no SMTP client and no print driver; `EMAIL`/`POST` are HTTP relays, and a print service can also *pull* `GET /api/v1/spool`. `SENT` ≠ `DELIVERED`: arrival comes back through `POST /deliveries/{id}/status` |
+| **Render API** | `POST /api/v1/render/{kind}` → PDF + `X-Mako-Template-Hash` to pin. Stateless. An `INVOICE` sends the **EN 16931 model** and outputd projects the view; a Textform kind sends its own |
+| **Document API** | `POST /api/v1/documents/issue/{kind}` — the same render, **recorded** and queued. Idempotent on `subject_ref`, so a retrying issuer cannot send a second notice |
+| **Issued bytes** | `/documents/{id}/content` reproduces the bytes **as issued**, never a re-render (§ 14 Abs. 1 UStG, § 147 AO); `GET /documents` is the customer's inbox |
+| **Delivery** | One track per (document, channel), with backoff, an attempt ceiling (`max_attempts`, default 8) and evidence. `PORTAL`, `EMAIL`, `POST`, `ERP` |
+| **Delivery transport** | No SMTP client, no print driver: `EMAIL`/`POST` are HTTP relays and a print service may instead *pull* `GET /api/v1/spool`. `SENT` ≠ `DELIVERED` — arrival returns through `POST /deliveries/{id}/status` |
 | **Authz** | Cedar ABAC (`policies/outputd.cedar`) on every route: tenant isolation everywhere, plus a market-role gate (`LF`/`MSB`/`ESA`) on publishing, rolling out and rendering |
 | **Errors** | One envelope, one stable code — and a template that does not compile returns its diagnostics as a **list**, not a blob: `{"error":{"code":"TEMPLATE_DID_NOT_COMPILE","diagnostics":["/template.typ:12:4: …"]}}` |
 | **Typst sandbox** | no filesystem, no network, no packages, no clock (`datetime.today()` is the *document's* date); renders capped at cores − 1 on the blocking pool, 20 s budget |
 | **ZUGFeRD carrier** | `document::facturx` — PDF/A-3 via typst-pdf, Factur-X XMP stamped by incremental update (typst-pdf has no XMP hook); profile derived from the payload's BT-24, never configured |
 | **Publish gates** | `POST /api/v1/templates` renders the candidate against an awkward specimen, enforces PDF/A, stamps, reads the finished file back with `en16931-formats::zugferd::extract` (byte-identical payload, no `Divergence`), and requires the § 14 Abs. 4 UStG terms on the page. Only then is a row written |
 | **Template store** | content-addressed per tenant (`PRIMARY KEY (tenant, hash)`), append-only, never UPDATE/DELETE — issuing services pin the hash next to each document, and § 147 AO / GoBD keep that resolvable for 8 years. `document_template_current` is the one mutable pointer |
-| **Textform kinds** | `MAHNUNG` (§ 126b BGB; Stufe-3 specimen gate — declarant, Gesamtforderung, Zahlungsfrist, § 41f Sperrtermin) and `PREISANPASSUNG` (§ 41 Abs. 5 EnWG; mixed-change specimen — declarant, Wirksamkeit, **both** changed prices and the Satz-4 Sonderkündigungsrecht) share the store and the engine. Each has a view, a specimen, a gate and a reference layout, and a producer: `accountingd` and `vertragd` |
+| **Textform kinds** | `MAHNUNG` (§ 126b BGB — declarant, Gesamtforderung, Zahlungsfrist, § 41f Sperrtermin) from `accountingd`, and `PREISANPASSUNG` (§ 41 Abs. 5 EnWG — declarant, Wirksamkeit, **both** changed prices, Satz-4 Sonderkündigungsrecht) from `vertragd`. Each carries a view, a specimen, a publish gate and a reference layout |
 | **External validation** | `just zugferd-verify` — veraPDF + Mustang, containerized (Docker is the only host dependency); all specimens must come back valid/compliant |
 
 ## Authorization

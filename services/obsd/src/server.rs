@@ -415,7 +415,6 @@ pub async fn build_router(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Resu
                         secret
                     }),
                     event_types: &event_types,
-                    makopid_filter: &[],
                     active: true,
                 },
             )

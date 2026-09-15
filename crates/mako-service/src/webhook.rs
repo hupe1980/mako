@@ -108,6 +108,12 @@ pub enum WebhookError {
     StaleTimestamp,
     #[error("no `v1` signature matched")]
     SignatureMismatch,
+    #[error(
+        "the configured webhook secret is empty — an empty key verifies against \
+         a value anyone can reproduce; unset the field for the dev bypass or set \
+         a real secret"
+    )]
+    EmptySecret,
 }
 
 impl From<WebhookError> for axum::http::StatusCode {
@@ -218,6 +224,15 @@ pub fn verify_request(
         // that behaves differently in the environment nobody tests.
         return Ok(header(ID_HEADER).ok().map(|id| WebhookId(id.to_owned())));
     };
+
+    // An empty secret is worse than no secret. `None` is the documented dev
+    // bypass and reads as one; `Some(b"")` runs the whole HMAC against a key
+    // every reader of this repository can reproduce, and answers 200 — so a
+    // forged body is indistinguishable from a signed one. Refuse it rather than
+    // letting a blank config line pass for a configured receiver.
+    if secret.is_empty() {
+        return Err(WebhookError::EmptySecret);
+    }
 
     let id = header(ID_HEADER)?;
     let timestamp: i64 = header(TIMESTAMP_HEADER)?
@@ -503,8 +518,42 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_secret_and_body_round_trip() {
+    fn an_empty_body_round_trips() {
         let ts = now();
-        assert!(verify_request(Some(b""), &signed(b"", "m", ts, b""), b"").is_ok());
+        assert!(
+            verify_request(Some(b"k"), &signed(b"k", "m", ts, b""), b"").is_ok(),
+            "an empty body is signable and verifiable like any other"
+        );
     }
+
+    /// An empty secret is refused rather than used as a key.
+    ///
+    /// `None` is the documented dev bypass and verifies nothing. `Some(b"")` is
+    /// a different thing: an HMAC against an empty key is one every reader of
+    /// this repository can reproduce, so accepting it would authenticate a
+    /// forged body while reading as verification. Eight services' startup
+    /// posture checks test `is_none()`, so a blank config line arrives here as
+    /// `Some(b"")` and this is where it has to stop.
+    #[test]
+    fn an_empty_secret_is_refused_rather_than_used_as_a_key() {
+        let body = b"{}";
+        let ts = time::OffsetDateTime::now_utc().unix_timestamp();
+        // Sign with the empty key, exactly as a forger would.
+        let sig = super::sign(b"", "evt-1", ts, body);
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(ID_HEADER, "evt-1".parse().expect("valid header"));
+        headers.insert(
+            TIMESTAMP_HEADER,
+            ts.to_string().parse().expect("valid header"),
+        );
+        headers.insert(SIGNATURE_HEADER, sig.parse().expect("valid header"));
+
+        let err = verify_request(Some(b""), &headers, body)
+            .expect_err("an empty secret must never authenticate a request");
+        assert!(
+            matches!(err, WebhookError::EmptySecret),
+            "expected EmptySecret, got {err:?}"
+        );
+    }
+
 }

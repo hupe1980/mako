@@ -16,26 +16,11 @@
 //!
 //! # Why the Hub arm refuses instead of guessing
 //!
-//! There is **no Beschluss**. The H1-2026 target slipped, the -1 consultation
-//! closed 17.11.2025, and go-live is planned for H2 2028. No wire format, no
-//! endpoint and no payload shape has been published, so an implementation would
-//! be invention rather than compliance — and an invented format that reaches a
-//! real Hub is indistinguishable, at the point of failure, from a correct one
-//! that was rejected. The arm therefore fails loudly at configuration time.
-//!
-//! # What the cutover will need
-//!
-//! Recorded here so the audit does not have to be redone:
-//!
-//! - **Aggregation key.** `sync_engine::resolve_bilanzierungsgebiete` groups
-//!   MaLos by Bilanzierungsgebiet. The Hub routes by MaLo-ID, so this becomes a
-//!   per-MaLo submission, not a per-territory one.
-//! - **`mabis_zp_id`.** Resolved from `marktd` master data and carried as the
-//!   `LOC+172` Meldepunkt. The Hub does not use it for routing; whether it stays
-//!   as payload content is a format question for the Beschluss.
-//! - **Tranchen.** `marktd.tranche` keys on `tranche_id` with a parent
-//!   `malo_id`. A Tranche is not a MaLo, so any series built per Tranche needs a
-//!   resolution rule before it can be routed by MaLo-ID.
+//! There is **no Beschluss** for BK6-24-210: no wire format, no endpoint and no
+//! payload shape has been published, so an implementation would be invention
+//! rather than compliance — and an invented format that reaches a real Hub is
+//! indistinguishable, at the point of failure, from a correct one that was
+//! rejected. The arm therefore fails loudly at configuration time.
 
 use serde::Deserialize;
 

@@ -259,8 +259,8 @@ reason  = "Runtime toml 0.8 → toml_edit 0.22 pulls winnow 0.7; cargo's build-t
 
 # p256/ecdsa (energy-api) still pins sha2 0.10, pulling the 2022-generation digest
 # chain (digest 0.10 / block-buffer 0.10 / crypto-common 0.1 / cpufeatures 0.2).
-# asx-rs + lopdf both use sha2 0.11 (RustCrypto 2024 generation), so that
-# side is no longer a source of these duplicates.
+# asx-rs and lopdf are both on sha2 0.11 (RustCrypto 2024 generation), so the
+# duplicate comes from the p256/ecdsa side alone.
 # Resolve when the p256/ecdsa ecosystem updates to sha2 0.11.
 [[bans.skip]]
 name    = "digest"
@@ -283,8 +283,8 @@ version = "0.2"
 reason  = "p256/sha2 0.10 chain still pulls cpufeatures 0.2; asx-rs + lopdf pull cpufeatures 0.3 via sha2 0.11. Resolve when p256 ecosystem updates."
 
 # ── asx-rs vs p256/ecdsa/energy-api crypto split ────────────────────────────────
-# asx-rs uses sha2 0.11 / hmac 0.13 (RustCrypto 2024 update). lopdf also uses
-# sha2 0.11, so xtask is no longer a source of crypto version splits.
+# asx-rs and lopdf are both on sha2 0.11 / hmac 0.13 (RustCrypto 2024 update),
+# so xtask contributes no crypto version split.
 # p256/ecdsa/rfc6979 (energy-api ECDSA, makod HMAC) are still on sha2 0.10 / hmac 0.12.
 # No shared key material or verification state across the version boundary.
 # Resolve when p256/ecdsa ecosystem aligns on sha2 0.11 / hmac 0.13.

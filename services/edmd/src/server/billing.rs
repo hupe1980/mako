@@ -308,11 +308,12 @@ pub(crate) async fn get_billing_period(
 /// a cross-MaLo `SELECT DISTINCT` over meterstore's version-resolved relation,
 /// evaluated across both tiers in one plan.
 ///
-/// It used to scan `meter_billing_periods` instead — the **cache**, which
-/// `billing_period()` fills lazily on read-through. A MaLo whose aggregate had
-/// never been requested had no row there, so it was invisible to discovery and
-/// its Summenzeitreihe was never submitted: a MaBiS gap that grew quietly and
-/// that no error surfaced, because an empty list is a valid answer.
+/// Discovery must not run off `meter_billing_periods`: that table is the
+/// **cache**, which `billing_period()` fills lazily on read-through. A MaLo whose
+/// aggregate has never been requested has no row there, so scanning it would
+/// make that MaLo invisible to discovery and leave its Summenzeitreihe
+/// unsubmitted — a MaBiS gap no error surfaces, because an empty list is a valid
+/// answer.
 ///
 /// This is the collection form; `GET /api/v1/billing-period/{malo_id}` returns
 /// the aggregate for a single MaLo.

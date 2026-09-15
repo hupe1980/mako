@@ -103,8 +103,9 @@ mako_markt
 ├── commands        typed makod command names/payloads
 ├── makod_client    HTTP client for the makod admin API (feature `makod-client`)
 ├── marktd_client   HTTP client for the marktd REST API (feature `marktd-client`)
-└── testing         InMemory* test doubles (feature = "testing")
-                    includes: InMemoryPriCatRepository
+└── testing         Two InMemory* test doubles (feature = "testing"):
+                    InMemoryVersorgungsStatusRepository,
+                    InMemoryNbEnergiemixRepository
 ```
 
 ---
@@ -151,12 +152,16 @@ assert_eq!(mp_id.is_bdew(), true);
 
 ## Repository traits
 
-All traits use AFIT and return `Result<_, MdmError>`. Every trait has two implementations:
+All traits use AFIT and return `Result<_, MdmError>`. Production implementations
+are the `Pg*Repository` types in `services/marktd/src/pg/` — PostgreSQL via
+sqlx 0.8+ — one per trait.
 
-| Implementation | Use |
-|---|---|
-| `Pg*Repository` in `services/marktd/src/pg/` | Production — PostgreSQL via sqlx 0.8+ |
-| `InMemory*` (behind the `testing` feature) | Unit tests — no PostgreSQL required |
+Only **two** carry an in-memory double (`InMemoryVersorgungsStatusRepository`,
+`InMemoryNbEnergiemixRepository`), and `src/testing.rs` explains why: a
+hand-written double is a second implementation of the same contract, and the two
+drift. A double earns its place where the *regulatory* semantics are worth
+asserting without a database; everywhere else the schema-per-test suites run
+against real PostgreSQL.
 
 ### `VersorgungsStatusRepository`
 
@@ -248,7 +253,7 @@ Outbound events emitted by `marktd` conform to **CloudEvents 1.0** structured-mo
 HMAC-SHA256 signed for delivery to ERP subscribers.
 
 HMAC-SHA256 signing and verification are **not** in this crate: they live in
-`mako_service::webhook` (`sign` / `verify_hmac`), the one canonical
+`mako_service::webhook` (`sign` / `verify_request`), the one canonical
 implementation shared by every emitter and verifier.
 
 ```rust
@@ -299,7 +304,7 @@ Details responses:
 
 ## Testing
 
-Enable the `testing` feature to get `InMemory*` test doubles for every repository trait:
+Enable the `testing` feature to get the two `InMemory*` test doubles:
 
 ```toml
 [dev-dependencies]
@@ -307,17 +312,9 @@ mako-markt = { path = "../../crates/mako-markt", features = ["testing"] }
 ```
 
 ```rust
-use mako_markt::{
-    domain::{MaloId, Sparte},
-    repository::AppState,
-    testing::{InMemoryMaloRepository, InMemoryMeloRepository, …},
-};
-use std::sync::Arc;
+use mako_markt::testing::InMemoryVersorgungsStatusRepository;
 
-let state = Arc::new(AppState {
-    malo_repo: InMemoryMaloRepository::default(),
-    // … other repos …
-});
+let versorgung = InMemoryVersorgungsStatusRepository::default();
 ```
 
 ---
@@ -327,7 +324,7 @@ let state = Arc::new(AppState {
 | Flag | Enables |
 |---|---|
 | *(default)* | All domain types, repository traits, CloudEvents |
-| `testing` | `InMemory*` test doubles — **never enable in production builds** |
+| `testing` | The two `InMemory*` test doubles — **never enable in production builds** |
 | `makod-client` | HTTP client for the makod admin API (`reqwest`) |
 | `marktd-client` | HTTP client for the marktd REST API (`reqwest`) |
 

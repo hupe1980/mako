@@ -1153,8 +1153,10 @@ delivery stops blocking its key, so head-of-line blocking is bounded by `max_ret
 
 **`roles` and `sparten` filter on CloudEvents extensions.** An empty array matches
 everything; otherwise the event's `marktrole` / `marktsparte` must appear in it. An event
-with no `marktsparte` is not Sparte-scoped (a Marktpartner, a subscription test) and matches
-every `sparten` filter.
+carrying **neither** extension is not scoped by that axis and matches every filter on it —
+a Marktpartner or a subscription test is not an event for the empty Marktrolle. Both axes
+behave the same way, and they have to: only the makod relay sets `marktrole`, so every
+marktd-native event type reaches a role-filtered subscriber on that rule alone.
 
 ### Event types
 

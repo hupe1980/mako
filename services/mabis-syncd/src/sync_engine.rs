@@ -1094,7 +1094,6 @@ impl SyncEngine {
         let command = serde_json::json!({
             "command": mako_markt::commands::MABIS_SUMMENZEITREIHE_UEBERMITTELN,
             "marktrolle": "ÜNB",
-            "correlation_id": run_id.to_string(),
             "payload": {
                 "pruefidentifikator": MSCONS_SUMMENZEITREIHE_PID.as_u32(),
                 "mabis_zp_id": summenzeitreihe.mabis_zp_id,

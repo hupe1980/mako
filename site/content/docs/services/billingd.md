@@ -233,7 +233,7 @@ Energiesteuer Erdgas    [from billingd.toml] § 2 Abs. 3 S. 1 Nr. 4 EnergieStG
                            (§§ 25–28 EnergieStG, Erlaubnis nach § 24 Abs. 2)
 Entlastungshinweis      [informational]    § 53a / § 54 EnergieStG — the levy is
                                            billed in full; the customer files
-CO₂-Abgabe BEHG         [from billingd.toml] ~1.18 ct/kWh_Hs (65 EUR/t CO₂, 2026)
+CO₂-Abgabe BEHG         [from billingd.toml] ~1.09 ct/kWh_Hs (60 EUR/t CO₂, 2026)
 MwSt                    [from billingd.toml] 19%
 ```
 

@@ -100,10 +100,12 @@ pub struct SubscriptionRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub webhook_secret: Option<&'a str>,
     /// `CloudEvent` type filter (empty = wildcard, receive all events).
+    ///
+    /// There is deliberately no PID filter beside it: `marktd`'s `subscriptions`
+    /// table narrows on `roles`, `event_types` and `sparten` only, so a PID set
+    /// here would read as server-side narrowing without being it. Subscribers
+    /// that care about a PID subset filter on arrival.
     pub event_types: &'a [&'a str],
-    /// Optional PID filter (empty = all PIDs).
-    #[serde(skip_serializing_if = "<[_]>::is_empty")]
-    pub makopid_filter: &'a [u32],
     /// Whether the subscription is active.
     pub active: bool,
 }
@@ -1515,7 +1517,6 @@ impl MarktdClient {
             "webhook_secret": req.webhook_secret,
             "roles":          [],
             "event_types":    req.event_types,
-            "makopid_filter": req.makopid_filter,
             "active":         req.active,
         });
 

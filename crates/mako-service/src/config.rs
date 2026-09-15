@@ -198,16 +198,78 @@ pub fn load_config<C: DeserializeOwned>(name: &str) -> Result<C, ConfigError> {
     let path = config_path(name);
     let prefix = format!("{}_", name.to_uppercase().replace('-', "_"));
     Figment::new()
-        .merge(FileAdapter::wrap(Toml::file(path)))
+        .merge(EnvRefAdapter(FileAdapter::wrap(Toml::file(path))))
         // `<PREFIX>_CONFIG` names the config-file path (read by `config_path`), not
         // a config key — ignore it so a struct with `#[serde(deny_unknown_fields)]`
         // does not fail startup on a stray `config` field.
-        .merge(FileAdapter::wrap(
+        .merge(EnvRefAdapter(FileAdapter::wrap(
             Env::prefixed(&prefix)
                 .split("__")
                 .ignore(&["CONFIG", "LOG_FORMAT", "LOG_LEVEL"]),
-        ))
+        )))
         .extract()
+}
+
+/// Resolves every `env:VAR` indirection in a provider's data, at load time.
+///
+/// Without this, resolution is each service's own job — and a service that
+/// forgets it ships the placeholder *as the value*. For an API key that is
+/// merely loud (a 401). For an **HMAC secret it is silent and worse than having
+/// no secret at all**: `verify_request` runs the full comparison against the
+/// literal string `env:SVC_INBOUND_SECRET`, which is a constant published in
+/// this repository, so a forged webhook *verifies*. Nine services shipped that
+/// way while their own READMEs taught the `env:` syntax.
+///
+/// Resolving here makes the indirection a property of the loader rather than a
+/// convention each service has to remember, and an unset variable fails startup
+/// naming it. A value that is already literal passes through untouched, so a
+/// service that also calls [`resolve_env`] itself is unaffected.
+struct EnvRefAdapter<P>(P);
+
+impl<P: figment::Provider> figment::Provider for EnvRefAdapter<P> {
+    fn metadata(&self) -> figment::Metadata {
+        self.0.metadata()
+    }
+
+    fn data(
+        &self,
+    ) -> Result<figment::value::Map<figment::Profile, figment::value::Dict>, figment::Error> {
+        let mut data = self.0.data()?;
+        for dict in data.values_mut() {
+            resolve_dict(dict).map_err(|e| figment::Error::from(e.to_string()))?;
+        }
+        Ok(data)
+    }
+
+    fn profile(&self) -> Option<figment::Profile> {
+        self.0.profile()
+    }
+}
+
+fn resolve_dict(dict: &mut figment::value::Dict) -> Result<(), EnvRefError> {
+    for value in dict.values_mut() {
+        resolve_value(value)?;
+    }
+    Ok(())
+}
+
+fn resolve_value(value: &mut figment::value::Value) -> Result<(), EnvRefError> {
+    use figment::value::Value;
+    match value {
+        Value::String(_, s) => {
+            if s.starts_with("env:") {
+                *s = resolve_env(s)?;
+            }
+        }
+        Value::Dict(_, d) => resolve_dict(d)?,
+        Value::Array(_, items) => {
+            for item in items {
+                resolve_value(item)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 // ── Internals ─────────────────────────────────────────────────────────────────
@@ -290,6 +352,60 @@ mod env_indirection_tests {
     #[test]
     fn a_literal_passes_through_unchanged() {
         assert_eq!(resolve_env("plain-value").unwrap(), "plain-value");
+    }
+
+    /// The loader resolves `env:` anywhere in the tree, at any depth.
+    ///
+    /// This is what stops a service that forgets to call [`resolve_env`] from
+    /// shipping the placeholder as the value. For an HMAC secret that failure is
+    /// silent and worse than having none: the literal `env:SVC_SECRET` is a
+    /// constant published in this repository, so a forged webhook verifies.
+    #[test]
+    fn the_loader_resolves_env_refs_at_every_depth() {
+        use figment::value::{Dict, Value};
+
+        // `PATH` rather than a variable the test sets: this crate denies
+        // `unsafe_code`, and `std::env::set_var` is unsafe as of Rust 2024.
+        let expected = std::env::var("PATH").expect("PATH is set in any test environment");
+
+        let mut inner = Dict::new();
+        inner.insert("secret".into(), Value::from("env:PATH"));
+        let mut dict = Dict::new();
+        dict.insert("literal".into(), Value::from("stays"));
+        dict.insert("nested".into(), Value::from(inner));
+        dict.insert("list".into(), Value::from(vec![Value::from("env:PATH")]));
+
+        resolve_dict(&mut dict).expect("every referenced variable is set");
+
+        assert_eq!(dict["literal"].as_str(), Some("stays"));
+        assert_eq!(
+            dict["nested"].as_dict().unwrap()["secret"].as_str(),
+            Some(expected.as_str()),
+            "a nested `env:` must resolve — config sections are nested by definition"
+        );
+        assert_eq!(
+            dict["list"].as_array().unwrap()[0].as_str(),
+            Some(expected.as_str()),
+            "an `env:` inside an array must resolve too"
+        );
+    }
+
+    /// An unset variable fails startup naming it, rather than silently yielding
+    /// the placeholder.
+    #[test]
+    fn an_unset_env_ref_refuses_at_load_time() {
+        use figment::value::{Dict, Value};
+
+        let mut dict = Dict::new();
+        dict.insert(
+            "secret".into(),
+            Value::from("env:MAKO_TEST_ENVREF_DEFINITELY_UNSET"),
+        );
+        let err = resolve_dict(&mut dict).expect_err("an unset variable must refuse");
+        assert!(
+            err.to_string().contains("MAKO_TEST_ENVREF_DEFINITELY_UNSET"),
+            "the error must name the variable, got: {err}"
+        );
     }
 
     #[test]

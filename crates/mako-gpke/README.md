@@ -394,7 +394,8 @@ Allokationsliste, exchanged between LF and NB via ORDERS and answered with MSCON
 use mako_gpke::wechselprozesse::{GpkeSupplierChangeWorkflow, SupplierChangeCommand};
 use mako_engine::{builder::EngineBuilder, event_store::InMemoryEventStore};
 
-// In tests (requires `testing` feature or `#[cfg(test)]`):
+// In tests (this crate declares no features; the doubles come from
+// `mako-engine/testing`, enabled as a dev-dependency feature):
 #[cfg(test)]
 let ctx = EngineBuilder::new()
     .with_event_store(InMemoryEventStore::new())

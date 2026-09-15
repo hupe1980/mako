@@ -166,7 +166,7 @@ Each is independently testable and suitable for crates.io publication.
 
 | Crate | Role | Key API |
 |---|---|---|
-| `edi-energy` | EDIFACT parse / validate / build | `parse()`, `Platform`, `Validator` |
+| `edi-energy` | EDIFACT parse / validate / build | `parse()`, `Platform`, `ValidationReport` |
 | `mako-engine` | Event-sourced process runtime | `Workflow`, `EventStore`, `OutboxStore`, `DeadlineStore` |
 | `mako-markt` | Market data domain types + repo traits | `MaloId`, `MeloId`, `MarktpartnerId`, `VersorgungsStatus` |
 | `mako-fristen` | The German market calendar — every Frist, and what "today" means | `heute`/`berlin_date`/`berlin_midnight`; `add_werktage`, `deadline_at_werktage`, the BDEW holiday table; `antwort`/`meldung`/`vorlauf` per-Prüfidentifikator windows |

@@ -663,10 +663,10 @@ to this API.
 
 | BO4E `_typ` | `marktrolle` / context | PID family |
 |---|---|---|
-| `VERTRAG` (Beginn, Strom) | `LIEFERANT` | GPKE 55001 |
-| `VERTRAG` (Ende, Strom) | `LIEFERANT` | GPKE 55004 |
-| `VERTRAG` (Beginn, Gas) | `LIEFERANT` | GeLi Gas 44001 |
-| `ZAEHLER` (Geräteübernahme) | `MESSSTELLENBETREIBER` | WiM ORDERS 17001/17002 |
+| `VERTRAG` (Beginn, Strom) | `LF` | GPKE 55001 |
+| `VERTRAG` (Ende, Strom) | `LF` | GPKE 55004 |
+| `VERTRAG` (Beginn, Gas) | `LF` | GeLi Gas 44001 |
+| `ZAEHLER` (Geräteübernahme) | `MSB` | WiM ORDERS 17001/17002 |
 | `RECHNUNG` | `BKV` | MABIS 13003 |
 
 ### Event-driven inbound (`ErpCommandSource`)
@@ -1065,7 +1065,7 @@ With BO4E:
 | `OutboxErpWorker` (exponential back-off) | `makod/src/core/erp_adapter.rs` | At-least-once delivery with retry + dead-letter |
 | `POST /api/v1/commands` | `makod/src/orchestrator/commands_api/` | ERP-initiated process commands |
 | `PUT /admin/malo/{malo_id}` · `PUT /admin/partners/{mp_id}` | `makod` | Master-data cache sync |
-| BO4E typed model (`rubo4e`) | workspace dependency | `rubo4e = "0.13"`, BO4E schema v202607.1.0; typed BOs at every API boundary, strict-decoded on ingest (`Bo4eStrict::ensure_known_enums`) and checked against BO4E's own rules (`.validate()`) |
+| BO4E typed model (`rubo4e`) | workspace dependency | `rubo4e = "0.14"`, BO4E schema v202607.1.0; typed BOs at every API boundary, strict-decoded on ingest (`Bo4eStrict::ensure_known_enums`) and checked against BO4E's own rules (`.validate()`) |
 
 ---
 

@@ -622,8 +622,8 @@ pub async fn monthly_epex_average(
     let row = sqlx::query(
         r"SELECT SUM(avg_ct_kwh * mtu_minutes) / NULLIF(SUM(mtu_minutes), 0) AS avg
           FROM epex_prices
-          WHERE EXTRACT(YEAR  FROM price_date) = $1
-            AND EXTRACT(MONTH FROM price_date) = $2",
+          WHERE price_date >= make_date($1, $2, 1)
+            AND price_date <  make_date($1, $2, 1) + INTERVAL '1 month'",
     )
     .bind(year)
     .bind(month as i32)

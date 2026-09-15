@@ -210,7 +210,10 @@ cause, reset `iftsta_attempts` and the worker picks the order up again.
 
 ## Emitted events
 
-All through the transactional outbox.
+All through the transactional outbox, enqueued in the same transaction as the
+state change and drained by the outbox worker. Delivery needs `erp_webhook_url`
+in `sperrd.toml`; without it the notices accumulate in `event_outbox`
+undelivered and startup warns.
 
 | CloudEvent | Emitted when |
 |---|---|
@@ -229,6 +232,12 @@ All through the transactional outbox.
 Every REST route requires an OIDC token **and** passes a Cedar check.
 Authentication alone would let a valid token from any tenant order a
 disconnection in this operator's name.
+
+`POST /webhook` is the exception: it carries no OIDC and is authenticated by
+`inbound_hmac_secret` alone, which is why startup refuses without one. That route
+queues a physical disconnection, so an unsigned body reaching it bypasses the
+`create-sperr-order` role gate entirely. `allow_insecure_no_auth = true` is the
+only way to serve it unverified, and it has to be asked for by name.
 
 | Action | Routes |
 |---|---|

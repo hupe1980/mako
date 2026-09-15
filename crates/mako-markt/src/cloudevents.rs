@@ -263,7 +263,7 @@ pub struct EventExtensions {
 }
 
 // CloudEvent webhook signing/verification lives in `mako_service::webhook`
-// (`sign` / `verify_hmac`) — the one canonical HMAC-SHA256 implementation, shared
+// (`sign` / `verify_request`) — the one canonical HMAC-SHA256 implementation, shared
 // by every emitter and verifier. Do not add a second copy here.
 
 #[cfg(test)]

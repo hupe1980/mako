@@ -752,7 +752,7 @@ if invoice.has_errors() {
 | § 9 StromStG | All eight Abs. 1 Befreiungen plus the Abs. 2/3 ermäßigte Sätze, typed; § 9a/9b/9c Entlastungen kept out of the amounts |
 | §2 EnergieStG | Erdgassteuer 0.55 ct/kWh; `energiesteuer_gas_for_year(year)` (incl. 2022 0-rate) |
 | §§ 53a, 54 EnergieStG | Steuer**entlastungen** the customer claims at the Hauptzollamt — the supply is invoiced in full, and a `Steuerentlastung` renders the 0-EUR note the application needs |
-| BEHG §10 | CO₂-Preis H-Gas (65 EUR/t 2026) + L-Gas factor; `behg_ct_per_kwh_for_year(year)` |
+| BEHG §10 / CO2KostAufG §4 | CO₂-Preis H-Gas (2026: **60 EUR/t** — `§ 4 Abs. 1 Nr. 2 CO2KostAufG` bills the *Mittelwert* of the §10 Abs. 2 corridor 55–65) + L-Gas factor; `behg_ct_per_kwh_for_year(year)` |
 | §25 Nr. 4 MessEV | Brennwertkorrektur m³ → kWh_Hs |
 | §12 Abs. 2 Nr. 1 UStG | Reduced 7% MwSt for Anlage-2 goods (Trinkwasser) — NOT district heating |
 | §19 UStG | 0% USt on the feed-in Gutschrift (Kleinunternehmer election) |

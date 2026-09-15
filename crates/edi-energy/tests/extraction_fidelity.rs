@@ -21,8 +21,9 @@
 //!   so the column ended before the clause did.
 //! - **unbalanced parentheses** — an opened bracket the extraction never closed.
 //! - **prose bleed** — narrative body text from the page landed inside a
-//!   condition. The worst class: `remadv [493]` runs to 1 899 characters of
-//!   INVOIC commentary where a one-sentence Bedingung belongs.
+//!   condition, so a one-sentence Bedingung carries a paragraph of the page it
+//!   was printed on. The longest condition surviving anywhere in the corpus is
+//!   `mscons [130]` at 606 characters, against a median of 72.
 //!
 //! The detectors are deliberately conservative. A general „truncated mid-word"
 //! measure is *not* obtainable: German sentences legitimately end in two-letter

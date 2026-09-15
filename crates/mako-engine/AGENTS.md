@@ -14,10 +14,10 @@ impl Workflow for MyWorkflow {
     type Event   = MyEvent;   // impl EventPayload
     type Command = MyCommand; // impl CommandPayload
 
-    fn handle(state: &Self::State, cmd: Self::Command)
-        -> Result<Vec<NewEvent<Self::Event>>, WorkflowError> { … } // pure
+    fn handle(state: &Self::State, command: Self::Command)
+        -> Result<WorkflowOutput<Self::Event>, WorkflowError> { … } // pure
 
-    fn apply(state: Self::State, event: &EventEnvelope<Self::Event>)
+    fn apply(state: Self::State, event: &Self::Event)
         -> Self::State { … } // pure
 }
 ```
@@ -42,7 +42,12 @@ let pid: Uuid = Uuid::new_v4(); // ❌
 
 Key ID types: `ProcessId`, `StreamId`, `EventId`, `DeadlineId`, `TenantId`.
 
-## Deadline Arithmetic (fristen module)
+## Deadline arithmetic — the `mako-fristen` crate
+
+`mako-engine` schedules and dispatches deadlines; it does not compute them and
+re-exports nothing. The arithmetic below is `mako_fristen`, a separate leaf
+crate a caller depends on directly (these samples read as `fristen::` because
+`use mako_fristen as fristen;` is the house spelling).
 
 **There is no 24-hour GPKE window**, under BK6-24-174 or anything else — see
 `mako_fristen::antwort::GPKE_IS_NOT_TWENTY_FOUR_HOURS`. A flat 24 h is neither
