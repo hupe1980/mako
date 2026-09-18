@@ -1855,9 +1855,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.4.6"
+version = "1.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3eb0f42d6c360dc3f8a821f6bf2fdea7f72bfd36b3076eb0e6d1e9e0752fff4"
+checksum = "54413ede23c2daf518f35156dfde027feb2374004d63bd497f983c8db9c0e313"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -4306,9 +4306,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.12"
+version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e0f1c7c3a72c66fd80abe965175f7523475c0489a87d3ff9d6e8c87d87a9d2d"
+checksum = "ef25905e51abafe4dcea6c15fec58c57b601cdbd0ee53d22ea1d3016c587d39b"
 
 [[package]]
 name = "fixedbitset"
@@ -7138,9 +7138,9 @@ dependencies = [
 
 [[package]]
 name = "meterstore"
-version = "0.11.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b823ab49d905a61e1fd618948a6b597339c9426d5543f187c6f15075b362903"
+checksum = "8ec9942c0a54ca953250991e0210c09e7624357874b2018a30c17a0ee32a3c2a"
 dependencies = [
  "arrow",
  "async-stream",
@@ -7163,6 +7163,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sqlx",
+ "sqlx-postgres",
  "thiserror 2.0.20",
  "time",
  "time-tz",
@@ -7753,7 +7754,6 @@ dependencies = [
  "opendal-layer-retry",
  "opendal-layer-timeout",
  "opendal-service-azdls",
- "opendal-service-fs",
  "opendal-service-gcs",
  "opendal-service-s3",
 ]
@@ -7857,20 +7857,6 @@ checksum = "9b489f13c42e69d69bdd72952b634356ec43a7881a20259b38b540fcecdf4051"
 dependencies = [
  "http 1.5.0",
  "opendal-core",
-]
-
-[[package]]
-name = "opendal-service-fs"
-version = "0.57.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22e89a665fef0e6bd249cf5ea47fc174b7ba892159bee4b9382528b1ca873a2c"
-dependencies = [
- "bytes",
- "log",
- "opendal-core",
- "serde",
- "tokio",
- "xattr",
 ]
 
 [[package]]

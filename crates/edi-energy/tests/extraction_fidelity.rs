@@ -468,7 +468,13 @@ fn element_value_conditions_are_read_as_values() {
             }
             total += 1;
             match Voraussetzung::parse(&text) {
-                Some(Voraussetzung::ElementValue { .. }) => as_value += 1,
+                // Both read the element the Bedingung names: `ElementValue`
+                // against a code list, `ElementShape` against the value's
+                // form. What the count separates is reading the element from
+                // settling for the segment around it.
+                Some(Voraussetzung::ElementValue { .. } | Voraussetzung::ElementShape { .. }) => {
+                    as_value += 1;
+                }
                 Some(_) => as_presence += 1,
                 None => unparsed.push(format!("{label} [{key}]")),
             }
@@ -483,6 +489,19 @@ fn element_value_conditions_are_read_as_values() {
         total >= 200,
         "found only {total} DE-referencing conditions — the corpus or the shape \
          changed and this measurement is looking at nothing"
+    );
+    // A clause that names a data element is about that element. Reading it as
+    // the segment around it answers a different question and fires the rule
+    // for messages the element never selected — „Wenn im selben SG12 NAD
+    // DE3124 nicht vorhanden" becomes „no NAD at all", which is false in
+    // almost every message and so inverts the rule. `Voraussetzung::parse`
+    // returns `None` where it cannot read the element, and `None` permits.
+    assert_eq!(
+        as_presence, 0,
+        "{as_presence} DE-referencing conditions are read as the mere presence \
+         of their segment; that is the wrong question and it fires for messages \
+         the element does not select. Read the element, or return `None` and let \
+         it permit"
     );
     assert!(
         as_value >= ELEMENT_VALUE_FLOOR,
@@ -502,17 +521,27 @@ fn element_value_conditions_are_read_as_values() {
 
 /// How many DE-referencing conditions the evaluator reads as what they say.
 ///
-/// Measured 2026-09-14: **179 of 371**. 30 fall back to the segment's mere
-/// presence and 162 do not parse at all. What remains needs Voraussetzung
-/// variants that do not exist yet — a length test („genau 11 Stellen"), a join
-/// between two places, and the ID-format semantics behind „die ID der
-/// Marktlokation". Each is a design decision, not a missing branch.
+/// Measured 2026-09-18: **224 of 371**, and **none** falls back to the
+/// segment's mere presence — that reading is now refused outright. The
+/// remaining 147 do not parse, and what they need does not exist: a join
+/// between two places, and matching two segments by a Zeitraum-ID they share.
 ///
 /// The floor only rises. It went 78 → 179 when [`Voraussetzung::parse`] learned
 /// the comparison shape („Wenn in diesem STS DE1131 = E_0526"), which the whole
 /// IFTSTA Antwortcode family is written in and which carries no „vorhanden" for
-/// the old gate to catch.
-const ELEMENT_VALUE_FLOOR: usize = 179;
+/// the old gate to catch. It went 179 → 200 on three repairs to that same
+/// reading: a code list the Bedingungen column wrapped after a `/`
+/// („DE4465 = A01/A21/A22/ A23/A90/A96"), a comparison printed without spaces
+/// („DE4465=28"), and the Meldepunkt's own question — „die ID einer
+/// Marktlokation angegeben ist" and „genau 11 Stellen" — which
+/// [`edi_energy::profile::formatbedingung`] answers. It went 200 → 224 when
+/// the segment-presence fallback was removed and the clauses it had been
+/// swallowing were read: a code named before its DE („der Code Z35 … im
+/// DE1153"), a dashed Artikel-ID, „mit 1 vorhanden", and the bare question
+/// whether an element carries a value at all. It went 224 → 237 when a
+/// Voraussetzung gained a **path** — „in dieser SG8 SEQ+Z01 SG10 CCI+++ZA6 …
+/// CAV+E02 vorhanden" — and the alternatives the AHB writes with „oder".
+const ELEMENT_VALUE_FLOOR: usize = 237;
 
 /// Whether the text names a data element (`DE` followed by digits).
 fn mentions_de(t: &str) -> bool {
@@ -547,3 +576,126 @@ fn sample_unparsed() {
         }
     }
 }
+
+/// How thinly each Prüfidentifikator is actually validated.
+///
+/// A Bedingung the evaluator cannot read is `Truth::Unknown`, which permits and
+/// never requires ([FORMAT.md] § 6). That invariant is honest, and it is also
+/// the one number a buyer would ask about the wrong way round: the count of
+/// unreadable *conditions* says nothing about whether a given Anwendungsfall is
+/// checked, because one unreadable Bedingung may gate forty places in one PID
+/// and none in the next.
+///
+/// So this counts **binding places** — a row or data element the column marks
+/// `Muss`/`X`/`M` — whose status cites at least one Voraussetzung nothing can
+/// read, and reports them per PID. Those places are admitted whatever the
+/// message carries.
+///
+/// [FORMAT.md]: ../../../concepts/FORMAT.md
+#[test]
+fn the_silent_permit_is_measured_per_pruefidentifikator() {
+    let mut per_pid: BTreeMap<String, usize> = BTreeMap::new();
+    let mut total = 0usize;
+    let mut places = 0usize;
+
+    for (label, v) in profiles() {
+        let conds = conditions(&v);
+        // A Voraussetzung is readable when its text is there and parses. A
+        // Bedingung that states a constraint rather than a precondition does
+        // not gate the place at all, so it is not a silent permit.
+        let unreadable = |id: &str| -> bool {
+            match conds.get(id) {
+                None => true,
+                Some(text) => {
+                    edi_energy::profile::conditions::is_precondition(text)
+                        && Voraussetzung::parse(text).is_none()
+                }
+            }
+        };
+        let gated = |expr: &str| -> bool {
+            edi_energy::profile::conditions::Status::parse(expr)
+                .and_then(|s| s.expr)
+                .is_some_and(|e| {
+                    e.cited().into_iter().any(|id| {
+                        edi_energy::profile::conditions::ConditionKind::of(id)
+                            == edi_energy::profile::conditions::ConditionKind::Voraussetzung
+                            && unreadable(id)
+                    })
+                })
+        };
+        for af in v["anwendungsfaelle"].as_array().into_iter().flatten() {
+            let pid = af["pid"].as_u64().map_or_else(
+                || af["name"].as_str().unwrap_or("?").to_owned(),
+                |p| p.to_string(),
+            );
+            let key = format!("{label} {pid}");
+            let mut thin = 0usize;
+            for row in af["rows"].as_array().into_iter().flatten() {
+                for st in row["status"].as_array().into_iter().flatten() {
+                    let Some(st) = st.as_str() else { continue };
+                    if !st.starts_with("Muss") {
+                        continue;
+                    }
+                    places += 1;
+                    if gated(st) {
+                        thin += 1;
+                    }
+                }
+            }
+            for el in af["elements"].as_array().into_iter().flatten() {
+                for op in el["operands"].as_array().into_iter().flatten() {
+                    let Some(op) = op["operand"].as_str() else {
+                        continue;
+                    };
+                    if !matches!(op.split_whitespace().next(), Some("X" | "M")) {
+                        continue;
+                    }
+                    places += 1;
+                    if gated(op) {
+                        thin += 1;
+                    }
+                }
+            }
+            total += thin;
+            if thin > 0 {
+                per_pid.insert(key, thin);
+            }
+        }
+    }
+
+    let mut worst: Vec<(&String, &usize)> = per_pid.iter().collect();
+    worst.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+    println!(
+        "binding places gated by an unreadable Voraussetzung: {total} of {places}, \
+         in {} of the shipped Anwendungsfälle. Worst:",
+        per_pid.len()
+    );
+    for (key, n) in worst.iter().take(15) {
+        println!("  {n:>4}  {key}");
+    }
+
+    assert!(
+        places > 20_000,
+        "found only {places} binding places — the corpus or the shape changed \
+         and this measurement is looking at nothing"
+    );
+    assert!(
+        total <= SILENT_PERMIT_BUDGET,
+        "places admitted whatever they carry rose to {total} (budget \
+         {SILENT_PERMIT_BUDGET}). A place gated by a Bedingung nothing can read \
+         is not validated; teach `Voraussetzung::parse` the shape, or say in \
+         ROADMAP.md why it cannot be read"
+    );
+    assert!(
+        total + 200 >= SILENT_PERMIT_BUDGET,
+        "places admitted whatever they carry fell to {total} — good; lower \
+         SILENT_PERMIT_BUDGET to match so the guard keeps its grip"
+    );
+}
+
+/// Binding places gated by a Voraussetzung nothing can read.
+///
+/// The budget only falls. It is not the count of unreadable Bedingungen: one
+/// of those can gate many places in one Anwendungsfall and none in the next,
+/// which is why the figure that matters is per place and is reported per PID.
+const SILENT_PERMIT_BUDGET: usize = 2203;

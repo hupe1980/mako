@@ -567,7 +567,21 @@ jobs:
             *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/mako-builder:${{ matrix.tag }}
             *.cache-from=type=gha,scope=mako-builder-${{ matrix.platform }}
             *.cache-to=
-          provenance: false
+          # SLSA build provenance and an SBOM per image — Cyber Resilience Act
+          # Annex I Part II(1), which market surveillance may ask for from
+          # 11.12.2027. `mode=max` records the build arguments and the base
+          # images, not only the invocation.
+          #
+          # This changes the shape of what is pushed: with attestations each
+          # per-platform build produces an **OCI index** (the image manifest plus
+          # the attestation manifests) rather than a bare manifest, so
+          # `containerimage.digest` below is that index's digest.
+          # `docker buildx imagetools create` takes index sources and carries
+          # their manifests into the merged index, so the digest export and the
+          # manifest-merge job need no change — but they now depend on that
+          # behaviour, which is why the merge job asserts it.
+          provenance: mode=max
+          sbom: true
         env:
           REGISTRY: ghcr.io/${{ github.repository_owner }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -693,3 +707,33 @@ jobs:
           docker buildx imagetools create $tags \
             "ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.service }}@sha256:${amd64}" \
             "ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.service }}@sha256:${arm64}"
+
+      # The merge above carries the attestation manifests across only because
+      # `imagetools create` flattens an index source. Nothing in the build fails
+      # if it stops doing so, or if `provenance`/`sbom` are turned off upstream —
+      # the images would simply publish without the evidence a market
+      # surveillance authority may request under CRA Annex I Part II(1), and the
+      # release would look entirely ordinary. So the release asserts it.
+      - name: Assert provenance and SBOM survived the merge
+        run: |
+          tag=$(jq -r '.tags[0]' <<< '${{ steps.meta.outputs.json }}')
+          raw=$(docker buildx imagetools inspect --raw "$tag")
+          # An attestation rides the index as its own manifest, tagged by the
+          # `vnd.docker.reference.type` annotation BuildKit writes. Counting
+          # those is independent of the `--format` field names, which differ
+          # between `.Provenance`, `.SLSA` and `.SBOM` and between buildx
+          # versions.
+          attestations=$(jq '[.manifests[]
+            | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest")]
+            | length' <<< "$raw")
+          platforms=$(jq '[.manifests[]
+            | select(.platform.architecture != "unknown")] | length' <<< "$raw")
+          echo "$tag: $platforms platform manifest(s), $attestations attestation manifest(s)"
+          if [ "$platforms" -ne 2 ]; then
+            echo "::error::$tag has $platforms platform manifests, expected amd64 and arm64"
+            exit 1
+          fi
+          if [ "$attestations" -lt "$platforms" ]; then
+            echo "::error::$tag carries $attestations attestation manifest(s) for $platforms platforms — provenance or the SBOM did not survive the merge"
+            exit 1
+          fi

@@ -142,7 +142,7 @@ spec:
         audience: [netzbilanz]
         priority: urgent
         summary: >-
-          A MaBiS submission failed or missed its window (BK6-24-174 Anlage 3 §3.10). The window is fixed Werktage after month end.
+          AI-generated. A MaBiS submission failed or missed its window (BK6-24-174 Anlage 3 §3.10). The window is fixed Werktage after month end.
         when:
           - path: /submission_status
             in: ["FAILED", "OVERDUE"]

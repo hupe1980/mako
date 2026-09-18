@@ -840,12 +840,27 @@ fn first_group_segment(text: &str) -> Option<SegmentPattern> {
 /// A receiver-checkable Voraussetzung.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Voraussetzung {
-    /// „Wenn SG4 STS+7++xxx+ZAP vorhanden" / „… nicht vorhanden".
+    /// „Wenn SG4 STS+7++xxx+ZAP vorhanden" / „… nicht vorhanden", and the
+    /// **path** the AHBs write when the place sits inside another: „Wenn in
+    /// dieser SG8 SEQ+Z01 SG10 CCI+++ZA6 … CAV+E02 (SLP/SEP) vorhanden".
+    ///
+    /// A path is satisfied when each pattern is found after the one before it,
+    /// inside the scope. That is deliberately looser than „nested": the
+    /// structure would let a `CAV` of the *next* `SG10` answer for this one,
+    /// and reading it strictly would refuse messages the AHB admits. Kap. 6.5
+    /// leaves what cannot be read undecided; this can be read, and the reading
+    /// errs towards satisfying rather than refusing.
     Present {
         /// Where to look.
         scope: Scope,
-        /// What to look for.
-        pattern: SegmentPattern,
+        /// What to look for: outermost first for a path, or the alternatives.
+        patterns: Vec<SegmentPattern>,
+        /// „oder" between them — any one satisfies it. „wenn SG3
+        /// `AJT+Z58+S_0109` oder SG3 `AJT+Z59+S_0109` oder SG3
+        /// `AJT+Z60+S_0109` vorhanden" is three Antwortcodes of which one is
+        /// sent, and reading it as a path would demand all three and fire the
+        /// rule almost never.
+        alternatives: bool,
         /// „nicht vorhanden“.
         negate: bool,
     },
@@ -870,6 +885,30 @@ pub enum Voraussetzung {
         negate: bool,
         /// Compare the last two characters only.
         suffix: bool,
+    },
+    /// „Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Marktlokation
+    /// angegeben ist" / „Wenn Wert in SG6 LOC+172 DE3225 genau 11 Stellen".
+    ///
+    /// The Meldepunkt is polymorphic — DE 3225 carries a Marktlokations-ID, a
+    /// Zählpunktbezeichnung, a Netzlokations-ID or an SR-ID, and the AHB gates
+    /// places on **which** of them is there. The question is the value's
+    /// shape, so [`super::formatbedingung`] answers it and this variant only
+    /// says where to look.
+    ///
+    /// Unlike [`Voraussetzung::ElementValue`] this matches the whole segment
+    /// pattern: „in LOC+172" is about the Meldepunkt and not about the
+    /// `LOC+Z16` two places away.
+    ElementShape {
+        /// Where to look.
+        scope: Scope,
+        /// Which segment — qualifier included.
+        pattern: SegmentPattern,
+        /// The data element number.
+        de: String,
+        /// What the value has to look like.
+        shape: ValueShape,
+        /// „nicht".
+        negate: bool,
     },
     /// „Wenn SG8 SEQ+ZH0 mehr als einmal vorhanden".
     Count {
@@ -953,9 +992,153 @@ fn names_qualified_segment(word: &str) -> bool {
     !rest.is_empty() && tag.len() == 3 && tag.chars().all(|c| c.is_ascii_uppercase())
 }
 
+/// Every qualified segment the clause names, and how they combine.
+///
+/// Several in one clause are either a **path** — „in dieser SG8 SEQ+Z01 SG10
+/// `CCI+++ZA6` … `CAV+E02` vorhanden", the place named by where it sits — or
+/// **alternatives**, which the AHB joins with „oder".
+fn segment_chain(words: &[&str], ti: usize) -> Option<(Vec<SegmentPattern>, bool)> {
+    let trimmed = |i: usize| words[i].trim_end_matches([',', '.', ';', ')']);
+    let mut at: Vec<usize> = std::iter::once(ti)
+        .chain((ti + 1..words.len()).filter(|&i| names_qualified_segment(trimmed(i))))
+        .collect();
+    // A qualified segment a demonstrative introduces names **where to look**,
+    // not a link in the chain, and it does not follow the word order of the
+    // wire: „Wenn das SG8 RFF+Z19 … in derselben SG8 SEQ+Z37 nicht vorhanden"
+    // asks about the `RFF` inside the `SEQ+Z37`, while naming the `SEQ`
+    // second. Read as a chain in printed order that is the structure upside
+    // down. The group is already the scope, so the pattern is dropped —
+    // unless it is the only one there is.
+    if at.len() > 1 {
+        let scoped: Vec<usize> = at
+            .iter()
+            .copied()
+            .filter(|&i| !introduced_by_demonstrative(words, i))
+            .collect();
+        if !scoped.is_empty() {
+            at = scoped;
+        }
+    }
+    let patterns: Vec<SegmentPattern> = at
+        .iter()
+        .flat_map(|&i| split_path(trimmed(i)))
+        .map(SegmentPattern::parse)
+        .collect::<Option<_>>()?;
+    // „oder" standing between two of them makes them alternatives; one inside
+    // a parenthetical („Gültige Daten oder keine Daten") does not.
+    let alternatives = at.windows(2).any(|w| {
+        words[w[0] + 1..w[1]]
+            .iter()
+            .any(|x| x.eq_ignore_ascii_case("oder"))
+    });
+    Some((patterns, alternatives))
+}
+
+/// Split a word where `/` separates a **path** rather than alternatives.
+///
+/// „CCI+Z66/CAV+ZH9" is a `CAV+ZH9` inside a `CCI+Z66`, not a `CCI` whose
+/// first element takes either code: a `/` followed by another three-letter tag
+/// and a `+` is a step down, and `SegmentPattern::parse` reading it as a code
+/// list produces a pattern nothing on the wire matches. „SEQ+Z04/ ZF7" is the
+/// other case and stays one pattern, because `ZF7` is not a tag.
+fn split_path(word: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = word;
+    while let Some(i) = rest.find('/') {
+        let next = &rest[i + 1..];
+        let is_tag = next.len() > 3
+            && next.as_bytes()[..3].iter().all(u8::is_ascii_uppercase)
+            && next.as_bytes()[3] == b'+';
+        if !is_tag {
+            break;
+        }
+        out.push(&rest[..i]);
+        rest = next;
+    }
+    out.push(rest);
+    out
+}
+
+/// Whether the qualified segment at `i` is introduced by „in dieser SG8",
+/// „in derselben SG8", „im selben SG12" — the phrase that names a scope.
+fn introduced_by_demonstrative(words: &[&str], i: usize) -> bool {
+    words[i.saturating_sub(4)..i].iter().any(|w| {
+        matches!(
+            w.to_lowercase().as_str(),
+            "dieser" | "diesem" | "diese" | "dieses" | "derselben" | "demselben" | "selben"
+        )
+    })
+}
+
+/// Whether the clause relates two places rather than testing one.
+///
+/// Allgemeine Festlegungen 6.1d Kap. 6.5 leaves what the reader cannot read
+/// undecided, and these are the phrases that say a second place is involved:
+/// another occurrence („eine weitere SG36 … die Ziffer dort größer"), a
+/// comparison between two („identisch", „größer ist als"), or a code list the
+/// AHB names without printing („ein Antwortcode aus dem Cluster Zustimmung").
+/// Reading any of them as „the element has a value" would answer a question
+/// nobody asked.
+fn names_a_relation(lower: &str) -> bool {
+    [
+        "eine weitere",
+        "ein weiteres",
+        "einer weiteren",
+        "einem weiteren",
+        // „Wenn zwei SG8 SEQ+Z45 …, mit derselben Zeitraum-ID im DE1050" —
+        // the numeral quantifies over two occurrences and the „mit derselben"
+        // names the key they have to share. „in derselben SG8" is a scope and
+        // not a relation, which is why the „mit" is part of the phrase.
+        "wenn zwei ",
+        "wenn drei ",
+        "mit derselben",
+        "mit demselben",
+        "identisch",
+        "gleiche",
+        "gleichen",
+        "wie ein",
+        "äßer ist als",
+        "kleiner ist als",
+        "aus dem cluster",
+        // A code list the AHB names but does not print — „aus Codeliste der
+        // Konfigurationen", „aus der Codeliste der Artikelnummern".
+        "codeliste",
+        "genannte",
+        "genannten",
+    ]
+    .iter()
+    .any(|p| lower.contains(p))
+}
+
 /// Whether the word is a data-element reference (`DE1131`).
 fn is_de_token(w: &str) -> bool {
     w.len() == 6 && w.starts_with("DE") && w[2..].chars().all(|c| c.is_ascii_digit())
+}
+
+/// Re-split a word that carries `=` with no space around it.
+///
+/// „Wenn in SG12 AJT DE4465=28" is the same comparison as „… DE4465 = 28",
+/// and the AHBs print both. A `!=` or `<>` keeps its own token, so an operator
+/// is never cut in half.
+fn space_out_equals(words: &[&str]) -> Vec<String> {
+    words
+        .iter()
+        .flat_map(|w| match w.split_once('=') {
+            // „DE1373 =11" — the space fell on the other side of the operator.
+            Some((lhs, rhs)) if lhs.is_empty() && !rhs.is_empty() && !rhs.starts_with('=') => {
+                vec!["=".to_owned(), rhs.to_owned()]
+            }
+            Some((lhs, rhs))
+                if !lhs.is_empty()
+                    && !rhs.is_empty()
+                    && !lhs.ends_with(['!', '<', '>'])
+                    && !rhs.starts_with('=') =>
+            {
+                vec![lhs.to_owned(), "=".to_owned(), rhs.to_owned()]
+            }
+            _ => vec![(*w).to_owned()],
+        })
+        .collect()
 }
 
 /// „Wenn in diesem STS DE1131 = `E_0526`" / „… DE9013 <> `A01`".
@@ -970,16 +1153,31 @@ fn is_de_token(w: &str) -> bool {
 /// („…, dann ist nur der Code A01 möglich"), which says what the rule does
 /// rather than when it applies.
 fn parse_comparison(words: &[&str]) -> Option<Voraussetzung> {
+    let spaced = space_out_equals(words);
+    let words: &[&str] = &spaced.iter().map(String::as_str).collect::<Vec<_>>();
     let di = words.iter().position(|w| is_de_token(w))?;
     let negate = match *words.get(di + 1)? {
         "=" => false,
         "<>" | "\u{2260}" | "!=" => true,
         _ => return None,
     };
-    let value = words
-        .get(di + 2)?
+    // The Bedingungen column wraps, and the break lands wherever the line ran
+    // out — inside a code list that is after a `/`, so „DE4465 = A01/A21/A22/
+    // A23/A90/A96" arrives here as two words. A word ending in `/` continues
+    // into the next; without this the list parses to an empty alternative and
+    // the whole rule is refused.
+    let mut joined = String::new();
+    let mut i = di + 2;
+    loop {
+        joined.push_str(words.get(i)?);
+        if !joined.ends_with('/') {
+            break;
+        }
+        i += 1;
+    }
+    let value = joined
         .trim_end_matches([',', '.', ';', ')'])
-        .trim_matches(['"', '\u{201e}', '\u{201c}', '\u{201d}']);
+        .trim_matches(['"', '„', '“', '”']);
     // „DE6411 = MON/ANN" lists alternatives the element may carry, the same
     // way „der Code TE / FX / AJ / AL" does; any one of them satisfies it.
     let values: Vec<String> = value.split('/').map(str::to_owned).collect();
@@ -995,6 +1193,11 @@ fn parse_comparison(words: &[&str]) -> Option<Voraussetzung> {
     if tag.len() != 3 {
         return None;
     }
+    // „Wenn BGM DE1373 = 11 (Dokument nicht verfügbar) nicht vorhanden" is a
+    // comparison the clause then negates; reading only the operator inverts
+    // the rule.
+    let tail = words[di + 2..].join(" ").to_lowercase();
+    let negate = negate != tail.contains("nicht vorhanden");
     Some(Voraussetzung::ElementValue {
         suffix: false,
         scope,
@@ -1059,6 +1262,153 @@ fn locate_pattern(words: &[&str]) -> (Scope, Option<usize>) {
     (scope, tag_idx)
 }
 
+/// What a [`Voraussetzung::ElementShape`] asks of the value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValueShape {
+    /// It satisfies a Formatbedingung — `[950]` Marktlokations-ID, `[951]`
+    /// Zählpunktbezeichnung, `[960]` Netzlokations-ID, `[961]` SR-ID.
+    Format(&'static str),
+    /// „genau N Stellen" — a length, and deliberately nothing more. The AHB
+    /// uses it where it means the Marktlokations-ID, but what it *says* is the
+    /// length, and a value of the right length with a bad check digit still
+    /// satisfies the Voraussetzung it states.
+    Length(usize),
+    /// „Wenn Wert in SG7 RFF+AGK DE1154 vorhanden" / „Wenn im selben SG12 NAD
+    /// DE3124 nicht vorhanden" — the element carries a value, whatever it is.
+    ///
+    /// This is the shape the reader used to settle for the surrounding segment
+    /// on, which answers a different question: a `NAD` exists in almost every
+    /// message, and DE 3124 inside it usually does not.
+    Any,
+}
+
+impl ValueShape {
+    /// Whether `value` has this shape.
+    #[must_use]
+    pub fn holds(&self, value: &str) -> bool {
+        match self {
+            Self::Format(id) => {
+                super::formatbedingung::evaluate(id, value)
+                    == super::formatbedingung::FormatVerdict::Holds
+            }
+            Self::Length(n) => value.chars().count() == *n,
+            Self::Any => !value.is_empty(),
+        }
+    }
+}
+
+/// The three ways an AHB names the value a data element must carry.
+///
+/// Without these the clause falls through to the segment pattern alone and the
+/// Voraussetzung becomes „a COM exists" — true of almost every message. That is
+/// wrong in both directions: it fires rules the element does not trigger and it
+/// satisfies rules the element does.
+fn parse_element_value(
+    words: &[&str],
+    lower: &str,
+    di: usize,
+    seg_word: &str,
+    scope: Scope,
+    negate: bool,
+) -> Option<Voraussetzung> {
+    let tag = seg_word[..3].to_owned();
+    let de = words[di][2..].to_owned();
+    // „TAG DExxxx mit Wert v" — also „TAG (…) das DExxxx mit dem Wert v".
+    if lower.contains(" mit wert ") || lower.contains(" mit dem wert ") {
+        let v_idx = words.iter().position(|w| *w == "Wert")?;
+        let value = words
+            .get(v_idx + 1)?
+            .trim_end_matches([',', '.', ';', ')'])
+            .trim_matches(['"', '„', '“', '”'])
+            .to_owned();
+        return Some(Voraussetzung::ElementValue {
+            suffix: lower.contains("letzten beiden stellen"),
+            scope,
+            tag,
+            de,
+            values: vec![value],
+            negate,
+        });
+    }
+    // „… DExxxx … der Code EM vorhanden", „… der Code TE / FX / AJ / AL …",
+    // „… in DE6411 KWH/K3 vorhanden", „… der Code Z35 … im DE1153 vorhanden".
+    let values = code_alternatives(words, di, &tag);
+    if !values.is_empty() {
+        return Some(Voraussetzung::ElementValue {
+            suffix: false,
+            scope,
+            tag,
+            de,
+            values,
+            negate,
+        });
+    }
+    // „Wenn UNH DE0070 (Übermittlungsfolgenummer) mit 1 vorhanden" — the value
+    // carries no „Wert"/„Code" label, so only the shape `mit <v> vorhanden`
+    // identifies it.
+    let i = (0..words.len()).find(|&i| {
+        words[i].eq_ignore_ascii_case("mit")
+            && words
+                .get(i + 2)
+                .is_some_and(|w| w.to_lowercase().starts_with("vorhanden"))
+    })?;
+    let value = words.get(i + 1)?;
+    if !value.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(Voraussetzung::ElementValue {
+        suffix: false,
+        scope,
+        tag,
+        de,
+        values: vec![(*value).to_owned()],
+        negate,
+    })
+}
+
+/// „… die ID einer Marktlokation angegeben ist" / „… genau 11 Stellen".
+///
+/// Neither carries „vorhanden", so both have to be read before the gate in
+/// [`Voraussetzung::parse`] refuses them — the same reason
+/// [`parse_comparison`] runs there.
+fn parse_value_shape(words: &[&str]) -> Option<Voraussetzung> {
+    let lower: Vec<String> = words.iter().map(|w| w.to_lowercase()).collect();
+    let shape = if let Some(i) = lower.iter().position(|w| w == "genau") {
+        // „genau 11 Stellen"
+        if !lower.get(i + 2)?.starts_with("stellen") {
+            return None;
+        }
+        ValueShape::Length(lower.get(i + 1)?.parse().ok()?)
+    } else {
+        // „die ID der/einer <Objekt> angegeben ist"
+        let i = lower
+            .windows(2)
+            .position(|w| w[0] == "angegeben" && w[1].starts_with("ist"))?;
+        let id = lower.iter().position(|w| w == "id")?;
+        if id + 2 >= i || !matches!(lower[id + 1].as_str(), "der" | "einer") {
+            return None;
+        }
+        let object = lower[id + 2..i].join(" ");
+        ValueShape::Format(match object.as_str() {
+            "marktlokation" => "950",
+            "messlokation" => "951",
+            "netzlokation" => "960",
+            "steuerbaren ressource" | "steuerbare ressource" => "961",
+            _ => return None,
+        })
+    };
+    let (scope, tag_idx) = locate_pattern(words);
+    let pattern = SegmentPattern::parse(words[tag_idx?].trim_end_matches([',', '.', ';', ')']))?;
+    let de = words.iter().find(|w| is_de_token(w))?;
+    Some(Voraussetzung::ElementShape {
+        scope,
+        pattern,
+        de: de[2..].to_owned(),
+        shape,
+        negate: false,
+    })
+}
+
 impl Voraussetzung {
     /// Read the Voraussetzung shapes the AHBs use. `None` for anything else.
     #[must_use]
@@ -1077,10 +1427,22 @@ impl Voraussetzung {
         if let Some(v) = parse_comparison(&words) {
             return Some(v);
         }
+        // „… die ID einer Marktlokation angegeben ist" and „… genau 11
+        // Stellen" carry no „vorhanden" either.
+        if let Some(v) = parse_value_shape(&words) {
+            return Some(v);
+        }
         if !lower.contains("vorhanden") {
             return None;
         }
+        // „in keinem SG8 SEQ+Z79 … vorhanden ist" negates as surely as „nicht
+        // vorhanden" does. The quantifier phrase is matched rather than the
+        // bare „kein", because „Keine Daten" is the name of a code in several
+        // Bedingungen and negating on it would invert them.
         let negate = lower.contains(" nicht vorhanden")
+            || lower.contains(" in keinem ")
+            || lower.contains(" in keiner ")
+            || lower.contains(" in keinen ")
             || words
                 .get(1)
                 .is_some_and(|w| matches!(*w, "kein" | "keine" | "keinen" | "nicht"));
@@ -1088,13 +1450,13 @@ impl Voraussetzung {
         // leading group name before the segment.
         let (scope, tag_idx) = locate_pattern(&words);
         let ti = tag_idx?;
-        // A Voraussetzung that names a second qualified segment („Wenn eine
-        // andere SG8 SEQ+Z27 …, mit dem RFF+Z18 … referenziert, mit
-        // PIA+5+9991000000078:Z11 … vorhanden ist") states a join between
-        // places, not the presence of one. Kap. 6.5 leaves what the reader
-        // cannot read undecided rather than answering it from the first
-        // pattern alone.
-        if words[ti + 1..].iter().any(|w| names_qualified_segment(w)) {
+        // Several qualified segments in one clause are either a **path** —
+        // „in dieser SG8 SEQ+Z01 SG10 CCI+++ZA6 … CAV+E02 vorhanden", the
+        // place named by where it sits — or a **join**: „Wenn eine andere SG8
+        // SEQ+Z27 …, mit dem RFF+Z18 … referenziert". A path is read as a
+        // chain; a join is what Kap. 6.5 leaves undecided, and
+        // [`names_a_relation`] is what tells them apart.
+        if names_a_relation(&lower) {
             return None;
         }
         let seg_word = words[ti].trim_end_matches([',', '.', ';', ')']);
@@ -1108,46 +1470,16 @@ impl Voraussetzung {
             .enumerate()
             .find(|(_, w)| is_de_token(w))
             .map(|(i, _)| i);
-        if let Some(de_word) = de_idx.and_then(|i| words.get(i))
-            && (lower.contains(" mit wert ") || lower.contains(" mit dem wert "))
+        if let Some(di) = de_idx
+            && let Some(v) =
+                parse_element_value(&words, &lower, di, seg_word, scope.clone(), negate)
         {
-            let v_idx = words.iter().position(|w| *w == "Wert")?;
-            let value = words
-                .get(v_idx + 1)?
-                .trim_end_matches([',', '.', ';', ')'])
-                .trim_matches(['"', '„', '“', '”'])
-                .to_owned();
-            let suffix = lower.contains("letzten beiden stellen");
-            return Some(Self::ElementValue {
-                suffix,
-                scope,
-                tag: seg_word[..3].to_owned(),
-                de: de_word[2..].to_owned(),
-                values: vec![value],
-                negate,
-            });
+            return Some(v);
         }
-        // „… DExxxx … der Code EM vorhanden", „… der Code TE / FX / AJ / AL …",
-        // „… in DE6411 KWH/K3 vorhanden".
-        //
-        // Without this the clause falls through to the segment pattern alone,
-        // and the Voraussetzung becomes „a COM exists" — true of almost every
-        // message. That is wrong in both directions: it fires rules the element
-        // does not trigger and it satisfies rules the element does.
-        if let Some(di) = de_idx {
-            let values = code_alternatives(&words[di + 1..], &seg_word[..3]);
-            if !values.is_empty() {
-                return Some(Self::ElementValue {
-                    suffix: false,
-                    scope,
-                    tag: seg_word[..3].to_owned(),
-                    de: words[di][2..].to_owned(),
-                    values,
-                    negate,
-                });
-            }
-        }
-        let pattern = SegmentPattern::parse(seg_word)?;
+        // The chain: every qualified segment the clause names, in the order it
+        // names them. A single one is the ordinary presence test.
+        let (patterns, alternatives) = segment_chain(&words, ti)?;
+        let pattern = patterns.first()?.clone();
         // Repetition: „mehr als einmal/zweimal/dreimal/viermal vorhanden".
         if let Some(i) = lower.find("mehr als ") {
             let n = lower[i + 9..].split_whitespace().next().unwrap_or("");
@@ -1167,9 +1499,32 @@ impl Voraussetzung {
         if lower.contains("mal vorhanden") && !lower.contains("einmal vorhanden") {
             return None;
         }
+        // A clause that names a data element is about that element, never
+        // about the segment around it. „Wenn im selben SG12 NAD DE3124 nicht
+        // vorhanden" asks whether *this* NAD carries DE 3124; read as the
+        // segment it becomes „no NAD at all", which is false in almost every
+        // message and inverts the rule.
+        //
+        // Where nothing more than „is there a value" can be read, that is what
+        // is read; where even that cannot be — a join between two places, a
+        // code cluster the AHB names but does not list — the answer is
+        // `None`, which the evaluator treats as `Unknown` and which permits.
+        if let Some(di) = de_idx {
+            if names_a_relation(&lower) {
+                return None;
+            }
+            return Some(Self::ElementShape {
+                scope,
+                pattern,
+                de: words[di][2..].to_owned(),
+                shape: ValueShape::Any,
+                negate,
+            });
+        }
         Some(Self::Present {
             scope,
-            pattern,
+            patterns,
+            alternatives,
             negate,
         })
     }
@@ -1187,18 +1542,42 @@ impl Voraussetzung {
 /// a `SGnn` group name, for the same reason. A clause with no code left after
 /// that yields nothing, and the caller keeps the segment-presence reading it
 /// would have had anyway.
-fn code_alternatives(rest: &[&str], tag: &str) -> Vec<String> {
+fn code_alternatives(words: &[&str], de_idx: usize, tag: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for w in rest {
-        let w = w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '/');
-        if w.eq_ignore_ascii_case("vorhanden") {
+    let mut labelled = false;
+    for (i, w) in words.iter().enumerate() {
+        let bare = w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '/');
+        if bare.eq_ignore_ascii_case("vorhanden") {
             break;
         }
-        for part in w.split('/') {
+        // „der Code 293", „mit dem Wert 1", „einer der Codes 1-01-6-005 /
+        // 1-01-9-001 …" — the AHB names what follows, so it is a value
+        // whatever it looks like, and the run continues over the `/`
+        // separators the column sets as their own words.
+        if matches!(
+            bare.to_lowercase().as_str(),
+            "code" | "codes" | "wert" | "werte"
+        ) {
+            labelled = true;
+            continue;
+        }
+        if i == de_idx {
+            continue;
+        }
+        if bare == "/" {
+            continue;
+        }
+        let mut took = false;
+        for part in bare.split('/') {
+            let part = part.trim_matches('-');
             if part.is_empty()
                 || part == tag
                 || (part.starts_with("SG") && part[2..].chars().all(|c| c.is_ascii_digit()))
             {
+                continue;
+            }
+            let body = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+            if !part.chars().all(body) {
                 continue;
             }
             let upper_code = (2..=4).contains(&part.len())
@@ -1207,9 +1586,21 @@ fn code_alternatives(rest: &[&str], tag: &str) -> Vec<String> {
                     .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
                 && part.chars().any(|c| c.is_ascii_uppercase());
             let numeric_code = part.len() >= 6 && part.chars().all(|c| c.is_ascii_digit());
-            if (upper_code || numeric_code) && !out.iter().any(|o| o == part) {
+            // A dashed Artikel-ID (`1-01-6-005`) is a value wherever it
+            // stands; nothing else in a Bedingung is written that way.
+            let artikel_id = part.contains('-')
+                && part.split('-').count() >= 3
+                && part.chars().all(|c| c.is_ascii_digit() || c == '-');
+            if (upper_code || numeric_code || artikel_id || labelled)
+                && !out.iter().any(|o| o == part)
+            {
                 out.push(part.to_owned());
+                took = true;
             }
+        }
+        // The labelled run ends at the first word that is not a value.
+        if labelled && !took {
+            labelled = false;
         }
     }
     out
@@ -1443,5 +1834,126 @@ mod tests {
             Voraussetzung::parse("Hinweis: Wenn in der Anmeldung der Code ZAP vorhanden war")
                 .is_none()
         );
+    }
+
+    /// The Bedingungen column wraps after a `/`, and a code list broken that
+    /// way used to parse to an empty alternative and be refused whole — which
+    /// is eleven COMDIS/IFTSTA Antwortcode rules never evaluated.
+    #[test]
+    fn a_code_list_the_column_wrapped_is_rejoined() {
+        let v = Voraussetzung::parse("Wenn in dieser SG7 AJT DE4465 = A01/A21/A22/ A23/A90/A96")
+            .expect("the wrapped list reads");
+        let Voraussetzung::ElementValue { de, values, .. } = v else {
+            panic!("a comparison is an element value");
+        };
+        assert_eq!(de, "4465");
+        assert_eq!(values, ["A01", "A21", "A22", "A23", "A90", "A96"]);
+        // Unwrapped, the same list reads the same way.
+        let same = Voraussetzung::parse("Wenn in dieser SG7 AJT DE4465 = A01/A21/A22/A23/A90/A96");
+        assert!(
+            matches!(same, Some(Voraussetzung::ElementValue { ref values, .. }) if values.len() == 6)
+        );
+    }
+
+    #[test]
+    fn a_comparison_needs_no_spaces_around_its_operator() {
+        let v = Voraussetzung::parse("Wenn in SG12 AJT DE4465=28").expect("reads");
+        assert!(
+            matches!(v, Voraussetzung::ElementValue { ref de, ref values, negate: false, .. }
+                if de == "4465" && values == &["28".to_owned()])
+        );
+        // An operator is never cut in half.
+        let v = Voraussetzung::parse("Wenn in diesem STS DE9013 <> A01").expect("reads");
+        assert!(matches!(
+            v,
+            Voraussetzung::ElementValue { negate: true, .. }
+        ));
+    }
+
+    /// The Meldepunkt is polymorphic and the AHB gates on which ID is in it.
+    #[test]
+    fn the_meldepunkts_own_question_is_the_values_shape() {
+        let v = Voraussetzung::parse(
+            "Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Marktlokation angegeben ist",
+        )
+        .expect("reads");
+        let Voraussetzung::ElementShape {
+            ref pattern,
+            ref de,
+            ref shape,
+            ..
+        } = v
+        else {
+            panic!("an ID question is an element shape, got {v:?}");
+        };
+        assert_eq!(de, "3225");
+        assert_eq!(*shape, ValueShape::Format("950"));
+        // The qualifier is part of it: a `LOC+Z16` is not the Meldepunkt.
+        assert!(pattern.matches(&seg("LOC+172+41373559241'")));
+        assert!(!pattern.matches(&seg("LOC+Z16+41373559241'")));
+        // …and the shape is answered by the Formatbedingung registry.
+        assert!(shape.holds("41373559241"));
+        assert!(!shape.holds("DE0000000000000000000000000000042"));
+
+        let v = Voraussetzung::parse(
+            "Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Messlokation angegeben ist.",
+        )
+        .expect("reads");
+        assert!(matches!(
+            v,
+            Voraussetzung::ElementShape {
+                shape: ValueShape::Format("951"),
+                ..
+            }
+        ));
+        let v = Voraussetzung::parse(
+            "Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Steuerbaren Ressource angegeben ist",
+        )
+        .expect("reads");
+        assert!(matches!(
+            v,
+            Voraussetzung::ElementShape {
+                shape: ValueShape::Format("961"),
+                ..
+            }
+        ));
+        // An object the mapping does not know stays unparsed rather than
+        // becoming the wrong one.
+        assert!(
+            Voraussetzung::parse(
+                "Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Tranche angegeben ist"
+            )
+            .is_none()
+        );
+    }
+
+    /// „genau 11 Stellen" says a length and the check digit is not part of it.
+    #[test]
+    fn genau_n_stellen_is_a_length_and_not_an_identifier() {
+        let v = Voraussetzung::parse("Wenn Wert in SG6 LOC+172 DE3225 genau 11 Stellen")
+            .expect("reads");
+        let Voraussetzung::ElementShape {
+            ref shape, ref de, ..
+        } = v
+        else {
+            panic!("a length is an element shape");
+        };
+        assert_eq!(de, "3225");
+        assert_eq!(*shape, ValueShape::Length(11));
+        // `41373559242` is the BDEW worked example with a wrong check digit:
+        // `[950]` refuses it and „genau 11 Stellen" does not, because that is
+        // what the two sentences say.
+        assert!(shape.holds("41373559242"));
+        assert!(!ValueShape::Format("950").holds("41373559242"));
+        assert!(!shape.holds("DE0000000000000000000000000000042"));
+        let v = Voraussetzung::parse("Wenn Wert in SG6 LOC+172 DE3225 genau 33 Stellen")
+            .expect("reads");
+        assert!(matches!(
+            v,
+            Voraussetzung::ElementShape {
+                shape: ValueShape::Length(33),
+                ..
+            }
+        ));
     }
 }

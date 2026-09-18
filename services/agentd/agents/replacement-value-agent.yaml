@@ -119,7 +119,7 @@ spec:
       - name: replacement-value-escalation
         audience: [metering]
         priority: urgent
-        summary: Ersatzwertbildung needs metering-operations review.
+        summary: AI-generated. Ersatzwertbildung needs metering-operations review.
         when:
           - path: /substitution_status
             in: [PENDING_REVIEW, ESCALATED]

@@ -14,6 +14,7 @@ use edifact_rs::{Element as WireElement, OwnedSegment, Segment};
 
 use super::Profile;
 use super::conditions::{Status, Truth};
+use super::formatbedingung;
 use super::model::{Anwendungsfall, Element, ElementRule, SegmentNode};
 use super::structure::{Kind, NodeId};
 
@@ -147,6 +148,17 @@ struct Fixpoint {
     /// How many admitted codes to skip for a data element (`Nr`, DE) whose
     /// earlier choices the validator refused.
     skipped_codes: HashMap<(String, String), usize>,
+    /// Places whose drop was already taken back once.
+    ///
+    /// Dropping is a guess at which side of a mutual exclusion to keep, and
+    /// the guess can be wrong: UTILMD 55641 offers the `PIA+5` product data
+    /// with its three `SG10`s **or** the `CCI+11` details, and dropping from
+    /// the end takes out the `CCI+11` last — at which point the four places
+    /// dropped before it become `Muss` again. Without a way back they stay
+    /// out and the skeleton is missing four places its own column demands.
+    /// One reversal each is enough to settle it, and bounding it at one is
+    /// what stops the two sides trading places for ever.
+    undropped: HashSet<String>,
 }
 
 impl Fixpoint {
@@ -172,6 +184,13 @@ impl Fixpoint {
                     Some(de) => changed |= self.elements.insert((nr.to_owned(), de.to_owned())),
                     None if !self.dropped.contains(nr) => {
                         changed |= self.segments.insert(nr.to_owned());
+                    }
+                    // Dropped, and the column asks for it again: the exclusion
+                    // resolved the other way, so take the drop back — once.
+                    None if self.undropped.insert(nr.to_owned()) => {
+                        self.dropped.remove(nr);
+                        self.segments.insert(nr.to_owned());
+                        changed = true;
                     }
                     None => {}
                 }
@@ -585,7 +604,18 @@ impl Generator<'_> {
                     pin.map(|p| p.code.clone())
                 } else if self.fix.dropped_elements.contains(&key) {
                     None
-                } else if self.fix.elements.contains(&key) {
+                } else if self.fix.elements.contains(&key)
+                    // The fixpoint is keyed by place and data element, and a
+                    // composite may repeat one: `NAD` C059 carries DE 3042
+                    // four times. Forcing the key filled all four, three of
+                    // which the column does not list — so the next round
+                    // reported them not permitted, the round after dropped the
+                    // element again, and the one the column *does* ask for was
+                    // never emitted. Only an occurrence the column lists is
+                    // forced; where it lists none, the MIG is what asked and
+                    // every occurrence stands.
+                    && (rule.is_some() || !rules.iter().any(|r| r.de == comp.id))
+                {
                     Some(self.forced(layout, comp, rule, skip, &chosen, &values))
                 } else {
                     self.value(layout, comp, rule, composite_used, skip, &chosen, &values)
@@ -749,7 +779,10 @@ impl Generator<'_> {
             if el.is_code_list() {
                 return mig_code(el, skip);
             }
-            Some(self.synthetic(layout, el, chosen, current))
+            Some(fit_format(
+                rule,
+                self.synthetic(layout, el, chosen, current),
+            ))
         } else {
             None
         }
@@ -883,6 +916,43 @@ impl Generator<'_> {
 }
 
 /// The `skip`-th candidate, wrapping around.
+/// Replace a synthetic value the column's Formatbedingungen refuse.
+///
+/// [`Generator::synthetic`] is keyed on the data element, which is as far as
+/// the MIG goes: DE 3225 is „Identifikator" in every `LOC`, and only the AHB
+/// column says that *this* one wants a Zählpunktbezeichnung where the next
+/// wants a Marktlokations-ID. So where the column states a format, it decides —
+/// and where no candidate satisfies it, the synthetic value stands and
+/// validation reports the gap rather than the generator hiding it.
+fn fit_format(rule: &ElementRule, value: String) -> String {
+    let statuses: Vec<Status> = rule
+        .operands
+        .iter()
+        .filter(|o| o.code.is_none())
+        .filter_map(|o| Status::parse(&o.operand))
+        .filter(|s| s.kind.is_receiver_checkable())
+        .collect();
+    let exprs: Vec<&super::conditions::Expr> =
+        statuses.iter().filter_map(|s| s.expr.as_ref()).collect();
+    if exprs.is_empty() {
+        return value;
+    }
+    let accepted = |v: &str| {
+        exprs
+            .iter()
+            .all(|e| formatbedingung::truth(e, v) != Truth::False)
+    };
+    if accepted(&value) {
+        return value;
+    }
+    exprs
+        .iter()
+        .flat_map(|e| e.cited())
+        .filter_map(formatbedingung::example)
+        .find(|c| accepted(c))
+        .map_or(value, ToOwned::to_owned)
+}
+
 fn nth_code(codes: &[String], skip: usize) -> Option<String> {
     (!codes.is_empty()).then(|| codes[skip % codes.len()].clone())
 }

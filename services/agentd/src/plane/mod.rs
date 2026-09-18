@@ -40,6 +40,33 @@ use std::collections::BTreeMap;
 
 use agentplane::manifest::Manifest;
 
+/// How a worklist row says that a model wrote it.
+///
+/// Verordnung (EU) 2024/1689 Art. 50 binds the transparency duties from
+/// **02.08.2026**, and the Omnibus (Verordnung (EU) 2026/1744) leaves that date
+/// while giving the Abs. 2 marking duty on a system already on the market until
+/// **02.12.2026**. Whether an operator worklist is a system „interacting
+/// directly with natural persons" is genuinely arguable — and arguing it is the
+/// expensive answer. Saying so on the row is one line, and it holds whichever
+/// way the classification falls. [`AIFIRST.md`] carries the position.
+///
+/// **The machine-readable half already exists.** agentplane opens a triage task
+/// under the kind `agent.triage/<rule>`, so anything reading the worklist can
+/// tell an agent's row from a human's without parsing prose. What was missing
+/// is the half a person reads, and that is what this prefix is.
+///
+/// It belongs in the manifest rather than in code because the manifest's digest
+/// covers it: a disclosure a deployment could quietly drop is not one.
+///
+/// A **coded** specialist must not carry it. `deadline-alert-agent` and
+/// `gabi-gas-agent` are arithmetic written in Rust, with no model and no
+/// completion anywhere in the path; marking their rows as AI-generated would be
+/// a false statement in the direction that is worse, because it is the
+/// direction that teaches an operator to ignore the marking.
+///
+/// [`AIFIRST.md`]: ../../../../concepts/AIFIRST.md
+pub const MACHINE_GENERATED: &str = "AI-generated. ";
+
 /// Every specialist manifest, embedded at compile time and keyed by the name the
 /// document declares.
 ///
@@ -622,6 +649,77 @@ mod tests {
             "these specialists can report a terminal finding and tell nobody: {silent:?}. \
              Add an `oversight.triage` rule, or explain in the file why the finding needs \
              no human"
+        );
+    }
+
+    /// Every worklist row a model wrote says so, and no other row does.
+    ///
+    /// Verordnung (EU) 2024/1689 Art. 50 — see [`MACHINE_GENERATED`]. The
+    /// marking is a sentence in a manifest, which is exactly the kind of thing
+    /// a new specialist is added without: the duty is discharged by the set
+    /// being complete, so completeness is what is asserted rather than the
+    /// presence of any one line.
+    ///
+    /// Both directions. A missing marking is an undisclosed machine finding; a
+    /// marking on a **coded** specialist is a false disclosure, and the false
+    /// one is worse, because a marking that appears on rows a model never
+    /// touched is a marking an operator learns to skip.
+    #[test]
+    fn every_triage_row_a_model_writes_discloses_that_a_model_wrote_it() {
+        let mut undisclosed: Vec<String> = Vec::new();
+        let mut falsely_disclosed: Vec<String> = Vec::new();
+        let mut checked = 0usize;
+        for (name, m) in manifests() {
+            let model_backed = m.spec.execution.is_some();
+            for rule in m
+                .spec
+                .oversight
+                .as_ref()
+                .map(|o| o.triage.as_slice())
+                .unwrap_or_default()
+            {
+                checked += 1;
+                let marked = rule.summary.starts_with(MACHINE_GENERATED);
+                match (model_backed, marked) {
+                    (true, false) => undisclosed.push(format!("{name}/{}", rule.name)),
+                    (false, true) => falsely_disclosed.push(format!("{name}/{}", rule.name)),
+                    _ => {}
+                }
+            }
+        }
+        assert!(
+            checked > 10,
+            "found only {checked} triage rules — the manifests or the shape changed \
+             and this is looking at nothing"
+        );
+        assert!(
+            undisclosed.is_empty(),
+            "these worklist rows are written by a model and do not say so: {undisclosed:?}. \
+             Open the summary with `{MACHINE_GENERATED}` (Verordnung (EU) 2024/1689 Art. 50)"
+        );
+        assert!(
+            falsely_disclosed.is_empty(),
+            "these worklist rows say a model wrote them and no model was involved: \
+             {falsely_disclosed:?}. A coded specialist is arithmetic in Rust"
+        );
+        // agentplane refuses `oversight` on a manifest with no `execution`, so
+        // no shipped manifest can exercise the second arm and a green run says
+        // nothing about it. The classifier is asserted directly instead.
+        let discloses = |model_backed: bool, summary: &str| {
+            let marked = summary.starts_with(MACHINE_GENERATED);
+            (model_backed && !marked, !model_backed && marked)
+        };
+        assert_eq!(
+            discloses(true, "A dispute needs resolution."),
+            (true, false)
+        );
+        assert_eq!(
+            discloses(false, "AI-generated. A Frist has passed."),
+            (false, true)
+        );
+        assert_eq!(
+            discloses(true, "AI-generated. A dispute needs resolution."),
+            (false, false)
         );
     }
 

@@ -19,6 +19,12 @@
 //! - every `[n]` a status expression or an operand cites has its Bedingung text;
 //! - every status and operand that cites a Bedingung reads as an expression,
 //!   bar the truncations [`crate::profile_expressions::ALLOWLIST_FILE`] records;
+//! - every Formatbedingung `[9xx]` and Zeitpunktangabe `[UBn]` a binding
+//!   operand cites has an evaluator in `edi_energy::profile::formatbedingung`,
+//!   bar the [`UNEVALUATED_FORMATBEDINGUNGEN`] ratchet;
+//! - every profile on a regular Anwendungszeitpunkt states the
+//!   `publikationsdatum` Allgemeine Festlegungen 6.1d § 2.5 fixes for it, and an
+//!   ausserordentliche release states none;
 //! - the `source.sha256` matches the mirrored document when the mirror is here.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -84,6 +90,8 @@ struct Source {
     valid_from: String,
     #[serde(default)]
     valid_until: Option<String>,
+    #[serde(default)]
+    publikationsdatum: Option<String>,
     ahb_version: String,
     mig: String,
     ahb: String,
@@ -99,6 +107,8 @@ struct Mig {
     valid_from: String,
     #[serde(default)]
     valid_until: Option<String>,
+    #[serde(default)]
+    publikationsdatum: Option<String>,
     ahb_version: String,
     source: FileSource,
     structure: Vec<serde_json::Value>,
@@ -148,6 +158,130 @@ struct Manifest {
 struct ManifestEntry {
     #[serde(default)]
     sha256: Option<String>,
+}
+
+/// Formatbedingungen a binding place cites and
+/// [`edi_energy::profile::formatbedingung`] does not yet answer.
+///
+/// Each needs something its number alone does not give — a document outside the
+/// mirror, or state the single value does not carry. The list is a ratchet: it
+/// may only shrink, and [`unregistered_formatbedingungen`] refuses both a new
+/// number that is not here and a row here that has since gained an evaluator.
+const UNEVALUATED_FORMATBEDINGUNGEN: &[(&str, &str)] = &[
+    (
+        "911",
+        "„1 bis n, je Nachricht oder Segmentgruppe bei 1 beginnend und fortlaufend \
+         aufsteigend“ — the ascending half is a property of the whole message, and a \
+         per-value evaluator that checked only ≥ 1 would report a broken sequence as sound",
+    ),
+    (
+        "941",
+        "„Format: Artikelnummer“ — unlike [942]/[943]/[959] this names no shape, so what \
+         it admits is the Codeliste der Artikelnummern und Artikel-ID itself; that is a \
+         code-list import rather than an evaluator",
+    ),
+    (
+        "952",
+        "Gerätenummer nach DIN 43863-5 — the standard is sold by Beuth and is not in the \
+         mirror, so its shape cannot be sourced here",
+    ),
+    (
+        "967",
+        "Zertifikatskörper gemäß X.509.1 / BSI TR-03109-4 — a certificate parser, not a \
+         format screen",
+    ),
+];
+
+/// Every `[9xx]` a binding operand cites has an evaluator, or a reason not to.
+///
+/// A Formatbedingung or Zeitpunktangabe nothing evaluates is a silent permit
+/// on every message:
+/// [`edi_energy::profile::formatbedingung::evaluate`] returns `Unregistered`,
+/// the validator reads it as `Unknown`, and the place is admitted whatever it
+/// carries. Catching it here means it is refused once, at import, against the
+/// profile that introduced it — rather than never.
+fn unregistered_formatbedingungen(dir: &str, ahb: &serde_json::Value) -> Vec<String> {
+    use edi_energy::profile::formatbedingung;
+
+    let mut cited: BTreeMap<String, String> = BTreeMap::new();
+    for af in ahb
+        .get("anwendungsfaelle")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let pid = af
+            .get("pid")
+            .map_or_else(|| "?".to_owned(), std::string::ToString::to_string);
+        for el in af
+            .get("elements")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            let de = el.get("de").and_then(|v| v.as_str()).unwrap_or("?");
+            for op in el
+                .get("operands")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+            {
+                let Some(text) = op.get("operand").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                // Only a place the receiver may refuse: a `Soll` or `Kann`
+                // column states a format nobody checks either way.
+                if !matches!(text.split_whitespace().next(), Some("X" | "M")) {
+                    continue;
+                }
+                for id in format_ids(text) {
+                    cited.entry(id).or_insert_with(|| format!("{pid} DE {de}"));
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for (id, whence) in &cited {
+        if formatbedingung::is_registered(id) {
+            continue;
+        }
+        if UNEVALUATED_FORMATBEDINGUNGEN.iter().any(|(n, _)| n == id) {
+            continue;
+        }
+        out.push(format!(
+            "{dir}: Formatbedingung [{id}] is cited by a binding place ({whence}) and \
+             `formatbedingung::evaluate` does not answer it, so the value it \
+             constrains is admitted unchecked. Register an evaluator, or add [{id}] \
+             to `UNEVALUATED_FORMATBEDINGUNGEN` with the reason it cannot have one"
+        ));
+    }
+    out
+}
+
+/// The Formatbedingungen and Zeitpunktangaben an operand expression cites.
+///
+/// `[UB1]`–`[UB3]` are in because Allgemeine Festlegungen 6.1d Kap. 3.8 defines
+/// them as expressions over `[931]`–`[935]`: they constrain a value exactly as
+/// a `[9xx]` does, and leaving them out of the ratchet would leave 1 220
+/// binding places outside it.
+fn format_ids(text: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        rest = &rest[open + 1..];
+        let Some(close) = rest.find(']') else { break };
+        let id = &rest[..close];
+        rest = &rest[close + 1..];
+        let numbered =
+            id.len() == 3 && id.starts_with('9') && id.bytes().all(|b| b.is_ascii_digit());
+        let zeitpunkt =
+            id.len() == 3 && id.starts_with("UB") && id.ends_with(|c: char| c.is_ascii_digit());
+        if numbered || zeitpunkt {
+            out.insert(id.to_owned());
+        }
+    }
+    out
 }
 
 /// Every segment `Nr` in a MIG structure.
@@ -315,6 +449,36 @@ fn nrs(nodes: &[serde_json::Value], out: &mut BTreeSet<String>) {
 /// One profile's window and Prüfidentifikatoren: (dir, valid_from, valid_until, pids).
 type Span = (String, time::Date, Option<time::Date>, BTreeSet<u32>);
 
+/// The `publikationsdatum` Allgemeine Festlegungen 6.1d § 2.5 fixes for a
+/// profile applying on `valid_from`, or `None` for an ausserordentliche release.
+///
+/// § 2.5.1 and § 2.5.2 set one timetable each and there are only two: a release
+/// applying **01.10.** has its consulted documents published **01.04.**, and one
+/// applying **01.04.** publishes **01.10.** Six months is the Festlegung's own
+/// schedule, so for a regular Anwendungszeitpunkt the date is not observed — it
+/// is *entailed*, and a stored value that disagrees is a typo in one of the two
+/// fields.
+///
+/// An ausserordentliche release — mako carries 01.01.2026 and 06.06.2025 — sits
+/// outside both timetables. Its Veröffentlichungszeitpunkt is whatever BDEW
+/// chose and this function cannot derive it, which is why such a profile states
+/// none rather than a guessed one.
+///
+/// **This is why no release lead time can be computed from the field.** It
+/// restates `valid_from`; a metric over it would measure the Festlegung's
+/// schedule against itself. BDEW publishes no per-document publication date
+/// either — the catalogue carries a `publicationDate` column and leaves it empty
+/// on every record — so the figure has to come from when a profile actually
+/// entered this repository, which is git's to answer and not this file's.
+fn entailed_publikationsdatum(valid_from: &str) -> Option<String> {
+    let d = date(valid_from)?;
+    match (d.month() as u8, d.day()) {
+        (10, 1) => Some(format!("{}-04-01", d.year())),
+        (4, 1) => Some(format!("{}-10-01", d.year() - 1)),
+        _ => None,
+    }
+}
+
 fn load<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
     let raw = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     serde_json::from_str(&raw).map_err(|e| format!("{}: {e}", path.display()))
@@ -377,6 +541,33 @@ pub fn run(workspace_root: &str) -> bool {
                 continue;
             }
         };
+
+        // Allgemeine Festlegungen 6.1d § 2.5 — see `entailed_publikationsdatum`.
+        match (
+            entailed_publikationsdatum(&src.valid_from),
+            src.publikationsdatum.as_deref(),
+        ) {
+            (Some(entailed), Some(stated)) if stated != entailed => errors.push(format!(
+                "{dir}: publikationsdatum {stated} contradicts valid_from {}. \
+                 Allgemeine Festlegungen 6.1d § 2.5 publishes a release applying \
+                 {} on {entailed}; one of the two dates is a typo",
+                src.valid_from, src.valid_from,
+            )),
+            (Some(entailed), None) => errors.push(format!(
+                "{dir}: valid_from {} is a regular Anwendungszeitpunkt, so \
+                 Allgemeine Festlegungen 6.1d § 2.5 fixes its publikationsdatum at \
+                 {entailed} — state it",
+                src.valid_from,
+            )),
+            (None, Some(stated)) => errors.push(format!(
+                "{dir}: valid_from {} is an ausserordentliche Anwendungszeitpunkt, \
+                 which neither § 2.5.1 nor § 2.5.2 covers, so the stated \
+                 publikationsdatum {stated} is not entailed by anything. Remove it, \
+                 or carry the date the document itself names",
+                src.valid_from,
+            )),
+            _ => {}
+        }
         let message_type = ty.to_ascii_uppercase();
         let mig: Mig = match load(&profiles.join(dir).join("mig.json")) {
             Ok(m) => m,
@@ -416,6 +607,7 @@ pub fn run(workspace_root: &str) -> bool {
                     ));
                 }
                 errors.extend(codes_cited_by_conditions_exist(dir, &raw, &mig));
+                errors.extend(unregistered_formatbedingungen(dir, &raw));
             }
             Err(e) => errors.push(format!("{dir}: {e}")),
         }
@@ -443,6 +635,15 @@ pub fn run(workspace_root: &str) -> bool {
         }
         if mig.valid_from != src.valid_from || mig.valid_until != src.valid_until {
             e("valid_from/valid_until do not match sources.json".into());
+        }
+        // `import-profiles` copies this across, but it only proves the copy
+        // where the document mirror is — and the mirror is gitignored, so on a
+        // CI checkout that comparison skips. Here it runs everywhere.
+        if mig.publikationsdatum != src.publikationsdatum {
+            e(format!(
+                "publikationsdatum {:?} does not match sources.json {:?}",
+                mig.publikationsdatum, src.publikationsdatum
+            ));
         }
         if mig.ahb_version != src.ahb_version || ahb.ahb_version != src.ahb_version {
             e(format!(
@@ -587,4 +788,120 @@ pub fn run(workspace_root: &str) -> bool {
         errors.len()
     );
     errors.is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{UNEVALUATED_FORMATBEDINGUNGEN, entailed_publikationsdatum, format_ids};
+
+    /// The exemption list only shrinks.
+    ///
+    /// `unregistered_formatbedingungen` catches a number that gains no
+    /// evaluator; this catches the other direction, which no run of the guard
+    /// can see — a row left standing after its evaluator was written. Without
+    /// it the list becomes a place a registered number can hide.
+    #[test]
+    fn an_exemption_whose_evaluator_exists_is_refused() {
+        for (id, _) in UNEVALUATED_FORMATBEDINGUNGEN {
+            assert!(
+                !edi_energy::profile::formatbedingung::is_registered(id),
+                "[{id}] has an evaluator now — delete its row from \
+                 UNEVALUATED_FORMATBEDINGUNGEN"
+            );
+        }
+    }
+
+    /// A reason is worth nothing if it describes a number no AHB cites.
+    #[test]
+    fn every_exemption_is_still_cited_by_a_binding_place() {
+        let profiles = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .join(super::PROFILES_DIR);
+        let mut cited = std::collections::BTreeSet::new();
+        let mut seen_profiles = 0;
+        for ty in std::fs::read_dir(&profiles).into_iter().flatten().flatten() {
+            for fv in std::fs::read_dir(ty.path()).into_iter().flatten().flatten() {
+                let Ok(text) = std::fs::read_to_string(fv.path().join("ahb.json")) else {
+                    continue;
+                };
+                seen_profiles += 1;
+                let Ok(raw) = serde_json::from_str::<serde_json::Value>(&text) else {
+                    continue;
+                };
+                for af in raw["anwendungsfaelle"].as_array().into_iter().flatten() {
+                    for el in af["elements"].as_array().into_iter().flatten() {
+                        for op in el["operands"].as_array().into_iter().flatten() {
+                            let Some(t) = op["operand"].as_str() else {
+                                continue;
+                            };
+                            if matches!(t.split_whitespace().next(), Some("X" | "M")) {
+                                cited.extend(format_ids(t));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(seen_profiles > 20, "read only {seen_profiles} profiles");
+        for (id, _) in UNEVALUATED_FORMATBEDINGUNGEN {
+            assert!(
+                cited.contains(*id),
+                "[{id}] is exempted but no binding place cites it — delete the row"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_nine_hundred_number_or_a_ub_constrains_a_value() {
+        let ids = format_ids("X [914] ∧ [937] [22] ∨ [2000] ∧ [1P0..1] [UB1]");
+        assert_eq!(
+            ids.into_iter().collect::<Vec<_>>(),
+            vec!["914".to_owned(), "937".to_owned(), "UB1".to_owned()]
+        );
+    }
+
+    /// Allgemeine Festlegungen 6.1d § 2.5.1 — a release applying **01.10.** has
+    /// its consulted documents published **01.04.** of the same year.
+    #[test]
+    fn an_october_release_publishes_in_april_of_the_same_year() {
+        assert_eq!(
+            entailed_publikationsdatum("2026-10-01").as_deref(),
+            Some("2026-04-01")
+        );
+    }
+
+    /// § 2.5.2 — a release applying **01.04.** publishes **01.10.** of the year
+    /// before. The year decrement is the half a six-month subtraction written by
+    /// hand gets wrong.
+    #[test]
+    fn an_april_release_publishes_in_october_of_the_year_before() {
+        assert_eq!(
+            entailed_publikationsdatum("2026-04-01").as_deref(),
+            Some("2025-10-01")
+        );
+    }
+
+    /// An ausserordentliche release sits outside both timetables, so nothing is
+    /// entailed and the profile states no `publikationsdatum` rather than a
+    /// guessed one. mako carries two: 01.01.2026 and 06.06.2025.
+    #[test]
+    fn an_ausserordentliche_release_entails_no_publication_date() {
+        assert_eq!(entailed_publikationsdatum("2026-01-01"), None);
+        assert_eq!(entailed_publikationsdatum("2025-06-06"), None);
+    }
+
+    /// The input a passing run would never show: a date six months off in the
+    /// wrong direction still reads as plausible, and only the timetable says
+    /// which of the pair is wrong.
+    #[test]
+    fn a_plausible_wrong_date_is_not_what_the_timetable_entails() {
+        // Naively "valid_from minus six months" with the year left alone.
+        assert_ne!(
+            entailed_publikationsdatum("2026-04-01").as_deref(),
+            Some("2026-10-01")
+        );
+        // An unparseable date entails nothing rather than defaulting.
+        assert_eq!(entailed_publikationsdatum("not-a-date"), None);
+    }
 }

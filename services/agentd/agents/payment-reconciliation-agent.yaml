@@ -220,7 +220,7 @@ spec:
         audience: [credit-control]
         priority: urgent
         summary: >-
-          Arrears have reached the § 41f Abs. 3 threshold. A human decides whether the disconnection sequence opens — accountingd dispatches it, this row is the review before that.
+          AI-generated. Arrears have reached the § 41f Abs. 3 threshold. A human decides whether the disconnection sequence opens — accountingd dispatches it, this row is the review before that.
         when:
           - path: /payment_status
             equals: "SPERR_REQUIRED"
@@ -242,7 +242,7 @@ spec:
         audience: [credit-control, billing-compliance]
         priority: urgent
         summary: >-
-          The §§ 41f/41g EnWG disconnection sequence is out of order for this customer. An interruption executed on it would be unlawful, and the sequence has to be restarted from the step the finding names.
+          AI-generated. The §§ 41f/41g EnWG disconnection sequence is out of order for this customer. An interruption executed on it would be unlawful, and the sequence has to be restarted from the step the finding names.
         when:
           - path: /sperr_sequence/compliant
             equals: "BLOCKED"

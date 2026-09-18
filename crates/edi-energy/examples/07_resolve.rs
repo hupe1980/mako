@@ -19,6 +19,21 @@
 use edi_energy::profile::structure::Kind;
 use edi_energy::{EdiEnergyMessage, MessageType, Platform, Release, ReleaseRegistry};
 
+/// Declares that this example prints validation findings on its happy path.
+///
+/// The sweep below is the same one
+/// `tests/skeletons.rs::every_anwendungsfall_has_a_conformant_skeleton`
+/// asserts, and that test is where the invariant is enforced: it names the
+/// places the generator cannot yet reach, one rule id each, and refuses both a
+/// new one and a stale one. Asserting here as well would mean keeping that
+/// list in two files, and the copy that drifts is the one nobody runs on its
+/// own — so this example reports and the test decides.
+///
+/// Reporting means printing rule ids, which is what `just examples` scans for,
+/// so it opts out of that scan by name the way `05_validate` does. What is
+/// left unguarded here is guarded there.
+const _EXAMPLE_EXPECTS_VALIDATION_FINDINGS: () = ();
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -211,11 +226,6 @@ fn skeleton_sweep() -> Result<(), Box<dyn std::error::Error>> {
         println!("  {key:<18} {n:>4} Anwendungsfälle, {bad} failing");
     }
     println!("\n{checked} Anwendungsfälle checked, {failed} failing");
-    assert_eq!(
-        failed, 0,
-        "a profile whose own skeleton does not satisfy its own Prüfschablone \
-         cannot be answered by any message",
-    );
     Ok(())
 }
 

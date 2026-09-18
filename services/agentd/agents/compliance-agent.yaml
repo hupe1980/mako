@@ -166,7 +166,7 @@ spec:
         audience: [regulatory]
         priority: urgent
         summary: >-
-          §20 Abs. 1 EnWG parity deviation between market roles. BNetzA-reportable — confirm before the next Diskriminierungsbericht.
+          AI-generated. §20 Abs. 1 EnWG parity deviation between market roles. BNetzA-reportable — confirm before the next Diskriminierungsbericht.
         when:
           - path: /parity_status
             equals: "VIOLATION"

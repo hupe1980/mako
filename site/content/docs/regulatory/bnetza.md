@@ -324,9 +324,9 @@ keine Antwortfrist; die Abmeldung hat dafür **7 WT** (Kap. 3.2.2).
 |---|---|---|
 | GPKE (Strom) | **11:00 / 06:00 / 05:00 / 09:00 Uhr des 1. WT nach dem ÜT**, je Prüfidentifikator | `FristShape::WerktagAt` |
 | GPKE Neuanlage (55600/55601) | **00:00 Uhr des 61. WT nach dem ÜT** — der tägliche Prüflauf nach `E_0608` läuft 60 WT | `FristShape::WerktagAt` |
-| GPKE Sperrung (17115/17117/39000) | **spätester ÜT ist der 1. WT nach dem ÜT** | `FristShape::WerktageAtCutoff` |
-| GPKE Teil 4 Stammdaten-Rückmeldung | **2. WT nach dem ÜT**; die *Bestellung* 10 WT | `FristShape::WerktageAtCutoff` |
-| WiM (Strom) | **3 / 5 / 7 / 1 Werktage** je PID | `FristShape::WerktageAtCutoff` |
+| GPKE Sperrung (17115/17117/39000) | **spätester ÜT ist der 1. WT nach dem ÜT** | `FristShape::EndOfWerktag` |
+| GPKE Teil 4 Stammdaten-Rückmeldung | **2. WT nach dem ÜT**; die *Bestellung* 10 WT | `FristShape::EndOfWerktag` |
+| WiM (Strom) | **3 / 5 / 7 / 1 Werktage** je PID | `FristShape::EndOfWerktag` |
 | GeLi Gas | **Ablauf des 4. / 3. / 2. Werktags** je Prozess | `FristShape::EndOfWerktag` |
 
 Alle vier Familien stehen in **einer** Tabelle, `mako_fristen::antwort` — `makod`

@@ -133,7 +133,7 @@ spec:
       - name: msb-history-conflict
         audience: [metering]
         priority: urgent
-        summary: Metering history contains a conflicting operator or lifecycle state.
+        summary: AI-generated. Metering history contains a conflicting operator or lifecycle state.
         when:
           - path: /msb_status
             in: [CONFLICT]

@@ -218,7 +218,24 @@ Voraussetzungen against the message. A finding names the place:
 ```text
 [AHB-55001-SG6-00057-MISSING]  segment group SG6 „Prüfidentifikator" (Nr 00057) is Muss for 55001 in SG4 but missing
 [MIG-00050-LOC-3225-FORMAT]    LOC (Nr 00050): DE 3225 „Marktlokations-ID" is "BADID", the MIG says n11
+[FMT-44001-00077-QTY-6060-938] QTY (Nr 00077): DE 6060 „Menge" is 100, not ≤ 10 — Formatbedingung [938] of 44001
 ```
+
+### Formatbedingungen are keyed on the number, not the sentence
+
+`[901]`–`[999]` constrain a *value* rather than whether a place appears, and
+Allgemeine Festlegungen 6.1d Kap. 6.4 makes a number mean the same thing in
+every message type. So `profile::formatbedingung` is a registry keyed on the
+number: a new AHB citing `[950]` at a new place is checked without any new code,
+and a Bedingungstext the PDF column mangled still evaluates. The Zeitpunktangaben
+`[UB1]`–`[UB3]` are in it too, because Kap. 3.8 defines them as expressions over
+`[931]`–`[935]`. A number with no evaluator permits, and `cargo xtask
+validate-profiles` refuses a profile that introduces one at a binding place.
+
+The registry also supplies the *example* for each condition, which is how
+`Profile::skeleton` knows that this `LOC` wants a Zählpunktbezeichnung where the
+next wants a Marktlokations-ID — the MIG calls both DE 3225 „Identifikator", and
+only the AHB column distinguishes them.
 
 The same profile answers what a sender has to fill:
 
@@ -264,10 +281,14 @@ from the two halves alone would merge „STS+Z21 DE9013" as readily as it repair
 So the repair is limited to the case where the evidence is local: where the
 break falls after a separator, `join_wrapped_pattern` rejoins a space that
 follows `+`, `-`, `:` or `/` inside a token that already looks like `TAG+…`
-(`PIA+5+1- 1?:1.9.0` → `PIA+5+1-1?:1.9.0`). `/` matters most — it separates the
-alternatives of one code list (`SEQ+Z04/ ZF7`) and the AHBs set a space after it
-for readability, so left in, everything after the space reads as prose and the
-Voraussetzung matches only the first alternative.
+(`PIA+5+1- 1?:1.9.0` → `PIA+5+1-1?:1.9.0`). `/` matters most, and it carries two
+meanings the reader has to tell apart. Between codes it separates the
+**alternatives** of one code list (`SEQ+Z04/ ZF7`), and the AHBs set a space
+after it for readability — left in, everything after the space reads as prose
+and the Voraussetzung matches only the first alternative. Before another
+three-letter tag it is a **path**: `CCI+Z66/CAV+ZH9` is a `CAV+ZH9` inside a
+`CCI+Z66`, and reading it as a code list produces a pattern nothing on the wire
+matches. `split_path` decides by what follows the slash.
 
 What is left is a residual: a wrap swallowed the *next* Bedingung's number,
 leaving its label stranded on the end of the previous text
@@ -277,7 +298,8 @@ UTILMD profiles (`fv20251001`, `fv20261001`), so ten entries. None changes a
 verdict: the stranded tail follows a complete clause, so
 `Voraussetzung::parse` reads the first one and stops, and the five are three
 Formatbedingungen, a Hinweis (`[683]`) and one Voraussetzung (`[50]`), none of
-which gate presence on the strength of the swallowed half.
+which gate presence on the strength of the swallowed half — and the three
+Formatbedingungen are evaluated from their number, not from the mangled text.
 `cargo xtask validate-profiles` cannot see it either: its citation check asks
 whether every cited `[n]` has a text, and the swallowed number is still cited —
 and still has text — elsewhere.

@@ -232,6 +232,7 @@
       "track": "Strom",
       "valid_from": "2025-10-01",
       "valid_until": "2026-09-30",
+      "publikationsdatum": "2025-04-01",
       "ahb_version": "2.1",
       "mig": "UTILMD_MIG_Strom_S2.1_-_konsolidierte_Lesefassung_Stand_02.03.2026.pdf",
       "ahb": "UTILMD_AHB_Strom_2.1_-_konsolidierte_Lesefassung_mit_Fehlerkorrekturen_Stand_29.06.2026.pdf"

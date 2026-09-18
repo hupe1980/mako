@@ -98,7 +98,7 @@ spec:
       - name: billing-dispute
         audience: [billing-operations, billing-compliance]
         priority: urgent
-        summary: A valid dispute or network-operator billing error requires resolution.
+        summary: AI-generated. A valid dispute or network-operator billing error requires resolution.
         when:
           - path: /dispute_status
             in: [VALID_DISPUTE, NB_ERROR]

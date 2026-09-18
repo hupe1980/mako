@@ -286,7 +286,7 @@ Pass 5  Cancellation sign reversal   (Stornorechnung)
 | [`en16931-formats`](https://crates.io/crates/en16931-formats) | `0.7` | EN 16931 renderers over that model — XRechnung/CII, PEPPOL UBL and the ZUGFeRD carrier |
 | [`sepa`](https://crates.io/crates/sepa) | `0.7` | SEPA payment utilities — IBAN/BIC validation, pain.001/008/007 generation, camt.05x and pain.002 parsing |
 | [`metering`](https://crates.io/crates/metering) | `0.23` | German energy metering domain — intervals, aggregation, gap filling, quality scoring, GGV allocation |
-| [`meterstore`](https://crates.io/crates/meterstore) | `0.11` | Metering time-series store beneath `edmd` — hot PostgreSQL window, settled Iceberg V2 history, version resolution |
+| [`meterstore`](https://crates.io/crates/meterstore) | `0.13` | Metering time-series store beneath `edmd` — hot PostgreSQL window, settled Iceberg V2 history, version resolution. `file://` and `memory://` warehouses reach `iceberg`'s own factories, so a default build links no OpenDAL, XML parser or second TLS stack; the cloud object stores carry them |
 | [`doubleentry`](https://crates.io/crates/doubleentry) | `0.7` | Double-entry ledger — append-only BLAKE3 Merkle log, inclusion and consistency proofs, period seals |
 | [`rubo4e`](https://crates.io/crates/rubo4e) | `0.14` | BO4E business-object types — the `rubo4e::current` versioned schema with validation |
 | [`agentplane`](https://crates.io/crates/agentplane) | `0.29` | Durable agent runtime behind `agentd` — journaled effects, typed manifests, human triage |

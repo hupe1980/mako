@@ -165,7 +165,7 @@ spec:
         audience: [billing-operations]
         priority: urgent
         summary: >-
-          An issued invoice deviates from the rolling baseline by more than 50%. Investigate and decide whether correction is required.
+          AI-generated. An issued invoice deviates from the rolling baseline by more than 50%. Investigate and decide whether correction is required.
         when:
           - path: /severity
             equals: "CRITICAL"

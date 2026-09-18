@@ -450,3 +450,91 @@ fn conformance_comdis_valid() {
 fn conformance_utilts_valid() {
     run_valid_fixtures("utilts");
 }
+
+/// The Meldepunkt's own ID decides which Prüfschablone branch applies, and a
+/// rule that says so has to change a verdict.
+///
+/// QUOTES 15005 lists three `SG27` „Erforderliches Produkt" branches —
+/// `[56]` Messlokation, `[57]` Netzlokation, `[58]` Steuerbare Ressource — and
+/// names no branch for a Marktlokation. Every one of those Bedingungen is a
+/// statement about the *value* in `LOC+172` DE 3225, which is what
+/// [`Voraussetzung::ElementShape`] reads. Until it did, all three evaluated to
+/// `Unknown`, the `SG27` was never demanded, and a 15005 answering about a
+/// Messlokation without its Angebotsposition validated clean.
+///
+/// So this drives the same message twice and changes one value. The floor in
+/// `extraction_fidelity` proves the rule still *parses*; this proves it still
+/// *decides*.
+#[cfg(feature = "quotes")]
+#[test]
+fn the_meldepunkt_id_selects_the_sg27_branch() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/quotes/valid/pid_15005_1_3b.edi");
+    let melo = std::fs::read_to_string(&path).expect("the 15005 fixture");
+    assert!(
+        melo.contains("LOC+172+DE00056266802AO6G56M11SN51G21M24S'"),
+        "the fixture names a Messlokation by its Zählpunktbezeichnung"
+    );
+    // The same message about a Marktlokation: `41373559241` is the worked
+    // example in the BDEW Anwendungshilfe „Identifikatoren".
+    let malo = melo.replace("DE00056266802AO6G56M11SN51G21M24S", "41373559241");
+
+    let profile = edi_energy::ReleaseRegistry::global()
+        .profiles_for(edi_energy::MessageType::Quotes)
+        .find(|p| p.release().as_str() == "1.3b")
+        .expect("QUOTES 1.3b is shipped");
+    let pid = edi_energy::Pruefidentifikator::new(15005).ok();
+
+    let judge = |wire: &str| -> Vec<String> {
+        // The Prüfschablone is about `UNH…UNT`; the interchange envelope is
+        // the transport's.
+        let segs: Vec<edifact_rs::OwnedSegment> = edifact_rs::from_bytes(wire.as_bytes())
+            .map(|s| s.map(edifact_rs::Segment::into_owned))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("the fixture parses")
+            .into_iter()
+            .filter(|s| !matches!(s.tag.as_ref(), "UNB" | "UNZ"))
+            .collect();
+        profile
+            .validate(&segs, pid)
+            .iter()
+            .filter_map(|i| i.rule_id().map(str::to_owned))
+            .collect()
+    };
+
+    // With the Messlokation named, `[56]` holds and its SG27 is Muss — the
+    // fixture carries it, so nothing is reported.
+    assert!(
+        judge(&melo).is_empty(),
+        "the Messlokation branch is satisfied: {:?}",
+        judge(&melo)
+    );
+
+    // With a Marktlokations-ID, none of the three Bedingungen holds, so the
+    // SG27 the fixture still carries is not part of this column.
+    let with_malo = judge(&malo);
+    assert!(
+        with_malo
+            .iter()
+            .any(|r| r.starts_with("AHB-15005-SG27-") && r.ends_with("-NOT-PERMITTED")),
+        "a Marktlokations-ID selects no SG27 branch, so the group is not \
+         permitted — got {with_malo:?}"
+    );
+
+    // Deleting the SG27 with the Messlokation named brings the demand back.
+    let without = melo
+        .lines()
+        .filter(|l| {
+            !l.starts_with("LIN+")
+                && !l.starts_with("PIA+")
+                && !l.starts_with("PRI+")
+                && !l.starts_with("RNG+")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let missing = judge(&without);
+    assert!(
+        missing.iter().any(|r| r == "AHB-15005-SG27-00075-MISSING"),
+        "[56] demands the Messlokation SG27 — got {missing:?}"
+    );
+}

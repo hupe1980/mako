@@ -170,7 +170,7 @@ spec:
         audience: [billing-operations]
         priority: high
         summary: >-
-          The annual settlement cannot be issued. § 40c Abs. 2 EnWG requires it within six weeks of the abgerechneter Zeitraum ending — and within six weeks of the Lieferverhältnis ending where this is an Abschlussrechnung.
+          AI-generated. The annual settlement cannot be issued. § 40c Abs. 2 EnWG requires it within six weeks of the abgerechneter Zeitraum ending — and within six weeks of the Lieferverhältnis ending where this is an Abschlussrechnung.
         when:
           - path: /compliance_status
             equals: "BLOCKED"

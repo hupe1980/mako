@@ -27,12 +27,15 @@ mako-wim   = { workspace = true }
 metering  = { workspace = true, features = ["serde"] }
 # `default-features = false` drops meterstore's `rest-catalog` default
 # (`iceberg-catalog-rest`): edmd constructs its cold tier with a `SqlCatalog`, not
-# the REST *client*. `catalog-facade` is the read-only Iceberg REST *server* edmd
-# mounts so external engines (DuckDB/Spark/Trino/PyIceberg) can read the cold tier
-# directly — it pulls only `axum` (already a dep), not `reqwest`. `object-store-all`
-# enables meterstore's S3/GCS/Azure cold-tier backends: meterstore owns the whole
-# Iceberg catalog stack now, so edmd links none of it directly (see below).
-meterstore = { version = "0.11", default-features = false, features = ["catalog-facade", "object-store-all"] }
+# the REST *client* — so `sql-catalog` is named back, because that is the feature
+# `meterstore::IcebergSqlCatalog` sits behind and `store.rs` builds one.
+# `catalog-facade` is the read-only Iceberg REST *server* edmd mounts so external
+# engines (DuckDB/Spark/Trino/PyIceberg) can read the cold tier directly — it
+# pulls only `axum` (already a dep), not `reqwest`. `object-store-all` enables
+# meterstore's S3/GCS/Azure cold-tier backends: meterstore owns the whole Iceberg
+# catalog stack now, so edmd links none of it directly (see below). `file://` and
+# `memory://` warehouses need none of them and reach `iceberg`'s own factories.
+meterstore = { version = "0.13", default-features = false, features = ["catalog-facade", "object-store-all", "sql-catalog"] }
 rubo4e     = { workspace = true }
 
 anyhow             = { workspace = true }

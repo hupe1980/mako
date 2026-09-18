@@ -377,7 +377,8 @@ impl DeadlineTriage {
         .map_err(|e| SkillError::Other(format!("register the triage obligation: {e}")))?;
 
         let summary = format!(
-            "{} MaKo process(es) are past their Frist{}. The window has closed, so this row              reports what was missed rather than gating anything.",
+            "{} MaKo process(es) are past their Frist{}. The window has closed, so \
+             this row reports what was missed rather than gating anything.",
             breached.len(),
             if unclassifiable > 0 {
                 format!(", and {unclassifiable} more carry a deadline mako could not read")

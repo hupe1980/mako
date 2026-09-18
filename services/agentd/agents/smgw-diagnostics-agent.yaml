@@ -176,7 +176,7 @@ spec:
         audience: [metering]
         priority: high
         summary: >-
-          A Smart-Meter-Gateway is in a critical state — an expiring TLS certificate or a broken CLS session stops §14a EnWG Steuerung and iMSys readings both.
+          AI-generated. A Smart-Meter-Gateway is in a critical state — an expiring TLS certificate or a broken CLS session stops §14a EnWG Steuerung and iMSys readings both.
         when:
           - path: /smgw_status
             equals: "CRITICAL"

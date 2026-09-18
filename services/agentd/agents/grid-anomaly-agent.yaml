@@ -157,7 +157,7 @@ spec:
         audience: [grid-operations]
         priority: high
         summary: >-
-          A MaLo has no NB grid assignment. Any NB STP Anmeldung for it fails processd check 5 until the grid PUT is provisioned.
+          AI-generated. A MaLo has no NB grid assignment. Any NB STP Anmeldung for it fails processd check 5 until the grid PUT is provisioned.
         when:
           - path: /grid_status
             equals: "MISSING"

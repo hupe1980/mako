@@ -137,7 +137,7 @@ REMADV is **not** in the 2026-10-01 release: BDEW published no REMADV AHB or MIG
 with that Anwendungszeitpunkt, so `remadv/fv20260401` (AHB 1.0a / MIG 2.9e) stays
 binding. `crates/edi-energy/profiles/sources.json` is the authority for every row.
 
-The `fv` date is the **Anwendungszeitpunkt**, six months after the document's Publikationsdatum (Allgemeine Festlegungen 6.1d §2.5). `mig.json` carries both: `publikationsdatum` (source metadata) and `valid_from` (normative).
+The `fv` date is the **Anwendungszeitpunkt**. Allgemeine Festlegungen 6.1d §2.5 runs two Änderungsmanagement cycles and only two — a release applying 01.10. publishes 01.04., one applying 01.04. publishes 01.10. — so `publikationsdatum` is **entailed by `valid_from`**, not observed, and an ausserordentliche release (mako carries 01.01.2026 and 06.06.2025) states none because neither timetable covers it. `validate-profiles` holds the entailment both ways. Do not compute a release lead time from the field: it restates the schedule, and BDEW leaves its own `publicationDate` column empty on every catalogue record.
 
 Message types untouched by a release keep their previous profile. Multiple format
 versions coexist in the same engine instance simultaneously. A process started under

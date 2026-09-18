@@ -376,9 +376,13 @@ Anwendungszeitpunkt; the latest consolidated version is the one to implement.
 cargo xtask validate-profiles          # prints gaps and overlaps
 ```
 
-One exception to the six-month rule, by regulation rather than cycle:
-`contrl`/`insrpt` run on the ausserordentliche Veröffentlichung of 11.12.2025
-(applies 2026-01-01). Those profiles state no `publikationsdatum`.
+The six-month gap is § 2.5's own timetable, so `publikationsdatum` is entailed
+by `valid_from` rather than looked up, and `validate-profiles` refuses a profile
+that states neither or states one that disagrees. The exception is by regulation
+rather than cycle: `contrl`/`insrpt` run on the ausserordentliche
+Veröffentlichung of 11.12.2025 (applies 2026-01-01), which neither § 2.5.1 nor
+§ 2.5.2 covers, so those profiles state no `publikationsdatum` — a stated one
+there would be a guess.
 
 ### Date or wire code?
 

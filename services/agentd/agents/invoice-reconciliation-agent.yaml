@@ -133,7 +133,7 @@ spec:
         audience: [credit-control]
         priority: urgent
         summary: >-
-          An unpaid invoice has reached the disconnection threshold. Review before the §41f sequence opens.
+          AI-generated. An unpaid invoice has reached the disconnection threshold. Review before the §41f sequence opens.
         when:
           - path: /escalation_level
             equals: "SPERR"

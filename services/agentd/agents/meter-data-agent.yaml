@@ -164,7 +164,7 @@ spec:
         audience: [metering]
         priority: high
         summary: >-
-          Metering data is missing for a billing period. §60 Abs. 2 MsbG substitution needs an operator decision before the Rechnung is built.
+          AI-generated. Metering data is missing for a billing period. §60 Abs. 2 MsbG substitution needs an operator decision before the Rechnung is built.
         when:
           - path: /data_status
             equals: "MISSING"

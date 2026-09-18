@@ -126,7 +126,7 @@ spec:
         audience: [marktkommunikation]
         priority: normal
         summary: >-
-          A process was rejected. Repeated rejections move the STP rate BNetzA monitors.
+          AI-generated. A process was rejected. Repeated rejections move the STP rate BNetzA monitors.
         when:
           - path: /decision
             equals: "REJECTED"

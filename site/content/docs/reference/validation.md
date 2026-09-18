@@ -49,6 +49,7 @@ flowchart LR
 | **1 — MIG** | Structure, cardinality, Segmentlayout, code lists | `MIG-` |
 | **2 — AHB** | The Prüfschablone of the selected column | `AHB-` |
 | **3 — Semantic** | Cross-field rules the documents state in prose | `SEM-` |
+| **Formatbedingung** | What the column says about a *value*, across all layers | `FMT-` |
 
 **Layer 1** resolves every segment to its *place* in the Nachrichtenstruktur —
 the MIG's running number `Nr`, of which `SG5 LOC+Z16` and `SG5 LOC+Z17` are two
@@ -213,7 +214,7 @@ for issue in report.issues_for_rule_id("MIG-UTILMD-DTM-137") { /* ... */ }
 ```
 
 The rule identifier carries the layer, so a prefix is also how you select one:
-`"AHB-"`, `"MIG-"`, `"SEM-"`.
+`"AHB-"`, `"MIG-"`, `"SEM-"`, `"FMT-"`.
 
 ### Converting to `Result`
 
@@ -333,6 +334,7 @@ rule can be looked up in the profile and in the published document.
 | `AHB-{PID}-{Nr}-{TAG}-{DE}-PAKET-MIN`, `…-PAKET-MAX` | a code marked by a Paket appears fewer/more times than the Paketmerkmal `a..b` allows |
 | `AHB-UNKNOWN-PID` | the Prüfidentifikator is not a column of this profile — AHB rules were not applied (warning) |
 | `AHB-SKIP-NO-PID` | no column could be selected (warning) |
+| `FMT-{PID}-{Nr}-{TAG}-{DE}-{n}` | the value does not satisfy Formatbedingung `[n]` or Zeitpunktangabe `[UBn]` the column attaches to the place (warning) |
 
 `{PID}` is the Prüfidentifikator. CONTRL is the one message type whose AHB
 publishes no Prüfidentifikatoren, so its three columns are named `col1`, `col2`,
@@ -347,7 +349,38 @@ AHB-55240-00109-SEQ-NOT-PERMITTED   # 55240 does not list SG8 SEQ „Daten der M
 AHB-55242-SG5-00047-MISSING         # 55242: SG5 (LOC Marktlokation) is Muss but absent
 MIG-00050-LOC-3225-FORMAT           # SG5 LOC DE 3225 is not an n11
 AHB-col3-00002-UCI-MISSING          # CONTRL column 3: UCI is Muss but absent
+FMT-44001-00077-QTY-6060-938        # 44001: a Gemeinderabatt of 100 %, where [938] admits ≤ 10
 ```
+
+### Formatbedingungen
+
+`[901]`–`[999]` say what a *value* must look like — `[931]` „ZZZ = +00", `[950]`
+„Marktlokations-ID", `[937]` „keine Nachkommastelle". They never decide whether
+a place appears, which is why they are not layer 2: a Formatbedingung is read
+off the same column but answers a different question, and it is checked wherever
+the place carries a value.
+
+`[UB1]`–`[UB3]` belong here too. Allgemeine Festlegungen 6.1d Kap. 3.8 defines
+each as an expression over `[931]`–`[935]` — a Beginn- or Ende-Zeitpunkt written
+in UTC sits on the day boundary in gesetzlicher deutscher Zeit, so `HHMM` is
+`2200` in MESZ and `2300` in MEZ, and `0400`/`0500` for the Gas-Tag's 06:00.
+`[UB3]` chooses between the two by the recipient's Sparte, which a single value
+does not carry, so it admits either.
+
+The reading is the operand's own expression, not the list of numbers it cites.
+Allgemeine Festlegungen 6.1d Kap. 6.8.5 prints `X ([951] [503] ∧ [505]) ∨
+([950] [504] ∧ [506])` — a Zählpunktbezeichnung *or* a Marktlokations-ID — so
+`∨` admits either and `∧` demands both, while the Voraussetzungen and Hinweise
+beside them impose no format of their own.
+
+A number mako has no evaluator for permits: the verdict is unknown, never a
+refusal. Which numbers those are is fixed at import rather than left to run
+time — `cargo xtask validate-profiles` refuses a profile citing an
+unregistered `[9xx]` at a binding place, against a list that only shrinks.
+
+`FMT-` findings are **warnings**. The verdicts are new, and one that refuses a
+counterparty message accepted today is a change to make after a release has been
+read, not before.
 
 **A rule id is only meaningful together with the Formatversion.** The `Nr` is the
 MIG's running number, and BDEW renumbers when a place is inserted: the `SG5 LOC`
@@ -432,19 +465,35 @@ range, and the evaluator follows that split
 |---|---|---|
 | `[1]`–`[499]` | Voraussetzung | against the message; the status binds when the expression holds |
 | `[500]`–`[899]` | Hinweis | never binds |
-| `[901]`–`[999]` | Formatbedingung | neutral — formats are the MIG's |
+| `[901]`–`[999]` | Formatbedingung | neutral for presence; the **value** is checked — see [Formatbedingungen](#formatbedingungen) |
 | `[2000]`–`[2499]` | Wiederholbarkeit | neutral — does not gate presence |
-| `[UB1]`–`[UB3]` | Zeitpunktangabe | neutral — does not gate presence |
+| `[UB1]`–`[UB3]` | Zeitpunktangabe | neutral for presence; the **value** is checked, as `[931]`–`[935]` |
 | `[nPa..b]` | Paket | through the Paketvoraussetzung, plus the `a..b` repetition check |
 
 A Voraussetzung is checkable by definition — Kap. 6.5 admits only „Informationen,
 die an anderer Stelle im Anwendungsfall vorhanden sind". The parser reads the
-shapes the AHBs actually print: „Wenn SG10 QTY DE6063 mit Wert 67 vorhanden",
-„Wenn SG5 LOC+Z17 nicht vorhanden", „mehr als einmal vorhanden", a value suffix
-(„… DE7140 bei der die letzten beiden Stellen mit dem Wert "01" …"), and
-wildcards such as `PIA+5+1-b?:1.9.e`, where a lowercase letter stands for any one
-character. Anything it cannot read evaluates to `Truth::Unknown`, which is never
-a ground for rejection.
+shapes the AHBs actually print:
+
+| Shape | Printed as |
+|---|---|
+| a segment is there | „Wenn SG5 LOC+Z17 nicht vorhanden" |
+| a **path** — the place named by where it sits | „Wenn in dieser SG8 SEQ+Z01 SG10 CCI+++ZA6 … CAV+E02 vorhanden" |
+| **alternatives** | „wenn SG3 AJT+Z58+S_0109 oder SG3 AJT+Z59+S_0109 … vorhanden" |
+| an element carries a value | „Wenn SG10 QTY DE6063 mit Wert 67 vorhanden", „… der Code Z35 … im DE1153 vorhanden" |
+| a comparison | „Wenn in diesem STS DE1131 = E_0526" |
+| the value's **shape** | „Wenn in LOC+172 DE3225 die ID einer Marktlokation angegeben ist", „genau 11 Stellen" |
+| how often | „mehr als einmal vorhanden" |
+| a value suffix | „… DE7140 bei der die letzten beiden Stellen mit dem Wert "01" …" |
+
+Wildcards such as `PIA+5+1-b?:1.9.e` match a family, where a lowercase letter
+stands for any one character.
+
+**A clause that names a data element is about that element.** Reading it as the
+segment around it answers a different question and fires for messages the element
+never selected, so where the element cannot be read the answer is
+`Truth::Unknown` — which is never a ground for rejection. What is left unread is
+one shape: a **join** between two places, „Wenn zwei SG8 SEQ+Z45 mit derselben
+Zeitraum-ID im DE1050 …".
 
 A Paket citation such as `[2P0..1]` is a macro (Kap. 6.9.1): `2P` stands for the
 Paketvoraussetzung the AHB's Paketübersicht prints, an expression of the same

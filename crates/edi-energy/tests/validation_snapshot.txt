@@ -1,6 +1,6 @@
 # Validation verdict per fixture: <path>\t<severity>\t<rule id>.
 # Regenerate with BLESS_VALIDATION_SNAPSHOT=1; read the diff before committing.
-# 79 fixtures, 87 lines.
+# 79 fixtures, 89 lines.
 aperak/invalid/missing_acw_ref.edi	error	AHB-29001-SG5-00012-MISSING
 aperak/invalid/missing_acw_ref.edi	error	MIG-SG5-00012-REQUIRED
 aperak/valid/beispiel_29001_verarbeitbarkeitsfehler.edi	clean
@@ -14,6 +14,7 @@ iftsta/valid/beispiel_21042_umsetzungsstatus.edi	clean
 insrpt/valid/pid_23012_zs1.edi	clean
 invoic/valid/beispiel_31001_abschlagsrechnung.edi	clean
 mscons/invalid/bad_melo.edi	error	SEM-MSCONS-LOCATION-FORMAT
+mscons/invalid/bad_melo.edi	warning	FMT-13003-00015-LOC-3225-951
 mscons/invalid/inverted_period.edi	error	SEM-MSCONS-PERIOD-ORDER
 mscons/invalid/missing_sts_z32.edi	error	AHB-13002-00011-NAD-3055-CODE
 mscons/invalid/missing_sts_z32.edi	error	AHB-13002-00034-STS-MISSING
@@ -38,6 +39,7 @@ utilmd/invalid/55242_falscher_loc_qualifier.edi	error	AHB-55242-SG5-00047-MISSIN
 utilmd/invalid/bad_lokations_id.edi	error	AHB-55001-00087-SEQ-1050-MISSING
 utilmd/invalid/bad_lokations_id.edi	error	MIG-00050-LOC-3225-FORMAT
 utilmd/invalid/bad_lokations_id.edi	error	SEM-UTILMD-LOKATIONS-ID
+utilmd/invalid/bad_lokations_id.edi	warning	FMT-55001-00050-LOC-3225-950
 utilmd/valid/beispiel_44001_lieferbeginn_gas.edi	clean
 utilmd/valid/beispiel_44022_stornierung_gas.edi	clean
 utilmd/valid/beispiel_44023_bestaetigung_stornierung_gas.edi	clean

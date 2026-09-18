@@ -158,7 +158,7 @@ spec:
         audience: [grid-operations]
         priority: urgent
         summary: >-
-          A Sperrauftrag queue is out of compliance on the Netzbetreiber's own obligations — an order past the 6 Werktage of GPKE Teil 2 § 3.5.1.2 Nr. 1, or an IFTSTA 21039 that never reached the Lieferant so their gpke-sperrung-lf process cannot close.
+          AI-generated. A Sperrauftrag queue is out of compliance on the Netzbetreiber's own obligations — an order past the 6 Werktage of GPKE Teil 2 § 3.5.1.2 Nr. 1, or an IFTSTA 21039 that never reached the Lieferant so their gpke-sperrung-lf process cannot close.
         when:
           - path: /sperr_compliance
             equals: "BREACH"

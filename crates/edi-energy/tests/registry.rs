@@ -591,13 +591,21 @@ fn reqote_switches_on_the_anwendungszeitpunkt_not_the_publikationsdatum() {
     );
 }
 
-/// Every profile that records a `publikationsdatum` must sit six months later.
+/// Every profile takes effect on an Anwendungszeitpunkt BDEW actually publishes
+/// on.
 ///
-/// The relation is enforced at codegen, but the generated tables are what the
-/// runtime actually selects on, so it is re-checked here against the compiled
-/// registry rather than against the JSON.
+/// Allgemeine Festlegungen 6.1d § 2.5 runs two Änderungsmanagement cycles and
+/// only two, so the regular changeovers are **01.04.** and **01.10.**; mako
+/// additionally carries the ausserordentliche 01.01.2026 and 06.06.2025. A
+/// `valid_from` on any other day is a transcription error, and it selects a
+/// profile for a window no release occupies.
+///
+/// This is checked against the **compiled registry**, not the JSON: the
+/// generated tables are what the runtime selects on, and `validate-profiles`
+/// already holds the JSON. That guard owns the companion relation — the
+/// `publikationsdatum` § 2.5 entails for each of these dates.
 #[test]
-fn no_profile_is_valid_from_its_publication_date() {
+fn every_profile_takes_effect_on_a_published_anwendungszeitpunkt() {
     use edi_energy::registry::ReleaseRegistry;
 
     for profile in ReleaseRegistry::global().all_profiles() {

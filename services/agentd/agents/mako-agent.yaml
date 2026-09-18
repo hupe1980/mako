@@ -102,7 +102,7 @@ spec:
       - name: mako-escalation
         audience: [marktkommunikation]
         priority: urgent
-        summary: A MaKo incident could not be resolved automatically.
+        summary: AI-generated. A MaKo incident could not be resolved automatically.
         when:
           - path: /status
             in: [ESCALATED]

@@ -89,6 +89,13 @@ The active plane is advisory: all 150 grants are read-only. Model-backed
 specialists may investigate and file triage; they cannot dispatch market
 commands. Deterministic procedures are coded rather than expressed as prompts.
 
+**A worklist row a model wrote says so.** Its summary opens with
+`AI-generated. `, in the manifest where the agent's digest covers it, and a
+`plane::` test holds the set complete in both directions — a model-backed
+specialist that omits it and a coded one that claims it both fail. Verordnung
+(EU) 2024/1689 Art. 50; the machine-readable half is the task kind agentplane
+already opens the row under, `agent.triage/<rule>`.
+
 The deterministic boundary is unchanged: **an agent may prepare and may wait,
 `makod` still dispatches.** An approved decision becomes an ordinary command
 through the command API, so what goes on the wire stays a pure function of a

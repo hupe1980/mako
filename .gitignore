@@ -49,7 +49,9 @@ regulatories/bdew-mako/*
 !regulatories/bdew-mako/manifest.json
 concepts/
 .DS_Store
-.claude
+
+# Local agent configuration, skills included.
+.claude/
 
 # Zola build output
 /site/public

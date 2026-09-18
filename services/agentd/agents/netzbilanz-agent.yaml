@@ -175,7 +175,7 @@ spec:
         audience: [netzbilanz]
         priority: urgent
         summary: >-
-          A Netzbetreiber invoice cannot be dispatched — its own pre-dispatch check disputes it. Every day it waits is a day of Netznutzungsentgelt unbilled.
+          AI-generated. A Netzbetreiber invoice cannot be dispatched — its own pre-dispatch check disputes it. Every day it waits is a day of Netznutzungsentgelt unbilled.
         when:
           - path: /draft_status
             equals: "BLOCKED"

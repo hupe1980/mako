@@ -21,8 +21,16 @@ use super::Profile;
 use super::conditions::{
     ConditionKind, EvalError, Expr, ExprError, Paket, Scope, Status, Truth, Voraussetzung,
 };
+use super::formatbedingung;
 use super::model::{Anwendungsfall, Element, ElementRule, SegmentNode};
 use super::structure::{InstanceId, Kind, NodeId, Resolution, Structure};
+
+/// Rule id prefix of a Formatbedingung finding (`FMT-<pid>-<nr>-<tag>-<de>-<n>`).
+///
+/// Advisory for now: the registry is new, and a verdict that refuses a
+/// counterparty message which passes today is a change to make once the
+/// findings have been read for a release. [`super::formatbedingung`].
+pub const FMT_PREFIX: &str = "FMT-";
 
 /// Rule id of the advisory raised when no Anwendungsfall can be selected.
 pub const AHB_SKIP_NO_PID: &str = "AHB-SKIP-NO-PID";
@@ -699,6 +707,71 @@ impl<'a, 'd> Ctx<'a, 'd> {
         out
     }
 
+    /// Whether some `tag` segment in `range` carries a `de` holding one of
+    /// `values` — or, with `suffix`, ending in one of them.
+    fn carries_value(
+        &self,
+        range: std::ops::Range<usize>,
+        tag: &str,
+        de: &str,
+        values: &[String],
+        suffix: bool,
+    ) -> bool {
+        range.into_iter().any(|i| {
+            let seg = &self.segments[i];
+            if seg.tag != tag {
+                return false;
+            }
+            let Some(a) = self.res.assigned[i] else {
+                return false;
+            };
+            let Some(layout) = self.structure.layout(a.node) else {
+                return false;
+            };
+            layout.locate(de, 0).is_some_and(|(ei, ci, _)| {
+                seg.component_str(ei, ci).is_some_and(|v| {
+                    values.iter().any(|want| {
+                        if suffix {
+                            v.len() >= 2 && v.ends_with(want.as_str())
+                        } else {
+                            v == want
+                        }
+                    })
+                })
+            })
+        })
+    }
+
+    /// Whether some segment in `range` matching `pattern` carries a `de` whose
+    /// value has `shape`.
+    ///
+    /// The whole segment pattern is matched, qualifier included, because the
+    /// Bedingung names one: „in LOC+172 DE3225" is the Meldepunkt and not the
+    /// `LOC+Z16` two places away.
+    fn carries_shape(
+        &self,
+        range: std::ops::Range<usize>,
+        pattern: &super::conditions::SegmentPattern,
+        de: &str,
+        shape: &super::conditions::ValueShape,
+    ) -> bool {
+        range.into_iter().any(|i| {
+            let seg = &self.segments[i];
+            if !pattern.matches(seg) {
+                return false;
+            }
+            let Some(a) = self.res.assigned[i] else {
+                return false;
+            };
+            let Some(layout) = self.structure.layout(a.node) else {
+                return false;
+            };
+            layout.locate(de, 0).is_some_and(|(ei, ci, _)| {
+                seg.component_str(ei, ci).is_some_and(|v| shape.holds(v))
+            })
+        })
+    }
+
     /// The value of Bedingung `id` for a row evaluated inside `instance`.
     fn truth(&self, id: &str, instance: InstanceId) -> Result<Truth, EvalError> {
         match ConditionKind::of(id) {
@@ -756,14 +829,39 @@ impl<'a, 'd> Ctx<'a, 'd> {
         Ok(match v {
             Voraussetzung::Present {
                 scope,
-                pattern,
+                patterns,
+                alternatives,
                 negate,
             } => {
-                let found = self.segments[range(&scope)]
-                    .iter()
-                    .any(|s| pattern.matches(s));
+                let segments = &self.segments[range(&scope)];
+                let found = if alternatives {
+                    patterns
+                        .iter()
+                        .any(|p| segments.iter().any(|s| p.matches(s)))
+                } else {
+                    // A path is satisfied when each pattern is found after the
+                    // one before it: `SEQ+Z01`, then below it `CCI+++ZA6`,
+                    // then `CAV+E02`.
+                    let mut at = 0;
+                    patterns.iter().all(|p| {
+                        match segments[at..].iter().position(|s| p.matches(s)) {
+                            Some(i) => {
+                                at += i + 1;
+                                true
+                            }
+                            None => false,
+                        }
+                    })
+                };
                 Truth::from(found != negate)
             }
+            Voraussetzung::ElementShape {
+                scope,
+                pattern,
+                de,
+                shape,
+                negate,
+            } => Truth::from(self.carries_shape(range(&scope), &pattern, &de, &shape) != negate),
             Voraussetzung::Count {
                 scope,
                 pattern,
@@ -783,31 +881,7 @@ impl<'a, 'd> Ctx<'a, 'd> {
                 negate,
                 suffix,
             } => {
-                let r = range(&scope);
-                let found = (r.start..r.end).any(|i| {
-                    let seg = &self.segments[i];
-                    if seg.tag != tag {
-                        return false;
-                    }
-                    let Some(a) = self.res.assigned[i] else {
-                        return false;
-                    };
-                    let Some(layout) = self.structure.layout(a.node) else {
-                        return false;
-                    };
-                    layout.locate(&de, 0).is_some_and(|(ei, ci, _)| {
-                        seg.component_str(ei, ci).is_some_and(|v| {
-                            values.iter().any(|want| {
-                                if suffix {
-                                    v.len() >= 2 && v.ends_with(want.as_str())
-                                } else {
-                                    v == want
-                                }
-                            })
-                        })
-                    })
-                });
-                Truth::from(found != negate)
+                Truth::from(self.carries_value(range(&scope), &tag, &de, &values, suffix) != negate)
             }
         })
     }
@@ -1169,6 +1243,16 @@ fn element_rules(
             }
             continue;
         }
+        for (cond, why) in format_violations(ctx, rule, instance, value) {
+            issues.push(at(ValidationIssue::new(
+                ValidationSeverity::Warning,
+                format!(
+                    "{tag} (Nr {nr}): DE {} „{}“ {why} — Formatbedingung [{cond}] of {pid}",
+                    el.id, el.name
+                ),
+            )
+            .with_rule_id(format!("{FMT_PREFIX}{pid}-{nr}-{tag}-{}-{cond}", el.id))));
+        }
         if coded && !admitted.iter().any(|c| c == value) {
             issues.push(at(ValidationIssue::new(
                 ValidationSeverity::Error,
@@ -1259,6 +1343,44 @@ fn operands(
         }
     }
     (required, admitted, coded)
+}
+
+/// The Formatbedingungen a place's column attaches to `value`, and how the
+/// value fails them.
+///
+/// This is deliberately *not* the list of `[9xx]` the operand cites — see
+/// [`formatbedingung::violations`] for the reading and why it differs from the
+/// presence question.
+fn format_violations(
+    ctx: &Ctx<'_, '_>,
+    rule: &ElementRule,
+    instance: InstanceId,
+    value: &str,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for op in &rule.operands {
+        let Some(status) = Status::parse(&op.operand) else {
+            continue;
+        };
+        let Some(expr) = &status.expr else {
+            continue;
+        };
+        // A column whose Voraussetzung the message does not meet says nothing
+        // about the value, and a `Soll`/`Kann` place is not the receiver's to
+        // refuse.
+        if !status.kind.is_receiver_checkable() || ctx.truth_of(&status, instance) == Truth::False {
+            continue;
+        }
+        // A coded operand speaks for its own code: `X [950]` beside `Z16` is
+        // about a `Z16` place and not about the one carrying `Z17`.
+        if op.code.as_deref().is_some_and(|c| c != value) {
+            continue;
+        }
+        out.extend(formatbedingung::violations(expr, value));
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 #[cfg(test)]

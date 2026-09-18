@@ -172,7 +172,7 @@ spec:
         audience: [billing-compliance]
         priority: urgent
         summary: >-
-          An issued Rechnung failed a § 40 / § 41a / § 42 EnWG check. Review correction or cancellation; pre-dispatch blocking remains billingd's deterministic responsibility.
+          AI-generated. An issued Rechnung failed a § 40 / § 41a / § 42 EnWG check. Review correction or cancellation; pre-dispatch blocking remains billingd's deterministic responsibility.
         when:
           - path: /compliance_status
             equals: "VIOLATIONS"
