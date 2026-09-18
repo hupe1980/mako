@@ -145,14 +145,18 @@ produce `trancheIds` and stop matching.
 
 ## Specification version
 
-This crate implements **1.0.0**, the only tag in either spec repository.
+This crate implements **1.0.0**.
 
 Release **2.0.0** was put out for consultation by Mitteilung Nr. 55 for
 01.10.2026, then **excluded** by Mitteilung Nr. 56: *"Die im Release 2.0.0 zur
 Konsultation gestellten Anpassungen an den API-Webdiensten sind nicht Bestandteil
-dieser Veröffentlichung."* Only API Guideline 1.0b binds on 01.10.2026. The 2.0.0
-material exists only on the `2026-07-31-consultation` branch, which is still
-moving; there is no `2.0.0` tag. See `spec_version::RELEASE_2_0_0_STATUS`.
+dieser Veröffentlichung."* Only API Guideline 1.0b binds on 01.10.2026.
+
+`EDI-Energy/api-electricity` carries a **`2.0.0` tag**, released 24.07.2026, and
+its own Änderungshistorie applies it *"ab dem 01.10.2027 00:00 Uhr"* — one
+format cycle after FV 2027-04, so it is not part of that import either. The
+directory-service repository still has only `1.0.0`.
+See `spec_version::RELEASE_2_0_0_STATUS`.
 
 Specs live in two **separate** repositories: `EDI-Energy/api-electricity` for the
 electricity APIs and `EDI-Energy/api-directory-service` for the Verzeichnisdienst.

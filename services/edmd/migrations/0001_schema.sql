@@ -102,6 +102,17 @@ CREATE TABLE meter_billing_periods (
     CONSTRAINT mbp_period_forward CHECK (period_to >= period_from)
 );
 
+-- Keyed on the **exact** window, because that is what this table is: a cache of
+-- one aggregate per period a caller asked for, not a set of disjoint billing
+-- periods. Both readers match `period_from = $2 AND period_to = $3`, so two
+-- overlapping rows never both answer one read.
+--
+-- Overlapping rows are therefore expected and correct — a caller asking for
+-- Jan 1–31 and another asking for Jan 15–Feb 15 each get a row that is a right
+-- aggregate of its own window. **Do not add an interval-overlap EXCLUDE here**:
+-- it would refuse the second caller's cache write. The only overlap predicates
+-- belong to the two invalidating DELETEs, which must evict every cached window
+-- a corrected reading touches.
 CREATE UNIQUE INDEX mbp_tenant_period_unique
     ON meter_billing_periods (malo_id, period_from, period_to, tenant);
 

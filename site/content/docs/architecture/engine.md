@@ -320,7 +320,7 @@ PID, for callers that need the number rather than a resolved instant.
 
 **The count starts on the day of receipt, whatever weekday it is.** The same Kapitel defines the Übertragungstag as *"der Tag des Empfangs der Übertragungsdatei ... aus der AS4-Zustellquittung"* and attaches no rule deeming a weekend arrival received on the next Werktag — only the Werktage *counted* skip weekends and holidays. What it does attach is a condition on the acknowledgement: the ÜT counts *"nur ..., sofern es sich um eine positive Zustellquittung bzw. Response-Nachricht handelt"*, so a negative acknowledgement starts no Frist.
 
-Deadlines are always expressed as `17:00 Europe/Berlin` on the due date (not UTC), and the day of receipt is read as a Berlin calendar date — see [Dates and days](@/docs/architecture/domain-model.md#dates-and-days). The `fristen` module uses `time_tz::assume_timezone(Europe/Berlin)` and the Anonymous Gregorian Easter algorithm for public holiday detection (valid for all years).
+A Werktage Frist runs to the end of the due Werktag in `Europe/Berlin` (not UTC), and a Frist the rulebook states as a clock time to that clock time in Berlin, and the day of receipt is read as a Berlin calendar date — see [Dates and days](@/docs/architecture/domain-model.md#dates-and-days). The `fristen` module uses `time_tz::assume_timezone(Europe/Berlin)` and the Anonymous Gregorian Easter algorithm for public holiday detection (valid for all years).
 
 ---
 
@@ -358,32 +358,38 @@ timeline
         Next changeover : Superseded in turn
 ```
 
-### `WorkflowVersionPolicy`
+### What carries a process across a format-version boundary
 
-A workflow declares how it handles a message encoded under a different format
-version than the one it was started with. `ForwardCompatible` carries
-`#[default]`, so a workflow that overrides nothing already has it — the override
-below is what a *deviation* looks like:
+A MaKo process routinely outlives the format version it was started under: a
+Lieferbeginn opened in September is answered by an APERAK sent in November under
+the October release. Two mechanisms carry that, and neither is a policy a
+workflow declares.
+
+**The adapter registry picks the parser.** The *inbound message's own* format
+version selects the `MessageAdapter` that turns it into a command, so a
+FV2026-10-encoded APERAK is parsed by the FV2026-10 adapter whatever the process
+was started under. Every adapter registry is asked at startup which of the
+binary's known format versions no adapter claims:
 
 ```rust
-impl Workflow for MyWorkflow {
-    fn version_policy() -> WorkflowVersionPolicy {
-        WorkflowVersionPolicy::Pinned   // ← a deliberate narrowing, not the default
-    }
-}
+let uncovered = GPKE_ADAPTER_REGISTRY.uncovered_format_versions(&known_fvs());
 ```
 
-`WorkflowVersionPolicy::accepts(fv, creation_fv)` decides:
+`makod::startup::validate_adapter_coverage` refuses to boot on a non-empty
+answer, and refuses an empty `known_fvs()` as well — a coverage check with no
+input reports "covered" for a registry with no adapters at all.
 
-| Policy | Acceptance | When to use |
-|---|---|---|
-| `ForwardCompatible` | **always** — every FV is acceptable | **The default for all MaKo workflows.** A FV2025 process can receive a FV2026-encoded APERAK |
-| `Pinned` | `fv == creation_fv` | Only a workflow guaranteed to complete inside one release cycle (< 6 months), so no counterparty message can cross an April-1 or October-1 boundary |
-| `Explicit(list)` | `fv` is in `list` | When the acceptable set is fixed and known at compile time (e.g. a billing process handling exactly FV2025-10-01 and FV2026-10-01) |
+The check is deliberately unconditional. A process may be started under any
+known format version and a counterparty may reply under any later one, so every
+known format version has to be covered; there is no narrower set that is safe,
+and therefore nothing for a workflow to declare.
 
-> **Do not default to `Pinned`.** A `Pinned` policy on any GPKE/WiM/GeLi Gas
-> workflow will cause the process to reject APERAKs sent by counterparties that
-> have already migrated to the next format version, silently breaking the workflow.
+**The `WorkflowId` records the rules the process runs under.** It carries the
+workflow name and the format version the process was *created* with, permanently,
+on every event in the stream. That is what makes the § 147 Abs. 1 AO record
+foldable a decade later, and what `StateMigration` moves when an in-flight
+process has to be advanced to a newer format version before the old one leaves
+the registry.
 
 ---
 

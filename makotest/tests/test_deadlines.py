@@ -3,13 +3,18 @@
 `add_werktage` answers "which date". These answer "which moment", and the moment
 is the obligation.
 
-The trap this module exists to close: "a Werktage Frist expires at 17:00
-Europe/Berlin" is true of the WiM MSB-Wechsel windows and of nothing else. A
-GPKE answer window is a **clock time on the n-th Werktag after the
-Übertragungstag** — or, for the Ersatz-/Grundversorgung and the LF-Zuordnung,
-that clock time **on the ÜT itself** — and a GeLi Gas window runs to the **end**
-of the n-th Werktag. Sizing any of them the same is wrong in both directions,
-and the loose direction reports a lapsed Frist as still running.
+The trap this module exists to close: there is no single formula. A GPKE answer
+window is a **clock time on the n-th Werktag after the Übertragungstag** — or,
+for the Ersatz-/Grundversorgung and the LF-Zuordnung, that clock time **on the
+ÜT itself** — while GeLi Gas, WiM and MaBiS all run to the **end** of the n-th
+Werktag. Sizing any of them the same is wrong in both directions, and the loose
+direction reports a lapsed Frist as still running.
+
+The end-of-Werktag shape has one wording per family and they mean the same
+thing: „Ablauf des n. WT" (GeLi Gas, WiM Gas) and „spätester Übertragungs*tag*
+ist der n. WT" (GPKE Teil 2/4, WiM Strom) both name a day. No BDEW or BNetzA
+document in this domain attaches an end-of-business hour to either, so none of
+them is cut short of the day it names.
 
 The two GPKE shapes share a clock time and land a day apart, so the Werktag
 count is what separates them.
@@ -79,13 +84,21 @@ class TestTheThreeShapes:
         assert due == end_of_werktag_after(MONDAY, 4)
         assert due.startswith("2026-03-06T23:59:59")
 
-    def test_wim_expires_at_the_1700_cutoff(self):
-        """BK6-24-174 WiM Teil 1: „spätester ÜT ist der n. WT", 17:00 MaKo cut-off."""
+    def test_wim_runs_to_the_end_of_the_nth_werktag_too(self):
+        """BK6-24-174 WiM Teil 1: „spätester ÜT ist der n. WT".
+
+        „Spätester Übertragungs*tag*" names a day, exactly as GeLi Gas's
+        „Ablauf des n. WT" does, and no BDEW or BNetzA document in this domain
+        attaches an end-of-business hour to either. The two wordings are one
+        shape; placing WiM at a 17:00 cut-off expires it seven hours early and
+        escalates a Messstellenbetreiber still inside its Frist.
+        """
         o = antwort_obligation(55039)
-        assert o.shape == "werktage_at_cutoff"
+        assert o.shape == "end_of_werktag"
         assert o.werktage == 3
         assert antwort_deadline(55039, MONDAY) == deadline_at_werktage(MONDAY, 3)
-        assert antwort_deadline(55039, MONDAY).startswith("2026-03-05T17:00:00")
+        assert antwort_deadline(55039, MONDAY) == end_of_werktag_after(MONDAY, 3)
+        assert antwort_deadline(55039, MONDAY).startswith("2026-03-05T23:59:59")
 
     def test_the_three_are_three_different_instants(self):
         instants = {antwort_deadline(pid, MONDAY) for pid in (55001, 44001, 55039)}
@@ -212,7 +225,8 @@ class TestCalendarEdges:
         """
         assert add_werktage("2026-12-30", 1) == "2027-01-04"
         assert (
-            deadline_at_werktage("2026-12-30T09:00:00Z", 1) == "2027-01-04T17:00:00+01:00"
+            deadline_at_werktage("2026-12-30T09:00:00Z", 1)
+            == "2027-01-04T23:59:59.999999999+01:00"
         )
 
     def test_a_bad_datetime_is_rejected_with_a_useful_message(self):

@@ -533,9 +533,11 @@ mod tests {
     /// answer at all. The GeLi Gas twin has always emitted it here.
     #[test]
     fn a_refused_stornierung_answers_with_the_negative_aperak() {
-        let out =
-            GpkeStornierungWorkflow::handle(&GpkeStornierungState::New, stornierung_cmd(55022, false))
-                .unwrap();
+        let out = GpkeStornierungWorkflow::handle(
+            &GpkeStornierungState::New,
+            stornierung_cmd(55022, false),
+        )
+        .unwrap();
         assert_eq!(out.outbox.len(), 1, "exactly one APERAK");
         assert_eq!(out.outbox[0].message_type.as_ref(), "APERAK");
         assert_eq!(out.outbox[0].payload["error_code"], "Z29");

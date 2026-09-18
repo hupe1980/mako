@@ -153,7 +153,7 @@ pub struct NneRequest {
     pub nb_mp_id: String,
     /// Lieferant MP-ID — the invoice recipient.
     pub lf_mp_id: String,
-    /// `"STROM"` or `"GAS"`. Required: it selects StromNEV §21 vs GasNEV §14,
+    /// `"STROM"` or `"GAS"`. Required: it selects StromNEV §21 vs GasNEV §15,
     /// the `SettlementType`, and whether the three EnFG network levies apply at
     /// all. There is no safe default — defaulting to `Strom` would put
     /// ~2.95 ct/kWh of electricity levies on every gas invoice.
@@ -164,7 +164,7 @@ pub struct NneRequest {
     /// RLM demand charge — peak and rate together, or neither.
     #[serde(default)]
     pub leistungspreis: Option<Leistungspreis>,
-    /// Gas Verrechnungspreis (§14 GasNEV) — monthly rate and months billed.
+    /// Gas Verrechnungspreis (§15 Abs. 7 GasNEV) — monthly rate and months billed.
     #[serde(default)]
     pub grundpreis: Option<Grundpreis>,
     /// Konzessionsabgabe — rate **and** KAV § 2 customer group, so the

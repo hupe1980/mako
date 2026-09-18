@@ -37,7 +37,7 @@ Two things about this table are easy to get wrong:
 
 - **The Sparte is not in the Prüfidentifikator.** NN-Rechnung Strom and Gas both use 31002, and both
   MMM variants use 31005. Every position states its `sparte`, which selects StromNEV §21 or
-  GasNEV §14, decides whether the three EnFG network levies apply at all, and reaches the wire on
+  GasNEV §15, decides whether the three EnFG network levies apply at all, and reaches the wire on
   `Rechnung.sparte`.
 - **31009 runs the other way.** The Messstellenbetreiber issues it in all seven of its
   Anwendungsfälle (*Anwendungsübersicht der Prüfidentifikatoren* 4.0); it is never addressed to one.

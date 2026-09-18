@@ -3628,8 +3628,15 @@ impl BillingProvider for DynamicElectricityProvider {
 /// The provider groups prior positions by their `applicable_tax_rate`:
 /// - `None` → uses the engine-wide default rate (passed to `new()`)
 /// - `Some(dec!(0.19))` → standard rate
-/// - `Some(dec!(0.07))` → reduced rate (§12 Abs. 2 Nr. 1 UStG for renewable Fernwärme)
-/// - `Some(dec!(0.0))` → zero rate (§12 Abs. 3 UStG for solar PV ≤30 kWp since 01.01.2023)
+/// - `Some(dec!(0.07))` → reduced rate. The standing case is **Trinkwasser**
+///   (§12 Abs. 2 Nr. 1 UStG i. V. m. Anlage 2 Nr. 34). Fernwärme is **not** in
+///   Anlage 2 and is standard-rated; its 7 % was the temporary §28 Abs. 5/6
+///   UStG window (01.10.2022–31.03.2024), which arrives as an override.
+/// - `Some(dec!(0.0))` → zero rate. §12 Abs. 3 UStG zero-rates the **supply of
+///   the PV system** (modules, storage, installation) — never the electricity
+///   and never the feed-in. A small operator's Einspeise-Gutschrift is 0 % only
+///   through the Kleinunternehmerregelung (§19 UStG), which is an election and
+///   not a function of plant size.
 ///
 /// One `Tax` position is generated per distinct rate group.
 /// Groups with `rate = 0` produce no Tax position.

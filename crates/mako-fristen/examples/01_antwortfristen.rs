@@ -81,7 +81,6 @@ fn shape_name(shape: antwort::FristShape) -> String {
     match shape {
         F::WerktagAt { .. } => "WerktagAt",
         F::EndOfWerktag(_) => "EndOfWerktag",
-        F::WerktageAtCutoff(_) => "WerktageAtCutoff",
         F::SameDayAt(_) => "SameDayAt",
         F::SameDay => "SameDay",
     }

@@ -9,7 +9,9 @@
   `WORKFLOW_NAME` constant. Read it there; a list restated here drifts, and
   `EngineBuilder::build` only checks `workflow_names()` against what
   `register_pids_with_roles` routes to.
-- The `ForwardCompatible` version policy is mandatory for all GPKE workflows.
+- A GPKE process keeps its creation `WorkflowId`; the inbound message's own FV
+  picks the adapter. Every registry must cover every known FV — there is no
+  per-workflow acceptance policy to set.
 
 ## Cross-crate rules
 

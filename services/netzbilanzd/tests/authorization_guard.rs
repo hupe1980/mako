@@ -345,6 +345,40 @@ fn startup_refuses_an_open_mcp_surface() {
     );
 }
 
+/// A delivery target without a signing secret is refused.
+///
+/// `OutboxWorker` signs only when it has one, so this posture ships every
+/// `de.netzbilanz.*` CloudEvent to the ERP unsigned — and nothing at runtime
+/// says so.
+#[test]
+fn startup_refuses_a_webhook_url_without_its_signing_secret() {
+    let err = config(serde_json::json!({
+        "oidc": oidc(),
+        "inbound_secret": "s3cret",
+        "erp_webhook_url": "https://erp.example.test/events",
+    }))
+    .check_auth_posture()
+    .expect_err("an unsigned outbound webhook must not start");
+    assert!(
+        err.to_string().contains("erp_webhook_secret"),
+        "the refusal must name erp_webhook_secret: {err}"
+    );
+
+    config(serde_json::json!({
+        "oidc": oidc(),
+        "inbound_secret": "s3cret",
+        "erp_webhook_url": "https://erp.example.test/events",
+        "erp_webhook_secret": "signing-key",
+    }))
+    .check_auth_posture()
+    .expect("a URL with its secret is a startable posture");
+
+    // No delivery target, nothing to sign.
+    config(serde_json::json!({ "oidc": oidc(), "inbound_secret": "s3cret" }))
+        .check_auth_posture()
+        .expect("no erp_webhook_url means no unsigned delivery");
+}
+
 #[test]
 fn a_fully_configured_deployment_starts() {
     config(serde_json::json!({ "oidc": oidc(), "inbound_secret": "s3cret" }))

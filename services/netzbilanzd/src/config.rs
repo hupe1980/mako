@@ -80,11 +80,12 @@ fn default_tenant() -> String {
 impl NetzbilanzConfig {
     /// Refuse to start in a posture that leaves money-moving routes open.
     ///
-    /// The three mechanisms are checked together because each guards a
+    /// The four mechanisms are checked together because each guards a
     /// different door into the same daemon, and any one of them left open is
     /// enough: OIDC guards the operator API, the `[mcp]` key or OIDC guards the
-    /// MCP surface, and the inbound HMAC guards the one route no bearer token
-    /// ever reaches.
+    /// MCP surface, the inbound HMAC guards the one route no bearer token ever
+    /// reaches, and the outbound HMAC is what lets the ERP tell an event this
+    /// service emitted from one anybody posted.
     ///
     /// # Errors
     ///
@@ -123,6 +124,15 @@ impl NetzbilanzConfig {
                 "inbound_secret — without it POST /api/v1/webhooks/remadv accepts any \
                  unsigned body, and a forged REMADV marks an invoice paid or disputes one \
                  that was not"
+                    .to_owned(),
+            );
+        }
+        if self.erp_webhook_url.is_some() && self.erp_webhook_secret.is_none() {
+            fehlt.push(
+                "erp_webhook_secret — erp_webhook_url is set, and `OutboxWorker` signs \
+                 only when it has a secret: de.netzbilanz.invoic.drafted/.dispatched and \
+                 the stale-draft and Kostenblatt alerts all reach the ERP unsigned, and \
+                 the receiver cannot tell one from a forgery"
                     .to_owned(),
             );
         }

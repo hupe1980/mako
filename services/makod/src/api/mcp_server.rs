@@ -1391,7 +1391,7 @@ impl MakodMcpHandler {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for MakodMcpHandler {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         let configured = &self.state.commands.configured_marktrollen;
 
         let cmd_lines: String = COMMAND_REGISTRY

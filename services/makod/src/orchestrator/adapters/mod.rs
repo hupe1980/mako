@@ -462,6 +462,9 @@ fn build_wim_iftsta_command(msg: &AnyMessage) -> Result<DeviceChangeCommand, Eng
                     pid,
                     zuordnungsbeginn,
                     message_ref: MessageRef::new(msg.message_ref()),
+                    // The ÜT of Nr. 7 — resolved here at the ingest boundary
+                    // so the pure workflow never reads a clock.
+                    received_at: time::OffsetDateTime::now_utc(),
                 }
             }
             _ => DeviceChangeCommand::ReceiveZuordnungsantwort {
@@ -725,13 +728,7 @@ macro_rules! coverage_table {
                 RegistryCoverage {
                     registry: stringify!($name),
                     adapters: registry.len(),
-                    uncovered: registry
-                        .validate_policy(
-                            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-                            &known,
-                        )
-                        .err()
-                        .unwrap_or_default(),
+                    uncovered: registry.uncovered_format_versions(&known),
                 }
             }),+]
         }

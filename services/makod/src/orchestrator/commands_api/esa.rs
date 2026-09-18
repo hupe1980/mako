@@ -402,6 +402,9 @@ pub(super) async fn dispatch_esa_werteanfrage(
         lokations_id: location.clone(),
         gegenstand,
         message_ref,
+        // ÜT of the outbound REQOTE — resolved here so the pure workflow anchors
+        // the 5-WT Angebot window on an instant that survives a retry.
+        gesendet_am: time::OffsetDateTime::now_utc(),
     };
 
     let workflow_id = WorkflowId::new(
@@ -489,6 +492,9 @@ pub(super) async fn dispatch_esa_bestellung(
     // ORDCHG Stornierung references it in `RFF+ON` too (`ZG-T51`).
     let message_ref =
         crate::edifact_renderer::msg_ref_from_uuid(&format!("ESABE{}", uuid::Uuid::new_v4()));
+    // ÜT of the outbound ORDERS — pinned once, here, so the Bindungsfrist test
+    // and the 2-WT answer window inside the pure workflow survive a retry.
+    let gesendet_am = time::OffsetDateTime::now_utc();
     dispatch_to_process_keyed::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow, _>(
         state,
         &process_key,
@@ -496,6 +502,7 @@ pub(super) async fn dispatch_esa_bestellung(
         &[message_ref.as_str()],
         || mako_wim::esa_wertebestellung::EsaWertebestellungCommand::SendBestellung {
             message_ref: MessageRef::new(message_ref.clone()),
+            gesendet_am,
         },
     )
     .await
@@ -510,6 +517,9 @@ pub(super) async fn dispatch_esa_stornierung(
     let process_key = esa_process_key(payload, &location);
     let message_ref =
         crate::edifact_renderer::msg_ref_from_uuid(&format!("ESAST{}", uuid::Uuid::new_v4()));
+    // ÜT of the outbound ORDCHG — pinned once so the 2-WT answer window the pure
+    // workflow arms is the same on every attempt.
+    let gesendet_am = time::OffsetDateTime::now_utc();
     dispatch_to_process_keyed::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow, _>(
         state,
         &process_key,
@@ -518,6 +528,7 @@ pub(super) async fn dispatch_esa_stornierung(
         &[message_ref.as_str()],
         || mako_wim::esa_wertebestellung::EsaWertebestellungCommand::SendStornierung {
             message_ref: MessageRef::new(message_ref.clone()),
+            gesendet_am,
         },
     )
     .await
@@ -591,13 +602,17 @@ pub(super) async fn dispatch_wim_wertebestellung_anbieten(
 ) -> Result<DispatchOutcome, DispatchError> {
     let location = extract_esa_location(payload)?;
     let process_key = esa_process_key(payload, &location);
+    // ÜT of the outbound QUOTES. The `DTM+273` Bindungsfrist is a **duration**
+    // measured from it, so it is pinned here — once — and handed to the pure
+    // workflow: a retried `handle` must render the same day count on the wire.
+    let gesendet_am = time::OffsetDateTime::now_utc();
     let bindungsfrist = payload
         .get("bindungsfrist")
         .and_then(|v| v.as_str())
         .and_then(|s| {
             time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
         })
-        .unwrap_or_else(|| time::OffsetDateTime::now_utc() + time::Duration::days(14));
+        .unwrap_or(gesendet_am + time::Duration::days(14));
     // `DTM+469` — the earliest start the MSB offers. Defaults inside the
     // workflow to the ESA's Wunschtermin when the MSB can meet it.
     let fruehester_start = payload
@@ -623,6 +638,7 @@ pub(super) async fn dispatch_wim_wertebestellung_anbieten(
             bindungsfrist,
             fruehester_start,
             angebot,
+            gesendet_am,
         },
     )
     .await
@@ -928,6 +944,9 @@ pub(super) async fn dispatch_esa_abbestellung(
         // fails for them, which is the one outcome GDPR Art. 7(3) does not
         // allow.
         let ist_abo = abonnement.ist_abo();
+        // ÜT of whichever stop message this subscription needs — pinned here so
+        // the 2-WT ORDRSP window the pure workflow arms survives a retry.
+        let gesendet_am = time::OffsetDateTime::now_utc();
         let result = dispatch_to_process_keyed::<
             mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow,
             _,
@@ -943,10 +962,12 @@ pub(super) async fn dispatch_esa_abbestellung(
                         message_ref: MessageRef::new(message_ref),
                         beendigung_zum,
                         grund,
+                        gesendet_am,
                     }
                 } else {
                     mako_wim::esa_wertebestellung::EsaWertebestellungCommand::SendStornierung {
                         message_ref: MessageRef::new(message_ref),
+                        gesendet_am,
                     }
                 }
             },

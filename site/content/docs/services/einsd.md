@@ -24,7 +24,7 @@ technology type, respecting Bestandsschutz for old plants commissioned before 20
 ```mermaid
 graph TB
     Operator["NB Operator / ERP"]
-    edmd["edmd :8380<br/>¼h Einspeisung feed-in<br/>(GET /api/v1/energy?direction=EINSPEISUNG)"]
+    edmd["edmd :8380<br/>¼h Einspeisung feed-in<br/>(GET /api/v1/energy/{malo_id}?direction=EINSPEISUNG)"]
     einsd["einsd :9180"]
     eeg_billing["eeg-billing crate<br/>10 settlement schemes<br/>Anlage 1 Marktprämie<br/>§49 degression · §36h Abs.1/2 wind<br/>§51 Negativpreis · §51a Förderende<br/>§51b biogas Ausschreibung<br/>§39i Biogas-Höchstanteile<br/>§52 Abs.6 netting<br/>SettlementPeriodState · InbetriebnahmeTyp<br/>no I/O"]
     db[("PostgreSQL<br/>eeg_anlagen · settlement_receipts<br/>settlement_receipt_history<br/>settlement_state_transitions<br/>eeg_regionalnachweise · eeg_stromsteuerbefreiungen<br/>eeg_sect54_solar_defekte · eeg_pflichtverstoesse<br/>marktwert_preise · epex_monthly_prices · epex_spot_prices<br/>wind_guetefaktor_reevaluations · eeg_verguetungssaetze")]
@@ -904,7 +904,7 @@ until then the version in force on 15 May 2024 — the 8,60 / 7,50 / 6,20 ladder
 That is also the series the Bundesnetzagentur publishes.
 
 For any other commissioning date use the `lookup_statutory_rate` MCP tool or
-`GET /api/v1/verguetungssatz-lookup`, which resolve the §49 window.
+`POST /api/v1/verguetungssatz-lookup`, which resolve the §49 window.
 
 ---
 
@@ -1914,7 +1914,7 @@ Einspeisevergütung is not in a Direktvermarktung.
 `register-eeg-plant` · `settle-monthly` · `check-foerderung-expiry` ·
 `ausschreibung-workflow` · `post-eeg-transition` · `anlagenerweiterung`
 
-The `eeg-agent` specialist in `agentd` handles `de.eeg.*` CloudEvents **and** `de.messwert.reading.direct.stored` (for iMSys rollout detection — lifts the <100 kW §51 Negativpreisregel exemption on first iMSys push). Two more agentd specialists cover einsd: `eeg-compliance-agent` runs the §52/§44b/§21 compliance checks (get_compliance_status, check_sect44b_quota, check_einspeiseverguetung_anspruch); `einsd-batch-agent` drives the monthly settlement batch + §52 Pflichtzahlungen sweep (list_unsettled_plants + POST /settlements/batch, triggered on de.eeg.anlage.foerderung-auslaufend or manual/cron).
+The `eeg-agent` specialist in `agentd` handles `de.eeg.*` CloudEvents **and** `de.messwert.reading.direct.stored` (for iMSys rollout detection — lifts the <100 kW §51 Negativpreisregel exemption on first iMSys push). Two more agentd specialists cover einsd: `eeg-compliance-agent` runs the §52/§44b/§21 compliance checks (get_compliance_status, check_sect44b_quota, check_einspeiseverguetung_anspruch); `einsd-batch-agent` drives the monthly settlement batch + §52 Pflichtzahlungen sweep (list_unsettled_plants + POST /api/v1/settle/{year}/{month}, triggered on de.eeg.anlage.foerderung-auslaufend or manual/cron).
 See [agentd operator guide](@/docs/services/agentd.md) for the full trigger→action mapping.
 
 ---

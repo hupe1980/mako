@@ -283,7 +283,7 @@ impl MabisMcpHandler {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for MabisMcpHandler {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()

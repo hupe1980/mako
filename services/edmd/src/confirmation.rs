@@ -21,15 +21,25 @@ use std::sync::Arc;
 
 use sqlx::PgPool;
 
-/// Flip open confirmations past `deadline_weeks` to UEBERFAELLIG.
+/// Flip open confirmations past `deadline_weeks` to UEBERFAELLIG **and** record
+/// the overdue notice, in one transaction.
 ///
 /// Returns the number of newly overdue entries. Factored out of the worker
 /// loop so the sweep is testable against real PostgreSQL without spawning.
+///
+/// The two halves are one transaction because the count is
+/// `rows_affected()` of the UPDATE and the UPDATE is not repeatable: once a row
+/// reads `UEBERFAELLIG` the next sweep's `WHERE status = 'OFFEN'` no longer
+/// matches it, so a notice lost after the commit is lost for good — the § 60
+/// Abs. 1 MsbG replacement deadline passes and nothing downstream is ever told.
+/// Rolling the UPDATE back instead leaves the rows `OFFEN` for the next sweep
+/// to find.
 pub async fn mark_overdue_confirmations(
     pool: &PgPool,
     tenant: &str,
     deadline_weeks: i64,
 ) -> Result<u64, sqlx::Error> {
+    let mut tx = pool.begin().await?;
     let result = sqlx::query(
         r"UPDATE estimated_read_confirmations
           SET status = 'UEBERFAELLIG'
@@ -39,20 +49,42 @@ pub async fn mark_overdue_confirmations(
     )
     .bind(tenant)
     .bind(deadline_weeks)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
-    Ok(result.rows_affected())
+
+    let newly_overdue = result.rows_affected();
+    if newly_overdue > 0 {
+        // One aggregate event per sweep — the endpoint lists the details.
+        // Tenant-wide aggregate: no per-object business subject.
+        let event = mako_service::CloudEvent::new(
+            mako_service::source("edmd", tenant),
+            mako_events::messwert::READING_CONFIRMATION_OVERDUE,
+            String::new(),
+            serde_json::json!({
+                "tenant": tenant,
+                "newly_overdue": newly_overdue,
+                "deadline_weeks": deadline_weeks,
+                "rechtsgrundlage": "§ 60 Abs. 1 MsbG (Aufbereitung und Übermittlung an die berechtigten Stellen)",
+                "hinweis": "GET /api/v1/confirmations?status=UEBERFAELLIG listet die offenen Intervalle",
+            }),
+        )
+        .without_subject()
+        .extension("tenantid", tenant.to_owned());
+        crate::outbox::emit_tx(&mut tx, &event).await?;
+    }
+
+    tx.commit().await?;
+    Ok(newly_overdue)
 }
 
 /// Spawn the daily confirmation-deadline worker (no-op when disabled).
 ///
 /// Same shape as the CLS compliance worker: initial delay, daily tick,
-/// cancellation-aware, webhook notification best-effort.
+/// cancellation-aware. The overdue notice is written to the outbox by
+/// [`mark_overdue_confirmations`], in the transaction that flips the rows.
 pub fn spawn_confirmation_worker(
     pool: Arc<PgPool>,
     tenant: String,
-    erp_webhook_url: Option<String>,
-    erp_webhook_secret: Option<String>,
     deadline_weeks: i64,
     interval_secs: u64,
     shutdown_token: tokio_util::sync::CancellationToken,
@@ -89,37 +121,6 @@ pub fn spawn_confirmation_worker(
                 deadline_weeks,
                 "edmd: confirmation-worker: estimated readings past the replacement deadline (§ 60 Abs. 1 MsbG)"
             );
-
-            let Some(ref webhook_url) = erp_webhook_url else {
-                continue;
-            };
-            // One aggregate event per sweep — the endpoint lists the details.
-            // Tenant-wide aggregate: no per-object business subject.
-            let event = mako_service::CloudEvent::new(
-                mako_service::source("edmd", &tenant),
-                mako_events::messwert::READING_CONFIRMATION_OVERDUE,
-                String::new(),
-                serde_json::json!({
-                    "tenant": tenant,
-                    "newly_overdue": newly_overdue,
-                    "deadline_weeks": deadline_weeks,
-                    "rechtsgrundlage": "§ 60 Abs. 1 MsbG (Aufbereitung und Übermittlung an die berechtigten Stellen)",
-                    "hinweis": "GET /api/v1/confirmations?status=UEBERFAELLIG listet die offenen Intervalle",
-                }),
-            )
-            .without_subject()
-            .extension("tenantid", tenant.clone());
-            let client = mako_service::http::default_client();
-            if let Err(e) = mako_service::post_ce_with_retry(
-                &client,
-                webhook_url,
-                &event,
-                erp_webhook_secret.as_deref().map(str::as_bytes),
-            )
-            .await
-            {
-                tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
-            }
         }
     });
 }

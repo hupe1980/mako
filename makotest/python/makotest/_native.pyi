@@ -409,10 +409,14 @@ def is_werktag(date: str) -> bool: ...
 def add_werktage(date: str, n: int) -> str: ...
 def next_werktag(date: str) -> str: ...
 def deadline_at_werktage(received: str, werktage: int) -> str:
-    """The WiM shape: 17:00 Europe/Berlin on the n-th Werktag."""
+    """The end of the n-th Werktag, Europe/Berlin.
+
+    „Spätester ÜT ist der n. WT" and „Ablauf des n. WT" are one rule, so this
+    and `end_of_werktag_after` return the same instant.
+    """
 
 def end_of_werktag_after(received: str, werktage: int) -> str:
-    """The GeLi Gas shape: the end of the n-th Werktag."""
+    """The end of the n-th Werktag, Europe/Berlin."""
 
 def next_werktag_at(received: str, at: str) -> str:
     """The GPKE shape: `at` on the first Werktag after the Übertragungstag."""
@@ -446,8 +450,7 @@ class AntwortObligation:
     family: str
     """`"gpke"`, `"geli-gas"`, `"wim"` or `"wim-gas"`."""
     shape: str
-    """`"werktag_at"`, `"same_day_at"`, `"same_day"`, `"end_of_werktag"` or
-    `"werktage_at_cutoff"`."""
+    """`"werktag_at"`, `"same_day_at"`, `"same_day"` or `"end_of_werktag"`."""
     werktage: int | None
     clock_time: str | None
     source: str

@@ -619,7 +619,7 @@ mod tests {
     fn the_answer_window_is_one_werktag() {
         use mako_fristen::antwort::{FristShape, antwort_obligation};
         let o = antwort_obligation(AUFTRAG_PID).expect("published");
-        assert_eq!(o.frist, FristShape::WerktageAtCutoff(1));
+        assert_eq!(o.frist, FristShape::EndOfWerktag(1));
         assert_eq!(o.antwort_pids, ANTWORT_PIDS);
         assert_eq!(o.ebd, Some(mako_pruefung::codes::EBD_WEITERVERPFLICHTUNG));
     }

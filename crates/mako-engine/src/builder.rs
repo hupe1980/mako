@@ -118,11 +118,14 @@ use std::sync::Arc;
 ///     fn configure(&self) -> Result<(), String> {
 ///         // Validate that every known BDEW format version has an adapter:
 ///         GPKE_ADAPTER_REGISTRY
-///             .validate_policy(&GpkeWorkflow::version_policy(), &KNOWN_FVS)
-///             .map_err(|uncovered| format!(
-///                 "gpke: missing adapters for format versions: {:?}",
-///                 uncovered
-///             ))
+///             .uncovered_format_versions(&KNOWN_FVS)
+///             .as_slice()
+///         {
+///             [] => Ok(()),
+///             uncovered => Err(format!(
+///                 "gpke: missing adapters for format versions: {uncovered:?}"
+///             )),
+///         }
 ///     }
 /// }
 ///
@@ -295,13 +298,14 @@ pub trait EngineModule: Send + 'static {
     ///
     /// The default implementation is a no-op (always returns `Ok(())`).
     /// Override it in domain crates to call
-    /// [`AdapterRegistry::validate_policy`] and emit structured errors.
+    /// [`AdapterRegistry::uncovered_format_versions`] and emit structured
+    /// errors.
     ///
     /// Note: if your validation needs access to the edi-energy profile
     /// registry, use [`profile_requirements`] instead — it does not require
     /// importing `edi-energy` in domain crates.
     ///
-    /// [`AdapterRegistry::validate_policy`]: crate::message_adapter::AdapterRegistry::validate_policy
+    /// [`AdapterRegistry::uncovered_format_versions`]: crate::message_adapter::AdapterRegistry::uncovered_format_versions
     /// [`profile_requirements`]: EngineModule::profile_requirements
     ///
     /// # Errors

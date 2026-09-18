@@ -78,8 +78,16 @@ fn angebot() -> C {
         message_ref: mref("QUO-1"),
         // Bindungsfrist: two weeks out.
         bindungsfrist: datetime!(2026-03-16 17:00 UTC),
+        gesendet_am: ANGEBOT_UT,
     }
 }
+
+/// Übertragungszeitpunkt of the outbound QUOTES 15003.
+///
+/// The `DTM+273` Bindungsfrist is a **duration** measured from it, so it is an
+/// input to the pure workflow rather than a clock read — which is what makes the
+/// rendered day count reproducible across a retry, a replay and this test suite.
+const ANGEBOT_UT: time::OffsetDateTime = datetime!(2026-03-02 10:00 UTC);
 
 fn bestellung() -> C {
     C::ReceiveBestellung {
@@ -229,6 +237,31 @@ fn angebot_registers_the_bindungsfrist_as_the_ordering_deadline() {
         .find(|d| d.label == BINDUNGSFRIST_LABEL)
         .expect("Bindungsfrist registered");
     assert_eq!(dl.due_at, datetime!(2026-03-16 17:00 UTC));
+}
+
+/// `DTM+273` is a **duration** (QUOTES AHB 1.1a §4.3), so the day count on the
+/// wire is a function of the Bindungsfrist *and* the Übertragungszeitpunkt.
+///
+/// Both are command inputs. Were the ÜT read from the clock inside `handle`, a
+/// `VersionConflict` retry would render a different QUOTES than the first
+/// attempt, and a replay of the stream would produce bytes that were never sent.
+/// Running `handle` twice over the same command must yield the identical
+/// payload.
+#[test]
+fn the_bindungsfrist_on_the_wire_is_reproducible() {
+    let mut state = S::default();
+    let out = W::handle(&state, anfrage()).unwrap();
+    for ev in &out.events {
+        state = W::apply(state.clone(), ev);
+    }
+    let first = W::handle(&state, angebot()).unwrap();
+    let again = W::handle(&state, angebot()).unwrap();
+    // 2026-03-02 10:00 → 2026-03-16 17:00 is 14 whole days.
+    assert_eq!(first.outbox[0].payload["bindungsfrist_tage"], 14);
+    assert_eq!(
+        first.outbox[0].payload, again.outbox[0].payload,
+        "a re-run of the same command must render the identical QUOTES",
+    );
 }
 
 #[test]

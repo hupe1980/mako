@@ -876,7 +876,7 @@ impl VertragdMcpHandler {
 #[prompt_handler]
 #[tool_handler]
 impl ServerHandler for VertragdMcpHandler {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()

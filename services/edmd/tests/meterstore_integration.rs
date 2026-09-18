@@ -80,6 +80,12 @@ async fn boot() -> (sqlx::PgPool, String, String, PgContainer, tempfile::TempDir
         .run(&pool)
         .await
         .expect("edmd migrations");
+    // `Daemon::migrate` does this in production; the suite has to as well, or a
+    // path that enqueues a CloudEvent is tested against a schema the running
+    // service does not have.
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("event_outbox schema");
 
     let warehouse = tempfile::tempdir().expect("warehouse tempdir");
     let warehouse_uri = format!("file://{}", warehouse.path().display());
@@ -1746,7 +1752,7 @@ async fn a_silent_measuring_point_is_found_reported_once_and_closed_on_return() 
         .expect("store fresh reads");
 
     // ── First sweep: the stale point is opened ────────────────────────────────
-    let first = run_surveillance_sweep(&repo, &cfg, "9910000000001", None, None).await;
+    let first = run_surveillance_sweep(&repo, &cfg, "9910000000001").await;
     let silent: Vec<_> = first
         .findings
         .iter()
@@ -1766,7 +1772,7 @@ async fn a_silent_measuring_point_is_found_reported_once_and_closed_on_return() 
     );
 
     // ── Second sweep, nothing changed: silent, not re-announced ───────────────
-    let second = run_surveillance_sweep(&repo, &cfg, "9910000000001", None, None).await;
+    let second = run_surveillance_sweep(&repo, &cfg, "9910000000001").await;
     assert_eq!(
         second.findings.len(),
         1,
@@ -1799,7 +1805,7 @@ async fn a_silent_measuring_point_is_found_reported_once_and_closed_on_return() 
         .await
         .expect("store the backfill");
 
-    let third = run_surveillance_sweep(&repo, &cfg, "9910000000001", None, None).await;
+    let third = run_surveillance_sweep(&repo, &cfg, "9910000000001").await;
     assert_eq!(third.resumed, 1, "the recovered point is closed");
     let resolved: Option<OffsetDateTime> = sqlx::query_scalar(
         "SELECT resolved_at FROM delivery_surveillance WHERE tenant = $1 AND malo_id = $2",
@@ -1835,7 +1841,7 @@ async fn surveillance_does_not_cross_tenants() {
         .await
         .expect("store other tenant's stale read");
 
-    let report = run_surveillance_sweep(&repo, &cfg, "9910000000001", None, None).await;
+    let report = run_surveillance_sweep(&repo, &cfg, "9910000000001").await;
     assert!(
         report.findings.is_empty(),
         "another tenant's silent point is not this tenant's finding: {:?}",
@@ -1907,7 +1913,7 @@ async fn a_standing_compliance_fault_is_announced_once_and_closed_when_fixed() {
     let expired = session(date!(2021 - 01 - 01), GatewayStatus::Operational);
     store(&pool, tenant, &expired, "OPERATIONAL").await;
 
-    let first = run_cls_compliance_sweep(&pool, tenant, None, None, 30, 2).await;
+    let first = run_cls_compliance_sweep(&pool, tenant, 30, 2).await;
     assert_eq!(first.sessions_with_issues, 1);
     assert_eq!(
         first.newly_opened, 1,
@@ -1916,7 +1922,7 @@ async fn a_standing_compliance_fault_is_announced_once_and_closed_when_fixed() {
 
     // Three more sweeps change nothing.
     for _ in 0..3 {
-        let again = run_cls_compliance_sweep(&pool, tenant, None, None, 30, 2).await;
+        let again = run_cls_compliance_sweep(&pool, tenant, 30, 2).await;
         assert_eq!(
             again.newly_opened, 0,
             "a standing fault must not re-announce on every sweep"
@@ -1942,7 +1948,7 @@ async fn a_standing_compliance_fault_is_announced_once_and_closed_when_fixed() {
     );
     store(&pool, tenant, &renewed, "OPERATIONAL").await;
 
-    let after = run_cls_compliance_sweep(&pool, tenant, None, None, 30, 2).await;
+    let after = run_cls_compliance_sweep(&pool, tenant, 30, 2).await;
     assert_eq!(after.sessions_with_issues, 0, "the fault is gone");
     assert_eq!(after.resolved, 1, "and the register closes it");
 
@@ -2008,7 +2014,7 @@ async fn a_replaced_gateway_is_not_swept() {
     .await
     .expect("store replaced session");
 
-    let report = run_cls_compliance_sweep(&pool, tenant, None, None, 30, 2).await;
+    let report = run_cls_compliance_sweep(&pool, tenant, 30, 2).await;
     assert_eq!(
         report.sessions_scanned, 0,
         "a swapped-out gateway is history, not fleet"
@@ -3214,4 +3220,100 @@ async fn query_as_of_describes_every_register_of_a_prosumer() {
         .await
         .expect("query_as_of");
     assert!(before.is_empty());
+}
+
+// ── Durable emission ─────────────────────────────────────────────────────────
+
+/// The § 60 Abs. 1 MsbG overdue notice and the rows it reports are one
+/// transaction.
+///
+/// `mark_overdue_confirmations` flips `OFFEN` → `UEBERFAELLIG` and returns
+/// `rows_affected()`. That UPDATE is not repeatable: once a row reads
+/// `UEBERFAELLIG` the next sweep's `WHERE status = 'OFFEN'` no longer matches
+/// it, so a notice that is lost after the commit is lost for good — the
+/// replacement deadline passes and nothing downstream is ever told. The event
+/// is therefore written to `event_outbox` inside the same transaction, and a
+/// failure to record it must take the status change with it.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_overdue_confirmation_sweep_records_its_notice_in_the_same_transaction() {
+    let (pool, _url, _warehouse, _container, _tmp) = boot().await;
+    let tenant = "9910000000001";
+
+    // One estimated reading, already past an eight-week deadline.
+    sqlx::query(
+        r"INSERT INTO estimated_read_confirmations
+              (tenant, malo_id, dtm_from, dtm_to, obis_code_norm, quality, status, created_at)
+          VALUES ($1, '51238696012', now() - interval '80 days',
+                  now() - interval '80 days' + interval '15 minutes', '1-0:1.8.0',
+                  'ESTIMATED', 'OFFEN', now() - interval '80 days')",
+    )
+    .bind(tenant)
+    .execute(&pool)
+    .await
+    .expect("seed an open confirmation");
+
+    let newly_overdue = edmd::confirmation::mark_overdue_confirmations(&pool, tenant, 8)
+        .await
+        .expect("sweep succeeds");
+    assert_eq!(
+        newly_overdue, 1,
+        "the seeded confirmation is past the deadline"
+    );
+
+    // The notice is durable, not a best-effort POST that a restarting receiver
+    // would have dropped.
+    let queued: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM event_outbox WHERE ce_type = $1 AND delivered_at IS NULL",
+    )
+    .bind(mako_events::messwert::READING_CONFIRMATION_OVERDUE)
+    .fetch_one(&pool)
+    .await
+    .expect("count queued notices");
+    assert_eq!(queued, 1, "the overdue notice is in the outbox");
+
+    // And the sweep is not repeatable, which is why the two had to be atomic:
+    // a second pass finds nothing and would emit nothing.
+    let again = edmd::confirmation::mark_overdue_confirmations(&pool, tenant, 8)
+        .await
+        .expect("second sweep succeeds");
+    assert_eq!(again, 0, "a flipped row is never `OFFEN` again");
+}
+
+/// A stored direct-push batch announces itself durably.
+///
+/// `de.messwert.reading.direct.stored` is what tells `billingd` to recompute, so
+/// a batch that is stored and never announced is consumption that is never
+/// billed — and nothing re-derives it. The announcement is enqueued whether or
+/// not a webhook is configured: gating the emission on the delivery target
+/// means a webhook added later cannot recover the events of the period before
+/// it, because nothing recorded them.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_queued_cloud_event_survives_without_a_configured_webhook() {
+    let (pool, _url, _warehouse, _container, _tmp) = boot().await;
+
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("edmd", "9910000000001"),
+        mako_events::messwert::READING_DIRECT_STORED,
+        "51238696012",
+        serde_json::json!({ "malo_id": "51238696012" }),
+    );
+    let mut conn = pool.acquire().await.expect("connection");
+    mako_service::outbox::enqueue(&mut conn, &ce)
+        .await
+        .expect("enqueue");
+
+    // Enqueue is idempotent on the CloudEvent id, so a retried request cannot
+    // double-announce a batch it already announced.
+    mako_service::outbox::enqueue(&mut conn, &ce)
+        .await
+        .expect("re-enqueue is a no-op");
+
+    let queued: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM event_outbox WHERE event_id = $1")
+        .bind(&ce.id)
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(queued, 1, "the same event is queued once, not twice");
 }

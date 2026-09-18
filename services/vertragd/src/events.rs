@@ -59,8 +59,18 @@ pub fn build_cloud_event(
 
 /// Read a MaKo process outcome off an inbound CloudEvent.
 ///
-/// Matches the outcome *suffix* rather than the full type, so a finer-grained
-/// per-process type would be understood without a change here.
+/// **The verdict is in `data`, not in the type.** `de.mako.process.completed`
+/// says a process reached a terminal state, not that it succeeded: `mako-gpke`
+/// emits it for both the NB's Bestätigung (PID 55002/55078) and its **Ablehnung**
+/// (55003/55080), and the two are told apart only by `data.accepted` /
+/// `data.outcome`. Reading the type suffix alone lets a refused Anmeldung set
+/// the contract `BESTAETIGT`, which enqueues the Beginnablesung and the
+/// Abrechnungskonto and bills a Marktlokation this Lieferant was never assigned.
+///
+/// So the payload decides whenever it carries a verdict, and the suffix is the
+/// fallback for the event types that carry none. A type whose suffix says
+/// confirmed and whose payload says rejected is resolved as **rejected**: the
+/// two disagreeing is exactly the case that must not activate supply.
 pub fn parse_mako_outcome(ce: &Value) -> Option<MakoOutcome> {
     let ce_type = ce.get("type")?.as_str()?;
     let data = ce.get("data")?;
@@ -81,28 +91,45 @@ pub fn parse_mako_outcome(ce: &Value) -> Option<MakoOutcome> {
         .and_then(|v| v.as_str())
         .map(str::to_owned);
 
-    match ce_type {
+    // The explicit verdict, when the emitter supplied one.
+    let payload_verdict = data.get("accepted").and_then(Value::as_bool).or_else(|| {
+        match data.get("outcome").and_then(Value::as_str) {
+            Some("accepted") => Some(true),
+            Some("rejected") => Some(false),
+            _ => None,
+        }
+    });
+
+    let suffix_verdict = match ce_type {
         t if t.ends_with(".bestaetigt")
             || t.ends_with(".confirmed")
             || t.ends_with(".completed") =>
         {
-            Some(MakoOutcome {
-                process_id,
-                malo_id,
-                confirmed: true,
-                erc_code: None,
-                reason: None,
-            })
+            Some(true)
         }
-        t if t.ends_with(".abgelehnt") || t.ends_with(".rejected") => Some(MakoOutcome {
-            process_id,
-            malo_id,
-            confirmed: false,
-            erc_code,
-            reason,
-        }),
+        t if t.ends_with(".abgelehnt") || t.ends_with(".rejected") => Some(false),
         _ => None,
-    }
+    };
+
+    // A type this service does not recognise is not an outcome, even when its
+    // payload carries an `accepted` key — that key belongs to some other
+    // process and joining on it would apply a foreign verdict to a contract.
+    suffix_verdict?;
+
+    // `false` from either side wins: a payload and a suffix that disagree is
+    // the shape that must not activate supply.
+    let confirmed = payload_verdict.unwrap_or(true) && suffix_verdict.unwrap_or(true);
+
+    Some(MakoOutcome {
+        process_id,
+        malo_id,
+        confirmed,
+        // Carried on a refusal only: a Bestätigung has no Ablehnungsgrund, and
+        // leaving a stale one on it would put an ERC code beside an accepted
+        // Marktlokation.
+        erc_code: if confirmed { None } else { erc_code },
+        reason: if confirmed { None } else { reason },
+    })
 }
 
 pub struct MakoOutcome {

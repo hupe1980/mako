@@ -400,7 +400,7 @@ keeps waiting.
 
 Deadlines resolve through **mako's own BDEW Werktage calendar**, so
 `kind: working-days` means the same thing to an agent's approval window as it
-does to a [`makod`](@/docs/services/makod.md) APERAK Frist — same holiday table, same 17:00 Europe/Berlin cut-off,
+does to a [`makod`](@/docs/services/makod.md) APERAK Frist — same holiday table, same Europe/Berlin resolution,
 and the calendar's digest is journaled with the instant it produced, so a later
 correction cannot retroactively move a window somebody relied on.
 

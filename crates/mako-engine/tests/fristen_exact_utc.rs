@@ -21,6 +21,7 @@ use mako_fristen::{
     HolidayCalendar, add_hours, add_werktage, aperak_strom_due_at, deadline_at_werktage,
 };
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
+use time_tz::{OffsetDateTimeExt, timezones};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: construct a UTC OffsetDateTime from date+time components
@@ -148,102 +149,118 @@ fn add_werktage_skips_neujahr() {
 // deadline_at_werktage: exact UTC output including 17:00 Berlin local time
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// deadline_at_werktage with 5 WT starting on a winter Monday:
-/// Mon Jan 5, 2026 + 5 WT (Jan 6 is holiday) → Mon Jan 12.
-/// 17:00 CET = 16:00 UTC.
+/// A Werktage Frist runs to the **end** of the due Werktag, and the offset it
+/// carries is the one in force in Berlin **on that date** — not on the day the
+/// message arrived.
 ///
-/// Note: deadline_at_werktage returns OffsetDateTime with local offset;
-/// compare as UTC instants via to_offset(UTC).
+/// Both halves matter. The rulebook states this Frist shape as a day („Ablauf
+/// des n. WT", „spätester ÜT ist der n. WT"), so cutting it at an
+/// end-of-business hour expires it early and escalates a counterparty still
+/// inside its window; and resolving the offset against the arrival date instead
+/// of the due date is the off-by-one-hour error these tests exist for.
+///
+/// Winter: Mon 2026-01-05 + 5 WT, skipping Heilige Drei Könige (Jan 6) → due
+/// Tue 2026-01-13, CET.
 #[test]
 fn deadline_at_werktage_5wt_winter_cet() {
-    // 2026-01-05 09:00 UTC = 10:00 CET (Monday, winter)
     let received = utc(2026, Month::January, 5, 9, 0);
-    let due =
-        deadline_at_werktage(received, 5, HolidayCalendar::BdewMaKo).to_offset(UtcOffset::UTC);
-    // Due date: 2026-01-13 (Tuesday), 17:00 CET = 16:00 UTC
-    let expected = utc(2026, Month::January, 13, 16, 0);
+    let due = deadline_at_werktage(received, 5, HolidayCalendar::BdewMaKo);
+
     assert_eq!(
-        due, expected,
-        "5 WT winter deadline (Heilige Drei Könige skipped) must be Tue Jan 13 at 17:00 CET = 16:00 UTC"
+        mako_fristen::berlin_date(due),
+        Date::from_calendar_date(2026, Month::January, 13).unwrap(),
+        "5 WT with Heilige Drei Könige skipped is Tue 2026-01-13"
+    );
+    assert_eq!(
+        due.to_timezone(timezones::db::europe::BERLIN).offset(),
+        UtcOffset::from_hms(1, 0, 0).unwrap(),
+        "January is CET (UTC+1)"
+    );
+    assert_eq!(
+        due,
+        mako_fristen::end_of_werktag_after(received, 5, HolidayCalendar::BdewMaKo),
+        "the window runs to the end of the Werktag, not to a cut-off hour"
     );
 }
 
-/// deadline_at_werktage with 10 WT starting on a summer Wednesday:
-/// Wed Jun 4, 2025 + 10 WT, accounting for Pfingstmontag (Jun 9 = holiday).
-/// Thu 5(1), Fri 6(2), [Sat 7 / Sun 8 not Werktage], [Mon 9 = Pfingstmontag, skip],
-/// Tue 10(3), Wed 11(4), Thu 12(5), Fri 13(6), Mon 16(7), Tue 17(8), Wed 18(9), Thu 19(10)…
-/// Due: Fri Jun 20. 17:00 CEST = 15:00 UTC.
+/// Summer: Wed 2025-06-04 + 10 WT, skipping Pfingstmontag (Jun 9) → due
+/// Fri 2025-06-20, CEST.
 #[test]
 fn deadline_at_werktage_10wt_summer_cest() {
-    // 2025-06-04 09:00 UTC = 11:00 CEST (Wednesday, summer)
     let received = utc(2025, Month::June, 4, 9, 0);
-    let due =
-        deadline_at_werktage(received, 10, HolidayCalendar::BdewMaKo).to_offset(UtcOffset::UTC);
-    // 17:00 CEST (UTC+2) = 15:00 UTC
-    let expected = utc(2025, Month::June, 20, 15, 0);
+    let due = deadline_at_werktage(received, 10, HolidayCalendar::BdewMaKo);
+
     assert_eq!(
-        due, expected,
-        "10 WT summer deadline (Pfingstmontag skipped) must be due Fri Jun 20 at 17:00 CEST = 15:00 UTC"
+        mako_fristen::berlin_date(due),
+        Date::from_calendar_date(2025, Month::June, 20).unwrap(),
+        "10 WT with Pfingstmontag skipped is Fri 2025-06-20"
+    );
+    assert_eq!(
+        due.to_timezone(timezones::db::europe::BERLIN).offset(),
+        UtcOffset::from_hms(2, 0, 0).unwrap(),
+        "June is CEST (UTC+2)"
+    );
+    assert_eq!(
+        due,
+        mako_fristen::end_of_werktag_after(received, 10, HolidayCalendar::BdewMaKo)
     );
 }
 
-/// deadline_at_werktage must produce 15:00 UTC (17:00 CEST) when the due date
-/// falls in summer time, even if the received timestamp is in winter time.
-/// Starting Mon Mar 24 (CET), +10 WT:
-/// Tue 25(1), Wed 26(2), Thu 27(3), Fri 28(4), Sat 29(5),
-/// Mon 31(6), Tue Apr 1(7), Wed 2(8), Thu 3(9), Fri 4(10) → due Fri Apr 4.
-/// Spring forward was Mar 30, so Apr 4 is CEST. 17:00 CEST = 15:00 UTC.
+/// The **due** date decides the offset, not the received date.
+///
+/// Received Mon 2025-03-24, still CET; +10 Werktage lands on Mon 2025-04-07,
+/// after the 2025-03-30 spring-forward, so the deadline is resolved against
+/// CEST. Resolving it against the arrival date's CET would move the instant by
+/// an hour.
 #[test]
 fn deadline_at_werktage_due_date_drives_offset() {
-    // 2025-03-24 09:00 UTC = 10:00 CET (Monday, still winter)
     let received = utc(2025, Month::March, 24, 9, 0);
-    let due =
-        deadline_at_werktage(received, 10, HolidayCalendar::BdewMaKo).to_offset(UtcOffset::UTC);
-    // Tue 25(1), Wed 26(2), Thu 27(3), Fri 28(4), Sat 29(5),
-    // Mon 31(6), Tue Apr 1(7), Wed 2(8), Thu 3(9), Fri 4(10)
-    // Due: 2025-04-04 (Friday, CEST). 17:00 CEST = 15:00 UTC.
-    let expected = utc(2025, Month::April, 7, 15, 0);
+    let due = deadline_at_werktage(received, 10, HolidayCalendar::BdewMaKo);
+
     assert_eq!(
-        due, expected,
-        "Due date in CEST must produce 15:00 UTC (17:00 CEST), \
-         even when received date was in CET"
+        mako_fristen::berlin_date(due),
+        Date::from_calendar_date(2025, Month::April, 7).unwrap()
+    );
+    assert_eq!(
+        due.to_timezone(timezones::db::europe::BERLIN).offset(),
+        UtcOffset::from_hms(2, 0, 0).unwrap(),
+        "the due date is past spring-forward, so CEST — even though arrival was CET"
     );
 }
 
-/// deadline_at_werktage crossing the spring-forward boundary (2025-03-30):
-/// 5 WT starting Thu Mar 27: Fri 28(1), Sat 29(2), Mon 31(3), Tue Apr 1(4), Wed Apr 2(5).
-/// Due: Wed Apr 2, in CEST. 17:00 CEST = 15:00 UTC.
+/// A window spanning the spring-forward boundary (2025-03-30) resolves on the
+/// due date: received Thu 2025-03-27 (CET), +5 WT → Thu 2025-04-03 (CEST).
 #[test]
 fn deadline_at_werktage_crosses_spring_forward_2025() {
-    // 2025-03-27 09:00 UTC = 10:00 CET (Thursday)
     let received = utc(2025, Month::March, 27, 9, 0);
-    let due =
-        deadline_at_werktage(received, 5, HolidayCalendar::BdewMaKo).to_offset(UtcOffset::UTC);
-    // Fri 28(1), Sat 29(2), Mon 31(3), Tue Apr 1(4), Wed Apr 2(5)
-    // Due: 2025-04-02 (Wednesday, CEST). 17:00 CEST = 15:00 UTC.
-    let expected = utc(2025, Month::April, 3, 15, 0);
+    let due = deadline_at_werktage(received, 5, HolidayCalendar::BdewMaKo);
+
     assert_eq!(
-        due, expected,
-        "Deadline spanning spring-forward must use CEST offset on due date (15:00 UTC)"
+        mako_fristen::berlin_date(due),
+        Date::from_calendar_date(2025, Month::April, 3).unwrap()
+    );
+    assert_eq!(
+        due.to_timezone(timezones::db::europe::BERLIN).offset(),
+        UtcOffset::from_hms(2, 0, 0).unwrap(),
+        "CEST on the due date"
     );
 }
 
-/// deadline_at_werktage crossing the fall-back boundary (2025-10-26):
-/// 5 WT starting Fri Oct 24: Sat 25(1), Mon 27(2), Tue 28(3), Wed 29(4), Thu 30(5).
-/// Due: Thu Oct 30, after fall-back (Oct 26), so CET. 17:00 CET = 16:00 UTC.
+/// And one spanning the fall-back boundary (2025-10-26): received Fri
+/// 2025-10-24 (CEST), +5 WT → Mon 2025-11-03 (CET).
 #[test]
 fn deadline_at_werktage_crosses_fall_back_2025() {
-    // 2025-10-24 09:00 UTC = 11:00 CEST (Friday — still summer before fall-back Sun)
     let received = utc(2025, Month::October, 24, 9, 0);
-    let due =
-        deadline_at_werktage(received, 5, HolidayCalendar::BdewMaKo).to_offset(UtcOffset::UTC);
-    // Sat 25(1), Mon 27(2), Tue 28(3), Wed 29(4), Thu 30(5)
-    // Due: 2025-10-30 (Thursday) — after fall-back (Oct 26), so CET
-    // 17:00 CET (UTC+1) = 16:00 UTC
-    let expected = utc(2025, Month::November, 3, 16, 0);
+    let due = deadline_at_werktage(received, 5, HolidayCalendar::BdewMaKo);
+
     assert_eq!(
-        due, expected,
-        "Deadline spanning fall-back must use CET offset on due date (16:00 UTC)"
+        mako_fristen::berlin_date(due),
+        Date::from_calendar_date(2025, Month::November, 3).unwrap()
+    );
+    assert_eq!(
+        due.to_timezone(timezones::db::europe::BERLIN).offset(),
+        UtcOffset::from_hms(1, 0, 0).unwrap(),
+        "CET on the due date"
     );
 }
 

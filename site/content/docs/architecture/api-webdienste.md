@@ -223,12 +223,13 @@ zeros.
 
 ## Specification versions
 
-`energy-api` implements **1.0.0**, the only tag in either spec repository.
+`energy-api` implements **1.0.0**.
 
 Release 2.0.0 was consulted via Mitteilung Nr. 55 for 01.10.2026 and then
 **excluded** by Mitteilung Nr. 56; only **API Guideline 1.0b** binds on that
-date. The 2.0.0 material lives on a consultation branch that is still moving, and
-no `2.0.0` tag exists. `energy_api::spec_version::RELEASE_2_0_0_SCOPE` carries
+date. A `2.0.0` tag was published on 24.07.2026, and its Änderungshistorie
+applies it *"ab dem 01.10.2027"* — a cycle after FV 2027-04.
+`energy_api::spec_version::RELEASE_2_0_0_SCOPE` carries
 what that release would change — the modularised schema library, six new process
 APIs, and the `identificationParameterId` property renames — so a reader can see
 the delta without going to the branch.

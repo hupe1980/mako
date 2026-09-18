@@ -640,6 +640,12 @@ pub enum WertebestellungCommand {
         /// what distinguishes the Angebot from the Ablehnung, since `DTM+273`
         /// is Muss on both.
         angebot: Box<crate::esa::Angebot>,
+        /// Übertragungszeitpunkt of this outbound QUOTES — the instant the
+        /// `DTM+273` Bindungsfrist **duration** is measured from. An input
+        /// rather than a clock read: the day count goes on the wire, so a
+        /// retried `handle` (after a `VersionConflict`) or a stream replay must
+        /// produce the byte-identical message the first attempt sent.
+        gesendet_am: OffsetDateTime,
     },
     /// UC 4.1 Nr. 2 — refuse the Anfrage; the process ends.
     RejectAnfrage {
@@ -1327,6 +1333,7 @@ impl Workflow for WimWertebestellungWorkflow {
                 bindungsfrist,
                 fruehester_start,
                 angebot,
+                gesendet_am,
             } => {
                 let Some(data) = state
                     .data()
@@ -1346,9 +1353,12 @@ impl Workflow for WimWertebestellungWorkflow {
                 // §4.3: DE 2380 „Zeitraum“, DE 2379 ∈ {802 Monat, 803 Woche,
                 // 804 Tag}). The workflow holds the absolute end it will
                 // enforce and hands the renderer the day count to the wire.
-                let bindungsfrist_tage = (bindungsfrist - OffsetDateTime::now_utc())
-                    .whole_days()
-                    .max(1);
+                //
+                // The duration is measured from this message's ÜT, which
+                // arrives on the command. Reading the clock here would put a
+                // different `DTM+273` on the wire on a retried attempt, and a
+                // replay of the stream would render bytes that were never sent.
+                let bindungsfrist_tage = (bindungsfrist - gesendet_am).whole_days().max(1);
                 let start = fruehester_start
                     .unwrap_or_else(|| data.gegenstand.wunschtermin.midnight().assume_utc());
                 // An Angebot has to price something: `SG31 PRI` is Muss inside

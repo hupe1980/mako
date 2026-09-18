@@ -38,7 +38,9 @@ use std::sync::Arc;
 
 use axum::{
     Router,
+    http::StatusCode,
     middleware::{self, Next},
+    response::IntoResponse,
 };
 use rmcp::{
     ErrorData as McpError, ServerHandler,
@@ -1642,7 +1644,7 @@ impl EinsdMcpHandler {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for EinsdMcpHandler {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()
@@ -1696,6 +1698,88 @@ impl ServerHandler for EinsdMcpHandler {
     }
 }
 
+// ── Per-tool authorization ────────────────────────────────────────────────────
+
+/// The Cedar action one mutating MCP tool requires — the same action its REST
+/// twin enforces, or `None` for a read tool.
+///
+/// The blanket `use-mcp` gate the shared middleware applies sits in the **read**
+/// permit of `einsd.cedar`, whose only condition is
+/// `principal_tenant == resource_tenant`. It therefore admits a principal with
+/// no market role at all — including an `[mcp] api_key` whose `api_key_roles`
+/// is unset. Three tools on this surface are not reads:
+///
+/// - `trigger_settle` calls the same settlement core as
+///   `POST /api/v1/settle/{year}/{month}` and produces the amount the
+///   Netzbetreiber owes for the period,
+/// - `import_marktwert` writes the Anlage 1 Marktwert series that prices every
+///   kWh of the period,
+/// - `import_epex_monthly_price` writes the EPEX monthly aggregate the § 51 and
+///   Post-EEG paths price from.
+///
+/// Without the action below, those three are reachable over `/mcp` by a caller
+/// the REST surface refuses with a 403 — the write permit holds them to NB, LF
+/// or ÜNB.
+///
+/// The names are the **wire** tool names (the `name = "…"` of the `#[tool]`
+/// attribute where one is given), because that is what a `tools/call` frame
+/// carries.
+pub fn mutating_tool_action(tool: &str) -> Option<&'static str> {
+    Some(match tool {
+        "trigger_settle" => "run-settlement",
+        "import_marktwert" | "import_epex_monthly_price" => "write-marktdaten",
+        _ => return None,
+    })
+}
+
+/// Tools this build serves that carry no `read_only_hint`, by wire name.
+///
+/// Consulted only to decide whether an unmapped tool is a read (served) or a
+/// write (refused). Adding a mutating tool without an entry in
+/// [`mutating_tool_action`] must fail closed, since the failure mode of an
+/// allowlist is the newest entry being the one it misses.
+pub const MUTATING_TOOLS: &[&str] = &[
+    "trigger_settle",
+    "import_marktwert",
+    "import_epex_monthly_price",
+];
+
+/// What a JSON-RPC frame asks for, as far as authorization is concerned.
+enum McpCall {
+    /// Not a `tools/call` — `initialize`, `tools/list`, a prompt — or a
+    /// read-only tool. The blanket `use-mcp` gate is the whole check.
+    ReadOnly,
+    /// A `tools/call` for a mutating tool, and the action it needs.
+    Tool(&'static str),
+    /// A `tools/call` naming a mutating tool with no entry in
+    /// [`mutating_tool_action`].
+    UnmappedMutation(String),
+}
+
+fn classify(body: &[u8]) -> McpCall {
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return McpCall::ReadOnly;
+    };
+    if v.get("method").and_then(serde_json::Value::as_str) != Some("tools/call") {
+        return McpCall::ReadOnly;
+    }
+    let Some(name) = v
+        .get("params")
+        .and_then(|p| p.get("name"))
+        .and_then(serde_json::Value::as_str)
+    else {
+        return McpCall::ReadOnly;
+    };
+    match mutating_tool_action(name) {
+        Some(action) => McpCall::Tool(action),
+        None if MUTATING_TOOLS.contains(&name) => McpCall::UnmappedMutation(name.to_owned()),
+        None => McpCall::ReadOnly,
+    }
+}
+
+/// One MCP frame's size cap — the body must be buffered to read the tool name.
+const MAX_MCP_BODY: usize = 1024 * 1024;
+
 // ── Auth middleware + router ──────────────────────────────────────────────────
 
 async fn mcp_auth_middleware(
@@ -1703,6 +1787,36 @@ async fn mcp_auth_middleware(
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
+    // A `tools/call` for a mutating tool must clear the same Cedar write action
+    // its REST twin enforces, not just `use-mcp`. Buffer the body to read the
+    // tool name, authorize, then reconstruct the request for `authenticate`.
+    let (parts, body) = request.into_parts();
+    let bytes = match axum::body::to_bytes(body, MAX_MCP_BODY).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "MCP request body too large").into_response();
+        }
+    };
+    match classify(&bytes) {
+        McpCall::ReadOnly => {}
+        McpCall::Tool(action) => {
+            if let Err(resp) = state.auth.authorize(&parts.headers, action) {
+                return resp;
+            }
+        }
+        McpCall::UnmappedMutation(name) => {
+            tracing::warn!(tool = %name, "einsd: mutating MCP tool carries no Cedar action");
+            return (
+                StatusCode::FORBIDDEN,
+                format!(
+                    "403 Forbidden: MCP tool {name:?} mutates but carries no Cedar action, so \
+                     it cannot be authorized — add it to `mutating_tool_action`"
+                ),
+            )
+                .into_response();
+        }
+    }
+    let request = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
     state.auth.authenticate(request, next).await
 }
 

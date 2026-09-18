@@ -115,6 +115,18 @@ name    = "chacha20"
 version = "0.9"
 reason  = "agentplane's keyring AEAD (chacha20poly1305 0.10, its latest release) pins chacha20 0.9; our rand 0.10 (mako-engine, lopdf) uses 0.10. Not unifiable from here — resolve when chacha20poly1305 bumps."
 
+# ── synstructure: the AS4 X.509 chain vs. the Typst/ICU chain ────────────────
+# Two independent upstream trees, neither of them mako's to unify:
+#   0.13 — asx-rs → x509-parser → asn1-rs → asn1-rs-derive  (WS-Security X.509)
+#   0.14 — typst / icu_collections → yoke → yoke-derive     (outputd rendering)
+# `synstructure` is a proc-macro helper, so both copies are build-time only and
+# neither reaches a binary. Resolve when `asn1-rs-derive` moves to synstructure
+# 0.14 (it is the older of the two chains).
+[[bans.skip]]
+name    = "synstructure"
+version = "0.13"
+reason  = "asn1-rs-derive (asx-rs → x509-parser) pins synstructure 0.13; yoke-derive (typst/icu) is on 0.14. Proc-macro only — build-time, never linked into a binary."
+
 # ── Iceberg cold tier vs. DataFusion ─────────────────────────────────────────
 # `edmd`'s cold-tier archive brings both: `iceberg` → `apache-avro` compresses
 # Avro blocks with zstd 0.13, while `datafusion` → `async-compression` is on

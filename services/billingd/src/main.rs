@@ -128,6 +128,20 @@ impl Daemon for Billingd {
                  inbound_webhook_secret or set allow_insecure_no_auth = true (dev only)."
             );
         }
+        // `OutboxWorker` signs only when it has a secret. With a webhook URL
+        // and no secret every de.billing.* CloudEvent — the Rechnung events
+        // accountingd books from among them — reaches the ERP unsigned, and the
+        // receiver has no way to tell one from a body anybody posted.
+        if !cfg.allow_insecure_no_auth
+            && cfg.erp_webhook_url.is_some()
+            && cfg.erp_hmac_secret.is_none()
+        {
+            anyhow::bail!(
+                "refusing to start: erp_webhook_url is set but erp_hmac_secret is not — \
+                 every de.billing.* CloudEvent would be delivered to the ERP unsigned. \
+                 Configure erp_hmac_secret or set allow_insecure_no_auth = true (dev only)."
+            );
+        }
         cfg.validate()?;
         if cfg.allow_insecure_no_auth {
             tracing::warn!(

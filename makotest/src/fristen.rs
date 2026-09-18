@@ -10,14 +10,13 @@
 //! 3. **Which Frist applies at all** — [`antwort_obligation`] answers that from
 //!    the platform's own table, per inbound Prüfidentifikator.
 //!
-//! Question 3 is the one a harness gets wrong. "A Werktage Frist expires at
-//! 17:00 Europe/Berlin" is true of the WiM MSB-Wechsel windows and of nothing
-//! else: a GPKE answer window is a **clock time on the *n*-th Werktag after the
+//! Question 3 is the one a harness gets wrong. There is no single formula: a
+//! GPKE answer window is a **clock time on the *n*-th Werktag after the
 //! Übertragungstag** (11:00 / 06:00 / 05:00 / 09:00) — or, for the Ersatz-/
 //! Grundversorgung and the LF-Zuordnung, that clock time **on the ÜT itself** —
-//! and a GeLi Gas window runs to the **end** of the *n*-th Werktag. Asserting a
-//! GPKE deadline with Werktage-plus-cutoff arithmetic is wrong by hours in one
-//! direction or six in the other, and the loose direction is silent.
+//! while GeLi Gas, WiM and MaBiS run to the **end** of the *n*-th Werktag.
+//! Asserting a GPKE deadline with end-of-Werktag arithmetic is wrong by hours in
+//! one direction or a day in the other, and the loose direction is silent.
 //!
 //! The two GPKE shapes share a clock time and land a day apart, so the Werktag
 //! count is load-bearing: a window read off `clock_time` alone is a day late for
@@ -80,14 +79,16 @@ pub fn next_werktag(date: &str) -> PyResult<String> {
 
 // ── Instants ──────────────────────────────────────────────────────────────────
 
-/// The instant `werktage` Werktage after `received` expires — 17:00 Berlin.
+/// The instant `werktage` Werktage after `received` expires — the **end** of
+/// that Werktag in Europe/Berlin.
 ///
 /// The result carries the **Europe/Berlin offset**, not UTC: rendering it as
 /// UTC hides the CET/CEST transition that makes it correct.
 ///
-/// This is the WiM MSB-Wechsel shape. For a Frist you are asserting against a
-/// real process, prefer [`antwort_deadline`], which picks the shape the
-/// Festlegung actually states for that Prüfidentifikator.
+/// „Spätester ÜT ist der *n*. WT" and „Ablauf des *n*. WT" are one rule, so this
+/// and [`end_of_werktag_after`] return the same instant. For a Frist you are
+/// asserting against a real process, prefer [`antwort_deadline`], which picks
+/// the shape the Festlegung actually states for that Prüfidentifikator.
 #[pyfunction]
 pub fn deadline_at_werktage(received: &str, werktage: u32) -> PyResult<String> {
     let t = parse_dt(received)?;
@@ -355,7 +356,6 @@ pub struct AntwortObligation {
     /// literal reading would otherwise place the deadline behind the message.
     /// | `"same_day"` | the anchor's own day, no cut-off stated | `0` | `None` |
     /// | `"end_of_werktag"` | the **end** of the *n*-th Werktag | *n* | `None` |
-    /// | `"werktage_at_cutoff"` | 17:00 Europe/Berlin on the *n*-th Werktag | *n* | `None` |
     ///
     /// Rendering a window from `clock_time` alone is a day out on
     /// `"same_day_at"`: „15:00 Uhr **am ÜT**" and „15:00 Uhr des 1. WT nach dem
@@ -422,7 +422,6 @@ fn convert(o: &antwort::AntwortObligation) -> AntwortObligation {
             Some(format!("{:02}:{:02}", at.hour(), at.minute())),
         ),
         antwort::FristShape::EndOfWerktag(n) => ("end_of_werktag", Some(n), None),
-        antwort::FristShape::WerktageAtCutoff(n) => ("werktage_at_cutoff", Some(n), None),
         // „Spätester ÜZ ist HH:MM Uhr **am ÜT**" — the same wall clock as
         // `werktag_at`, but on the arrival day itself, so `werktage` is 0
         // rather than absent.
@@ -473,10 +472,10 @@ pub fn antwort_obligations() -> Vec<AntwortObligation> {
 
 /// The instant an answer to `trigger_pid` is due, or `None` when unquantified.
 ///
-/// This picks the shape the Festlegung states — a clock time on the next
-/// Werktag for GPKE, the end of the *n*-th Werktag for GeLi Gas, the 17:00
-/// cut-off for WiM. Prefer it to [`deadline_at_werktage`] whenever the process
-/// is known: the Werktage form is right for one family out of four.
+/// This picks the shape the Festlegung states — a clock time on the *n*-th
+/// Werktag (or on the ÜT itself) for GPKE, the end of the *n*-th Werktag for
+/// GeLi Gas, WiM and MaBiS. Prefer it to [`deadline_at_werktage`] whenever the
+/// process is known: the bare Werktage form does not fit the GPKE shapes.
 #[pyfunction]
 pub fn antwort_deadline(trigger_pid: u32, received: &str) -> PyResult<Option<String>> {
     let t = parse_dt(received)?;
@@ -523,12 +522,12 @@ mod tests {
         let gpke = antwort_deadline(55_001, received).unwrap().unwrap();
         // GeLi Gas Anmeldung — end of the 4th Werktag.
         let gas = antwort_deadline(44_001, received).unwrap().unwrap();
-        // WiM Kündigung — 17:00 on the 3rd Werktag.
+        // WiM Kündigung — end of the 3rd Werktag.
         let wim = antwort_deadline(55_039, received).unwrap().unwrap();
 
         assert!(gpke.starts_with("2026-03-03T11:00:00"), "{gpke}");
-        assert!(wim.starts_with("2026-03-05T17:00:00"), "{wim}");
-        assert!(gas > wim, "4 WT to end-of-day outlasts 3 WT to 17:00");
+        assert!(wim.starts_with("2026-03-05T23:59:59"), "{wim}");
+        assert!(gas > wim, "4 Werktage outlast 3, both to end-of-day");
 
         // The trap this table exists to prevent: the Werktage form applied to a
         // GPKE PID is a different instant entirely.

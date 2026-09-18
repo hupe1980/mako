@@ -38,7 +38,7 @@ use crate::{
     event_store::{EventStore, ExpectedVersion},
     ids::{CausationId, ConversationId, CorrelationId, ProcessId, TenantId},
     outbox::PendingOutbox,
-    version::{WorkflowId, WorkflowVersionPolicy},
+    version::WorkflowId,
 };
 
 // ── PendingDeadline ───────────────────────────────────────────────────────────
@@ -377,39 +377,6 @@ pub trait Workflow: Send + Sync + 'static {
         payload: serde_json::Value,
     ) -> Result<serde_json::Value, EngineError> {
         Ok(payload)
-    }
-
-    /// Declares which BDEW format versions this workflow accepts for in-flight
-    /// processes.
-    ///
-    /// The engine uses this policy to validate that an incoming message's
-    /// format version is acceptable *before* constructing the command, surfacing
-    /// missing adapter coverage at dispatch time rather than during runtime
-    /// deserialization.
-    ///
-    /// The default returns [`WorkflowVersionPolicy::ForwardCompatible`] —
-    /// accept messages in any format version.  This is the safe default for
-    /// the majority of BDEW market-communication processes, which routinely
-    /// span annual release boundaries (e.g. a GPKE Lieferbeginn process
-    /// started in September may still receive APERAK replies in November under
-    /// the new October FV).
-    ///
-    /// Override to `Pinned` only for strictly short-lived workflows that are
-    /// guaranteed to complete within a single BDEW release cycle.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use mako_engine::version::WorkflowVersionPolicy;
-    ///
-    /// // Override to Pinned for a workflow with a 24h wall-clock SLA:
-    /// fn version_policy() -> WorkflowVersionPolicy {
-    ///     WorkflowVersionPolicy::Pinned
-    /// }
-    /// ```
-    #[must_use]
-    fn version_policy() -> WorkflowVersionPolicy {
-        WorkflowVersionPolicy::ForwardCompatible
     }
 
     /// Map a fired deadline to a compensating command.

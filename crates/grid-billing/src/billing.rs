@@ -190,8 +190,8 @@ pub(crate) fn warn_if_straddles_turnover(
 ///
 /// ## Legal references
 ///
-/// - Gas Grundpreis position → `GasNEV §14`
-/// - Arbeit positions → `StromNEV §21` (or `GasNEV §14` for Gas)
+/// - Gas Grundpreis position → `GasNEV §15 Abs. 7`
+/// - Arbeit positions → `StromNEV §21` (or `GasNEV §15` for Gas)
 /// - §14a Modul 1 positions → `Sect14aEnwg { module: Modul1 }` + `BNetzA BK8-22/010-A`
 /// - §14a Modul 2 position → `Sect14aEnwg { module: Modul2 }` + `BNetzA BK8-22/010-A`
 /// - §14a Modul 3 positions (HT/ST/NT and Spot) → `Sect14aEnwg { module: Modul3 }` + `BNetzA BK8-22/010-A`
@@ -279,7 +279,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     }
 
     // Resolved once from the period and recorded on the result. NNE positions
-    // are priced on the Entgelt axis (StromNEV §§17/21, GasNEV §§14–15, the
+    // are priced on the Entgelt axis (StromNEV §§17/21, GasNEV §15, the
     // §19 individual forms), which AgNeS replaces from 2029 — so a period the
     // Verordnung methodology no longer governs is refused here rather than
     // computed with lapsed math and merely tagged.
@@ -323,7 +323,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     let (settlement_type, arbeit_ref) = match input.sparte {
         Sparte::Gas => (
             SettlementType::NneGas,
-            LegalReference::GasNev { paragraph: "§14" },
+            LegalReference::GasNev { paragraph: "§15" },
         ),
         Sparte::Strom => (
             SettlementType::NneStrom,
@@ -334,7 +334,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     // Gas Grundpreis / Verrechnungspreis (Gas NNE monthly standing charge per GasNEV).
     //
     // Sparte-guarded like the Kapazitätsentgelt below: the position kind, its
-    // label and its GasNEV §14 citation are all gas-specific, so billing it on a
+    // label and its GasNEV citation are all gas-specific, so billing it on a
     // Strom settlement would put "Netzentgelt Grundpreis Gas" and a gas ordinance
     // on an electricity invoice.
     if let Some(gp) = input.grundpreis
@@ -345,7 +345,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                 severity: WarningSeverity::Warning,
                 code: "GRUNDPREIS_ON_STROM",
                 message: "a Grundpreis was supplied on a Strom settlement — the Gas \
-                          Verrechnungspreis position of §14 GasNEV does not apply to Strom"
+                          Verrechnungspreis position of §15 Abs. 7 GasNEV does not apply to Strom"
                     .to_owned(),
             });
         } else {
@@ -355,7 +355,9 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                 BillingPositionKind::NneGasGrundpreis,
                 months,
                 gp.eur_per_month,
-                vec![LegalReference::GasNev { paragraph: "§14" }],
+                vec![LegalReference::GasNev {
+                    paragraph: "§15 Abs. 7",
+                }],
                 tariff_src.clone(),
             );
             total += p.net_eur;
@@ -1650,7 +1652,7 @@ pub fn settle_abschlag(input: &AbschlagInput) -> Result<SettlementResult, Billin
             legal_refs: vec![
                 match input.sparte {
                     Sparte::Strom => LegalReference::StromNev { paragraph: "§21" },
-                    Sparte::Gas => LegalReference::GasNev { paragraph: "§14" },
+                    Sparte::Gas => LegalReference::GasNev { paragraph: "§15" },
                 },
                 LegalReference::Ustg {
                     paragraph: "§14 Abs. 5",
@@ -2104,7 +2106,7 @@ pub fn correct(
 ///
 /// Every position cites:
 /// - `BdewAhb { reference: "GeLi Gas 3.0 (BK7-24-01-009) §5.4" }` (governing ruling)
-/// - `GasNev { paragraph: "§14" }` (general GasNEV charge authorisation)
+/// - `GasNev { paragraph: "§15" }` (general GasNEV charge authorisation)
 ///
 /// ## Errors
 ///
@@ -2114,7 +2116,7 @@ pub fn correct(
 /// - Any position has `anzahl == 0` or `preis_eur < 0`
 ///
 /// [`BillingError::UnsupportedEntgeltRegime`] for a period governed by AgNeS
-/// (from 01.01.2029) — the GasNEV §14 charge authorisation the AWH positions
+/// (from 01.01.2029) — the GasNEV §15 charge authorisation the AWH positions
 /// rest on lapses with 2028.
 #[must_use = "handle the BillingError"]
 pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingError> {
@@ -2141,7 +2143,7 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
         }
     }
 
-    // AWH charges rest on the GasNEV §14 charge authorisation, i.e. on the
+    // AWH charges rest on the GasNEV §15 charge authorisation, i.e. on the
     // Entgelt axis that lapses with 2028 — so a period under AgNeS is refused
     // like an NNE settlement, not billed under an authorisation that no
     // longer exists.
@@ -2157,7 +2159,7 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
         LegalReference::BdewAhb {
             reference: "GeLi Gas 3.0 (BK7-24-01-009) §5.4",
         },
-        LegalReference::GasNev { paragraph: "§14" },
+        LegalReference::GasNev { paragraph: "§15" },
     ];
 
     let mut positions: Vec<SettlementPosition> = Vec::new();
@@ -3888,7 +3890,7 @@ mod tests {
     fn legal_reference_citations_non_empty() {
         for lr in [
             LegalReference::StromNev { paragraph: "§17" },
-            LegalReference::GasNev { paragraph: "§14" },
+            LegalReference::GasNev { paragraph: "§15" },
             LegalReference::Kav {
                 paragraph: "§2 Abs. 2",
             },
@@ -4863,7 +4865,7 @@ mod tests {
         assert!(err.to_string().contains("GBK-25-01"), "{err}");
     }
 
-    /// AWH charges rest on the GasNEV §14 authorisation — same refusal.
+    /// AWH charges rest on the GasNEV §15 authorisation — same refusal.
     #[test]
     fn a_2029_gas_awh_settlement_is_refused_under_agnes() {
         let input = GasAwhInput {
@@ -5577,7 +5579,7 @@ mod modul3_tests {
 
     // ── Sparte guards ────────────────────────────────────────────────────────
 
-    /// A Grundpreis on a Strom settlement is not billed as a GasNEV §14 position.
+    /// A Grundpreis on a Strom settlement is not billed as a GasNEV §15 position.
     #[test]
     fn a_grundpreis_on_strom_is_refused_not_labelled_gas() {
         let out = settle_nne(&NneInput {

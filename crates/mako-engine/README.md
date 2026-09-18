@@ -167,9 +167,14 @@ second — a crash between the two produces a lost APERAK with no recovery path.
 
 ## Format-version coexistence
 
-`WorkflowVersionPolicy::ForwardCompatible` (the default for all MaKo workflows)
-allows a process started under `FV2025-10-01` to continue under those rules
-after the `FV2026-10-01` cutover. Do not use `Pinned` as default.
+A process started under `FV2025-10-01` continues under those rules after the
+`FV2026-10-01` cutover: its `WorkflowId` records the creation FV permanently,
+while the **inbound message's own** FV selects the `MessageAdapter` that parses
+it. Nothing has to be declared per workflow — a process may be started under any
+known FV and answered under any later one, so every registry must cover every
+known FV regardless. Ask a registry what it does not cover with
+`AdapterRegistry::uncovered_format_versions`; `makod` refuses to boot on a
+non-empty answer.
 
 ---
 

@@ -413,7 +413,7 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check check-fuzz test test-doc test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-runner-routes check-wire-timestamps check-business-dates check-citations check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+ci: check check-fuzz test test-doc test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-citations check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -661,6 +661,16 @@ check-bo4e-examples:
 # `heute()` function.
 check-business-dates:
     cargo xtask check-business-dates
+
+# Refuse a clock, randomness, environment or filesystem read inside an
+# `impl … Workflow for …` block. A workflow is a pure function of
+# (state, command): `Process::execute_with_retry` re-runs `handle` after a
+# version conflict and every state is re-folded from the event log, so a value
+# taken from the environment makes a retry emit a different message than the one
+# already sent. The instant belongs on the command (`received_at`/`gesendet_am`),
+# resolved at the makod boundary.
+check-workflow-purity:
+    cargo xtask check-workflow-purity
 
 # Refuse a Festlegung cited in a form it does not publish. BK6-22-024 numbers its
 # operative part in Tenorziffern and carries its substance in Anlagen, so

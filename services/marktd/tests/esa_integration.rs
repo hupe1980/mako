@@ -530,8 +530,11 @@ async fn a_belegnummer_resolves_to_the_messprodukt_it_ordered() {
 /// the gap: the gate refuses only *new* orders, the list endpoint drops the row,
 /// and the MSB has no reason to act.
 ///
-/// `revoke_expired` is what the hourly sweep calls to close them and get the
-/// records back, so it can stop each covered location.
+/// `revoke_expired` closes a tenant's lapsed consents in one statement and
+/// returns the records. The hourly sweep takes the transactional path instead
+/// (`expired_candidates` + `claim_expired`, each row closed together with its
+/// event — see `an_expiry_whose_event_fails_stays_open_for_the_next_sweep`);
+/// what this pins is the expiry boundary both paths share.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_expired_consent_is_closed_and_returned_for_the_abbestellung() {
@@ -606,6 +609,134 @@ async fn an_expired_consent_is_closed_and_returned_for_the_abbestellung() {
         !decision.allowed,
         "the swept consent no longer authorises its locations"
     );
+}
+
+/// **A revocation whose event is lost must stay revocable.**
+///
+/// `revoked_at` is the sweep's own filter, so committing it is spending the
+/// only retry there is: a consent closed without its
+/// `de.markt.einwilligung.widerrufen` event can never be selected again, no
+/// Abbestellung is ever sent, and the ESA keeps receiving Typ-2 Messwerte with
+/// no lawful basis (Art. 6 Abs. 1 lit. a DSGVO). The revocation and the event
+/// therefore commit together — this drives the two halves
+/// `consent_lifecycle::close_expired` composes, with the event INSERT made to
+/// fail between them.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_expiry_whose_event_fails_stays_open_for_the_next_sweep() {
+    let Some((pool, _pg)) = test_pool("expiry-atomic").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool.clone());
+    let notify = tokio::sync::Notify::new();
+    let today = time::macros::date!(2026 - 06 - 15);
+
+    let id = repo
+        .grant(EinwilligungRecord {
+            valid_to: Some(time::macros::date!(2026 - 06 - 14)),
+            ..consent("AN-ATOMIC", &["51238696012"])
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.expired_candidates(today, TENANT).await.unwrap(),
+        vec![id],
+        "the lapsed consent is a sweep candidate"
+    );
+
+    // Sweep 1 — the event INSERT fails. `event_log` is renamed away, which is
+    // what a lost event looks like from inside the transaction.
+    sqlx::query("ALTER TABLE event_log RENAME TO event_log_away")
+        .execute(&pool)
+        .await
+        .expect("rename event_log away");
+    {
+        let mut tx = pool.begin().await.unwrap();
+        let claimed = PgEinwilligungRepository::claim_expired(&mut tx, id, today, TENANT)
+            .await
+            .expect("claim")
+            .expect("the lapsed consent is claimable");
+        assert_eq!(claimed.id, id);
+        marktd::outbox::enqueue(&mut *tx, &widerrufen_event(&claimed), &notify)
+            .await
+            .expect_err("the event INSERT must fail with event_log gone");
+        tx.rollback().await.expect("roll back the failed sweep");
+    }
+    sqlx::query("ALTER TABLE event_log_away RENAME TO event_log")
+        .execute(&pool)
+        .await
+        .expect("restore event_log");
+
+    // The consent is exactly as it was: still open, and still a candidate.
+    let after = repo
+        .get(TENANT, id)
+        .await
+        .unwrap()
+        .expect("consent present");
+    assert!(
+        after.revoked_at.is_none(),
+        "a consent whose event was lost must stay open — a committed revoked_at \
+         is invisible to every later sweep, so the ESA would deliver on forever"
+    );
+    assert_eq!(
+        repo.expired_candidates(today, TENANT).await.unwrap(),
+        vec![id],
+        "the next sweep retries it"
+    );
+
+    // Sweep 2 — the event lands, and both commit together.
+    let mut tx = pool.begin().await.unwrap();
+    let claimed = PgEinwilligungRepository::claim_expired(&mut tx, id, today, TENANT)
+        .await
+        .expect("claim")
+        .expect("still claimable");
+    marktd::outbox::enqueue(&mut *tx, &widerrufen_event(&claimed), &notify)
+        .await
+        .expect("enqueue");
+    tx.commit().await.expect("commit");
+
+    let closed = repo
+        .get(TENANT, id)
+        .await
+        .unwrap()
+        .expect("consent present");
+    assert!(closed.revoked_at.is_some(), "the consent is now closed");
+    assert!(
+        repo.expired_candidates(today, TENANT)
+            .await
+            .unwrap()
+            .is_empty(),
+        "a closed consent is not swept twice"
+    );
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM event_log WHERE ce_type = $1 AND envelope->'data'->>'grund' = $2",
+    )
+    .bind(mako_events::markt::EINWILLIGUNG_WIDERRUFEN)
+    .bind(marktd::consent_lifecycle::GRUND_ABGELAUFEN)
+    .fetch_one(&pool)
+    .await
+    .expect("count events");
+    assert_eq!(
+        events, 1,
+        "exactly one expiry event — the failed sweep left none behind"
+    );
+}
+
+/// The event the expiry sweep writes beside the revocation.
+fn widerrufen_event(rec: &EinwilligungRecord) -> mako_markt::cloudevents::MarktEvent {
+    mako_markt::cloudevents::MarktEvent::new(
+        TENANT,
+        mako_events::markt::EINWILLIGUNG_WIDERRUFEN,
+        rec.id.to_string(),
+        serde_json::json!({
+            "einwilligung_id": rec.id,
+            "esa_mp_id": rec.esa_mp_id,
+            "anschlussnutzer_ref": rec.anschlussnutzer_ref,
+            "location_ids": rec.location_ids,
+            "grund": marktd::consent_lifecycle::GRUND_ABGELAUFEN,
+            "valid_to": rec.valid_to.map(|d| d.to_string()),
+        }),
+    )
 }
 
 async fn pg_container() -> Option<(String, PgContainer)> {

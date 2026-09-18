@@ -533,8 +533,7 @@ pub(crate) async fn fail_reading_order(
 
     // The order is terminal but the reading is still owed, so the failure is
     // announced rather than just recorded.
-    if let Some(ref webhook_url) = state.erp_webhook_url {
-        let client = mako_service::http::default_client();
+    {
         let ce = mako_service::CloudEvent::new(
             mako_service::source("edmd", &state.tenant),
             mako_events::messwert::READING_ORDER_FAILED,
@@ -552,16 +551,7 @@ pub(crate) async fn fail_reading_order(
             }),
         )
         .extension("tenantid", state.tenant.clone());
-        if let Err(e) = mako_service::post_ce_with_retry(
-            &client,
-            webhook_url,
-            &ce,
-            state.webhook_secret_bytes(),
-        )
-        .await
-        {
-            tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
-        }
+        state.emit(&ce).await;
     }
 
     (

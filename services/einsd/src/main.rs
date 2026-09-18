@@ -83,6 +83,21 @@ impl Daemon for Einsd {
                  refusing to serve the settlement API unauthenticated"
             );
         }
+        // `OutboxWorker` signs only when it has a secret. With a webhook URL and
+        // none, every de.eeg.* CloudEvent — the settled amounts the ERP pays out
+        // on among them — reaches the receiver unsigned and indistinguishable
+        // from a body anybody posted.
+        if cfg.erp_webhook_url.is_some()
+            && cfg.erp_hmac_secret.is_none()
+            && !cfg.allow_insecure_no_auth
+        {
+            anyhow::bail!(
+                "einsd: erp_webhook_url is set but erp_hmac_secret is not — the outbox \
+                 worker signs only when it has a secret, so every de.eeg.* CloudEvent, \
+                 settlement amounts included, would reach the ERP unsigned. Configure \
+                 erp_hmac_secret, or set allow_insecure_no_auth = true"
+            );
+        }
 
         // Shared HTTP client from the runner, wrapped in `Arc` for the workers and
         // MCP state that hold onto it.

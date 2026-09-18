@@ -219,14 +219,14 @@ def assert_deadline_is(
     Pass `pid` — the **inbound** Prüfidentifikator that started the clock — and
     the expectation comes from the platform's own answer-Frist table, in the
     shape that process really uses. Pass `werktage` only for a window with no
-    table entry, where you are asserting the WiM cut-off shape explicitly.
+    table entry, where you are asserting the end-of-Werktag shape explicitly.
 
     Both `actual` and `received` are RFC 3339. Write it this way rather than
     comparing dates: a day-granular comparison passes on a deadline that is
     hours wrong, and no single shape fits every family — GPKE answers are due at
     a **clock time on the n-th Werktag after the Übertragungstag** or on the
-    **ÜT itself**, GeLi Gas at the **end of the n-th Werktag**, WiM at **17:00 on
-    the n-th**.
+    **ÜT itself**, while GeLi Gas, WiM and MaBiS run to the **end of the n-th
+    Werktag**.
 
     The comparison is over **instants**, not over the strings. A Frist carries
     the Europe/Berlin offset and a platform commonly reports it in UTC:
@@ -237,7 +237,7 @@ def assert_deadline_is(
     if (pid is None) == (werktage is None):
         raise ValueError(
             "pass exactly one of pid= (the published Frist for that process) or "
-            "werktage= (an explicit WiM-shaped cut-off)"
+            "werktage= (an explicit end-of-Werktag window)"
         )
 
     if pid is not None:
@@ -254,7 +254,7 @@ def assert_deadline_is(
     else:
         assert werktage is not None  # narrowed by the guard above
         expected = deadline_at_werktage(received, werktage)
-        basis = f"{werktage} Werktage to the 17:00 Europe/Berlin cut-off"
+        basis = f"{werktage} Werktage to the end of that Werktag, Europe/Berlin"
 
     if _instant(actual) != _instant(expected):
         raise AssertionError(

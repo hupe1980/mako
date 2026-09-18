@@ -25,7 +25,8 @@
 //!    transitions to `Rejected`.
 //!
 //! These assertions collectively verify that:
-//! - `WorkflowVersionPolicy::ForwardCompatible` is the default for GeLi Gas.
+//! - A GeLi Gas process keeps its creation `WorkflowId` while the inbound
+//!   message's own FV picks the adapter.
 //! - The 10-Werktage APERAK window label (`LIEFERBEGINN_RESPONSE_WINDOW_LABEL`) is
 //!   consistent with what the engine uses in `deadline_dispatch.rs`.
 //! - A mid-flight version switch (FV2025→FV2026) does not break state continuity.

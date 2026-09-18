@@ -94,7 +94,7 @@ graph TB
 |---|---|---|---|
 | [invoicd](@/docs/services/invoicd.md) | `:8280` | LF | INVOIC plausibility-check — eight stages plus the WiM 31003 send window (incl. ToU band routing via `zaehlzeitregister`), auto-settle/dispute, § 147 AO / GoBD receipts |
 | [netzbilanzd](@/docs/services/netzbilanzd.md) | `:8680` | NB | NNE/KA/MMM/MSB/AWH billing — generates INVOIC 31001/31002/31005/31009/31011, full REMADV lifecycle, §14a Modul 2 ToU, §42b EnWG GGV, Redispatch 2.0 Kostenblatt, 8-tool MCP server |
-| [sperrd](@/docs/services/sperrd.md) | `:8780` | NB | Sperrung execution tracking — IFTSTA 21039 auto-dispatch on field confirmation; `GET /stats` compliance snapshot; tenant isolation; 4-tool MCP server |
+| [sperrd](@/docs/services/sperrd.md) | `:8780` | NB | Sperrung execution tracking — IFTSTA 21039 auto-dispatch on field confirmation; `GET /api/v1/sperr-orders/stats` compliance snapshot; tenant isolation; 4-tool MCP server |
 
 ## Energy Data & Observability
 

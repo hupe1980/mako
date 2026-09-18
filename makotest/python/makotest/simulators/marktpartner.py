@@ -126,8 +126,8 @@ class Answer:
     #: for the same PID answers the first request; this one answers the repeat.
     nur_bei_offenem_vorgang: bool = False
     #: Werktage to sit on the answer before sending it. `0` answers the moment
-    #: the request arrives; anything else sends at **17:00 Berlin on the n-th
-    #: Werktag**, which is how a *late* answer is produced — the message is
+    #: the request arrives; anything else sends at the **end of the n-th Werktag
+    #: in Berlin**, which is how a *late* answer is produced — the message is
     #: conformant and the timing is not, and a platform has to notice. It moves
     #: `Reply.answered_at`, never `Reply.due_at`: the Frist is the Festlegung's
     #: and a counterparty does not get to move it.

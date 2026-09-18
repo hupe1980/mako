@@ -70,6 +70,88 @@ fn a_rejection_keeps_the_erc_code_the_customer_is_told() {
     assert_eq!(outcome.reason.as_deref(), Some("MaLo nicht im Netzgebiet"));
 }
 
+/// The refusal `mako-gpke` actually emits, in the envelope it actually uses.
+///
+/// A GPKE Ablehnung (PID 55003/55080) leaves `mako-gpke` as an outbox entry of
+/// type `ProcessCompleted`, which `makod` maps to `de.mako.process.completed` —
+/// the same CloudEvent type a Bestätigung uses. Only `accepted`/`outcome` in
+/// `data` tell them apart. Reading the suffix alone sets the contract
+/// `BESTAETIGT`, enqueues the Beginnablesung and the Abrechnungskonto, and bills
+/// a Marktlokation the Netzbetreiber refused to assign.
+#[test]
+fn a_refusal_wearing_the_completed_type_is_not_a_confirmation() {
+    let outcome = parse_mako_outcome(&ce(
+        "de.mako.process.completed",
+        serde_json::json!({
+            "pid": 55003,
+            "process_id": "P-3",
+            "malo_id": "51238696012",
+            "accepted": false,
+            "outcome": "rejected",
+            "reason": "MaLo nicht im Netzgebiet",
+        }),
+    ))
+    .expect("a terminal process event is an outcome");
+    assert!(
+        !outcome.confirmed,
+        "`accepted: false` is the verdict; the `.completed` suffix is not"
+    );
+    assert_eq!(outcome.reason.as_deref(), Some("MaLo nicht im Netzgebiet"));
+}
+
+/// The acceptance half of the same envelope still reads as one.
+#[test]
+fn an_acceptance_wearing_the_completed_type_is_a_confirmation() {
+    let outcome = parse_mako_outcome(&ce(
+        "de.mako.process.completed",
+        serde_json::json!({
+            "pid": 55002,
+            "process_id": "P-4",
+            "accepted": true,
+            "outcome": "accepted",
+        }),
+    ))
+    .expect("a terminal process event is an outcome");
+    assert!(outcome.confirmed);
+}
+
+/// `outcome` alone decides when `accepted` is absent.
+#[test]
+fn the_outcome_string_decides_without_an_accepted_flag() {
+    let rejected = parse_mako_outcome(&ce(
+        "de.mako.process.completed",
+        serde_json::json!({ "process_id": "P-5", "outcome": "rejected" }),
+    ))
+    .expect("an outcome");
+    assert!(!rejected.confirmed);
+}
+
+/// A verdict-free terminal event still reads off the suffix, so the event types
+/// that carry no payload verdict keep working.
+#[test]
+fn a_payload_without_a_verdict_falls_back_to_the_suffix() {
+    let outcome = parse_mako_outcome(&ce(
+        "de.mako.process.completed",
+        serde_json::json!({ "process_id": "P-6" }),
+    ))
+    .expect("an outcome");
+    assert!(outcome.confirmed);
+}
+
+/// An `accepted` key on a type this service does not classify is somebody
+/// else's verdict and must not become a contract outcome.
+#[test]
+fn a_foreign_events_accepted_flag_is_not_an_outcome() {
+    assert!(
+        parse_mako_outcome(&ce(
+            "de.markt.malo.updated",
+            serde_json::json!({ "accepted": true }),
+        ))
+        .is_none(),
+        "only a recognised outcome type may carry a verdict"
+    );
+}
+
 #[test]
 fn an_unrelated_event_is_not_an_outcome() {
     assert!(parse_mako_outcome(&ce("de.markt.malo.updated", serde_json::json!({}))).is_none());

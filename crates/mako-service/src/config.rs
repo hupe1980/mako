@@ -403,7 +403,8 @@ mod env_indirection_tests {
         );
         let err = resolve_dict(&mut dict).expect_err("an unset variable must refuse");
         assert!(
-            err.to_string().contains("MAKO_TEST_ENVREF_DEFINITELY_UNSET"),
+            err.to_string()
+                .contains("MAKO_TEST_ENVREF_DEFINITELY_UNSET"),
             "the error must name the variable, got: {err}"
         );
     }

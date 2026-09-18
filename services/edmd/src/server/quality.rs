@@ -614,9 +614,7 @@ pub async fn post_quality_rescore(
     // `BATCH_RESCORE`), which is what a billing dispute reads.
     //
     // Emit a quality warning CloudEvent if warranted.
-    if quality.has_warnings
-        && let Some(ref url) = state.erp_webhook_url
-    {
+    if quality.has_warnings {
         let event_id = uuid::Uuid::new_v4().to_string();
         let ce = mako_service::CloudEvent::new(
             mako_service::source("edmd", &state.tenant),
@@ -636,12 +634,7 @@ pub async fn post_quality_rescore(
         )
         .with_id(event_id)
         .extension("tenantid", state.tenant.clone());
-        let client = mako_service::http::default_client();
-        if let Err(e) =
-            mako_service::post_ce_with_retry(&client, url, &ce, state.webhook_secret_bytes()).await
-        {
-            tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
-        }
+        state.emit(&ce).await;
     }
 
     (

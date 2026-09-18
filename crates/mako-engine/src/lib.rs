@@ -56,7 +56,7 @@
 //! |--------|----------|
 //! | [`ids`] | Typed identifier newtypes (`EventId`, `StreamId`, `ProcessId`, `ProcessIdentity`, `DeadlineId`, …) |
 //! | [`types`] | Semantic domain identifiers (`MaLo`, `MeLo`, `MarktpartnerCode`, `MessageRef`, `DeviceId`, `BkvId`, `UenbId`, `BillingPeriod`) |
-//! | [`version`] | `FormatVersion`, `WorkflowId`, and `WorkflowVersionPolicy` |
+//! | [`version`] | `FormatVersion` and `WorkflowId` |
 //! | [`envelope`] | `EventEnvelope` and `NewEvent` |
 //! | [`error`] | `EngineError`, `WorkflowError` |
 //! | [`event_store`] | `EventStore` trait (with `stream_version`) + `InMemoryEventStore` |

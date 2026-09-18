@@ -19,9 +19,9 @@
 //! (`accepts_format_version`), receives a parsed `AnyMessage`, and returns the
 //! domain command to dispatch.
 //!
-//! Adapters are registered in an [`AdapterRegistry`] at engine startup.  The
-//! registry validates at registration time that all format versions in the
-//! workflow's [`WorkflowVersionPolicy`] have a registered adapter.
+//! Adapters are registered in an [`AdapterRegistry`] at engine startup, and
+//! the registry reports which of the binary's known format versions no adapter
+//! claims ([`AdapterRegistry::uncovered_format_versions`]).
 //!
 //! # Example
 //!
@@ -51,11 +51,7 @@
 //! registry.register(GpkeAperakAdapter);
 //! ```
 
-use crate::{
-    error::EngineError,
-    version::{FormatVersion, WorkflowVersionPolicy},
-    workflow::Workflow,
-};
+use crate::{error::EngineError, version::FormatVersion, workflow::Workflow};
 
 // ── MessageAdapter trait ──────────────────────────────────────────────────────
 
@@ -74,8 +70,7 @@ pub trait MessageAdapter<W: Workflow>: Send + Sync + 'static {
     /// `fv`.
     ///
     /// The [`AdapterRegistry`] calls this during validation to confirm that
-    /// every format version declared by the workflow's
-    /// [`WorkflowVersionPolicy`] is covered.
+    /// every format version the binary knows about is covered.
     fn accepts_format_version(&self, fv: &FormatVersion) -> bool;
 
     /// Translate a raw parsed message into a domain command.
@@ -100,9 +95,9 @@ pub trait MessageAdapter<W: Workflow>: Send + Sync + 'static {
 /// Runtime registry of [`MessageAdapter`]s for a single workflow type `W`.
 ///
 /// Adapters are registered at startup via [`AdapterRegistry::register`].
-/// After all adapters are registered, call [`AdapterRegistry::validate_policy`]
-/// to confirm that every format version declared in the workflow's
-/// [`WorkflowVersionPolicy`] is covered by at least one adapter.
+/// After all adapters are registered, call
+/// [`AdapterRegistry::uncovered_format_versions`] to confirm that every format
+/// version the binary knows about is claimed by at least one adapter.
 ///
 /// # Example
 ///
@@ -112,15 +107,15 @@ pub trait MessageAdapter<W: Workflow>: Send + Sync + 'static {
 /// let mut registry: AdapterRegistry<MyWorkflow> = AdapterRegistry::new();
 /// registry.register(MyFV2025Adapter);
 /// registry.register(MyFV2026Adapter);
-/// registry
-///     .validate_policy(
-///         &MyWorkflow::version_policy(),
-///         &[
+/// assert!(
+///     registry
+///         .uncovered_format_versions(&[
 ///             FormatVersion::new("FV2025-10-01"),
 ///             FormatVersion::new("FV2026-10-01"),
-///         ],
-///     )
-///     .expect("all format versions must have a registered adapter");
+///         ])
+///         .is_empty(),
+///     "every format version must have a registered adapter",
+/// );
 /// ```
 pub struct AdapterRegistry<W: Workflow> {
     adapters: Vec<Box<dyn MessageAdapter<W>>>,
@@ -175,57 +170,28 @@ impl<W: Workflow> AdapterRegistry<W> {
         )))
     }
 
-    /// Validate that every format version in `known_fvs` is covered by at
-    /// least one registered adapter, according to `policy`.
+    /// Format versions in `known_fvs` that no registered adapter claims.
     ///
-    /// `known_fvs` is typically the set of all registered BDEW profiles for
-    /// the workflow's message type.  In practice, call this at engine startup
-    /// with the format versions returned by `ReleaseRegistry::all_profiles()`.
+    /// `known_fvs` is the set of BDEW format versions the running binary has
+    /// profiles for. An empty return value means every one of them can be
+    /// parsed into this workflow's command type.
     ///
-    /// # Behaviour per policy
+    /// A non-empty one is a **startup** error, not a runtime one: the gap is a
+    /// release the binary knows about and this workflow cannot answer, so the
+    /// first counterparty message in that format would dead-letter. `makod`
+    /// refuses to boot on it rather than discovering it on the wire.
     ///
-    /// | Policy | Validation rule |
-    /// |--------|-----------------|
-    /// | `Pinned` | All `known_fvs` must be covered. A Pinned workflow can be
-    ///   started under any known FV; every one of them must have an adapter. |
-    /// | `ForwardCompatible` | Same — all `known_fvs` must be covered so the
-    ///   workflow can handle messages in every FV it may encounter. |
-    /// | `Explicit(list)` | Only the explicitly listed FVs must be covered. |
-    ///
-    /// Passing an empty `known_fvs` slice skips all coverage checks and
-    /// always returns `Ok(())`.
-    ///
-    /// # Errors
-    ///
-    /// Returns a non-empty list of uncovered format versions.  The engine
-    /// should treat this as a startup error rather than a runtime error.
-    pub fn validate_policy(
-        &self,
-        policy: &WorkflowVersionPolicy,
-        known_fvs: &[FormatVersion],
-    ) -> Result<(), Vec<FormatVersion>> {
-        let must_cover: &[FormatVersion] = match policy {
-            // Pinned and ForwardCompatible both require coverage of every
-            // currently-known FV.  (For Pinned, any of the known FVs may be
-            // used as the process creation FV; for ForwardCompatible, the
-            // workflow accepts all of them.)
-            WorkflowVersionPolicy::Pinned | WorkflowVersionPolicy::ForwardCompatible => known_fvs,
-
-            // Explicit lists the exact FVs that need coverage.
-            WorkflowVersionPolicy::Explicit(required) => required.as_slice(),
-        };
-
-        let uncovered: Vec<FormatVersion> = must_cover
+    /// The check is deliberately not conditioned on anything a workflow
+    /// declares. A process may be started under any known format version and a
+    /// counterparty may reply under any later one, so every known format
+    /// version has to be covered — there is no narrower set that is safe.
+    #[must_use]
+    pub fn uncovered_format_versions(&self, known_fvs: &[FormatVersion]) -> Vec<FormatVersion> {
+        known_fvs
             .iter()
             .filter(|fv| !self.adapters.iter().any(|a| a.accepts_format_version(fv)))
             .cloned()
-            .collect();
-
-        if uncovered.is_empty() {
-            Ok(())
-        } else {
-            Err(uncovered)
-        }
+            .collect()
     }
 
     /// Returns the number of registered adapters.
@@ -341,7 +307,7 @@ mod tests {
     use super::*;
     use crate::{
         error::WorkflowError,
-        version::{FormatVersion, WorkflowVersionPolicy},
+        version::FormatVersion,
         workflow::{CommandPayload, EventPayload, Workflow},
     };
 
@@ -419,97 +385,46 @@ mod tests {
     }
 
     #[test]
-    fn validate_policy_explicit_all_covered() {
+    fn every_known_format_version_covered_reports_no_gap() {
         let mut registry: AdapterRegistry<TestWorkflow> = AdapterRegistry::new();
         registry.register(FnAdapter::new(
             |fv| matches!(fv.as_str(), "FV2025-10-01" | "FV2026-10-01"),
             |_raw, _fv| Ok(TestCommand::Fire),
         ));
-        let policy = WorkflowVersionPolicy::Explicit(vec![
-            FormatVersion::new("FV2025-10-01"),
-            FormatVersion::new("FV2026-10-01"),
-        ]);
         let known = vec![
             FormatVersion::new("FV2025-10-01"),
             FormatVersion::new("FV2026-10-01"),
         ];
-        assert!(registry.validate_policy(&policy, &known).is_ok());
+        assert!(registry.uncovered_format_versions(&known).is_empty());
     }
 
     #[test]
-    fn validate_policy_explicit_gap_detected() {
+    fn a_format_version_no_adapter_claims_is_reported() {
         let mut registry: AdapterRegistry<TestWorkflow> = AdapterRegistry::new();
-        // Only FV2025 adapter registered.
         registry.register(FnAdapter::new(
             |fv| fv.as_str() == "FV2025-10-01",
             |_raw, _fv| Ok(TestCommand::Fire),
         ));
-        let policy = WorkflowVersionPolicy::Explicit(vec![
-            FormatVersion::new("FV2025-10-01"),
-            FormatVersion::new("FV2026-10-01"), // <-- no adapter
-        ]);
         let known = vec![
             FormatVersion::new("FV2025-10-01"),
-            FormatVersion::new("FV2026-10-01"),
+            FormatVersion::new("FV2026-10-01"), // no adapter → gap
         ];
-        let result = registry.validate_policy(&policy, &known);
-        assert!(result.is_err());
-        let gaps = result.unwrap_err();
-        assert_eq!(gaps.len(), 1);
-        assert_eq!(gaps[0].as_str(), "FV2026-10-01");
+        assert_eq!(
+            registry.uncovered_format_versions(&known),
+            vec![FormatVersion::new("FV2026-10-01")]
+        );
     }
 
+    /// An empty `known_fvs` cannot fail, which is why the caller — not this
+    /// function — is responsible for supplying the real profile list.
+    ///
+    /// `makod::startup::validate_adapter_coverage` refuses an empty
+    /// `known_fvs()` for exactly this reason: a coverage check whose input is
+    /// empty reports "covered" for a registry with no adapters at all.
     #[test]
-    fn validate_policy_pinned_empty_known_fvs_always_ok() {
-        // When no known FVs are supplied, there is nothing to validate —
-        // even an empty registry passes.  Callers should always provide the
-        // actual registered profile list for meaningful coverage checks.
+    fn an_empty_known_set_reports_no_gap_even_for_an_empty_registry() {
         let registry: AdapterRegistry<TestWorkflow> = AdapterRegistry::new();
-        assert!(
-            registry
-                .validate_policy(&WorkflowVersionPolicy::Pinned, &[])
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn validate_policy_pinned_with_known_fvs_detects_gap() {
-        // Pinned policy with known FVs: all must be covered.
-        let mut registry: AdapterRegistry<TestWorkflow> = AdapterRegistry::new();
-        registry.register(FnAdapter::new(
-            |fv| fv.as_str() == "FV2025-10-01",
-            |_raw, _fv| Ok(TestCommand::Fire),
-        ));
-        let known = vec![
-            FormatVersion::new("FV2025-10-01"),
-            FormatVersion::new("FV2026-10-01"), // no adapter → gap
-        ];
-        let result = registry.validate_policy(&WorkflowVersionPolicy::Pinned, &known);
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err(),
-            vec![FormatVersion::new("FV2026-10-01")]
-        );
-    }
-
-    #[test]
-    fn validate_policy_forward_compatible_with_known_fvs_detects_gap() {
-        // ForwardCompatible must cover every known FV.
-        let mut registry: AdapterRegistry<TestWorkflow> = AdapterRegistry::new();
-        registry.register(FnAdapter::new(
-            |fv| fv.as_str() == "FV2025-10-01",
-            |_raw, _fv| Ok(TestCommand::Fire),
-        ));
-        let known = vec![
-            FormatVersion::new("FV2025-10-01"),
-            FormatVersion::new("FV2026-10-01"), // no adapter → gap
-        ];
-        let result = registry.validate_policy(&WorkflowVersionPolicy::ForwardCompatible, &known);
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err(),
-            vec![FormatVersion::new("FV2026-10-01")]
-        );
+        assert!(registry.uncovered_format_versions(&[]).is_empty());
     }
 
     #[test]

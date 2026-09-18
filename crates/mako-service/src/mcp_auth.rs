@@ -27,8 +27,13 @@
 //!   the [`McpIdentity`][crate::mcp_auth::McpIdentity] extension injected into the request for downstream audit logging.
 //! - A named key is a Cedar principal like any token caller: `User::"<key name>"`
 //!   carrying the roles its configuration declares. A key holder therefore
-//!   reaches only what the policy grants those roles, and a role-less key is
-//!   refused by every role-testing `permit`.
+//!   reaches only what the policy grants those roles. A role-less key is refused
+//!   by every role-testing `permit` — but not by a tenant-only one, and the
+//!   blanket `use-mcp` gate is tenant-only in most services, so such a key
+//!   reaches the whole MCP read surface there.
+//! - A verified token must carry `mako_tenant` **and** it must be this
+//!   deployment's tenant. The comparison runs before Cedar, so the same-tenant
+//!   clause the policies carry is defence in depth rather than the only line.
 //!
 //! ## Identity propagation
 //!
@@ -120,7 +125,14 @@ use subtle::ConstantTimeEq;
 /// When an OIDC verifier is passed to [`McpAuth::from_auth_config_oidc`], JWT
 /// tokens are verified against it; API keys remain accepted as a fallback for
 /// LLM clients that cannot perform a full OIDC flow.
+///
+/// An unknown key here is an error, not a shrug: this struct is nested under a
+/// service's own `Config`, and `deny_unknown_fields` does not reach into a
+/// nested struct. Without it a misspelt `api_key` would be dropped in silence
+/// and the server would come up in dev mode — authentication configured and
+/// never enforced.
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct McpAuthConfig {
     /// Primary API key — accepted as Bearer token for `/mcp` requests.
     ///
@@ -317,9 +329,11 @@ impl McpAuth {
     /// Multiple keys may be registered by chaining calls.  Keys are checked in
     /// registration order; first match wins.
     ///
-    /// A role-less key is denied by every role-testing `permit`, so under Cedar
-    /// it reaches only what a policy grants it by name. Use
-    /// [`Self::with_named_key_roles`] to give it the roles its work needs.
+    /// A role-less key is denied by every role-testing `permit` — but the
+    /// blanket `use-mcp` gate is a tenant-only rule in most services, so such a
+    /// key still reaches that service's whole MCP read surface. Use
+    /// [`Self::with_named_key_roles`] to give it the roles its work needs, and
+    /// do not rely on rolelessness as a restriction.
     ///
     /// # Example
     ///
@@ -531,11 +545,16 @@ impl McpAuth {
                     // data-isolation boundary all downstream checks key on.
                     // (Tenant-less tokens are only meaningful for makod's
                     // sub-based Cedar layer, which does not use McpAuth.)
-                    if claims.mako_tenant.is_none() {
-                        return (StatusCode::UNAUTHORIZED, "401 Unauthorized: invalid token")
-                            .into_response();
+                    // …and it must be *this* deployment's tenant: see
+                    // `check_token_tenant`.
+                    if let Err(resp) = self.check_token_tenant(claims.mako_tenant.as_deref()) {
+                        return resp;
                     }
-                    // Optional Cedar policy check.
+                    // Cedar, when configured. The same-tenant clause its rules
+                    // carry is now defence in depth: the comparison above has
+                    // already refused a foreign tenant, so a rule written
+                    // without that clause no longer authorises across tenants
+                    // on this surface.
                     if let Some(ref cedar) = self.cedar {
                         let principal = crate::oidc::Claims(claims.clone()).principal();
                         if let Err(e) = cedar.check(&principal, "use-mcp", &self.tenant) {
@@ -624,11 +643,55 @@ impl McpAuth {
         let claims = self.oidc.verify(&token).map_err(|_| {
             (StatusCode::UNAUTHORIZED, "401 Unauthorized: invalid token").into_response()
         })?;
+        // This path verifies the token itself, so it owes the same tenant check
+        // `authenticate` does — a per-tool `authorize` must not be the one door
+        // where a foreign tenant is left to the policy.
+        self.check_token_tenant(claims.mako_tenant.as_deref())?;
         let principal = crate::oidc::Claims(claims).principal();
         self.check_principal(&principal, action)
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
+
+    /// Refuse a verified token that is not this deployment's tenant.
+    ///
+    /// A single-tenant deployment pins one tenant in configuration, and the
+    /// realm that signs its tokens signs every other operator's too. A token
+    /// minted for a different `mako_tenant` therefore verifies cleanly here: it
+    /// has a valid signature, the right issuer and the right audience. What
+    /// makes it foreign is the claim, and something has to read it.
+    ///
+    /// Until this check existed, nothing in `McpAuth` did. The MCP surface was
+    /// closed only because all fourteen service policies happen to repeat
+    /// `context.principal_tenant == context.resource_tenant` in every `permit`
+    /// — a condition spread across hundreds of rules standing in for one layer,
+    /// which is the arrangement `xtask check-expected-tenant` exists to refuse
+    /// on the REST side. `oidc::Claims` pins the tenant there through the
+    /// `ExpectedTenant` extension; this is the same pin for `/mcp`, and it runs
+    /// **before** Cedar so the policy clause is defence in depth rather than the
+    /// only line.
+    ///
+    /// The detail is deliberately the same generic string an invalid token
+    /// gets. The caller has already proved membership of the realm, so naming
+    /// the tenant this deployment serves would tell them something they came
+    /// without.
+    #[allow(clippy::result_large_err)]
+    fn check_token_tenant(&self, claim: Option<&str>) -> Result<(), axum::response::Response> {
+        match claim {
+            // Missing entirely: not an MCP caller. (Tenant-less tokens are only
+            // meaningful for makod's sub-based Cedar layer, which does not use
+            // `McpAuth`.)
+            None => {
+                Err((StatusCode::UNAUTHORIZED, "401 Unauthorized: invalid token").into_response())
+            }
+            Some(t) if t == self.tenant => Ok(()),
+            Some(_) => Err((
+                StatusCode::FORBIDDEN,
+                "403 Forbidden: token is not valid for this deployment",
+            )
+                .into_response()),
+        }
+    }
 
     /// Check `token` against all registered API keys.
     ///
@@ -640,10 +703,20 @@ impl McpAuth {
 
     /// Say so at startup when a key carries no roles and a policy is loaded.
     ///
-    /// Such a key is denied by every role-testing rule — including the blanket
-    /// `use-mcp` gate where a service writes one that way. The failure is a 403
-    /// on the caller's first request and says nothing about the configuration
-    /// that caused it, so name it here instead.
+    /// Cedar sees such a key with an empty `principal_roles`, so a rule that
+    /// tests a role denies it. A rule that tests only the tenant does not — and
+    /// in most mako services the blanket `use-mcp` gate is written that way: it
+    /// sits in the same `permit` as the read actions under
+    /// `principal_tenant == resource_tenant` alone. A role-less key therefore
+    /// clears the door and reaches that service's whole MCP **read** surface,
+    /// which is the larger half of it. Only `productd` and `vertragd` hold
+    /// `use-mcp` itself to a role list; only the per-tool `authorize` checks a
+    /// server adds keep a role-less key off the mutating tools.
+    ///
+    /// A key that is not meant to read the tenant's whole register needs the
+    /// deployment to say so somewhere other than here — this warning is the
+    /// only place the posture is visible, since nothing about the caller's
+    /// requests looks wrong afterwards.
     fn warn_role_less_keys(&self) {
         if self.cedar.is_none() {
             return;
@@ -652,9 +725,11 @@ impl McpAuth {
             tracing::warn!(
                 key = %key.name,
                 "MCP key declares no roles: Cedar sees it with empty \
-                 `principal_roles`, so every role-testing rule denies it — set \
-                 `roles` on the key if it is meant to reach more than the \
-                 rules written for its name"
+                 `principal_roles`. Role-testing rules deny it, but the blanket \
+                 `use-mcp` gate is a tenant-only rule in most services, so the \
+                 key reaches this service's whole MCP read surface — set \
+                 `roles` on the key and narrow the policy if that is more than \
+                 it is meant to see"
             );
         }
     }
@@ -923,6 +998,148 @@ mod tests {
         assert!(
             dev.authorize(&axum::http::HeaderMap::new(), "anything")
                 .is_ok()
+        );
+    }
+
+    // ── The expected tenant reaches the MCP surface ───────────────────────────
+    //
+    // A realm signs tokens for every operator in it. `OidcVerifier::verify`
+    // deliberately does not compare `mako_tenant` — a service that derives its
+    // tenant *from* the token has nothing to compare against — so a
+    // single-tenant MCP surface has to make the comparison itself.
+
+    /// Mint a really-signed RS256 token for `tenant`, using the crate's test key.
+    fn token_for_tenant(tenant: &str) -> String {
+        use jsonwebtoken::{Algorithm, EncodingKey, Header};
+        #[derive(serde::Serialize)]
+        struct C<'a> {
+            sub: &'a str,
+            iss: &'a str,
+            aud: &'a str,
+            exp: u64,
+            mako_tenant: &'a str,
+        }
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some(crate::oidc::tests::TEST_KID.to_owned());
+        jsonwebtoken::encode(
+            &header,
+            &C {
+                sub: "user-1",
+                iss: "https://idp.example.com",
+                aud: "mako-mcp",
+                exp: 9_999_999_999,
+                mako_tenant: tenant,
+            },
+            &EncodingKey::from_rsa_pem(crate::oidc::tests::TEST_RSA_PRIVATE_KEY_PEM.as_bytes())
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    /// An `McpAuth` pinned to `9900357000004`, with a policy that permits
+    /// everything so nothing but the tenant gate can produce the refusal.
+    fn tenant_pinned_auth() -> McpAuth {
+        const PERMIT_ALL: &str = "permit(principal, action, resource);";
+        McpAuth::new(
+            OidcVerifier::from_jwks_for_testing(
+                "https://idp.example.com",
+                "mako-mcp",
+                crate::oidc::tests::test_jwks(),
+            ),
+            "9900357000004",
+        )
+        .with_cedar(Arc::new(
+            CedarEnforcer::from_policy_str(PERMIT_ALL).unwrap(),
+        ))
+    }
+
+    /// A validly-signed token for another operator in the same realm is refused
+    /// before Cedar sees it.
+    ///
+    /// The policy here permits everything, so an accept would mean the
+    /// comparison never happened — which is what "the Cedar clause is the only
+    /// line" looked like.
+    #[test]
+    fn a_validly_signed_token_for_another_tenant_is_refused() {
+        let auth = tenant_pinned_auth();
+        let claims = auth
+            .oidc
+            .verify(&token_for_tenant("9900987654321"))
+            .expect("the token is validly signed for this realm");
+        let err = auth
+            .check_token_tenant(claims.mako_tenant.as_deref())
+            .expect_err("a token minted for another operator must not reach the tools");
+        assert_eq!(err.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// …and this deployment's own tenant still passes.
+    #[test]
+    fn the_configured_tenant_passes_the_gate() {
+        let auth = tenant_pinned_auth();
+        let claims = auth
+            .oidc
+            .verify(&token_for_tenant("9900357000004"))
+            .expect("validly signed");
+        assert!(
+            auth.check_token_tenant(claims.mako_tenant.as_deref())
+                .is_ok()
+        );
+    }
+
+    /// `authorize` verifies its own token, so it owes the same comparison — a
+    /// per-tool gate must not be the one door a foreign tenant walks through.
+    #[test]
+    fn authorize_refuses_another_tenants_token() {
+        let auth = tenant_pinned_auth();
+        let err = auth
+            .authorize(
+                &bearer(&token_for_tenant("9900987654321")),
+                "run-settlement",
+            )
+            .expect_err("permit-all policy, so only the tenant gate can refuse this");
+        assert_eq!(err.status(), StatusCode::FORBIDDEN);
+        assert!(
+            auth.authorize(
+                &bearer(&token_for_tenant("9900357000004")),
+                "run-settlement"
+            )
+            .is_ok(),
+            "the deployment's own tenant must still reach its tools"
+        );
+    }
+
+    /// The refusal says nothing about which tenant this deployment serves. The
+    /// caller proved membership of the realm and nothing more; naming the
+    /// tenant would tell them something they arrived without.
+    #[tokio::test]
+    async fn the_refusal_does_not_name_the_expected_tenant() {
+        use axum::body::to_bytes;
+        let auth = tenant_pinned_auth();
+        let err = auth
+            .check_token_tenant(Some("9900987654321"))
+            .expect_err("foreign tenant");
+        let body = to_bytes(err.into_body(), 4096).await.unwrap();
+        let detail = String::from_utf8_lossy(&body);
+        assert!(
+            !detail.contains("9900357000004"),
+            "the response must not name this deployment's tenant: {detail}"
+        );
+        assert!(
+            !detail.contains("9900987654321"),
+            "nor echo the caller's: {detail}"
+        );
+    }
+
+    /// A token with no `mako_tenant` is still a 401 — "absent" is not
+    /// "matching".
+    #[test]
+    fn a_tenant_less_token_is_refused() {
+        let auth = tenant_pinned_auth();
+        assert_eq!(
+            auth.check_token_tenant(None)
+                .expect_err("no tenant claim")
+                .status(),
+            StatusCode::UNAUTHORIZED
         );
     }
 

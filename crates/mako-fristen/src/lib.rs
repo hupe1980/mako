@@ -301,13 +301,27 @@ pub const APERAK_STROM_WINDOW_LABEL: &str = "aperak-strom-45min-window";
 ///
 /// | `received` Berlin weekday | Deadline |
 /// |---|---|
-/// | Monday – Friday | `received + 45 minutes` |
 /// | Saturday | next Sunday 12:00 Berlin local time |
-/// | Sunday | `received + 45 minutes` (de-facto — not specified in AHB) |
+/// | any other day | `received + 45 minutes` |
 ///
-/// **Regulatory basis:** APERAK AHB 1.0 §2.4.1:
-/// *"UTILMD und ORDERS: samstags bis spätestens Sonntag 12:00 Uhr,
-/// an Werktagen (Montag–Freitag): 45 Minuten."*
+/// **Regulatory basis:** APERAK AHB 1.1 §2.4.1, which states the 45 minutes
+/// **unqualified** and carves out Saturday alone:
+///
+/// *"Wird eine UTILMD oder ORDERS übertragen, so ist der Empfänger der
+/// entsprechenden Übertragungsdatei verpflichtet dem Absender unverzüglich,
+/// jedoch spätestens **45 Minuten** nach Eingang der Übertragungsdatei das
+/// Ergebnis der Verarbeitbarkeitsprüfung per APERAK mitzuteilen … Wird an
+/// **Samstagen** eine UTILMD oder ORDERS übertragen, so ist der Empfänger …
+/// verpflichtet … spätestens bis zum **Sonntag, 12 Uhr** gesetzlicher deutscher
+/// Zeit eine APERAK zu senden."*
+///
+/// So Sunday is not a special case in the document and is not one here: the
+/// document names one exception and it is Saturday.
+///
+/// This is the UTILMD/ORDERS rule only. The general Strom window in the same
+/// section — everything that is not a UTILMD or an ORDERS — is the **next
+/// Werktag 12 Uhr**, which is twenty times looser; see
+/// [`aperak_strom_allgemein_due_at`].
 ///
 /// # Panics
 ///
@@ -353,9 +367,64 @@ pub fn aperak_strom_due_at(received: OffsetDateTime) -> OffsetDateTime {
             }
         }
     } else {
-        // Weekday (Mon–Fri) or Sunday: 45 wall-clock minutes.
+        // Every other day: 45 wall-clock minutes. The AHB carves out Saturday
+        // and nothing else.
         received + Duration::minutes(APERAK_STROM_WEEKDAY_MINUTES)
     }
+}
+
+/// Compute the Strom APERAK sending deadline for a message that is **not** a
+/// UTILMD or an ORDERS.
+///
+/// APERAK AHB 1.1 §2.4.1 opens with the general Strom rule and only then carves
+/// out UTILMD/ORDERS:
+///
+/// *"Das Ergebnis der Verarbeitbarkeitsprüfung aller in einer Übertragungsdatei
+/// enthaltenen Geschäftsvorfälle hat der Empfänger der Übertragungsdatei dem
+/// Absender unverzüglich, jedoch spätestens **bis zum nächsten Werktag 12 Uhr**
+/// gesetzlicher deutscher Zeit nach Eingang der Übertragungsdatei, per APERAK
+/// mitzuteilen."*
+///
+/// So a Strom MSCONS, INVOIC, REMADV or IFTSTA has until noon on the next
+/// Werktag, not 45 minutes. [`aperak_strom_due_at`] is the UTILMD/ORDERS
+/// carve-out and is roughly twenty times tighter; applying it to the rest of
+/// the Strom traffic reports a breach on every message that takes longer than
+/// three quarters of an hour to acknowledge.
+///
+/// Same shape as the Gas Folgeprozess window, and deliberately a separate
+/// function: the two rest on different sections, and a shared one would let a
+/// change to either silently move the other.
+///
+/// # Panics
+///
+/// Panics if the date arithmetic overflows the calendar (unreachable for any
+/// practical date).
+///
+/// # Example
+///
+/// ```rust
+/// use mako_fristen as fristen;
+/// use time::{Date, Month, OffsetDateTime, Time};
+///
+/// // Monday 2025-01-06 10:00 UTC → Tuesday 2025-01-07 12:00 Berlin.
+/// let received = OffsetDateTime::new_utc(
+///     Date::from_calendar_date(2025, Month::January, 6).unwrap(),
+///     Time::from_hms(10, 0, 0).unwrap(),
+/// );
+/// let due = fristen::aperak_strom_allgemein_due_at(received);
+/// assert_eq!(
+///     fristen::berlin_date(due),
+///     Date::from_calendar_date(2025, Month::January, 7).unwrap()
+/// );
+/// ```
+#[must_use]
+pub fn aperak_strom_allgemein_due_at(received: OffsetDateTime) -> OffsetDateTime {
+    let berlin = timezones::db::europe::BERLIN;
+    let received_date = received.to_timezone(berlin).date();
+    let next_day = received_date
+        .next_day()
+        .expect("date overflow — unreachable for any practical date");
+    noon_berlin(next_werktag(next_day, HolidayCalendar::BdewMaKo))
 }
 
 // ── APERAK Gas sending windows ────────────────────────────────────────────────
@@ -431,10 +500,18 @@ pub fn aperak_gas_folgeprozess_due_at(received: OffsetDateTime) -> OffsetDateTim
 
 /// Compute the Gas APERAK sending deadline for **Initialprozesse**.
 ///
-/// Per APERAK AHB 1.0 §2.3.1: the receiver must dispatch the APERAK within
-/// **3 Werktage at 12:00 Uhr Berliner Lokalzeit** after receiving the message.
+/// Per APERAK AHB 1.1 §2.3.1: *"Bei Verarbeitbarkeitsfehlern in
+/// Geschäftsvorfällen von Initialprozessen teilt der Empfänger der
+/// Übertragungsdatei dem Absender unverzüglich, jedoch spätestens **3 Werktage
+/// nach Eingang** des Geschäftsvorfalls, diesen per APERAK mit."*
 ///
-/// **Regulatory basis:** APERAK AHB 1.0 §2.3.1 — Gas Initialprozesse.
+/// The window is the **whole** third Werktag — the sentence names no clock
+/// time. The „12 Uhr" belongs to the Folgeprozess rule in the paragraph above
+/// it ([`aperak_gas_folgeprozess_due_at`]) and does not carry over; applying it
+/// here removes twelve hours from every Gas Initialprozess window and raises a
+/// breach the counterparty is not in.
+///
+/// **Regulatory basis:** APERAK AHB 1.1 §2.3.1 — Gas Initialprozesse.
 ///
 /// # Panics
 ///
@@ -454,7 +531,7 @@ pub fn aperak_gas_folgeprozess_due_at(received: OffsetDateTime) -> OffsetDateTim
 /// );
 /// let due = fristen::aperak_gas_initialprozess_due_at(received);
 /// assert_eq!(
-///     due.to_offset(time::UtcOffset::UTC).date(),
+///     fristen::berlin_date(due),
 ///     Date::from_calendar_date(2025, Month::January, 9).unwrap()
 /// );
 /// ```
@@ -463,7 +540,7 @@ pub fn aperak_gas_initialprozess_due_at(received: OffsetDateTime) -> OffsetDateT
     let berlin = timezones::db::europe::BERLIN;
     let start_date = received.to_timezone(berlin).date();
     let due_date = add_werktage(start_date, 3, HolidayCalendar::BdewMaKo);
-    noon_berlin(due_date)
+    end_of_day_berlin(due_date)
 }
 
 /// The Gas Prüfidentifikatoren that open a business process — the
@@ -1083,13 +1160,24 @@ pub fn next_werktag(from: Date, cal: HolidayCalendar) -> Date {
     current
 }
 
-/// Compute a deadline `werktage` Werktage after `from`, expressed as an
-/// [`OffsetDateTime`] at **17:00 Europe/Berlin** on the deadline date.
+/// Compute a deadline `werktage` Werktage after `from`, running to the **end of
+/// that Werktag** in Europe/Berlin.
+///
+/// The rulebook states this Frist shape as a day and never as an hour: the WiM
+/// and GeLi Gas Aktivitätsdiagramme word it „**Ablauf des** n. WT", and the GPKE
+/// sequence diagrams „spätester **ÜT** ist der n. WT nach dem ÜT" — a
+/// Übertragungs*tag*. A day-granular Frist runs to the end of that day, so that
+/// is where the deadline lands; see [`end_of_day_berlin`], which this delegates
+/// to and which carries the argument in full.
+///
+/// No BDEW or BNetzA document in this domain states an end-of-business hour for
+/// it. Placing the deadline at 17:00 expires every one of these windows seven
+/// hours early, which reports a met obligation as a breach and escalates a
+/// counterparty still inside its Frist.
 ///
 /// The deadline is computed in German local time (CET in winter, CEST in
-/// summer). 17:00 CET = 16:00 UTC; 17:00 CEST = 15:00 UTC. Using UTC
-/// directly would give a systematic 1–2 hour error on every regulatory
-/// deadline.
+/// summer). Using UTC directly would give a systematic 1–2 hour error on every
+/// regulatory deadline.
 ///
 /// # The count starts on the day of receipt
 ///
@@ -1108,25 +1196,31 @@ pub fn next_werktag(from: Date, cal: HolidayCalendar) -> Date {
 /// to enforce — `mako_wim::wertebestellung::Zustellquittung` is the model for
 /// carrying it.
 ///
-/// 17:00 is never in a DST transition window for Europe/Berlin (transitions
-/// happen at 02:00), so the conversion is unambiguous on all dates.
+/// The last instant of a day is never inside a DST transition window for
+/// Europe/Berlin (transitions happen at 02:00), so the conversion is
+/// unambiguous on all dates.
 ///
 /// # Example
 ///
 /// ```rust
 /// use mako_fristen::{self as fristen, HolidayCalendar};
-/// use time::{Date, Month, OffsetDateTime, Time, UtcOffset};
+/// use time::{Date, Month, OffsetDateTime, Time};
 ///
 /// let received = OffsetDateTime::new_utc(
 ///     Date::from_calendar_date(2025, Month::January, 6).unwrap(),
 ///     Time::MIDNIGHT,
 /// );
 /// let due = fristen::deadline_at_werktage(received, 5, HolidayCalendar::BdewMaKo);
-/// assert_eq!(due.date(), Date::from_calendar_date(2025, Month::January, 13).unwrap());
-/// // January is CET (UTC+1): the deadline is 17:00 local time.
-/// // Local hour is 17; the UTC equivalent is 16:00.
-/// assert_eq!(due.hour(), 17);  // local time (CET)
-/// assert_eq!(due.to_offset(UtcOffset::UTC).hour(), 16); // UTC equivalent
+/// // The Frist runs to the end of the fifth Werktag in Berlin.
+/// assert_eq!(
+///     fristen::berlin_date(due),
+///     Date::from_calendar_date(2025, Month::January, 13).unwrap()
+/// );
+/// // …and to the end of it, not to an end-of-business hour.
+/// assert_eq!(
+///     due,
+///     fristen::end_of_werktag_after(received, 5, HolidayCalendar::BdewMaKo)
+/// );
 /// ```
 ///
 /// # Panics
@@ -1147,14 +1241,7 @@ pub fn deadline_at_werktage(
     // starting from yesterday's calendar date, yielding a deadline that is one
     // calendar day — and potentially one Werktag — too early.
     let start_date = from.to_timezone(berlin).date();
-    let due_date = add_werktage(start_date, werktage, cal);
-    // 17:00 is the end-of-business convention the WiM Antwortfristen are
-    // administered on. Fristen worded „bis zum Ablauf des n. Werktags" run to
-    // the end of the day instead — use [`end_of_werktag_after`] for those.
-    berlin_at(
-        due_date,
-        Time::from_hms(17, 0, 0).expect("17:00:00 is valid"),
-    )
+    end_of_day_berlin(add_werktage(start_date, werktage, cal))
 }
 
 // ── Holiday tables ────────────────────────────────────────────────────────────
@@ -1695,81 +1782,89 @@ mod tests {
 
     // ── deadline_at_werktage ──────────────────────────────────────────────────
 
-    ///  deadline must be 17:00 CET (16:00 UTC) in winter, not 17:00 UTC.
+    /// The deadline is the end of the Berlin day, and the offset it carries is
+    /// the Berlin offset in force on that date — CET in winter.
     #[test]
     fn deadline_at_werktage_winter_cet() {
-        // January is CET (UTC+1).  17:00 CET = 16:00 UTC.
         let received = OffsetDateTime::new_utc(date(2025, 1, 6), Time::MIDNIGHT);
         let due = deadline_at_werktage(received, 5, HolidayCalendar::BdewMaKo);
-        assert_eq!(due.date(), date(2025, 1, 13));
+        let berlin = due.to_timezone(timezones::db::europe::BERLIN);
+        assert_eq!(berlin.date(), date(2025, 1, 13));
+        assert_eq!((berlin.hour(), berlin.minute()), (23, 59));
         assert_eq!(
-            due.to_offset(time::UtcOffset::UTC).hour(),
-            16,
-            "winter: 17:00 CET = 16:00 UTC"
+            berlin.offset(),
+            time::UtcOffset::from_hms(1, 0, 0).unwrap(),
+            "January is CET (UTC+1)"
         );
-        assert_eq!(due.to_offset(time::UtcOffset::UTC).minute(), 0);
     }
 
-    ///  deadline must be 17:00 CEST (15:00 UTC) in summer, not 17:00 UTC.
+    /// Same, in summer: CEST.
     #[test]
     fn deadline_at_werktage_summer_cest() {
-        // July is CEST (UTC+2).  17:00 CEST = 15:00 UTC.
         let received = OffsetDateTime::new_utc(date(2025, 7, 1), Time::MIDNIGHT);
         let due = deadline_at_werktage(received, 1, HolidayCalendar::BdewMaKo);
+        let berlin = due.to_timezone(timezones::db::europe::BERLIN);
+        assert_eq!((berlin.hour(), berlin.minute()), (23, 59));
         assert_eq!(
-            due.to_offset(time::UtcOffset::UTC).hour(),
-            15,
-            "summer: 17:00 CEST = 15:00 UTC"
+            berlin.offset(),
+            time::UtcOffset::from_hms(2, 0, 0).unwrap(),
+            "July is CEST (UTC+2)"
         );
-        assert_eq!(due.to_offset(time::UtcOffset::UTC).minute(), 0);
     }
 
-    /// Deadline that lands on the day *after* the spring-forward transition
-    /// must use CEST (UTC+2), not CET (UTC+1).
+    /// A deadline landing on the day *after* the spring-forward transition is
+    /// resolved against CEST, not CET.
     ///
-    /// 2025-03-30 02:00 CET → 03:00 CEST (spring-forward).
-    /// received = Wednesday 2025-03-26; +4 Werktage:
-    ///   Thu 27 (+1), Fri 28 (+2), Sat 29 (+3), Sun 30 (skip), Mon 31 (+4).
-    /// Deadline falls on Monday 2025-03-31 which is CEST: 17:00 CEST = 15:00 UTC.
+    /// 2025-03-30 02:00 CET → 03:00 CEST. received = Wednesday 2025-03-26;
+    /// +4 Werktage: Thu 27 (+1), Fri 28 (+2), Mon 31 (+3), Tue 2025-04-01 (+4).
     #[test]
     fn deadline_on_day_after_spring_forward_is_cest() {
         let received = OffsetDateTime::new_utc(date(2025, 3, 26), Time::MIDNIGHT);
         let due = deadline_at_werktage(received, 4, HolidayCalendar::BdewMaKo);
+        let berlin = due.to_timezone(timezones::db::europe::BERLIN);
+        assert_eq!(berlin.date(), date(2025, 4, 1));
         assert_eq!(
-            due.date(),
-            date(2025, 4, 1),
-            "should land on Tuesday 2025-04-01"
+            berlin.offset(),
+            time::UtcOffset::from_hms(2, 0, 0).unwrap(),
+            "spring-forward has already happened"
         );
-        assert_eq!(
-            due.to_offset(time::UtcOffset::UTC).hour(),
-            15,
-            "CEST: 17:00 local = 15:00 UTC (spring-forward already happened)"
-        );
-        assert_eq!(due.to_offset(time::UtcOffset::UTC).minute(), 0);
     }
 
-    /// Deadline that lands on the day *after* the fall-back transition must
-    /// use CET (UTC+1), not CEST (UTC+2).
+    /// And one landing after the fall-back transition against CET.
     ///
-    /// 2025-10-26 03:00 CEST → 02:00 CET (fall-back).
-    /// received = Wednesday 2025-10-22; +4 Werktage:
-    ///   Thu 23 (+1), Fri 24 (+2), Sat 25 (+3), Sun 26 (skip), Mon 27 (+4).
-    /// Deadline falls on Monday 2025-10-27 which is CET: 17:00 CET = 16:00 UTC.
+    /// 2025-10-26 03:00 CEST → 02:00 CET. received = Wednesday 2025-10-22.
     #[test]
     fn deadline_on_day_after_fall_back_is_cet() {
         let received = OffsetDateTime::new_utc(date(2025, 10, 22), Time::MIDNIGHT);
         let due = deadline_at_werktage(received, 4, HolidayCalendar::BdewMaKo);
+        let berlin = due.to_timezone(timezones::db::europe::BERLIN);
+        assert_eq!(berlin.date(), date(2025, 10, 28));
         assert_eq!(
-            due.date(),
-            date(2025, 10, 28),
-            "should land on Tuesday 2025-10-28"
+            berlin.offset(),
+            time::UtcOffset::from_hms(1, 0, 0).unwrap(),
+            "fall-back has already happened"
         );
-        assert_eq!(
-            due.to_offset(time::UtcOffset::UTC).hour(),
-            16,
-            "CET: 17:00 local = 16:00 UTC (fall-back already happened)"
+    }
+
+    /// The Frist is **not** cut short at an end-of-business hour.
+    ///
+    /// „Ablauf des n. WT" and „spätester ÜT ist der n. WT" both name a day. No
+    /// BDEW or BNetzA document in this domain attaches a clock time to either,
+    /// and placing one at 17:00 expires the window seven hours early — which
+    /// reports a met obligation as a breach and escalates a counterparty that is
+    /// still inside its Frist.
+    #[test]
+    fn a_werktage_frist_is_not_truncated_to_an_end_of_business_hour() {
+        let received = OffsetDateTime::new_utc(date(2025, 1, 6), Time::MIDNIGHT);
+        let due = deadline_at_werktage(received, 5, HolidayCalendar::BdewMaKo);
+        let seventeen_hundred = berlin_at(
+            due.to_timezone(timezones::db::europe::BERLIN).date(),
+            Time::from_hms(17, 0, 0).unwrap(),
         );
-        assert_eq!(due.to_offset(time::UtcOffset::UTC).minute(), 0);
+        assert!(
+            due > seventeen_hundred,
+            "the window runs past 17:00 to the end of the Werktag"
+        );
     }
 
     /// Regression test for the UTC-date edge case (F-005).
@@ -1992,20 +2087,19 @@ mod tests {
     fn aperak_gas_initialprozess_3_werktage_winter_cet() {
         // Monday 2025-01-13 10:00 UTC (= 11:00 CET).
         // 3 Werktage: Tue 14 (+1), Wed 15 (+2), Thu 16 (+3).
-        // Deadline: Thursday 2025-01-16 12:00 CET = 11:00 UTC.
+        // APERAK AHB 1.1 §2.3.1 names no clock time for the Initialprozess
+        // window — „spätestens 3 Werktage nach Eingang" — so the whole of
+        // Thursday 2025-01-16 is inside it, ending 23:59:59.999999999 CET.
         let received =
             OffsetDateTime::new_utc(date(2025, 1, 13), Time::from_hms(10, 0, 0).unwrap());
         let due = aperak_gas_initialprozess_due_at(received);
+        let berlin = due.to_timezone(timezones::db::europe::BERLIN);
+        assert_eq!(berlin.date(), date(2025, 1, 16));
         assert_eq!(
-            due.to_offset(time::UtcOffset::UTC).date(),
-            date(2025, 1, 16)
+            (berlin.hour(), berlin.minute(), berlin.second()),
+            (23, 59, 59),
+            "the Frist runs to the end of the third Werktag, not to noon on it"
         );
-        assert_eq!(
-            due.to_offset(time::UtcOffset::UTC).hour(),
-            11,
-            "12:00 CET = 11:00 UTC"
-        );
-        assert_eq!(due.to_offset(time::UtcOffset::UTC).minute(), 0);
     }
 
     #[test]
@@ -2014,19 +2108,65 @@ mod tests {
         // +3 Werktage: Thu 17 (+1), Fri 18 = Karfreitag (skip), Sat 19 / Sun 20
         //              (not Werktage), Mon 21 = Ostermontag (skip), Tue 22 (+2),
         //              Wed 23 (+3).
-        // Deadline: Wednesday 2025-04-23 12:00 CEST = 10:00 UTC.
+        // Deadline: the end of Wednesday 2025-04-23 in Berlin (CEST).
         let received =
             OffsetDateTime::new_utc(date(2025, 4, 16), Time::from_hms(10, 0, 0).unwrap());
         let due = aperak_gas_initialprozess_due_at(received);
-        assert_eq!(
-            due.to_offset(time::UtcOffset::UTC).date(),
-            date(2025, 4, 23)
+        let berlin = due.to_timezone(timezones::db::europe::BERLIN);
+        assert_eq!(berlin.date(), date(2025, 4, 23));
+        assert_eq!((berlin.hour(), berlin.minute()), (23, 59));
+    }
+
+    /// The Initialprozess window is not the Folgeprozess window.
+    ///
+    /// APERAK AHB 1.1 §2.3.1 states the Folgeprozess rule („bis zum nächsten
+    /// Werktag 12 Uhr") in the paragraph directly above the Initialprozess one
+    /// („spätestens 3 Werktage nach Eingang"), and only the first names a clock
+    /// time. Carrying the noon over to the second removes twelve hours from
+    /// every Gas Initialprozess window — in the tightening direction, so it
+    /// raises a breach the counterparty is not in.
+    #[test]
+    fn the_gas_initialprozess_window_is_not_truncated_to_noon() {
+        let received =
+            OffsetDateTime::new_utc(date(2025, 1, 13), Time::from_hms(10, 0, 0).unwrap());
+        let due = aperak_gas_initialprozess_due_at(received);
+        let noon_on_the_same_day = berlin_at(
+            due.to_timezone(timezones::db::europe::BERLIN).date(),
+            Time::from_hms(12, 0, 0).unwrap(),
         );
-        assert_eq!(
-            due.to_offset(time::UtcOffset::UTC).hour(),
-            10,
-            "12:00 CEST = 10:00 UTC"
+        assert!(
+            due > noon_on_the_same_day,
+            "the window must outlast noon on the third Werktag by the rest of the day"
         );
+    }
+
+    /// A Strom message that is neither UTILMD nor ORDERS has the next Werktag
+    /// at noon, not 45 minutes.
+    #[test]
+    fn the_general_strom_window_is_the_next_werktag_at_noon() {
+        // Monday 2025-01-13 10:00 UTC → Tuesday 2025-01-14 12:00 Berlin.
+        let received =
+            OffsetDateTime::new_utc(date(2025, 1, 13), Time::from_hms(10, 0, 0).unwrap());
+        let due = aperak_strom_allgemein_due_at(received);
+        let berlin = due.to_timezone(timezones::db::europe::BERLIN);
+        assert_eq!(berlin.date(), date(2025, 1, 14));
+        assert_eq!((berlin.hour(), berlin.minute()), (12, 0));
+        assert!(
+            due > aperak_strom_due_at(received),
+            "the general window is looser than the UTILMD/ORDERS 45 minutes"
+        );
+    }
+
+    /// Friday's general window skips the weekend to Monday noon.
+    #[test]
+    fn the_general_strom_window_skips_the_weekend() {
+        // Friday 2025-01-17 → Monday 2025-01-20 12:00 Berlin.
+        let received =
+            OffsetDateTime::new_utc(date(2025, 1, 17), Time::from_hms(10, 0, 0).unwrap());
+        let due = aperak_strom_allgemein_due_at(received);
+        let berlin = due.to_timezone(timezones::db::europe::BERLIN);
+        assert_eq!(berlin.date(), date(2025, 1, 20));
+        assert_eq!(berlin.hour(), 12);
     }
 
     #[test]
@@ -2149,16 +2289,28 @@ mod tests {
         assert_eq!(due.hour(), 23, "Ablauf des Werktags, not 17:00");
     }
 
-    /// The end-of-day form must never be shorter than the 17:00 form used for
-    /// the WiM Antwortfristen — that difference is what made a met GeLi Gas
-    /// obligation report as missed.
+    /// „Ablauf des n. WT" and „spätester ÜT ist der n. WT" are one Frist, so the
+    /// two spellings resolve to the same instant.
+    ///
+    /// They were two: the second was placed at a 17:00 „end-of-business"
+    /// cut-off that no BDEW or BNetzA document in this domain states. Holding
+    /// them equal here is what stops a clock time being reintroduced into a
+    /// Frist the rulebook states as a day.
     #[test]
-    fn end_of_werktag_is_later_than_the_1700_convention() {
-        let received = utc(2025, Month::June, 3, 8);
-        assert!(
-            end_of_werktag_after(received, 3, HolidayCalendar::BdewMaKo)
-                > deadline_at_werktage(received, 3, HolidayCalendar::BdewMaKo)
-        );
+    fn both_spellings_of_a_werktage_frist_resolve_to_the_same_instant() {
+        for n in [1, 2, 3, 5, 7, 10] {
+            for received in [
+                utc(2025, Month::June, 3, 8),
+                utc(2025, Month::January, 6, 23),
+                utc(2025, Month::December, 22, 12),
+            ] {
+                assert_eq!(
+                    end_of_werktag_after(received, n, HolidayCalendar::BdewMaKo),
+                    deadline_at_werktage(received, n, HolidayCalendar::BdewMaKo),
+                    "n={n}, received={received}"
+                );
+            }
+        }
     }
 
     /// Summer: 11:00 CEST is 09:00 UTC. Computing the hour in UTC year-round

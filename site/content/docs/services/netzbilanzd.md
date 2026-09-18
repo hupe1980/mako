@@ -100,7 +100,7 @@ Two properties of this table are easy to get wrong, and both cost money.
 **The Sparte is not in the Prüfidentifikator.** NN-Rechnung Strom and Gas share PID 31002;
 the two MMM variants share 31005. Every settlement therefore states its `sparte`, and that
 one field decides three things: whether the Arbeit position cites StromNEV §21 or
-GasNEV §14, whether the three EnFG network levies are billed at all, and what
+GasNEV §15, whether the three EnFG network levies are billed at all, and what
 `Rechnung.sparte` says on the wire — the only place a receiver can read which Sparte a
 31002 settles.
 
@@ -479,7 +479,7 @@ fall below the statutory floor.
 
 | Settlement | Positions |
 |---|---|
-| NNE | Arbeit (flat, or one per §14a module) · Leistung (RLM) · Gas Grundpreis (§14 GasNEV) · Gas Kapazitätsentgelt (§15 GasNEV, pro-rated by calendar days over the actual year length) · Konzessionsabgabe · the three EnFG levies (Strom only) · Blindmehrarbeit |
+| NNE | Arbeit (flat, or one per §14a module) · Leistung (RLM) · Gas Grundpreis (§15 Abs. 7 GasNEV) · Gas Kapazitätsentgelt (§15 GasNEV, pro-rated by calendar days over the actual year length) · Konzessionsabgabe · the three EnFG levies (Strom only) · Blindmehrarbeit |
 | MMM | Mehrmengen (Gutschrift, negated) · Mindermengen |
 | MSB | Grundgebühr Messstellenbetrieb · Messdienstleistung, both measured together against the §30 Abs. 1 MsbG Preisobergrenze when `messstellen_kategorie` is supplied — and only for a period ending from 01.01.2025, which is what that schedule dates itself to · Steuerungseinrichtung am Netzanschlusspunkt, which §30 Abs. 2 charges „zusätzlich“ and caps separately at 50 EUR brutto/Jahr |
 | NNE (privileged) | the §19 Aufschlag splits into two positions where the period straddles the EnFG 1-GWh boundary |
@@ -835,12 +835,12 @@ column the ÜNB settles against. `fremdkosten_json` is gated the same way.
 ### The dispatched energy comes from the projected series
 
 The quantity the ÜNB is invoiced for is read from `edmd`'s
-`GET /api/v1/energy?direction=EINSPEISUNG` — the canonical projected series, one
+`GET /api/v1/energy/{malo_id}?direction=EINSPEISUNG` — the canonical projected series, one
 entry per interval in one direction. Both callers settle lost *generation*: the
 Kostenblatt prices the curtailed energy, and §13a Abs. 2 Ausfallarbeit is by
 definition what the resource would have produced.
 
-`GET /api/v1/lastgang` is the BO4E **export** and is the wrong input to a
+`GET /api/v1/lastgang/{malo_id}` is the BO4E **export** and is the wrong input to a
 figure: one object per register, both directions, every quality, non-kWh
 registers included. Folding it back into one number *is* the register
 projection, and doing it here would sum the grid **draw** into a figure that
@@ -862,7 +862,7 @@ resource was curtailed for the part that is there.
 
 1. `manual_override` — a verified operator figure, when supplied;
 2. `lastgang_sum` — `edmd`'s projected feed-in series
-   (`/api/v1/energy?direction=EINSPEISUNG`) summed over the **exact** activation window,
+   (`/api/v1/energy/{malo_id}?direction=EINSPEISUNG`) summed over the **exact** activation window,
    half-open `[start, end)`;
 3. `billing_period` — the monthly aggregate, only when no series exists.
 

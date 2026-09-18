@@ -54,9 +54,9 @@ graph TB
     marktd -->|"de.mako.*"| edmd
     marktd -->|"de.mako.*"| obsd
     marktd --- pg
-    erp -->|"PUT /api/v1/malos<br/>PUT /api/v1/partners"| marktd
-    invoicd -->|"GET /api/v1/preisblaetter<br/>GET /api/v1/nb-contracts"| marktd
-    processd -->|"GET /api/v1/versorgung<br/>GET /api/v1/malos/{id}/grid<br/>GET /api/v1/partners"| marktd
+    erp -->|"PUT /api/v1/malos/{id}<br/>PUT /api/v1/partners/{mp_id}"| marktd
+    invoicd -->|"GET /api/v1/preisblaetter/{nb_mp_id}<br/>GET /api/v1/nb-contracts"| marktd
+    processd -->|"GET /api/v1/versorgung/{malo_id}<br/>GET /api/v1/malos/{id}/grid<br/>GET /api/v1/partners"| marktd
     processd -->|"POST /api/v1/commands"| makod
 ```
 
@@ -195,8 +195,8 @@ issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 audience = "api://mako-marktd"
 jwks_refresh_secs = 300
 
-[mcp]               # the /mcp surface's own API-key or OIDC layer
-path = "/mcp"
+[mcp]               # the /mcp surface's own API-key or OIDC layer; mount is fixed at /mcp
+api_key = "env:AGENTD_KEY"   # optional; omit the section for dev mode
 
 [mmma_import]       # monthly Mehr-/Mindermengenpreis import; off by default
 enabled        = false
@@ -524,8 +524,15 @@ only protocol-level stop is the ORDERS 17008 the ESA sends.
 
 `DELETE` covers the Widerruf; an **hourly sweep** closes every consent whose
 `valid_to` has passed and stops the deliveries it authorised, through the same
-code path. Idempotent by construction: `revoked_at` is stamped in the statement
-that selects, so a second sweep — or a `DELETE` racing it — returns nothing.
+code path. The sweep takes one lapsed consent at a time (`FOR UPDATE SKIP
+LOCKED`) and commits the revocation **together with** its
+`de.markt.einwilligung.widerrufen` event in a single transaction. `revoked_at`
+is also the sweep's own filter, so a revocation that committed without its event
+could never be retried — the Abbestellung would never go out and the ESA would
+keep receiving Typ-2 Messwerte with no lawful basis. Anything that fails
+therefore leaves the consent open for the next sweep; the 17008 is dispatched
+after the commit, and a row another transaction holds, or one already closed, is
+skipped — so one consent yields one Abbestellung.
 
 Both paths emit `de.markt.einwilligung.widerrufen`. The payload's `grund`
 (`einwilligung_widerrufen` / `einwilligung_abgelaufen`) is what lets an audit

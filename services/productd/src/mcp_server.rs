@@ -613,29 +613,37 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
         let is_dynamic = product.dyn_source.as_deref() == Some("epex-spot-day-ahead");
 
         let explanation = match preistyp.as_str() {
-            "GRUNDPREIS" => "GRUNDPREIS: Fixed base charge.\n\
-                 Formula: grundpreis_ct × days_in_period / 100 / 365 × days_in_period = EUR\n\
-                 billingd method: ElectricityProvider::bill_grundpreis()\n\
+            "GRUNDPREIS" => "GRUNDPREIS: Fixed base charge, priced per day.\n\
+                 Formula: grundpreis_ct_per_day / 100 × prorate_days = EUR\n\
+                 (the rate is per DAY, so the period length enters exactly once)\n\
+                 energy-billing: ElectricityProvider::bill() → grundpreis_position()\n\
                  BO4E output: Rechnungsposition { preistyp: Grundpreis }\n\
-                 Legal: §10 StromGVV Grundpreis".to_owned(),
+                 Legal basis emitted on the position: §41 EnWG (supply-contract content).\n\
+                 Note: §10 StromGVV is Vertragsstrafe, not the Grundpreis — in \
+                 Grundversorgung the price term is §5 StromGVV.".to_owned(),
             "ARBEITSPREIS_EINTARIF" => "ARBEITSPREIS_EINTARIF: Single-rate consumption charge.\n\
-                 Formula: ct_kwh × kwh_total / 100 = EUR\n\
-                 billingd: ElectricityProvider::bill_arbeitspreis()\n\
+                 Formula: arbeitspreis_ct_per_kwh / 100 × billable_kwh = EUR\n\
+                 Graduated products (block_tiers) go through billing::RateSchedule instead.\n\
+                 energy-billing: ElectricityProvider::bill()\n\
                  BO4E: Rechnungsposition { preistyp: ArbeitspreisEintarif }\n\
                  §41a guard: If dyn_source=epex-spot-day-ahead, customer MaLo MUST have iMSys=true or BillingError.".to_owned(),
             "ARBEITSPREIS_HT" | "ARBEITSPREIS_NT" => format!(
                 "{preistyp}: Dual-rate (HT/NT) consumption charge.\n\
-                 Formula: ct_kwh × kwh_ht_or_nt / 100 = EUR\n\
-                 billingd: ElectricityProvider::bill_ht_nt()\n\
+                 Formula: arbeitspreis_{{ht,nt}}_ct_per_kwh / 100 × kwh_in_that_band = EUR\n\
+                 energy-billing: ElectricityProvider::bill() → billing::TimeOfUsePricing\n\
+                 Selected only when the METER reports both registers AND the PRODUCT \
+                 prices both bands; a half-priced Zweitarif is refused by validate_warnings.\n\
                  Requires ZaehlzeitRegister TOU definition from marktd GET /zaehler/{{id}}/zaehlzeitdefinitionen."
             ),
             "LEISTUNGSPREIS" => "LEISTUNGSPREIS: Demand charge (RLM/C&I only).\n\
-                 Formula: eur_per_kw × peak_kw_spitzenleistung = EUR\n\
-                 billingd: ElectricityProvider::bill_leistungspreis()\n\
-                 Source: edmd MeterBillingPeriod.spitzenleistung_kw".to_owned(),
+                 Formula: leistungspreis_strom_ct_per_kw_month / 100 × billed_months × spitzenleistung_kw = EUR\n\
+                 (the rate is per kW and MONTH, so it prorates to the billed period)\n\
+                 energy-billing: ElectricityProvider::bill()\n\
+                 Source: edmd MeterBillingPeriod.spitzenleistung_kw\n\
+                 Legal basis emitted on the position: §41 EnWG.".to_owned(),
             "EEG_VERGUETUNG" => "EEG_VERGUETUNG: Feed-in tariff credit (negative billing position).\n\
                  Formula: -(kwh × verguetungssatz_ct / 100) = EUR credit\n\
-                 billingd: EnergyShareProvider or einsd settlement\n\
+                 einsd settlement, or energy-billing's Einspeisung provider\n\
                  Legal: §21 EEG 2023".to_owned(),
             pt if is_dynamic => format!(
                 "{pt} on dynamic tariff (dyn_source=epex-spot-day-ahead):\n\
@@ -890,7 +898,7 @@ impl ProductdMcpHandler {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for ProductdMcpHandler {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         InitializeResult::new(
             ServerCapabilities::builder().enable_tools().enable_prompts().build(),
         )

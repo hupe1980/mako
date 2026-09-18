@@ -1293,7 +1293,7 @@ impl MdmdMcpHandler {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for MdmdMcpHandler {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         InitializeResult::new(ServerCapabilities::builder().enable_tools().enable_prompts().build())
             .with_server_info(Implementation::new("marktd", env!("CARGO_PKG_VERSION")))
             .with_instructions(

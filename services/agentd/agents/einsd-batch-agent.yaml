@@ -40,9 +40,10 @@ spec:
       1. Call einsd `list_unsettled_plants` — plants not yet settled for the billing month.
       2. For each returned plant:
          a. Call edmd `get_billing_period` for prior month meter data.
-         b. Report the batch as ready. Running it is `POST /settlements/batch` on einsd,
-            an operator surface and not a tool — a tool-calling specialist cannot
-            dispatch a mutating call, so this one prepares and reports.
+         b. Report the batch as ready. Running it is `POST /api/v1/settle/{year}/{month}`
+            on einsd, or `POST /api/v1/anlagen/{tr_id}/settle/{year}/{month}` for a single
+            plant. Both are operator surfaces and not tools — a tool-calling specialist
+            cannot dispatch a mutating call, so this one prepares and reports.
          c. Read `settlement_state` back once the operator has run it.
       3. Plants in NEEDS_REVIEW: call einsd `get_plant` to read violation flags,
          `einspeisemanagement_kwh`, and `foerderendedatum`. Call einsd

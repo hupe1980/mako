@@ -424,7 +424,7 @@ and the business answer is the REMADV, due zum Zahlungsziel (`SG8 DTM+265`).
 | Process | Sender → Empfänger | INVOIC PID | Content | Sparte | Crate |
 |---|---|---|---|---|---|
 | Abschlagsrechnung | NB → LF | INVOIC **31001** | Netznutzung Abschlag (StromNEV §21) | ⚡ | `mako-gpke` ✅ |
-| NN-Rechnung (Netznutzung) | NB → LF | INVOIC **31002** | Netznutzungsentgelt Strom + Gas (StromNEV §21 / GasNEV §14; Sparte in message content) | ⚡ | `netzbilanzd` ✅ |
+| NN-Rechnung (Netznutzung) | NB → LF | INVOIC **31002** | Netznutzungsentgelt Strom + Gas (StromNEV §21 / GasNEV §15; Sparte in message content) | ⚡ | `netzbilanzd` ✅ |
 | MMM-Rechnung | NB → LF | INVOIC **31005** | Mehr-/Mindermengensaldo Strom + Gas | ⚡ | `netzbilanzd` ✅ |
 | MMM Mehrmenge selbst ausgestellt | NB+LF same entity | INVOIC **31006** | Mehr-/Mindermenge als Lieferung, selbst ausgestellt | ⚡ | `netzbilanzd` ✅ |
 | WiM-Rechnung | MSBA → NB · MSBA → MSBN | INVOIC **31003** | Fortführung Messstellenbetrieb, Geräteübernahme, Zwischen-/Kontrollablesung | ⚡🔥 | `mako-wim` `wim-invoic` |
@@ -1258,7 +1258,7 @@ sequenceDiagram
 
 | INVOIC PID | Content | Sender → Empfänger | Crate |
 |---|---|---|---|
-| **31002** | Netznutzungsentgelt Gas (GasNEV §14, NN-Rechnung) | NB → LF | `netzbilanzd` ✅ |
+| **31002** | Netznutzungsentgelt Gas (GasNEV §15, NN-Rechnung) | NB → LF | `netzbilanzd` ✅ |
 | **31005** | Mehr-/Mindermengensaldo Gas (MMM) | NB → LF | `netzbilanzd` ✅ |
 | **31011** | AWH Sperrprozesse Gas | GNB/VNB → LF | `mako-geli-gas` ✅ |
 | **31003** | WiM-Rechnung (Abrechnung von Dienstleistungen im Messwesen — Strom *und* Gas) | MSBA → NB · MSBA → MSBN | `mako-wim` `wim-invoic` |
@@ -1329,7 +1329,7 @@ Folgeprozess, 3 Werktage for an Initialprozess (APERAK AHB 1.1 § 2.3.1). Not
 | Abmeldung NB-initiiert — UTILMD 55007–55009 | Abmeldung NN (GNB → LFN) — UTILMD G 44007–44009 | ✅ Direct equivalent |
 | Stornierung — UTILMD 55022–55024 | Stornierung — UTILMD G 44022–44024 | ✅ Direct equivalent (role-conditional routing) |
 | Sperrung/Entsperrung — ORDERS 17115–17117 | Sperrung/Entsperrung — ORDERS 17115–17117 | ✅ **Same PIDs**, different market; routed by commodity |
-| INVOIC NNE Strom — 31002 | **INVOIC 31002** — NNE Gas (NB → LF, GasNEV §14) | ✅ Same NN-Rechnung PID for both Sparten. `netzbilanzd` takes `billing_type: "nne"` with `sparte: "GAS"` (there is no `nne_gas` discriminant — an unknown one is a parse error); same calculation as Strom, legal refs switch to `GasNEV §14` |
+| INVOIC NNE Strom — 31002 | **INVOIC 31002** — NNE Gas (NB → LF, GasNEV §15) | ✅ Same NN-Rechnung PID for both Sparten. `netzbilanzd` takes `billing_type: "nne"` with `sparte: "GAS"` (there is no `nne_gas` discriminant — an unknown one is a parse error); same calculation as Strom, legal refs switch to `GasNEV §15` |
 | INVOIC MMM Strom — 31005 (NB → LF) | **INVOIC 31005** — MMM Gas (NB → LF); aggregierte Gas MMM (NB → MGV) uses **31007/31008** (`mako-gabi-gas`) | ⚠️ NB → LF Gas MMM shares PID 31005 with Strom; the aggregierte MMM-Rechnung flows **NB → MGV** (Marktgebietsverantwortlicher) as 31007/31008, which `invoicd` checks against MMMA Gas (THE) prices |
 | **Neuanlage MaLo** — UTILMD 55600–55605 | Embedded in UTILMD G 44001 (Lieferbeginn) | ⚠️ Gas has no separate "Neuanlage" PID set; new connections use the same 44001 PID as supplier changes |
 | **Ankündigung Zuordnung LF** — UTILMD 55607–55609 | ❌ No equivalent | The NB restores the 100 % LF-Zuordnung of an **erzeugende** Marktlokation or Tranche (GPKE Teil 2 § 2.4). Gas has no Veräußerungsform/Direktvermarktung split, so no counterpart |
@@ -1772,5 +1772,6 @@ A process started under an older format version continues under those AHB rules
 until it completes, even after a cutover (e.g. the `FV2026-10-01` cutover on
 2026-10-01). Multiple format versions coexist simultaneously in the same engine
 instance.
-`WorkflowVersionPolicy::ForwardCompatible` is the mandatory default for all MaKo
-workflows. See [Schema Versioning](@/docs/compliance/schema-versioning.md) for details.
+A process keeps its creation `WorkflowId` and the inbound message's own FV picks
+the adapter, so no per-workflow acceptance policy is declared or needed. See
+[Schema Versioning](@/docs/compliance/schema-versioning.md) for details.

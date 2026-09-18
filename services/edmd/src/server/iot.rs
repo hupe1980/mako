@@ -495,13 +495,8 @@ pub(crate) async fn post_iot_reads(
         validation: &validation,
         hampel,
     };
-    crate::server::quality_alert::raise_quality_warning(
-        state.erp_webhook_url.as_deref(),
-        state.webhook_secret_bytes(),
-        &state.tenant,
-        &alert,
-    )
-    .await;
+    crate::server::quality_alert::raise_quality_warning(state.repo.pool(), &state.tenant, &alert)
+        .await;
 
     let status = if stored == 0 {
         StatusCode::UNPROCESSABLE_ENTITY

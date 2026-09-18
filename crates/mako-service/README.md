@@ -319,8 +319,11 @@ Without it, a token signed by the *same realm* for a different operator extracts
 cleanly, and the only thing left between it and the data is that every Cedar rule
 remembered to carry `context.principal_tenant == context.resource_tenant`. With
 it, the comparison happens once at extraction and the policies keep theirs as
-defence in depth. `cargo xtask check-expected-tenant` holds every service that
-reads `Claims` to it.
+defence in depth. `cargo xtask check-expected-tenant` checks that every service
+reading `Claims` names `ExpectedTenant` somewhere in its `src/` — presence, not
+placement, and `makod` is a documented exemption because it pins the tenant
+through its own `BearerAuthenticator`. That the layer reaches every route is
+each service's own `authorization_guard.rs`.
 
 ## Telemetry
 

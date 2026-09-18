@@ -181,18 +181,18 @@ next_werktag("2026-11-07")     # '2026-11-09' — Saturday rolls to Monday
 
 ### Which moment — and there is no single formula
 
-"A Werktage Frist expires at 17:00 Europe/Berlin" is true of 42 of the 65
-published obligations and false of the other 23 — and the 42 are not one family:
-20 are WiM, 4 WiM Gas, and **18 are GPKE** (the Sperr-/Entsperraufträge,
-Bearbeitungsstände and Stammdatenänderungen of Teil 2 §3.5/§3.1 and Teil 4).
-Guessing the shape from the family is the mistake this table exists to prevent:
+A Werktage Frist runs to the **end** of the *n*-th Werktag, and the rulebook
+attaches no end-of-business hour to it: the WiM and GeLi Gas
+Aktivitätsdiagramme word it „Ablauf des *n*. WT" and the GPKE sequence diagrams
+„spätester **ÜT** ist der *n*. WT nach dem ÜT" — a Übertragungs*tag*. But not
+every obligation is that shape, and guessing the shape from the family is the
+mistake this table exists to prevent:
 
 | `shape` | Window | Example |
 |---|---|---|
 | `werktag_at` | a clock time on the *n*-th Werktag after the ÜT | 55001 → 11:00 on the 1. WT |
 | `same_day_at` | that clock time **on the ÜT itself**, rolling to the next Werktag when it would already be behind the message | 55013 → 15:00 am ÜT |
-| `end_of_werktag` | the **end** of the *n*-th Werktag | 44001 → Ablauf 4. WT |
-| `werktage_at_cutoff` | 17:00 Europe/Berlin on the *n*-th Werktag | 55039 → 3 WT |
+| `end_of_werktag` | the **end** of the *n*-th Werktag | 44001 → Ablauf 4. WT; 55039 → 3 WT |
 | `same_day` | the ÜT itself, no clock time | defined, but no published obligation uses it |
 
 GPKE alone uses the first two — all 7 `werktag_at` and both `same_day_at`
@@ -235,7 +235,7 @@ versus days for Strom UTILMD. Conflating them is the classic WiM error.
 | Function | Window |
 |---|---|
 | `antwort_deadline(trigger_pid, received)` | the published window for that process |
-| `deadline_at_werktage(received, werktage)` | *n* Werktage → 17:00 Berlin (`werktage_at_cutoff`) |
+| `deadline_at_werktage(received, werktage)` | *n* Werktage → end of that Werktag (`end_of_werktag`) |
 | `end_of_werktag_after(received, werktage)` | end of the *n*-th Werktag (`end_of_werktag`) |
 | `next_werktag_at(received, "11:00")` | clock time on the 1. WT (`werktag_at`) |
 | `berlin_instant(date, "09:00")` | that wall clock, with that date's own offset |

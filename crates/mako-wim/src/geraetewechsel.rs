@@ -239,7 +239,7 @@ pub fn antwort_frist_werktage(request_pid: u32) -> Option<u32> {
         return None;
     }
     match mako_fristen::antwort::antwort_obligation(request_pid)?.frist {
-        FristShape::WerktageAtCutoff(n) => Some(n),
+        FristShape::EndOfWerktag(n) => Some(n),
         _ => None,
     }
 }
@@ -1046,6 +1046,11 @@ pub enum DeviceChangeCommand {
         zuordnungsbeginn: Option<String>,
         /// EDIFACT message reference of the IFTSTA.
         message_ref: MessageRef,
+        /// Übertragungszeitpunkt at which this IFTSTA arrived — the anchor of
+        /// the Kap. 2.3.2 Nr. 8 „1. WT nach dem ÜT von Nr. 7" window. An input
+        /// rather than a clock read: `handle` is pure, so a retried or replayed
+        /// command must arm the identical Frist.
+        received_at: OffsetDateTime,
     },
     /// Decide the Zuordnung as the **NB** (IFTSTA 21012 / 21011, Nr. 8).
     ///
@@ -1928,6 +1933,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                 pid,
                 zuordnungsbeginn,
                 message_ref,
+                received_at,
             } => {
                 if !matches!(state, DeviceChangeState::AntwortGesendet(_)) {
                     return Err(WorkflowError::invalid_state(
@@ -1954,17 +1960,16 @@ impl Workflow for WimDeviceChangeWorkflow {
                 }];
                 if erfolgreich {
                     // Kap. 2.3.2 Nr. 8 — „Unverzüglich, jedoch spätester ÜT ist
-                    // der 1. WT nach dem ÜT von Nr. 7."
+                    // der 1. WT nach dem ÜT von Nr. 7." The ÜT of Nr. 7 is when
+                    // this IFTSTA arrived, which the command carries; reading
+                    // the clock here would anchor a regulatory Frist to
+                    // whenever `handle` happened to run.
                     Ok(WorkflowOutput::with_outbox_and_deadlines(
                         events,
                         vec![],
                         vec![PendingDeadline::new(
                             ZUORDNUNG_ANTWORT_WINDOW_LABEL,
-                            deadline_at_werktage(
-                                OffsetDateTime::now_utc(),
-                                1,
-                                HolidayCalendar::BdewMaKo,
-                            ),
+                            deadline_at_werktage(received_at, 1, HolidayCalendar::BdewMaKo),
                         )],
                     ))
                 } else {
@@ -2781,6 +2786,7 @@ mod tests {
                 pid: Pruefidentifikator::new(GESAMTVORGANG_ERFOLG_PID).expect("valid"),
                 zuordnungsbeginn: Some(gemeldet_str.clone()),
                 message_ref: MessageRef::new("MSG-IFT-1"),
+                received_at: time::macros::datetime!(2026-02-02 09:00 UTC),
             },
         )
         .expect("report");
@@ -2852,6 +2858,7 @@ mod tests {
                 // A year past the vorläufig confirmed 2025-02-01.
                 zuordnungsbeginn: Some("20260210".to_owned()),
                 message_ref: MessageRef::new("MSG-IFT-2"),
+                received_at: time::macros::datetime!(2026-02-02 09:00 UTC),
             },
         )
         .expect("the report is recorded even when its date is wrong")

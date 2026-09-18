@@ -79,15 +79,13 @@ BK6-24-174, WiM Strom too, GPKE Teil 4 is BK6-22-024, GeLi Gas is
 BK7-24-01-009 — so take the citation from the domain crate's own `AGENTS.md`
 rather than from an example.
 
-## Version Policy
+## Format versions
 
-```rust
-// Correct default for ALL MaKo workflows:
-WorkflowVersionPolicy::ForwardCompatible
-
-// Pinned is only for special upgrade scenarios — never the default
-WorkflowVersionPolicy::Pinned // ❌ as default
-```
+A workflow declares no acceptance policy. The inbound message's own FV picks the
+adapter; the process keeps the `WorkflowId` it was created with. Every adapter
+registry must cover every known FV — check with
+`AdapterRegistry::uncovered_format_versions(&known_fvs())`, which `makod` calls
+at startup and refuses to boot on.
 
 Use `FormatVersion::parse(s)?` for user-supplied strings. `FormatVersion::new(...)` is unchecked — only for compile-time literals.
 

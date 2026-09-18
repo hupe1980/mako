@@ -471,8 +471,13 @@ pub enum LegalReference {
         paragraph: &'static str,
     },
     /// GasNEV — Gasnetzentgeltverordnung (grid usage charges, Gas).
+    ///
+    /// § 15 is *Ermittlung der Netzentgelte*, and Abs. 7 is the one that
+    /// requires a separate Entgelt für Messstellenbetrieb, Messung und
+    /// Abrechnung per Ausspeisepunkt — the Verrechnungspreis. **§ 14 is
+    /// *Teilnetze*** and is not a price basis for anything this crate bills.
     GasNev {
-        /// Paragraph reference, e.g. `"§14"`.
+        /// Paragraph reference, e.g. `"§15"`, `"§15 Abs. 7"`.
         paragraph: &'static str,
     },
     /// KAV — Konzessionsabgabenverordnung (municipal concession fee).
@@ -774,7 +779,7 @@ pub enum BillingPositionKind {
     /// → `BdewArtikelnummer::Leistung`
     NneLeistung,
     /// Gas NNE monthly base fee (Grundpreis / Verrechnungspreis).
-    /// GasNEV §14. → `BdewArtikelnummer::Grundpreis`
+    /// GasNEV §15 Abs. 7. → `BdewArtikelnummer::Grundpreis`
     NneGasGrundpreis,
     /// Konzessionsabgabe — KAV §2 municipal concession fee.
     /// → `BdewArtikelnummer::Konzessionsabgabe`
@@ -1956,7 +1961,7 @@ pub struct NneInput {
     ///
     /// - `Sparte::Strom` (default) → `StromNEV §21` Arbeit, `StromNEV §17` Leistung,
     ///   `SettlementType::NneStrom`
-    /// - `Sparte::Gas` → `GasNEV §14`, `SettlementType::NneGas`
+    /// - `Sparte::Gas` → `GasNEV §15`, `SettlementType::NneGas`
     pub sparte: Sparte,
 
     // ── §14a Modul 3 Spotpreis-NNE per-interval dispatch data ────────────────

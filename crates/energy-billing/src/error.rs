@@ -78,7 +78,7 @@ pub enum EngineError {
         sum: Decimal,
     },
 
-    /// A §42b EEG Nutzungsplan whose shares do not describe an allocation.
+    /// A §42b EnWG Nutzungsplan whose shares do not describe an allocation.
     ///
     /// The plan's fractions are caller-supplied and must partition the plant's
     /// generation exactly once — a plan entered as percentages allocates a

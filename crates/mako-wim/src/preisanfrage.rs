@@ -113,7 +113,7 @@ pub fn antwort_frist_werktage(request_pid: u32) -> Option<u32> {
         return None;
     }
     match mako_fristen::antwort::antwort_obligation(request_pid)?.frist {
-        FristShape::WerktageAtCutoff(n) => Some(n),
+        FristShape::EndOfWerktag(n) => Some(n),
         _ => None,
     }
 }

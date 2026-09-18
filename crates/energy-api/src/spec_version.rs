@@ -54,14 +54,16 @@ pub const MAJOR: i32 = 1;
 /// > Die im Release 2.0.0 zur Konsultation gestellten Anpassungen an den
 /// > API-Webdiensten sind nicht Bestandteil dieser Veröffentlichung.
 ///
-/// Only **API Guideline 1.0b** binds on 01.10.2026. In the spec repository
-/// (`github.com/EDI-Energy/api-electricity`) the only tag is **`1.0.0`**; the
-/// 2.0.0 material lives solely on the `2026-07-31-consultation` branch, which
-/// is still moving. BNetzA's own link to a `2.0.0` release tag returns 404.
+/// Only **API Guideline 1.0b** binds on 01.10.2026. `EDI-Energy/api-electricity`
+/// does carry a **`2.0.0`** tag, released 24.07.2026, whose own
+/// Änderungshistorie applies it *"ab dem 01.10.2027 00:00 Uhr"* — a cycle after
+/// FV 2027-04, so it is outside that import as well. The directory-service
+/// repository has only `1.0.0`.
 ///
-/// Implementing against it now would be rework against an unfrozen contract.
+/// Implementing against it now would be rework against a contract that binds a
+/// year later than the release currently being prepared.
 pub const RELEASE_2_0_0_STATUS: &str =
-    "deferred by Mitteilung Nr. 56; consultation branch only, no 2.0.0 tag";
+    "deferred by Mitteilung Nr. 56; tagged 2.0.0 on 24.07.2026, applies ab 01.10.2027";
 
 /// What 2.0.0 actually changes, from the consultation branch.
 ///

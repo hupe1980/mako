@@ -85,6 +85,22 @@ impl Daemon for Sperrd {
                  Configure inbound_hmac_secret, or set allow_insecure_no_auth = true."
             );
         }
+        // The outbound side of the same argument: `OutboxWorker` signs only
+        // when it has a secret, so a configured webhook URL without one ships
+        // every de.sperr.* notice to the ERP unsigned — a disconnection
+        // announcement the receiver cannot distinguish from a forged one.
+        if cfg.erp_webhook_url.is_some()
+            && cfg.erp_hmac_secret.is_none()
+            && !cfg.allow_insecure_no_auth
+        {
+            anyhow::bail!(
+                "erp_webhook_url is configured but erp_hmac_secret is not. The outbox \
+                 worker signs only when it has a secret, so every de.sperr.* notice — \
+                 including the ones announcing a physical disconnection — would reach the \
+                 ERP unsigned. Configure erp_hmac_secret, or set \
+                 allow_insecure_no_auth = true."
+            );
+        }
         if cfg.allow_insecure_no_auth {
             tracing::warn!(
                 "sperrd: allow_insecure_no_auth is set — any caller that can open a socket \

@@ -555,5 +555,4 @@ mod tests {
             "expected EmptySecret, got {err:?}"
         );
     }
-
 }

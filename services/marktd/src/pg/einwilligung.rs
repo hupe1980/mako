@@ -22,6 +22,103 @@ impl PgEinwilligungRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+
+    /// The ids of this tenant's consents whose validity window has closed and
+    /// that are still open.
+    ///
+    /// Candidates only: nothing is written here, and an id that another sweep
+    /// or an operator's Widerruf closes in the meantime simply comes back empty
+    /// from [`Self::claim_expired`]. The closing happens one row at a time,
+    /// inside the transaction that also writes the consent's
+    /// `einwilligung.widerrufen` event.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MdmError::Internal`] when the query fails.
+    pub async fn expired_candidates(
+        &self,
+        now: time::Date,
+        tenant: &str,
+    ) -> Result<Vec<Uuid>, MdmError> {
+        // `valid_to` is the last day the consent is good for — the gate reads it
+        // as `valid_to >= heute()` — so a row expires the day *after* it, and
+        // `< $1` is that boundary.
+        sqlx::query_scalar(
+            "SELECT id FROM esa_einwilligungen \
+             WHERE tenant = $2 AND revoked_at IS NULL AND valid_to IS NOT NULL \
+               AND valid_to < $1 \
+             ORDER BY valid_to",
+        )
+        .bind(now)
+        .bind(tenant)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))
+    }
+
+    /// Close one lapsed consent **on the caller's transaction**, returning the
+    /// record when this call is the one that closed it.
+    ///
+    /// # Why the caller owns the transaction
+    ///
+    /// `revoked_at` is the only thing that makes a consent expire-able: once it
+    /// is set, no later sweep can ever see the row again. So a revocation that
+    /// commits without its `einwilligung.widerrufen` event ends the sweep's
+    /// ability to retry and leaves the ESA receiving Typ-2 Messwerte with no
+    /// lawful basis (Art. 6 Abs. 1 lit. a DSGVO), with nothing left in the
+    /// system that would notice. The revocation and the event therefore commit
+    /// together: the caller opens the transaction, calls this, enqueues the
+    /// event on the same transaction and commits. Any failure rolls the row
+    /// back to open, and the next sweep picks it up again.
+    ///
+    /// # Why `FOR UPDATE SKIP LOCKED`
+    ///
+    /// The claim is the same shape [`crate::fanout`] uses on `event_log`. A row
+    /// another transaction already holds — a second replica's sweep, or a
+    /// customer's Widerruf arriving at the same instant — is left to that
+    /// transaction rather than waited on, because the wait would now last for
+    /// an event INSERT and a commit, and the whole sweep queues behind it. The
+    /// skipped row is still expired on the next pass.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MdmError::Internal`] when the claim or the update fails.
+    pub async fn claim_expired(
+        conn: &mut sqlx::PgConnection,
+        id: Uuid,
+        now: time::Date,
+        tenant: &str,
+    ) -> Result<Option<EinwilligungRecord>, MdmError> {
+        let claimed: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM esa_einwilligungen \
+             WHERE id = $1 AND tenant = $3 AND revoked_at IS NULL \
+               AND valid_to IS NOT NULL AND valid_to < $2 \
+             FOR UPDATE SKIP LOCKED",
+        )
+        .bind(id)
+        .bind(now)
+        .bind(tenant)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+        let Some(id) = claimed else {
+            return Ok(None);
+        };
+
+        sqlx::query(
+            "UPDATE esa_einwilligungen SET revoked_at = now(), updated_at = now() \
+             WHERE id = $1 \
+             RETURNING *",
+        )
+        .bind(id)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?
+        .as_ref()
+        .map(map_consent)
+        .transpose()
+        .map_err(|e| MdmError::Internal(e.to_string()))
+    }
 }
 
 fn map_consent(row: &PgRow) -> Result<EinwilligungRecord, sqlx::Error> {
@@ -151,9 +248,13 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         now: time::Date,
         tenant: &str,
     ) -> Result<Vec<EinwilligungRecord>, MdmError> {
-        // One statement, so selecting and closing cannot race: a concurrent
-        // sweep or an operator revocation takes the row first and this returns
-        // nothing for it, which is what keeps the 17008 to one per consent.
+        // Closes the rows and returns them, and that is all it does — no
+        // `einwilligung.widerrufen` event rides along. The expiry sweep does
+        // **not** take this path (see [`Self::expired_candidates`] /
+        // [`Self::claim_expired`]): a committed `revoked_at` is invisible to
+        // every later sweep, so closing a batch here and losing the events
+        // afterwards would leave the ESA delivering with no lawful basis and no
+        // row left to retry from.
         //
         // `valid_to` is the last day the consent is good for — the gate reads
         // it as `valid_to >= heute()` — so a row expires the day *after*

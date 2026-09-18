@@ -392,11 +392,11 @@ and `KA_CHARGED_WHILE_EXEMPT` when a rate is applied to a §2 Abs. 7 exemption.
 `grid-billing` computes BDEW INVOIC billing positions with full explainability:
 
 - **NNE Strom** (PID 31002, NN-Rechnung) — flat-rate Arbeit, Leistung (RLM), Konzessionsabgabe
-- **NNE Gas** (PID 31002, NN-Rechnung) — GasNEV §14 legal basis, auto-set when `Sparte::Gas`
+- **NNE Gas** (PID 31002, NN-Rechnung) — GasNEV §15 legal basis, auto-set when `Sparte::Gas`
 - **§14a modules** — Modul 1 (pauschale Reduzierung), Modul 2 (prozentuale Reduzierung des Arbeitspreises), Modul 3 (zeitvariable Netzentgelte HT/ST/NT, opt-in since 01.04.2025) — BNetzA BK8-22/010-A / BK8-22/010-A
 - **MMM Strom** (PID 31005) — Mehr-/Mindermengensaldo, GPKE (BK6-24-174) Teil 1 Kap. 8.4
 - **MMM Gas** (PID 31005) — Gas imbalance, GaBi Gas 2.1 (BK7-24-01-008)
-- **NNE Gas** (PID 31002) — GasNEV §14 Arbeits-/Grundpreis and §15 Kapazitätsentgelt
+- **NNE Gas** (PID 31002) — GasNEV §15 Arbeitspreis, §15 Abs. 7 Grundpreis and §15 Kapazitätsentgelt
 - **Abschlagsrechnung** (PID 31001) — a payment on account: one Positionszeile, no quantity, no
   Arbeitspreis (INVOIC AHB 1.0b Änd-ID 26817). The invoice that settles the period deducts it
   from what is **owed** via `InvoiceDocument::abschlaege`, never from the net or the tax, because
@@ -687,7 +687,7 @@ pub enum TariffSource {
 pub enum Sparte {
     #[default]
     Strom,  // → StromNEV §21, SettlementType::NneStrom, PID 31002 (NN-Rechnung)
-    Gas,    // → GasNEV §14,   SettlementType::NneGas,   PID 31002 (NN-Rechnung)
+    Gas,    // → GasNEV §15,   SettlementType::NneGas,   PID 31002 (NN-Rechnung)
 }
 ```
 
@@ -884,15 +884,15 @@ for pos in &settlement.positions {
 }
 ```
 
-### NNE Gas (GasNEV §14)
+### NNE Gas (GasNEV §15)
 
 ```rust,no_run
 use grid_billing::{NneInput, Sparte, SettlementType, settle_nne};
 use grid_billing::types::{ArbeitspreisModell, MengePreis};
 
-// Only Sparte changes — GasNEV §14 legal refs and SettlementType::NneGas are automatic:
+// Only Sparte changes — GasNEV §15 legal refs and SettlementType::NneGas are automatic:
 let settlement = settle_nne(&NneInput {
-    sparte: Sparte::Gas,  // ← drives GasNEV §14 + NneGas (PID 31002)
+    sparte: Sparte::Gas,  // ← drives GasNEV §15 + NneGas (PID 31002)
     arbeitspreis: ArbeitspreisModell::Einheitlich(MengePreis {
         menge_kwh: d("3000"),        // already kWh_Hs from edmd gas conversion
         preis_ct_per_kwh: d("1.80"),
@@ -1170,10 +1170,10 @@ is what it is — and what a §20 EnWG audit or an LF dispute is answered from.
 
 | # | Position text | Unit | `kind` | Condition | Legal basis | Artikelnummer |
 |---|---|---|---|---|---|---|
-| 1 | `Netznutzung Arbeit` | kWh | `NneArbeit` | `arbeitspreis: ArbeitspreisModell::Einheitlich` | StromNEV §21 (Strom) · GasNEV §14 (Gas) | `Wirkarbeit` (Gas); `artikel_id` (Strom) |
+| 1 | `Netznutzung Arbeit` | kWh | `NneArbeit` | `arbeitspreis: ArbeitspreisModell::Einheitlich` | StromNEV §21 (Strom) · GasNEV §15 (Gas) | `Wirkarbeit` (Gas); `artikel_id` (Strom) |
 | 1–2 | `Netznutzung Arbeit (§14a Modul 1)` + `§14a Modul 1 pauschale Reduzierung` | kWh · Jahr | `NneArbeitModul1` | `arbeitspreis: ArbeitspreisModell::Modul1Pauschal` | §14a EnWG Modul 1 · BK8-22/010-A | same as NneArbeit |
 | 1–3 | `Netznutzung Arbeit HT/ST/NT (§14a Modul 3)` | kWh | `NneArbeitHt` / `NneArbeitSt` / `NneArbeitNt` | `arbeitspreis: ArbeitspreisModell::Modul3ZeitVariabel` | §14a EnWG Modul 3 · BK8-22/010-A | same as NneArbeit |
-| opt | `Netzentgelt Grundpreis Gas` | Monat | `NneGasGrundpreis` | `grundpreis` set | GasNEV §14 | `Grundpreis` |
+| opt | `Netzentgelt Grundpreis Gas` | Monat | `NneGasGrundpreis` | `grundpreis` set | GasNEV §15 Abs. 7 | `Grundpreis` |
 | next | `Netznutzung Leistung` | kW | `NneLeistung` | `leistungspreis` set (RLM) — the Jahresleistungspreis pro-rated by calendar days | StromNEV §17 Abs. 2 | `Leistung` (Gas); `artikel_id` (Strom) |
 | next | `Blindmehrarbeit` | kvarh | `Blindmehrarbeit` | `blindarbeit` set **and** the draw exceeds the free share | StromNEV §17 (Preisblatt) | `Blindmehrarbeit` |
 | last | `Konzessionsabgabe[tier]` | kWh | `Konzessionsabgabe` | `konzessionsabgabe` set | KAV §2 Abs. 2 | `Konzessionsabgabe` |
@@ -1246,7 +1246,7 @@ Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6, Section 3.2 (valid 01
 | **No floating-point money** | `rust_decimal::Decimal` throughout; `EuroAmount` for overflow guard. No `f64`. |
 | **rubo4e is opt-in** | The engine returns `SettlementResult` and depends on no BO4E type; `bo4e::into_rechnung()` ships behind the off-by-default `bo4e` feature. |
 | **`recipient_mp_id` auto-populated** | `lf_mp_id` (NNE/MMM) or `empfaenger.mp_id` (PID 31009) copied automatically; `sender_mp_id` is the NB, or the **MSB** for 31009. |
-| **`Sparte` drives settlement type** | `Sparte::Gas` → `SettlementType::NneGas`, `GasNEV §14`. NN-Rechnung is PID 31002 for both Sparten — the Sparte rides on `Rechnung.sparte`, not on the Prüfidentifikator. |
+| **`Sparte` drives settlement type** | `Sparte::Gas` → `SettlementType::NneGas`, `GasNEV §15`. NN-Rechnung is PID 31002 for both Sparten — the Sparte rides on `Rechnung.sparte`, not on the Prüfidentifikator. |
 | **Every position cites regulation** | `trace.legal_refs` is non-empty for every position. Enables BNetzA audit without re-calculation. |
 | **Artikelnummer decided in this crate** | `BillingPositionKind::artikelnummer(settlement_type)` returns the codelist name, or `None` where the position carries an Artikel-ID instead (Strom NNE, AWH Gas, Abschlag). The decision is never left to the renderer. |
 | **`MmmGas` ≠ `MmmStrom`** | Separate `SettlementType` variants ensure correct legal refs (`GaBi Gas 2.1 (BK7-24-01-008)` vs `GPKE (BK6-24-174) Teil 1 Kap. 8.4`) per position. |

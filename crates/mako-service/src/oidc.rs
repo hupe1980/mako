@@ -825,7 +825,11 @@ impl OidcConfig {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
+// `pub(crate)` so sibling modules' tests can reuse the RSA key pair and JWKS
+// rather than minting a second one: `mcp_auth` needs a really-signed token to
+// prove its tenant gate, and a token signed by a different key would fail for
+// the wrong reason.
+pub(crate) mod tests {
     use super::*;
     use jsonwebtoken::{EncodingKey, Header};
 
@@ -834,7 +838,7 @@ mod tests {
     // Private key in PKCS#8 PEM format; JWK n/e derived from it.
     // Generated with `openssl genrsa 2048`.
 
-    pub(super) const TEST_RSA_PRIVATE_KEY_PEM: &str = concat!(
+    pub(crate) const TEST_RSA_PRIVATE_KEY_PEM: &str = concat!(
         "-----BEGIN PRIVATE KEY-----\n",
         "MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCv6YP9yEHHvG3o\n",
         "gIPI2GVw16HoDxXnD2TnnRiQCH/ChaYOA580amRfdmnazjlpdiE+DpMtlAMEOIF9\n",
@@ -874,9 +878,9 @@ mod tests {
 
     // e = 65537 → AQAB
     const TEST_JWK_E: &str = "AQAB";
-    pub(super) const TEST_KID: &str = "test-key-1";
+    pub(crate) const TEST_KID: &str = "test-key-1";
 
-    pub(super) fn test_jwks() -> JwkSet {
+    pub(crate) fn test_jwks() -> JwkSet {
         serde_json::from_value(serde_json::json!({
             "keys": [{
                 "kty": "RSA",

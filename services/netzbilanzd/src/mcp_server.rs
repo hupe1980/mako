@@ -395,7 +395,7 @@ impl NetzbilanzMcpHandler {
                  | 31011 | Rechnung sonstige Leistung (GeLi Gas AWH Sperrprozesse) | GNB → LFG | `gas_awh` |\n\n\
                  **Sparte is a field, not a Prüfidentifikator.** NN-Rechnung Strom and Gas \
                  share 31002, and so do the two MMM variants share 31005. Every position \
-                 carries `sparte`, which selects StromNEV §21 or GasNEV §14, decides whether \
+                 carries `sparte`, which selects StromNEV §21 or GasNEV §15, decides whether \
                  the three EnFG network levies apply, and reaches the wire on `Rechnung.sparte`.\n\n\
                  **31009 is inverted.** The Messstellenbetreiber issues it in all seven of its \
                  Anwendungsfälle (PID overview 4.0); it is never addressed to one. The draft \
@@ -604,7 +604,7 @@ impl NetzbilanzMcpHandler {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for NetzbilanzMcpHandler {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()

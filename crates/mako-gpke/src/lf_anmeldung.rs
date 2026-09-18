@@ -574,6 +574,16 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                     LfAnmeldungState::Pending(data) => data.location_id.as_str().to_owned(),
                     _ => String::new(),
                 };
+                // `accepted`/`outcome` are the verdict, and they are the only
+                // thing that distinguishes a Bestätigung from an Ablehnung
+                // downstream: both leave through `de.mako.process.completed`,
+                // whose type says only that the process is terminal. A consumer
+                // keying on the type alone activates supply for a Marktlokation
+                // the NB refused.
+                //
+                // `reason` rides along so the refusal explains itself where it
+                // is read; without it a consumer knows a Lieferbeginn failed and
+                // cannot say why.
                 let outbox = vec![PendingOutbox::new(
                     "ProcessCompleted",
                     "",
@@ -582,6 +592,7 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                         "malo_id":  malo_id_str,
                         "accepted": accepted,
                         "outcome":  if accepted { "accepted" } else { "rejected" },
+                        "reason":   reason,
                     }),
                 )];
 

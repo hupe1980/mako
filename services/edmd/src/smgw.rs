@@ -457,13 +457,10 @@ pub fn check_session_compliance(
 pub async fn run_cls_compliance_sweep(
     pool: &PgPool,
     tenant: &str,
-    erp_webhook_url: Option<&str>,
-    erp_webhook_secret: Option<&str>,
     cert_warning_days: i32,
     comm_fault_threshold_hours: i64,
 ) -> ComplianceReport {
     let scanned_at = OffsetDateTime::now_utc();
-    let client = mako_service::http::default_client();
 
     // The watermark that decides which rows this sweep did *not* re-sight must
     // come from the **database** clock, because `last_seen_at` does: the upsert
@@ -615,7 +612,7 @@ pub async fn run_cls_compliance_sweep(
             newly_opened += 1;
 
             // ── 3. Emit de.messwert.cls.compliance-issue CloudEvent ───────────────
-            if let Some(url) = erp_webhook_url {
+            {
                 let ce = mako_service::CloudEvent::new(
                     mako_service::source("edmd", tenant),
                     mako_events::messwert::CLS_COMPLIANCE_ISSUE,
@@ -640,18 +637,9 @@ pub async fn run_cls_compliance_sweep(
                 .extension("worker", "cls-compliance-worker");
 
                 // A lost warning silently runs a gateway into an expired
-                // certificate and out of §14a eligibility, so this retries like
-                // every other edmd compliance event.
-                if let Err(e) = mako_service::post_ce_with_retry(
-                    &client,
-                    url,
-                    &ce,
-                    erp_webhook_secret.map(str::as_bytes),
-                )
-                .await
-                {
-                    tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
-                }
+                // certificate and out of §14a eligibility, so it is persisted
+                // before it is dispatched, like every other edmd event.
+                crate::outbox::emit(pool, &ce).await;
             }
         }
 
@@ -685,7 +673,7 @@ pub async fn run_cls_compliance_sweep(
         );
         // A resolution is as actionable as an occurrence: it is what closes a
         // ticket the earlier event opened.
-        if let Some(url) = erp_webhook_url {
+        {
             let ce = mako_service::CloudEvent::new(
                 mako_service::source("edmd", tenant),
                 mako_events::messwert::CLS_COMPLIANCE_RESOLVED,
@@ -701,16 +689,7 @@ pub async fn run_cls_compliance_sweep(
             )
             .extension("tenantid", tenant)
             .extension("worker", "cls-compliance-worker");
-            if let Err(e) = mako_service::post_ce_with_retry(
-                &client,
-                url,
-                &ce,
-                erp_webhook_secret.map(str::as_bytes),
-            )
-            .await
-            {
-                tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
-            }
+            crate::outbox::emit(pool, &ce).await;
         }
     }
 
@@ -760,8 +739,6 @@ pub async fn run_cls_compliance_sweep(
 pub fn spawn_cls_compliance_worker(
     pool: Arc<PgPool>,
     tenant: String,
-    erp_webhook_url: Option<String>,
-    erp_webhook_secret: Option<String>,
     cert_warning_days: i32,
     comm_fault_threshold_hours: i64,
     interval_secs: u64,
@@ -792,8 +769,6 @@ pub fn spawn_cls_compliance_worker(
             run_cls_compliance_sweep(
                 &pool,
                 &tenant,
-                erp_webhook_url.as_deref(),
-                erp_webhook_secret.as_deref(),
                 cert_warning_days,
                 comm_fault_threshold_hours,
             )
@@ -861,16 +836,10 @@ pub struct CertExpirySweepReport {
 /// ages. A renewed certificate (new `valid_to`) gets a fresh set of alerts.
 /// Already-expired certificates are left to the CLS compliance sweep
 /// (`CERT_EXPIRED`) — this worker is the *advance* warning.
-pub async fn run_smgw_cert_expiry_sweep(
-    pool: &PgPool,
-    tenant: &str,
-    erp_webhook_url: Option<&str>,
-    erp_webhook_secret: Option<&str>,
-) -> CertExpirySweepReport {
+pub async fn run_smgw_cert_expiry_sweep(pool: &PgPool, tenant: &str) -> CertExpirySweepReport {
     let scanned_at = OffsetDateTime::now_utc();
     // The tier boundaries are counted in German calendar days.
     let today = mako_fristen::berlin_date(scanned_at);
-    let client = mako_service::http::default_client();
 
     let rows = match sqlx::query("SELECT malo_id, session FROM smgw_sessions WHERE tenant = $1")
         .bind(tenant)
@@ -941,7 +910,10 @@ pub async fn run_smgw_cert_expiry_sweep(
             .bind(tier as i16)
             .bind(days)
             .bind(severity)
-            .bind(erp_webhook_url.is_some())
+            // The warning is enqueued for every claimed alert, so this row is
+            // emitted by construction: the outbox decides delivery, not whether
+            // a webhook happened to be configured when the certificate aged.
+            .bind(true)
             .bind(&malo_id)
             .bind(&event_id)
             .execute(pool)
@@ -967,7 +939,7 @@ pub async fn run_smgw_cert_expiry_sweep(
                 "edmd: SMGW certificate expiry warning",
             );
 
-            if let Some(url) = erp_webhook_url {
+            {
                 let ce = mako_service::CloudEvent::new(
                     mako_service::source("edmd", tenant),
                     mako_events::messwert::SMGW_CERT_EXPIRY_WARNING,
@@ -988,18 +960,9 @@ pub async fn run_smgw_cert_expiry_sweep(
                 .extension("tenantid", tenant)
                 .extension("worker", "smgw-cert-expiry-worker");
                 // A lost warning silently runs a gateway into an expired
-                // certificate and out of §14a eligibility, so retry like every
-                // other edmd compliance event.
-                if let Err(e) = mako_service::post_ce_with_retry(
-                    &client,
-                    url,
-                    &ce,
-                    erp_webhook_secret.map(str::as_bytes),
-                )
-                .await
-                {
-                    tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
-                }
+                // certificate and out of §14a eligibility, so it is persisted
+                // before it is dispatched, like every other edmd event.
+                crate::outbox::emit(pool, &ce).await;
             }
             warnings_emitted += 1;
         }
@@ -1035,8 +998,6 @@ pub async fn run_smgw_cert_expiry_sweep(
 pub fn spawn_smgw_cert_expiry_worker(
     pool: Arc<PgPool>,
     tenant: String,
-    erp_webhook_url: Option<String>,
-    erp_webhook_secret: Option<String>,
     interval_secs: u64,
     shutdown_token: tokio_util::sync::CancellationToken,
 ) {
@@ -1055,13 +1016,7 @@ pub fn spawn_smgw_cert_expiry_worker(
                     break;
                 }
             }
-            run_smgw_cert_expiry_sweep(
-                &pool,
-                &tenant,
-                erp_webhook_url.as_deref(),
-                erp_webhook_secret.as_deref(),
-            )
-            .await;
+            run_smgw_cert_expiry_sweep(&pool, &tenant).await;
         }
     });
 }
@@ -1212,7 +1167,7 @@ pub async fn put_smgw_session(
             continue;
         }
 
-        if let Some(url) = &state.erp_webhook_url {
+        {
             let ce = mako_service::CloudEvent::new(
                 mako_service::source("edmd", tenant),
                 mako_events::messwert::CLS_COMPLIANCE_ISSUE,
@@ -1234,13 +1189,7 @@ pub async fn put_smgw_session(
             // CLS_COMPLIANCE_ISSUE is also emitted by the compliance sweep worker;
             // `worker` disambiguates the emitting path (type/subject alone do not).
             .extension("worker", "smgw-upsert");
-            let client = mako_service::http::default_client();
-            if let Err(e) =
-                mako_service::post_ce_with_retry(&client, url, &ce, state.webhook_secret_bytes())
-                    .await
-            {
-                tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
-            }
+            state.emit(&ce).await;
         }
     }
 
@@ -1559,11 +1508,6 @@ pub async fn post_smgw_compliance_scan(
     let report = run_cls_compliance_sweep(
         pool.as_ref(),
         tenant,
-        state.erp_webhook_url.as_deref(),
-        state.erp_webhook_secret.as_ref().map(|s| {
-            use secrecy::ExposeSecret;
-            s.expose_secret()
-        }),
         state.smgw.cert_warning_days,
         state.smgw.comm_fault_threshold_hours,
     )

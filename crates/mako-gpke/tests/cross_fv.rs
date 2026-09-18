@@ -27,7 +27,8 @@
 //!    verified to have been cancelled after `SendAntwort`.
 //!
 //! These assertions collectively verify that:
-//! - `WorkflowVersionPolicy::ForwardCompatible` is the default (not `Pinned`).
+//! - A GPKE process keeps its creation `WorkflowId` while the inbound message's
+//!   own FV picks the adapter.
 //! - The 24-wall-clock-hour APERAK deadline is registered immediately on
 //!   `ReceiveUtilmd`.
 //! - The cross-FV response transitions the LFN process to `Active` (not
@@ -152,10 +153,10 @@ fn render_utilmd(
 /// A GPKE 55001 process started under FV2025-10-01 accepts a response message
 /// that arrives after the FV2026-01-01 cutover.
 ///
-/// This is the core `WorkflowVersionPolicy::ForwardCompatible` contract:
-/// a process must continue under its original format-version rules until
-/// completion, and the engine must route mid-flight cross-FV responses
-/// correctly.
+/// This is the core format-version contract: a process continues under the
+/// rules of the FV recorded in its `WorkflowId` until it completes, while the
+/// inbound message's own FV selects the adapter that parses it — so a
+/// mid-flight cross-FV response routes rather than dead-letters.
 ///
 /// ## Test sequence
 ///
@@ -419,8 +420,8 @@ async fn cross_fv_rejection_also_terminates_cleanly() {
 ///
 /// After the FV2026-10-01 cutover, long-running processes that were initiated
 /// under S2.1 will receive response messages encoded under S2.2.  The
-/// `WorkflowVersionPolicy::ForwardCompatible` engine contract must accept the
-/// S2.2 wire bytes without a `VersionMismatch` dead-letter.
+/// engine must accept the S2.2 wire bytes — the S2.2 adapter parses them —
+/// without a `VersionMismatch` dead-letter.
 ///
 /// ## What is asserted
 ///

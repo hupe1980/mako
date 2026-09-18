@@ -109,11 +109,10 @@ answers name a `G_…` Codeliste where a GPKE answer names its EBD, and UTILMD r
 a parallel `G…` release track on the same date as `S…`. The builders follow the
 track: a `("malo", …)` location lands where the column of the Sparte puts it.
 
-**Fristen have four shapes, so ask the table.** "A Werktage Frist expires at
-17:00 Berlin" is true of the WiM MSB-Wechsel windows and of nothing else — GPKE
-states a clock time on the n-th Werktag after the ÜT, or on the ÜT itself, and
-GeLi Gas the *end* of the n-th Werktag. The two GPKE shapes share a clock time
-and land a day apart.
+**Fristen have four shapes, so ask the table.** GPKE states a clock time on the
+n-th Werktag after the ÜT, or on the ÜT itself; GeLi Gas, WiM and MaBiS run to
+the *end* of the n-th Werktag. The two GPKE shapes share a clock time and land a
+day apart.
 
 ```python
 assert_deadline_is(response["deadline"], received=received, pid=55001)

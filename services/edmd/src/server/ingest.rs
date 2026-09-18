@@ -566,47 +566,34 @@ pub(crate) async fn post_direct_reads_inner(
         validation: &validation,
         hampel: Some(quality_json.clone()),
     };
-    crate::server::quality_alert::raise_quality_warning(
-        state.erp_webhook_url.as_deref(),
-        state.webhook_secret_bytes(),
-        &state.tenant,
-        &alert,
+    crate::server::quality_alert::raise_quality_warning(state.repo.pool(), &state.tenant, &alert)
+        .await;
+
+    // `de.messwert.reading.direct.stored` is what tells `billingd` to recompute,
+    // so it is enqueued for every stored batch — not only when a webhook happens
+    // to be configured. Gating the *emission* on the delivery target means a
+    // webhook added later can never recover the events of the period before it,
+    // because nothing recorded them; gating only the *delivery* leaves them in
+    // `event_outbox` where the worker picks them up.
+    let stored_ce = mako_service::CloudEvent::new(
+        mako_service::source("edmd", &state.tenant),
+        mako_events::messwert::READING_DIRECT_STORED,
+        malo_id,
+        serde_json::json!({
+            "malo_id": malo_id,
+            "session_id": session_id,
+            "sparte": sparte_str,
+            "obis_code": obis_code,
+            "period_from": period_from_date.to_string(),
+            "period_to": period_to_date.to_string(),
+            "intervals_stored": accepted.len(),
+            "source": source,
+        }),
     )
-    .await;
-
-    if let Some(ref webhook_url) = state.erp_webhook_url {
-        let client = mako_service::http::default_client();
-
-        // Always emit de.messwert.reading.direct.stored so billingd knows to recompute.
-        let stored_ce = mako_service::CloudEvent::new(
-            mako_service::source("edmd", &state.tenant),
-            mako_events::messwert::READING_DIRECT_STORED,
-            malo_id,
-            serde_json::json!({
-                "malo_id": malo_id,
-                "session_id": session_id,
-                "sparte": sparte_str,
-                "obis_code": obis_code,
-                "period_from": period_from_date.to_string(),
-                "period_to": period_to_date.to_string(),
-                "intervals_stored": accepted.len(),
-                "source": source,
-            }),
-        )
-        .extension("tenantid", state.tenant.clone())
-        .extension("correlationid", correlation_id.clone())
-        .extension("causationid", session_id.clone());
-        if let Err(e) = mako_service::post_ce_with_retry(
-            &client,
-            webhook_url,
-            &stored_ce,
-            state.webhook_secret_bytes(),
-        )
-        .await
-        {
-            tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
-        }
-    }
+    .extension("tenantid", state.tenant.clone())
+    .extension("correlationid", correlation_id.clone())
+    .extension("causationid", session_id.clone());
+    state.emit(&stored_ce).await;
 
     let status = if alert.is_warning() {
         StatusCode::ACCEPTED // 202 — stored but with quality warnings
@@ -1339,13 +1326,8 @@ pub async fn post_bulk_reads(
             .as_ref()
             .map(|q| crate::server::hampel_summary(&q.report)),
     };
-    crate::server::quality_alert::raise_quality_warning(
-        state.erp_webhook_url.as_deref(),
-        state.webhook_secret_bytes(),
-        &state.tenant,
-        &alert,
-    )
-    .await;
+    crate::server::quality_alert::raise_quality_warning(state.repo.pool(), &state.tenant, &alert)
+        .await;
 
     (
         if alert.is_warning() {

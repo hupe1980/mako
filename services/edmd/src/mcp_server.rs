@@ -1702,7 +1702,6 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
         .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
         .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
-
 }
 
 #[prompt_router]
@@ -1895,13 +1894,12 @@ impl EdmdMcpHandler {
     }
 
     // ── New Phase-2 tools ─────────────────────────────────────────────────────
-
 }
 
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for EdmdMcpHandler {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()

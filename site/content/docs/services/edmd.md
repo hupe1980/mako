@@ -134,7 +134,7 @@ graph TB
     edmd -->|"mounts"| catalog
     catalog -.->|"table schemas + locations"| cold
     hot -->|"tiering watermark<br/>(one-week settlement lag)"| cold
-    erp -->|"GET /api/v1/lastgang Accept: arrow.stream<br/>→ Arrow IPC (10× faster than JSON)"| edmd
+    erp -->|"GET /api/v1/lastgang/{malo_id} Accept: arrow.stream<br/>→ Arrow IPC (10× faster than JSON)"| edmd
     erp -->|"GET /api/v1/billing-period/{malo_id}"| edmd
     erp -->|"POST /api/v1/query/sql (DataFusion)"| edmd
     duckdb -->|"ATTACH — metadata only"| catalog
@@ -1507,10 +1507,20 @@ resolution column. The shared rule set lives in `metering::sharing`.
 
 ## CloudEvents emitted
 
-Eleven types, all from `mako_events::messwert`. Every one is delivered through
-the single signing emitter, so a configured `webhook.erp_webhook_secret` covers
-all of them; without `erp_webhook_url` the finding is logged at `WARN` instead of
-dropped.
+Eleven types, all from `mako_events::messwert`. Every one is written to the
+transactional outbox (`event_outbox`) and drained by a background worker, so a
+configured `webhook.erp_webhook_secret` signs all of them and a receiver that is
+restarting delays delivery rather than ending it; the worker retries with
+backoff and dead-letters on exhaustion.
+
+Emission does not depend on `erp_webhook_url`. Without one the events accumulate
+in `event_outbox`, which is where an operator finds them — gating the emission on
+the delivery target would mean a webhook added later could never recover the
+events of the period before it, because nothing recorded them.
+
+`de.messwert.reading.direct.stored` is the one that shows why: it is what tells
+`billingd` to recompute, and nothing else re-derives it, so a batch stored and
+never announced is consumption that is never billed.
 
 | Type | Raised by | When |
 |---|---|---|

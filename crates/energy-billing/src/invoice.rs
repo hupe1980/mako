@@ -1437,8 +1437,9 @@ impl VatCategory {
 /// EN16931 requires **one breakdown entry per distinct category and rate**, each
 /// carrying its own taxable base (BT-116) and tax amount (BT-117). A single
 /// aggregate `mwst_eur` cannot express that, and an invoice mixing rates — 19 %
-/// commodity with 7 % Fernwärme (§12 Abs. 2 Nr. 1 UStG) or 0 % Solar (§12 Abs. 3
-/// UStG) — is structurally invalid without it.
+/// commodity with 7 % Trinkwasser (§12 Abs. 2 Nr. 1 UStG i. V. m. Anlage 2
+/// Nr. 34) or a 0 % Kleinunternehmer-Gutschrift (§19 UStG) — is structurally
+/// invalid without it.
 ///
 /// Zero-rated bases are included. Omitting them would make the sum of the
 /// taxable bases differ from the invoice net, which is exactly what the

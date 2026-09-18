@@ -533,13 +533,7 @@ pub async fn post_zaehlerstandsgang(
             .as_ref()
             .map(|q| crate::server::hampel_summary(&q.report)),
     };
-    crate::server::quality_alert::raise_quality_warning(
-        state.erp_webhook_url.as_deref(),
-        state.webhook_secret_bytes(),
-        &tenant,
-        &alert,
-    )
-    .await;
+    crate::server::quality_alert::raise_quality_warning(state.repo.pool(), &tenant, &alert).await;
 
     let anomalies: Vec<serde_json::Value> = lastgang
         .anomalies

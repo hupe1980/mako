@@ -125,14 +125,18 @@ pub enum FristShape {
         /// The wall-clock time on that Werktag, in German local time.
         at: Time,
     },
-    /// „…bis zum **Ablauf** des `n`. Werktags nach Eingang."
+    /// „…bis zum **Ablauf** des `n`. Werktags nach Eingang", and its equivalent
+    /// wording „spätester **ÜT** ist der `n`. WT nach dem ÜT".
     ///
     /// Day-granular: the Frist runs to the end of that Werktag. The arrival day
     /// does not count (§ 187 Abs. 1 BGB).
+    ///
+    /// The two wordings are one rule. „Ablauf des n. WT" names the end of a day
+    /// and „spätester Übertragungs**tag** ist der n. WT" names the last day on
+    /// which the message may be transmitted, which is the same instant. No BDEW
+    /// or BNetzA document in this domain attaches an end-of-business hour to
+    /// either, so neither is cut short of the day it names.
     EndOfWerktag(u32),
-    /// „…spätester ÜT ist der `n`. WT nach dem ÜT", resolved to the 17:00
-    /// Europe/Berlin MaKo cut-off on that Werktag.
-    WerktageAtCutoff(u32),
     /// „Spätester ÜZ ist `HH:MM` Uhr **am ÜT**" — a wall-clock instant on the
     /// arrival day itself, not on a Werktag after it.
     ///
@@ -177,7 +181,6 @@ impl FristShape {
         match self {
             Self::WerktagAt { werktage, at } => crate::nth_werktag_at(received, werktage, at, cal),
             Self::EndOfWerktag(n) => crate::end_of_werktag_after(received, n, cal),
-            Self::WerktageAtCutoff(n) => crate::deadline_at_werktage(received, n, cal),
             Self::SameDayAt(at) => {
                 let berlin = received.to_timezone(timezones::db::europe::BERLIN);
                 let same_day = crate::berlin_at(berlin.date(), at);
@@ -483,7 +486,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (19_116, 19_117),
         ebd: Some("E_0470"),
-        frist: FristShape::WerktageAtCutoff(1),
+        frist: FristShape::EndOfWerktag(1),
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2 § 3.5.1.2 Prozessschritt 2 — „spätester ÜT ist der \
                  1. WT nach dem ÜT von Nr. 1\"",
@@ -494,7 +497,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (19_116, 19_117),
         ebd: Some("E_0497"),
-        frist: FristShape::WerktageAtCutoff(1),
+        frist: FristShape::EndOfWerktag(1),
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2 § 3.5.2.2 Prozessschritt 2 — „spätester ÜT ist der \
                  1. WT nach dem ÜT von Nr. 1\"",
@@ -505,7 +508,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (19_128, 19_129),
         ebd: Some("E_0468"),
-        frist: FristShape::WerktageAtCutoff(1),
+        frist: FristShape::EndOfWerktag(1),
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2 § 3.5.3.2 Prozessschritt 2 — „spätester ÜT ist der \
                  1. WT nach dem ÜT\"",
@@ -516,7 +519,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "MSB",
         antwort_pids: (19_118, 19_119),
         ebd: None,
-        frist: FristShape::WerktageAtCutoff(3),
+        frist: FristShape::EndOfWerktag(3),
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2 § 3.5.1.2 Prozessschritt 4 — „spätester ÜT ist der \
                  3. WT nach dem ÜT von Nr. 3\"; Fristverstreichen gilt als Zustimmung",
@@ -527,7 +530,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (21_047, 21_047),
         ebd: Some("E_0595"),
-        frist: FristShape::WerktageAtCutoff(ABRECHNUNGSDATEN_WERKTAGE),
+        frist: FristShape::EndOfWerktag(ABRECHNUNGSDATEN_WERKTAGE),
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2 §§ 3.1.2.2 / 3.1.3.2 — Bearbeitungsstand \
                  „spätester ÜT ist der 2. WT nach dem ÜT\"",
@@ -538,7 +541,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (21_047, 21_047),
         ebd: Some("E_0595"),
-        frist: FristShape::WerktageAtCutoff(ABRECHNUNGSDATEN_WERKTAGE),
+        frist: FristShape::EndOfWerktag(ABRECHNUNGSDATEN_WERKTAGE),
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2 §§ 3.1.2.2 / 3.1.3.2",
     },
@@ -548,7 +551,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (21_047, 21_047),
         ebd: Some("E_0595"),
-        frist: FristShape::WerktageAtCutoff(ABRECHNUNGSDATEN_WERKTAGE),
+        frist: FristShape::EndOfWerktag(ABRECHNUNGSDATEN_WERKTAGE),
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2 §§ 3.1.1.2 / 3.1.3.2",
     },
@@ -558,7 +561,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (55_137, 55_137),
         ebd: Some("E_0410"),
-        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
         source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.3 Prozessschritt 2 — „spätester ÜT ist der \
                  2. WT nach dem ÜT von Nr. 1\"",
@@ -569,7 +572,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (55_232, 55_232),
         ebd: Some("E_0410"),
-        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
         source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.3 Prozessschritt 2",
     },
@@ -579,7 +582,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (55_694, 55_694),
         ebd: Some("E_0410"),
-        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
         source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.3 Prozessschritt 2",
     },
@@ -589,7 +592,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (55_559, 55_559),
         ebd: Some("E_0415"),
-        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
         source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
     },
@@ -609,7 +612,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "MSB",
         antwort_pids: (21_047, 21_047),
         ebd: Some("E_0632"),
-        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
         source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 3 — „spätester ÜT ist der 2. WT \
                  nach dem ÜT von Nr. 2\" (the Bestellung variant, § 1.5.4 Prozessschritt 2, \
@@ -621,7 +624,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (55_644, 55_644),
         ebd: Some("E_0415"),
-        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
         source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
     },
@@ -631,7 +634,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (55_645, 55_645),
         ebd: Some("E_0415"),
-        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
         source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
     },
@@ -641,7 +644,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (55_646, 55_646),
         ebd: Some("E_0415"),
-        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
         source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
     },
@@ -651,7 +654,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (55_647, 55_647),
         ebd: Some("E_0415"),
-        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
         source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
     },
@@ -661,7 +664,7 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (55_648, 55_648),
         ebd: Some("E_0415"),
-        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
         source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
     },
@@ -673,7 +676,7 @@ pub const GPKE: &[AntwortObligation] = &[
         // Two trees on one PID: `E_0524` when the NB asked, `E_0531` when the
         // LF did. The PID cannot pick between them, so none is named here.
         ebd: None,
-        frist: FristShape::WerktageAtCutoff(KONFIGURATIONSANGEBOT_WERKTAGE),
+        frist: FristShape::EndOfWerktag(KONFIGURATIONSANGEBOT_WERKTAGE),
         family: Family::Gpke,
         source: "GPKE Teil 3 § 3.1 / § 3.2 SD Prozessschritt 2 — 2 Werktage",
     },
@@ -901,7 +904,7 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "MSBA",
         antwort_pids: (55_040, 55_041),
         ebd: Some("E_0200"),
-        frist: FristShape::WerktageAtCutoff(3),
+        frist: FristShape::EndOfWerktag(3),
         family: Family::Wim,
         source: "WiM Strom Teil 1 Kap. 2.2.2 Nr. 2 — 3 Werktage",
     },
@@ -911,7 +914,7 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (55_043, 55_044),
         ebd: Some("E_0201"),
-        frist: FristShape::WerktageAtCutoff(5),
+        frist: FristShape::EndOfWerktag(5),
         family: Family::Wim,
         source: "WiM Strom Teil 1 Kap. 2.3.2 Nr. 2 — 5 Werktage",
     },
@@ -921,7 +924,7 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (55_052, 55_053),
         ebd: Some("E_0202"),
-        frist: FristShape::WerktageAtCutoff(7),
+        frist: FristShape::EndOfWerktag(7),
         family: Family::Wim,
         source: "WiM Strom Teil 1 Kap. 2.4.2 Nr. 2 — 7 Werktage",
     },
@@ -931,7 +934,7 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "gMSB",
         antwort_pids: (55_169, 55_170),
         ebd: Some("E_0240"),
-        frist: FristShape::WerktageAtCutoff(1),
+        frist: FristShape::EndOfWerktag(1),
         family: Family::Wim,
         // Not Kap. 2.5: the Verpflichtungsanfrage is Prozessschritt 3 of the
         // *Ende Messstellenbetrieb*, and Kap. 2.5 („Verpflichtung gMSB") is the
@@ -944,7 +947,7 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "MSBA",
         antwort_pids: (19_003, 19_004),
         ebd: Some("E_0203"),
-        frist: FristShape::WerktageAtCutoff(1),
+        frist: FristShape::EndOfWerktag(1),
         family: Family::Wim,
         source: "WiM Strom Teil 1 Kap. 2.4.2 Nr. 6 — 1 Werktag",
     },
@@ -954,7 +957,7 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (21_012, 21_011),
         ebd: Some("E_0232"),
-        frist: FristShape::WerktageAtCutoff(1),
+        frist: FristShape::EndOfWerktag(1),
         family: Family::Wim,
         source: "WiM Strom Teil 1 Kap. 2.3.2 Nr. 8 — 1 Werktag",
     },
@@ -966,7 +969,7 @@ pub const WIM: &[AntwortObligation] = &[
         // `Z66` „MSB-Scheitermeldung liegt vor", carried by 21011.
         antwort_pids: (21_011, 21_011),
         ebd: Some("E_0232"),
-        frist: FristShape::WerktageAtCutoff(1),
+        frist: FristShape::EndOfWerktag(1),
         family: Family::Wim,
         source: "WiM Strom Teil 1 Kap. 2.3.2 Nr. 8 — 1 Werktag",
     },
@@ -976,7 +979,7 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "MSBA",
         antwort_pids: (15_001, 15_001),
         ebd: None,
-        frist: FristShape::WerktageAtCutoff(GERAETEUEBERNAHME_ANGEBOT_WERKTAGE),
+        frist: FristShape::EndOfWerktag(GERAETEUEBERNAHME_ANGEBOT_WERKTAGE),
         family: Family::Wim,
         source: "WiM Strom Teil 1 Kap. 3.2.2 Nr. 2 — 4 Werktage",
     },
@@ -986,7 +989,7 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "MSBA",
         antwort_pids: (19_001, 19_002),
         ebd: Some("E_0247"),
-        frist: FristShape::WerktageAtCutoff(2),
+        frist: FristShape::EndOfWerktag(2),
         family: Family::Wim,
         source: "WiM Strom Teil 1 Kap. 3.2.2 Nr. 4 — 2 Werktage",
     },
@@ -996,7 +999,7 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "MSB",
         antwort_pids: (15_002, 21_033),
         ebd: Some("E_0207"),
-        frist: FristShape::WerktageAtCutoff(RECHNUNGSABWICKLUNG_ANFRAGE_WERKTAGE),
+        frist: FristShape::EndOfWerktag(RECHNUNGSABWICKLUNG_ANFRAGE_WERKTAGE),
         family: Family::Wim,
         source: "WiM Strom Teil 1 Kap. 3.6.3.6.2 Nr. 2 — 5 Werktage",
     },
@@ -1006,7 +1009,7 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "LF",
         antwort_pids: (17_005, 21_032),
         ebd: Some("E_0205"),
-        frist: FristShape::WerktageAtCutoff(RECHNUNGSABWICKLUNG_WERKTAGE),
+        frist: FristShape::EndOfWerktag(RECHNUNGSABWICKLUNG_WERKTAGE),
         family: Family::Wim,
         source: "WiM Strom Teil 1 Kap. 3.6.3.4.2 Nr. 2 — 8 Werktage",
     },
@@ -1016,7 +1019,7 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "Gegenseite (LF oder MSB)",
         antwort_pids: (19_009, 19_010),
         ebd: Some("E_0206"),
-        frist: FristShape::WerktageAtCutoff(RECHNUNGSABWICKLUNG_WERKTAGE),
+        frist: FristShape::EndOfWerktag(RECHNUNGSABWICKLUNG_WERKTAGE),
         family: Family::Wim,
         source: "WiM Strom Teil 1 Kap. 3.6.3.5.2 Nr. 2 — 8 Werktage",
     },
@@ -1026,7 +1029,7 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "NB · MSB",
         antwort_pids: (17_133, 19_132),
         ebd: None,
-        frist: FristShape::WerktageAtCutoff(GESCHAEFTSDATENANFRAGE_WERKTAGE),
+        frist: FristShape::EndOfWerktag(GESCHAEFTSDATENANFRAGE_WERKTAGE),
         family: Family::Gpke,
         source: "GPKE Teil 4 § 3.2 Nr. 2 — spätester ÜZ ist 1 WT nach dem ÜZ der Anfrage",
     },
@@ -1036,7 +1039,7 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "MSB",
         antwort_pids: (15_005, 15_005),
         ebd: None,
-        frist: FristShape::WerktageAtCutoff(TECHNIKAENDERUNG_WERKTAGE),
+        frist: FristShape::EndOfWerktag(TECHNIKAENDERUNG_WERKTAGE),
         family: Family::Wim,
         source: "WiM Strom Teil 1 Kap. 3.3.1.2 / 3.3.2.2 Nr. 2 — 10 Werktage",
     },
@@ -1054,7 +1057,7 @@ pub const WIM: &[AntwortObligation] = &[
         // Zuordnung zu einem Objekt (`ZO-T15` against `ZG-T24`).
         // `mako_pruefung::codes::aenderung_der_technik_baum` takes both.
         ebd: None,
-        frist: FristShape::WerktageAtCutoff(TECHNIKAENDERUNG_WERKTAGE),
+        frist: FristShape::EndOfWerktag(TECHNIKAENDERUNG_WERKTAGE),
         family: Family::Wim,
         source: "WiM Strom Teil 1 Kap. 3.3.1.2 / 3.3.2.2 Nr. 2 — 10 Werktage",
     },
@@ -1064,7 +1067,7 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "wMSB",
         antwort_pids: (21_030, 21_031),
         ebd: Some("E_0233"),
-        frist: FristShape::WerktageAtCutoff(ERSTEINBAU_ANTWORT_WERKTAGE),
+        frist: FristShape::EndOfWerktag(ERSTEINBAU_ANTWORT_WERKTAGE),
         family: Family::Wim,
         source: "WiM Strom Teil 1 Kap. 3.5.2 Nr. 2 — spätester ÜT ist der 3. WT nach dem ÜT \
                  der Vorabinformation",
@@ -1093,7 +1096,7 @@ pub const WIM: &[AntwortObligation] = &[
         // publishes it without a diagram: „derzeit ist für diese Entscheidung
         // kein Entscheidungsbaum notwendig, da keine Antwort gegeben wird".)
         ebd: None,
-        frist: FristShape::WerktageAtCutoff(ESA_ANGEBOT_WERKTAGE),
+        frist: FristShape::EndOfWerktag(ESA_ANGEBOT_WERKTAGE),
         family: Family::Wim,
         source: "WiM Strom Teil 2 Kap. 4.1.2 Nr. 2 — 5 Werktage",
     },
@@ -1103,7 +1106,7 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "MSB",
         antwort_pids: (19_011, 19_012),
         ebd: Some("E_0256"),
-        frist: FristShape::WerktageAtCutoff(ESA_ANTWORT_WERKTAGE),
+        frist: FristShape::EndOfWerktag(ESA_ANTWORT_WERKTAGE),
         family: Family::Wim,
         source: "WiM Strom Teil 2 Kap. 4.1.2 Nr. 4 — 2 Werktage",
     },
@@ -1115,7 +1118,7 @@ pub const WIM: &[AntwortObligation] = &[
         // what says which of the two it answers, and therefore which tree.
         antwort_pids: (19_011, 19_012),
         ebd: Some("E_0254"),
-        frist: FristShape::WerktageAtCutoff(ESA_ANTWORT_WERKTAGE),
+        frist: FristShape::EndOfWerktag(ESA_ANTWORT_WERKTAGE),
         family: Family::Wim,
         source: "WiM Strom Teil 2 Kap. 4.3.2 Nr. 2 — 2 Werktage",
     },
@@ -1125,7 +1128,7 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "MSB",
         antwort_pids: (19_013, 19_014),
         ebd: Some("E_0257"),
-        frist: FristShape::WerktageAtCutoff(ESA_ANTWORT_WERKTAGE),
+        frist: FristShape::EndOfWerktag(ESA_ANTWORT_WERKTAGE),
         family: Family::Wim,
         source: "WiM Strom Teil 2 Kap. 4.1.2 Nr. 6 — 2 Werktage",
     },
@@ -1316,7 +1319,7 @@ pub const WIM_GAS: &[AntwortObligation] = &[
         answered_by: "MSBA",
         antwort_pids: (44_040, 44_041),
         ebd: Some("E_2000"),
-        frist: FristShape::WerktageAtCutoff(3),
+        frist: FristShape::EndOfWerktag(3),
         family: Family::WimGas,
         source: "AWH WiM Gas 2.0 Kap. 3.3.2 Nr. 2 — 3 Werktage",
     },
@@ -1326,7 +1329,7 @@ pub const WIM_GAS: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (44_043, 44_044),
         ebd: Some("E_2002"),
-        frist: FristShape::WerktageAtCutoff(5),
+        frist: FristShape::EndOfWerktag(5),
         family: Family::WimGas,
         source: "AWH WiM Gas 2.0 Kap. 3.5.2 Nr. 2 — 5 Werktage",
     },
@@ -1336,7 +1339,7 @@ pub const WIM_GAS: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (44_052, 44_053),
         ebd: Some("E_2005"),
-        frist: FristShape::WerktageAtCutoff(7),
+        frist: FristShape::EndOfWerktag(7),
         family: Family::WimGas,
         source: "AWH WiM Gas 2.0 Kap. 3.6.2 Nr. 2 — 7 Werktage",
     },
@@ -1350,7 +1353,7 @@ pub const WIM_GAS: &[AntwortObligation] = &[
         // a code and no carrier — `mako-wim` escalates instead of inventing one.
         antwort_pids: (44_169, 44_169),
         ebd: Some("E_2006"),
-        frist: FristShape::WerktageAtCutoff(1),
+        frist: FristShape::EndOfWerktag(1),
         family: Family::WimGas,
         source: "AWH WiM Gas 2.0 Kap. 3.6.2 Nr. 4 — 1 Werktag",
     },
@@ -1693,7 +1696,7 @@ mod tests {
             "the Rückmeldung window is the tighter one"
         );
         let anfrage = antwort_obligation(55_555).expect("55555 is catalogued");
-        assert_eq!(anfrage.frist, FristShape::WerktageAtCutoff(tighter));
+        assert_eq!(anfrage.frist, FristShape::EndOfWerktag(tighter));
         assert!(
             anfrage.source.contains("10 WT"),
             "the source names the window the table does not publish"
@@ -1895,7 +1898,7 @@ mod tests {
     #[test]
     fn the_esa_werteanfrage_has_its_own_window_and_is_not_a_preisanfrage() {
         let o = antwort_obligation(ESA_WERTEANFRAGE_PID).expect("published in WiM Teil 2");
-        assert_eq!(o.frist, FristShape::WerktageAtCutoff(ESA_ANGEBOT_WERKTAGE));
+        assert_eq!(o.frist, FristShape::EndOfWerktag(ESA_ANGEBOT_WERKTAGE));
         assert_eq!(o.antwort_pids, (15_003, 15_003));
         assert_eq!(o.ebd, None, "E_0253 is published without a tree");
         // Its window comes from Teil 2, not from the Teil 1 Preisanfrage
@@ -1930,7 +1933,7 @@ mod tests {
             assert_eq!(o.antwort_pids, antwort_pids, "{pid}");
             assert_eq!(
                 o.frist,
-                FristShape::WerktageAtCutoff(ESA_ANTWORT_WERKTAGE),
+                FristShape::EndOfWerktag(ESA_ANTWORT_WERKTAGE),
                 "{pid}"
             );
         }
@@ -1943,20 +1946,18 @@ mod tests {
     fn the_reqote_family_is_not_one_window() {
         assert_eq!(
             antwort_obligation(35_001).map(|o| o.frist),
-            Some(FristShape::WerktageAtCutoff(
-                GERAETEUEBERNAHME_ANGEBOT_WERKTAGE
-            )),
+            Some(FristShape::EndOfWerktag(GERAETEUEBERNAHME_ANGEBOT_WERKTAGE)),
             "35001 is the Anforderung Geräteübernahmeangebot — 4 WT"
         );
         assert_eq!(
             antwort_obligation(35_002).map(|o| o.frist),
-            Some(FristShape::WerktageAtCutoff(
+            Some(FristShape::EndOfWerktag(
                 RECHNUNGSABWICKLUNG_ANFRAGE_WERKTAGE
             )),
         );
         assert_eq!(
             antwort_obligation(35_005).map(|o| o.frist),
-            Some(FristShape::WerktageAtCutoff(TECHNIKAENDERUNG_WERKTAGE)),
+            Some(FristShape::EndOfWerktag(TECHNIKAENDERUNG_WERKTAGE)),
             "35005 opens the Messlokationsänderung — 10 WT"
         );
         // 35004 opens the GPKE Teil 3 Konfigurationsprozess, so it lives in
@@ -1965,7 +1966,7 @@ mod tests {
         assert_eq!(o.family, Family::Gpke);
         assert_eq!(
             o.frist,
-            FristShape::WerktageAtCutoff(KONFIGURATIONSANGEBOT_WERKTAGE)
+            FristShape::EndOfWerktag(KONFIGURATIONSANGEBOT_WERKTAGE)
         );
     }
 

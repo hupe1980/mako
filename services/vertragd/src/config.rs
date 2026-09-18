@@ -99,11 +99,12 @@ impl VertragdConfig {
     /// Refuse to start in a posture that exposes customer data or lets an
     /// unauthenticated caller move supply.
     ///
-    /// The two authentication mechanisms are checked together because they
-    /// protect different halves of the same surface: OIDC guards the operator
-    /// API (GDPR export, IBAN writes, contract mutation), the inbound HMAC
-    /// guards the two webhook routes (`de.mako.process.*` outcomes and CPQ
-    /// Angebote) that no token ever reaches.
+    /// The three mechanisms are checked together because each guards a
+    /// different door: OIDC guards the operator API (GDPR export, IBAN writes,
+    /// contract mutation), the inbound HMAC guards the two webhook routes
+    /// (`de.mako.process.*` outcomes and CPQ Angebote) that no token ever
+    /// reaches, and the outbound HMAC is what lets the ERP tell a notice this
+    /// service issued from one anybody posted.
     ///
     /// # Errors
     ///
@@ -128,6 +129,14 @@ impl VertragdConfig {
                 "inbound_secret — without it POST /api/v1/events and \
                  POST /api/v1/webhooks/angebot accept any unsigned body, and a forged one \
                  confirms supply or creates a contract",
+            );
+        }
+        if self.erp_webhook_url.is_some() && self.erp_hmac_secret.is_none() {
+            fehlt.push(
+                "erp_hmac_secret — erp_webhook_url is set, and `OutboxWorker` signs only \
+                 when it has a secret: every de.vertrag.* CloudEvent, the § 41 Abs. 5 EnWG \
+                 notices among them, goes to the ERP unsigned and the receiver cannot tell \
+                 one from a forgery",
             );
         }
         anyhow::ensure!(
@@ -168,4 +177,70 @@ pub struct AbsenderConfig {
     pub contact_name: Option<String>,
     pub phone: Option<String>,
     pub email: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal startable configuration, plus whatever `extra` adds.
+    fn config(extra: &str) -> VertragdConfig {
+        let base = r#"
+            tenant       = "9900357000004"
+            lf_mp_id     = "9900357000004"
+            processd_url = "http://localhost:9080"
+            accountingd_url = "http://localhost:9380"
+            edmd_url     = "http://localhost:9280"
+            inbound_secret = "s3cret"
+
+            [database]
+            url = "postgres://localhost/vertragd"
+
+            [oidc]
+            issuer   = "https://login.example.test/v2.0"
+            audience = "api://mako-vertragd"
+        "#;
+        toml::from_str(&format!("{extra}\n{base}")).expect("the test configuration parses")
+    }
+
+    /// A delivery target without a signing secret is refused.
+    ///
+    /// `OutboxWorker` signs only when it has one, so this posture ships every
+    /// `de.vertrag.*` CloudEvent — the § 41 Abs. 5 EnWG notices among them — to
+    /// the ERP unsigned, and nothing at runtime says so.
+    #[test]
+    fn startup_refuses_a_webhook_url_without_its_signing_secret() {
+        let err = config(r#"erp_webhook_url = "https://erp.example.test/events""#)
+            .check_auth_posture()
+            .expect_err("an unsigned outbound webhook must not start");
+        assert!(
+            err.to_string().contains("erp_hmac_secret"),
+            "the refusal must name erp_hmac_secret: {err}"
+        );
+    }
+
+    #[test]
+    fn a_signed_webhook_and_no_webhook_at_all_both_start() {
+        config(
+            "erp_webhook_url = \"https://erp.example.test/events\"\n\
+             erp_hmac_secret = \"signing-key\"",
+        )
+        .check_auth_posture()
+        .expect("a URL with its secret is a startable posture");
+
+        config("")
+            .check_auth_posture()
+            .expect("no erp_webhook_url means no unsigned delivery");
+    }
+
+    /// The escape hatch still opens every door, this one included.
+    #[test]
+    fn allow_insecure_no_auth_still_covers_it() {
+        config(
+            "allow_insecure_no_auth = true\n\
+             erp_webhook_url = \"https://erp.example.test/events\"",
+        )
+        .check_auth_posture()
+        .expect("allow_insecure_no_auth is the dev escape hatch");
+    }
 }

@@ -30,7 +30,18 @@ impl Daemon for Edmd {
         sqlx::migrate!("./migrations")
             .run(pool)
             .await
-            .context("run edmd migrations")
+            .context("run edmd migrations")?;
+        // Transactional outbox for the CloudEvents edmd publishes.
+        //
+        // A metering event is not an optimisation: `de.messwert.reading.direct.stored`
+        // is what tells `billingd` to recompute, so an RLM push that is stored and
+        // never announced is consumption that is never billed. Three attempts
+        // inside the emitting request survive a network blip and not a receiver
+        // restart, which is exactly when a fleet-wide push arrives.
+        mako_service::outbox::ensure_schema(pool)
+            .await
+            .context("ensure event_outbox schema")?;
+        Ok(())
     }
 
     async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Router> {

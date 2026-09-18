@@ -292,12 +292,9 @@ pub async fn run_surveillance_sweep(
     repo: &MeterStoreTimeSeriesRepository,
     cfg: &SurveillanceConfig,
     tenant: &str,
-    erp_webhook_url: Option<&str>,
-    erp_webhook_secret: Option<&str>,
 ) -> SurveillanceReport {
     let scanned_at = OffsetDateTime::now_utc();
     let pool = repo.pool();
-    let client = mako_service::http::default_client();
 
     let (findings, points_scanned, window_from) =
         match assess_delivery(repo, tenant, cfg, scanned_at).await {
@@ -383,7 +380,7 @@ pub async fn run_surveillance_sweep(
             "edmd: surveillance: measuring point is not delivering (§ 60 Abs. 1 MsbG)"
         );
 
-        if let Some(url) = erp_webhook_url {
+        {
             let ce = mako_service::CloudEvent::new(
                 mako_service::source("edmd", tenant),
                 mako_events::messwert::READING_DELIVERY_OVERDUE,
@@ -405,16 +402,7 @@ pub async fn run_surveillance_sweep(
             )
             .extension("tenantid", tenant)
             .extension("worker", "delivery-surveillance");
-            if let Err(e) = mako_service::post_ce_with_retry(
-                &client,
-                url,
-                &ce,
-                erp_webhook_secret.map(str::as_bytes),
-            )
-            .await
-            {
-                tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
-            }
+            crate::outbox::emit(pool, &ce).await;
         }
         emitted += 1;
     }
@@ -440,7 +428,7 @@ pub async fn run_surveillance_sweep(
         use sqlx::Row as _;
         let malo_id: String = row.get("malo_id");
         tracing::info!(%malo_id, "edmd: surveillance: measuring point is delivering again");
-        if let Some(url) = erp_webhook_url {
+        {
             let ce = mako_service::CloudEvent::new(
                 mako_service::source("edmd", tenant),
                 mako_events::messwert::READING_DELIVERY_RESUMED,
@@ -456,16 +444,7 @@ pub async fn run_surveillance_sweep(
             )
             .extension("tenantid", tenant)
             .extension("worker", "delivery-surveillance");
-            if let Err(e) = mako_service::post_ce_with_retry(
-                &client,
-                url,
-                &ce,
-                erp_webhook_secret.map(str::as_bytes),
-            )
-            .await
-            {
-                tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
-            }
+            crate::outbox::emit(pool, &ce).await;
         }
     }
 
@@ -498,8 +477,6 @@ pub fn spawn_surveillance_worker(
     // Resolves a subscription's Messprodukt so the Typ-2 sweep can use the
     // cadence that product publishes rather than one flat setting.
     marktd: Option<mako_markt::marktd_client::MarktdClient>,
-    erp_webhook_url: Option<String>,
-    erp_webhook_secret: Option<String>,
     shutdown: CancellationToken,
 ) {
     tokio::spawn(async move {
@@ -518,30 +495,14 @@ pub fn spawn_surveillance_worker(
                     break;
                 }
             }
-            run_surveillance_sweep(
-                &repo,
-                &cfg,
-                &tenant,
-                erp_webhook_url.as_deref(),
-                erp_webhook_secret.as_deref(),
-            )
-            .await;
+            run_surveillance_sweep(&repo, &cfg, &tenant).await;
 
             // The ESA Typ-2 stream rides the same cadence but its own
             // thresholds and register rows — the two never mix.
             if cfg.typ2_enabled
                 && let Some(t) = typ2.as_ref()
             {
-                run_typ2_surveillance_sweep(
-                    t,
-                    repo.pool(),
-                    &cfg,
-                    &tenant,
-                    marktd.as_ref(),
-                    erp_webhook_url.as_deref(),
-                    erp_webhook_secret.as_deref(),
-                )
-                .await;
+                run_typ2_surveillance_sweep(t, repo.pool(), &cfg, &tenant, marktd.as_ref()).await;
             }
         }
     });
@@ -758,17 +719,7 @@ pub async fn post_delivery_surveillance_scan(
             .into_response();
     }
 
-    let report = run_surveillance_sweep(
-        &state.repo,
-        &state.surveillance,
-        &state.tenant,
-        state.erp_webhook_url.as_deref(),
-        state.erp_webhook_secret.as_ref().map(|s| {
-            use secrecy::ExposeSecret as _;
-            s.expose_secret()
-        }),
-    )
-    .await;
+    let report = run_surveillance_sweep(&state.repo, &state.surveillance, &state.tenant).await;
 
     axum::Json(serde_json::json!({
         "scanned_at":     report.scanned_at.to_string(),
@@ -1057,11 +1008,8 @@ pub async fn run_typ2_surveillance_sweep(
     cfg: &SurveillanceConfig,
     tenant: &str,
     marktd: Option<&mako_markt::marktd_client::MarktdClient>,
-    erp_webhook_url: Option<&str>,
-    erp_webhook_secret: Option<&str>,
 ) -> SurveillanceReport {
     let scanned_at = OffsetDateTime::now_utc();
-    let client = mako_service::http::default_client();
     let empty = |window_from| SurveillanceReport {
         scanned_at,
         window_from,
@@ -1145,7 +1093,7 @@ pub async fn run_typ2_surveillance_sweep(
             "edmd: ESA Typ-2 subscription has stopped delivering (§60 Abs. 1 MsbG)"
         );
 
-        if let Some(url) = erp_webhook_url {
+        {
             let ce = mako_service::CloudEvent::new(
                 mako_service::source("edmd", tenant),
                 mako_events::messwert::ESA_TYP2_DELIVERY_OVERDUE,
@@ -1170,16 +1118,7 @@ pub async fn run_typ2_surveillance_sweep(
             )
             .extension("tenantid", tenant)
             .extension("worker", "esa-typ2-surveillance");
-            if let Err(e) = mako_service::post_ce_with_retry(
-                &client,
-                url,
-                &ce,
-                erp_webhook_secret.map(str::as_bytes),
-            )
-            .await
-            {
-                tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
-            }
+            crate::outbox::emit(pool, &ce).await;
         }
         emitted += 1;
     }
@@ -1212,7 +1151,7 @@ pub async fn run_typ2_surveillance_sweep(
         let bestellung_ref: String = row.get("subscription_ref");
         tracing::info!(%malo_id, %obis, %bestellung_ref,
             "edmd: ESA Typ-2 subscription is delivering again");
-        if let Some(url) = erp_webhook_url {
+        {
             let ce = mako_service::CloudEvent::new(
                 mako_service::source("edmd", tenant),
                 mako_events::messwert::ESA_TYP2_DELIVERY_RESUMED,
@@ -1230,16 +1169,7 @@ pub async fn run_typ2_surveillance_sweep(
             )
             .extension("tenantid", tenant)
             .extension("worker", "esa-typ2-surveillance");
-            if let Err(e) = mako_service::post_ce_with_retry(
-                &client,
-                url,
-                &ce,
-                erp_webhook_secret.map(str::as_bytes),
-            )
-            .await
-            {
-                tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
-            }
+            crate::outbox::emit(pool, &ce).await;
         }
     }
 

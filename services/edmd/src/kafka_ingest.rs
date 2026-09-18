@@ -97,33 +97,15 @@ struct WireBatch {
     intervals: Vec<WireInterval>,
 }
 
-/// Outbound-webhook coordinates for the consumer's quality warnings.
-///
-/// The consumer runs outside the HTTP stack and so has no `HandlerState`; this
-/// carries the two fields it needs rather than the whole thing.
-#[derive(Clone)]
-pub struct QualityAlertTarget {
-    pub webhook_url: Option<String>,
-    pub secret: Option<secrecy::SecretString>,
-}
-
-impl QualityAlertTarget {
-    fn secret_bytes(&self) -> Option<&[u8]> {
-        use secrecy::ExposeSecret;
-        self.secret.as_ref().map(|s| s.expose_secret().as_bytes())
-    }
-}
-
 /// Spawn the Kafka ingest consumer. Runs until `shutdown` is cancelled.
 ///
-/// `alerts` is where a quality warning goes. A head-end feed is the least
+/// A quality warning is enqueued on edmd's outbox. A head-end feed is the least
 /// supervised ingest door there is, so a V-rule finding on it has to reach the
 /// same CloudEvent the REST doors raise, not just the log.
 pub fn spawn(
     cfg: KafkaIngestConfig,
     repo: MeterStoreTimeSeriesRepository,
     tenant: String,
-    alerts: QualityAlertTarget,
     shutdown: CancellationToken,
 ) {
     tokio::spawn(async move {
@@ -131,7 +113,7 @@ pub fn spawn(
             if shutdown.is_cancelled() {
                 break;
             }
-            match run_consumer(&cfg, &repo, &tenant, &alerts, &shutdown).await {
+            match run_consumer(&cfg, &repo, &tenant, &shutdown).await {
                 Ok(()) => break, // clean shutdown
                 Err(e) => {
                     error!(error = %e, "edmd kafka-ingest: consumer failed — reconnecting in 5s");
@@ -150,7 +132,6 @@ async fn run_consumer(
     cfg: &KafkaIngestConfig,
     repo: &MeterStoreTimeSeriesRepository,
     tenant: &str,
-    alerts: &QualityAlertTarget,
     shutdown: &CancellationToken,
 ) -> anyhow::Result<()> {
     let consumer: Consumer = Consumer::builder()
@@ -267,7 +248,7 @@ async fn run_consumer(
                     continue;
                 }
             };
-            match store_batch(repo, tenant, alerts, batch).await {
+            match store_batch(repo, tenant, batch).await {
                 Ok(n) => {
                     stored_batches += 1;
                     tracing::debug!(intervals = n, "edmd kafka-ingest: batch stored");
@@ -297,7 +278,6 @@ async fn run_consumer(
 async fn store_batch(
     repo: &MeterStoreTimeSeriesRepository,
     tenant: &str,
-    alerts: &QualityAlertTarget,
     batch: WireBatch,
 ) -> anyhow::Result<usize> {
     // An unrecognised Sparte or source is **refused**, not coerced — the same
@@ -424,13 +404,7 @@ async fn store_batch(
             .as_ref()
             .map(|q| crate::server::hampel_summary(&q.report)),
     };
-    crate::server::quality_alert::raise_quality_warning(
-        alerts.webhook_url.as_deref(),
-        alerts.secret_bytes(),
-        tenant,
-        &alert,
-    )
-    .await;
+    crate::server::quality_alert::raise_quality_warning(repo.pool(), tenant, &alert).await;
     Ok(n)
 }
 

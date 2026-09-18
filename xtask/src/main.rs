@@ -37,6 +37,9 @@ Commands:
   check-bo4e-examples  Refuse a documented BO4E example using a field BO4E does not define
   check-malo-ids       Refuse a MaLo-ID literal whose BDEW check digit is wrong
   check-business-dates   Refuse a business date read in UTC rather than in Europe/Berlin
+  check-workflow-purity  Refuse a clock, random, environment or filesystem read inside an
+                        `impl … Workflow for …` block — a workflow is a pure function of
+                        (state, command), re-run on retry and re-folded on every replay
   check-citations        Refuse a Festlegung cited in a form it does not publish
   check-rounding         Refuse banker's rounding — money rounds kaufmännisch (DIN 1333)
   check-pid-coverage     Compare the shipped AHB profiles against the published
@@ -87,6 +90,7 @@ mod check_sql;
 mod check_tool_grants;
 mod check_vorlauf_consulted;
 mod check_wire_timestamps;
+mod check_workflow_purity;
 mod import_profiles;
 mod pid_overview;
 mod profile_diff;
@@ -123,6 +127,7 @@ fn main() {
         Some("check-dep-versions") => check_dep_versions(),
         Some("check-licenses") => check_licenses(),
         Some("check-wire-timestamps") => check_wire_timestamps(),
+        Some("check-workflow-purity") => check_workflow_purity(),
         Some("check-answer-commands") => check_answer_commands(),
         Some("check-tool-grants") => check_tool_grants(),
         Some("validate-ebd-codes") => validate_ebd_codes(),
@@ -211,6 +216,13 @@ fn check_expected_tenant() {
 fn check_vorlauf_consulted() {
     let (workspace_root, _) = workspace_info();
     if !check_vorlauf_consulted::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_workflow_purity() {
+    let (workspace_root, _) = workspace_info();
+    if !check_workflow_purity::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }
@@ -401,7 +413,7 @@ fn check_bo4e_coverage() {
     let found = types.len();
     println!("\nTotal: {found} distinct rubo4e::current types");
 
-    // The claim reads: **80 active `rubo4e::current` types — ...**
+    // The claim reads: **94 active `rubo4e::current` types — ...**
     let readme = std::fs::read_to_string(root.join("README.md")).unwrap_or_default();
     let claimed: usize = readme
         .lines()
@@ -427,7 +439,7 @@ fn check_bo4e_coverage() {
         println!("✓ README.md claim {claimed} matches.");
     } else {
         eprintln!("ERROR: found {found} types but README.md claims {claimed}.");
-        eprintln!("Update the count in README.md and concepts/BO4E_COVERAGE.md.");
+        eprintln!("Update the count in README.md.");
         std::process::exit(1);
     }
 }

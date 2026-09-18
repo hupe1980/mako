@@ -94,11 +94,18 @@ mod tests {
         )
     }
 
-    /// A working-day window skips the weekend, and lands at the German cut-off.
+    /// A working-day window skips the weekend, and runs to the end of the
+    /// Werktag it lands on.
     ///
     /// The failure this prevents is the one that makes a domain calendar worth
     /// wiring at all: `WallClock` would answer "Monday + 5 days = Saturday",
     /// which is not a Frist any AHB states.
+    ///
+    /// The window ends with the Werktag rather than at an end-of-business hour:
+    /// „Ablauf des n. WT" and „spätester ÜT ist der n. WT" both name a day, and
+    /// no BDEW or BNetzA document in this domain attaches a clock time to
+    /// either — so a deadline alert raised at 17:00 would fire against a
+    /// counterparty still inside its Frist.
     #[test]
     fn five_working_days_from_a_monday_is_the_next_monday() {
         let spec = DeadlineSpec::new(WORKING_DAYS, json!({ "n": 5 }));
@@ -107,11 +114,19 @@ mod tests {
             .expect("resolves");
 
         assert_eq!(
-            due.date(),
+            mako_fristen::berlin_date(due),
             Date::from_calendar_date(2025, Month::January, 13).expect("date"),
             "Tue–Fri then Monday: the weekend is not a Werktag"
         );
-        assert_eq!(due.hour(), 17, "17:00 Europe/Berlin is the MaKo cut-off");
+        assert_eq!(
+            due,
+            mako_fristen::end_of_werktag_after(
+                at(2025, Month::January, 6),
+                5,
+                mako_fristen::HolidayCalendar::BdewMaKo,
+            ),
+            "the window runs to the end of the fifth Werktag"
+        );
     }
 
     /// The wall-clock kinds still work — a 45-minute APERAK window is minutes.

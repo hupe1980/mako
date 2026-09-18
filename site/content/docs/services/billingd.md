@@ -511,7 +511,7 @@ let invoice = engine.bill(ctx, &quantities)?;
 | `ablesungsart` → how the reading was obtained, beside the readings | § 40 Abs. 2 Nr. 6 EnWG |
 | `ZWEITARIF_OHNE_HT_NT_AUFTEILUNG` / `HT_NT_SUMME_WEICHT_AB` → refused, not under-billed | § 41 EnWG |
 | `preisgarantie_bis` → disclosure on invoice | §41 Abs. 1 Nr. 4 EnWG |
-| `MeteringMode` (SLP/RLM/iMSys) on MeterInput | §3/§ 12 StromNZV, §31 MsbG |
+| `MeteringMode` (SLP/RLM/iMSys) on MeterInput | §3/§ 12 StromNZV, § 29 Abs. 1 Nr. 1 MsbG |
 | `is_estimated` flag → the Verbrauchsschätzung must be stated „unter ausdrücklichem und optisch besonders hervorgehobenem Hinweis" | § 40a Abs. 2 Satz 3 EnWG |
 | `zaehler_replaced` flag → Zählerwechsel notice | §41 EnWG |
 | `Sect41aAnnualComparison` in Quantities | §41a Abs. 6 EnWG |

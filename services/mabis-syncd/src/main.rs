@@ -56,6 +56,21 @@ impl Daemon for MabisSyncd {
                  to accept an unauthenticated deployment."
             );
         }
+        // `OutboxWorker` signs only when it has a secret, so a configured
+        // webhook URL without one delivers every de.mabis.* CloudEvent to the
+        // ERP unsigned — the record of what was filed with the BIKO, which the
+        // receiver then cannot tell from a body anybody posted.
+        if cfg.erp_webhook_url.is_some()
+            && cfg.erp_hmac_secret.is_none()
+            && !cfg.allow_insecure_no_auth
+        {
+            anyhow::bail!(
+                "erp_webhook_url is configured but erp_hmac_secret is not. The outbox \
+                 worker signs only when it has a secret, so every de.mabis.* CloudEvent \
+                 would reach the ERP unsigned. Configure erp_hmac_secret, or set \
+                 allow_insecure_no_auth = true to accept an unauthenticated deployment."
+            );
+        }
         if cfg.allow_insecure_no_auth {
             tracing::warn!(
                 "mabis-syncd: allow_insecure_no_auth is set — every caller can file a \

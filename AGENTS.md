@@ -32,7 +32,7 @@ neither is restated here. This file is what an agent needs before touching code.
   plausible one is the most expensive mistake available here; see the
   known-wrong citations in *Domain Rules* below.
 - **A defect class becomes a guard.** When something is found, the deliverable is
-  the check that makes it unrepresentable — which is why `just ci` carries 28 of
+  the check that makes it unrepresentable — which is why `just ci` carries 29 of
   them and the list grows with the defect list, not the feature list.
 
 ## Build and test
@@ -42,7 +42,7 @@ neither is restated here. This file is what an agent needs before touching code.
 
 ```bash
 just check      # cargo check --all-targets --all-features — the minimum
-just ci         # the gate: test, doctests, clippy, deny, 28 xtask guards, site-free
+just ci         # the gate: test, doctests, clippy, deny, 29 xtask guards, site-free
 just check-site # mermaid + link + zola checks; NOT part of `just ci`
 just test-db    # schema-per-test suites against real PostgreSQL (needs Docker)
 ```
@@ -279,8 +279,12 @@ Every daemon builds on the `mako-service` SDK. Do **not** hand-roll the lifecycl
 - 56101–56123 and 56201–56202: provisional Energy-Sharing PIDs. No BDEW AHB
   publishes them; § 42c runs inside the existing Lieferanten-/Bilanzkreis-
   zuordnung and introduces no new message family (BNetzA Mitteilung Nr. 73)
-- 13024 / 13025: **not** Redispatch PIDs and correctly absent. Write the
-  Redispatch MSCONS range as „13020–13023, 13026", never as a span across them
+- 13024: not a Redispatch PID, and absent from the PID overview 4.0 entirely.
+  **13025 is not in this list** — it is published (Lastgang Marktlokation,
+  Tranche, MSB → LF, GPKE Teil 4) and is registered by `mako-gpke`
+  `gpke-messwerte`. Write the Redispatch MSCONS range as „13020–13023, 13026",
+  never as a span: 13020 and 13023 are MaBiS Summenzeitreihen routed to
+  `mabis-billing`, and only 13021/13022 are `mako-redispatch`
 
 **PIDs that exist but belong to WiM Gas, NOT GeLi Gas:**
 - 44022–44024: role-conditional routing implemented in `mako-geli-gas`:
@@ -296,11 +300,17 @@ PID 31011 (Rechnung sonstige Leistung, NB → LF) is billed by the GNB/VNB to th
 
 ### MABIS vs Messwesen
 MaBiS (`mako-mabis`) covers MSCONS **13003** + **13010–13012** (Bilanzkreisabrechnung
-Strom, BKV↔ÜNB/BIKO, `mabis-billing`), the UTILMD Clearinglisten **55065/55069/55070**
-(`mabis-clearingliste`), the ZP lifecycle **55062–55064 / 55071–55072 / 55197–55200 /
-55203–55214** (`mabis-zp-lifecycle`), the ORDERS Anforderungen **17201–17208**
-(`mabis-anforderung`), and the list/correction pairs **55195+55196, 55201+55202,
-55223+55224** (`mabis-listenabgleich`). The remaining 130xx Messwesen PIDs are **not**
+Strom, BKV↔ÜNB/BIKO, `mabis-billing`), the UTILMD Clearinglisten
+**55067/55069/55070/55073** (`mabis-clearingliste`), the ZP lifecycle
+**55062–55064 / 55071–55072 / 55197–55200 / 55203–55214** (`mabis-zp-lifecycle`),
+the ORDERS Anforderungen **17201–17208** (`mabis-anforderung`), and the
+list/correction pairs **55065+55066, 55195+55196, 55201+55202, 55223+55224**
+(`mabis-listenabgleich`).
+
+**55065 is not a Clearingliste.** The Lieferantenclearingliste carries a
+Prozessschritt-3 answer — 55066 „Korrekturliste zu Lieferantenclearingliste",
+LF → NB — so it is a list/correction pair and belongs to `mabis-listenabgleich`;
+`mako-mabis` holds a pin asserting it is not routed to `mabis-clearingliste`. The remaining 130xx Messwesen PIDs are **not**
 MaBiS — do not register them under `mako-mabis`.
 
 Three traps in that band, all verified against the PID overview 4.0:
@@ -391,15 +401,22 @@ Source: Allgemeine Festlegungen V6.1d §3.
 ### APERAK Fristen — never mix these up
 
 #### APERAK *sending* deadline (how quickly the receiver must send the APERAK)
-Per **APERAK AHB 1.0** (FV2025-10-01):
+Per **APERAK AHB 1.1** (FV2026-04-01):
 
 | Sparte | Message type | Deadline | Source |
 |---|---|---|---|
-| **Strom** | UTILMD / ORDERS (weekday) | **45 Minuten** | APERAK AHB 1.0 §2.4.1 |
-| **Strom** | UTILMD / ORDERS (Saturday) | **Sonntag 12 Uhr** | APERAK AHB 1.0 §2.4.1 |
-| **Strom** | all other | **nächster Werktag 12 Uhr** | APERAK AHB 1.0 §2.4.1 |
-| **Gas** | Folgeprozesse | **nächster Werktag 12 Uhr** | APERAK AHB 1.0 §2.3.1 |
-| **Gas** | Initialprozesse | **3 Werktage** | APERAK AHB 1.0 §2.3.1 |
+| **Strom** | UTILMD / ORDERS | **45 Minuten** | APERAK AHB 1.1 §2.4.1 |
+| **Strom** | UTILMD / ORDERS **an Samstagen** | **Sonntag 12 Uhr** | APERAK AHB 1.1 §2.4.1 |
+| **Strom** | all other | **nächster Werktag 12 Uhr** | APERAK AHB 1.1 §2.4.1 |
+| **Gas** | Folgeprozesse | **nächster Werktag 12 Uhr** | APERAK AHB 1.1 §2.3.1 |
+| **Gas** | Initialprozesse | **3 Werktage**, to the **end** of the third | APERAK AHB 1.1 §2.3.1 |
+
+Two readings the document does not support, both of which have been in this
+table: the 45 minutes carries **no Montag–Freitag qualifier** — §2.4.1 states it
+unconditionally and carves out **Samstag** alone, so Sunday is not a special
+case; and the Gas Initialprozess window names **no clock time**, so it runs to
+the end of the third Werktag and not to 12 Uhr on it. The „12 Uhr" belongs to
+the Folgeprozess sentence in the paragraph above it.
 
 Gas APERAKs are always **Verarbeitbarkeitsfehlermeldungen** (BGM+313) only — no Anerkennungsmeldung.
 Strom APERAKs include **both** Anerkennungsmeldung (BGM+312, accepted) and Verarbeitbarkeitsfehlermeldung (BGM+313, rejected).
@@ -426,8 +443,13 @@ deadline arithmetic runs in **gesetzlicher deutscher Zeit** (CET/CEST), not UTC.
 An off-by-one-hour error at DST transitions is a regulatory deadline violation.
 
 ### Format-version coexistence
-`WorkflowVersionPolicy::ForwardCompatible` is the correct default for **all** MaKo
-workflows. Do not default to `Pinned`.
+A process keeps the `WorkflowId` — and therefore the format version — it was
+created with, while the **inbound message's own** FV selects the
+`MessageAdapter` that parses it. So a process started under `FV2026-04-01`
+accepts a counterparty's `FV2026-10-01` APERAK without anything being declared:
+there is no per-workflow acceptance policy, because every known FV must be
+covered by an adapter anyway. `makod::startup::validate_adapter_coverage`
+refuses to boot on a registry that leaves one uncovered.
 
 ### Dual-write atomicity
 Events and outbox entries must be written in a single `WriteBatch` via
@@ -464,17 +486,23 @@ engine it silently becomes money.
 | "Zuschlag-Erlöschen = §35a EEG (or §33, or §55 Pönalen)" | Expiry for want of timely commissioning is **technology-specific**: §36e Wind an Land, §37e Solaranlagen des ersten Segments, §39e Biomasseanlagen. §35a is **Entwertung von Zuschlägen** (a BNetzA act); §33 is **Ausschluss von Geboten** (before any award exists); §55 Pönalen are a bidder↔ÜNB obligation outside settlement entirely |
 | "A `None` from a period-rate helper can fall back to a default rate" | Those helpers return `None` to say **no single rate is correct for the period**. Answering it with `.unwrap_or(default)` bills part of the period wrong and reads exactly like a correct invoice downstream — a silent customer overcharge. Refuse the period and name the Stichtage (`steuer_stichtage_im_zeitraum`) |
 | "§40c EnWG's three-week deadline follows from a short billing period" | The three weeks attach to **§40b Abs. 1 monthly billing** — the agreed cadence — not to the period's length. A Schlussrechnung always has six weeks, measured from the end of the **Lieferverhältnis**, however short the final period is |
-| "§14a EnWG Modul 2 = zeitvariable/HT-NT Netzentgelte; Modul 3 = Spotpreis or Steuerungsentschädigung" | BNetzA **BK8-22/010-A** (NSAVER, Beschluss 23.11.2023) numbers them — not BK6-22-300, which is the companion Festlegung for the netzorientierte Steuerung: **Modul 1** = pauschale Reduzierung des Netzentgelts (default, no extra metering); **Modul 2** = prozentuale Reduzierung des Arbeitspreises on the device's *separately metered* energy; **Modul 3** = zeitvariable Netzentgelte with **three** Tarifstufen HT/ST/NT, offered from 01.04.2025, requires iMSys. **Modul 2 and Modul 3 are mutually exclusive**; Modul 1 combines with either. A Steuerungsentschädigung is not a module — all three modules are rate reductions, not payments for a dispatch. |
+| "§14a EnWG Modul 2 = zeitvariable/HT-NT Netzentgelte; Modul 3 = Spotpreis or Steuerungsentschädigung" | Numbered by **BK8-22/010-A** (NSAVER, 23.11.2023), not BK6-22-300 (the companion Festlegung for the netzorientierte Steuerung). **Modul 1** pauschale Netzentgelt-Reduzierung (default, no extra metering); **Modul 2** prozentuale Arbeitspreis-Reduzierung on the device's *separately metered* energy; **Modul 3** zeitvariable Netzentgelte, **three** Tarifstufen HT/ST/NT, from 01.04.2025, iMSys required. **2 and 3 are mutually exclusive**; 1 combines with either. All three are rate reductions — a Steuerungsentschädigung is not a module |
 | "the Modul-2 percentage is the Netzbetreiber's to publish" | **BK8-22/010-A Tenor 2. b) fixes it**: „Der reduzierte Arbeitspreis entspricht **40%** des Arbeitspreises für die Entnahme ohne Leistungsmessung des Netzbetreibers in der Niederspannung.“ Tenor 2. c) makes Modul 2 verpflichtend ab 01.01.2024 and Tenor 2. d) forbids a Grundpreis on such a Marktlokation. Only the *reference* Arbeitspreis is the operator's; the percentage is not |
 | "The ESA Werteanfrage shares REQOTE 35002 with the Preisanfrage, because no ESA-specific REQOTE PID exists" | It is **35003**. REQOTE AHB 1.1 §4.3 gives the Kommunikation as *ESA an MSB* and labels `SG1 RFF+Z13` "35003 Anfrage von Werten für ESA"; §4.2 **35002** is "Anfrage zur Rechnungsabwicklung des Messstellenbetriebs über den LF", **LF → MSB**, WiM Teil 1. Corroboration: `PIA` is *mandatory* on 35003 — exactly the segment the old heuristic sniffed for. REQOTE↔QUOTES pair 3500n → 1500n |
-| "WiM MSB-Wechsel responses are 5 Werktage" | **Per PID, from four separate Use-Cases**: Kündigung 55039 **3 WT** (WiM Teil 1 Kap. 2.2.2 Nr. 2), Beginn 55042 **5 WT** (2.3.2 Nr. 2), Ende 55051 **7 WT** (2.4.2 Nr. 2), Verpflichtungsanfrage 55168 **1 WT** (Kap. **2.5**.2 Nr. 4 — not 2.4). A flat window escalates the Abmeldung two days early and hides a missed Verpflichtungsanfrage for four. Distinct again from the **APERAK** acknowledgement: 45 minutes for Strom UTILMD (APERAK AHB §2.4.1), never Werktage |
+| "WiM MSB-Wechsel responses are 5 Werktage" | **Per PID, four separate Use-Cases** (WiM Teil 1): Kündigung 55039 **3 WT** (Kap. 2.2.2 Nr. 2), Beginn 55042 **5 WT** (2.3.2 Nr. 2), Ende 55051 **7 WT** (2.4.2 Nr. 2), Verpflichtungsanfrage 55168 **1 WT** (**2.5**.2 Nr. 4 — not 2.4). A flat window escalates the Abmeldung two days early and hides a missed Verpflichtungsanfrage for four. Not the **APERAK** window either: that is 45 minutes for Strom UTILMD (§2.4.1), never Werktage |
 | "INVOIC 31009 (MSB-Rechnung) is NB → MSB" | It is **MSB → NB / LF / ESA** — the MSB is the invoicer in all **seven** Anwendungsfälle of the PID overview 4.0 (GPKE Teil 3 ×2, WiM Teil 1 ×2, WiM Teil 2 ×1, AWH Änderung Technik ×2), Strom only. Modelling it inverted names the party owed money as the one billing for it. The recipient's role varies, so it cannot be a bare `nb_mp_id` |
-| "A MIG defines where a data element sits in a segment" | A MIG lists which elements a profile **uses**; the **position** is fixed by the UN/EDIFACT directory and is what the counterparty writes. Generating positions from the MIG's list order shifts everything after an omitted element — REQOTE's `FTX.C108` landed at 2 instead of 4 and mako **rejected valid inbound** `FTX+ACB+++text`. A missing element is a different defect: fix the profile against the MIG PDF, never work around it in a builder |
+| "A MIG defines where a data element sits in a segment" | A MIG lists which elements a profile **uses**; the **position** is fixed by the UN/EDIFACT directory and is what the counterparty writes. Generating positions from the MIG's list order shifts everything after an omitted element — REQOTE's `FTX.C108` landed at 2 instead of 4 and mako **rejected valid inbound** `FTX+ACB+++text`. A missing element is a different defect: fix the profile against the MIG PDF, not the builder |
 | "Blindmehrarbeit rests on StromNEV §18" | §18 StromNEV is the **Entgelt für dezentrale Erzeugung** (the crate's own `sect18.rs` says so). Reactive-energy excess is charged from the Netzbetreiber's **Preisblatt**, formed under StromNEV §17. §19 is Sonderformen der Netznutzung. The free share (cos φ 0,9 → tan φ ≈ 0,4843, often rounded to 50 %) is a price-sheet term and must be an input, not a constant |
 | "Parse-don't-validate applies uniformly to inbound and outbound" | It does not. A value the system **produces** should be a validating newtype (`MabisZaehlpunktId`) so a malformed one is unconstructible. A value it **receives** must stay representable — requiring the type on an inbound command leaves the workflow unable to record what arrived and therefore unable to reject it properly. Type the outbound side; keep the inbound side raw and refuse explicitly |
 | "A DB `CHECK` is enough to protect an identifier that reaches the wire" | A `CHECK` only guards rows written to *that* table. A payload assembled from a fixture, a replay, or a caller passing a value straight through never meets it. MSCONS SG6's `LOC+172`/`107`/`237` are free text at the MIG level, so a swapped pair parses, validates and is **accepted by the BIKO** — the guard has to live in the pure crate as well (`Summenzeitreihe::validate_identifiers`) |
-| "A dependency's `validate()` enforces our profile's security mandate" | Library validation encodes the *generic* floor, not your profile's mandate. `asx-rs` rejects an AS4 policy layer only when it disables signing **and** encryption; BDEW AS4-Profil v1.2 §2.2.6.2.2 requires **both**, so a sign-only override validated cleanly and would have sent messages in the clear. Assert the domain mandate yourself over base *and* every override layer (`BdewAs4Profile::validate`, which reports `ProfileValidationCode::SecurityFloorViolation`), and pin the gap with a test that asserts the upstream check still accepts what you reject |
+| "A dependency's `validate()` enforces our profile's security mandate" | Library validation encodes the *generic* floor, not your profile's mandate. `asx-rs` rejects an AS4 policy layer only when it disables signing **and** encryption; BDEW AS4-Profil v1.2 §2.2.6.2.2 requires **both**, so a sign-only override validates cleanly and would send in the clear. Assert the mandate over base *and* every override layer (`BdewAs4Profile::validate` → `SecurityFloorViolation`), and pin the gap with a test that the upstream check still accepts what you reject |
 | "§13a Abs. 2 EnWG compensation uses one Ausfallarbeit basis" | The counterfactual differs by redispatch case: **Duldungsfall** derives it from the measured Lastgang (the NB steered, so nothing was transmitted), **Aufforderungsfall** from the schedule transmitted to the EIV (that schedule *is* the counterfactual). Resolving both from the Lastgang settles an Aufforderungsfall against what happened rather than what was instructed — a money error nothing downstream detects. `AusfallarbeitBasis` is a required input, carried into the result and trace |
+| "Gas NNE Grundpreis / Arbeitspreis rests on §14 GasNEV" | **§14 GasNEV is *Teilnetze*** — cost allocation when a Betreiber has formed Teilnetze under §6 Abs. 5 GasNZV. Netzentgelte are **§15 GasNEV** (*Ermittlung der Netzentgelte*), and the Verrechnungspreis specifically **§15 Abs. 7**: „Für leistungsgemessene Ausspeisepunkte sind … ein Entgelt für den Messstellenbetrieb, ein Entgelt … für die Messung und ein Entgelt für die Abrechnung festzulegen." The wrong § rode into the audit trace of every gas NNE invoice |
+| "Gemeinschaftliche Gebäudeversorgung is §42b **EEG 2023**" | There is no §42b EEG 2023. GGV is **§42b EnWG**. §42a EnWG is Mieterstrom, §42c Energy Sharing; the Mieterstromzuschlag is §21 Abs. 3 EEG 2023 |
+| "The Strom UTILMD/ORDERS APERAK window is 45 Minuten *on weekdays (Mo–Fr)*" | APERAK AHB 1.1 §2.4.1 states the 45 minutes **unqualified** and carves out **Samstag** alone („Wird an Samstagen eine UTILMD oder ORDERS übertragen … bis zum Sonntag, 12 Uhr"). There is no Montag–Freitag restriction in the document, so Sunday is not a special case. The invented qualifier was carried by an equally invented *verbatim quotation* — never attribute words to an AHB without grepping the PDF |
+| "The Gas APERAK Initialprozess window is 3 Werktage **at 12 Uhr**" | §2.3.1 says „spätestens **3 Werktage nach Eingang**" and names no clock time; the „12 Uhr" belongs to the Folgeprozess sentence above it. Truncating to noon removes twelve hours in the tightening direction — a breach the counterparty is not in |
+| "A Werktage-Antwortfrist expires at a 17:00 Europe/Berlin ‚MaKo cut-off'" | No BDEW or BNetzA document in this domain states one. „**Ablauf des** n. WT" (WiM, GeLi Gas) and „spätester **ÜT** ist der n. WT" (GPKE) are **one** Frist shape, not two, and both name a **day** — so it runs to the end of that day. 17:00 expired 42 obligations seven hours early, escalating counterparties still inside their Frist |
+| "13025 is not a real PID" | **13025 is published** (Lastgang Marktlokation/Tranche, MSB → LF, GPKE Teil 4) and is registered by `mako-gpke` `gpke-messwerte`. **13024** is the one absent from the PID overview. Likewise 13020 and 13023 are MaBiS Summenzeitreihen routed to `mabis-billing` — only 13021/13022 are `mako-redispatch` |
 | "§12 Abs. 3 UStG 0 % applies to PV electricity / feed-in ≤ 30 kWp" | §12 Abs. 3 zero-rates the **supply of the PV system** (modules/storage/installation), NOT electricity or feed-in remuneration. A retail **consumption** supply is always standard-rated even for a prosumer. A small operator's **feed-in Gutschrift** is 0 % only via the **Kleinunternehmerregelung §19 UStG** — an election (`kleinunternehmer_19_ustg`), not a function of plant size |
 
 ## Licenses

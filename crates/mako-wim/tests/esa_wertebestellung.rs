@@ -28,6 +28,15 @@ use mako_wim::esa_wertebestellung::{
 use mako_wim::esa_wertebestellung::{Angebot, Antwort};
 use time::macros::datetime;
 
+/// The Übertragungszeitpunkt every outbound command in this suite is sent at.
+///
+/// The workflow takes the send instant as a command field rather than reading
+/// the clock, so the Fristen it arms and the `DTM+273` day counts it renders are
+/// a function of the inputs alone — a fixed value here keeps the assertions from
+/// depending on when the suite runs. It sits between the `2000-01-01` lapsed and
+/// the `2099-01-01` open Bindungsfrist the tests use.
+const JETZT: time::OffsetDateTime = datetime!(2026-02-02 09:00 UTC);
+
 /// A priced Angebot, which is what tells an offer from a refusal — the QUOTES
 /// AHB 1.1a makes `DTM+273` Muss on the only published 15003 use case, so the
 /// Bindungsfrist cannot.
@@ -60,6 +69,7 @@ fn mp(s: &str) -> MarktpartnerCode {
 
 fn werteanfrage() -> C {
     C::SendWerteanfrage {
+        gesendet_am: JETZT,
         gegenstand: gegenstand(),
         esa: mp("9905550000005"),
         msb: mp("9900357000004"),
@@ -104,6 +114,7 @@ fn beliefert() -> S {
     let (s, _) = step(
         &s,
         C::SendBestellung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-BE-1"),
         },
     )
@@ -162,6 +173,7 @@ fn bestellung_emits_orders_17007() {
     let (state, out) = step(
         &s,
         C::SendBestellung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-BE-1"),
         },
     )
@@ -192,6 +204,7 @@ fn ordering_after_the_bindungsfrist_is_refused() {
     let err = W::handle(
         &s,
         C::SendBestellung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-BE-1"),
         },
     )
@@ -209,6 +222,7 @@ fn abbestellung_is_the_revocation_path_and_ends_delivery() {
         W::handle(
             &s,
             C::SendStornierung {
+                gesendet_am: JETZT,
                 message_ref: mref("X")
             }
         )
@@ -219,6 +233,7 @@ fn abbestellung_is_the_revocation_path_and_ends_delivery() {
     let (s, out) = step(
         &s,
         C::SendAbbestellung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-AB-1"),
             beendigung_zum: datetime!(2026-04-01 00:00 UTC),
             grund: "einwilligung_widerrufen".to_owned(),
@@ -254,6 +269,7 @@ fn a_19011_confirms_the_bestellung_but_a_19011_after_abbestellung_ends_it() {
     let (s, _) = step(
         &s,
         C::SendAbbestellung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-AB-1"),
             beendigung_zum: datetime!(2026-04-01 00:00 UTC),
             grund: "einwilligung_widerrufen".to_owned(),
@@ -288,6 +304,7 @@ fn a_rejected_bestellung_ends_the_process() {
     let (s, _) = step(
         &s,
         C::SendBestellung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-BE-1"),
         },
     )
@@ -309,6 +326,7 @@ fn stornierung_before_delivery_voids_the_order() {
     let (s, out) = step(
         &s,
         C::SendStornierung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-ST-1"),
         },
     )
@@ -372,6 +390,7 @@ fn stornierung_references_the_original_bestellung_belegnummer() {
     let (s, out) = step(
         &s,
         C::SendStornierung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-ST-9"),
         },
     )
@@ -413,6 +432,7 @@ fn bestellung_references_the_angebot_and_carries_no_location() {
     let (_, out) = step(
         &s,
         C::SendBestellung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-BE-1"),
         },
     )
@@ -433,6 +453,7 @@ fn abbestellung_references_the_bestellung_and_ends_the_abo() {
     let (_, out) = step(
         &s,
         C::SendAbbestellung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-AB-1"),
             beendigung_zum: datetime!(2026-04-01 00:00 UTC),
             grund: "einwilligung_widerrufen".to_owned(),
@@ -551,6 +572,7 @@ fn the_msb_may_end_a_delivery_with_a_stornierung_in_flight() {
     let (s, _) = step(
         &s,
         C::SendStornierung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-ST-9"),
         },
     )
@@ -683,6 +705,7 @@ fn a_refused_stornierung_does_not_reset_the_delivery_flag() {
     let (s, _) = step(
         &s,
         C::SendStornierung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-ST-1"),
         },
     )
@@ -704,6 +727,7 @@ fn a_refused_stornierung_does_not_reset_the_delivery_flag() {
         W::handle(
             &s,
             C::SendStornierung {
+                gesendet_am: JETZT,
                 message_ref: mref("ESA-ST-2"),
             }
         )
@@ -719,6 +743,7 @@ fn a_refused_stornierung_does_not_reset_the_delivery_flag() {
 #[test]
 fn a_one_shot_is_stornierbar_not_abbestellbar() {
     let einmalig = C::SendWerteanfrage {
+        gesendet_am: JETZT,
         gegenstand: Box::new(mako_wim::esa::Bestellgegenstand {
             abonnement: mako_wim::esa::Abonnement::OhneAbo,
             ..*gegenstand()
@@ -743,6 +768,7 @@ fn a_one_shot_is_stornierbar_not_abbestellbar() {
     let (s, _) = step(
         &s,
         C::SendBestellung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-BE-1"),
         },
     )
@@ -759,6 +785,7 @@ fn a_one_shot_is_stornierbar_not_abbestellbar() {
     let err = W::handle(
         &s,
         C::SendAbbestellung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-AB-1"),
             beendigung_zum: datetime!(2026-04-01 00:00 UTC),
             grund: "einwilligung_widerrufen".to_owned(),
@@ -771,6 +798,7 @@ fn a_one_shot_is_stornierbar_not_abbestellbar() {
         W::handle(
             &s,
             C::SendStornierung {
+                gesendet_am: JETZT,
                 message_ref: mref("ESA-ST-1"),
             }
         )
@@ -798,6 +826,7 @@ fn the_bestellung_honours_the_offered_earliest_start() {
     let (_, out) = step(
         &s,
         C::SendBestellung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-BE-1"),
         },
     )
@@ -828,6 +857,7 @@ fn an_earlier_offered_start_does_not_move_the_wunschtermin() {
     let (_, out) = step(
         &s,
         C::SendBestellung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-BE-1"),
         },
     )
@@ -859,6 +889,7 @@ fn a_refusal_carries_its_published_antwortcode() {
     let (s, _) = step(
         &s,
         C::SendBestellung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-BE-1"),
         },
     )
@@ -902,6 +933,7 @@ fn an_answer_whose_cluster_contradicts_its_pid_is_recorded() {
     let (s, _) = step(
         &s,
         C::SendBestellung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-BE-1"),
         },
     )
@@ -957,6 +989,7 @@ fn a_refused_abbestellung_keeps_the_code_and_the_delivery() {
     let (s, _) = step(
         &s,
         C::SendAbbestellung {
+            gesendet_am: JETZT,
             message_ref: mref("ESA-AB-1"),
             beendigung_zum: datetime!(2026-04-01 00:00 UTC),
             grund: "einwilligung_widerrufen".to_owned(),
@@ -982,6 +1015,7 @@ fn a_refused_abbestellung_keeps_the_code_and_the_delivery() {
         W::handle(
             &s,
             C::SendStornierung {
+                gesendet_am: JETZT,
                 message_ref: mref("X")
             }
         )

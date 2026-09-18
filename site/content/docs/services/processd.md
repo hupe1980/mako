@@ -119,7 +119,11 @@ Every REST route authenticates through the `Claims` extractor and then evaluates
 one [Cedar](https://cedarpolicy.com) action against
 `services/processd/policies/processd.cedar`. There is **no global auth
 middleware**: a handler that does not name `Claims` is served to anyone, which is
-why the mapping is pinned by a guard rather than by review.
+why `tests/authorization_guard.rs` checks every mounted route's handler for both
+a `Claims` extractor and an authorization call, and holds the action set in code
+and the action set in the policy to each other in both directions. Which action
+a given route checks — the table below — it does not read; that pairing is held
+by review.
 
 | Route | Cedar action | Granted to |
 |---|---|---|

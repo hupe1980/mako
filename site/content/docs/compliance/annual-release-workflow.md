@@ -389,9 +389,9 @@ both carry wire release `1.3c`, so only the date distinguishes them.
 supplied by the caller — `makod` states `mako_fristen::heute()`, the German
 calendar date, because a Formatversion takes effect at German midnight.
 
-Running processes continue under the FV they were spawned with
-(`WorkflowVersionPolicy::ForwardCompatible`), so a partial cutover needs no
-coordination.
+Running processes continue under the FV they were spawned with — it is on their
+`WorkflowId` — while the inbound message's own FV picks the adapter, so a
+partial cutover needs no coordination.
 
 EDIFACT has no overlap at the changeover: before the Anwendungszeitpunkt the old
 format applies, from it the new one.

@@ -536,7 +536,7 @@ Key facts:
 - **`grid-billing` pure library** — all monetary arithmetic uses `rust_decimal::Decimal` via `EuroAmount`,
   zero floating-point money. Returns `SettlementResult` — no `rubo4e` dependency.
   Every position carries `CalculationTrace { explanation, legal_refs, tariff_source, … }` for full audit.
-  `Sparte::Gas` automatically selects `GasNEV §14` legal references; the NN-Rechnung PID is 31002 for both Sparten. `KaKundengruppe` annotates the KAV tier.
+  `Sparte::Gas` automatically selects `GasNEV §15` legal references; the NN-Rechnung PID is 31002 for both Sparten. `KaKundengruppe` annotates the KAV tier.
   The service layer (`netzbilanzd`, `invoicd`) owns the `into_rechnung()` conversion.
   The same library is used by `invoicd` for LF selbstausstellen (PID 31006).
 - **Operator-supplied inputs** — `POST /api/v1/billing/run` accepts meter readings and tariff data
@@ -702,7 +702,9 @@ it from their own path (`/invoicd/metrics`, `/obs/metrics`,
 `/accountingd/metrics`), which costs a second scrape target. What none of them
 may do is route `/metrics` a second time: `Router::merge` panics on an
 overlapping method route while the router is assembled, so the daemon does not
-start. `cargo xtask check-runner-routes` holds every daemon to that.
+start. `cargo xtask check-runner-routes` holds every `mako_service::run::<D>()`
+daemon to that; `makod` predates the runner, drives its own `main` and is a
+documented exemption.
 
 The third metric is the one worth an alert. Every amount on a BO4E wire — a
 price, a billed quantity, an invoice total — is read by a deserializer that

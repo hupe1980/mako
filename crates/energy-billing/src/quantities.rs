@@ -19,7 +19,7 @@ use time::OffsetDateTime;
 /// |---|---|---|---|
 /// | `Slp` | < 100 MWh/year | Standard load profile (estimated) | ✗ |
 /// | `Rlm` | ≥ 100 MWh/year | Registered 15-min values | ✗ |
-/// | `Imsys` | ≥ 6 MWh/year (§31 MsbG) | Smart Meter Gateway | ✓ |
+/// | `Imsys` | > 6 000 kWh/year (§29 Abs. 1 Nr. 1 MsbG) | Smart Meter Gateway | ✓ |
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MeteringMode {
@@ -31,7 +31,13 @@ pub enum MeteringMode {
     /// Required for customers ≥ 100 MWh/year (§ 12 StromNZV, §14 NAV).
     Rlm,
     /// Intelligentes Messsystem (iMSys) — Smart Meter Gateway.
-    /// Enables §41a EnWG dynamic tariffs. Required for > 6 MWh/year (§31 MsbG).
+    ///
+    /// Enables §41a EnWG dynamic tariffs. The Einbaupflicht is **§ 29 Abs. 1
+    /// Nr. 1 MsbG** — „bei Letztverbrauchern mit einem Jahresstromverbrauch von
+    /// **mehr als 6 000 Kilowattstunden**", so the boundary is exclusive.
+    /// Nr. 2b adds the separate **> 7 kW** installed-capacity band. § 31 MsbG is
+    /// *Agiler Rollout, Anwendungsupdate* and carries a 100 000 kWh ceiling, not
+    /// this threshold.
     Imsys,
 }
 
@@ -340,7 +346,7 @@ pub struct SolarMeterInput {
 ///
 /// ## Legal basis
 ///
-/// §42b Abs. 1 EEG 2023 (Solarpaket I): the Lieferant must maintain a Nutzungsplan
+/// §42b Abs. 1 EnWG (Solarpaket I): the Lieferant must maintain a Nutzungsplan
 /// for the duration of the GGV contract. The sum of all fractions must equal 1.0.
 ///
 /// ## Storage
@@ -414,7 +420,7 @@ impl GgvNutzungsplan {
     /// omits a tenant is internally consistent, and the omitted tenant silently
     /// falls out of the allocation — billed as if their whole consumption were
     /// self-consumed solar, with no grid residual and no Stromsteuer. §42b Abs. 1
-    /// EEG 2023 requires the Nutzungsplan to cover the community for the duration
+    /// EnWG requires the Nutzungsplan to cover the community for the duration
     /// of the contract, so a mismatch is a configuration error, not a default.
     ///
     /// A MaLo appearing twice is also rejected: the allocation is keyed on the
@@ -438,7 +444,7 @@ impl GgvNutzungsplan {
         if !missing.is_empty() {
             return Err(format!(
                 "GGV Nutzungsplan: no entry for {} — every tenant must be allocated \
-                 (§42b Abs. 1 EEG 2023)",
+                 (§42b Abs. 1 EnWG)",
                 missing.join(", ")
             ));
         }

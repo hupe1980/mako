@@ -1,14 +1,16 @@
-//! Integration test: cross-format-version dispatch with `ForwardCompatible` policy.
+//! Integration test: cross-format-version dispatch.
 //!
-//! Validates that a process started under one format version can correctly
-//! receive and process messages formatted under a later format version when
-//! the `ForwardCompatible` version policy is active.
+//! A BDEW process routinely outlives the format version it was started under —
+//! a Lieferbeginn opened in September is answered by an APERAK sent in November
+//! under the October release. What carries that is the adapter registry: the
+//! inbound message's own format version selects the adapter that parses it,
+//! while the process keeps the `WorkflowId` it was created with.
 //!
 //! # Scenario
 //!
 //! 1. A `CrossFvWorkflow` is started under `FV2025-10-01`.
 //! 2. Two adapters are registered: one for `FV2025-10-01`, one for `FV2026-10-01`.
-//! 3. `validate_policy(ForwardCompatible, known_fvs)` succeeds when both FVs are covered.
+//! 3. `uncovered_format_versions(known_fvs)` is empty when both FVs are covered.
 //! 4. `dispatch()` succeeds when called with a message under either FV.
 //! 5. The workflow state correctly reflects commands dispatched from both FVs.
 
@@ -18,7 +20,7 @@ use mako_engine::{
     ids::TenantId,
     message_adapter::{AdapterRegistry, FnAdapter},
     process::Process,
-    version::{FormatVersion, WorkflowId, WorkflowVersionPolicy},
+    version::{FormatVersion, WorkflowId},
     workflow::{CommandPayload, EventPayload, Workflow},
 };
 use serde::{Deserialize, Serialize};
@@ -83,8 +85,6 @@ impl Workflow for CrossFvWorkflow {
         }]
         .into())
     }
-
-    // Use the default version_policy() = ForwardCompatible.
 }
 
 // ── Simulated message type ────────────────────────────────────────────────────
@@ -142,18 +142,16 @@ fn build_adapter_registry() -> AdapterRegistry<CrossFvWorkflow> {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[test]
-fn validate_policy_passes_for_forward_compatible_with_both_fvs_registered() {
+fn coverage_is_complete_when_both_fvs_have_an_adapter() {
     let registry = build_adapter_registry();
     assert!(
-        registry
-            .validate_policy(&WorkflowVersionPolicy::ForwardCompatible, &known_fvs())
-            .is_ok(),
-        "validate_policy must succeed when all known_fvs are covered by adapters"
+        registry.uncovered_format_versions(&known_fvs()).is_empty(),
+        "every known format version is covered by an adapter"
     );
 }
 
 #[test]
-fn validate_policy_fails_when_future_fv_adapter_is_missing() {
+fn coverage_reports_the_missing_future_fv_adapter() {
     let mut registry: AdapterRegistry<CrossFvWorkflow> = AdapterRegistry::new();
 
     // Register ONLY the current FV adapter — FV2026-10-01 is missing.
@@ -167,13 +165,12 @@ fn validate_policy_fails_when_future_fv_adapter_is_missing() {
         },
     ));
 
-    let result = registry.validate_policy(&WorkflowVersionPolicy::ForwardCompatible, &known_fvs());
-    assert!(
-        result.is_err(),
-        "validate_policy must detect the missing FV2026-10-01 adapter"
+    let uncovered = registry.uncovered_format_versions(&known_fvs());
+    assert_eq!(
+        uncovered.len(),
+        1,
+        "the missing FV2026-10-01 adapter is named"
     );
-    let uncovered = result.unwrap_err();
-    assert_eq!(uncovered.len(), 1);
     assert_eq!(uncovered[0].as_str(), "FV2026-10-01");
 }
 

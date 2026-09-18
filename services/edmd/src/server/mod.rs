@@ -593,8 +593,6 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
     // The surveillance worker watches the Typ-2 store on its own thresholds.
     let typ2_for_surveillance = typ2_repo.clone();
     // Clone the webhook URL/secret and tenant before they are moved into HandlerState.
-    let smgw_webhook_url = cfg.erp_webhook_url.clone();
-    let smgw_webhook_secret = cfg.erp_webhook_secret.clone();
     let smgw_tenant = cfg.tenant.clone();
     let expected_tenant = mako_service::oidc::ExpectedTenant(cfg.tenant.clone());
     let state = HandlerState {
@@ -613,6 +611,29 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
         smgw: cfg.smgw.clone(),
         surveillance: cfg.surveillance.clone(),
     };
+    // ── Outbox drain ─────────────────────────────────────────────────────────
+    // Every CloudEvent edmd publishes goes through `event_outbox`, so delivery
+    // survives a receiver restart rather than three attempts inside the request
+    // that produced it. Without a webhook URL the events accumulate in the
+    // table, which is where an operator can still find them — the alternative,
+    // dropping them at the emit site, is what made a stored RLM push invisible
+    // to `billingd`.
+    if let Some(url) = state.erp_webhook_url.clone() {
+        tokio::spawn(
+            mako_service::outbox::OutboxWorker::new(
+                state.repo.pool().clone(),
+                url,
+                state.erp_webhook_secret.clone(),
+            )
+            .run(cfg.shutdown.clone()),
+        );
+    } else {
+        tracing::warn!(
+            "edmd: no webhook.erp_webhook_url configured — CloudEvents are persisted to \
+             event_outbox and never delivered"
+        );
+    }
+
     // ── Kafka ingest consumer (optional) ─────────────────────────────────────
     // High-throughput intake for head-end systems that stream reading batches
     // instead of pushing per-gateway HTTP. Same validation, same store, same
@@ -622,10 +643,6 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
             kafka_cfg.clone(),
             state.repo.clone(),
             state.tenant.clone(),
-            crate::kafka_ingest::QualityAlertTarget {
-                webhook_url: state.erp_webhook_url.clone(),
-                secret: state.erp_webhook_secret.clone(),
-            },
             cfg.shutdown.clone(),
         );
     }
@@ -715,8 +732,6 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
         crate::smgw::spawn_cls_compliance_worker(
             pool_arc.clone(),
             smgw_tenant.clone(),
-            smgw_webhook_url.clone(),
-            smgw_webhook_secret.clone(),
             cfg.smgw.cert_warning_days,
             cfg.smgw.comm_fault_threshold_hours,
             cfg.smgw.sweep_interval_secs,
@@ -725,8 +740,6 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
         crate::smgw::spawn_smgw_cert_expiry_worker(
             pool_arc.clone(),
             smgw_tenant.clone(),
-            smgw_webhook_url.clone(),
-            smgw_webhook_secret.clone(),
             cfg.smgw.sweep_interval_secs,
             cfg.shutdown.clone(),
         );
@@ -749,8 +762,6 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
             cfg.surveillance.clone(),
             smgw_tenant.clone(),
             Some(marktd_for_surveillance),
-            smgw_webhook_url.clone(),
-            smgw_webhook_secret.clone(),
             cfg.shutdown.clone(),
         );
     }
@@ -761,8 +772,6 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
         crate::confirmation::spawn_confirmation_worker(
             pool_arc,
             smgw_tenant,
-            smgw_webhook_url,
-            smgw_webhook_secret,
             cfg.confirmation.deadline_weeks,
             86_400, // daily
             cfg.shutdown.clone(),

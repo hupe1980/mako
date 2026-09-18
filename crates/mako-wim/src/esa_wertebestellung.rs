@@ -457,6 +457,11 @@ pub enum EsaWertebestellungCommand {
         gegenstand: Box<Bestellgegenstand>,
         /// Belegnummer of the outbound REQOTE.
         message_ref: MessageRef,
+        /// Übertragungszeitpunkt of this outbound REQOTE — the instant the 5-WT
+        /// Angebot window is measured from. An input rather than a clock read:
+        /// `handle` is pure, and a retried or replayed command must arm the
+        /// same Frist it armed the first time.
+        gesendet_am: OffsetDateTime,
     },
     /// QUOTES 15003 Angebot received (UC 4.1 Nr. 2).
     ReceiveAngebot {
@@ -480,6 +485,11 @@ pub enum EsaWertebestellungCommand {
     SendBestellung {
         /// Reference of the outbound ORDERS.
         message_ref: MessageRef,
+        /// Übertragungszeitpunkt of this outbound ORDERS — both the instant the
+        /// Bindungsfrist is tested against and the anchor of the 2-WT ORDRSP
+        /// window. An input rather than a clock read: `handle` is pure, so a
+        /// retry must reach the same verdict and arm the same Frist.
+        gesendet_am: OffsetDateTime,
     },
     /// ORDRSP 19011 received — a **Bestätigung** of the Bestellung (UC 4.1 Nr. 4)
     /// or, once running, of the Abbestellung (UC 4.3 Nr. 2). One PID, resolved
@@ -507,6 +517,10 @@ pub enum EsaWertebestellungCommand {
     SendStornierung {
         /// Reference of the outbound ORDCHG.
         message_ref: MessageRef,
+        /// Übertragungszeitpunkt of this outbound ORDCHG — the anchor of the
+        /// 2-WT ORDRSP 19013/19014 window. An input rather than a clock read:
+        /// `handle` is pure, so a retry must arm the same Frist.
+        gesendet_am: OffsetDateTime,
     },
     /// ORDRSP 19013/19014 received answering the Stornierung (UC 4.1 Nr. 6).
     ReceiveStornierungAntwort {
@@ -526,6 +540,10 @@ pub enum EsaWertebestellungCommand {
         beendigung_zum: OffsetDateTime,
         /// Trigger — typically `einwilligung_widerrufen`.
         grund: String,
+        /// Übertragungszeitpunkt of this outbound ORDERS 17008 — the anchor of
+        /// the 2-WT ORDRSP window. An input rather than a clock read:
+        /// `handle` is pure, so a retry must arm the same Frist.
+        gesendet_am: OffsetDateTime,
     },
     /// IFTSTA 21042 received (UC 4.4) — the MSB has ended the value delivery
     /// (STS 4405 = 105 „beendet"). Terminal; needs no ESA answer.
@@ -885,6 +903,7 @@ impl Workflow for EsaWertebestellungWorkflow {
                 lokations_id,
                 gegenstand,
                 message_ref,
+                gesendet_am,
             } => {
                 if !matches!(state, S::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -930,10 +949,12 @@ impl Workflow for EsaWertebestellungWorkflow {
                     Some(wunschtermin),
                     gegenstand.abonnement,
                 );
-                // The MSB owes an Angebot within 5 WT; arm the window from now
-                // (the AS4 Receipt for our REQOTE is issued in the same request).
+                // The MSB owes an Angebot within 5 WT, measured from the ÜT of
+                // this REQOTE (the AS4 Receipt is issued in the same request).
+                // The instant comes in on the command so a retried `handle`
+                // arms the identical window.
                 let due = mako_fristen::deadline_at_werktage(
-                    OffsetDateTime::now_utc(),
+                    gesendet_am,
                     super::wertebestellung::ANGEBOT_FRIST_WT,
                     mako_fristen::HolidayCalendar::BdewMaKo,
                 );
@@ -1012,7 +1033,10 @@ impl Workflow for EsaWertebestellungWorkflow {
                 }]))
             }
 
-            C::SendBestellung { message_ref } => {
+            C::SendBestellung {
+                message_ref,
+                gesendet_am,
+            } => {
                 let S::AngebotErhalten {
                     data,
                     bindungsfrist,
@@ -1023,8 +1047,10 @@ impl Workflow for EsaWertebestellungWorkflow {
                         state.label(),
                     ));
                 };
-                // UC 4.1 Nr. 3: order only within the MSB's Bindungsfrist.
-                if OffsetDateTime::now_utc() > *bindungsfrist {
+                // UC 4.1 Nr. 3: order only within the MSB's Bindungsfrist,
+                // judged against the ÜT of this ORDERS rather than the instant
+                // `handle` happened to run.
+                if gesendet_am > *bindungsfrist {
                     return Err(WorkflowError::rejected(format!(
                         "Bindungsfrist des Angebots endete am {bindungsfrist}"
                     )));
@@ -1055,8 +1081,11 @@ impl Workflow for EsaWertebestellungWorkflow {
                     Some(ausfuehrungsdatum),
                     data.gegenstand.abonnement,
                 );
+                // 2 WT nach ÜT der ausgehenden Nachricht — anchored on the send
+                // instant the caller passed in, never on a clock read inside
+                // this pure handler.
                 let due = mako_fristen::deadline_at_werktage(
-                    OffsetDateTime::now_utc(),
+                    gesendet_am,
                     ANTWORT_FRIST_WT,
                     mako_fristen::HolidayCalendar::BdewMaKo,
                 );
@@ -1142,7 +1171,10 @@ impl Workflow for EsaWertebestellungWorkflow {
                 Ok(WorkflowOutput::events(events))
             }
 
-            C::SendStornierung { message_ref } => {
+            C::SendStornierung {
+                message_ref,
+                gesendet_am,
+            } => {
                 let S::Beliefert(data) = state else {
                     return Err(WorkflowError::invalid_state("Beliefert", state.label()));
                 };
@@ -1168,8 +1200,11 @@ impl Workflow for EsaWertebestellungWorkflow {
                     None,
                     data.gegenstand.abonnement,
                 );
+                // 2 WT nach ÜT der ausgehenden Nachricht — anchored on the send
+                // instant the caller passed in, never on a clock read inside
+                // this pure handler.
                 let due = mako_fristen::deadline_at_werktage(
-                    OffsetDateTime::now_utc(),
+                    gesendet_am,
                     ANTWORT_FRIST_WT,
                     mako_fristen::HolidayCalendar::BdewMaKo,
                 );
@@ -1217,6 +1252,7 @@ impl Workflow for EsaWertebestellungWorkflow {
                 message_ref,
                 beendigung_zum,
                 grund,
+                gesendet_am,
             } => {
                 let S::Beliefert(data) = state else {
                     return Err(WorkflowError::invalid_state("Beliefert", state.label()));
@@ -1256,8 +1292,11 @@ impl Workflow for EsaWertebestellungWorkflow {
                     // `E_0254` for the MSB's answer.
                     Abonnement::EndeAbo,
                 );
+                // 2 WT nach ÜT der ausgehenden Nachricht — anchored on the send
+                // instant the caller passed in, never on a clock read inside
+                // this pure handler.
                 let due = mako_fristen::deadline_at_werktage(
-                    OffsetDateTime::now_utc(),
+                    gesendet_am,
                     ANTWORT_FRIST_WT,
                     mako_fristen::HolidayCalendar::BdewMaKo,
                 );

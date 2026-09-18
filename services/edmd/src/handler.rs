@@ -116,13 +116,9 @@ pub struct HandlerState {
 }
 
 impl HandlerState {
-    /// The outbound-webhook HMAC secret as bytes, if one is configured. Passed to
-    /// `post_ce_with_retry` so every emitted CloudEvent is signed the same way.
-    pub(crate) fn webhook_secret_bytes(&self) -> Option<&[u8]> {
-        use secrecy::ExposeSecret;
-        self.erp_webhook_secret
-            .as_ref()
-            .map(|s| s.expose_secret().as_bytes())
+    /// Hand a `CloudEvent` to the transactional outbox — see [`crate::outbox`].
+    pub(crate) async fn emit(&self, ce: &mako_service::CloudEvent) {
+        crate::outbox::emit(self.repo.pool(), ce).await;
     }
 }
 
@@ -754,8 +750,7 @@ pub async fn handle_webhook(
                 );
             }
             crate::server::quality_alert::raise_quality_warning(
-                state.erp_webhook_url.as_deref(),
-                state.webhook_secret_bytes(),
+                state.repo.pool(),
                 &state.tenant,
                 &alert,
             )

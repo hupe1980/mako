@@ -56,30 +56,22 @@ impl QualityAlert<'_> {
 
 /// Raise the warning if either signal fired; do nothing otherwise.
 ///
-/// Delivery failure is logged, not propagated: the readings are already stored
-/// and a lost notification must not turn a successful ingest into an error the
-/// sender will retry, which would duplicate nothing but would hide the store.
+/// The event is enqueued whether or not a webhook is configured: a § 60 Abs. 1
+/// MsbG quality finding is a record before it is a notification, and gating the
+/// emission on the delivery target means a webhook added later cannot recover
+/// the findings made before it. `event_outbox` holds them either way.
+///
+/// An enqueue failure is logged, not propagated: the readings are already
+/// stored, and turning a successful ingest into an error the sender retries
+/// would hide the store rather than recover the notice.
 pub(crate) async fn raise_quality_warning(
-    webhook_url: Option<&str>,
-    secret: Option<&[u8]>,
+    pool: &sqlx::PgPool,
     tenant: &str,
     alert: &QualityAlert<'_>,
 ) {
     if !alert.is_warning() {
         return;
     }
-    let Some(url) = webhook_url else {
-        // No ERP webhook configured. Still record it — an operator reading logs
-        // after a settlement surprise needs to see the finding was made.
-        tracing::warn!(
-            malo_id = %alert.malo_id,
-            door = %alert.door,
-            billing_blocks = alert.validation.billing_block_count,
-            rules = ?alert.validation.rules,
-            "edmd: quality warning raised but no ERP webhook is configured"
-        );
-        return;
-    };
 
     let ce = mako_service::CloudEvent::new(
         mako_service::source("edmd", tenant),
@@ -108,15 +100,7 @@ pub(crate) async fn raise_quality_warning(
     .extension("correlationid", alert.correlation_id.to_owned())
     .extension("causationid", alert.causation_id.to_owned());
 
-    let client = mako_service::http::default_client();
-    if let Err(e) = mako_service::post_ce_with_retry(&client, url, &ce, secret).await {
-        tracing::error!(
-            error = %e,
-            malo_id = %alert.malo_id,
-            door = %alert.door,
-            "edmd: quality-warning CloudEvent delivery failed — event lost"
-        );
-    }
+    crate::outbox::emit(pool, &ce).await;
 }
 
 #[cfg(test)]
