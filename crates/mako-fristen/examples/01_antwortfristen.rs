@@ -93,12 +93,28 @@ fn shape_name(shape: antwort::FristShape) -> String {
 /// working day in the other seven. BDEW's MaKo calendar treats it as a
 /// non-Werktag everywhere — the conservative-inclusive rule, so a Frist is
 /// never shorter than the AHB requires for *any* participant.
+///
+/// The year matters: on a Saturday the weekend rule already answers `false`,
+/// and a demonstration that cannot fail for the reason it names demonstrates
+/// nothing. The assertion below pins the chosen date to a weekday.
 fn the_calendar_is_bdews() -> usize {
     section("2. Werktag is BDEW's calendar, not a Bundesland's");
     let mut bad = 0;
-    let reformationstag = time::macros::date!(2026 - 10 - 31);
+    // 2028, because Reformationstag has to fall on a **weekday** for this to
+    // demonstrate anything. In 2026 it is a Saturday, so `is_werktag` would
+    // answer `false` on the weekend rule alone and the holiday rule would go
+    // untested while appearing to pass.
+    let reformationstag = time::macros::date!(2028 - 10 - 31);
+    bad += check(
+        "the date chosen actually isolates the holiday rule",
+        !matches!(
+            reformationstag.weekday(),
+            time::Weekday::Saturday | time::Weekday::Sunday
+        ),
+    );
     println!(
-        "  31.10.2026 (Reformationstag, 9 of 16 states) → Werktag? {}",
+        "  31.10.2028 ({}, Reformationstag, 9 of 16 states) → Werktag? {}",
+        reformationstag.weekday(),
         mako_fristen::is_werktag(reformationstag, HolidayCalendar::BdewMaKo)
     );
     bad += check(

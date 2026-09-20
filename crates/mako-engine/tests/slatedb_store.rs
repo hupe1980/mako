@@ -327,23 +327,37 @@ async fn due_now_has_more_set_when_exactly_at_limit() {
 
 // ── InboxStore tests ──────────────────────────────────────────────────────────
 
+/// The three phases over the durable store, including the distinction a
+/// two-state store cannot make.
 #[tokio::test]
-async fn inbox_accept_deduplicates() {
+async fn inbox_claim_accept_abandon() {
+    use mako_engine::inbox::InboxClaim;
+
     let store = open().await;
     let inbox = store.as_inbox_store();
 
-    assert!(
-        inbox.accept("msg-001").await.unwrap(),
-        "first accept must return true"
-    );
-    assert!(
-        !inbox.accept("msg-001").await.unwrap(),
-        "duplicate must return false"
-    );
-    assert!(
-        inbox.accept("msg-002").await.unwrap(),
-        "different key must be accepted"
-    );
+    // First delivery takes the key.
+    assert_eq!(inbox.claim("msg-001").await.unwrap(), InboxClaim::Claimed);
+    // A concurrent one is told so, rather than being called a duplicate:
+    // nothing has been handled yet, so acknowledging it would be a lie.
+    assert_eq!(inbox.claim("msg-001").await.unwrap(), InboxClaim::InFlight);
+
+    // Settled as handled — now every later delivery is a replay.
+    inbox.accept("msg-001").await.unwrap();
+    assert_eq!(inbox.claim("msg-001").await.unwrap(), InboxClaim::Duplicate);
+
+    // An unrelated key is untouched.
+    assert_eq!(inbox.claim("msg-002").await.unwrap(), InboxClaim::Claimed);
+
+    // Released, because nothing durable recorded it: the retransmission is a
+    // recovery path, not a silent drop.
+    inbox.abandon("msg-002").await.unwrap();
+    assert_eq!(inbox.claim("msg-002").await.unwrap(), InboxClaim::Claimed);
+
+    // An accepted key is never re-opened by an abandon.
+    inbox.accept("msg-002").await.unwrap();
+    inbox.abandon("msg-002").await.unwrap();
+    assert_eq!(inbox.claim("msg-002").await.unwrap(), InboxClaim::Duplicate);
 }
 
 #[tokio::test]
@@ -437,12 +451,14 @@ async fn inbox_concurrent_accept_exactly_one_winner() {
             let inbox = store.as_inbox_store();
             let wins = Arc::clone(&wins);
             tokio::spawn(async move {
-                match inbox.accept("concurrent-key").await {
-                    Ok(true) => {
+                // Exactly one delivery may take the key. The rest see an
+                // unsettled claim, not a duplicate — nothing is handled yet.
+                match inbox.claim("concurrent-key").await {
+                    Ok(mako_engine::inbox::InboxClaim::Claimed) => {
                         wins.fetch_add(1, Ordering::Relaxed);
                     }
-                    Ok(false) => {}
-                    Err(e) => panic!("accept failed: {e}"),
+                    Ok(_) => {}
+                    Err(e) => panic!("claim failed: {e}"),
                 }
             })
         })

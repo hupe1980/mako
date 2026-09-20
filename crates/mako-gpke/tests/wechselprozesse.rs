@@ -53,7 +53,7 @@ use mako_gpke::{GpkeSupplierChangeWorkflow, SupplierChangeCommand, SupplierChang
 /// - UNT  — message trailer
 /// - UNZ  — interchange trailer
 const UTILMD_55001_BYTES: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+INTER-2025-001'\
+UNB+UNOC:3+4012345000023:14+9900357000004:500+250115:0800+INTER-2025-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
 BGM+E01:::+00055001::+9'\
 DTM+137:202501150800?+00:303'\

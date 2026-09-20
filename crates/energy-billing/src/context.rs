@@ -358,7 +358,10 @@ impl Default for InvoiceType {
 /// ## Legal basis
 ///
 /// - §2 Nr. 4 StromStG — definition of "Unternehmen des produzierenden Gewerbes"
-/// - § 12 StromNZV / §14 NAV — RLM metering thresholds
+/// - § 12 StromNZV (bis 31.12.2025; seither § 20 Abs. 3 EnWG über die
+///   BNetzA-Festlegungen, weil die StromNZV mit Ablauf des 31.12.2025 außer
+///   Kraft getreten ist — Art. 15 Abs. 4 G. v. 22.12.2023, BGBl. 2023 I
+///   Nr. 405) / §14 NAV — RLM metering thresholds
 /// - §41 Abs. 1 EnWG — invoice disclosure requirements vary by customer type
 /// - Grundversorgung (StromGVV) vs. Sondervertrag — different contract law
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -379,7 +382,7 @@ pub enum CustomerKategorie {
 
     /// Industrial / large commercial customer (Sonderkunde).
     ///
-    /// B2B ≥ 100 MWh/year electricity (§ 12 StromNZV), RLM mandatory.
+    /// B2B ≥ 100 MWh/year electricity (§ 12 StromNZV bis 31.12.2025), RLM mandatory.
     /// Sondervertrag, not Grundversorgung. Eligible for §9 Nr. 1–3 StromStG
     /// industrial exemption, KWKG Selbstbehaltsgrenze, and capacity pricing.
     Industrie,

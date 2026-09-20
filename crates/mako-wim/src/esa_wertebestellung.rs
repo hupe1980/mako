@@ -263,7 +263,6 @@ impl EventPayload for EsaWertebestellungEvent {
 
 /// Business data carried from the Anfrage through the whole process.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct EsaWertebestellungData {
     /// GLN of this ESA.
     pub esa: MarktpartnerCode,

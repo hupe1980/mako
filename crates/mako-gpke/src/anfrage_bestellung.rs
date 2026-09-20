@@ -146,7 +146,6 @@ impl EventPayload for AnfrageBestellungEvent {
 
 /// Business data recorded at `AnfrageErhalten` time and carried forward.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AnfrageData {
     /// Prüfidentifikator — always 55555 at construction time.
     pub pruefidentifikator: Pruefidentifikator,

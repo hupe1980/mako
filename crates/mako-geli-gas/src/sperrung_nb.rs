@@ -181,7 +181,6 @@ impl EventPayload for GasSperrungNbEvent {
 
 /// Business data captured when the GNB receives an Anweisung Sperrung.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct GasSperrungNbData {
     /// EIC/MaLo of the gas supply location.
     pub location_id: MaLo,

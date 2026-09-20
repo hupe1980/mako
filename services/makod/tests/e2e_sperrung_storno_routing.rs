@@ -27,7 +27,7 @@ const MALO: &str = "51238696012";
 /// `extract_malo_from_msg` resolves a non-empty correlation key.
 fn ordrsp(pid: u32) -> String {
     format!(
-        "UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'\
+        "UNB+UNOC:3+4012345000023:14+9900357000004:500+230101:0000+1'\
 UNH+1+ORDRSP:D:10A:UN:1.4c'\
 BGM+7+000{pid}'\
 DTM+137:202301010000?+00:303'\

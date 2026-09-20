@@ -413,7 +413,7 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check check-fuzz test test-doc test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-citations check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+ci: check check-fuzz test test-doc test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-outbox-notify check-event-payloads check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -672,10 +672,34 @@ check-business-dates:
 check-workflow-purity:
     cargo xtask check-workflow-purity
 
+# Hold each durable outbox's wake-up in the database, where it belongs. Postgres
+# queues a NOTIFY until the raising transaction commits, so an AFTER INSERT
+# trigger cannot wake the worker onto a snapshot without the row — and reaches
+# every replica, which an in-process handle never can.
+check-outbox-notify:
+    cargo xtask check-outbox-notify
+
+# Refuse `deny_unknown_fields` on a workflow event payload — an event is read
+# back years later, so a removed field must not make a § 147 AO record unfoldable.
+check-event-payloads:
+    cargo xtask check-event-payloads
+
 # Refuse a Festlegung cited in a form it does not publish. BK6-22-024 numbers its
 # operative part in Tenorziffern and carries its substance in Anlagen, so
 # „BK6-22-024 § 4" names nothing that can be looked up — and an uncheckable
 # citation shields whatever Frist stands beside it from review.
+# Refuse an unreachable control at the AS4 boundary.
+check-as4-controls:
+    cargo xtask check-as4-controls
+
+# Refuse a statement against a tenant-scoped table with no tenant bound.
+check-tenant-predicate:
+    cargo xtask check-tenant-predicate
+
+# Refuse a Cedar role literal the platform never mints.
+check-cedar-roles:
+    cargo xtask check-cedar-roles
+
 check-citations:
     cargo xtask check-citations
 

@@ -35,7 +35,6 @@
 //! ## Client-side usage
 //!
 //! ```no_run
-//! # #[cfg(feature = "crypto")] {
 //! use energy_api::transport::content_security::{self, HEADER_DIGEST, HEADER_SIGNATURE};
 //!
 //! let key = content_security::signing_key_from_pem(
@@ -51,14 +50,12 @@
 //!     &key,
 //! )?;
 //! // add `HEADER_DIGEST: digest` and `HEADER_SIGNATURE: sig` to the outgoing request
-//! # }
 //! # Ok::<(), energy_api::Error>(())
 //! ```
 //!
 //! ## Server-side usage
 //!
 //! ```no_run
-//! # #[cfg(feature = "crypto")] {
 //! use energy_api::transport::content_security;
 //!
 //! // verifying_key loaded from the X-BDEW-CERT / DER certificate in the TLS handshake
@@ -73,7 +70,6 @@
 //!     /* sig_b64   from SIGNATURE header */ "...",
 //!     &verifying_key,
 //! )?;
-//! # }
 //! # Ok::<(), energy_api::Error>(())
 //! ```
 //!
@@ -82,6 +78,13 @@
 use base64ct::{Base64, Encoding};
 use p256::ecdsa::signature::hazmat::{PrehashSigner, PrehashVerifier};
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
+
+/// The ECDSA P-256 key types this module signs and verifies with.
+///
+/// Re-exported so a consumer needs no direct `p256` dependency of its own: two
+/// `p256` versions in one build are two incompatible `SigningKey` types, and
+/// the compiler error says only that the types differ.
+pub use p256::ecdsa::{SigningKey as ContentSigningKey, VerifyingKey as ContentVerifyingKey};
 use p256::pkcs8::{DecodePrivateKey, DecodePublicKey};
 use sha2::{Digest as _, Sha256};
 

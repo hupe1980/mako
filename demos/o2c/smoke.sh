@@ -375,11 +375,10 @@ pass "POST /api/v1/billing/${MALO_ID}/calculate → $code  (id=$BILLING_ID)"
 
 # **Who the invoice is addressed to.** § 14 Abs. 4 Nr. 1 UStG makes the
 # Leistungsempfänger part of what an invoice has to state and EN 16931 makes
-# BT-44 mandatory, so this is not a nicety — and it is the assertion that was
-# missing while the demo created a nameless customer and reported success. The
-# party lives on the billing engine's context, which is the one field the BO4E
-# `Rechnung` and the EN 16931 model both read: naming it twice is how they came
-# to disagree.
+# BT-44 mandatory, so this is not a nicety: without this assertion a nameless
+# customer priced correctly and the run is green. The party lives on the billing
+# engine's context, which is the one field the BO4E `Rechnung` and the EN 16931
+# model both read — naming it twice is how the two maps come to disagree.
 resp=$(req GET "${BILLINGD_URL}/api/v1/billing/${BILLING_ID}")
 [[ "$(status "$resp")" == "200" ]] || fail "GET the invoice back → $(status "$resp")"
 RECORD=$(body "$resp")
@@ -560,8 +559,15 @@ info "[7] what the ERP receiver saw"
 #
 # `de.accounting.payment.imported` is asserted, not just listed. It leaves
 # accountingd through the transactional outbox and its drain worker, so it
-# arrives a poll interval after the ledger entry — reading the receiver once,
-# immediately, reported a green run whose last event had not been sent yet.
+# arrives a poll interval after the ledger entry: a single immediate read of the
+# receiver is green before the last event has been sent, which is why this polls.
+#
+# In practice it arrives in milliseconds: the `event_outbox` trigger raises a
+# Postgres `NOTIFY` that the drain worker is listening for, and Postgres holds it
+# until the import's transaction commits. The window below is nonetheless sized
+# past the 30 s poll interval that remains the fallback, because an assertion
+# window that depends on the hint arriving is an assertion about latency rather
+# than about the event.
 # Matched on **this run's** MaLo, not merely on the event type: the receiver
 # keeps every run's events, so an earlier run's payment would satisfy a
 # type-only wait and the assertions below would then read its amount.
@@ -569,13 +575,17 @@ paid_event() {
     jq -r --arg m "$MALO_ID" '[ .[] | select(.body.type == "de.accounting.payment.imported")
                                     | .body.data | select(.malo_id == $m) ] | last'
 }
-for i in $(seq 1 15); do
+# 45 polls × 2 s = 90 s — three outbox poll intervals, so the run is green even
+# with the wake-up hint lost entirely and every delivery on the poll.
+OUTBOX_POLLS=45
+for i in $(seq 1 "$OUTBOX_POLLS"); do
     EVENTS=$(curl -sf "${WEBHOOK_URL}/events" || echo '[]')
     TYPES=$(jq -r '[.[].body.type] | unique | sort | join(", ")' <<<"$EVENTS")
     PAID=$(paid_event <<<"$EVENTS")
     [ "$PAID" != "null" ] && break
-    [ "$i" -eq 15 ] && \
-        fail "de.accounting.payment.imported for ${MALO_ID} never reached the ERP: ${TYPES:-<none>}"
+    [ "$i" -eq "$OUTBOX_POLLS" ] && \
+        fail "de.accounting.payment.imported for ${MALO_ID} never reached the ERP \
+in $(( OUTBOX_POLLS * 2 )) s: ${TYPES:-<none>}"
     sleep 2
 done
 [ "$(jq -r '.amount_eur' <<<"$PAID")" = "$EXPECTED_FORDERUNG" ] || \

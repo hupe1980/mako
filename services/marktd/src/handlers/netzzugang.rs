@@ -36,7 +36,6 @@ use super::{Claims, IntoMdmResponse as _, Tenant};
 pub type NetzzugangRepoExt = Arc<crate::pg::PgNetzzugangRepository>;
 async fn emit(
     pool: &sqlx::PgPool,
-    notify: &tokio::sync::Notify,
     tenant: &str,
     subject: String,
     data: serde_json::Value,
@@ -47,7 +46,8 @@ async fn emit(
         subject,
         data,
     );
-    crate::outbox::enqueue(pool, &evt, notify).await
+    crate::outbox::enqueue(pool, &evt).await?;
+    Ok(())
 }
 
 fn antrag_event(rec: &NetzzugangAntrag, version: i64) -> serde_json::Value {
@@ -81,7 +81,6 @@ pub async fn upsert_antrag(
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
-    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Json(mut rec): Json<NetzzugangAntrag>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-netzzugang", &tenant) {
@@ -101,14 +100,7 @@ pub async fn upsert_antrag(
     match repo.upsert(&rec).await {
         Ok((id, version)) => {
             rec.id = id;
-            if let Err(e) = emit(
-                &pool,
-                &notify,
-                &tenant,
-                id.to_string(),
-                antrag_event(&rec, version),
-            )
-            .await
+            if let Err(e) = emit(&pool, &tenant, id.to_string(), antrag_event(&rec, version)).await
             {
                 tracing::error!(error = %e, "netzzugang: durable enqueue failed");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -235,7 +227,6 @@ pub async fn set_antrag_status(
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
-    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Path(id): Path<Uuid>,
     Json(body): Json<StatusBody>,
 ) -> impl IntoResponse {
@@ -256,7 +247,6 @@ pub async fn set_antrag_status(
         Ok(Some(rec)) => {
             if let Err(e) = emit(
                 &pool,
-                &notify,
                 &tenant,
                 id.to_string(),
                 antrag_event(&rec.antrag, rec.version),

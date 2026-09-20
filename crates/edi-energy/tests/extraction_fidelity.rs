@@ -521,26 +521,32 @@ fn element_value_conditions_are_read_as_values() {
 
 /// How many DE-referencing conditions the evaluator reads as what they say.
 ///
-/// Measured 2026-09-18: **224 of 371**, and **none** falls back to the
-/// segment's mere presence — that reading is now refused outright. The
-/// remaining 147 do not parse, and what they need does not exist: a join
-/// between two places, and matching two segments by a Zeitraum-ID they share.
+/// **237 of 371**, and **none** falls back to the segment's mere presence —
+/// that reading is refused outright, because a clause naming a data element is
+/// about that element and reading it as the segment around it inverts the rule.
+/// The remaining 134 do not parse. Most of them are not a parser gap at all: an
+/// MP-ID's Sparte or Rolle is a property of the recipient the message does not
+/// carry, and a code list the AHB names without printing belongs to the
+/// Codelisten import. What is genuinely missing is a shape — a join between two
+/// places, and matching two segments by a Zeitraum-ID they share.
 ///
-/// The floor only rises. It went 78 → 179 when [`Voraussetzung::parse`] learned
-/// the comparison shape („Wenn in diesem STS DE1131 = E_0526"), which the whole
-/// IFTSTA Antwortcode family is written in and which carries no „vorhanden" for
-/// the old gate to catch. It went 179 → 200 on three repairs to that same
-/// reading: a code list the Bedingungen column wrapped after a `/`
-/// („DE4465 = A01/A21/A22/ A23/A90/A96"), a comparison printed without spaces
-/// („DE4465=28"), and the Meldepunkt's own question — „die ID einer
-/// Marktlokation angegeben ist" and „genau 11 Stellen" — which
-/// [`edi_energy::profile::formatbedingung`] answers. It went 200 → 224 when
-/// the segment-presence fallback was removed and the clauses it had been
-/// swallowing were read: a code named before its DE („der Code Z35 … im
-/// DE1153"), a dashed Artikel-ID, „mit 1 vorhanden", and the bare question
-/// whether an element carries a value at all. It went 224 → 237 when a
-/// Voraussetzung gained a **path** — „in dieser SG8 SEQ+Z01 SG10 CCI+++ZA6 …
-/// CAV+E02 vorhanden" — and the alternatives the AHB writes with „oder".
+/// The floor only rises, and it is a floor rather than a target because each
+/// shape below was found by reading texts the evaluator had silently permitted:
+///
+/// - the **comparison** („Wenn in diesem STS DE1131 = E_0526"), which the whole
+///   IFTSTA Antwortcode family is written in and which carries no „vorhanden"
+///   for a presence gate to catch;
+/// - three readings the **page** rather than the grammar defeats: a code list
+///   the Bedingungen column wrapped after a `/` („DE4465 = A01/A21/A22/
+///   A23/A90/A96"), a comparison printed without spaces („DE4465=28"), and the
+///   Meldepunkt's own question — „die ID einer Marktlokation angegeben ist",
+///   „genau 11 Stellen" — which [`edi_energy::profile::formatbedingung`]
+///   answers;
+/// - a code named **before** its DE („der Code Z35 … im DE1153"), a dashed
+///   Artikel-ID, „mit 1 vorhanden", and the bare question whether an element
+///   carries a value at all;
+/// - a **path** („in dieser SG8 SEQ+Z01 SG10 CCI+++ZA6 … CAV+E02 vorhanden")
+///   and the alternatives the AHB writes with „oder".
 const ELEMENT_VALUE_FLOOR: usize = 237;
 
 /// Whether the text names a data element (`DE` followed by digits).

@@ -106,7 +106,6 @@ pub const ANTWORT_WINDOW_LABEL: &str = "gpke-sperrung-lf-antwort";
 
 /// Business data captured when the LF initiates a Sperrauftrag.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SperrungAuftragData {
     /// EIC/MaLo of the supply location.
     pub location_id: MaLo,

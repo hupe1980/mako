@@ -76,7 +76,6 @@ impl From<dvgw_edi::ssqnot::Verfahren> for MmmVerfahren {
 
 /// One Mehr-/Mindermengenmeldung as recorded.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct MehrMindermengenData {
     /// The Prüfidentifikator (70095 SLP / 70096 RLM).
     pub pruefidentifikator: u32,

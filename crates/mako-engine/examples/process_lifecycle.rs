@@ -299,15 +299,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .unwrap_err();
 
+    // Asserted, not merely printed. The summary below says "Checks passed",
+    // and a classifier that answered `false` here would print that line and
+    // exit 0 — an example that cannot fail demonstrates nothing.
     println!("  Raw error              : {err}");
+    assert!(
+        err.is_workflow_error(),
+        "Activate on an Inactive process is a workflow error, not transport: {err}"
+    );
+    assert!(
+        !err.is_version_conflict(),
+        "nothing raced this command, so it cannot be a version conflict: {err}"
+    );
     println!("  is_workflow_error()    : {}", err.is_workflow_error());
     println!("  is_version_conflict()  : {}", err.is_version_conflict());
 
-    if let Some(we) = err.as_workflow_error() {
-        println!("  WorkflowError variant  : {we}");
-        println!("  is_invalid_state()     : {}", we.is_invalid_state());
-        println!("  is_rejected()          : {}", we.is_rejected());
-    }
+    let we = err
+        .as_workflow_error()
+        .expect("is_workflow_error() said so, so the downcast must succeed");
+    println!("  WorkflowError variant  : {we}");
+    assert!(
+        we.is_invalid_state(),
+        "the command was refused for the state it arrived in, not on its merits: {we}"
+    );
+    assert!(
+        !we.is_rejected(),
+        "`Rejected` is a business refusal; this one never reached that decision: {we}"
+    );
+    println!("  is_invalid_state()     : {}", we.is_invalid_state());
+    println!("  is_rejected()          : {}", we.is_rejected());
 
     // ── Summary ───────────────────────────────────────────────────────────────
     println!();

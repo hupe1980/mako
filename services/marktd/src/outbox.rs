@@ -6,13 +6,15 @@
 //! exclusively from `event_log` / `event_delivery` — there is no in-memory
 //! channel that could lose an in-flight event across a crash.
 //!
-//! This mirrors [`mako_service::outbox`]: the `enqueue` INSERT is idempotent on
-//! the CloudEvent `id` (`ON CONFLICT DO NOTHING`) and is **fatal on the producer
-//! path** — a producer must propagate the error / fail the request so that no
-//! event is ever fanned out unless it is durable.
+//! This mirrors [`mako_service::outbox`] in both halves: the `enqueue` INSERT is
+//! idempotent on the CloudEvent `id` (`ON CONFLICT DO NOTHING`) and is **fatal
+//! on the producer path** — a producer must propagate the error / fail the
+//! request so that no event is ever fanned out unless it is durable — and the
+//! worker's wake-up is a Postgres `NOTIFY` raised by an `AFTER INSERT` trigger
+//! on the table, so it is delivered on the producer's COMMIT and reaches every
+//! replica rather than only the process that wrote the row.
 
 use mako_markt::cloudevents::MarktEvent;
-use tokio::sync::Notify;
 
 /// Persist a [`MarktEvent`] to the durable `event_log` outbox.
 ///
@@ -27,19 +29,21 @@ use tokio::sync::Notify;
 /// not Sparte-scoped and matches every filter — so a producer that knows the
 /// Sparte must set it, or the filter silently passes everything.
 ///
-/// `notify` is a low-latency wake-up hint for the fan-out worker — it is **not**
-/// correctness-bearing (the worker also polls on an interval), so a missed
-/// notification only delays, never drops, delivery.
+/// **Nothing to call afterwards.** The `event_log_notify` trigger raises a
+/// `NOTIFY` on [`crate::fanout::NOTIFY_CHANNEL`] that Postgres holds until this
+/// transaction commits, and the fan-out worker is listening, so delivery starts
+/// on the commit rather than at the next poll. Keeping that wake-up in the
+/// database is what makes it impossible to take one too early: on a `&mut *tx`
+/// executor the row is invisible to every other connection until the commit, so
+/// an in-process hint raised here would be spent on a snapshot without the
+/// event and the delivery would wait out a whole
+/// [`crate::fanout::FanoutConfig::poll_interval`] with nothing logged.
 ///
 /// # Errors
 ///
 /// Returns [`sqlx::Error`] if the envelope cannot be encoded or the INSERT
 /// fails. Callers on the producer path MUST treat this as fatal.
-pub async fn enqueue<'e, E>(
-    executor: E,
-    ev: &MarktEvent,
-    notify: &Notify,
-) -> Result<(), sqlx::Error>
+pub async fn enqueue<'e, E>(executor: E, ev: &MarktEvent) -> Result<(), sqlx::Error>
 where
     E: sqlx::PgExecutor<'e>,
 {
@@ -69,7 +73,5 @@ where
     .execute(executor)
     .await?;
 
-    // Low-latency wake-up hint only; correctness rests on the worker's poll loop.
-    notify.notify_one();
     Ok(())
 }

@@ -1,5 +1,5 @@
 {
-  "_comment": "Which BDEW publication each profile is extracted from. `cargo xtask import-profiles` reads the named PDFs from the document mirror and regenerates <dir>/mig.json and <dir>/ahb.json; the JSON files are derived artefacts. Dates follow Allgemeine Festlegungen 6.1d §2.5: `valid_from` is the Anwendungszeitpunkt, `publikationsdatum` the Veröffentlichungszeitpunkt six months earlier. `release` is the wire code in UNH DE 0057.",
+  "_comment": "Which BDEW publication each profile is extracted from. `cargo xtask import-profiles` reads the named PDFs from the document mirror and regenerates <dir>/mig.json and <dir>/ahb.json; the JSON files are derived artefacts. `valid_from` is the Anwendungszeitpunkt and `publikationsdatum` the Veröffentlichungszeitpunkt. Allgemeine Festlegungen 6.1d §2.5 puts the second six months before the first, but that is the usual schedule rather than a rule: a release may be given a different Umsetzungszeitraum, and one that is must name the BNetzA Mitteilung that published it in `publikation_quelle`. `release` is the wire code in UNH DE 0057.",
   "profiles": {
     "aperak/fv20251001": {
       "release": "2.1i",

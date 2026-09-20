@@ -189,7 +189,6 @@ impl EventPayload for KonfigurationAenderungEvent {
 
 /// Data captured when an ORDERS request is sent.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AnfrageData {
     /// ORDERS Prüfidentifikator sent.
     pub orders_pid: Pruefidentifikator,

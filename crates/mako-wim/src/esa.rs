@@ -864,7 +864,6 @@ impl Abonnement {
 
 /// One `SG28 CCI+Z60` threshold pair for a Schwellwert-triggered SMGW product.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Schwellwert {
     /// Messprodukt-Position-Code from *Codeliste der Konfigurationen* 1.4
     /// Kapitel 4.7 (`CCI` DE 7037).
@@ -882,7 +881,6 @@ pub struct Schwellwert {
 /// IPv4 and an IPv6 URI are required — the AHB lists two `FTX+Z17` DE 4440
 /// occurrences with hints `[515]` and `[516]`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SmgwZiel {
     /// `FTX+Z17` DE 4440 #1 — IPv4 URI.
     pub uri_ipv4: String,
@@ -906,7 +904,6 @@ pub struct SmgwZiel {
 /// wire — which the MSB side needs to fulfil the order and the ESA side needs
 /// to notice a delivery that never arrived.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Bestellgegenstand {
     /// Messprodukt-Code (`SG27 PIA+5` DE 7140), digits only.
     pub messprodukt: String,
@@ -1171,7 +1168,6 @@ pub fn business_key(lokations_id: &str, messprodukt: &str) -> String {
 /// „Bestellung nicht bestätigt" in `E_0257` and „war eine einmalige
 /// Übermittlung" in `E_0254`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Antwort {
     /// `AJT` DE 4465 — the Code des Prüfschritts.
     pub antwortcode: String,
@@ -1250,7 +1246,6 @@ impl Antwort {
 /// two digits pick the price type — `01` Einrichtung, `02` Betrieb, `03`
 /// Transaktion — which is what conditions `[83]`–`[85]` say.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Preisposition {
     /// `SG27 PIA+Z02` DE 7140 — the Artikel-ID this price belongs to.
     pub artikel_id: String,
@@ -1309,7 +1304,6 @@ impl Preistyp {
 /// against, what the MSB's later INVOIC 31009 is reconciled with, and what says
 /// which registers the subscription will deliver.
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Angebot {
     /// `SG4 CUX` DE 6345 — the currency the prices are in. **Muss**; `EUR` is
     /// the only published value, but it is read rather than assumed.

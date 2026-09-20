@@ -22,7 +22,9 @@ use std::sync::Arc;
 
 use axum::{
     Router,
+    http::StatusCode,
     middleware::{self, Next},
+    response::IntoResponse as _,
 };
 use rmcp::{
     ErrorData as McpError, ServerHandler,
@@ -44,10 +46,34 @@ use tokio_util::sync::CancellationToken;
 /// processd's own base URL, derived from the configured `makod` URL.
 ///
 /// The two run side by side in every deployment this ships with, so the host is
-/// shared and only the port differs. A deployment that separates them needs its
-/// own `self_url` config key.
-fn self_base_url(makod_url: &str) -> String {
-    makod_url.trim_end_matches('/').replace(":8080", ":8580")
+/// shared and only the port differs. The port is **replaced**, not substituted
+/// textually: `replace(":8080", ":8580")` leaves a URL that states no explicit
+/// port completely unchanged, so the approve `POST` goes to makod carrying
+/// processd's queue path — a request that authenticates, 404s, and looks from
+/// here like a processd failure.
+///
+/// Returns `None` when the URL has no host to rebuild from, and the caller
+/// refuses rather than guessing: dispatching an irreversible market decision to
+/// an address derived by accident is the outcome worth avoiding.
+fn self_base_url(makod_url: &str) -> Option<String> {
+    let trimmed = makod_url.trim_end_matches('/');
+    let (scheme, rest) = trimmed.split_once("://")?;
+    // Authority ends at the first `/`; anything after it is a path we drop,
+    // since this is a base URL.
+    let authority = rest.split('/').next()?;
+    let host = authority.rsplit_once(':').map_or(authority, |(h, port)| {
+        // Only treat the tail as a port when it is one — an IPv6 literal such
+        // as `[::1]` also contains colons.
+        if port.chars().all(|c| c.is_ascii_digit()) && !port.is_empty() {
+            h
+        } else {
+            authority
+        }
+    });
+    if host.is_empty() {
+        return None;
+    }
+    Some(format!("{scheme}://{host}:8580"))
 }
 
 #[derive(Clone)]
@@ -100,6 +126,16 @@ pub struct ListQueueParams {
 pub struct QueueActionParams {
     /// UUID of the approval queue entry to approve or reject.
     pub id: String,
+    /// Who decided, as **verified by the MCP middleware** — never the caller.
+    ///
+    /// `mcp_auth_middleware` overwrites whatever arrives here with the identity
+    /// behind the presented token, so a caller cannot name someone else. It is
+    /// `Option` because the middleware leaves it unset when nothing identifies
+    /// a caller (dev mode, no Cedar), and an unattributable decision is refused
+    /// rather than recorded against a placeholder: this value becomes § 20
+    /// Abs. 1 EnWG parity evidence and a GoBD record.
+    #[serde(default)]
+    pub decided_by: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -351,13 +387,33 @@ Use `list_pending_approvals` first to check `expires_at` before approving.",
         };
         // processd's own approval endpoint, reached over the loopback so the
         // REST handler's Cedar check runs rather than being bypassed.
+        // Set by `mcp_auth_middleware` from the verified token. Absent means
+        // the decision cannot be attributed, and an unattributable § 20
+        // Abs. 1 EnWG record is refused rather than written.
+        let Some(decided_by) = p.decided_by.as_deref() else {
+            return Err(McpError::internal_error(
+                "decision not attributable to a verified caller",
+                None,
+            ));
+        };
+        let Some(base) = self_base_url(&self.state.makod_url) else {
+            return Err(McpError::internal_error(
+                "cannot derive processd's own base URL from the configured makod_url",
+                None,
+            ));
+        };
         let up = mako_service::http::Upstream::new(
             "processd",
-            &self_base_url(&self.state.makod_url),
+            &base,
             Some(self.state.makod_api_key.clone()),
             mako_service::http::default_client(),
         );
-        match crate::server::QUEUE_APPROVE.request(&up, id).send().await {
+        match crate::server::QUEUE_APPROVE
+            .request(&up, id)
+            .header("X-Decided-By", decided_by)
+            .send()
+            .await
+        {
             Ok(resp) if resp.status().is_success() || resp.status() == 204 => {
                 ContentBlock::json(serde_json::json!({
                     "id": p.id,
@@ -395,13 +451,33 @@ For §20 parity data: use `obsd` `get_kpi_report`.",
         };
         // processd's own approval endpoint, reached over the loopback so the
         // REST handler's Cedar check runs rather than being bypassed.
+        // Set by `mcp_auth_middleware` from the verified token. Absent means
+        // the decision cannot be attributed, and an unattributable § 20
+        // Abs. 1 EnWG record is refused rather than written.
+        let Some(decided_by) = p.decided_by.as_deref() else {
+            return Err(McpError::internal_error(
+                "decision not attributable to a verified caller",
+                None,
+            ));
+        };
+        let Some(base) = self_base_url(&self.state.makod_url) else {
+            return Err(McpError::internal_error(
+                "cannot derive processd's own base URL from the configured makod_url",
+                None,
+            ));
+        };
         let up = mako_service::http::Upstream::new(
             "processd",
-            &self_base_url(&self.state.makod_url),
+            &base,
             Some(self.state.makod_api_key.clone()),
             mako_service::http::default_client(),
         );
-        match crate::server::QUEUE_REJECT.request(&up, id).send().await {
+        match crate::server::QUEUE_REJECT
+            .request(&up, id)
+            .header("X-Decided-By", decided_by)
+            .send()
+            .await
+        {
             Ok(resp) if resp.status().is_success() || resp.status() == 204 => {
                 ContentBlock::json(serde_json::json!({
                     "id": p.id,
@@ -566,11 +642,146 @@ impl ServerHandler for ProcessdMcpHandler {
     }
 }
 
+/// The Cedar action each MCP tool needs, by tool name.
+///
+/// The blanket `use-mcp` grant is deliberately weak — `processd.cedar` gives it
+/// on tenant alone, with no role — because it gates *reaching* the surface, not
+/// what may be done on it. Without a per-tool action every tool inherits that
+/// one grant, so a role-less token of the right tenant reaches
+/// `approve_queue_entry` and dispatches an irreversible market message.
+///
+/// A tool missing from this table is refused rather than defaulted: a new tool
+/// that nobody mapped is exactly the one whose authority nobody has reasoned
+/// about, and defaulting it open is how the gap above appears again.
+fn tool_action(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "list_decisions"
+        | "get_decision"
+        | "get_stp_rate"
+        | "get_stp_breakdown_by_erc"
+        | "list_affiliate_decisions" => "read-decisions",
+        "list_pending_approvals" | "get_queue_entry" => "read-queue",
+        // Irreversible: dispatches `gpke.nb-lieferende.bestaetigen` (PID 55008)
+        // or `geli.stornierung.initiieren`. The market message cannot be
+        // withdrawn once sent.
+        "approve_queue_entry" | "reject_queue_entry" => "decide-queue",
+        _ => return None,
+    })
+}
+
+/// What one inbound MCP frame is, for authorization purposes.
+enum McpCall {
+    /// Not a `tools/call` — `initialize`, `tools/list`, a prompt. The blanket
+    /// `use-mcp` gate is the whole check.
+    NotATool,
+    /// A `tools/call` for a tool this build knows, and the action it needs.
+    Tool(&'static str),
+    /// A `tools/call` naming a tool with no entry in [`tool_action`].
+    UnknownTool(String),
+}
+
+fn classify(body: &[u8]) -> McpCall {
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return McpCall::NotATool;
+    };
+    if v.get("method").and_then(serde_json::Value::as_str) != Some("tools/call") {
+        return McpCall::NotATool;
+    }
+    let Some(name) = v
+        .get("params")
+        .and_then(|p| p.get("name"))
+        .and_then(serde_json::Value::as_str)
+    else {
+        return McpCall::NotATool;
+    };
+    match tool_action(name) {
+        Some(action) => McpCall::Tool(action),
+        None => McpCall::UnknownTool(name.to_owned()),
+    }
+}
+
+/// Overwrite `params.arguments.decided_by` with the verified caller's name.
+///
+/// Returns the rewritten frame, or `None` when the frame is not the object
+/// shape a `tools/call` has — in which case nothing is guessed and the request
+/// is refused.
+fn stamp_decider(body: &[u8], name: &str) -> Option<Vec<u8>> {
+    let mut v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let params = v.get_mut("params")?.as_object_mut()?;
+    let args = params
+        .entry("arguments")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()?;
+    args.insert(
+        "decided_by".to_owned(),
+        serde_json::Value::String(name.to_owned()),
+    );
+    serde_json::to_vec(&v).ok()
+}
+
+/// One MCP frame's size cap — the body must be buffered to read the tool name.
+const MAX_MCP_BODY: usize = 1024 * 1024;
+
 async fn mcp_auth_middleware(
     axum::extract::State(state): axum::extract::State<Arc<ProcessdMcpState>>,
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
+    let (parts, body) = request.into_parts();
+    let bytes = match axum::body::to_bytes(body, MAX_MCP_BODY).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "MCP request body too large").into_response();
+        }
+    };
+    let mut bytes = bytes;
+    match classify(&bytes) {
+        McpCall::NotATool => {}
+        McpCall::Tool(action) => {
+            if let Err(resp) = state.auth.authorize(&parts.headers, action) {
+                return resp;
+            }
+            // An irreversible decision has to be attributable, and the only
+            // identity worth recording is the one this layer just verified.
+            // Stamping it into the frame is what lets the tool body see it:
+            // `McpIdentity` reaches Axum extensions, which an MCP tool never
+            // reads. Whatever arrived under this key is overwritten, so a
+            // caller cannot name somebody else as the decider.
+            if action == "decide-queue" {
+                let Some(identity) = state.auth.identify(&parts.headers) else {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        "403 Forbidden: this decision cannot be attributed to a verified \
+                         caller, and an unattributable § 20 Abs. 1 EnWG record is refused \
+                         rather than written against a placeholder",
+                    )
+                        .into_response();
+                };
+                match stamp_decider(&bytes, &identity.name) {
+                    Some(rewritten) => bytes = rewritten.into(),
+                    None => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            "400 Bad Request: malformed tools/call frame",
+                        )
+                            .into_response();
+                    }
+                }
+            }
+        }
+        McpCall::UnknownTool(name) => {
+            tracing::warn!(tool = %name, "processd: MCP tool carries no Cedar action");
+            return (
+                StatusCode::FORBIDDEN,
+                format!(
+                    "403 Forbidden: MCP tool {name:?} carries no Cedar action, so it cannot be \
+                     authorized — add it to `tool_action`"
+                ),
+            )
+                .into_response();
+        }
+    }
+    let request = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
     state.auth.authenticate(request, next).await
 }
 
@@ -584,4 +795,96 @@ pub fn router(state: Arc<ProcessdMcpState>, _shutdown: CancellationToken) -> Rou
     Router::new()
         .route_service("/mcp", service)
         .layer(middleware::from_fn_with_state(state, mcp_auth_middleware))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every tool the surface exposes maps to an action, and the two
+    /// irreversible ones need more than the blanket `use-mcp` grant.
+    ///
+    /// `processd.cedar` grants `use-mcp` on tenant alone with no role. Without
+    /// a per-tool action every tool inherits exactly that, so a role-less token
+    /// of the right tenant reaches `approve_queue_entry` and dispatches a
+    /// market message that cannot be withdrawn.
+    #[test]
+    fn the_irreversible_tools_need_the_decide_action() {
+        assert_eq!(tool_action("approve_queue_entry"), Some("decide-queue"));
+        assert_eq!(tool_action("reject_queue_entry"), Some("decide-queue"));
+        assert_eq!(tool_action("list_pending_approvals"), Some("read-queue"));
+        assert_eq!(tool_action("list_decisions"), Some("read-decisions"));
+    }
+
+    /// A tool nobody mapped is refused, not defaulted onto the blanket grant.
+    #[test]
+    fn an_unmapped_tool_is_refused() {
+        assert_eq!(tool_action("some_future_tool"), None);
+        let frame = br#"{"method":"tools/call","params":{"name":"some_future_tool"}}"#;
+        assert!(matches!(classify(frame), McpCall::UnknownTool(_)));
+    }
+
+    /// `tools/list` and `initialize` are not tool calls.
+    #[test]
+    fn a_non_tool_frame_is_not_gated_per_tool() {
+        assert!(matches!(
+            classify(br#"{"method":"tools/list"}"#),
+            McpCall::NotATool
+        ));
+        assert!(matches!(classify(b"not json"), McpCall::NotATool));
+    }
+
+    /// The decider the middleware verified replaces whatever the caller sent.
+    #[test]
+    fn the_stamped_decider_overwrites_a_caller_supplied_one() {
+        let frame = br#"{"method":"tools/call","params":{"name":"approve_queue_entry","arguments":{"id":"x","decided_by":"someone-else"}}}"#;
+        let out = stamp_decider(frame, "verified-operator").expect("stamped");
+        let v: serde_json::Value = serde_json::from_slice(&out).expect("json");
+        assert_eq!(v["params"]["arguments"]["decided_by"], "verified-operator");
+        assert_eq!(v["params"]["arguments"]["id"], "x");
+    }
+
+    /// A frame carrying no `arguments` still gets the decider.
+    #[test]
+    fn the_decider_is_stamped_into_a_frame_without_arguments() {
+        let frame = br#"{"method":"tools/call","params":{"name":"approve_queue_entry"}}"#;
+        let out = stamp_decider(frame, "op").expect("stamped");
+        let v: serde_json::Value = serde_json::from_slice(&out).expect("json");
+        assert_eq!(v["params"]["arguments"]["decided_by"], "op");
+    }
+
+    /// The loopback target replaces the port rather than substituting text.
+    ///
+    /// `replace(":8080", ":8580")` leaves a URL that states no explicit port
+    /// unchanged, so the approve `POST` goes to **makod** carrying processd's
+    /// queue path — it authenticates, 404s, and reads from here as a processd
+    /// failure.
+    #[test]
+    fn the_self_url_always_carries_processds_own_port() {
+        assert_eq!(
+            self_base_url("http://makod:8080").as_deref(),
+            Some("http://makod:8580")
+        );
+        assert_eq!(
+            self_base_url("http://makod").as_deref(),
+            Some("http://makod:8580"),
+            "a URL with no explicit port must still reach processd"
+        );
+        assert_eq!(
+            self_base_url("https://host:9999/").as_deref(),
+            Some("https://host:8580")
+        );
+        assert_eq!(
+            self_base_url("http://makod:8080/api/v1").as_deref(),
+            Some("http://makod:8580"),
+            "a base URL carries no path"
+        );
+    }
+
+    /// Nothing is guessed from a URL with no host.
+    #[test]
+    fn an_unusable_makod_url_yields_no_target() {
+        assert_eq!(self_base_url("makod:8080"), None);
+        assert_eq!(self_base_url("http://"), None);
+    }
 }

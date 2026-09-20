@@ -45,7 +45,7 @@ permit(
 ) when {
     context.principal_tenant == context.resource_tenant &&
     (context.principal_roles.contains("MSB") ||
-     context.principal_roles.contains("admin"))
+     context.principal_roles.contains("ADMIN"))
 };
 
 // Stored-series mutation: bulk import, § 60 Abs. 6 MsbG corrections, § 60 Abs. 1
@@ -64,7 +64,7 @@ permit(
     context.principal_tenant == context.resource_tenant &&
     (context.principal_roles.contains("MSB") ||
      context.principal_roles.contains("NB") ||
-     context.principal_roles.contains("admin"))
+     context.principal_roles.contains("ADMIN"))
 };
 
 // Reading orders (Ablesesteuerung). Reads are open to the tenant; creating,
@@ -87,7 +87,7 @@ permit(
     context.principal_tenant == context.resource_tenant &&
     (context.principal_roles.contains("NB") ||
      context.principal_roles.contains("MSB") ||
-     context.principal_roles.contains("admin"))
+     context.principal_roles.contains("ADMIN"))
 };
 
 // ESA "Werte nach Typ 2 aus SMGW" (Codeliste 1.4 Kapitel 4.6.2).
@@ -111,7 +111,7 @@ permit(
     context.principal_tenant == context.resource_tenant &&
     (context.principal_roles.contains("ESA") ||
      context.principal_roles.contains("MSB") ||
-     context.principal_roles.contains("admin"))
+     context.principal_roles.contains("ADMIN"))
 };
 
 // GDPR erasure (Art. 17 DSGVO): destructive — operator roles only. An
@@ -130,5 +130,5 @@ permit(
     context.principal_tenant == context.resource_tenant &&
     (context.principal_roles.contains("NB") ||
      context.principal_roles.contains("MSB") ||
-     context.principal_roles.contains("admin"))
+     context.principal_roles.contains("ADMIN"))
 };

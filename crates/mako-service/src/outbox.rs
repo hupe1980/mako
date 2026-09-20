@@ -59,7 +59,39 @@ CREATE TABLE IF NOT EXISTS event_outbox (
 CREATE INDEX IF NOT EXISTS event_outbox_pending ON event_outbox (next_attempt_at)
     WHERE delivered_at IS NULL AND dead_lettered_at IS NULL;
 CREATE INDEX IF NOT EXISTS event_outbox_dead ON event_outbox (dead_lettered_at)
-    WHERE dead_lettered_at IS NOT NULL;";
+    WHERE dead_lettered_at IS NOT NULL;
+-- Wake the drain worker the moment an enqueued event becomes visible.
+--
+-- The notification is raised by the database, not by the producer, and that is
+-- the whole point: Postgres queues a NOTIFY until the raising transaction
+-- COMMITs, so the worker cannot be woken onto a snapshot in which the row does
+-- not exist yet. A producer-side, in-process hint has no way to promise that —
+-- called inside the transaction it is spent on an invisible row, and the event
+-- then waits out a whole poll interval with nothing logged.
+--
+-- FOR EACH STATEMENT with a transition table, so a batch enqueue raises one
+-- notification rather than one per row, and an `ON CONFLICT DO NOTHING` that
+-- inserted nothing raises none.
+CREATE OR REPLACE FUNCTION event_outbox_notify() RETURNS trigger
+    LANGUAGE plpgsql AS $fn$
+BEGIN
+    IF EXISTS (SELECT 1 FROM inserted) THEN
+        PERFORM pg_notify('event_outbox', '');
+    END IF;
+    RETURN NULL;
+END;
+$fn$;
+DROP TRIGGER IF EXISTS event_outbox_notify ON event_outbox;
+CREATE TRIGGER event_outbox_notify
+    AFTER INSERT ON event_outbox
+    REFERENCING NEW TABLE AS inserted
+    FOR EACH STATEMENT EXECUTE FUNCTION event_outbox_notify();";
+
+/// The `LISTEN` channel [`SCHEMA`]'s trigger raises on.
+///
+/// Named for the table rather than the service: each service has its own
+/// database, so the channel never has to be disambiguated.
+pub const NOTIFY_CHANNEL: &str = "event_outbox";
 
 /// Create the `event_outbox` table + indexes if absent. Idempotent.
 ///
@@ -75,9 +107,15 @@ pub async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
 ///
 /// Pass the business transaction (`&mut tx`) so the event and the domain write
 /// commit atomically — that atomicity is the whole point. The row is immediately
-/// pending (`next_attempt_at` defaults to `now()`), so the worker picks it up on
-/// its next poll. Enqueue is idempotent on the `CloudEvent` `id`
-/// (`ON CONFLICT DO NOTHING`), so a retried command cannot double-enqueue.
+/// pending (`next_attempt_at` defaults to `now()`). Enqueue is idempotent on the
+/// `CloudEvent` `id` (`ON CONFLICT DO NOTHING`), so a retried command cannot
+/// double-enqueue.
+///
+/// **Nothing to call afterwards.** The `event_outbox_notify` trigger raises a
+/// `NOTIFY` that Postgres holds until this transaction commits, and the worker
+/// is listening, so delivery starts on the commit rather than at the next poll.
+/// [`OutboxConfig::poll_interval`] remains what correctness rests on: a lost
+/// notification delays delivery and never drops it.
 ///
 /// # Errors
 ///
@@ -138,6 +176,31 @@ impl Default for OutboxConfig {
     }
 }
 
+/// Await the next `event_outbox` notification.
+///
+/// Returns `true` when one arrived. On error the listener is dropped and the
+/// worker falls back to its poll interval, so a database that never regains the
+/// channel degrades to the behaviour it had without one. With no listener this
+/// never resolves, leaving the other `select!` arms to drive the loop —
+/// returning immediately would spin it.
+async fn wait_for_notify(listener: &mut Option<sqlx::postgres::PgListener>) -> bool {
+    match listener.as_mut() {
+        // `recv` reconnects transparently and drops whatever was raised while
+        // the connection was down. That is exactly the right trade for a hint:
+        // the poll interval still finds those rows.
+        Some(l) => match l.recv().await {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!(error = %e,
+                    "outbox: listener lost — draining on the poll interval alone");
+                *listener = None;
+                false
+            }
+        },
+        None => std::future::pending().await,
+    }
+}
+
 #[derive(sqlx::FromRow)]
 struct Claimed {
     id: uuid::Uuid,
@@ -179,6 +242,15 @@ impl OutboxWorker {
     }
 
     /// Run the drain loop until `shutdown` is cancelled.
+    ///
+    /// [`OutboxConfig::poll_interval`] is what delivery rests on;
+    /// [`NOTIFY_CHANNEL`] is the latency hint, raised by the `event_outbox`
+    /// trigger rather than by the producer, so it arrives on the producer's
+    /// COMMIT and never on a snapshot without the row.
+    ///
+    /// The listener holds one pooled connection for the worker's life. If it
+    /// cannot be opened the worker says so once and runs on the poll alone —
+    /// slower, never wrong.
     pub async fn run(self, shutdown: CancellationToken) {
         let mut interval = tokio::time::interval(self.cfg.poll_interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -187,12 +259,41 @@ impl OutboxWorker {
         let mut prune = tokio::time::interval(Duration::from_secs(3600));
         prune.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         prune.reset();
-        tracing::info!(url = %self.url, "outbox worker started");
+        let mut listener = match sqlx::postgres::PgListener::connect_with(&self.pool).await {
+            Ok(mut l) => match l.listen(NOTIFY_CHANNEL).await {
+                Ok(()) => Some(l),
+                Err(e) => {
+                    tracing::warn!(error = %e, channel = NOTIFY_CHANNEL,
+                        "outbox: LISTEN failed — draining on the poll interval alone");
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!(error = %e,
+                    "outbox: listener connection failed — draining on the poll interval alone");
+                None
+            }
+        };
+        tracing::info!(
+            url = %self.url,
+            listening = listener.is_some(),
+            "outbox worker started"
+        );
         loop {
             tokio::select! {
                 () = shutdown.cancelled() => {
                     tracing::info!("outbox worker: shutdown");
                     return;
+                }
+                notified = wait_for_notify(&mut listener) => {
+                    if notified {
+                        match self.flush_once().await {
+                            Ok(n) if n > 0 => tracing::debug!(
+                                delivered_or_retried = n, "outbox flush (notified)"),
+                            Ok(_) => {}
+                            Err(e) => tracing::warn!(error = %e, "outbox flush cycle failed"),
+                        }
+                    }
                 }
                 _ = prune.tick() => {
                     match prune_delivered(&self.pool, self.cfg.retention).await {

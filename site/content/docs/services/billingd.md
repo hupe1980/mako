@@ -420,16 +420,18 @@ MwSt
 Identical to `STROM` but §14a positions are appended by `ControllableLoadProvider`,
 which delegates standard electricity billing to `ElectricityProvider`.
 
-BNetzA **BK6-22-300** defines exactly three modules, and the numbering is printed
-on the invoice and shared with the NB-side `grid-billing` engine:
+BNetzA **BK8-22/010-A** (NSAVER) defines exactly three modules and numbers them;
+BK6-22-300 is the companion Festlegung governing the netzorientierte Steuerung
+and numbers nothing. The numbering is printed on the invoice and shared with the
+NB-side `grid-billing` engine:
 
 | Modul | What it is | Field |
 |---|---|---|
 | **1** | *pauschale Reduzierung des Netzentgelts* — a **flat annual amount**, prorated over the billed period | `sect14a_modul1_pauschale_eur_per_year` |
-| **2** | *prozentuale Reduzierung des Arbeitspreises* — attaches to the device's **separately metered** energy | `sect14a_modul2_nne_reduktion_ct_per_kwh` |
+| **2** | *prozentuale Reduzierung des Arbeitspreises* — attaches to the device's **separately metered** energy. The percentage is **not** the operator's: Tenor 2. b) fixes the reduced Arbeitspreis at **40 %** of the Niederspannungs-Arbeitspreis ohne Leistungsmessung | `sect14a_modul2_nne_reduktion_ct_per_kwh` |
 | **3** | *zeitvariable Netzentgelte* (from 01.04.2025) — three Tarifstufen HT/ST/NT, requires an iMSys | `sect14a_modul3_nne_ht/st/nt_ct_per_kwh` + `sect14a_modul3` quantities |
 
-**Modul 1 has no per-kW component.** BK6-22-300 sets it nationwide as
+**Modul 1 has no per-kW component.** BK8-22/010-A sets it nationwide as
 `80 EUR + 3 750 kWh × Arbeitspreis im Standardtarif × 0,2`, which lands between 110 and
 190 EUR/year depending on the Netzbetreiber. Because nothing in that formula scales with the
 steuerbare Leistung, it needs no Spitzenleistung and no extra metering — which is why it is
@@ -445,7 +447,7 @@ twice, and configuring both is refused with `MODUL2_AND_MODUL3`. Setting the Mod
 bands alongside a flat NNE Arbeitspreis is refused with `MODUL3_AND_FLAT_NNE`, for the
 same double-charging reason.
 
-Two further refusals guard Modul 3 on its own. `MODUL3_OHNE_MODUL1` — BK6-22-300 offers
+Two further refusals guard Modul 3 on its own. `MODUL3_OHNE_MODUL1` — BK8-22/010-A offers
 Modul 3 only in combination with Modul 1, so bands without the pauschale price a tariff the
 Netzbetreiber does not offer *and* drop the reduction the customer is due. And
 `MODUL3_IMSYS_REQUIRED` — band pricing needs a meter that resolves the bands, so an SLP meter
@@ -454,7 +456,7 @@ carries.
 
 A **Steuerungsentschädigung** (`sect14a_steuerungsentschaedigung_ct_per_kwh` /
 `_eur_per_kw_year`) compensates a dispatch that actually happened. It carries no
-module number: all three BK6-22-300 modules are rate reductions, none of them a
+module number: all three BK8-22/010-A modules are rate reductions, none of them a
 payment for a Steuerungseingriff.
 
 ### HEMS / EMOBILITY / ENERGIEDIENSTLEISTUNG

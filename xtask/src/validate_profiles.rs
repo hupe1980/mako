@@ -92,6 +92,14 @@ struct Source {
     valid_until: Option<String>,
     #[serde(default)]
     publikationsdatum: Option<String>,
+    /// The BNetzA Mitteilung that published these documents, when the
+    /// publication does not fall on the § 2.5 timetable.
+    ///
+    /// Required exactly then: a date that matches the entailment needs no
+    /// source because the Festlegung *is* the source, and a date that does not
+    /// is either a deviation somebody can point at or a typo. Naming the
+    /// Mitteilung is what separates the two.
+    publikation_quelle: Option<String>,
     ahb_version: String,
     mig: String,
     ahb: String,
@@ -449,8 +457,8 @@ fn nrs(nodes: &[serde_json::Value], out: &mut BTreeSet<String>) {
 /// One profile's window and Prüfidentifikatoren: (dir, valid_from, valid_until, pids).
 type Span = (String, time::Date, Option<time::Date>, BTreeSet<u32>);
 
-/// The `publikationsdatum` Allgemeine Festlegungen 6.1d § 2.5 fixes for a
-/// profile applying on `valid_from`, or `None` for an ausserordentliche release.
+/// The `publikationsdatum` Allgemeine Festlegungen 6.1d § 2.5 *expects* for a
+/// profile applying on `valid_from`, or `None` where neither timetable covers it.
 ///
 /// § 2.5.1 and § 2.5.2 set one timetable each and there are only two: a release
 /// applying **01.10.** has its consulted documents published **01.04.**, and one
@@ -459,17 +467,23 @@ type Span = (String, time::Date, Option<time::Date>, BTreeSet<u32>);
 /// is *entailed*, and a stored value that disagrees is a typo in one of the two
 /// fields.
 ///
-/// An ausserordentliche release — mako carries 01.01.2026 and 06.06.2025 — sits
-/// outside both timetables. Its Veröffentlichungszeitpunkt is whatever BDEW
-/// chose and this function cannot derive it, which is why such a profile states
-/// none rather than a guessed one.
+/// **The schedule is the expectation, not the definition.** A release may be
+/// given a different Umsetzungszeitraum, and BNetzA Mitteilung Nr. 57
+/// (31.07.2026) proposes exactly that for FV 2027-04: „ein Umsetzungszeitraum
+/// von **zwölf Monaten** anstelle der ansonsten üblichen sechs Monate", which
+/// would publish 01.10.2026 and bind 01.10.2027. Read as a definition, this
+/// function would call that a typo and refuse the import it exists to protect.
+/// So a stated date that deviates is admitted when the entry names the
+/// Mitteilung that published it, and only then.
 ///
-/// **This is why no release lead time can be computed from the field.** It
-/// restates `valid_from`; a metric over it would measure the Festlegung's
-/// schedule against itself. BDEW publishes no per-document publication date
-/// either — the catalogue carries a `publicationDate` column and leaves it empty
-/// on every record — so the figure has to come from when a profile actually
-/// entered this repository, which is git's to answer and not this file's.
+/// An ausserordentliche release — mako carries 01.01.2026 and 06.06.2025 — sits
+/// outside both timetables for the same reason and is admitted on the same
+/// terms: state the date the documents actually carry, and cite it.
+///
+/// This is also what makes a release lead time computable. While the field was
+/// *derived*, a metric over it measured the Festlegung's schedule against
+/// itself; observed and sourced, it is one half of the figure — the other half
+/// is when a profile entered this repository, which is git's to answer.
 fn entailed_publikationsdatum(valid_from: &str) -> Option<String> {
     let d = date(valid_from)?;
     match (d.month() as u8, d.day()) {
@@ -546,27 +560,48 @@ pub fn run(workspace_root: &str) -> bool {
         match (
             entailed_publikationsdatum(&src.valid_from),
             src.publikationsdatum.as_deref(),
+            src.publikation_quelle.as_deref(),
         ) {
-            (Some(entailed), Some(stated)) if stated != entailed => errors.push(format!(
-                "{dir}: publikationsdatum {stated} contradicts valid_from {}. \
-                 Allgemeine Festlegungen 6.1d § 2.5 publishes a release applying \
-                 {} on {entailed}; one of the two dates is a typo",
-                src.valid_from, src.valid_from,
-            )),
-            (Some(entailed), None) => errors.push(format!(
-                "{dir}: valid_from {} is a regular Anwendungszeitpunkt, so \
-                 Allgemeine Festlegungen 6.1d § 2.5 fixes its publikationsdatum at \
-                 {entailed} — state it",
+            // On the § 2.5 timetable: the Festlegung is the source.
+            (Some(entailed), Some(stated), _) if stated == entailed => {}
+            // Off it, and sourced: a deviation somebody can point at. Mitteilung
+            // Nr. 57 proposes exactly this for FV 2027-04.
+            (_, Some(_), Some(_)) => {}
+            // Off it, unsourced: indistinguishable from a typo, so refused.
+            (Some(entailed), Some(stated), None) => errors.push(format!(
+                "{dir}: publikationsdatum {stated} is not the {entailed} that Allgemeine \
+                 Festlegungen 6.1d § 2.5 expects for a release applying {}. If the release \
+                 was given a different Umsetzungszeitraum, name the BNetzA Mitteilung that \
+                 published it in `publikation_quelle`; otherwise one of the two dates is a typo",
                 src.valid_from,
             )),
-            (None, Some(stated)) => errors.push(format!(
-                "{dir}: valid_from {} is an ausserordentliche Anwendungszeitpunkt, \
-                 which neither § 2.5.1 nor § 2.5.2 covers, so the stated \
-                 publikationsdatum {stated} is not entailed by anything. Remove it, \
-                 or carry the date the document itself names",
+            (None, Some(stated), None) => errors.push(format!(
+                "{dir}: valid_from {} falls on neither § 2.5 timetable, so publikationsdatum \
+                 {stated} is not entailed by anything. State the Mitteilung that published it \
+                 in `publikation_quelle`, or remove the date",
                 src.valid_from,
             )),
-            _ => {}
+            // Expected by the timetable and simply missing.
+            (Some(entailed), None, _) => errors.push(format!(
+                "{dir}: valid_from {} is a regular Anwendungszeitpunkt, so Allgemeine \
+                 Festlegungen 6.1d § 2.5 expects its publikationsdatum on {entailed} — state it",
+                src.valid_from,
+            )),
+            (None, None, _) => {}
+        }
+
+        // A release cannot bind before it is published, whatever the timetable.
+        if let (Some(stated), Some(pub_d), Some(from_d)) = (
+            src.publikationsdatum.as_deref(),
+            src.publikationsdatum.as_deref().and_then(date),
+            date(&src.valid_from),
+        ) && pub_d >= from_d
+        {
+            errors.push(format!(
+                "{dir}: publikationsdatum {stated} is not before valid_from {} — a release \
+                 cannot take effect before the documents describing it exist",
+                src.valid_from,
+            ));
         }
         let message_type = ty.to_ascii_uppercase();
         let mig: Mig = match load(&profiles.join(dir).join("mig.json")) {

@@ -171,7 +171,6 @@ impl EventPayload for StammdatenEvent {
 
 /// Business data captured from the Anforderung ORDERS.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct StammdatenData {
     /// ORDERS PID (17132 for Strom).
     pub pid: Pruefidentifikator,

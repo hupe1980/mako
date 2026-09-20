@@ -14,6 +14,7 @@ use super::*;
 /// Source: WiM Steuerungsauftrag IFTSTA confirmation (PID 21039) or equivalent
 /// VPP aggregator dispatch confirmation.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VppDispatchEvent {
     /// UTC dispatch start — ISO-8601 e.g. `"2026-01-15T10:00:00Z"`.
     pub start_utc: String,

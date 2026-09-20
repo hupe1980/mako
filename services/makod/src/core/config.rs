@@ -28,6 +28,12 @@
 //! | `as4.decryption_key_pem` | `as4.decryption_key_pem_file` |
 //! | `as4.trust_anchor_pem` | `as4.trust_anchor_pem_file` |
 //! | `as4.partner_certs` | `as4.partner_cert_files` |
+//! | `as4.partner_signing_certs` | `as4.partner_signing_cert_files` |
+//! | `as4.client_tls_cert_pem` | `as4.client_tls_cert_pem_file` |
+//! | `as4.client_tls_key_pem` | `as4.client_tls_key_pem_file` |
+//! | `webdienste.client_cert_pem` | `webdienste.client_cert_pem_file` |
+//! | `webdienste.client_key_pem` | `webdienste.client_key_pem_file` |
+//! | `webdienste.signing_key_pem` | `webdienste.signing_key_pem_file` |
 //! | `http.auth_keys` | `http.auth_keys_file` |
 //! | `erp.webhook_secret` | `erp.webhook_secret_file` |
 //! | `marktd.api_key` | `marktd.api_key_file` |
@@ -326,7 +332,14 @@ pub struct OidcConfig {
     pub jwks_refresh_secs: Option<u64>,
 }
 
-/// `[webdienste]` — BDEW API-Webdienste Strom server.
+/// `[webdienste]` — the BDEW API-Webdienste Strom boundary, both directions.
+///
+/// The `addr` and the two trust declarations describe the **inbound** port this
+/// daemon serves. The `client_*` fields describe the **outbound** identity it
+/// presents when it calls somebody else's API-Webdienste — the Verzeichnisdienst
+/// and the MaLo-ID service. They are one section because they are one boundary,
+/// and a deployment may need either half alone: a daemon that only calls out
+/// sets no `addr`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WebdiensteConfig {
@@ -352,6 +365,47 @@ pub struct WebdiensteConfig {
     /// a proxy authenticates this port.
     #[serde(default)]
     pub trust_client_mp_id_header: bool,
+
+    /// PEM X.509 certificate chain presented when calling an API-Webdienst.
+    ///
+    /// The EDI-Energy API-Webdienste authenticate their callers by mutual TLS
+    /// with an EMT.API certificate from the BSI SM-PKI. Without an identity the
+    /// TLS handshake completes only if the far side does not ask for one, so a
+    /// deployment missing this does not fail locally — it is refused at the
+    /// counterparty, which is the harder place to read it from.
+    pub client_cert_pem: Option<String>,
+    /// Path form of [`Self::client_cert_pem`] — keeps PEM out of the config.
+    pub client_cert_pem_file: Option<PathBuf>,
+    /// PEM PKCS#8 private key for [`Self::client_cert_pem`].
+    pub client_key_pem: Option<String>,
+    /// Path form of [`Self::client_key_pem`].
+    pub client_key_pem_file: Option<PathBuf>,
+    /// PEM PKCS#8 private key of the **EMT.API** certificate, for TR-03116-3
+    /// content-layer signing.
+    ///
+    /// Distinct from [`Self::client_key_pem`], which is the mTLS identity.
+    /// TR-03116-3 (chapter 9) signs the URI, the RFC 8785 canonical body, the
+    /// `creationDateTime` and the `transactionId`, and carries the result in
+    /// `DIGEST` / `SIGNATURE` headers — a layer above TLS, so the two are not
+    /// substitutes. It applies to the Control Measures and MaLo Identification
+    /// APIs; the Verzeichnisdienst uses JWS instead.
+    pub signing_key_pem: Option<String>,
+    /// Path form of [`Self::signing_key_pem`].
+    pub signing_key_pem_file: Option<PathBuf>,
+
+    /// DEV/TEST ONLY. Call the API-Webdienste without a client identity.
+    ///
+    /// The counterparty refuses the call rather than this daemon, which is the
+    /// harder place to read the failure from — hence the boot refusal this
+    /// downgrades.
+    #[serde(default)]
+    pub allow_unauthenticated_client: bool,
+
+    /// Paths to additional root CA certificates to trust when calling out.
+    ///
+    /// The SM-PKI roots. Needed when they are not in the host trust store,
+    /// which they usually are not.
+    pub client_root_ca_pem_files: Option<Vec<PathBuf>>,
 }
 
 /// `[engine]` — engine-level and worker settings.
@@ -452,6 +506,44 @@ pub struct As4Config {
     /// config file.
     pub partner_cert_files: Option<Vec<String>>,
 
+    /// PEM certificate chain of the **WIRK TLS** certificate, presented when
+    /// connecting to a partner MSH.
+    ///
+    /// The third certificate of the BDEW triplet, and the only one that is a
+    /// *transport* credential: the signing certificate proves who wrote the
+    /// message and this one proves who opened the connection. A partner MSH
+    /// that requires client-certificate authentication refuses the connection
+    /// without it.
+    ///
+    /// Optional, because an egress proxy may present it instead — `makod`
+    /// cannot tell the two deployments apart and will not guess. Absent, no
+    /// client certificate is offered.
+    pub client_tls_cert_pem: Option<String>,
+    /// Path form of [`Self::client_tls_cert_pem`].
+    pub client_tls_cert_pem_file: Option<PathBuf>,
+    /// PEM private key for [`Self::client_tls_cert_pem`].
+    pub client_tls_key_pem: Option<String>,
+    /// Path form of [`Self::client_tls_key_pem`].
+    pub client_tls_key_pem_file: Option<PathBuf>,
+
+    /// Trading-partner **signing** certificates as `"MP-ID=<PEM>"` pairs.
+    ///
+    /// Distinct from `partner_certs`, which are the *encryption* certificates
+    /// used on the send path. These are what inbound messages are authenticated
+    /// against: the SHA-256 of each certificate is pinned on the session used
+    /// to verify a message claiming to come from that MP-ID.
+    ///
+    /// Required for every counterparty mako accepts messages from. The BDEW and
+    /// DVGW PKIs issue a certificate to every market participant, so chaining to
+    /// the trust anchor proves only that the signer is *a* market participant —
+    /// the pin is what establishes *which*.
+    pub partner_signing_certs: Option<Vec<String>>,
+
+    /// Trading-partner signing certificates as `"MP-ID=/path/to/cert.pem"`
+    /// pairs. Preferred over `partner_signing_certs` — keeps PEM blobs out of
+    /// the config file.
+    pub partner_signing_cert_files: Option<Vec<String>>,
+
     /// DEV/TEST ONLY. Downgrade the missing-encryption-material refusals
     /// (inbound decryption key, per-partner certificates) to warnings.
     #[serde(default)]
@@ -497,6 +589,15 @@ impl std::fmt::Debug for As4Config {
             .field("partners", &self.partners)
             .field("partner_certs", &self.partner_certs)
             .field("partner_cert_files", &self.partner_cert_files)
+            .field("client_tls_cert_pem", &self.client_tls_cert_pem)
+            .field("client_tls_cert_pem_file", &self.client_tls_cert_pem_file)
+            .field("client_tls_key_pem", &redact(&self.client_tls_key_pem))
+            .field("client_tls_key_pem_file", &self.client_tls_key_pem_file)
+            .field("partner_signing_certs", &self.partner_signing_certs)
+            .field(
+                "partner_signing_cert_files",
+                &self.partner_signing_cert_files,
+            )
             .field("allow_unencrypted", &self.allow_unencrypted)
             .field("allow_no_signing", &self.allow_no_signing)
             .field("allow_no_trust_anchor", &self.allow_no_trust_anchor)
@@ -576,9 +677,22 @@ pub fn load(path: &Path) -> anyhow::Result<ConfigFile> {
 /// Supplying both is an error: the two would otherwise disagree silently and
 /// the winner would be an implementation detail of field ordering.
 ///
+/// An inline value carrying the `env:NAME` indirection is resolved through
+/// [`mako_service::config::resolve_env`], the same convention every other
+/// daemon gets from `mako_service::run`. makod assembles its own configuration
+/// and so has to ask for it explicitly — and it is not cosmetic: an unresolved
+/// `webhook_secret = "env:MAKOD_ERP_WEBHOOK_SECRET"` becomes the literal HMAC
+/// key, and that literal is a constant published in this repository, so anyone
+/// can forge a signed `de.mako.process.*` event. A referenced-but-unset
+/// variable fails here, at startup, rather than on the first request.
+///
+/// The `*_file` companion is read verbatim: a secret file's contents are the
+/// secret, and `env:` is a convention of the TOML, not of the file.
+///
 /// # Errors
 ///
-/// Returns an error when both forms are present, or when the file cannot be read.
+/// Returns an error when both forms are present, when the file cannot be read,
+/// or when an `env:` reference names a variable that is not set.
 pub fn either_inline_or_file(
     field: &str,
     inline: Option<String>,
@@ -590,7 +704,10 @@ pub fn either_inline_or_file(
             "config: {field} and {field}_file are both set ({}); provide exactly one",
             path.display()
         )),
-        (Some(v), None) => Ok(Some(v)),
+        (Some(v), None) => Ok(Some(
+            mako_service::config::resolve_env(&v)
+                .with_context(|| format!("config: resolving {field}"))?,
+        )),
         (None, Some(path)) => {
             Ok(Some(std::fs::read_to_string(path).with_context(|| {
                 format!("config: reading {field}_file {}", path.display())
@@ -709,6 +826,51 @@ partner_cert_files = ["9900000000002=/etc/makod/partners/9900000000002.pem"]
         assert!(err.to_string().contains("provide exactly one"), "{err}");
     }
 
+    /// An `env:` indirection is resolved, not shipped as the value.
+    ///
+    /// The literal `env:NAME` is non-empty, so every emptiness check upstream
+    /// passes it through. What makes it dangerous rather than merely broken is
+    /// that the placeholder is a constant in this repository: shipped as an
+    /// HMAC key it is a secret the whole world already holds.
+    ///
+    /// `PATH` stands in for the secret: the crate denies `unsafe_code` and
+    /// `std::env::set_var` is unsafe, so the test reads a variable the process
+    /// already has rather than weakening the lint for a fixture.
+    #[test]
+    fn an_env_indirection_is_resolved() {
+        let expected = std::env::var("PATH").expect("PATH is set in a test process");
+        let got = either_inline_or_file("erp.webhook_secret", Some("env:PATH".to_owned()), None)
+            .expect("a set variable resolves");
+        assert_eq!(got.as_deref(), Some(expected.as_str()));
+        assert_ne!(
+            got.as_deref(),
+            Some("env:PATH"),
+            "the literal must not ship"
+        );
+    }
+
+    /// A referenced-but-unset variable fails at startup and names itself.
+    #[test]
+    fn an_unset_env_indirection_is_refused() {
+        let err = either_inline_or_file(
+            "erp.webhook_secret",
+            Some("env:MAKOD_TEST_ENV_DEFINITELY_UNSET".to_owned()),
+            None,
+        )
+        .expect_err("an unset variable must not become the literal");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("MAKOD_TEST_ENV_DEFINITELY_UNSET"), "{msg}");
+        assert!(msg.contains("erp.webhook_secret"), "{msg}");
+    }
+
+    /// A plain literal is untouched, so a config may mix both forms.
+    #[test]
+    fn a_literal_value_passes_through() {
+        let got = either_inline_or_file("marktd.api_key", Some("plain".to_owned()), None)
+            .expect("a literal resolves to itself");
+        assert_eq!(got.as_deref(), Some("plain"));
+    }
+
     #[test]
     fn pairs_file_skips_comments_and_blanks() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -748,6 +910,12 @@ partner_cert_files = ["9900000000002=/etc/makod/partners/9900000000002.pem"]
             partners: None,
             partner_certs: None,
             partner_cert_files: None,
+            client_tls_cert_pem: None,
+            client_tls_cert_pem_file: None,
+            client_tls_key_pem: None,
+            client_tls_key_pem_file: None,
+            partner_signing_certs: None,
+            partner_signing_cert_files: None,
             allow_unencrypted: false,
             allow_no_signing: false,
             allow_no_trust_anchor: false,
@@ -767,6 +935,12 @@ partner_cert_files = ["9900000000002=/etc/makod/partners/9900000000002.pem"]
             partners: _,
             partner_certs: _,
             partner_cert_files: _,
+            client_tls_cert_pem: _,
+            client_tls_cert_pem_file: _,
+            client_tls_key_pem: _,
+            client_tls_key_pem_file: _,
+            partner_signing_certs: _,
+            partner_signing_cert_files: _,
             allow_unencrypted: _,
             allow_no_signing: _,
             allow_no_trust_anchor: _,

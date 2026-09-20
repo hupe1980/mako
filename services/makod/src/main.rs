@@ -551,6 +551,35 @@ struct Cli {
     )]
     as4_partner_cert: Vec<String>,
 
+    /// Trading-partner **signing** certificates as `MP-ID=<PEM>` pairs.
+    ///
+    /// What inbound AS4 messages are authenticated against. The BDEW/DVGW PKI
+    /// issues a certificate to every market participant, so chaining to the
+    /// trust anchor proves the signer is *a* participant; this pins *which*,
+    /// per MP-ID. A message claiming an MP-ID with no pin is refused.
+    ///
+    /// Can also be set via the `MAKOD_AS4_PARTNER_SIGNING_CERT` environment
+    /// variable (comma-separated for multiple entries).
+    #[arg(
+        long,
+        value_name = "MP_ID=PEM",
+        env = "MAKOD_AS4_PARTNER_SIGNING_CERT",
+        value_delimiter = ','
+    )]
+    as4_partner_signing_cert: Vec<String>,
+
+    /// PEM chain of the WIRK **TLS** certificate, presented to a partner MSH.
+    ///
+    /// The transport credential of the BDEW triplet — distinct from the signing
+    /// certificate, which authenticates the message rather than the connection.
+    /// Optional: an egress proxy may present it instead.
+    #[arg(long, env = "MAKOD_AS4_CLIENT_TLS_CERT_PEM")]
+    as4_client_tls_cert_pem: Option<String>,
+
+    /// PEM private key for `--as4-client-tls-cert-pem`.
+    #[arg(long, env = "MAKOD_AS4_CLIENT_TLS_KEY_PEM")]
+    as4_client_tls_key_pem: Option<SecretString>,
+
     /// DEV/TEST ONLY: allow AS4 operation without encryption material.
     ///
     /// BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every production AS4 message
@@ -610,6 +639,48 @@ struct Cli {
     /// `--webdienste-allow-unauthenticated`.
     #[arg(long, env = "MAKOD_WEBDIENSTE_TRUST_CLIENT_MP_ID_HEADER")]
     webdienste_trust_client_mp_id_header: bool,
+
+    /// PEM certificate chain presented when **calling** an API-Webdienst.
+    ///
+    /// The EDI-Energy API-Webdienste authenticate callers by mutual TLS with an
+    /// EMT.API certificate from the BSI SM-PKI. This is the outbound half of the
+    /// `:8090` boundary and is unrelated to the flags above, which describe the
+    /// inbound port.
+    #[arg(long, env = "MAKOD_WEBDIENSTE_CLIENT_CERT_PEM")]
+    webdienste_client_cert_pem: Option<String>,
+
+    /// PKCS#8 private key for `--webdienste-client-cert-pem`.
+    #[arg(long, env = "MAKOD_WEBDIENSTE_CLIENT_KEY_PEM")]
+    webdienste_client_key_pem: Option<SecretString>,
+
+    /// PKCS#8 private key of the EMT.API certificate, for TR-03116-3
+    /// content-layer signing of MaLo-ID callbacks.
+    ///
+    /// A layer above TLS: it signs the URI, the canonical body, the
+    /// `creationDateTime` and the `transactionId`, so it is not a substitute
+    /// for `--webdienste-client-key-pem` and that one is not a substitute for
+    /// it.
+    #[arg(long, env = "MAKOD_WEBDIENSTE_SIGNING_KEY_PEM")]
+    webdienste_signing_key_pem: Option<SecretString>,
+
+    /// Additional root CA certificate (PEM) to trust when calling out.
+    ///
+    /// The SM-PKI roots, which are usually not in the host trust store.
+    /// Repeatable.
+    #[arg(
+        long,
+        value_name = "PEM",
+        env = "MAKOD_WEBDIENSTE_ROOT_CA_PEM",
+        value_delimiter = ','
+    )]
+    webdienste_root_ca_pem: Vec<String>,
+
+    /// DEV/TEST ONLY: call the API-Webdienste without a client identity.
+    ///
+    /// Without it the calls are refused by the counterparty rather than here,
+    /// which is the harder place to read the failure from.
+    #[arg(long, env = "MAKOD_ALLOW_UNAUTHENTICATED_WEBDIENSTE_CLIENT")]
+    allow_unauthenticated_webdienste_client: bool,
 
     /// Register a trading-partner AS4 endpoint for outbound EDIFACT delivery.
     ///
@@ -1232,8 +1303,12 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         http_enabled: cli.http_addr.is_some(),
         webdienste_enabled: cli.api_webdienste_addr.is_some(),
         webdienste_allow_unauthenticated: cli.webdienste_allow_unauthenticated,
+        webdienste_client_identity: cli.webdienste_client_cert_pem.is_some()
+            && cli.webdienste_client_key_pem.is_some(),
+        allow_unauthenticated_webdienste_client: cli.allow_unauthenticated_webdienste_client,
         as4_partner: &cli.as4_partner,
         as4_partner_cert: &cli.as4_partner_cert,
+        as4_partner_signing_cert: &cli.as4_partner_signing_cert,
         as4_signing_key_pem: cli.as4_signing_key_pem.as_ref(),
         as4_signing_cert_pem: cli.as4_signing_cert_pem.as_deref(),
         as4_trust_anchor_pem: cli.as4_trust_anchor_pem.as_deref(),
@@ -1376,6 +1451,74 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         .build()
         .map_err(|e| anyhow::anyhow!("HTTP client build: {e}"))?;
 
+    // The EDI-Energy API-Webdienste authenticate their callers by mutual TLS,
+    // so calls to them go out under a separate client carrying that identity.
+    // `http_client` above deliberately does not: it fetches JWKS and posts to
+    // the operator's own webhook, and presenting an EMT.API certificate there
+    // would be wrong.
+    let webdienste_client = {
+        let tls = energy_api::transport::http::TlsConfig {
+            client_cert_pem: cli.webdienste_client_cert_pem.clone(),
+            client_key_pem: cli
+                .webdienste_client_key_pem
+                .as_ref()
+                .map(|k| secrecy::ExposeSecret::expose_secret(k).to_owned()),
+            root_ca_pems: cli.webdienste_root_ca_pem.clone(),
+            accept_invalid_certs: false,
+        };
+        if tls.client_cert_pem.is_some() || !tls.root_ca_pems.is_empty() {
+            energy_api::transport::http::build_client(&tls)
+                .map_err(|e| anyhow::anyhow!("API-Webdienste mTLS client build: {e}"))?
+        } else {
+            // Preflight has already refused this combination unless the
+            // operator declared it, so reaching here means dev or test.
+            http_client.clone()
+        }
+    };
+
+    // TR-03116-3 content signing for the MaLo-ID callbacks. Parsed here so a
+    // malformed key fails the boot rather than every callback: a send that
+    // cannot sign must not fall back to sending unsigned.
+    let webdienste_signing_key = cli
+        .webdienste_signing_key_pem
+        .as_ref()
+        .map(|k| {
+            energy_api::transport::content_security::signing_key_from_pem(
+                secrecy::ExposeSecret::expose_secret(k),
+            )
+            .map_err(|e| {
+                anyhow::anyhow!("webdienste.signing_key_pem is not a usable EMT.API key: {e}")
+            })
+        })
+        .transpose()?;
+
+    // The WIRK TLS identity for the AS4 send path, parsed here so a mismatched
+    // certificate/key pair fails at the point it is configured rather than on
+    // the first delivery to a partner. Both halves or neither: a certificate
+    // without its key cannot be presented, and silently ignoring one of them
+    // would make an incomplete configuration look like a deliberate absence.
+    let as4_client_identity = match (
+        cli.as4_client_tls_cert_pem.as_deref(),
+        cli.as4_client_tls_key_pem.as_ref(),
+    ) {
+        (Some(cert), Some(key)) => Some(
+            asx_rs::transport::ClientIdentity::from_pem(
+                cert.as_bytes(),
+                secrecy::ExposeSecret::expose_secret(key).as_bytes(),
+            )
+            .map_err(|e| anyhow::anyhow!("AS4 client TLS identity is unusable: {e}"))?,
+        ),
+        (None, None) => None,
+        (Some(_), None) => anyhow::bail!(
+            "--as4-client-tls-cert-pem is set but --as4-client-tls-key-pem is not: a \
+             certificate without its private key cannot be presented"
+        ),
+        (None, Some(_)) => anyhow::bail!(
+            "--as4-client-tls-key-pem is set but --as4-client-tls-cert-pem is not: a key \
+             without its certificate chain cannot be presented"
+        ),
+    };
+
     // ── Build Cedar authorizer (shared by :8080 REST, /mcp, and :8090) ───────
     //
     // The keys, the policy text and the baseline choice were validated by the
@@ -1467,6 +1610,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
                         .expect("preflight requires a signing certificate when --as4-addr is set"),
                     trust_anchor_pem: cli.as4_trust_anchor_pem.clone(),
                     decryption_key_pem: cli.as4_decryption_key_pem.clone(),
+                    sender_signing_certs: checked.as4_sender_signing_certs.clone(),
                     inbox_store,
                     dedup_is_durable: cli.data_dir.is_some(),
                 },
@@ -1511,6 +1655,9 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         platform: Arc::clone(&platform),
         ingest_dispatcher: Arc::clone(&ingest_dispatcher),
         http_client,
+        webdienste_client,
+        webdienste_signing_key,
+        as4_client_identity,
         malo_cache: Arc::clone(&malo_cache),
         shutdown_token: shutdown_token.clone(),
         mp_id_registry: Arc::clone(&mp_id_registry),
@@ -1880,6 +2027,45 @@ fn apply_config_file(
 
     // ── API-Webdienste ────────────────────────────────────────────────────────
     if let Some(wd) = cfg.webdienste {
+        if cli.webdienste_client_cert_pem.is_none() {
+            cli.webdienste_client_cert_pem = either_inline_or_file(
+                "webdienste.client_cert_pem",
+                wd.client_cert_pem,
+                wd.client_cert_pem_file.as_ref(),
+            )?;
+        }
+        if cli.webdienste_client_key_pem.is_none() {
+            cli.webdienste_client_key_pem = either_inline_or_file(
+                "webdienste.client_key_pem",
+                wd.client_key_pem,
+                wd.client_key_pem_file.as_ref(),
+            )?
+            .map(SecretString::from);
+        }
+        if wd.allow_unauthenticated_client {
+            cli.allow_unauthenticated_webdienste_client = true;
+        }
+        if cli.webdienste_signing_key_pem.is_none() {
+            cli.webdienste_signing_key_pem = either_inline_or_file(
+                "webdienste.signing_key_pem",
+                wd.signing_key_pem,
+                wd.signing_key_pem_file.as_ref(),
+            )?
+            .map(SecretString::from);
+        }
+        if cli.webdienste_root_ca_pem.is_empty()
+            && let Some(paths) = wd.client_root_ca_pem_files
+        {
+            for path in paths {
+                cli.webdienste_root_ca_pem
+                    .push(std::fs::read_to_string(&path).with_context(|| {
+                        format!(
+                            "config: reading webdienste.client_root_ca_pem_files {}",
+                            path.display()
+                        )
+                    })?);
+            }
+        }
         if cli.api_webdienste_addr.is_none() {
             cli.api_webdienste_addr = wd.addr;
         }
@@ -1981,6 +2167,28 @@ fn apply_config_file(
                 certs.extend(read_keyed_files("as4.partner_cert_files", files)?);
             }
             cli.as4_partner_cert = certs;
+        }
+        if cli.as4_client_tls_cert_pem.is_none() {
+            cli.as4_client_tls_cert_pem = either_inline_or_file(
+                "as4.client_tls_cert_pem",
+                as4.client_tls_cert_pem,
+                as4.client_tls_cert_pem_file.as_ref(),
+            )?;
+        }
+        if cli.as4_client_tls_key_pem.is_none() {
+            cli.as4_client_tls_key_pem = either_inline_or_file(
+                "as4.client_tls_key_pem",
+                as4.client_tls_key_pem,
+                as4.client_tls_key_pem_file.as_ref(),
+            )?
+            .map(SecretString::from);
+        }
+        if cli.as4_partner_signing_cert.is_empty() {
+            let mut certs = as4.partner_signing_certs.unwrap_or_default();
+            if let Some(ref files) = as4.partner_signing_cert_files {
+                certs.extend(read_keyed_files("as4.partner_signing_cert_files", files)?);
+            }
+            cli.as4_partner_signing_cert = certs;
         }
         if as4.allow_unencrypted {
             cli.allow_unencrypted_as4 = true;

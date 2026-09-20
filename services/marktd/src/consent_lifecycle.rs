@@ -122,7 +122,6 @@ pub fn spawn_expiry_sweep(
     repo: Arc<crate::pg::PgEinwilligungRepository>,
     makod: Arc<MakodClient>,
     pool: PgPool,
-    notify: Arc<tokio::sync::Notify>,
     tenant: String,
     shutdown: CancellationToken,
 ) {
@@ -133,7 +132,7 @@ pub fn spawn_expiry_sweep(
             tokio::select! {
                 () = shutdown.cancelled() => break,
                 _ = interval.tick() => {
-                    sweep(repo.as_ref(), &makod, &pool, &notify, &tenant).await;
+                    sweep(repo.as_ref(), &makod, &pool, &tenant).await;
                 }
             }
         }
@@ -144,7 +143,6 @@ async fn sweep(
     repo: &crate::pg::PgEinwilligungRepository,
     makod: &MakodClient,
     pool: &PgPool,
-    notify: &tokio::sync::Notify,
     tenant: &str,
 ) {
     let today = mako_fristen::heute();
@@ -164,7 +162,7 @@ async fn sweep(
     );
 
     for id in candidates {
-        match close_expired(pool, notify, tenant, today, id).await {
+        match close_expired(pool, tenant, today, id).await {
             // Closed here, and the event is durable — now stop the deliveries.
             Ok(Some(rec)) => stop_deliveries(makod, GRUND_ABGELAUFEN, &rec).await,
             // Already closed, or held by another transaction — a customer's
@@ -201,7 +199,6 @@ async fn sweep(
 /// against the Widerruf handler for its duration.
 async fn close_expired(
     pool: &PgPool,
-    notify: &tokio::sync::Notify,
     tenant: &str,
     today: time::Date,
     id: uuid::Uuid,
@@ -229,7 +226,7 @@ async fn close_expired(
             "valid_to": rec.valid_to.map(|d| d.to_string()),
         }),
     );
-    crate::outbox::enqueue(&mut *tx, &evt, notify).await?;
+    crate::outbox::enqueue(&mut *tx, &evt).await?;
     tx.commit().await?;
     Ok(Some(rec))
 }

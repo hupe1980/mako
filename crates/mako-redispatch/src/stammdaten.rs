@@ -142,7 +142,6 @@ impl EventPayload for StammdatenEvent {
 
 /// Business data captured when the `Stammdaten` document is first received.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ReceivedData {
     /// MRID (UUID) of the received `Stammdaten` document.
     pub mrid: String,

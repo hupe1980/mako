@@ -131,7 +131,6 @@ impl EventPayload for WeiterverpflichtungEvent {
 
 /// Business data carried from `AuftragEmpfangen` onwards.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct WeiterverpflichtungData {
     /// The Messlokation.
     pub melo_id: MeLo,

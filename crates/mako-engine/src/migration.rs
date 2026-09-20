@@ -2,10 +2,19 @@
 //!
 //! When an old BDEW format version (FV) is removed from the adapter registry
 //! after its grace period, any process initiated under that FV can no longer
-//! receive new events — the `ForwardCompatible` policy rejects FV mismatches
-//! at dispatch time. [`StateMigration`] + [`MigrationRunner`] provide the
-//! tooling to advance those processes to a newer FV *before* the old FV is
-//! retired.
+//! receive new events — not because a policy rejects the mismatch, but because
+//! **no adapter is left that can parse a message into a command for it**.
+//! [`StateMigration`] + [`MigrationRunner`] advance those processes to a newer
+//! FV *before* the old one is retired.
+//!
+//! There is deliberately **no per-workflow version-acceptance policy** and no
+//! `ForwardCompatible` type: a process keeps the `WorkflowId` it was created
+//! with, while the **inbound message's own** FV selects the adapter, so a
+//! process started under one FV accepts a counterparty's later-FV answer by
+//! construction. What is checked instead is coverage —
+//! `AdapterRegistry::uncovered_format_versions`, refused at boot. The name
+//! survives in some test prose as a label for that behaviour; it is not a thing
+//! in the code.
 //!
 //! # How it works
 //!

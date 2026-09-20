@@ -505,7 +505,7 @@ where
         marktsparte: sparte,
         ..Default::default()
     });
-    if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt, &state.notify).await {
+    if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt).await {
         tracing::error!(error = %e, "versorgung: durable enqueue failed");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }

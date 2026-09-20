@@ -59,7 +59,7 @@ use mako_geli_gas::{
 /// Gas APERAK: negative only, nächster Werktag 12:00 (APERAK AHB 1.1 §2.3.1).
 /// Saturdays, Sundays and federal public holidays are not Werktage.
 const UTILMD_44001_BYTES: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+GAS-2025-001'\
+UNB+UNOC:3+4012345000023:14+9900357000004:500+250115:0800+GAS-2025-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:G1.1'\
 BGM+E01:::+00044001::+9'\
 DTM+137:202501150800?+00:303'\
@@ -258,7 +258,7 @@ async fn wrong_pid_returns_workflow_error() {
 #[test]
 fn negative_ahb_wrong_bgm_qualifier_pid_44001() {
     let invalid_bytes: &[u8] = b"\
-UNB+UNOC:3+9900357000004:14+4012345000023:14+261001:0700+GAS-NEG-001'\
+UNB+UNOC:3+9900357000004:500+4012345000023:14+261001:0700+GAS-NEG-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:G1.1'\
 BGM+E99+DOK44001'\
 DTM+137:202610010000?+00:303'\

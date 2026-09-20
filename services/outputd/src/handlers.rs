@@ -579,6 +579,7 @@ pub enum RenderSubject {
 
 /// The invoice payload to embed.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RenderAttachment {
     /// The CII XML, rendered and (for B2G) validated by the caller.
     pub xml: String,

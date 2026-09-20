@@ -4,7 +4,8 @@
 //! Two rules, one scan, because both are about the same moment — the instant an
 //! untrusted body becomes a Rust value — and both failed the same way: silently.
 //!
-//! ## Rule 1 — every `Json<T>` body type denies unknown fields
+//! ## Rule 1 — every `Json<T>` body type, and everything inside it, denies
+//! unknown fields
 //!
 //! `serde` ignores a key no field declares, so a request naming a field the API
 //! does not have succeeds and the value goes nowhere. A customer posted as
@@ -19,6 +20,17 @@
 //!
 //! `#[serde(deny_unknown_fields)]` makes it a `422` naming the field — well-formed
 //! JSON that the schema refuses, which is what 422 is for.
+//!
+//! **The rule follows the body inwards.** The moment untrusted JSON becomes a
+//! Rust value is the same moment one level in, and the element types are where
+//! it was being missed: `DirectInterval` — one 15-minute reading of an `edmd`
+//! direct push — absorbed a misspelt `quality` in silence and stored the
+//! reading with no Messwertstatus, and `SpotPriceEntry` did the same to a
+//! mistyped field of an EPEX bulk load, settling the period against a default
+//! nobody chose. The scan therefore closes over the field types of every body,
+//! transitively, within `services/`, so a type is in scope because something
+//! reachable from a handler signature holds it — not because of how it is
+//! named.
 //!
 //! ## Rule 2 — a BO4E document in a request body is a `Bo4e<T>`
 //!
@@ -91,6 +103,12 @@ const DENY_EXEMPT: &[(&str, &str, &str)] = &[
         "BSI TR-03109 defines this payload, not mako — a conformant \
          Smart-Meter-Gateway one revision ahead must be read, not refused",
     ),
+    (
+        "services/edmd/src/server/lastgang.rs",
+        "SmgwTyp2Interval",
+        "an element of SmgwTyp2Push, and the same document: refusing the \
+         interval refuses the push, so the TR-03109 reason above covers it",
+    ),
     // The four below are BDEW **Energy API** types (MaLo-Identifikation, the
     // API-Verzeichnis). The schema is the BDEW's, and forward compatibility is
     // its property, not mako's: a counterparty on a later minor version adds
@@ -115,6 +133,15 @@ const DENY_EXEMPT: &[(&str, &str, &str)] = &[
         "crates/energy-api/src/models/electricity.rs",
         "MaloIdentResultNegative",
         "BDEW Energy API response schema — a later minor version may add fields",
+    ),
+    // Reached by name, not by use: Rule 1 matches body types across the tree,
+    // and `outputd`'s own `PostalAddress` — an element of the `Recipient` a
+    // document is issued to — carries the same name. That one denies; this one
+    // is the BDEW's schema and cannot.
+    (
+        "crates/energy-api/src/models/electricity.rs",
+        "PostalAddress",
+        "BDEW Energy API schema — a later minor version may add fields",
     ),
     (
         "crates/energy-api/src/models/directory.rs",
@@ -168,17 +195,21 @@ pub fn run(workspace_root: &Path) -> bool {
         collect_rs(&workspace_root.join(dir), workspace_root, &mut files);
     }
 
-    let body_types = json_body_types(&files);
+    // Rule 1 holds every type the document becomes, not only the one axum
+    // extracts: the element types of a body are deserialised from the same
+    // untrusted JSON and were where the silent drops lived.
+    let extracted = json_body_types(&files);
+    let body_types = reachable_body_types(&extracted, &files);
 
     // Both counts are what the success line reports. A scan that found no
     // source file, or no JSON body type in any of them, checks nothing, and
     // "0 JSON body type(s) deny unknown fields" reads exactly like a pass.
-    if files.is_empty() || body_types.is_empty() {
+    if files.is_empty() || extracted.is_empty() {
         eprintln!(
             "check-request-bodies: the scan found {} source file(s) and {} JSON body type(s) \
              under crates/ and services/ — the layout has probably changed",
             files.len(),
-            body_types.len()
+            extracted.len()
         );
         return false;
     }
@@ -525,6 +556,77 @@ fn disclaims_bo4e(doc: &str) -> bool {
     ["not bo4e", "no bo4e", "not a bo4e", "is not bo4e"]
         .iter()
         .any(|n| flat.contains(n))
+}
+
+/// Close a set of body-type names over the field types they hold.
+///
+/// A request body is not only the type axum extracts: every struct reachable
+/// from it by a field is deserialised from the same untrusted document, so it
+/// carries the same rule.
+///
+/// **The walk stops at `services/`.** A type declared in a domain crate is
+/// reachable from a body — `energy_billing::MeterInput` is what `billingd`'s
+/// `meter` block deserialises into — but it is not only that: the same type is
+/// built in Rust, stored as JSONB and read back, and the read is where denying
+/// does harm. This guard already says so for Rule 2 ("a read row deserialises
+/// from storage, where the document is whatever an older schema series wrote
+/// and refusing it would fail a `GET` on a row that merely got old"), and the
+/// reasoning does not change for Rule 1. Widening the walk across the crate
+/// boundary would make the rule demand something it cannot justify for 35
+/// domain types, half of them the BDEW Energy API's own schema, where forward
+/// compatibility is the counterparty's property and not mako's.
+fn reachable_body_types(seed: &[String], files: &[(String, String)]) -> Vec<String> {
+    use std::collections::{HashMap, HashSet};
+    let mut defs: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    for (rel, src) in files {
+        if !rel.starts_with("services/") {
+            continue;
+        }
+        for s in structs(src) {
+            defs.entry(s.name).or_insert(s.fields);
+        }
+    }
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut stack: Vec<String> = seed.to_vec();
+    while let Some(name) = stack.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let Some(fields) = defs.get(&name) else {
+            continue;
+        };
+        for (_, ty) in fields {
+            let inner = innermost_type(ty);
+            if defs.contains_key(&inner) && !seen.contains(&inner) {
+                stack.push(inner);
+            }
+        }
+    }
+    let mut out: Vec<String> = seen.into_iter().collect();
+    out.sort();
+    out
+}
+
+/// Peel `Option`/`Vec`/`Box`/map wrappers and any path, leaving the bare name.
+fn innermost_type(ty: &str) -> String {
+    let mut t = ty.trim();
+    loop {
+        let stripped = [
+            "Option<",
+            "Vec<",
+            "Box<",
+            "HashMap<String, ",
+            "BTreeMap<String, ",
+        ]
+        .iter()
+        .find_map(|w| t.strip_prefix(*w));
+        match stripped {
+            Some(rest) => t = rest.strip_suffix('>').unwrap_or(rest).trim(),
+            None => break,
+        }
+    }
+    let head = t.split('<').next().unwrap_or(t);
+    head.rsplit("::").next().unwrap_or(head).trim().to_owned()
 }
 
 /// Every type named as `Json<T>` in a handler signature, de-generic'd.

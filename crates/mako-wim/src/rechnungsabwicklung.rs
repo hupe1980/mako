@@ -220,7 +220,6 @@ impl EventPayload for RechnungsabwicklungEvent {
 
 /// Parties of the exchange, captured at first receipt/send.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct RechnungsabwicklungData {
     /// GLN of the initiating side.
     pub sender: MarktpartnerCode,

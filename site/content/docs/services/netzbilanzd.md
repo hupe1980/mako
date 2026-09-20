@@ -434,8 +434,14 @@ partial state the variant exists to prevent: independent per-band fields admit c
 that are not a Modul-3 tariff, and a half-filled set falls through to flat billing with no
 error at all.
 
-The Modul-2 `reduktion` is range-checked at the request boundary: a factor outside `(0, 1]`
-is refused, so a request body carrying `5` cannot multiply the Arbeitspreis by five.
+The Modul-2 `reduktion` is **pinned to the statutory rate** at the request boundary, not
+merely range-checked. BK8-22/010-A Tenor 2. b) fixes the reduced Arbeitspreis at **40 %**
+of the Niederspannungs-Arbeitspreis ohne Leistungsmessung, so `0.40` is the only admissible
+value and everything else is refused — `5`, which would multiply rather than reduce, but
+equally `0.90`, which bills a 10 % reduction where 60 % is owed, and `1`, which is no
+reduction at all. Those two are the dangerous ones: they are in range, they look ordinary,
+and the position they produce carries a `BnetzaDecision` citing the Beschluss it breaks.
+Only the reference Arbeitspreis is the Netzbetreiber's; the percentage is not.
 
 **Data sources.** Band quantities come from `edmd GET /api/v1/billing-period/{malo_id}`
 (HT/NT OBIS registers); band prices from the `PreisblattNetznutzung`
@@ -455,7 +461,7 @@ is refused, so a request body carrying `5` cannot multiply the Arbeitspreis by f
 
 `SpotpreisNetzentgelt` bills a Netzentgelt whose rate follows the spot price under the
 Netzbetreiber's own `PreisblattNetznutzung` formula, one rate per dispatch interval.
-BK6-22-300 defines exactly three modules and none of them is spot-linked, so this is
+BK8-22/010-A defines exactly three modules and none of them is spot-linked, so this is
 deliberately outside the §14a table — and `grid-billing` never queries a spot market: the
 rates arrive already derived.
 

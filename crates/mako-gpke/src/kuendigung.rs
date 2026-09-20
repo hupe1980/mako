@@ -142,7 +142,6 @@ impl EventPayload for KuendigungEvent {
 
 /// Business data captured at `KuendigungErhalten` time.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct KuendigungData {
     /// EIC/MaLo code.
     pub location_id: MaLo,

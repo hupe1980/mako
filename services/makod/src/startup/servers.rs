@@ -276,6 +276,12 @@ pub(crate) struct As4ServerConfig {
     pub signing_cert_pem: String,
     pub trust_anchor_pem: Option<String>,
     pub decryption_key_pem: Option<SecretString>,
+    /// Counterparty **signing** certificates in PEM, by MP-ID.
+    ///
+    /// Inbound messages are verified against a session pinned to the signing
+    /// certificate of the MP-ID they claim to come from; the trust anchor alone
+    /// says only that the signer is some BDEW/DVGW market participant.
+    pub sender_signing_certs: Vec<(String, String)>,
     pub inbox_store: SlateDbInboxStore,
     /// `false` in volatile mode: dedup state is not preserved across restarts,
     /// and the asx-rs pipeline is told so rather than left to assume durability.
@@ -328,6 +334,7 @@ pub(crate) async fn serve_as4(
 
     let handler = Arc::new(
         as4_ingest::BdewAs4IngestHandler::new(ingest_state, Arc::new(session), event_bus, dedup)
+            .with_sender_pins(cfg.sender_signing_certs)?
             .with_decryption_key_pem(
                 cfg.decryption_key_pem
                     .as_ref()

@@ -173,7 +173,6 @@ impl EventPayload for SperrungEvent {
 
 /// Business data set when the Anweisung Sperrung is received.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SperrungData {
     /// EIC/MaLo supply location code.
     pub location_id: MaLo,

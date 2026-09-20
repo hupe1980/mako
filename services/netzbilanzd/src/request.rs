@@ -435,8 +435,14 @@ mod tests {
     }
 
     /// A §14a Modul 2 factor outside (0, 1] is refused at the boundary.
+    /// The Modul-2 factor is the statutory rate, and everything else is refused.
+    ///
+    /// `5` is the obvious case — it multiplies rather than reduces. The ones
+    /// that matter are in range and plausible: `0.90` bills a 10 % reduction
+    /// where BK8-22/010-A Tenor 2. b) prescribes 60 %, and `1` is no reduction
+    /// at all. Both produce an invoice indistinguishable from a correct one.
     #[test]
-    fn an_out_of_range_modul_2_factor_is_refused() {
+    fn a_modul_2_factor_other_than_the_statutory_rate_is_refused() {
         assert!(
             parse(nne_position(serde_json::json!({
                 "billing_type": "nne",
@@ -451,6 +457,30 @@ mod tests {
             .is_err(),
             "a factor of 5 would multiply the Arbeitspreis, not reduce it"
         );
+
+        for (bad, why) in [
+            (
+                "0.90",
+                "a 10 % reduction where the Beschluss prescribes 60 %",
+            ),
+            ("1", "no reduction at all"),
+            ("0.6", "the reduction, not the retained share"),
+        ] {
+            assert!(
+                parse(nne_position(serde_json::json!({
+                    "billing_type": "nne",
+                    "nb_mp_id": "9900357000004",
+                    "lf_mp_id": "9900012345678",
+                    "sparte": "Strom",
+                    "arbeitspreis": { "Modul2ProzentualeReduzierung": {
+                        "basis": { "menge_kwh": "1000", "preis_ct_per_kwh": "3.5" },
+                        "reduktion": bad
+                    }}
+                })))
+                .is_err(),
+                "{bad}: {why}"
+            );
+        }
     }
 
     /// The whole settlement input round-trips, which is what makes a

@@ -64,3 +64,22 @@ permit(
     context.principal_tenant == context.resource_tenant &&
     context.principal_roles.contains("NB")
 };
+
+// ── Speaking MCP at all ───────────────────────────────────────────────────────
+// `use-mcp` is the blanket gate the shared MCP middleware applies to **every**
+// frame before any tool name is looked at — `mako_service::mcp_auth` checks it
+// whenever a Cedar enforcer is wired, and `CedarEnforcer::check` is
+// default-deny. A policy that does not name it therefore does not merely leave
+// the surface ungoverned: it returns 403 to every caller, and the whole tool and
+// prompt surface is unreachable.
+//
+// The MCP surface here is read-only — the Sperrung queue, its Fristen and the
+// § 41f phase of an order — so the gate is tenant-scoped and carries no role
+// test. Dispatching a disconnection is a REST action above, role-gated to `NB`.
+permit(
+    principal,
+    action == Action::"use-mcp",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant
+};

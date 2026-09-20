@@ -278,7 +278,6 @@ impl EventPayload for GeraeteubernahmeEvent {
 
 /// Business data captured from the inbound ORDERS.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct GeraeteubernahmeData {
     /// ORDERS PID (17001 or 17009).
     pub pid: Pruefidentifikator,

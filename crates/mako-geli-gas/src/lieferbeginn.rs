@@ -232,7 +232,6 @@ pub fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruefidentif
 
 /// Business data recorded at process initiation and carried through every state.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct GasSupplierChangeData {
     /// Process variant (derived from the Anfrage PID).
     pub variant: GasProcessVariant,

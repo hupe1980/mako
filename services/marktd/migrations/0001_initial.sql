@@ -1238,6 +1238,34 @@ CREATE TABLE event_log (
 CREATE INDEX event_log_pending   ON event_log (seq) WHERE fanned_out_at IS NULL;
 CREATE INDEX event_log_type_time ON event_log (ce_type, received_at DESC);
 
+-- Wake the fan-out worker the moment an enqueued event becomes visible.
+--
+-- Raised by the database, not by the producer, and that is the whole point:
+-- Postgres queues a NOTIFY until the raising transaction COMMITs, so the worker
+-- cannot be woken onto a snapshot in which the row does not exist yet. An
+-- in-process hint cannot promise that — taken inside the transaction it is
+-- spent on an invisible row and the event waits out a whole poll interval with
+-- nothing logged — and it cannot cross a replica boundary either: a write
+-- served by one marktd does not wake the worker in another.
+--
+-- FOR EACH STATEMENT with a transition table, so a batch enqueue raises one
+-- notification rather than one per row, and an `ON CONFLICT DO NOTHING` that
+-- inserted nothing raises none.
+CREATE OR REPLACE FUNCTION event_log_notify() RETURNS trigger
+    LANGUAGE plpgsql AS $fn$
+BEGIN
+    IF EXISTS (SELECT 1 FROM inserted) THEN
+        PERFORM pg_notify('event_log', '');
+    END IF;
+    RETURN NULL;
+END;
+$fn$;
+DROP TRIGGER IF EXISTS event_log_notify ON event_log;
+CREATE TRIGGER event_log_notify
+    AFTER INSERT ON event_log
+    REFERENCING NEW TABLE AS inserted
+    FOR EACH STATEMENT EXECUTE FUNCTION event_log_notify();
+
 -- ── Per-subscriber delivery ledger ────────────────────────────────────────────
 --
 -- One row per (event, subscriber) snapshotted at fan-out time. At-least-once
@@ -1312,8 +1340,12 @@ CREATE INDEX mmma_gas_month
 
 -- ── Strom Mehr-/Mindermengenpreise (BDEW, bundesweit einheitlich) ────────────
 --
--- § 13 Abs. 3 StromNZV requires *einheitliche* Mehr-/Mindermengenpreise
--- calculated from monthly market prices. Since 2016 the BDEW determines and
+-- The Mehr-/Mindermengenpreise are *einheitlich* and calculated from monthly
+-- market prices. The authority is keyed on the delivery period: § 13 Abs. 3
+-- StromNZV to 31.12.2025, and § 20 Abs. 3 EnWG through BK6-24-174 from
+-- 01.01.2026, since the StromNZV ceased to have effect with the end of
+-- 31.12.2025 (Art. 15 Abs. 4 G. v. 22.12.2023, BGBl. 2023 I Nr. 405).
+-- Since 2016 the BDEW determines and
 -- publishes them centrally, as one nationwide series with a Mehr and a Minder
 -- value per application month. Every Netzbetreiber settles against that same
 -- series.
@@ -1343,7 +1375,8 @@ CREATE TABLE mmm_preise_strom (
 );
 
 COMMENT ON TABLE mmm_preise_strom IS
-    'Bundesweit einheitliche Mehr-/Mindermengenpreise Strom (§ 13 Abs. 3 StromNZV), '
+    'Bundesweit einheitliche Mehr-/Mindermengenpreise Strom (§ 13 Abs. 3 StromNZV '
+    'bis 31.12.2025, seither § 20 Abs. 3 EnWG ueber BK6-24-174), '
     'monatlich vom BDEW ermittelt und veroeffentlicht. Keyed by month alone — there '
     'is no per-Netzbetreiber series.';
 

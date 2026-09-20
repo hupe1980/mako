@@ -390,6 +390,7 @@ pub fn with_buyer_reference(mut model: en16931::Invoice, leitweg_id: &str) -> en
 
 /// BG-7 buyer supplied on a B2G submission — the receiving public authority.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct B2gBuyer {
     /// BT-44 buyer name.
     pub name: String,

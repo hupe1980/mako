@@ -68,14 +68,25 @@ fn the_policy_and_the_code_name_the_same_actions() {
         !used.is_empty(),
         "the extractor found no actions — it has drifted from the call shape"
     );
+    // The policy must also grant what the *middleware* checks one crate over.
+    // `use-mcp` is the blanket gate `mako_service::mcp_auth::McpAuth` applies to
+    // every MCP frame before any tool name is read, so no `authorize(&claims, …)`
+    // in this crate names it and the extractor above cannot see it. Leaving it
+    // out of this comparison made the guard refuse the grant the MCP surface
+    // needs: the policy stayed silent, `CedarEnforcer` is default-deny, and the
+    // whole tool and prompt surface answered 403 to every caller — with a green
+    // guard over it. It is kept out of `used` because `ALL_ACTIONS` below pins
+    // what this crate's own handlers check.
+    let mut expected = used.clone();
+    expected.insert("use-mcp".to_owned());
     let permitted = actions_permitted_in_policy();
-    let missing: Vec<_> = used.difference(&permitted).cloned().collect();
+    let missing: Vec<_> = expected.difference(&permitted).cloned().collect();
     assert!(
         missing.is_empty(),
         "these actions are checked in code but appear in no policy, so Cedar's \
          default-deny makes those routes 403 for every caller: {missing:?}"
     );
-    let dead: Vec<_> = permitted.difference(&used).cloned().collect();
+    let dead: Vec<_> = permitted.difference(&expected).cloned().collect();
     assert!(
         dead.is_empty(),
         "these actions are granted by policy but checked nowhere — either a route \

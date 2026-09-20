@@ -23,7 +23,6 @@ default   = []
 client    = ["dep:reqwest"]
 server    = ["dep:axum", "dep:tower", "dep:http"]
 websocket = ["dep:tokio-tungstenite", "dep:futures-util", "dep:tokio"]
-crypto    = ["dep:p256", "dep:sha2", "dep:base64ct", "dep:serde_jcs"]
 
 [dependencies]
 serde      = { version = "1", features = ["derive"] }
@@ -52,10 +51,10 @@ futures-util      = { version = "0.3", optional = true }
 tokio             = { version = "1", features = ["rt", "sync"], optional = true }
 
 # ── crypto feature ───────────────────────────────────────────────────────────
-p256      = { version = "0.13", features = ["ecdsa", "pem"], optional = true }
-sha2      = { version = "0.10", optional = true }
-base64ct  = { version = "1", features = ["alloc"], optional = true }
-serde_jcs = { version = "0.1", optional = true }
+p256      = { version = "0.13", features = ["ecdsa", "pem"] }
+sha2      = { version = "0.10" }
+base64ct  = { version = "1", features = ["alloc"] }
+serde_jcs = { version = "0.1" }
 
 [dev-dependencies]
 serde_json = { workspace = true }

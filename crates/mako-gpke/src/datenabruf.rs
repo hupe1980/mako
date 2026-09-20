@@ -117,7 +117,6 @@ impl EventPayload for DatenabrufEvent {
 
 /// Data captured when the ORDERS request is sent.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AnfrageData {
     /// ORDERS PID sent.
     pub orders_pid: Pruefidentifikator,

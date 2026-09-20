@@ -2406,13 +2406,6 @@ where
     pub partner_repo: Pa,
     #[cfg(feature = "makod-client")]
     pub makod_client: std::sync::Arc<crate::makod_client::MakodClient>,
-    /// Low-latency wake-up hint for the durable fan-out worker.
-    ///
-    /// Producers persist events to the `event_log` outbox (via
-    /// `marktd::outbox::enqueue`) and then `notify_one()` this handle so the
-    /// worker drains immediately instead of waiting for its next poll. It is a
-    /// hint only — correctness rests on the outbox table, never on this signal.
-    pub notify: std::sync::Arc<tokio::sync::Notify>,
     /// This deployment's own tenant identifier — the operator's primary market
     /// code (`makod.toml` `[[party]] primary = true`).
     ///
@@ -3659,12 +3652,16 @@ pub trait MmmaPreisGasRepository: Send + Sync {
     async fn list_gas(&self, limit: i64) -> Result<Vec<MmmaPreisGasRecord>, MdmError>;
 }
 
-// ── Strom Mehr-/Mindermengenpreise (§ 13 Abs. 3 StromNZV) ────────────────────
+// ── Strom Mehr-/Mindermengenpreise ───────────────────────────────────────────
 
 /// The nationwide Strom Mehr-/Mindermengenpreise for one application month.
 ///
-/// § 13 Abs. 3 StromNZV requires *einheitliche* prices computed from monthly
-/// market prices; the BDEW determines and publishes them centrally as one
+/// The prices are *einheitlich* and computed from monthly market prices. The
+/// authority is keyed on the delivery period, not stated flat: § 13 Abs. 3
+/// StromNZV to 31.12.2025, and § 20 Abs. 3 EnWG through the GPKE Festlegung
+/// (BK6-24-174) from 01.01.2026, since the StromNZV ceased to have effect with
+/// the end of 31.12.2025 (Art. 15 Abs. 4 G. v. 22.12.2023, BGBl. 2023 I
+/// Nr. 405). The BDEW determines and publishes them centrally as one
 /// series for the whole German market, with a Mehr and a Minder value per
 /// month. There is deliberately no operator dimension here — every
 /// Netzbetreiber settles against the same published values.

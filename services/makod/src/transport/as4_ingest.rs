@@ -40,19 +40,19 @@
 use std::sync::Arc;
 
 use asx_rs::as4::{
-    As4ReceiptCredentials, As4ReceiveOutcome, As4ReceivePushRequest, generate_receipt_for_output,
-    generate_signed_receipt_for_output, receive_push_with_dedup_async,
+    As4ReceiptCredentials, As4ReceiveOutcome, As4ReceivePush, As4ReceivePushRequest,
+    As4SignerPinMap, generate_receipt_for_output, generate_signed_receipt_for_output, receive_push,
 };
 use asx_rs::core::{AsxError, ErrorCode, ErrorContext, SessionContext};
 use asx_rs::crypto::wssec::WsSecOutboundKeyInfoProfile;
 use asx_rs::observability::EventBus;
-use asx_rs::storage::{BoxFuture, DedupStorage};
+use asx_rs::storage::{BoxFuture, DedupStorage, DedupVerdict};
 use asx_rs::transport::ingress::As4HttpIngress;
 use asx_rs::transport::server::{As4AxumHandler, HandlerOutcome, as4_router};
 use axum::Router;
 use edi_energy::{AnyMessage, EdiEnergyMessage};
 use mako_as4::server::RouterConfig;
-use mako_engine::inbox::InboxStore;
+use mako_engine::inbox::{InboxClaim, InboxStore};
 use mako_engine::metrics::EngineMetrics;
 use mako_engine::store_slatedb::SlateDbInboxStore;
 use uuid::Uuid;
@@ -118,22 +118,59 @@ impl DedupStorage for SlateDbDedupBridge {
         false
     }
 
-    fn first_seen<'a>(
+    fn claim<'a>(
         &'a self,
         idempotency_key: &'a str,
-    ) -> BoxFuture<'a, asx_rs::core::Result<bool>> {
+    ) -> BoxFuture<'a, asx_rs::core::Result<DedupVerdict>> {
         let store = Arc::clone(&self.store);
         let key = idempotency_key.to_owned();
         Box::pin(async move {
-            store.accept(&key).await.map_err(|e| {
-                AsxError::new(
-                    ErrorCode::StorageBackendFailure,
-                    format!("inbox dedup store error: {e}"),
-                    ErrorContext::new("as4_dedup"),
-                )
-            })
+            store
+                .claim(&key)
+                .await
+                .map(|verdict| match verdict {
+                    InboxClaim::Claimed => DedupVerdict::Claimed,
+                    InboxClaim::InFlight => DedupVerdict::InFlight,
+                    InboxClaim::Duplicate => DedupVerdict::Duplicate,
+                })
+                .map_err(|e| dedup_err("claim", &e))
         })
     }
+
+    fn accept<'a>(&'a self, idempotency_key: &'a str) -> BoxFuture<'a, asx_rs::core::Result<()>> {
+        let store = Arc::clone(&self.store);
+        let key = idempotency_key.to_owned();
+        Box::pin(async move {
+            store
+                .accept(&key)
+                .await
+                .map_err(|e| dedup_err("accept", &e))
+        })
+    }
+
+    fn abandon<'a>(&'a self, idempotency_key: &'a str) -> BoxFuture<'a, asx_rs::core::Result<()>> {
+        let store = Arc::clone(&self.store);
+        let key = idempotency_key.to_owned();
+        Box::pin(async move {
+            store
+                .abandon(&key)
+                .await
+                .map_err(|e| dedup_err("abandon", &e))
+        })
+    }
+}
+
+/// Wrap an inbox failure as an `asx-rs` storage error.
+///
+/// Fail-closed by construction: `asx-rs` treats an error from any phase as a
+/// refusal rather than as "first seen", so a storage outage cannot be mistaken
+/// for a new message.
+fn dedup_err(phase: &str, e: &mako_engine::error::EngineError) -> AsxError {
+    AsxError::new(
+        ErrorCode::StorageBackendFailure,
+        format!("inbox dedup store error during {phase}: {e}"),
+        ErrorContext::new("as4_dedup"),
+    )
 }
 
 // ── AS4 receive handler ───────────────────────────────────────────────────────
@@ -146,7 +183,31 @@ pub struct BdewAs4IngestHandler {
     /// Shared EDIFACT dispatch state (Platform + PidRouter).
     ingest: Arc<EdifactApiState>,
     /// Per-session WS-Security context (signing key + partner trust anchors).
+    ///
+    /// The **base** session. It carries no pinned signer fingerprint, which is
+    /// why it is never handed to the receive pipeline directly: `asx-rs`
+    /// compares the WS-Security signer against `cert_handle.fingerprint_sha256`
+    /// and refuses a signed message outright when none is set. Every inbound
+    /// message is verified against it with the claimed sender's permitted
+    /// signing certificates supplied separately — see
+    /// [`BdewAs4IngestHandler::with_sender_pins`].
     session: Arc<SessionContext>,
+    /// Which signing certificates each counterparty may use, by MP-ID.
+    ///
+    /// The trust anchor answers „is the signer a BDEW/DVGW market
+    /// participant?" — roughly 1500 parties hold a certificate chaining to it,
+    /// so on its own it authenticates the PKI rather than the counterparty.
+    /// These pins answer „is the signer *the party this message claims to come
+    /// from*?", which is the question a Lieferantenwechsel depends on.
+    ///
+    /// `asx-rs` resolves them against the parsed `eb:From` and compares the
+    /// verified signer itself, so a message claiming to be someone else is
+    /// refused by the party whose pin it selected. A party with no pin has no
+    /// permitted signer and is refused.
+    ///
+    /// `None` falls back to the session's single fingerprint, which serves one
+    /// counterparty only.
+    signer_pins: Option<Arc<dyn asx_rs::as4::As4SignerPins>>,
     /// Telemetry event bus.
     event_bus: Arc<EventBus>,
     /// Deduplication backend.
@@ -187,12 +248,56 @@ impl BdewAs4IngestHandler {
         Self {
             ingest,
             session,
+            signer_pins: None,
             event_bus,
             dedup,
             decryption_key_pem: None,
             receipt_credentials: None,
             contrl_ack: None,
         }
+    }
+
+    /// Pin each counterparty's signing certificate, by MP-ID.
+    ///
+    /// `certs` maps an MP-ID to that partner's signing certificate in PEM. A
+    /// message is accepted only when the signer of its WS-Security signature is
+    /// one of the certificates pinned for the party it claims to come from.
+    ///
+    /// Several certificates may be pinned for one party, which is what a
+    /// certificate rollover needs: pin both for the overlap, then drop the old
+    /// one.
+    ///
+    /// Without a pin for the party a message claims, the message is refused —
+    /// there is no "unknown sender" mode, because the two failure directions
+    /// are not symmetric. Accepting an unpinned sender lets any holder of any
+    /// certificate the BDEW/DVGW PKI issued present themselves as any market
+    /// participant, and a forged 55004 Abmeldung or ORDERS 17115 Sperrung
+    /// cannot be withdrawn once acted on.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming the MP-ID whose certificate could not be read.
+    pub fn with_sender_pins<I, K, V>(mut self, certs: I) -> anyhow::Result<Self>
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: AsRef<str>,
+    {
+        let mut map = As4SignerPinMap::new();
+        let mut pinned = 0usize;
+        for (mp_id, pem) in certs {
+            let mp_id = mp_id.into();
+            map = map
+                .pin_cert_pem(&mp_id, pem.as_ref().as_bytes())
+                .map_err(|e| {
+                    anyhow::anyhow!("AS4 partner signing certificate for MP-ID {mp_id}: {e}")
+                })?;
+            pinned += 1;
+        }
+        if pinned > 0 {
+            self.signer_pins = Some(Arc::new(map));
+        }
+        Ok(self)
     }
 
     /// Set the operator's own AS4 inbound decryption private key.
@@ -253,13 +358,22 @@ impl As4AxumHandler for BdewAs4IngestHandler {
             authenticated_sender_scope: None,
         };
 
-        match receive_push_with_dedup_async(
+        match receive_push(
             &self.session,
             &self.event_bus,
-            request,
-            Arc::clone(&self.dedup),
+            As4ReceivePush {
+                request,
+                dedup: Arc::clone(&self.dedup),
+                // Fragment reassembly is not enabled, so no ordering context.
+                ordering: None,
+                // The pins are what bind a claimed `eb:From` to a verified
+                // signer. `None` would fall back to the session's single
+                // fingerprint, which cannot serve more than one counterparty.
+                signer_pins: self.signer_pins.clone(),
+            },
         )
         .await
+        .map(asx_rs::as4::As4Ordered::into_inner)
         {
             Err(e) => {
                 tracing::warn!(
@@ -274,6 +388,15 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                 // Idempotent replay: the dedup store has already seen this
                 // message_id.  Per BDEW AS4 §4.3 retransmissions must receive
                 // a valid acknowledgement — return 200 without re-dispatching.
+                //
+                // **A `400` from below is not a second chance.** The receive
+                // pipeline consumes the dedup key before the outcome reaches
+                // this handler, so it is spent by the time anything dispatches.
+                // The BDEW-mandated `ReceptionAwareness` retry carries the same
+                // `eb:MessageId`, so a retransmission lands here — 200, no
+                // dispatch — and the counterparty is told the message was
+                // delivered. Anything that fails after the key is spent must
+                // therefore leave a dead letter: it will not come round again.
                 tracing::debug!(
                     as4_message_id = %message_id,
                     "AS4 inbound: duplicate detected — returning idempotent 200",
@@ -281,520 +404,48 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                 HandlerOutcome::ok()
             }
 
-            Ok(As4ReceiveOutcome::FirstSeen(output)) => {
-                let msg_id = output.user_message.message_id.clone();
-                let action = &output.user_message.action;
-                let from = output
-                    .user_message
-                    .from_party_ids
-                    .first()
-                    .map(String::as_str)
-                    .unwrap_or("<unknown>");
-                let edifact = output.payload.clone().into_inner();
+            Ok(As4ReceiveOutcome::FirstSeen { output, claim }) => {
+                let outcome = self.handle_first_seen(output, &ingress).await;
 
-                tracing::info!(
-                    as4_message_id = %msg_id,
-                    action         = %action,
-                    from_party     = %from,
-                    payload_bytes  = edifact.len(),
-                    "AS4 inbound: message received",
-                );
-
-                // ── Synchronous receipt builder ───────────────────────────────
-                // BDEW AS4-Profil §2.2.4: the receipt must be signed and echo
-                // the inbound message's ds:Reference digests (NRR).  Unsigned
-                // receipts are a dev/test fallback only — strict counterparties
-                // reject them.  Shared by the EDIFACT and Redispatch-XML legs.
-                let send_receipt = || {
-                    let receipt_id = format!("makod@{}", Uuid::new_v4());
-                    let receipt = match &self.receipt_credentials {
-                        Some(credentials) => generate_signed_receipt_for_output(
-                            &self.session,
-                            &receipt_id,
-                            &output,
-                            &ingress.body,
-                            &ingress.content_type,
-                            credentials,
-                        ),
-                        None => {
-                            tracing::warn!(
-                                as4_message_id = %msg_id,
-                                "AS4 inbound: no receipt-signing credentials configured — \
-                                 emitting UNSIGNED receipt without NRI. This violates BDEW \
-                                 AS4-Profil §2.2.4; configure with_receipt_credentials for \
-                                 production.",
-                            );
-                            generate_receipt_for_output(&self.session, &receipt_id, &output)
-                        }
-                    };
-                    match receipt {
-                        Ok(receipt_xml) => {
-                            tracing::debug!(
-                                as4_message_id = %msg_id,
-                                receipt_id     = %receipt_id,
-                                signed         = self.receipt_credentials.is_some(),
-                                "AS4 inbound: sending synchronous receipt",
-                            );
-                            HandlerOutcome::ok_with_body(receipt_xml, "application/soap+xml")
-                        }
-                        Err(e) => {
-                            // Receipt generation failure is non-fatal for the
-                            // business payload — message was already dispatched.
-                            // Return 200 without a receipt body; the sender will
-                            // retry and hit the dedup path.
-                            tracing::error!(
-                                as4_message_id = %msg_id,
-                                error          = %e,
-                                "AS4 inbound: receipt generation failed — returning 200 without body",
-                            );
-                            HandlerOutcome::ok()
-                        }
-                    }
-                };
-
-                // ── ebMS3 Test Service (Core §5.2.2) ──────────────────────────
-                // A connectivity ping is acknowledged and **not delivered**: its
-                // payload is empty or a loopback of what the sender sent, so
-                // every branch below would read it as a malformed business
-                // document — a dead letter, or a 400 that tells the counterparty
-                // its connectivity check failed. `is_test_service_ping` is
-                // derived from the verified `eb:Service` and `eb:Action`, so a
-                // sender cannot label a real document as a ping to skip the
-                // pipeline: the payload never reaches it either way.
-                if output.is_test_service_ping() {
-                    tracing::info!(
-                        as4_message_id = %msg_id,
-                        from_party     = %from,
-                        "AS4 inbound: ebMS3 Test Service ping — acknowledged, not delivered",
-                    );
-                    return send_receipt();
-                }
-
-                // ── Redispatch 2.0 XML leg ────────────────────────────────────
-                // The BDEW AS4 channel carries two payload formats: EDIFACT
-                // interchanges and the nine Redispatch 2.0 XML document types
-                // (BK6-20-059/-061).  XML payloads never enter the EDIFACT
-                // pipeline — no UNB envelope, no test indicator, no CONTRL
-                // obligation.
-                if crate::redispatch_xml_ingest::looks_like_xml(&edifact) {
-                    let Some(dispatcher) = self.ingest.dispatcher.as_deref() else {
-                        tracing::error!(
-                            as4_message_id = %msg_id,
-                            "AS4 ingest: XML payload received but no Phase 2 dispatcher \
-                             is wired — rejecting so the sender retransmits",
-                        );
-                        return HandlerOutcome::bad_request(
-                            "XML payload received but workflow dispatch is not configured",
-                        );
-                    };
-                    return match crate::redispatch_xml_ingest::dispatch_redispatch_xml(
-                        dispatcher, &edifact,
-                    )
-                    .await
-                    {
-                        Ok(crate::ingest_dispatcher::IngestOutcome::Skipped {
-                            workflow_name,
-                            reason,
-                        }) => {
-                            // Parse/validation failure or unroutable document —
-                            // reject *without* a receipt: an AS4 receipt asserts
-                            // successful reception, and the sender must correct
-                            // and retransmit.
-                            tracing::warn!(
-                                as4_message_id = %msg_id,
-                                workflow       = %workflow_name,
-                                reason         = %reason,
-                                "AS4 ingest: Redispatch XML payload rejected",
-                            );
-                            HandlerOutcome::bad_request(format!(
-                                "Redispatch XML rejected: {reason}"
-                            ))
-                        }
-                        Ok(outcome) => {
-                            tracing::info!(
-                                as4_message_id = %msg_id,
-                                outcome        = ?outcome,
-                                "AS4 ingest: Redispatch XML document dispatched",
-                            );
-                            send_receipt()
-                        }
-                        Err(e) => {
-                            // No durable business record was written — reject so
-                            // the AS4 retransmission gives us another attempt.
-                            tracing::error!(
-                                as4_message_id = %msg_id,
-                                error          = %e,
-                                "AS4 ingest: Redispatch XML dispatch failed",
-                            );
-                            HandlerOutcome::bad_request(format!(
-                                "Redispatch XML dispatch failed: {e}"
-                            ))
-                        }
-                    };
-                }
-
-                // ── Test-indicator guard (§AF §3 / Allgemeine Festlegungen V6.1d §3) ──
-                // Reject before dispatching any messages.
+                // Settle the claim as handled, on every path.
                 //
-                // Read from the `UNB` alone, not from a full parse. A full parse
-                // errs on a § 2.13 party mismatch, a UNZ count mismatch, too many
-                // messages, or any single unparseable message — and the guard
-                // would then be skipped on exactly the interchange least worth
-                // trusting, letting a test-flagged one reach production
-                // workflows because one message inside it was malformed.
-                if let Ok(header) = self.ingest.platform.parse_interchange_header(&edifact[..])
-                    && header.test_indicator
-                {
-                    use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
-                    let ctx = AuditContext::from_interchange(
-                        &header.sender_id,
-                        &header.receiver_id,
-                        &header.control_ref,
-                    );
-                    self.ingest
-                        .dl_sink
-                        .reject(&DeadLetterReason::TestMessage { context: ctx });
-                    tracing::warn!(
-                        as4_message_id = %msg_id,
-                        sender = %header.sender_id,
-                        receiver = %header.receiver_id,
-                        control_ref = %header.control_ref,
-                        "AS4 ingest: test interchange (DE0035=1) rejected — \
-                         must not process test messages on production endpoint (§AF §3)",
-                    );
-                    // The sender is owed the reason. `UNB` DE 0035 is a value the
-                    // production endpoint does not support, which is exactly
-                    // `UCI` DE 0085 = 25 „Test-Kennzeichen nicht unterstützt"
-                    // (CONTRL AHB 1.0 Kap. 3).
-                    if let Some(contrl_svc) = self.contrl_ack.as_deref()
-                        && let Err(e) = contrl_svc
-                            .emit_syntax_error(
-                                &edifact,
-                                &header.control_ref,
-                                &header.receiver_id,
-                                &header.sender_id,
-                                crate::contrl_ack::SyntaxFehler::TestKennzeichen,
-                            )
-                            .await
-                    {
-                        self.ingest
-                            .dl_sink
-                            .reject(&DeadLetterReason::ProcessingError {
-                                message: format!("contrl_syntaxfehler_failed: {e}"),
-                                context: AuditContext::from_interchange(
-                                    &header.sender_id,
-                                    &header.receiver_id,
-                                    &header.control_ref,
-                                )
-                                .with_message_type("CONTRL"),
-                            });
-                    }
-                    return HandlerOutcome::bad_request(
-                        "test interchange rejected: DE0035=1 on production endpoint",
+                // By the time `handle_first_seen` returns, the message is
+                // durably recorded whichever way it went: dispatched, or
+                // dead-lettered before the refusal. `check-as4-controls`
+                // enforces that second half, because it is what makes this
+                // single unconditional `accept` correct — a refusal path that
+                // returned without a dead letter would be accepted here and the
+                // message would be gone, its retransmission answered as a
+                // duplicate.
+                if let Err(e) = claim.accept().await {
+                    // The work is done and recorded; only the dedup settlement
+                    // failed. Saying so is all that is left — the claim's lease
+                    // expires and a retransmission is reprocessed, which is the
+                    // safe direction.
+                    tracing::error!(
+                        error = %e,
+                        "AS4 inbound: could not settle the dedup claim; a retransmission \
+                         will be reprocessed once the claim lease expires",
                     );
                 }
-                // ── DVGW gas transport ────────────────────────────────────────
-                // Tried first, because a DVGW message rides `ORDERS`/`ORDRSP` and
-                // the BDEW parser would accept it as one — yielding a
-                // Prüfidentifikator from the wrong catalogue. `try_ingest` sniffs
-                // `BGM` DE 1001 and returns `None` for a BDEW interchange, which
-                // costs that path only the sniff.
-                {
-                    if let Some(report) =
-                        crate::dvgw_ingest::try_ingest(self.ingest.as_ref(), &edifact).await
-                    {
-                        tracing::info!(
-                            as4_message_id = %msg_id,
-                            accepted = report.accepted(),
-                            rejected = report.rejected(),
-                            "AS4 ingest: DVGW interchange dispatched",
-                        );
-                        // The EDIFACT-level CONTRL Empfangsbestätigung (CONTRL
-                        // AHB 1.0 §2.3.1) is owed within six wall-clock hours for
-                        // every inbound *Gas* interchange, and a DVGW interchange
-                        // is Gas by definition. The AS4 `eb:Receipt` below is a
-                        // *protocol* acknowledgement and does not discharge it.
-                        if let Some(contrl_svc) = self.contrl_ack.as_deref() {
-                            let sender = report.sender_mp_id.clone().unwrap_or_default();
-                            if let Err(e) = contrl_svc
-                                .emit_for_dvgw_interchange(
-                                    &sender,
-                                    &report.interchange_ref,
-                                    &report.recipient_mp_id,
-                                    super::contrl_ack::dvgw_report_has_alocat(&report),
-                                )
-                                .await
-                            {
-                                use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
-                                self.ingest
-                                    .dl_sink
-                                    .reject(&DeadLetterReason::ProcessingError {
-                                        message: format!("contrl_ack_failed: {e}"),
-                                        context: AuditContext::now()
-                                            .with_message_type("CONTRL")
-                                            .with_receiver_eic(report.recipient_mp_id.as_str())
-                                            .with_message_ref(report.interchange_ref.as_str()),
-                                    });
-                            }
-                        }
+                outcome
+            }
 
-                        // The AS4 receipt is owed regardless of which family the
-                        // payload belongs to, so the DVGW path returns through the
-                        // same closure the BDEW path ends with rather than
-                        // short-circuiting it.
-                        return send_receipt();
-                    }
-                }
-
-                // ── EDIFACT dispatch ──────────────────────────────────────────
-                // Collect parsed messages so they can be passed to ContrlAckService
-                // after the dispatch loop (CONTRL AHB 1.0 §2.3.1 Gas obligation).
-                // The recipient MP-ID (UNB DE0010) drives Sparte detection and the
-                // CONTRL sender MP-ID.
-                let (interchange_ref, recipient_mp_id): (String, String) =
-                    if let Ok(pi) = self.ingest.platform.parse_interchange_full(&edifact[..]) {
-                        (
-                            pi.header.control_ref.to_string(),
-                            pi.header.receiver_id.to_string(),
-                        )
-                    } else {
-                        (msg_id.clone(), String::new())
-                    };
-                let mut accepted = 0usize;
-                let mut rejected = 0usize;
-                let mut parsed_msgs: Vec<edi_energy::AnyMessage> = Vec::new();
-                // `UCI` DE 0085 of the Syntaxfehlermeldung, if one is owed. The
-                // segment carries one code, so it is the first fault that names
-                // the file (§5.3.3 reports at the lowest level that can express
-                // a fault, and an interchange-level UCI has no lower level here).
-                let mut first_syntax_error = crate::contrl_ack::SyntaxFehler::UngueltigerWert;
-                let mut saw_syntax_error = false;
-                for result in self
-                    .ingest
-                    .platform
-                    .parse_interchange(std::io::Cursor::new(&edifact[..]))
-                {
-                    match result {
-                        Err(e) => {
-                            rejected += 1;
-                            if !saw_syntax_error {
-                                first_syntax_error =
-                                    crate::contrl_ack::SyntaxFehler::from_parse_error(&e);
-                                saw_syntax_error = true;
-                            }
-                            // Deliberately *not* counted as a validation failure.
-                            // `makod_validation_failed_total` carries a message type
-                            // and a release, and a message that did not parse has
-                            // neither. Counting it under fixed labels such as
-                            // `("edifact", "parse_error")` would make the metric
-                            // report a message type that does not exist and bury
-                            // the AHB failures it is for. The dead letter below is
-                            // the record, and it alerts as
-                            // `makod_dead_letter_recorded_total{reason="processing_error"}`.
-                            //
-                            // § 147 AO / GoBD: a message that fails to parse inside an
-                            // otherwise-accepted interchange must leave a durable
-                            // trace — the AS4 receipt confirms receipt of the whole
-                            // interchange, so a metric + log alone would make the
-                            // failed message vanish from the audit trail.
-                            {
-                                use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
-                                self.ingest
-                                    .dl_sink
-                                    .reject(&DeadLetterReason::ProcessingError {
-                                        message: format!("EDIFACT parse error: {e}"),
-                                        context: AuditContext::now()
-                                            .with_message_type("UNPARSEABLE")
-                                            .with_message_ref(msg_id.as_str()),
-                                    });
-                            }
-                            tracing::warn!(
-                                as4_message_id = %msg_id,
-                                error          = %e,
-                                "AS4 ingest: EDIFACT parse error — dead-lettered",
-                            );
-                        }
-                        Ok(msg) => {
-                            let message_type = msg.try_message_type().map(|t| t.to_string());
-                            let pid = msg
-                                .detect_pruefidentifikator()
-                                .ok()
-                                .and_then(|p| mako_engine::ids::Pid::from_u32(p.as_u32()));
-                            let workflow = pid
-                                .and_then(|p| {
-                                    self.ingest.resolve_workflow(p.as_u32(), &recipient_mp_id)
-                                })
-                                .map(str::to_owned);
-
-                            // Same classifier as the REST door — the two used
-                            // to decide independently, and a PID-less non-CONTRL
-                            // message was `NoPid` (accepted, unrecorded) here
-                            // and `MissingPid` (dead-lettered) there.
-                            let status = MessageStatus::classify(&msg, pid, workflow.as_deref());
-
-                            // Conformance is recorded for every routed message,
-                            // not only the ones whose adapter happens to ask.
-                            if status == MessageStatus::Routed {
-                                crate::edifact_api::record_ahb_conformance(&msg);
-                            }
-
-                            // Dead-letter unroutable messages (§ 147 AO / GoBD).
-                            if status.is_unroutable() {
-                                use mako_engine::dead_letter::AuditContext;
-                                let ctx = AuditContext::now()
-                                    .with_message_type(message_type.as_deref().unwrap_or(""))
-                                    .with_message_ref(msg_id.as_str())
-                                    .with_receiver_eic(recipient_mp_id.as_str());
-                                let ctx = if let Some(p) = pid {
-                                    ctx.with_pid(p)
-                                } else {
-                                    ctx
-                                };
-                                let dead_pid = pid.unwrap_or(mako_engine::ids::Pid::new(1));
-                                let (reason, result) = crate::edifact_api::unroutable_rejection(
-                                    status, &msg, dead_pid, ctx,
-                                );
-                                EngineMetrics::global().inbound_received(dead_pid.as_u32(), result);
-                                self.ingest.dl_sink.reject(&reason);
-                            }
-
-                            tracing::info!(
-                                as4_message_id = %msg_id,
-                                message_type   = ?message_type,
-                                pid            = pid.map(|p| p.as_u32()),
-                                workflow       = ?workflow,
-                                status         = ?status,
-                                "AS4 ingest: EDIFACT message dispatched",
-                            );
-
-                            // Phase 2: execute workflow command if dispatcher is wired.
-                            if let (Some(pid_val), Some(wf_name)) = (pid, workflow.as_deref())
-                                && let Some(dispatcher) = self.ingest.dispatcher.as_deref()
-                            {
-                                match dispatcher.dispatch(&msg, wf_name, pid_val.as_u32()).await {
-                                    Ok(outcome) => {
-                                        // The receipt has already gone out, so a
-                                        // message the router claimed and no arm
-                                        // consumed is acknowledged and lost —
-                                        // recorded, not merely logged
-                                        // (§ 147 AO / GoBD).
-                                        if let Some((wf, reason)) = outcome.coverage_gap() {
-                                            use mako_engine::dead_letter::{
-                                                AuditContext, DeadLetterReason,
-                                            };
-                                            self.ingest.dl_sink.reject(
-                                                &DeadLetterReason::NotDispatchable {
-                                                    workflow_name: wf.to_owned(),
-                                                    pid: pid_val,
-                                                    reason: reason.to_owned(),
-                                                    context: AuditContext::now()
-                                                        .with_message_type(
-                                                            message_type.as_deref().unwrap_or(""),
-                                                        )
-                                                        .with_message_ref(msg_id.as_str())
-                                                        .with_receiver_eic(recipient_mp_id.as_str())
-                                                        .with_pid(pid_val),
-                                                },
-                                            );
-                                        }
-                                        tracing::debug!(
-                                            as4_message_id = %msg_id,
-                                            workflow       = %wf_name,
-                                            outcome        = ?outcome,
-                                            "AS4 ingest: Phase 2 command dispatched",
-                                        );
-                                    }
-                                    Err(e) => {
-                                        dead_letter_dispatch_failure(
-                                            self.ingest.dl_sink.as_ref(),
-                                            &msg_id,
-                                            message_type.as_deref(),
-                                            pid_val,
-                                            wf_name,
-                                            &e,
-                                        );
-                                        tracing::error!(
-                                            as4_message_id = %msg_id,
-                                            workflow       = %wf_name,
-                                            error          = %e,
-                                            "AS4 ingest: Phase 2 command dispatch failed — \
-                                             dead-lettered",
-                                        );
-                                    }
-                                }
-                            }
-
-                            accepted += 1;
-                            // Collect for CONTRL Empfangsbestätigung (Gas interchanges).
-                            parsed_msgs.push(msg);
-                        }
-                    }
-                }
-
-                if accepted == 0 && rejected > 0 {
-                    // Not one message in the Übertragungsdatei could be read, so
-                    // the file is not processed further — which is exactly what
-                    // a Syntaxfehlermeldung states (CONTRL AHB 1.0 §2.3.2 /
-                    // §2.4.2). It is owed in **both** Sparten: §2.4 uses the
-                    // CONTRL in Strom for nothing else. The `UNB` parsed, or
-                    // `interchange_ref` would be the AS4 message id — §2.2.2.1
-                    // makes a CONTRL impossible in that case and the dead letter
-                    // above is the record instead.
-                    if let Some(contrl_svc) = self.contrl_ack.as_deref()
-                        && let Ok(pi) = self.ingest.platform.parse_interchange_full(&edifact[..])
-                        && let Err(e) = contrl_svc
-                            .emit_syntax_error(
-                                &edifact,
-                                &pi.header.control_ref,
-                                &pi.header.receiver_id,
-                                &pi.header.sender_id,
-                                first_syntax_error,
-                            )
-                            .await
-                    {
-                        use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
-                        self.ingest
-                            .dl_sink
-                            .reject(&DeadLetterReason::ProcessingError {
-                                message: format!("contrl_syntaxfehler_failed: {e}"),
-                                context: AuditContext::now()
-                                    .with_message_type("CONTRL")
-                                    .with_receiver_eic(recipient_mp_id.as_str())
-                                    .with_message_ref(interchange_ref.as_str()),
-                            });
-                    }
-                    return HandlerOutcome::bad_request(
-                        "AS4 payload contained no valid EDIFACT messages",
-                    );
-                }
-
-                // ── Gas CONTRL Empfangsbestätigung ────────────────────────────
-                // CONTRL AHB 1.0 §2.3.1: for every inbound Gas interchange
-                // (except CONTRL-on-CONTRL) the receiver must send a CONTRL
-                // Empfangsbestätigung within 6 wall-clock hours.
-                // The AS4 eb:Receipt above is a *protocol* acknowledgement and
-                // does not satisfy this EDIFACT-level obligation.
-                if let Some(contrl_svc) = self.contrl_ack.as_deref() {
-                    let refs: Vec<&AnyMessage> = parsed_msgs.iter().collect();
-                    if let Err(e) = contrl_svc
-                        .emit_for_interchange(&refs, &interchange_ref, &recipient_mp_id)
-                        .await
-                    {
-                        use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
-                        self.ingest
-                            .dl_sink
-                            .reject(&DeadLetterReason::ProcessingError {
-                                message: format!("contrl_ack_failed: {e}"),
-                                context: AuditContext::now()
-                                    .with_message_type("CONTRL")
-                                    .with_receiver_eic(recipient_mp_id.as_str())
-                                    .with_message_ref(interchange_ref.as_str()),
-                            });
-                    }
-                }
-
-                // ── Synchronous receipt (BDEW AS4-Profil §2.2.4) ──────────────
-                send_receipt()
+            Ok(As4ReceiveOutcome::InFlight { message_id }) => {
+                // A concurrent delivery of this same message holds an unsettled
+                // claim. Not a duplicate — nothing has been handled yet, so an
+                // acknowledgement would tell the counterparty a message was
+                // processed that may still fail — and not first-seen either.
+                // Refusing without a receipt leaves the retransmission as the
+                // recovery path, which is what it is for.
+                tracing::warn!(
+                    as4_message_id = %message_id,
+                    "AS4 inbound: a concurrent delivery holds this message; refusing without \
+                     a receipt so the retransmission is the recovery path",
+                );
+                HandlerOutcome::bad_request(
+                    "a concurrent delivery of this eb:MessageId is still in flight",
+                )
             }
 
             // `As4ReceiveOutcome` is `#[non_exhaustive]` — keep a catch-all for
@@ -863,6 +514,36 @@ pub fn router(handler: Arc<BdewAs4IngestHandler>, config: RouterConfig) -> Route
 /// load balancer terminate client connections there, so the LB must enforce
 /// its own per-client limits (`X-Forwarded-For` is spoofable and deliberately
 /// not trusted here).
+/// How many checks pass between sweeps of a keyed limiter's state.
+///
+/// `governor`'s keyed store grows one entry per distinct key and is pruned only
+/// by an explicit `retain_recent()`; nothing calls it on a timer. Sweeping on a
+/// request count rather than a clock keeps the cost proportional to traffic and
+/// needs no background task to own — and so no shutdown path to get wrong.
+///
+/// Stated here rather than taken from `mako_service::rate_limit`, which lives
+/// behind the `rate-limit` feature: makod drives `governor` directly and has no
+/// other reason to pull in that middleware.
+const PRUNE_EVERY: u64 = 1024;
+
+/// Whether this call is the one that should sweep the keyed state.
+///
+/// `Relaxed`: the sweep is housekeeping, so a lost or duplicated tick costs
+/// nothing and the counter must not become a synchronisation point on the path
+/// every inbound message takes.
+fn prune_due(calls: &std::sync::atomic::AtomicU64) -> bool {
+    calls
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        .is_multiple_of(PRUNE_EVERY)
+}
+
+/// Admitted-check counter driving the sweep of the two inbound keyed stores.
+static AS4_RATE_LIMITER_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Admitted-check counter driving the sweep of the operator keyed store.
+static OPERATOR_RATE_LIMITER_CALLS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 static AS4_RATE_LIMITER: std::sync::LazyLock<
     governor::RateLimiter<
         std::net::IpAddr,
@@ -885,9 +566,18 @@ static AS4_RATE_LIMITER: std::sync::LazyLock<
 /// The value is **unverified** at this point and therefore spoofable; that is
 /// acceptable for a rate limiter because both limits always apply: a spoofing
 /// attacker still burns their own per-IP budget, and a spoofed partner can at
-/// worst see extra `429`s (never extra capacity). The verified identity is
-/// established later by WS-Security. Per-partner quota: 50 req/s sustained,
-/// burst 25 — half the per-IP quota, still far above any real MSH's peak.
+/// worst see extra `429`s (never extra capacity). Per-partner quota: 50 req/s
+/// sustained, burst 25 — half the per-IP quota, still far above any real MSH's
+/// peak.
+///
+/// **It is established immediately after.** The same claimed `eb:From` selects
+/// the session the message is verified against, and that session pins the
+/// SHA-256 of the claimed party's signing certificate — so a sender claiming to
+/// be someone else selects that party's pin and then fails to produce a
+/// matching signature. Chaining to the BDEW/DVGW trust anchor is not that
+/// binding on its own: every market participant holds such a certificate, so
+/// the anchor proves membership and the pin proves membership *of which party*.
+/// A claimed MP-ID with no registered signing certificate is refused outright.
 static AS4_SENDER_RATE_LIMITER: std::sync::LazyLock<
     governor::RateLimiter<
         String,
@@ -943,6 +633,14 @@ pub async fn as4_rate_limit_middleware(
     // design, and a 429 on a liveness probe reads as a dead container.
     if crate::health::is_health_path(req.uri().path()) {
         return next.run(req).await;
+    }
+    // `governor` prunes its keyed store only when asked, and an inbound AS4
+    // endpoint is reachable by anyone holding a BDEW/DVGW certificate: without
+    // the sweep the map keeps one permanent entry per peer address and per
+    // presented sender id, for the process lifetime.
+    if prune_due(&AS4_RATE_LIMITER_CALLS) {
+        AS4_RATE_LIMITER.retain_recent();
+        AS4_SENDER_RATE_LIMITER.retain_recent();
     }
     if AS4_RATE_LIMITER.check_key(&peer.ip()).is_err() {
         tracing::warn!(
@@ -1038,6 +736,9 @@ pub async fn rate_limit_middleware(
     // See `as4_rate_limit_middleware`: health probes are never throttled.
     if crate::health::is_health_path(req.uri().path()) {
         return next.run(req).await;
+    }
+    if prune_due(&OPERATOR_RATE_LIMITER_CALLS) {
+        OPERATOR_RATE_LIMITER.retain_recent();
     }
     if OPERATOR_RATE_LIMITER.check_key(&peer.ip()).is_err() {
         tracing::warn!(
@@ -1146,5 +847,614 @@ mod dispatch_failure_tests {
             detail.contains("store unavailable"),
             "the underlying error must survive into the audit trail: {detail}"
         );
+    }
+}
+
+impl BdewAs4IngestHandler {
+    /// Handle a verified, first-seen inbound message.
+    ///
+    /// Extracted from the receive match so the dedup claim is settled in exactly
+    /// one place. Inline, every one of this body's return points would have to
+    /// remember to settle, and the one that forgot would strand the key until
+    /// its lease expired.
+    ///
+    /// **Every path here records the message durably before returning** —
+    /// dispatched, or dead-lettered ahead of the refusal — which is what lets
+    /// the caller settle unconditionally. `check-as4-controls` keeps it true.
+    async fn handle_first_seen(
+        &self,
+        output: Box<asx_rs::as4::As4ReceivePushOutput>,
+        ingress: &As4HttpIngress,
+    ) -> HandlerOutcome {
+        let msg_id = output.user_message.message_id.clone();
+        let action = &output.user_message.action;
+        let from = output
+            .user_message
+            .from_party_ids
+            .first()
+            .map(String::as_str)
+            .unwrap_or("<unknown>");
+        let edifact = output.payload.clone().into_inner();
+
+        tracing::info!(
+            as4_message_id = %msg_id,
+            action         = %action,
+            from_party     = %from,
+            payload_bytes  = edifact.len(),
+            "AS4 inbound: message received",
+        );
+
+        // ── Synchronous receipt builder ───────────────────────────────
+        // BDEW AS4-Profil §2.2.4: the receipt must be signed and echo
+        // the inbound message's ds:Reference digests (NRR).  Unsigned
+        // receipts are a dev/test fallback only — strict counterparties
+        // reject them.  Shared by the EDIFACT and Redispatch-XML legs.
+        let send_receipt = || {
+            let receipt_id = format!("makod@{}", Uuid::new_v4());
+            let receipt = match &self.receipt_credentials {
+                Some(credentials) => generate_signed_receipt_for_output(
+                    &self.session,
+                    &receipt_id,
+                    &output,
+                    &ingress.body,
+                    &ingress.content_type,
+                    credentials,
+                ),
+                None => {
+                    tracing::warn!(
+                        as4_message_id = %msg_id,
+                        "AS4 inbound: no receipt-signing credentials configured — \
+                         emitting UNSIGNED receipt without NRI. This violates BDEW \
+                         AS4-Profil §2.2.4; configure with_receipt_credentials for \
+                         production.",
+                    );
+                    generate_receipt_for_output(&self.session, &receipt_id, &output)
+                }
+            };
+            match receipt {
+                Ok(receipt_xml) => {
+                    tracing::debug!(
+                        as4_message_id = %msg_id,
+                        receipt_id     = %receipt_id,
+                        signed         = self.receipt_credentials.is_some(),
+                        "AS4 inbound: sending synchronous receipt",
+                    );
+                    HandlerOutcome::ok_with_body(receipt_xml, "application/soap+xml")
+                }
+                Err(e) => {
+                    // Receipt generation failure is non-fatal for the
+                    // business payload — message was already dispatched.
+                    // Return 200 without a receipt body; the sender will
+                    // retry and hit the dedup path.
+                    tracing::error!(
+                        as4_message_id = %msg_id,
+                        error          = %e,
+                        "AS4 inbound: receipt generation failed — returning 200 without body",
+                    );
+                    HandlerOutcome::ok()
+                }
+            }
+        };
+
+        // ── ebMS3 Test Service (Core §5.2.2) ──────────────────────────
+        // A connectivity ping is acknowledged and **not delivered**: its
+        // payload is empty or a loopback of what the sender sent, so
+        // every branch below would read it as a malformed business
+        // document — a dead letter, or a 400 that tells the counterparty
+        // its connectivity check failed. `is_test_service_ping` is
+        // derived from the verified `eb:Service` and `eb:Action`, so a
+        // sender cannot label a real document as a ping to skip the
+        // pipeline: the payload never reaches it either way.
+        if output.is_test_service_ping() {
+            tracing::info!(
+                as4_message_id = %msg_id,
+                from_party     = %from,
+                "AS4 inbound: ebMS3 Test Service ping — acknowledged, not delivered",
+            );
+            return send_receipt();
+        }
+
+        // ── Redispatch 2.0 XML leg ────────────────────────────────────
+        // The BDEW AS4 channel carries two payload formats: EDIFACT
+        // interchanges and the nine Redispatch 2.0 XML document types
+        // (BK6-20-059/-061).  XML payloads never enter the EDIFACT
+        // pipeline — no UNB envelope, no test indicator, no CONTRL
+        // obligation.
+        if crate::redispatch_xml_ingest::looks_like_xml(&edifact) {
+            let Some(dispatcher) = self.ingest.dispatcher.as_deref() else {
+                // A deployment fault, not a sender fault: retransmitting
+                // reaches the same unconfigured daemon, and the dedup key
+                // is already spent, so the retry is answered 200 and the
+                // document is gone. The dead letter is the only record.
+                use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                self.ingest
+                    .dl_sink
+                    .reject(&DeadLetterReason::ProcessingError {
+                        message: "redispatch_xml_no_dispatcher_configured".to_owned(),
+                        context: AuditContext::now()
+                            .with_message_type("REDISPATCH-XML")
+                            .with_message_ref(msg_id.clone()),
+                    });
+                tracing::error!(
+                    as4_message_id = %msg_id,
+                    "AS4 ingest: XML payload received but no Phase 2 dispatcher \
+                     is wired — dead-lettered",
+                );
+                return HandlerOutcome::bad_request(
+                    "XML payload received but workflow dispatch is not configured",
+                );
+            };
+            return match crate::redispatch_xml_ingest::dispatch_redispatch_xml(dispatcher, &edifact)
+                .await
+            {
+                Ok(crate::ingest_dispatcher::IngestOutcome::Skipped {
+                    workflow_name,
+                    reason,
+                }) => {
+                    // Parse/validation failure or unroutable document —
+                    // reject *without* a receipt: an AS4 receipt asserts
+                    // successful reception, and the sender must correct
+                    // and retransmit.
+                    // The sender has to correct and resend under a new
+                    // `eb:MessageId`; this one's dedup key is spent, so a
+                    // plain retransmission is answered 200 and vanishes.
+                    // A regulated document arrived and was refused — that
+                    // is a record we owe regardless of whose fault it is.
+                    use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                    self.ingest
+                        .dl_sink
+                        .reject(&DeadLetterReason::ProcessingError {
+                            message: format!("redispatch_xml_rejected: {workflow_name}: {reason}"),
+                            context: AuditContext::now()
+                                .with_message_type("REDISPATCH-XML")
+                                .with_message_ref(msg_id.clone()),
+                        });
+                    tracing::warn!(
+                        as4_message_id = %msg_id,
+                        workflow       = %workflow_name,
+                        reason         = %reason,
+                        "AS4 ingest: Redispatch XML payload rejected — dead-lettered",
+                    );
+                    HandlerOutcome::bad_request(format!("Redispatch XML rejected: {reason}"))
+                }
+                Ok(outcome) => {
+                    tracing::info!(
+                        as4_message_id = %msg_id,
+                        outcome        = ?outcome,
+                        "AS4 ingest: Redispatch XML document dispatched",
+                    );
+                    send_receipt()
+                }
+                Err(e) => {
+                    // No durable business record was written, and the
+                    // dedup key is already spent: the `ReceptionAwareness`
+                    // retry carries the same `eb:MessageId` and is
+                    // answered 200 without dispatching. Without this dead
+                    // letter the document is lost while the counterparty
+                    // holds an acknowledgement saying it arrived.
+                    use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                    self.ingest
+                        .dl_sink
+                        .reject(&DeadLetterReason::ProcessingError {
+                            message: format!("redispatch_xml_dispatch_failed: {e}"),
+                            context: AuditContext::now()
+                                .with_message_type("REDISPATCH-XML")
+                                .with_message_ref(msg_id.clone()),
+                        });
+                    tracing::error!(
+                        as4_message_id = %msg_id,
+                        error          = %e,
+                        "AS4 ingest: Redispatch XML dispatch failed — dead-lettered",
+                    );
+                    HandlerOutcome::bad_request(format!("Redispatch XML dispatch failed: {e}"))
+                }
+            };
+        }
+
+        // The `UNB` alone, not a full parse. A full parse errs on a
+        // § 2.13 party mismatch, a UNZ count mismatch, too many messages,
+        // or any single unparseable message — and the guards below would
+        // then be skipped on exactly the interchange least worth
+        // trusting, letting a test-flagged or misaddressed one reach
+        // production workflows because one message inside it was
+        // malformed.
+        let unb = self
+            .ingest
+            .platform
+            .parse_interchange_header(&edifact[..])
+            .ok();
+
+        // ── Recipient guard (Allgemeine Festlegungen V6.1d § 2.13) ────
+        //
+        // `UNB` DE0010 names who the interchange is addressed to. An
+        // authenticated counterparty is still not entitled to hand us an
+        // interchange addressed to a third party: routing it would apply
+        // another market participant's message to our own processes, and
+        // the answer would go back under our MP-ID.
+        //
+        // Separate from the sender binding above, and not implied by it.
+        // That one establishes *who sent this*; this one establishes
+        // *that it was sent to us*. `is_own_mp_id` covers every MP-ID
+        // this deployment holds, so a combined-role instance addressed
+        // under its NB or its MSB identity both pass.
+        if let Some(header) = unb.as_ref()
+            && !self.ingest.mp_id_registry.is_own_mp_id(&header.receiver_id)
+        {
+            use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+            self.ingest
+                .dl_sink
+                .reject(&DeadLetterReason::ProcessingError {
+                    message: format!(
+                        "interchange addressed to a foreign MP-ID: UNB DE0010 = {}",
+                        header.receiver_id
+                    ),
+                    context: AuditContext::from_interchange(
+                        &header.sender_id,
+                        &header.receiver_id,
+                        &header.control_ref,
+                    ),
+                });
+            tracing::warn!(
+                as4_message_id = %msg_id,
+                sender = %header.sender_id,
+                receiver = %header.receiver_id,
+                control_ref = %header.control_ref,
+                "AS4 ingest: interchange is addressed to an MP-ID this deployment \
+                 does not hold — refused",
+            );
+            return HandlerOutcome::bad_request(
+                "UNB DE0010 names an MP-ID this deployment does not hold",
+            );
+        }
+
+        // ── Test-indicator guard (§AF §3 / Allgemeine Festlegungen V6.1d §3) ──
+        // Reject before dispatching any messages.
+        if let Some(header) = unb.as_ref()
+            && header.test_indicator
+        {
+            use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+            let ctx = AuditContext::from_interchange(
+                &header.sender_id,
+                &header.receiver_id,
+                &header.control_ref,
+            );
+            self.ingest
+                .dl_sink
+                .reject(&DeadLetterReason::TestMessage { context: ctx });
+            tracing::warn!(
+                as4_message_id = %msg_id,
+                sender = %header.sender_id,
+                receiver = %header.receiver_id,
+                control_ref = %header.control_ref,
+                "AS4 ingest: test interchange (DE0035=1) rejected — \
+                 must not process test messages on production endpoint (§AF §3)",
+            );
+            // The sender is owed the reason. `UNB` DE 0035 is a value the
+            // production endpoint does not support, which is exactly
+            // `UCI` DE 0085 = 25 „Test-Kennzeichen nicht unterstützt"
+            // (CONTRL AHB 1.0 Kap. 3).
+            if let Some(contrl_svc) = self.contrl_ack.as_deref()
+                && let Err(e) = contrl_svc
+                    .emit_syntax_error(
+                        &edifact,
+                        &header.control_ref,
+                        &header.receiver_id,
+                        &header.sender_id,
+                        crate::contrl_ack::SyntaxFehler::TestKennzeichen,
+                    )
+                    .await
+            {
+                self.ingest
+                    .dl_sink
+                    .reject(&DeadLetterReason::ProcessingError {
+                        message: format!("contrl_syntaxfehler_failed: {e}"),
+                        context: AuditContext::from_interchange(
+                            &header.sender_id,
+                            &header.receiver_id,
+                            &header.control_ref,
+                        )
+                        .with_message_type("CONTRL"),
+                    });
+            }
+            return HandlerOutcome::bad_request(
+                "test interchange rejected: DE0035=1 on production endpoint",
+            );
+        }
+        // ── DVGW gas transport ────────────────────────────────────────
+        // Tried first, because a DVGW message rides `ORDERS`/`ORDRSP` and
+        // the BDEW parser would accept it as one — yielding a
+        // Prüfidentifikator from the wrong catalogue. `try_ingest` sniffs
+        // `BGM` DE 1001 and returns `None` for a BDEW interchange, which
+        // costs that path only the sniff.
+        {
+            if let Some(report) =
+                crate::dvgw_ingest::try_ingest(self.ingest.as_ref(), &edifact).await
+            {
+                tracing::info!(
+                    as4_message_id = %msg_id,
+                    accepted = report.accepted(),
+                    rejected = report.rejected(),
+                    "AS4 ingest: DVGW interchange dispatched",
+                );
+                // The EDIFACT-level CONTRL Empfangsbestätigung (CONTRL
+                // AHB 1.0 §2.3.1) is owed within six wall-clock hours for
+                // every inbound *Gas* interchange, and a DVGW interchange
+                // is Gas by definition. The AS4 `eb:Receipt` below is a
+                // *protocol* acknowledgement and does not discharge it.
+                if let Some(contrl_svc) = self.contrl_ack.as_deref() {
+                    let sender = report.sender_mp_id.clone().unwrap_or_default();
+                    if let Err(e) = contrl_svc
+                        .emit_for_dvgw_interchange(
+                            &sender,
+                            &report.interchange_ref,
+                            &report.recipient_mp_id,
+                            super::contrl_ack::dvgw_report_has_alocat(&report),
+                        )
+                        .await
+                    {
+                        use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                        self.ingest
+                            .dl_sink
+                            .reject(&DeadLetterReason::ProcessingError {
+                                message: format!("contrl_ack_failed: {e}"),
+                                context: AuditContext::now()
+                                    .with_message_type("CONTRL")
+                                    .with_receiver_eic(report.recipient_mp_id.as_str())
+                                    .with_message_ref(report.interchange_ref.as_str()),
+                            });
+                    }
+                }
+
+                // The AS4 receipt is owed regardless of which family the
+                // payload belongs to, so the DVGW path returns through the
+                // same closure the BDEW path ends with rather than
+                // short-circuiting it.
+                return send_receipt();
+            }
+        }
+
+        // ── EDIFACT dispatch ──────────────────────────────────────────
+        // Collect parsed messages so they can be passed to ContrlAckService
+        // after the dispatch loop (CONTRL AHB 1.0 §2.3.1 Gas obligation).
+        // The recipient MP-ID (UNB DE0010) drives Sparte detection and the
+        // CONTRL sender MP-ID.
+        let (interchange_ref, recipient_mp_id): (String, String) =
+            if let Ok(pi) = self.ingest.platform.parse_interchange_full(&edifact[..]) {
+                (
+                    pi.header.control_ref.to_string(),
+                    pi.header.receiver_id.to_string(),
+                )
+            } else {
+                (msg_id.clone(), String::new())
+            };
+        let mut accepted = 0usize;
+        let mut rejected = 0usize;
+        let mut parsed_msgs: Vec<edi_energy::AnyMessage> = Vec::new();
+        // `UCI` DE 0085 of the Syntaxfehlermeldung, if one is owed. The
+        // segment carries one code, so it is the first fault that names
+        // the file (§5.3.3 reports at the lowest level that can express
+        // a fault, and an interchange-level UCI has no lower level here).
+        let mut first_syntax_error = crate::contrl_ack::SyntaxFehler::UngueltigerWert;
+        let mut saw_syntax_error = false;
+        for result in self
+            .ingest
+            .platform
+            .parse_interchange(std::io::Cursor::new(&edifact[..]))
+        {
+            match result {
+                Err(e) => {
+                    rejected += 1;
+                    if !saw_syntax_error {
+                        first_syntax_error = crate::contrl_ack::SyntaxFehler::from_parse_error(&e);
+                        saw_syntax_error = true;
+                    }
+                    // Deliberately *not* counted as a validation failure.
+                    // `makod_validation_failed_total` carries a message type
+                    // and a release, and a message that did not parse has
+                    // neither. Counting it under fixed labels such as
+                    // `("edifact", "parse_error")` would make the metric
+                    // report a message type that does not exist and bury
+                    // the AHB failures it is for. The dead letter below is
+                    // the record, and it alerts as
+                    // `makod_dead_letter_recorded_total{reason="processing_error"}`.
+                    //
+                    // § 147 AO / GoBD: a message that fails to parse inside an
+                    // otherwise-accepted interchange must leave a durable
+                    // trace — the AS4 receipt confirms receipt of the whole
+                    // interchange, so a metric + log alone would make the
+                    // failed message vanish from the audit trail.
+                    {
+                        use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                        self.ingest
+                            .dl_sink
+                            .reject(&DeadLetterReason::ProcessingError {
+                                message: format!("EDIFACT parse error: {e}"),
+                                context: AuditContext::now()
+                                    .with_message_type("UNPARSEABLE")
+                                    .with_message_ref(msg_id.as_str()),
+                            });
+                    }
+                    tracing::warn!(
+                        as4_message_id = %msg_id,
+                        error          = %e,
+                        "AS4 ingest: EDIFACT parse error — dead-lettered",
+                    );
+                }
+                Ok(msg) => {
+                    let message_type = msg.try_message_type().map(|t| t.to_string());
+                    let pid = msg
+                        .detect_pruefidentifikator()
+                        .ok()
+                        .and_then(|p| mako_engine::ids::Pid::from_u32(p.as_u32()));
+                    let workflow = pid
+                        .and_then(|p| self.ingest.resolve_workflow(p.as_u32(), &recipient_mp_id))
+                        .map(str::to_owned);
+
+                    // Same classifier as the REST door — the two used
+                    // to decide independently, and a PID-less non-CONTRL
+                    // message was `NoPid` (accepted, unrecorded) here
+                    // and `MissingPid` (dead-lettered) there.
+                    let status = MessageStatus::classify(&msg, pid, workflow.as_deref());
+
+                    // Conformance is recorded for every routed message,
+                    // not only the ones whose adapter happens to ask.
+                    if status == MessageStatus::Routed {
+                        crate::edifact_api::record_ahb_conformance(&msg);
+                    }
+
+                    // Dead-letter unroutable messages (§ 147 AO / GoBD).
+                    if status.is_unroutable() {
+                        use mako_engine::dead_letter::AuditContext;
+                        let ctx = AuditContext::now()
+                            .with_message_type(message_type.as_deref().unwrap_or(""))
+                            .with_message_ref(msg_id.as_str())
+                            .with_receiver_eic(recipient_mp_id.as_str());
+                        let ctx = if let Some(p) = pid {
+                            ctx.with_pid(p)
+                        } else {
+                            ctx
+                        };
+                        let dead_pid = pid.unwrap_or(mako_engine::ids::Pid::new(1));
+                        let (reason, result) =
+                            crate::edifact_api::unroutable_rejection(status, &msg, dead_pid, ctx);
+                        EngineMetrics::global().inbound_received(dead_pid.as_u32(), result);
+                        self.ingest.dl_sink.reject(&reason);
+                    }
+
+                    tracing::info!(
+                        as4_message_id = %msg_id,
+                        message_type   = ?message_type,
+                        pid            = pid.map(|p| p.as_u32()),
+                        workflow       = ?workflow,
+                        status         = ?status,
+                        "AS4 ingest: EDIFACT message dispatched",
+                    );
+
+                    // Phase 2: execute workflow command if dispatcher is wired.
+                    if let (Some(pid_val), Some(wf_name)) = (pid, workflow.as_deref())
+                        && let Some(dispatcher) = self.ingest.dispatcher.as_deref()
+                    {
+                        match dispatcher.dispatch(&msg, wf_name, pid_val.as_u32()).await {
+                            Ok(outcome) => {
+                                // The receipt has already gone out, so a
+                                // message the router claimed and no arm
+                                // consumed is acknowledged and lost —
+                                // recorded, not merely logged
+                                // (§ 147 AO / GoBD).
+                                if let Some((wf, reason)) = outcome.coverage_gap() {
+                                    use mako_engine::dead_letter::{
+                                        AuditContext, DeadLetterReason,
+                                    };
+                                    self.ingest.dl_sink.reject(
+                                        &DeadLetterReason::NotDispatchable {
+                                            workflow_name: wf.to_owned(),
+                                            pid: pid_val,
+                                            reason: reason.to_owned(),
+                                            context: AuditContext::now()
+                                                .with_message_type(
+                                                    message_type.as_deref().unwrap_or(""),
+                                                )
+                                                .with_message_ref(msg_id.as_str())
+                                                .with_receiver_eic(recipient_mp_id.as_str())
+                                                .with_pid(pid_val),
+                                        },
+                                    );
+                                }
+                                tracing::debug!(
+                                    as4_message_id = %msg_id,
+                                    workflow       = %wf_name,
+                                    outcome        = ?outcome,
+                                    "AS4 ingest: Phase 2 command dispatched",
+                                );
+                            }
+                            Err(e) => {
+                                dead_letter_dispatch_failure(
+                                    self.ingest.dl_sink.as_ref(),
+                                    &msg_id,
+                                    message_type.as_deref(),
+                                    pid_val,
+                                    wf_name,
+                                    &e,
+                                );
+                                tracing::error!(
+                                    as4_message_id = %msg_id,
+                                    workflow       = %wf_name,
+                                    error          = %e,
+                                    "AS4 ingest: Phase 2 command dispatch failed — \
+                                     dead-lettered",
+                                );
+                            }
+                        }
+                    }
+
+                    accepted += 1;
+                    // Collect for CONTRL Empfangsbestätigung (Gas interchanges).
+                    parsed_msgs.push(msg);
+                }
+            }
+        }
+
+        if accepted == 0 && rejected > 0 {
+            // Not one message in the Übertragungsdatei could be read, so
+            // the file is not processed further — which is exactly what
+            // a Syntaxfehlermeldung states (CONTRL AHB 1.0 §2.3.2 /
+            // §2.4.2). It is owed in **both** Sparten: §2.4 uses the
+            // CONTRL in Strom for nothing else. The `UNB` parsed, or
+            // `interchange_ref` would be the AS4 message id — §2.2.2.1
+            // makes a CONTRL impossible in that case and the dead letter
+            // above is the record instead.
+            if let Some(contrl_svc) = self.contrl_ack.as_deref()
+                && let Ok(pi) = self.ingest.platform.parse_interchange_full(&edifact[..])
+                && let Err(e) = contrl_svc
+                    .emit_syntax_error(
+                        &edifact,
+                        &pi.header.control_ref,
+                        &pi.header.receiver_id,
+                        &pi.header.sender_id,
+                        first_syntax_error,
+                    )
+                    .await
+            {
+                use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                self.ingest
+                    .dl_sink
+                    .reject(&DeadLetterReason::ProcessingError {
+                        message: format!("contrl_syntaxfehler_failed: {e}"),
+                        context: AuditContext::now()
+                            .with_message_type("CONTRL")
+                            .with_receiver_eic(recipient_mp_id.as_str())
+                            .with_message_ref(interchange_ref.as_str()),
+                    });
+            }
+            return HandlerOutcome::bad_request("AS4 payload contained no valid EDIFACT messages");
+        }
+
+        // ── Gas CONTRL Empfangsbestätigung ────────────────────────────
+        // CONTRL AHB 1.0 §2.3.1: for every inbound Gas interchange
+        // (except CONTRL-on-CONTRL) the receiver must send a CONTRL
+        // Empfangsbestätigung within 6 wall-clock hours.
+        // The AS4 eb:Receipt above is a *protocol* acknowledgement and
+        // does not satisfy this EDIFACT-level obligation.
+        if let Some(contrl_svc) = self.contrl_ack.as_deref() {
+            let refs: Vec<&AnyMessage> = parsed_msgs.iter().collect();
+            if let Err(e) = contrl_svc
+                .emit_for_interchange(&refs, &interchange_ref, &recipient_mp_id)
+                .await
+            {
+                use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                self.ingest
+                    .dl_sink
+                    .reject(&DeadLetterReason::ProcessingError {
+                        message: format!("contrl_ack_failed: {e}"),
+                        context: AuditContext::now()
+                            .with_message_type("CONTRL")
+                            .with_receiver_eic(recipient_mp_id.as_str())
+                            .with_message_ref(interchange_ref.as_str()),
+                    });
+            }
+        }
+
+        // ── Synchronous receipt (BDEW AS4-Profil §2.2.4) ──────────────
+        send_receipt()
     }
 }

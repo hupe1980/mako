@@ -82,10 +82,17 @@ pub struct PreflightInput<'a> {
     pub webdienste_enabled: bool,
     /// `--webdienste-allow-unauthenticated`.
     pub webdienste_allow_unauthenticated: bool,
+    /// Whether an mTLS client certificate **and** key are configured for
+    /// calling somebody else's API-Webdienste.
+    pub webdienste_client_identity: bool,
+    /// `--allow-unauthenticated-webdienste-client`.
+    pub allow_unauthenticated_webdienste_client: bool,
     /// `--as4-partner MP-ID=HTTPS-URL` pairs.
     pub as4_partner: &'a [String],
     /// `--as4-partner-cert MP-ID=<PEM>` pairs.
     pub as4_partner_cert: &'a [String],
+    /// `--as4-partner-signing-cert MP-ID=<PEM>` pairs.
+    pub as4_partner_signing_cert: &'a [String],
     /// `--as4-signing-key-pem`.
     pub as4_signing_key_pem: Option<&'a SecretString>,
     /// `--as4-signing-cert-pem`.
@@ -140,6 +147,12 @@ pub struct Preflight {
     /// AS4 partner P-Mode registry with every partner endpoint and encryption
     /// certificate already registered.
     pub as4_profile: BdewAs4Profile,
+    /// Counterparty **signing** certificates in PEM, by MP-ID.
+    ///
+    /// The inbound handler pins each one on the session it verifies that
+    /// sender's messages against. Separate from the encryption certificates in
+    /// [`Self::as4_profile`], which the send path uses.
+    pub as4_sender_signing_certs: Vec<(String, String)>,
     /// MaLo-ID callback endpoints, keyed by counterparty Marktpartner-ID.
     pub maloid_partners: HashMap<String, reqwest::Url>,
     /// Verzeichnisdienst base URL.
@@ -405,6 +418,91 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
          certificate."
     );
 
+    // ── API-Webdienste outbound: the identity this daemon calls under ────────
+    //
+    // The EDI-Energy API-Webdienste authenticate their callers by mutual TLS
+    // with an EMT.API certificate from the BSI SM-PKI. Without one the TLS
+    // handshake still completes locally — a client simply presents nothing —
+    // and the call is refused at the counterparty. That is the worst place for
+    // it to surface: the failure is a remote 4xx on a Frist rather than a line
+    // of startup output, and it looks like the counterparty's outage.
+    if (input.verzeichnisdienst_url.is_some() || !input.maloid_partner.is_empty())
+        && !input.webdienste_client_identity
+        && !input.allow_unauthenticated_webdienste_client
+    {
+        anyhow::bail!(
+            "an API-Webdienst is configured (--verzeichnisdienst-url / --maloid-partner) but no \
+             mTLS client identity is: the EDI-Energy API-Webdienste authenticate callers by \
+             mutual TLS with an EMT.API certificate from the BSI SM-PKI, so every call would be \
+             refused by the counterparty.\n\
+             Set --webdienste-client-cert-pem and --webdienste-client-key-pem (or \
+             webdienste.client_cert_pem_file / client_key_pem_file in makod.toml), or pass \
+             --allow-unauthenticated-webdienste-client for dev/test."
+        );
+    }
+
+    // ── AS4 inbound: who each message is allowed to claim to be ──────────────
+    //
+    // The trust anchor answers „is the signer a BDEW/DVGW market participant?",
+    // and ~1500 parties hold a certificate chaining to one, so it authenticates
+    // the PKI rather than the counterparty. The per-MP-ID signing certificate is
+    // what binds a message to the party it says sent it.
+    //
+    // Refused at startup rather than per message for two reasons. `asx-rs`
+    // rejects a *signed* message outright when the session pins no fingerprint —
+    // and BDEW AS4-Profil v1.2 §2.2.6.2.1 makes signing mandatory, so a
+    // deployment missing this accepts nothing at all, while its logs blame the
+    // counterparty. And discovering it per message means discovering it on a
+    // Frist.
+    let mut as4_sender_signing_certs: Vec<(String, String)> = Vec::new();
+    for pair in input.as4_partner_signing_cert {
+        let (mp_id, cert_pem) = pair.split_once('=').ok_or_else(|| {
+            anyhow::anyhow!("--as4-partner-signing-cert: expected MP-ID=<PEM>, got {pair:?}")
+        })?;
+        let (mp_id, cert_pem) = (mp_id.trim(), cert_pem.trim());
+        anyhow::ensure!(
+            !mp_id.is_empty(),
+            "--as4-partner-signing-cert: MP-ID must not be empty in {pair:?}"
+        );
+        anyhow::ensure!(
+            cert_pem.contains("-----BEGIN CERTIFICATE-----"),
+            "--as4-partner-signing-cert: value for MP-ID {mp_id:?} is not a PEM certificate \
+             (no -----BEGIN CERTIFICATE----- header). When using a file reference, set \
+             as4.partner_signing_cert_files in makod.toml."
+        );
+        as4_sender_signing_certs.push((mp_id.to_owned(), cert_pem.to_owned()));
+    }
+
+    if input.as4_inbound_enabled
+        && as4_sender_signing_certs.is_empty()
+        && !input.allow_unencrypted_as4
+    {
+        anyhow::bail!(
+            "--as4-addr is set but no AS4 partner signing certificates are configured, so \
+             every inbound message would be refused: BDEW AS4-Profil v1.2 §2.2.6.2.1 makes \
+             signing mandatory, and a signed message is only verifiable against the signing \
+             certificate of the party it claims to come from.\n\
+             Add --as4-partner-signing-cert MP-ID=<PEM> (or as4.partner_signing_cert_files in \
+             makod.toml) for each counterparty, or pass --allow-unencrypted-as4 for dev/test."
+        );
+    }
+
+    // The assembled profile has to satisfy the BDEW security floor before it
+    // carries traffic. BDEW AS4-Profil v1.2 §2.2.6.2.2 requires signing **and**
+    // encryption; `asx-rs` refuses a policy layer only when it disables both, so
+    // a sign-only override is valid AS4 and would send in the clear.
+    // `BdewAs4Profile::validate` is the check that asserts the mandate over the
+    // base stack and every override on top of it, and it is only a control if it
+    // runs on the path that builds the profile an operator actually deploys.
+    let _report = as4_profile.validate().map_err(|e| {
+        anyhow::anyhow!(
+            "the assembled AS4 profile violates the BDEW security floor: {e}. \
+             BDEW AS4-Profil v1.2 §2.2.6.2.2 mandates signing and encryption on \
+             every message; a layer relaxing either is refused here rather than \
+             discovered as plaintext on the wire."
+        )
+    })?;
+
     // ── Outbound delivery path ───────────────────────────────────────────────
     //
     // Signing material drives the AS4 sender; the EDIFACT webhook is the
@@ -512,6 +610,7 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
 
     Ok(Preflight {
         as4_profile,
+        as4_sender_signing_certs,
         maloid_partners,
         verzeichnisdienst_url,
         auth_keys,
@@ -589,6 +688,9 @@ mod tests {
             webdienste_allow_unauthenticated: false,
             as4_partner: &[],
             as4_partner_cert: &[],
+            as4_partner_signing_cert: &[],
+            webdienste_client_identity: false,
+            allow_unauthenticated_webdienste_client: true,
             as4_signing_key_pem: None,
             as4_signing_cert_pem: None,
             as4_trust_anchor_pem: None,
@@ -655,6 +757,150 @@ mod tests {
         };
         let err = rejection(&input);
         assert!(err.contains("must use HTTPS"), "{err}");
+    }
+
+    /// An AS4 listener with no counterparty signing certificates cannot accept
+    /// anything, and says so at startup.
+    ///
+    /// `asx-rs` refuses a *signed* message whose session pins no fingerprint,
+    /// and BDEW AS4-Profil v1.2 §2.2.6.2.1 makes signing mandatory — so this
+    /// configuration rejects every conformant message a counterparty sends,
+    /// while its logs read as though the counterparty were at fault. Refusing
+    /// to boot turns a silent, permanent outage into one line of startup output.
+    /// Real AS4 key material, because preflight builds a session from it and
+    /// `asx-rs` validates the PEM — a placeholder is refused two checks before
+    /// the one these tests are about.
+    struct As4Material {
+        pki: mako_as4::testing::BdewTestPki,
+    }
+
+    impl As4Material {
+        fn new() -> Self {
+            Self {
+                pki: mako_as4::testing::BdewTestPki::generate("Preflight 9900001000001"),
+            }
+        }
+        fn signing_key(&self) -> SecretString {
+            SecretString::from(self.pki.signing.key_pem_str().to_owned())
+        }
+        fn signing_cert(&self) -> &str {
+            self.pki.signing.cert_pem_str()
+        }
+    }
+
+    /// Calling an API-Webdienst without an mTLS identity is refused here, not
+    /// by the counterparty.
+    ///
+    /// The EDI-Energy API-Webdienste authenticate callers by mutual TLS with an
+    /// EMT.API certificate. Without one the handshake still completes locally —
+    /// a client simply presents nothing — so the failure surfaces as a remote
+    /// `4xx` on a Frist that reads like the other side's outage.
+    #[test]
+    fn an_api_webdienst_without_a_client_identity_is_rejected() {
+        let keys = vec!["erp=token".to_owned()];
+        let input = PreflightInput {
+            auth_keys: &keys,
+            verzeichnisdienst_url: Some("https://vz.example/api"),
+            webdienste_client_identity: false,
+            allow_unauthenticated_webdienste_client: false,
+            ..base()
+        };
+        let err = rejection(&input);
+        assert!(err.contains("mTLS client identity"), "{err}");
+        assert!(
+            err.contains("--webdienste-client-cert-pem"),
+            "the refusal must name what to configure: {err}"
+        );
+    }
+
+    /// A configured identity passes, and so does the declared dev escape.
+    #[test]
+    fn a_client_identity_or_the_declared_escape_passes() {
+        let keys = vec!["erp=token".to_owned()];
+        let with_identity = PreflightInput {
+            auth_keys: &keys,
+            verzeichnisdienst_url: Some("https://vz.example/api"),
+            webdienste_client_identity: true,
+            allow_unauthenticated_webdienste_client: false,
+            ..base()
+        };
+        preflight(&with_identity).expect("a configured identity is startable");
+
+        let declared = PreflightInput {
+            auth_keys: &keys,
+            verzeichnisdienst_url: Some("https://vz.example/api"),
+            webdienste_client_identity: false,
+            allow_unauthenticated_webdienste_client: true,
+            ..base()
+        };
+        preflight(&declared).expect("the declared dev escape is startable");
+    }
+
+    #[test]
+    fn an_as4_listener_without_partner_signing_certificates_is_rejected() {
+        let keys = vec!["erp=token".to_owned()];
+        let material = As4Material::new();
+        let signing = material.signing_key();
+        let decryption = material.signing_key();
+        let input = PreflightInput {
+            auth_keys: &keys,
+            as4_inbound_enabled: true,
+            as4_signing_key_pem: Some(&signing),
+            as4_signing_cert_pem: Some(material.signing_cert()),
+            // A loopback fixture; the trust anchor has its own test above.
+            allow_no_as4_trust_anchor: true,
+            as4_decryption_key_pem: Some(&decryption),
+            ..base()
+        };
+        let err = rejection(&input);
+        assert!(err.contains("partner signing certificates"), "{err}");
+    }
+
+    /// The dev/test escape is the same one the encryption material uses.
+    #[test]
+    fn the_dev_escape_allows_an_as4_listener_without_signing_certificates() {
+        let keys = vec!["erp=token".to_owned()];
+        let material = As4Material::new();
+        let signing = material.signing_key();
+        let input = PreflightInput {
+            auth_keys: &keys,
+            as4_inbound_enabled: true,
+            as4_signing_key_pem: Some(&signing),
+            as4_signing_cert_pem: Some(material.signing_cert()),
+            // A loopback fixture; the trust anchor has its own test above.
+            allow_no_as4_trust_anchor: true,
+            allow_unencrypted_as4: true,
+            ..base()
+        };
+        assert!(
+            preflight(&input).is_ok(),
+            "--allow-unencrypted-as4 must keep dev and the demos startable"
+        );
+    }
+
+    /// A signing certificate that is not a PEM certificate is named, not
+    /// silently pinned as an unusable fingerprint.
+    #[test]
+    fn a_partner_signing_certificate_that_is_not_a_pem_is_rejected() {
+        let keys = vec!["erp=token".to_owned()];
+        let material = As4Material::new();
+        let signing = material.signing_key();
+        let decryption = material.signing_key();
+        let certs = vec!["9900001000002=not-a-certificate".to_owned()];
+        let input = PreflightInput {
+            auth_keys: &keys,
+            as4_inbound_enabled: true,
+            as4_signing_key_pem: Some(&signing),
+            as4_signing_cert_pem: Some(material.signing_cert()),
+            // A loopback fixture; the trust anchor has its own test above.
+            allow_no_as4_trust_anchor: true,
+            as4_decryption_key_pem: Some(&decryption),
+            as4_partner_signing_cert: &certs,
+            ..base()
+        };
+        let err = rejection(&input);
+        assert!(err.contains("is not a PEM certificate"), "{err}");
+        assert!(err.contains("9900001000002"), "the MP-ID is named: {err}");
     }
 
     #[test]

@@ -268,9 +268,11 @@ async fn the_strom_mehr_mindermengenpreise_are_keyed_by_month_alone() {
     .await
     .expect("the published month is accepted");
 
-    // § 13 Abs. 3 StromNZV: the prices are *einheitlich*. A second row for the
-    // same month is a second nationwide price, which cannot exist — and the old
-    // per-`vnb_mp_id` key permitted exactly that, with no rule for choosing.
+    // The prices are *einheitlich* — § 13 Abs. 3 StromNZV for a period to
+    // 31.12.2025, § 20 Abs. 3 EnWG via BK6-24-174 from 01.01.2026 — so the month
+    // has to be the entire key. A second row for the same month is a second
+    // nationwide price, which cannot exist; carrying `vnb_mp_id` in the key
+    // admits exactly that, with no rule for choosing between the rows.
     let err = sqlx::query(
         "INSERT INTO mmm_preise_strom (price_month, mehr_ct_kwh, minder_ct_kwh, source)
          VALUES ('2026-07-01', 9.0000, 9.0000, 'manual')",

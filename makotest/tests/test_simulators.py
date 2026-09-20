@@ -5,6 +5,8 @@ be fed**. Everything else here is about the unhappy paths — the wrong
 acknowledgement, the misrouted submission, the dead control path, and silence.
 """
 
+from decimal import Decimal
+
 import pytest
 
 from conftest import BILANZKREIS, MALO, MELO, ON, utilmd_interchange
@@ -568,7 +570,11 @@ class TestImsysDelivery:
         push = gang.as_direct_push(sender_mp_id=NB_ID)
 
         assert len(push["intervals"]) == 94
-        assert not any(i["value"] == 0 for i in push["intervals"])
+        # `value` is a decimal **string** on the wire, so `i["value"] == 0`
+        # compares a str to an int and is always False — the assertion could
+        # never fail. A gap is an absent interval, never a zero: a zero handed
+        # to a platform is a reading it settles against.
+        assert not any(Decimal(i["value"]) == 0 for i in push["intervals"])
         starts = {i["from"] for i in push["intervals"]}
         assert "2026-11-01T09:15:00+00:00" not in starts, "index 41 must be absent"
 

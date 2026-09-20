@@ -74,7 +74,6 @@ pub const PARTIN_GAS_PIDS: &[u32] = &[37008, 37009, 37010, 37011, 37012, 37013, 
 
 /// Data captured when a Gas PARTIN message is received.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct GasKommunikationsdatenData {
     /// BDEW Prüfidentifikator of the inbound PARTIN.
     pub pruefidentifikator: Pruefidentifikator,

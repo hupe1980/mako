@@ -201,7 +201,7 @@ api_key = "env:AGENTD_KEY"   # optional; omit the section for dev mode
 [mmma_import]       # monthly Mehr-/Mindermengenpreis import; off by default
 enabled        = false
 gas_url        = ""   # THE Gas MMMA CSV/JSON; empty skips Gas
-strom_url      = ""   # ÜNB Strom MMM CSV/JSON; empty skips Strom
+strom_url      = ""   # BDEW Strom MMM CSV/JSON; empty skips Strom
 check_hour_utc = 6    # runs on the 1st of each month at this UTC hour
 
 # marktd is fail-closed: without [oidc] AND webhook.inbound_secret it refuses
@@ -1270,6 +1270,12 @@ worker drains it:
 2. **Deliver** — claims due `event_delivery` rows with a lease
    (`FOR UPDATE SKIP LOCKED`), signs + POSTs each, and on failure backs off
    (30 s → 5 m → 30 m → 2 h) or, after the attempt cap, marks `dead_lettered_at`.
+
+The worker polls every 30 s and is woken early by a Postgres `NOTIFY` on the
+`event_log` channel, raised by an `AFTER INSERT` trigger. Postgres queues it
+until the producing transaction commits, so the worker cannot wake onto a
+snapshot without the row, and every replica hears it. First delivery is
+milliseconds after the commit; a retry still waits for its `next_attempt_at`.
 
 **The claim counts the attempt, not the outcome.** `attempts` is incremented by
 the claim itself, so the retry budget is spent by *trying*, whatever happens

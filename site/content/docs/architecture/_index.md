@@ -290,7 +290,7 @@ Pass 5  Cancellation sign reversal   (Stornorechnung)
 | [`doubleentry`](https://crates.io/crates/doubleentry) | `0.7` | Double-entry ledger — append-only BLAKE3 Merkle log, inclusion and consistency proofs, period seals |
 | [`rubo4e`](https://crates.io/crates/rubo4e) | `0.14` | BO4E business-object types — the `rubo4e::current` versioned schema with validation |
 | [`agentplane`](https://crates.io/crates/agentplane) | `0.29` | Durable agent runtime behind `agentd` — journaled effects, typed manifests, human triage |
-| [`asx-rs`](https://crates.io/crates/asx-rs) | `0.14` | AS4/ebMS3 stack under the BDEW MaKo profile |
+| [`asx-rs`](https://crates.io/crates/asx-rs) | `0.15` | AS4/ebMS3 stack under the BDEW MaKo profile — signer pins bind a claimed `eb:From` to the verified signer, and the dedup store is claim/accept/abandon so a message that fails after receipt is retryable |
 | [`edifact-rs`](https://crates.io/crates/edifact-rs) | `~0.17` | EDIFACT syntax layer beneath `edi-energy` — parse, serialise, directory validation |
 
 ---
@@ -807,7 +807,7 @@ sequenceDiagram
 
 1. Render EDIFACT interchange via `edi-energy` builders.
 2. Look up trading partner AS4 endpoint in `PartnerStore`.
-3. Sign + encrypt with operator BrainpoolP256r1 credentials (`asx-rs` v0.14 — ECDSA-SHA256 + ECDH-ES key agreement via `with_signing_material(cert, key)`).
+3. Sign + encrypt with operator BrainpoolP256r1 credentials (`asx-rs` v0.15 — ECDSA-SHA256 + ECDH-ES key agreement via `with_signing_material(cert, key)`).
 4. POST via `asx-rs` AS4 sender.
 5. On HTTP 200: delete outbox entry. On 4xx/5xx: back-off and retry.
 

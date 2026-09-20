@@ -72,7 +72,6 @@ pub const MSCONS_PIDS: &[u32] = &[
 
 /// Data captured when an MSCONS message is received.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct MesswerteLieferungData {
     /// BDEW Prüfidentifikator of the inbound MSCONS.
     pub pruefidentifikator: Pruefidentifikator,

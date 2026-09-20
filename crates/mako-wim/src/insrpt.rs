@@ -176,7 +176,6 @@ pub enum Seite {
 
 /// Data captured when a Störungsmeldung opens the process.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct StoerungsmeldungData {
     /// Which side of the exchange this deployment is on.
     pub seite: Seite,

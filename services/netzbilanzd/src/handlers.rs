@@ -1465,6 +1465,7 @@ pub async fn mark_disputed(
 
 /// Inbound REMADV CloudEvent.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RemadvWebhookBody {
     /// The CloudEvent type.
     #[serde(rename = "type")]

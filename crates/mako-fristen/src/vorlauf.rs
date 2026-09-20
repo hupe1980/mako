@@ -505,8 +505,8 @@ pub const MSB_RECHNUNG_PID: u32 = 31_009;
 /// Zahlungsziel, and so does every other WiM invoice PID.
 ///
 /// Resolves all three windows from [`WIM`] by key rather than rebuilding them
-/// from the same constants. The LF/MSB window is a *zero* lead, which is why it
-/// used to be a bare `return zahlungsziel` naming no row at all — and a row no
+/// from the same constants. The LF/MSB window is a *zero* lead, so a bare
+/// `return zahlungsziel` would answer it without naming a row — and a row no
 /// caller names is the orphan [`WIM`] exists to make visible, whatever its
 /// value.
 ///

@@ -617,6 +617,7 @@ pub async fn delete_product(
 
 /// One product to resolve: a code and the day it has to be valid on.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProductQuery {
     pub product_code: String,
     /// The day the version must be in force on. Defaults to today (Berlin).
@@ -2950,7 +2951,7 @@ pub async fn get_comparison_feed_bo4e(
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
     let limit = q.limit.unwrap_or(100).clamp(1, 500) as usize;
 
-    let mut rows = match crate::pg::fetch_comparison_feed(&pool, &lf_mp_id, &q).await {
+    let mut rows = match crate::pg::fetch_comparison_feed(&pool, &cfg.tenant, &lf_mp_id, &q).await {
         Ok(r) => r,
         Err(e) => {
             return ApiError::Internal(e).into_response();
@@ -3085,7 +3086,7 @@ pub async fn get_comparison_feed(
     let verbrauch_kwh = q.verbrauch_kwh.unwrap_or(dec!(3500));
     let limit = q.limit.unwrap_or(100).clamp(1, 500) as usize;
 
-    let mut rows = match crate::pg::fetch_comparison_feed(&pool, &lf_mp_id, &q).await {
+    let mut rows = match crate::pg::fetch_comparison_feed(&pool, &cfg.tenant, &lf_mp_id, &q).await {
         Ok(r) => r,
         Err(e) => {
             return ApiError::Internal(e).into_response();

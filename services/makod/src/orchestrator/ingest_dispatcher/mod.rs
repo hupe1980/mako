@@ -1846,7 +1846,7 @@ mod faelligkeitsdatum_tests {
 
     fn parse_invoic(dtm_segments: &str) -> edi_energy::AnyMessage {
         let raw = format!(
-            "UNB+UNOC:3+4012345000023:14+9900357000004:14+260101:0000+1'\
+            "UNB+UNOC:3+4012345000023:14+9900357000004:500+260101:0000+1'\
              UNH+1+INVOIC:D:06A:UN:2.8e'\
              BGM+457+00031004'\
              DTM+137:202601010000?+00:303'{dtm_segments}\

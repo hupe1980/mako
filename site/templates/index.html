@@ -44,7 +44,7 @@
     <div><strong>71</strong><span>MaKo workflows</span></div>
     <div><strong>17</strong><span>EDI@Energy message types</span></div>
     <div><strong>17</strong><span>services</span></div>
-    <div><strong>4</strong><span>market roles (NB·LF·MSB·ESA)</span></div>
+    <div><strong>4</strong><span>role-scoped deployments</span></div>
   </div>
   <p class="stats-note wrap">Three views of one catalogue. Every one of the 482
     Prüfidentifikatoren the BDEW Anwendungsübersicht publishes is imported; 469 are
@@ -58,10 +58,10 @@
 <section class="roles section-pad" aria-labelledby="who">
   <div class="wrap">
     <h2 id="who">Who runs this</h2>
-    <p class="section-lead">German market law splits the industry into four roles, and every
-      message has one on each end. mako implements all four from one engine — and a
-      deployment scoped to a role contains no other role's code, which is what
-      § 6a EnWG unbundling asks for.</p>
+    <p class="section-lead">Every MaKo message names a Marktrolle on each end. The BDEW
+      Rollenmodell V2.2 defines twelve of them; these four carry the mass-market processes,
+      and mako builds each as its own binary — a role-scoped deployment contains no other
+      role's code, which is what § 6a EnWG informational unbundling asks for.</p>
     <div class="card-grid card-grid-4">
       <div class="card">
         <h3><span class="role-abbr">NB</span> Netzbetreiber</h3>

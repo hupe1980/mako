@@ -25,7 +25,7 @@ use edi_energy::{EdiEnergyMessage, Platform, Pruefidentifikator, Release, parse_
 
 /// Minimal UTILMD interchange used as a baseline parse fixture.
 const UTILMD_MINIMAL: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:500+190101:0000+1'\
 UNH+1+UTILMD:D:11A:UN:S2.1'\
 BGM+E01:::+00055001::+9'\
 DTM+137:202301010000?+00:303'\
@@ -38,7 +38,7 @@ UNZ+1+1'";
 
 /// Minimal UTILMD Gas interchange used as a baseline parse fixture.
 const UTILMD_GAS_MINIMAL: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9907317000007:14+251001:0700+00001'\
+UNB+UNOC:3+4012345000023:14+9907317000007:500+251001:0700+00001'\
 UNH+00001+UTILMD:D:11A:UN:G1.1'\
 BGM+E01:::+00044001::+9'\
 DTM+137:202510010700?+00:303'\
@@ -56,7 +56,7 @@ const UTILMD_44001_GAS_FIXTURE: &[u8] =
     include_bytes!("../tests/fixtures/utilmd/valid/beispiel_44001_lieferbeginn_gas.edi");
 #[cfg(feature = "mscons")]
 const MSCONS_MINIMAL: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:500+230101:0000+1'\
 UNH+1+MSCONS:D:04B:UN:2.4c'\
 BGM+7:::+00013002::+9'\
 DTM+137:202301010000?+00:303'\
@@ -72,7 +72,7 @@ UNZ+1+1'";
 /// Minimal APERAK interchange.
 #[cfg(feature = "aperak")]
 const APERAK_MINIMAL: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:500+230101:0000+1'\
 UNH+1+APERAK:D:07B:UN:2.1i'\
 BGM+1000+29001+9'\
 DTM+137:202301010000?+00:303'\
@@ -85,7 +85,7 @@ UNZ+1+1'";
 /// Minimal CONTRL interchange.
 #[cfg(feature = "contrl")]
 const CONTRL_MINIMAL: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:500+230101:0000+1'\
 UNH+1+CONTRL:D:3:UN:1.0a'\
 UCI+INTER001+4012345000023:14+9900357000004:14+4'\
 UNT+3+1'\
@@ -406,7 +406,7 @@ fn bench_interchange_throughput(c: &mut Criterion) {
         let mut interchange = Vec::new();
         // UNB
         interchange
-            .extend_from_slice(b"UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'");
+            .extend_from_slice(b"UNB+UNOC:3+4012345000023:14+9900357000004:500+230101:0000+1'");
         // UNH...UNT per message
         for i in 1..=count {
             let unh = format!(

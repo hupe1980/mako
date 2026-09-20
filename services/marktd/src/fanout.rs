@@ -53,12 +53,11 @@
 //! superseded it. Head-of-line blocking is bounded — a dead-lettered row stops
 //! blocking its key.
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use mako_markt::repository::SubscriptionRepository;
 use serde_json::Value;
 use sqlx::PgPool;
-use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
@@ -69,7 +68,7 @@ pub struct FanoutConfig {
     pub delivery_timeout: Duration,
     /// Delivery attempts before dead-lettering.
     pub max_attempts: i16,
-    /// How often the worker polls (in addition to `notify` wake-ups).
+    /// How often the worker polls (in addition to [`NOTIFY_CHANNEL`] wake-ups).
     pub poll_interval: Duration,
     /// Max `event_log` rows fanned out per Phase-1 batch.
     pub fanout_batch: i64,
@@ -105,32 +104,44 @@ impl Default for FanoutConfig {
     }
 }
 
+/// The `LISTEN` channel the `event_log_notify` trigger raises on.
+pub const NOTIFY_CHANNEL: &str = "event_log";
+
 /// Spawn the durable fan-out worker.
 ///
 /// No receiver: the worker is driven entirely by the `event_log` /
-/// `event_delivery` tables. `notify` is a low-latency wake-up hint from
-/// [`crate::outbox::enqueue`]; the worker also polls every
-/// [`FanoutConfig::poll_interval`], so a missed notification only delays work.
+/// `event_delivery` tables. [`FanoutConfig::poll_interval`] is what delivery
+/// rests on; [`NOTIFY_CHANNEL`] is the latency hint.
+///
+/// The hint is raised by the `event_log` trigger, not by the producer, because
+/// Postgres queues a `NOTIFY` until the raising transaction COMMITs: the worker
+/// cannot wake onto a snapshot without the row, which an in-process handle
+/// cannot promise. It also reaches every replica rather than the one process
+/// that served the write, and the claim is `FOR UPDATE SKIP LOCKED`, so they
+/// partition the work.
 pub fn spawn<S>(
     pool: PgPool,
     sub_repo: S,
     http: reqwest::Client,
     config: FanoutConfig,
-    notify: Arc<Notify>,
     shutdown: CancellationToken,
 ) where
     S: SubscriptionRepository + Clone + Send + Sync + 'static,
 {
     tokio::spawn(async move {
         let worker = Worker {
-            pool,
+            pool: pool.clone(),
             sub_repo,
             http,
             config,
         };
         let mut interval = tokio::time::interval(worker.config.poll_interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        info!("fanout: durable worker started");
+        let mut listener = open_listener(&pool).await;
+        info!(
+            listening = listener.is_some(),
+            "fanout: durable worker started"
+        );
         loop {
             tokio::select! {
                 () = shutdown.cancelled() => {
@@ -138,10 +149,58 @@ pub fn spawn<S>(
                     break;
                 }
                 _ = interval.tick() => worker.drain().await,
-                () = notify.notified() => worker.drain().await,
+                notified = wait_for_notify(&mut listener) => {
+                    if notified {
+                        worker.drain().await;
+                    }
+                }
             }
         }
     });
+}
+
+/// Open the wake-up channel, or `None` to run on the poll interval alone.
+///
+/// A failure here is a latency regression and not a correctness one, so it is
+/// logged and the worker carries on — which is also what happens against a
+/// server whose trigger has not been created.
+async fn open_listener(pool: &PgPool) -> Option<sqlx::postgres::PgListener> {
+    match sqlx::postgres::PgListener::connect_with(pool).await {
+        Ok(mut l) => match l.listen(NOTIFY_CHANNEL).await {
+            Ok(()) => Some(l),
+            Err(e) => {
+                warn!(error = %e, channel = NOTIFY_CHANNEL,
+                    "fanout: LISTEN failed — draining on the poll interval alone");
+                None
+            }
+        },
+        Err(e) => {
+            warn!(error = %e,
+                "fanout: listener connection failed — draining on the poll interval alone");
+            None
+        }
+    }
+}
+
+/// Await the next `event_log` notification; `true` when one arrived.
+///
+/// With no listener this never resolves, leaving the interval arm to drive the
+/// loop — returning immediately would spin it.
+async fn wait_for_notify(listener: &mut Option<sqlx::postgres::PgListener>) -> bool {
+    match listener.as_mut() {
+        // `recv` reconnects transparently and drops whatever was raised while
+        // the connection was down — the right trade for a hint, because the
+        // poll interval still finds those rows.
+        Some(l) => match l.recv().await {
+            Ok(_) => true,
+            Err(e) => {
+                warn!(error = %e, "fanout: listener lost — draining on the poll interval alone");
+                *listener = None;
+                false
+            }
+        },
+        None => std::future::pending().await,
+    }
 }
 
 struct Worker<S> {

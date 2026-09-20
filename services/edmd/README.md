@@ -380,7 +380,7 @@ roles = ["NB", "MSB"]
 [rate_limit]
 requests_per_second            = 500    # global sustained
 burst                          = 1000   # ingest is bursty by nature
-per_tenant_requests_per_second = 100
+per_caller_requests_per_second = 100
 
 [mcp]
 api_key = "env:EDMD_MCP_API_KEY"

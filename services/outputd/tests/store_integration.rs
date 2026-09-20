@@ -720,7 +720,7 @@ async fn a_claimed_delivery_is_not_claimed_again() {
     .await
     .expect("record success");
 
-    let after = docs::deliveries_of(&pool, issued.document.document_id)
+    let after = docs::deliveries_of(&pool, TENANT, issued.document.document_id)
         .await
         .expect("deliveries");
     assert_eq!(after[0].status, "DELIVERED");
@@ -736,7 +736,7 @@ async fn a_claimed_delivery_is_not_claimed_again() {
             .await
             .expect("record read")
     );
-    let after = docs::deliveries_of(&pool, issued.document.document_id)
+    let after = docs::deliveries_of(&pool, TENANT, issued.document.document_id)
         .await
         .expect("deliveries");
     assert!(after[0].read_at.is_some());
@@ -770,7 +770,7 @@ async fn a_failing_delivery_retries_and_then_gives_up() {
     )
     .await
     .expect("record failure");
-    let rows = docs::deliveries_of(&pool, issued.document.document_id)
+    let rows = docs::deliveries_of(&pool, TENANT, issued.document.document_id)
         .await
         .unwrap();
     assert_eq!(rows[0].status, "PENDING", "retryable");
@@ -786,7 +786,7 @@ async fn a_failing_delivery_retries_and_then_gives_up() {
     )
     .await
     .expect("give up");
-    let rows = docs::deliveries_of(&pool, issued.document.document_id)
+    let rows = docs::deliveries_of(&pool, TENANT, issued.document.document_id)
         .await
         .unwrap();
     assert_eq!(rows[0].status, "FAILED");
@@ -839,7 +839,7 @@ async fn a_postal_delivery_without_a_relay_stays_in_the_spool() {
             .expect("advance the backoff clock");
     }
 
-    let rows = docs::deliveries_of(&pool, issued.document.document_id)
+    let rows = docs::deliveries_of(&pool, TENANT, issued.document.document_id)
         .await
         .expect("deliveries");
     assert_eq!(

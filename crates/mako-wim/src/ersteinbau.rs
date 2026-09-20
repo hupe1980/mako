@@ -166,7 +166,6 @@ impl EventPayload for ErsteinbauEvent {
 
 /// Business data carried from the first event onwards.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ErsteinbauData {
     /// The Messlokation.
     pub melo_id: MeLo,

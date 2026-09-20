@@ -138,34 +138,50 @@ Expected output:
 ```
 ✓ makod is ready
 ✓ marktd is ready
+✓ webhook receiver is ready
 ✓ PUT /api/v1/preisblaetter/9900357000004 → 204 (FV2026 preisblatt stored)
 ✓ PUT /api/v1/partners/4012345000023 → 200 (partner ready for mako-pruefung)
 ✓ PUT /api/v1/malos/<malo> → 201  (version=1, makod cache push triggered)
 ✓ PUT /api/v1/malos/<malo>/grid → 204  (grid record ready for mako-pruefung)
-✓ PUT /api/v1/lokationszuordnungen → 204  (MaLo → MeLo edge)
+✓ PUT /api/v1/melos/<melo> → 201
+✓ PUT /api/v1/lokationszuordnungen → 200  (MaLo → MeLo edge)
 ✓ PUT /api/v1/melos/<melo>/msb → 204  (gMSB 9903456000009)
 ✓ PUT /api/v1/subscriptions/smoke-test-sub → 200
 ✓ GET /health → ok  (instance: ...)
+✓ GET /api/v1/openapi.json → makod — MaKo process engine
 ✓ PUT /admin/partners/4012345000023 → 200
+✓ GET /admin/partners → 1 partner(s) registered
 ✓ POST /edifact → HTTP 200  accepted=1  rejected=0  status=routed  pid=55001
 ✓ APERAK BGM+312 (Anerkennungsmeldung) delivered to LFN — automatic (no ERP action)
 ✓ ProcessInitiated delivered via marktd fan-out (source: urn:mako:marktd:tenant:9900357000004)
 ✓ processd NB auto-responder dispatched bestaetigen → UTILMD 55002 already arrived
 ✓ processd decision → Accept (mako-pruefung: all 6 checks passed)
-✓ POST /api/v1/commands → HTTP 422 (duplicate bestaetigen correctly rejected — AntwortGesendet guard confirmed)
+✓ POST /api/v1/commands → HTTP 409 (duplicate bestaetigen correctly rejected — AntwortGesendet guard confirmed)
 ✓ UTILMD 55002 was already verified in step 6c (auto-responder path)
+✓ DELETE /admin/partners/4012345000023 → 200
+✓ GET http://localhost:8180/health → ok
+✓ GET /api/v1/malos/<malo> → sparte=STROM  NB=9900357000004  (BO4E payload intact)
+✓ GET /api/v1/preisblaetter/9900357000004 → source=api  bezeichnung=Demo Netznutzungspreise FV2026 …  preis=0.0412
 ✓ Operator-override protection confirmed (source=api; api > mako enforced by SQL)
+✓ GET /api/v1/correlations?malo_id=<malo> → 0 correlations (process may have completed)
 All smoke tests passed.
   Wechselprozess auto-responder: ENABLED
   Flow: UTILMD 55001 → makod → marktd ingest → validate → bestaetigen → UTILMD 55002
 ```
 
-The `HTTP 422` at the manual dispatch step is the **state-machine proof**, not
-idempotency: `processd` already advanced the process to `AntwortGesendet`, so the
-later manual ERP command is refused as out of order.
+The round trip is milliseconds. `marktd`'s fan-out worker polls every 30 s and
+is woken early by a Postgres `NOTIFY` from an `AFTER INSERT` trigger on
+`event_log`, so the 55002 reaches the webhook before the first poll. A run where
+each step takes a poll interval means that wake-up is not arriving
+(`cargo xtask check-outbox-notify`).
 
-The 55002 that goes back to the LFN (message reference, timestamp and MaLo
-vary per run):
+The `HTTP 409` at the manual dispatch step is the **state-machine proof**, not
+idempotency: `processd` already advanced the process to `AntwortGesendet`, so the
+later manual ERP command is refused as out of order, and the body says so
+(`expected ValidationPassed, found AntwortGesendet`).
+
+The 55002 that goes back to the LFN (message reference, timestamp, MaLo and
+Messlokation are generated per run):
 
 ```
 UNB+UNOC:3+9900357000004:500+4012345000023:14+260701:0904+E8D66066D8E24B'
@@ -178,8 +194,8 @@ IDE+24+5c9a7b9b2c084e'
 DTM+92:202610010000?+00:303'   ← the Lieferbeginn, echoed from the Anmeldung
 STS+7++E01+ZW7'                ← the NB's own classification: gemessene MaLo
 STS+E01++A51:E_0623'           ← „Zustimmung (Prüfschritt 60)", with its EBD
-LOC+Z16+51238696012'
-LOC+Z17+DE00056266802AO6G56M11SN51G21M24S'   ← the Messlokation behind it
+LOC+Z16+17899174293'
+LOC+Z17+DE0005626680000000000000789917429'   ← the Messlokation behind it
 RFF+Z13:55002'                 ← the Prüfidentifikator, in SG6 of the Vorgang
 RFF+TN:VORGANG0001'            ← the Anmeldung's Vorgangsnummer being answered
 RFF+Z60:1'                     ← the Produktpaket-ID the NB will implement
@@ -187,7 +203,7 @@ SEQ+Z98'                       ← Daten der Marktlokation …
 CCI+++ZB3'
 CAV+Z91:9903456000009::Z39:Z19'  ← … its Messstellenbetreiber (gMSB, Vertrag)
 SEQ+ZF3'                       ← Daten der Messlokation …
-RFF+Z19:DE00056266802AO6G56M11SN51G21M24S'
+RFF+Z19:DE0005626680000000000000789917429'
 CCI+++ZB3'
 CAV+Z91:9903456000009::Z39:Z19'
 CAV+ZF0:9903456000009'         ← … and the gMSB standing behind it
@@ -242,12 +258,14 @@ bezeichnung), so the demo can be re-run without `docker compose down -v`.
 the wire as written. Segment by segment:
 
 ```
-UNB+UNOC:3+4012345000023:14+9900357000004:14+260701:0800+DEMO-2026-001'
+UNB+UNOC:3+4012345000023:14+9900357000004:500+260701:0800+DEMO-2026-001'
+                          ↑ DE 0007 also follows the id, on its own code list:
+                            14 GS1, 500 BDEW, 502 DVGW — not the NAD values
 UNH+MSG-001+UTILMD:D:11A:UN:S2.1'       ← S2.1 is the release in force until 2026-10-01
 BGM+E01+00055001'                       ← E01 Anmeldung; DE 1004 is the Dokumentennummer
 DTM+137:202607010800?+00:303'           ← Dokumentendatum, DE 2379 = 303 CCYYMMDDHHMMZZZ
 NAD+MS+4012345000023::9'                ← sender must equal the UNB sender
-NAD+MR+9900357000004::9'
+NAD+MR+9900357000004::293'              ← DE 3055 follows the id: 9 GS1, 293 BDEW, 332 DVGW
 IDE+24+VORGANG0001'                     ← DE 7402 is the Vorgangsnummer, not the MaLo
 DTM+92:202610010000?+00:303'            ← „Beginn zum" — the Lieferbeginn
 STS+7++E01+ZW4'                         ← Transaktionsgrund E01 Ein-/Auszug, verbrauchende MaLo (ZW4)

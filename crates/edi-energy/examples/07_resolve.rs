@@ -226,6 +226,40 @@ fn skeleton_sweep() -> Result<(), Box<dyn std::error::Error>> {
         println!("  {key:<18} {n:>4} Anwendungsfälle, {bad} failing");
     }
     println!("\n{checked} Anwendungsfälle checked, {failed} failing");
+
+    // ── The ratchet ──────────────────────────────────────────────────────────
+    //
+    // This sweep is the outbound counterpart of validation: it renders the
+    // minimal message of **every** Anwendungsfall of every shipped profile and
+    // resolves it against its own Prüfschablone, so every
+    // `AHB-<pid>-…-MISSING` here is a field a sender would have to source.
+    //
+    // Printing the number proves nothing on its own — a regression that doubles
+    // it still exits `0` and still reads like a report. The count is therefore
+    // asserted, and the two that remain are named rather than tolerated in bulk:
+    // UTILMD S2.1 and S2.2 PID 55235, whose `SG10 Zuordnungs-Regel des ZP der
+    // NGZ zur NZR` the generator's fixpoint does not force in. Fixing that is
+    // generator work; letting a third case join them silently is not something
+    // the fix should have to compete with.
+    const KNOWN_FAILING: usize = 2;
+    assert!(
+        failed <= KNOWN_FAILING,
+        "{failed} Anwendungsfälle fail to render a conformant skeleton, up from the \
+         {KNOWN_FAILING} known (UTILMD S2.1/S2.2 55235, SG10). Every one of these is a \
+         message mako would send incomplete — resolve the new ones, or move the number \
+         here deliberately and say which case joined and why."
+    );
+    assert!(
+        failed == KNOWN_FAILING,
+        "only {failed} Anwendungsfälle now fail, below the {KNOWN_FAILING} recorded here. \
+         Lower the ratchet in the same change that fixed them, so it keeps biting."
+    );
+    assert!(
+        checked > 900,
+        "the sweep reached only {checked} Anwendungsfälle — a shrunken corpus passes this \
+         for the wrong reason"
+    );
+
     Ok(())
 }
 

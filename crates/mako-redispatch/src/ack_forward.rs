@@ -105,7 +105,6 @@ impl CommandPayload for AckForwardCommand {}
 
 /// Core data captured on receipt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ReceivedData {
     /// MRID of the received document.
     pub mrid: String,

@@ -23,7 +23,7 @@ use edi_energy::{EdiEnergyMessage, Platform, ValidationSeverity};
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
 const VALID_UTILMD: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+240115:0800+INTER-V-001'\
+UNB+UNOC:3+4012345000023:14+9900357000004:500+240115:0800+INTER-V-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
 BGM+E01+MSG-001'\
 DTM+137:202401150800?+00:303'\
@@ -50,19 +50,28 @@ UNT+23+MSG-001'\
 UNZ+1+INTER-V-001'";
 
 /// The same Anmeldung with three deliberate defects, so the report API below has
-/// something to filter and render:
+/// something to filter and render. The rule ids each one fires are named,
+/// because the assertions below check for them and a defect the report does not
+/// reach is a defect this example only claims to demonstrate:
 ///
 /// - `IDE+Z19` — `Z19` is not an IDE qualifier; the AHB admits only `24`.
+///   (`MIG-00012-IDE-7495-CODE`, `AHB-55001-00012-IDE-NOT-PERMITTED`)
 /// - `DTM+137:…:102` — the Dokumentendatum's DE 2379 format code. Every
 ///   EDI@Energy MIG fixes it to `303` (`CCYYMMDDHHMMZZZ`).
-/// - no `SG8` — the Anmeldung must name the Bilanzkreis in a Produktpaket.
+///   (`MIG-00005-DTM-REQUIRED`, `AHB-55001-00005-DTM-MISSING`)
+/// - everything after `LOC+Z16` is gone — the `DTM+92` Lieferbeginn, the
+///   `STS+7` Transaktionsgrund and the whole Produktpaket — so the Vorgang
+///   group is incomplete. The report names that as **`SG4`**, the group the
+///   `IDE` opens, not as the `SG8` the Bilanzkreis would have sat in: a
+///   Produktpaket cannot be missing from a Vorgang the validator never got to
+///   enter. (`AHB-55001-SG4-00020-MISSING`)
 const INVALID_UTILMD: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+240115:0800+INTER-I-001'\
+UNB+UNOC:3+4012345000023:14+9900357000004:500+240115:0800+INTER-I-001'\
 UNH+MSG-002+UTILMD:D:11A:UN:S2.1'\
 BGM+E01:::+00055001::+9'\
 DTM+137:20240115:102'\
 RFF+Z13:REF-2024-002'\
-NAD+MS+4012345000023::293'\
+NAD+MS+4012345000023::9'\
 NAD+MR+9900357000004::293'\
 IDE+Z19+VORGANG-0002'\
 LOC+Z16+51238696781'\
@@ -136,6 +145,31 @@ fn check_valid() -> Result<(), Box<dyn std::error::Error>> {
 fn demo_report_api() -> Result<(), Box<dyn std::error::Error>> {
     let msg = Platform::with_all_profiles().parse(INVALID_UTILMD)?;
     let report = msg.validate()?;
+
+    // The subject of this half is a message with three named defects, so the
+    // report has to carry them. Printing the count alone would let a validator
+    // that found nothing render `Total issues: 0` and exit 0 — the example would
+    // still be demonstrating the report API, against an empty report, and the
+    // `_EXAMPLE_EXPECTS_VALIDATION_FINDINGS` exemption turns off the output scan
+    // that would otherwise notice.
+    assert!(
+        report.has_errors(),
+        "INVALID_UTILMD carries three deliberate defects and the report found no error: {report}"
+    );
+    let rules: Vec<&str> = report
+        .iter_issues()
+        .filter_map(|i| i.rule_id.as_deref())
+        .collect();
+    for defect in ["IDE", "DTM", "SG4"] {
+        assert!(
+            report
+                .iter_issues()
+                .any(|i| i.segment_tag.as_deref() == Some(defect)
+                    || i.rule_id.as_deref().is_some_and(|r| r.contains(defect))
+                    || i.message.contains(defect)),
+            "no finding names the deliberate {defect} defect; rules fired: {rules:?}"
+        );
+    }
 
     // Total issue count across all severities
     println!("Total issues     : {}", report.total_issues());

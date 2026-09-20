@@ -350,7 +350,7 @@ Also sets the SEPA billing_day (day of month for direct debit).",
         Parameters(p): Parameters<UpdateAbschlagParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::UpdateAccountRequest;
-        use crate::pg::{fetch_account, update_account};
+        use crate::pg::{fetch_account, update_account_tenanted};
         // Fetch to get lf_mp_id (required for update_account's composite key).
         let acct = match fetch_account(
             &self.state.pool,
@@ -369,10 +369,11 @@ Also sets the SEPA billing_day (day of month for direct debit).",
             }
             Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
         };
-        match update_account(
+        match update_account_tenanted(
             &self.state.pool,
             &p.malo_id,
             &acct.lf_mp_id,
+            &self.state.tenant,
             None,
             UpdateAccountRequest {
                 iban: None,

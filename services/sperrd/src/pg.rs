@@ -219,6 +219,7 @@ pub struct CreateOrderRequest {
 
 /// `SG2 NAD+Z24` — the meeting point for the field visit.
 #[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Treffpunkt {
     /// `NAD 3124` Zusatzinformation zur Identifizierung ("Keller links",
     /// "Zählerschrank Hof"). The AHB accepts this *instead of* a street.

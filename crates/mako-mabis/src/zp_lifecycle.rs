@@ -756,7 +756,6 @@ pub const WORKFLOW_NAME: &str = "mabis-zp-lifecycle";
 
 /// Data captured when a lifecycle Anfrage is received.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ZpLifecycleData {
     /// Prüfidentifikator of the inbound Anfrage.
     pub pruefidentifikator: Pruefidentifikator,

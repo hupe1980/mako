@@ -126,7 +126,6 @@ pub enum SteuerungsCommandType {
 
 /// Immutable data captured when the MSB receives a control command.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SteuerungsauftragData {
     /// Transaction ID from the NB/LF (unique per command).
     pub tx_id: String,

@@ -33,7 +33,7 @@ spec:
 
       ## TRIGGERED BY
       - `de.mako.process.failed` — process timed out or returned error
-      - `de.mako.aperak.timeout` — APERAK deadline missed (APERAK AHB §2.3/§2.4.1: Strom UTILMD/ORDERS 45 Minuten werktags; Gas Folgeprozesse nächster Werktag 12:00, Initialprozesse 3 Werktage)
+      - `de.mako.aperak.timeout` — APERAK deadline missed (APERAK AHB §2.3/§2.4.1: Strom UTILMD/ORDERS 45 Minuten an jedem Tag außer Samstag — § 2.4.1 nennt sie unqualifiziert und nimmt allein den Samstag aus, der Sonntag ist kein Sonderfall; Gas Folgeprozesse nächster Werktag 12:00, Initialprozesse 3 Werktage)
       - `de.mako.aperak.*` — APERAK events
 
       ## STEP-BY-STEP PROCEDURE
@@ -68,7 +68,9 @@ spec:
   # the file cannot back. Writing `orchestrator` here would have been exactly
   # that, and the parser said so.
   #
-  # MAST measures inter-agent misalignment at 36.9 % of observed multi-agent
+  # MAST — the Multi-Agent System Failure Taxonomy of Cemri et al., „Why Do
+  # Multi-Agent LLM Systems Fail?", arXiv:2503.13657 Fig. 4 (210 traces) —
+  # measures inter-agent misalignment at 36.9 % of observed multi-agent
   # failures — a class that exists only if you choose it. mako has not.
   topology:
     mode: single

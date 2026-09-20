@@ -53,7 +53,6 @@ pub const PARTIN_STROM_PIDS: &[u32] = &[37000, 37001, 37002, 37003, 37004, 37005
 
 /// Data captured when a PARTIN message is received.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct KommunikationsdatenData {
     /// BDEW Prüfidentifikator of the inbound PARTIN.
     pub pruefidentifikator: Pruefidentifikator,

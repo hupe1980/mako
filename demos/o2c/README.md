@@ -56,7 +56,7 @@ to state, EN 16931 makes BT-44 mandatory, and the object posted here is the
 party `billingd` puts on the document — so this is the demo's most load-bearing
 payload, not a formality.
 
-It is also the demo's own history. The earlier version posted
+The failure this shape prevents is a quiet one. A flat payload —
 
 ```json
 { "anrede": "Frau", "vorname": "Erika", "nachname": "Mustermann",
@@ -64,14 +64,14 @@ It is also the demo's own history. The earlier version posted
   "iban": "…", "zahlungsart": "SEPA_LASTSCHRIFT" }
 ```
 
-to an endpoint that has **none** of those fields — it takes a BO4E
+— names **none** of the fields `POST /kunden` has: it takes a BO4E
 `geschaeftspartner`, and the mandate belongs on
 `PUT /kunden/{id}/zahlungsinformation` as a BO4E `Zahlungsinformation`. `serde`
-ignores a key no field declares, so the request returned `201`, the customer was
-created with no name and no address, the invoice named nobody, and the demo
-reported success.
+ignores a key no field declares, so without the three rules below that request
+is a `201` for a customer with no name and no address, an invoice that names
+nobody, and a green smoke run.
 
-Three changes make that shape impossible now, and the demo asserts each:
+Three rules make that unrepresentable, and the demo asserts each:
 
 | | |
 |---|---|
@@ -173,7 +173,7 @@ Expected output:
 ✓ accountingd is ready
 
 ▶ [1] productd — the Tarifpreisblatt
-✓ PUT /api/v1/products/<lf>/STROM-H0-DEMO → 201
+✓ PUT /api/v1/products/<lf>/STROM-H0-DEMO → 200
 ✓ GET the product back → 200  (the catalogue is the only price source)
 
 ▶ [2] vertragd — POST the Kunde (BO4E Geschaeftspartner)
@@ -186,8 +186,8 @@ Expected output:
 ✓ PUT /api/v1/kunden/<id>/zahlungsinformation → 200  (IBAN checked mod-97)
 ✓ PUT a bad IBAN → 422  (mod-97, before a collection is ever built)
 
-▶ [2b] vertragd — POST the Versorgungsvertrag
-✓ POST /api/v1/kunden/<id>/vertraege → 201
+▶ [2b] vertragd — POST the Versorgungsvertrag on MaLo <malo>
+✓ POST /api/v1/kunden/<id>/vertraege → 201  (id=…)
 ✓ GET /api/v1/kunden/<id>/vertraege → 1 contract(s), status ANGELEGT
 
 ▶ [3] billingd — POST calculate for 2026-01-01..2026-01-31
@@ -196,14 +196,16 @@ Expected output:
 ✓ en16931_json.buyer → the same party  (one field feeds both maps)
 ✓ netto = 91.32500 EUR  (Grundpreis 6.20 + Arbeitspreis 80.00 + Stromsteuer 5.125)
 ✓ brutto = 108.67500 EUR  (19 % USt, kaufmännisch gerundet)
-✓ GET /api/v1/templates/reference/INVOICE → 200
-✓ POST /api/v1/templates → 201  (proof=RENDERED_PDFA)
-✓ PUT /api/v1/templates/INVOICE/current → 204
+
+▶ [3b] outputd — publish and roll out the INVOICE template
+✓ GET /api/v1/templates/reference/INVOICE → 200  (295 lines of Typst)
+✓ POST /api/v1/templates → 201  (hash=d4e9c165ab31…, proof=RENDERED_PDFA)
+✓ PUT /api/v1/templates/INVOICE/current → 204  (the layout every invoice renders with)
 
 ▶ [4] billingd → outputd — POST versenden
 ✓ POST /api/v1/billing/<id>/versenden → 202
-✓ GET /api/v1/documents?malo_id=… → 1 × INVOICE, 40782 bytes of application/pdf
-✓ GET /api/v1/documents/<id>/content → byte-identical to the record
+✓ GET /api/v1/documents?malo_id=… → 1 × INVOICE, 40791 bytes of application/pdf
+✓ GET /api/v1/documents/<id>/content → 40791 bytes, byte-identical to the record
 
 ▶ [5] accountingd — the invoice is a receivable
 ✓ GET /api/v1/offene-posten → 108.68 EUR open  (10868 ct, the invoice to the cent)
@@ -217,7 +219,15 @@ Expected output:
 ✓ de.accounting.payment.imported → 108.68 EUR, matched_by=remittance_token
 
 All order-to-cash smoke tests passed.
+  Flow: Tarifpreisblatt → Vertrag → Rechnung → Dokument → Offener Posten → Zahlung
+  MaLo <malo>, Rechnung RE-2026-000001, 108.68 EUR settled
 ```
+
+The whole run takes about four seconds, step 7 included: `accountingd`'s outbox
+worker polls every 30 s but is woken by a Postgres `NOTIFY` from an
+`AFTER INSERT` trigger on `event_outbox`. The smoke test still allows three poll
+intervals — an assertion window that needs the hint is an assertion about
+latency, not about the event.
 
 ## What is deliberately not here
 

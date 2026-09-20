@@ -149,7 +149,6 @@ impl EventPayload for KonfigurationEvent {
 
 /// Business data set when `BeauftragungGesendet` is applied.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct BeauftragungData {
     /// Prüfidentifikator of the sent ORDERS (17134).
     pub orders_pid: Pruefidentifikator,

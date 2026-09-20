@@ -103,7 +103,12 @@ const ADDRESSED_CODES: &[(&str, &str)] = &[
     ("CCI", "7037"),
     ("STS", "9015"),
     ("STS", "4405"),
-    ("STS", "9013"),
+    // Deliberately not `("STS", "9013")`. `C556` sits at three consecutive
+    // element positions under Statuskategorie `7`, so DE 9013 resolves to three
+    // slots and cannot be addressed by code at all — `Sts::reason_code` names
+    // its element and component index instead. Listing it here would assert the
+    // uniqueness the MIG disproves, which is how the layout came to declare one
+    // `C556` where the wire carries three.
     ("CTA", "3139"),
     ("CTA", "3413"),
     ("COM", "3148"),

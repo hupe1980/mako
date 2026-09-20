@@ -76,8 +76,8 @@ Quick reference across all process families. Each row is a top-level domain.
 > **„nicht quantifiziert" heißt unbekannt, nicht unbefristet.**
 > `mako_fristen::antwort` liefert für eine solche PID `None`; `makod` registriert
 > dann eine Betriebskonvention, gekennzeichnet als `is_regulatory: false`. Die
-> **APERAK**-Frist ist eine eigene Uhr (45 Minuten an einem Werktag, APERAK AHB
-> § 2.4.1) und steht nicht in dieser Spalte.
+> **APERAK**-Frist ist eine eigene Uhr (45 Minuten an jedem Tag außer Samstag,
+> APERAK AHB § 2.4.1) und steht nicht in dieser Spalte.
 
 | Domain | Sparte | Crate | Key PIDs | Antwortfrist des Geschäftsprozesses | Basis |
 |---|:---:|---|---|---|---|
@@ -196,8 +196,9 @@ Quick reference across all process families. Each row is a top-level domain.
 06.06.2025) — GPKE Teil 1–3 = Anlagen 1a–1c; **BK6-22-024** (Beschluss
 21.03.2024) — LFW24 (§ 20a EnWG) and GPKE Teil 4 = Anlage 1d.
 
-**APERAK Frist:** **45 Minuten** an einem Werktag für UTILMD und ORDERS,
-Samstag → Sonntag 12:00, sonst nächster Werktag 12:00 (APERAK AHB 1.1 § 2.4.1) —
+**APERAK Frist:** **45 Minuten** für UTILMD und ORDERS an jedem Tag außer
+Samstag, Samstag → Sonntag 12:00, sonst nächster Werktag 12:00 (APERAK AHB 1.1
+§ 2.4.1) —
 a separate clock from the business Antwortfrist of the process itself.
 
 ---

@@ -195,6 +195,13 @@ justifies it, a crash between "commit" and "deliver" can never drop or duplicate
 persist-before-dispatch. Emission always goes through one builder and one signer
 (`CloudEvent::new` + `post_ce_with_retry`; Standard Webhooks (`webhook-signature`)).
 
+Both outboxes wake their worker with a Postgres `NOTIFY`, raised by an
+`AFTER INSERT` trigger on the table rather than by the producer: Postgres holds
+it until the transaction commits, so the worker cannot wake onto a snapshot
+without the event, and every replica hears it. The 30 s poll interval stays the
+fallback — a lost notification delays delivery, never drops it.
+`cargo xtask check-outbox-notify` holds trigger, channel and listener together.
+
 > `makod`, `marktd` and `agentd` keep bespoke `main`s — `makod`/`marktd` for their non-standard
 > runtimes (SlateDB event store, `marktd`'s durable fan-out worker), `agentd` because it holds no
 > database. All three still use the same SDK building blocks (config, auth, tracing, shutdown,

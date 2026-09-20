@@ -57,7 +57,6 @@ pub const UTILTS_PIDS: &[u32] = &[25001, 25004, 25005, 25006, 25007, 25008, 2500
 
 /// Data captured when a UTILTS configuration message is received.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct UtiltsKonfigData {
     /// BDEW Prüfidentifikator of the inbound UTILTS.
     pub pruefidentifikator: Pruefidentifikator,

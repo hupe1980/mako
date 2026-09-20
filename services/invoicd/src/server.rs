@@ -533,6 +533,7 @@ async fn confirm_payment(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ResolveDisputeBody {
     note: Option<String>,
 }

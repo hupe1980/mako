@@ -546,7 +546,6 @@ async fn a_rolled_back_ingest_leaves_neither_marker_nor_projection_nor_outbox() 
             MALO.to_owned(),
             serde_json::json!({}),
         ),
-        &tokio::sync::Notify::new(),
     )
     .await
     .expect("enqueue");

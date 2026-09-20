@@ -237,7 +237,7 @@ where
                 marktmaloid: req.malo_id.clone(),
                 ..Default::default()
             });
-            if let Err(e) = crate::outbox::enqueue(&pool, &evt, &state.notify).await {
+            if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
                 tracing::error!(error = %e, "melo: durable enqueue failed");
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,

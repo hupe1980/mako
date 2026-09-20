@@ -148,7 +148,7 @@ mako-fristen     = { path = "crates/mako-fristen",     version = "0.21" }
 # AS4/ebMS3 stack behind the BDEW MaKo profile. Declared once here because
 # mako-as4 and makod both depend on it: independent declarations drift onto two
 # versions in one build.
-asx-rs           = { version = "0.14" }
+asx-rs           = { version = "0.15" }
 mako-service     = { path = "crates/mako-service",     version = "0.21" }
 invoic-checker   = { path = "crates/invoic-checker",   version = "0.21" }
 # `default-features = false` on purpose: the crate's defaults are *every*

@@ -31,7 +31,6 @@ use super::{Claims, IntoMdmResponse as _, Tenant};
 pub type MsbRvGasRepoExt = Arc<crate::pg::PgMsbRahmenvertragGasRepository>;
 async fn emit(
     pool: &sqlx::PgPool,
-    notify: &tokio::sync::Notify,
     tenant: &str,
     subject: String,
     data: serde_json::Value,
@@ -42,7 +41,8 @@ async fn emit(
         subject,
         data,
     );
-    crate::outbox::enqueue(pool, &evt, notify).await
+    crate::outbox::enqueue(pool, &evt).await?;
+    Ok(())
 }
 
 /// `PUT /api/v1/msb-rahmenvertraege-gas` — upsert a conclusion record.
@@ -70,7 +70,6 @@ pub async fn upsert_msb_rv_gas(
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
-    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Json(mut rec): Json<MsbRvGasUpsertRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-msb-rv-gas", &tenant) {
@@ -102,7 +101,6 @@ pub async fn upsert_msb_rv_gas(
         Ok((id, version)) => {
             if let Err(e) = emit(
                 &pool,
-                &notify,
                 &tenant,
                 id.to_string(),
                 serde_json::json!({

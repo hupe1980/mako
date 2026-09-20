@@ -226,7 +226,6 @@ pub const WORKFLOW_NAME: &str = "mabis-listenabgleich";
 
 /// Data captured when a list is received.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ListenabgleichData {
     /// Prüfidentifikator of the inbound list.
     pub pruefidentifikator: Pruefidentifikator,

@@ -159,7 +159,6 @@ impl EventPayload for LfStornierungEvent {
 
 /// Business data captured at `Initiated` time.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LfStornierungData {
     /// Prüfidentifikator of the outbound Anfrage (44022).
     pub pruefidentifikator: Pruefidentifikator,

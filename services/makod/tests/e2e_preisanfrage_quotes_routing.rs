@@ -20,7 +20,7 @@ const MALO: &str = "51238696012";
 /// A minimal QUOTES Angebot for `pid` carrying the MaLo in a LOC segment.
 fn quotes(pid: u32) -> String {
     format!(
-        "UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'\
+        "UNB+UNOC:3+4012345000023:14+9900357000004:500+230101:0000+1'\
 UNH+1+QUOTES:D:10A:UN:1.3c'\
 BGM+310+000{pid}'\
 DTM+137:202301010000?+00:303'\

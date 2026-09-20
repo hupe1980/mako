@@ -37,9 +37,24 @@ Commands:
   check-bo4e-examples  Refuse a documented BO4E example using a field BO4E does not define
   check-malo-ids       Refuse a MaLo-ID literal whose BDEW check digit is wrong
   check-business-dates   Refuse a business date read in UTC rather than in Europe/Berlin
+  check-outbox-notify    Hold each durable outbox's commit-coupled wake-up together: the
+                        AFTER INSERT trigger, the channel it raises on, the worker's LISTEN
+                        — and refuse an in-process notify on a producer path
   check-workflow-purity  Refuse a clock, random, environment or filesystem read inside an
                         `impl … Workflow for …` block — a workflow is a pure function of
                         (state, command), re-run on retry and re-folded on every replay
+  check-event-payloads   Refuse `deny_unknown_fields` on a workflow event payload — an
+                        event is read back years later, so a removed field must not make
+                        a § 147 AO record unfoldable
+  check-as4-controls     Refuse an AS4 control that is unreachable — the declared sign-and-encrypt
+                        floor with no call site, or the unpinned base session reaching the
+                        inbound pipeline (which refuses every signed message)
+  check-tenant-predicate Refuse a statement against a tenant-scoped table that names neither
+                        the tenant nor the table's own primary key — `tenant` is the isolation
+                        key and Postgres does not supply it
+  check-cedar-roles      Refuse a Cedar role literal no token can carry — `contains` is an
+                        exact match on `mako_roles`, so a misspelled role is a disjunct
+                        that is false for every caller and shows up only as a 403
   check-citations        Refuse a Festlegung cited in a form it does not publish
   check-rounding         Refuse banker's rounding — money rounds kaufmännisch (DIN 1333)
   check-pid-coverage     Compare the shipped AHB profiles against the published
@@ -68,17 +83,21 @@ Exit codes:
 mod bdew;
 mod bump_version;
 mod check_answer_commands;
+mod check_as4_controls;
 mod check_bo4e_attributes;
 mod check_bo4e_discriminants;
 mod check_bo4e_examples;
 mod check_business_dates;
+mod check_cedar_roles;
 mod check_citations;
 mod check_crate_lints;
 mod check_db_suites;
 mod check_dep_versions;
+mod check_event_payloads;
 mod check_expected_tenant;
 mod check_licenses;
 mod check_malo_ids;
+mod check_outbox_notify;
 mod check_prompt_tools;
 mod check_publish_order;
 mod check_release_coverage;
@@ -87,6 +106,7 @@ mod check_rounding;
 mod check_routes;
 mod check_runner_routes;
 mod check_sql;
+mod check_tenant_predicate;
 mod check_tool_grants;
 mod check_vorlauf_consulted;
 mod check_wire_timestamps;
@@ -127,7 +147,12 @@ fn main() {
         Some("check-dep-versions") => check_dep_versions(),
         Some("check-licenses") => check_licenses(),
         Some("check-wire-timestamps") => check_wire_timestamps(),
+        Some("check-outbox-notify") => check_outbox_notify(),
         Some("check-workflow-purity") => check_workflow_purity(),
+        Some("check-event-payloads") => check_event_payloads(),
+        Some("check-cedar-roles") => check_cedar_roles(),
+        Some("check-tenant-predicate") => check_tenant_predicate(),
+        Some("check-as4-controls") => check_as4_controls(),
         Some("check-answer-commands") => check_answer_commands(),
         Some("check-tool-grants") => check_tool_grants(),
         Some("validate-ebd-codes") => validate_ebd_codes(),
@@ -220,9 +245,44 @@ fn check_vorlauf_consulted() {
     }
 }
 
+fn check_outbox_notify() {
+    let (workspace_root, _) = workspace_info();
+    if !check_outbox_notify::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
 fn check_workflow_purity() {
     let (workspace_root, _) = workspace_info();
     if !check_workflow_purity::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_event_payloads() {
+    let (workspace_root, _) = workspace_info();
+    if !check_event_payloads::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_cedar_roles() {
+    let (workspace_root, _) = workspace_info();
+    if !check_cedar_roles::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_tenant_predicate() {
+    let (workspace_root, _) = workspace_info();
+    if !check_tenant_predicate::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_as4_controls() {
+    let (workspace_root, _) = workspace_info();
+    if !check_as4_controls::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

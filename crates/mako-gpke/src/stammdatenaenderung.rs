@@ -336,7 +336,6 @@ impl EventPayload for StammdatenEvent {
 
 /// Business data captured when the process starts (either role).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct StammdatenData {
     /// Marktlokation.
     pub location_id: MaLo,

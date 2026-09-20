@@ -3607,7 +3607,14 @@ pub async fn run_jahresabrechnung(
         settled_months.insert(month);
         einspeisemenge_kwh += kwh;
         settlement_eur += eur;
-        pflichtzahlung_eur += pflicht;
+        // The § 52 Pflichtzahlung is stored **cumulatively** — each monthly row
+        // carries the running claim to date, not that month's increment — so the
+        // year's figure is the last (largest) reading and never the sum. Adding
+        // them charges a year-long breach once per month: a 500 kW plant reports
+        // ~390 000 EUR where 60 000 EUR is owed, and the figure is persisted into
+        // `jahresabrechnungen`. `max` rather than "last row" because the rows are
+        // not ordered here and a corrected month must never lower the claim.
+        pflichtzahlung_eur = pflichtzahlung_eur.max(pflicht);
         verlaengerungsanspruch_qh += qh;
     }
 

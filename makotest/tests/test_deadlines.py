@@ -169,9 +169,12 @@ class TestTheTable:
         Sizing all four the same escalates the Abmeldung (7 WT) early and hides
         a missed Verpflichtungsanfrage (1 WT) for days.
         """
+        # Per PID, not as a set: a set of the four windows is identical after
+        # swapping 55039 (3 WT) with 55051 (7 WT), which is precisely the
+        # confusion this test exists to catch.
         assert {
-            antwort_obligation(pid).werktage for pid in (55039, 55042, 55051, 55168)
-        } == {1, 3, 5, 7}
+            pid: antwort_obligation(pid).werktage for pid in (55039, 55042, 55051, 55168)
+        } == {55039: 3, 55042: 5, 55051: 7, 55168: 1}
 
     def test_an_unquantified_pid_reports_unknown_not_unbounded(self):
         """44020's Frist is set per Netzbetreiber under Kap. 2.6, so it is absent."""

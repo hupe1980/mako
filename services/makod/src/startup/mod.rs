@@ -521,6 +521,22 @@ pub(crate) struct WorkersConfig {
     pub ingest_dispatcher: Arc<ingest_dispatcher::EdifactIngestDispatcher>,
     /// Shared HTTP client (OIDC JWKS, MaLo-ID callbacks).
     pub http_client: reqwest::Client,
+    /// Client carrying the mTLS identity for the EDI-Energy API-Webdienste.
+    ///
+    /// Separate from [`Self::http_client`] on purpose. That one fetches JWKS
+    /// and posts to the operator's own webhook, where presenting an EMT.API
+    /// certificate would be wrong; this one is the identity the BDEW services
+    /// authenticate. One shared client cannot be both.
+    pub webdienste_client: reqwest::Client,
+    /// EMT.API signing key for TR-03116-3 content-layer signing, when the
+    /// operator configured one.
+    pub webdienste_signing_key: Option<energy_api::transport::content_security::ContentSigningKey>,
+    /// WIRK TLS identity presented to a partner MSH, when the operator holds it
+    /// here rather than on an egress proxy.
+    ///
+    /// Parsed at startup so a mismatched certificate/key pair fails where it is
+    /// configured, not on the first delivery.
+    pub as4_client_identity: Option<asx_rs::transport::ClientIdentity>,
     /// MaLo cache (for MaloIdentSender and MCP server).
     pub malo_cache: Arc<malo_cache::SlateDbMaloCache>,
     /// Graceful-shutdown token. Every worker below observes it and returns at
@@ -652,7 +668,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
         if let Some(base_url) = cfg.checked.verzeichnisdienst_url.clone() {
             let vz_client = energy_api::directory::DirectoryServiceClient::new(
                 base_url.clone(),
-                cfg.http_client.clone(),
+                cfg.webdienste_client.clone(),
             );
             let vz_partner_store = cfg.store.as_partner_store();
             let vz_tenant_id =
@@ -678,10 +694,11 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
 
     let malo_sender = MaloIdentSender::new(
         (*cfg.malo_cache).clone(),
-        cfg.http_client.clone(),
+        cfg.webdienste_client.clone(),
         maloid_partners,
         verzeichnisdienst_lookup,
         cfg.store.clone(),
+        cfg.webdienste_signing_key.clone(),
     );
 
     // ── AS4 partner P-Mode registry (built by the preflight) ─────────────
@@ -770,6 +787,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
             })),
             Arc::clone(&cfg.platform),
             cfg.as4_lenient_receipts,
+            cfg.as4_client_identity.clone(),
         )?
         .with_netzzugang(Arc::clone(&netzzugang_sender))
         // `<eb:From>/<eb:PartyId>` must match the signing certificate's subject

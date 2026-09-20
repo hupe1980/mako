@@ -1238,6 +1238,7 @@ pub async fn put_epex_price(
 
 /// One EPEX spot interval in the bulk-load request body.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpotPriceEntry {
     /// Interval start, RFC 3339 (UTC).
     pub delivery_start: String,

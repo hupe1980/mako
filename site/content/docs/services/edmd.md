@@ -211,7 +211,7 @@ The `/mcp` surface is admitted by one blanket Cedar action (`use-mcp`, same-tena
 any role). That is right for the read tools, but the two **destructive** tools —
 `trigger_substitution` (Ersatzwertbildung) and `trigger_jahresablesung` (§40
 campaign) — call the same cores as their REST endpoints, which require
-`write-timeseries` / `write-reading-order` (MSB/NB/admin). The MCP auth middleware
+`write-timeseries` / `write-reading-order` (MSB/NB/ADMIN). The MCP auth middleware
 inspects the tool name of each `tools/call` and enforces that same write action,
 so an LF-role token cannot escalate through MCP to a write it is refused on REST.
 
@@ -1049,7 +1049,7 @@ the write path for every other tenant. Two limiters apply:
 
 | Limiter | Key | Bounds |
 |---|---|---|
-| `with_tenant_rate_limit` | authenticated tenant, else peer address | any single caller |
+| `with_caller_rate_limit` | peer address (the layer runs before auth, so any credential is caller-chosen) | any single caller |
 | `with_rate_limit` | global | their sum |
 
 A global bucket alone lets one busy tenant consume the whole allowance and starve
@@ -1063,7 +1063,7 @@ The bucket key is a hash of the bearer token, never the token itself.
 [rate_limit]
 requests_per_second            = 500   # global sustained
 burst                          = 1000  # metered ingest is bursty by nature
-per_tenant_requests_per_second = 100
+per_caller_requests_per_second = 100
 ```
 
 `burst` is deliberately above the sustained rate: an MSCONS batch or an IoT
@@ -3365,11 +3365,11 @@ everything but write nothing.
 | Action group | Actions | Required role |
 |---|---|---|
 | Reads | `read-timeseries`, `read-imbalance`, `read-billing-period`, `read-archive-olap`, `read-archive-status`, `read-reading-order`, `use-mcp` | any (tenant match only) |
-| Reading ingest | `write-meter-reads` (direct push, gas, IoT, SMGW registry) | `MSB` or `admin` |
-| Series mutation | `write-timeseries`, `write-corrections`, `write-quality-rescore` (bulk import, § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) corrections, § 60 Abs. 1 MsbG substitutes, virtual meters, rescore) | `MSB`, `NB`, or `admin` |
-| Field dispatch | `write-reading-order` (orders + §40b EnWG campaign) | `NB`, `MSB`, or `admin` |
-| ESA Typ-2 filing | `write-esa-typ2` (`POST /api/v1/esa/typ2/{malo_id}`, the Kapitel-4.6.2 SMGW door) | `ESA`, `MSB`, or `admin` |
-| Erasure | `write-gdpr-erasure` (Art. 17 DSGVO) | `NB`, `MSB`, or `admin` |
+| Reading ingest | `write-meter-reads` (direct push, gas, IoT, SMGW registry) | `MSB` or `ADMIN` |
+| Series mutation | `write-timeseries`, `write-corrections`, `write-quality-rescore` (bulk import, § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) corrections, § 60 Abs. 1 MsbG substitutes, virtual meters, rescore) | `MSB`, `NB`, or `ADMIN` |
+| Field dispatch | `write-reading-order` (orders + §40b EnWG campaign) | `NB`, `MSB`, or `ADMIN` |
+| ESA Typ-2 filing | `write-esa-typ2` (`POST /api/v1/esa/typ2/{malo_id}`, the Kapitel-4.6.2 SMGW door) | `ESA`, `MSB`, or `ADMIN` |
+| Erasure | `write-gdpr-erasure` (Art. 17 DSGVO) | `NB`, `MSB`, or `ADMIN` |
 
 `POST /api/v1/query/sql` is gated by `read-archive-olap` (the archive
 capability), not the generic hot-tier read action; the nested Iceberg REST

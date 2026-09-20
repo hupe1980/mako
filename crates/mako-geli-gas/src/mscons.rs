@@ -58,7 +58,6 @@ pub const MSCONS_PIDS: &[u32] = &[13002, 13007, 13008, 13009];
 
 /// Data captured when a Gas MSCONS message is received.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct GasMsconsDatenData {
     /// BDEW Prüfidentifikator of the inbound MSCONS.
     pub pruefidentifikator: Pruefidentifikator,

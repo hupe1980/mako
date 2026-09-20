@@ -2,7 +2,7 @@
 
 `obsd` projects all `de.mako.*` CloudEvents into a queryable read-model of running and completed MaKo processes. From it: per-PID KPIs, business-Antwortfrist alerts, and the § 7a Abs. 5 EnWG Gleichbehandlung parity evidence.
 
-**Two deadline clocks, never one number.** The *APERAK Frist* is the technical acknowledgement (45 min Strom weekday; Gas next Werktag 12:00 or 3 Werktage) and arrives as `de.mako.aperak.timeout`. The *Antwortfrist* is the business answer (11:00 of the 1. Werktag for a GPKE Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom) and is `deadline_at`. They differ by orders of magnitude and fail for different reasons; every report carries them as separate fields.
+**Two deadline clocks, never one number.** The *APERAK Frist* is the technical acknowledgement (45 min Strom on every day but Samstag; Gas next Werktag 12:00 or 3 Werktage) and arrives as `de.mako.aperak.timeout`. The *Antwortfrist* is the business answer (11:00 of the 1. Werktag for a GPKE Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom) and is `deadline_at`. They differ by orders of magnitude and fail for different reasons; every report carries them as separate fields.
 
 | Feature | Detail |
 |---|---|

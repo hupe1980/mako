@@ -24,11 +24,12 @@
 #
 # ## One grant, because one tool is called
 #
-# This file used to grant 34 tools across obsd, makod and marktd — inherited
-# wholesale from the cutover, which handed every specialist its servers' full
-# read surface. A coded skill's reach is legible: it calls
-# `obsd/list_overdue_processes`, so that is what it may reach. Everything else
-# was authority nobody had reasoned about.
+# A coded skill's reach is legible, and the grant is held to exactly it: this
+# agent calls `obsd/list_overdue_processes`, so that one tool is what it may
+# reach. The alternative is a grant sized to the servers instead of to the
+# skill — every specialist holding obsd's, makod's and marktd's full read
+# surface, which is authority nobody has reasoned about and no reviewer can
+# assess from the digest.
 #
 # Cross-cutting: present in every role-scoped build.
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
@@ -67,7 +68,8 @@ spec:
       Two different clocks produce these deadlines, and this specialist never
       conflates them:
 
-        APERAK Frist   the technical acknowledgement — 45 min Strom weekday,
+        APERAK Frist   the technical acknowledgement — 45 min Strom on every day
+                       but Samstag (a Saturday arrival is due Sonntag 12:00),
                        next Werktag 12:00 for a Gas Folgeprozess, 3 Werktage for
                        a Gas Initialprozess. A lapse arrives as
                        `de.mako.aperak.timeout`.
@@ -83,7 +85,9 @@ spec:
 
   # What this agent is in a multi-agent arrangement.
   #
-  # MAST measures inter-agent misalignment at 36.9 % of observed multi-agent
+  # MAST — the Multi-Agent System Failure Taxonomy of Cemri et al., „Why Do
+  # Multi-Agent LLM Systems Fail?", arXiv:2503.13657 Fig. 4 (210 traces) —
+  # measures inter-agent misalignment at 36.9 % of observed multi-agent
   # failures — a class that exists only if you choose it. Declaring the shape is
   # how you choose not to: `single` means one agent, one context, many tools, and
   # the inter-agent failure surface is structurally absent. `specialist` means it

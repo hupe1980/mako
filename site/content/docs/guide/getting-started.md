@@ -311,23 +311,22 @@ quarter-hour Einspeisemenge it settles against.
 
 ```bash
 # from the repo root
-docker build --target edmd-runtime  -t edmd:dev  .
-docker build --target einsd-runtime -t einsd:dev .
+just build-demo-eeg   # marktd, edmd, einsd
 
 cd demos/eeg-billing
 docker compose up -d
 bash smoke.sh
 ```
 
-`marktd` comes from the image `just build-demo` already produced. `edmd` and
-`einsd` are built on their own, and they are the expensive half of this page:
-both copy from the full `builder` stage, which compiles every service in the
-workspace in one `cargo build` — Iceberg/DataFusion and LanceDB included. Budget
-**20–45 minutes** cold, a few minutes on a warm BuildKit cache.
+The recipe rebuilds `marktd` too, which is a cache hit after the first demo.
+`edmd` and `einsd` are the expensive half of this page: both copy from the full
+`builder` stage, which compiles every service in the workspace in one
+`cargo build` — Iceberg/DataFusion and LanceDB included. Budget **20–45 minutes**
+cold, a few minutes on a warm BuildKit cache.
 
 It registers the Anlagenbetreiber and a 9.8 kWp rooftop plant behind it, pushes a
 month of quarter-hour readings under OBIS `1-0:2.8.0`, settles the month at EUR
-233.57, and asserts the `de.eeg.verguetung.berechnet` CloudEvent the ERP
+233.568, and asserts the `de.eeg.verguetung.berechnet` CloudEvent the ERP
 receives. The amount alone is not a legal document: under the Gutschriftverfahren
 (§ 14 Abs. 2 Satz 2 UStG) the Netzbetreiber issues the Gutschrift, so `einsd`
 renders it as a BO4E `Rechnung` whose VAT follows the operator's declared

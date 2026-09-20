@@ -106,15 +106,24 @@ fn the_envelope_and_the_nad_agree_on_the_issuing_office() {
 /// generator believes, what landed on disk has to agree with
 /// [`AgencyCode::for_mp_id`].
 ///
+/// The `demos/` fixtures are in scope. They are the copy an evaluator reads
+/// first and the one a market partner is handed as "this is what you send us",
+/// and nothing else holds them to the derivation: `demo_fixtures.rs` validates
+/// them against the AHB, which says nothing about which office issued the code.
+///
 /// Fixtures that deliberately carry a wrong agency belong under `invalid/` with
-/// an `.expected.json`; this only reads `gen/`, which is machine-written.
+/// an `.expected.json` naming the rule that must fire.
 #[test]
-fn every_generated_fixture_stamps_the_agency_its_mp_id_implies() {
+fn every_checked_in_fixture_stamps_the_agency_its_mp_id_implies() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let mut checked = 0usize;
     let mut wrong: Vec<String> = Vec::new();
 
-    let mut dirs = vec![root.clone()];
+    let demos = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../demos")
+        .canonicalize()
+        .expect("demos/ is part of the workspace");
+    let mut dirs = vec![root.clone(), demos];
     while let Some(dir) = dirs.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
@@ -164,6 +173,93 @@ fn every_generated_fixture_stamps_the_agency_its_mp_id_implies() {
         wrong.is_empty(),
         "{} generated NAD(s) name the wrong code list — fix `agency_for` and \
          regenerate the fixtures it feeds:\n  {}",
+        wrong.len(),
+        wrong
+            .iter()
+            .take(15)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+}
+
+/// Every checked-in fixture stamps the DE 0007 its own MP-ID implies.
+///
+/// The envelope half of the same rule, and the half that had nothing holding
+/// it: `unb_qualifier` is asserted on four literals in its own unit test, and
+/// the corpus was never read. DE 0007 and DE 3055 name the same issuing office
+/// on **different code lists** — `500`/`293` BDEW, `502`/`332` DVGW, `14`/`9`
+/// GS1 — so a fixture can carry the right NAD and still declare in its envelope
+/// that GS1 issued a BDEW-Codenummer.
+///
+/// That is not cosmetic. A fixture is what a reader copies and what the parser
+/// is exercised on, so a corpus stamping `14` everywhere means mako emits
+/// `9900357000004:500` and cannot point at a single inbound example of the shape
+/// it sends — and the demo that reads the fixture shows the same party
+/// identified two different ways in one exchange.
+#[test]
+fn every_checked_in_fixture_stamps_the_unb_qualifier_its_mp_id_implies() {
+    let mut dirs = vec![
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../demos")
+            .canonicalize()
+            .expect("demos/ is part of the workspace"),
+    ];
+    let mut checked = 0usize;
+    let mut wrong: Vec<String> = Vec::new();
+
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "edi") {
+                continue;
+            }
+            let raw = String::from_utf8_lossy(&std::fs::read(&path).expect("fixture is readable"))
+                .into_owned();
+            let Some(unb) = raw.split('\'').next().map(str::trim) else {
+                continue;
+            };
+            // UNB+<S001>+<S002 sender:qualifier>+<S003 receiver:qualifier>+…
+            let mut fields = unb.split('+');
+            let (Some(_tag), Some(_s001), Some(s002), Some(s003)) =
+                (fields.next(), fields.next(), fields.next(), fields.next())
+            else {
+                continue;
+            };
+            for (role, field) in [("sender", s002), ("receiver", s003)] {
+                let mut comps = field.split(':');
+                let (Some(mp_id), Some(qualifier)) = (comps.next(), comps.next()) else {
+                    continue;
+                };
+                checked += 1;
+                let expected = unb_qualifier(mp_id);
+                if qualifier != expected {
+                    wrong.push(format!(
+                        "{}: UNB {role} {mp_id} stamped {qualifier}, but unb_qualifier says \
+                         {expected}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        checked > 150,
+        "expected both parties of every interchange fixture, saw {checked}"
+    );
+    assert!(
+        wrong.is_empty(),
+        "{} fixture interchange(s) declare an issuing office their MP-ID does not imply \
+         (Allgemeine Festlegungen V6.1d: DE 0007 is 500 BDEW / 502 DVGW / 14 GS1):\n  {}",
         wrong.len(),
         wrong
             .iter()

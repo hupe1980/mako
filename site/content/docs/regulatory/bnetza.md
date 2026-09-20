@@ -55,9 +55,11 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 - **Mehr-/Mindermengen Strom** (INVOIC, PIDs 31005–31006) — see Mitteilung Nr. 72 below
 - **Mehr-/Mindermengen Gas** (INVOIC, PIDs 31007–31008; NB → MGV, Gas-only) — belongs to GaBi Gas (`mako-gabi-gas`)
 
-**APERAK Frist (GPKE):** **45 Minuten** an einem Werktag für UTILMD und ORDERS
-(APERAK AHB 1.0 §2.4.1); Samstagseingang bis Sonntag 12:00 Uhr, alles übrige bis
-12:00 Uhr des nächsten Werktags. Nicht die Antwortfrist des Geschäftsprozesses —
+**APERAK Frist (GPKE):** **45 Minuten** für UTILMD und ORDERS an **jedem Tag
+außer Samstag** — § 2.4.1 nennt die 45 Minuten unqualifiziert und nimmt allein
+den Samstag aus, der Sonntag ist also kein Sonderfall (APERAK AHB 1.0 § 2.4.1);
+Samstagseingang bis Sonntag 12:00 Uhr, alles übrige bis 12:00 Uhr des nächsten
+Werktags. Nicht die Antwortfrist des Geschäftsprozesses —
 siehe unten.
 
 **Laufende Verfahren:**
@@ -160,7 +162,7 @@ siehe unten.
 2.4.2 / **2.4.2 Nr. 4** — the Verpflichtungsanfrage is Prozessschritt 3 of the
 *Ende Messstellenbetrieb*, not of Kap. 2.5 „Verpflichtung gMSB"). Samstage, Sonntage und gesetzliche Feiertage sind keine Werktage.
 
-> Davon zu unterscheiden ist die **APERAK**-Eingangsbestätigung: für UTILMD Strom **45 Minuten** an Werktagen (APERAK AHB §2.4.1) — eine eigene, deutlich kürzere Frist.
+> Davon zu unterscheiden ist die **APERAK**-Eingangsbestätigung: für UTILMD Strom **45 Minuten** an jedem Tag außer Samstag (APERAK AHB § 2.4.1) — eine eigene, deutlich kürzere Frist. „An Werktagen" wäre zu eng: § 2.4.1 karenzt nur den Samstag, der Sonntag läuft auf 45 Minuten.
 
 **Laufende Verfahren:**
 
@@ -342,8 +344,12 @@ registriert daraus die Prozessfrist, `processd` bemisst die Operator-Queue,
 
 > **Werktag rule:** Saturdays, Sundays and public holidays are not Werktage (GPKE Teil 1). 24.12. and 31.12. count as holidays.
 
-> **Redispatch 2.0 deadlines are separate** — they use UTC wall-clock hours, not Werktage:
-> 6 h (`AcknowledgementDocument`), 24 h (`StatusRequest`), and 5 min (Activation response).
+> **Redispatch 2.0 deadlines are separate** — they use UTC wall-clock time, not Werktage:
+> **3 Minuten** (`AcknowledgementDocument`, „unverzüglich, jedoch spätestens 3 Minuten nach
+> Erhalt der Übertragungsdatei" — EDI@Energy Formatbeschreibung 1.0g), 24 h (`StatusRequest`),
+> and 5 min (Activation response). **Not 6 hours**: that figure is widely quoted and was never
+> this obligation, and the difference decides the design — a 6-hour window is something a batch
+> job satisfies, a 3-minute one has to be answered by the receiving process itself.
 > The full deadline table is in the [PID reference](@/docs/regulatory/pid-reference.md#redispatch-2-0-xml-document-types-not-edifact-pids).
 
 ---

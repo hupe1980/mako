@@ -91,6 +91,12 @@ struct MaloIdentCallbackPayload {
 pub struct MaloIdentSender {
     cache: SlateDbMaloCache,
     http_client: Client,
+    /// EMT.API key for TR-03116-3 content-layer signing, when configured.
+    ///
+    /// `None` sends the callback unsigned, which a counterparty is entitled to
+    /// refuse. That is a deployment choice the startup records, not one this
+    /// sender makes per call.
+    signing_key: Option<energy_api::transport::content_security::ContentSigningKey>,
     /// Static overrides: MP-ID → callback base URL.
     ///
     /// Takes priority over Verzeichnisdienst lookups.  Configure via
@@ -121,11 +127,13 @@ impl MaloIdentSender {
         partner_urls: HashMap<String, Url>,
         verzeichnisdienst: Option<VerzeichnisdienstLookup>,
         outbox_store: SlateDbStore,
+        signing_key: Option<energy_api::transport::content_security::ContentSigningKey>,
     ) -> Self {
         let result_cache = MaloIdentResultCache::new(outbox_store.clone());
         Self {
             cache,
             http_client,
+            signing_key,
             partner_urls: Arc::new(partner_urls),
             verzeichnisdienst,
             outbox_store,
@@ -149,6 +157,7 @@ impl As4Sender for MaloIdentSender {
     ) -> impl std::future::Future<Output = Result<(), EngineError>> + Send {
         let cache = self.cache.clone();
         let http_client = self.http_client.clone();
+        let signing_key = self.signing_key.clone();
         let partner_urls: Arc<HashMap<String, Url>> = Arc::clone(&self.partner_urls);
         let verzeichnisdienst = self.verzeichnisdienst.clone();
         let outbox_store = self.outbox_store.clone();
@@ -247,7 +256,16 @@ impl As4Sender for MaloIdentSender {
                 return Ok(());
             };
 
+            // TR-03116-3 Inhaltsdatensicherung (chapter 9) applies to the MaLo
+            // Identification API. Without the key the callback goes out
+            // unsigned, which the counterparty is entitled to refuse — so the
+            // key's absence is a deployment choice recorded at startup, not a
+            // per-call fallback decided here.
             let client = MaloIdentClient::new(lf_base_url, http_client);
+            let client = match signing_key.as_ref() {
+                Some(key) => client.with_signing(key.clone()),
+                None => client,
+            };
 
             let now_dt = OffsetDateTime::now_utc()
                 .format(&time::format_description::well_known::Rfc3339)

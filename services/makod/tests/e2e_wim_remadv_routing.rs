@@ -33,7 +33,7 @@ const INVOICE_REF: &str = "REF001"; // must match the REMADV's RFF+Z13 back-refe
 
 /// Minimal REMADV 33001 (Bestätigung) carrying `RFF+Z13:REF001` — the message-ref
 /// of the original 31009 INVOIC the billing process was registered under.
-const REMADV_33001: &str = "UNB+UNOC:3+4012345000023:14+9900357000004:14+250101:0000+1'\
+const REMADV_33001: &str = "UNB+UNOC:3+4012345000023:14+9900357000004:500+250101:0000+1'\
 UNH+1+REMADV:D:05A:UN:2.9f'\
 BGM+239+00033001'\
 DTM+137:202501010000?+00:303'\

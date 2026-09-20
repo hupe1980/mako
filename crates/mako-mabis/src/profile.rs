@@ -173,7 +173,6 @@ impl Profilart {
 
 /// Data captured when a profile delivery arrives.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ProfilData {
     /// MSCONS Prüfidentifikator of the delivery.
     pub pruefidentifikator: Pruefidentifikator,

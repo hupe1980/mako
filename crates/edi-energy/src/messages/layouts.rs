@@ -71,9 +71,17 @@ const C080: &[ComponentRef] = &[
 ];
 
 /// C506 — Referenz (`RFF`).
+///
+/// Most `RFF` uses stop at `1154`, but `1156` and `1056` are both carried — by
+/// the MIGs in three and six places respectively, and on the wire by
+/// `beispiel_25001_berechnungsformel` and `pid_37001_1_0f`. A composite is
+/// under-declared exactly once and then silently truncates every message that
+/// reaches past it.
 const C506: &[ComponentRef] = &[
     ComponentRef::new(1, "1153", M),
     ComponentRef::new(2, "1154", C),
+    ComponentRef::new(3, "1156", C),
+    ComponentRef::new(4, "1056", C),
 ];
 
 /// C206 — Identifikationsnummer (`IDE`).
@@ -112,8 +120,18 @@ const C212: &[ComponentRef] = &[
 /// C502 — Einzelheiten zu Maßangaben (`CCI`). *Nicht benutzt*, keeps its slot.
 const C502: &[ComponentRef] = &[ComponentRef::new(1, "6313", C)];
 
-/// C240 — Merkmalsbeschreibung (`CCI`). BDEW carries only DE 7037.
-const C240: &[ComponentRef] = &[ComponentRef::new(1, "7037", M)];
+/// C240 — Merkmalsbeschreibung (`CCI`).
+///
+/// Not only `7037`: the MIG carries `7037:1131:3055` and `7037:1131:3055:7036`,
+/// and Gas fixtures populate them (`pid_44123_gas`,
+/// `beispiel_55169_bestaetigung_verpflichtungsanfrage`). The qualifying
+/// components are conditional, so most `CCI` uses still carry `7037` alone.
+const C240: &[ComponentRef] = &[
+    ComponentRef::new(1, "7037", M),
+    ComponentRef::new(2, "1131", C),
+    ComponentRef::new(3, "3055", C),
+    ComponentRef::new(4, "7036", C),
+];
 
 /// C601 — Statuskategorie (`STS`).
 const C601: &[ComponentRef] = &[ComponentRef::new(1, "9015", M)];
@@ -158,11 +176,35 @@ const DTM_ELEMENTS: &[ElementRef] = &[ElementRef::composite(1, "C507", M, 1, C50
 pub const DTM: SegmentDefinition =
     SegmentDefinition::new("DTM", "Datum/Uhrzeit/Zeitspanne", DTM_ELEMENTS);
 
+/// C059 — Straße (`NAD`). DE 3042 occurs four times: street, and up to three
+/// further address lines. Addressed by index, since the id names all four.
+const C059: &[ComponentRef] = &[
+    ComponentRef::new(1, "3042", M),
+    ComponentRef::new(2, "3042", C),
+    ComponentRef::new(3, "3042", C),
+    ComponentRef::new(4, "3042", C),
+];
+
+/// C819 — Land-Untereinheit (`NAD`). *Nicht benutzt*, keeps its slot so the
+/// elements after it stay where the directory puts them.
+const C819: &[ComponentRef] = &[ComponentRef::new(1, "3229", C)];
+
+/// `NAD` carries a full postal address, not just the party.
+///
+/// Elements 5–9 are the address: Straße, Ort, Land-Untereinheit, Postleitzahl,
+/// Ländername. Declaring only the party elements does not make the rest absent
+/// from the wire — it makes them unaddressable, and an `NAD` that carries a
+/// customer's Ort, PLZ and Land is read as though it did not.
 const NAD_ELEMENTS: &[ElementRef] = &[
     ElementRef::new(1, "3035", M, 1),
     ElementRef::composite(2, "C082", C, 1, C082),
     ElementRef::composite(3, "C058", C, 1, C058),
     ElementRef::composite(4, "C080", C, 1, C080),
+    ElementRef::composite(5, "C059", C, 1, C059),
+    ElementRef::new(6, "3164", C, 1),
+    ElementRef::composite(7, "C819", C, 1, C819),
+    ElementRef::new(8, "3251", C, 1),
+    ElementRef::new(9, "3207", C, 1),
 ];
 /// `NAD` — Name und Adresse.
 pub const NAD: SegmentDefinition = SegmentDefinition::new("NAD", "Name und Adresse", NAD_ELEMENTS);
@@ -222,6 +264,9 @@ pub const QTY: SegmentDefinition = SegmentDefinition::new("QTY", "Mengenangaben"
 const LIN_ELEMENTS: &[ElementRef] = &[
     ElementRef::new(1, "1082", C, 1),
     ElementRef::new(2, "1229", C, 1),
+    // `C212` carries the article number that identifies the position — the
+    // INVOIC and PRICAT MIGs put it here in eight places, and both send it.
+    ElementRef::composite(3, "C212", C, 1, C212),
 ];
 /// `LIN` — Positionsdaten.
 pub const LIN: SegmentDefinition = SegmentDefinition::new("LIN", "Positionsdaten", LIN_ELEMENTS);
@@ -251,11 +296,17 @@ pub const CCI: SegmentDefinition = SegmentDefinition::new("CCI", "Merkmal/Klasse
 /// C889 — Merkmalswert (`CAV`). `1131` and `3055` are *nicht benutzt* in the
 /// BDEW profile and keep their slots, so the value sits at component **4**:
 /// `CAV+ZV4:::11XBK-STD-----9`.
+///
+/// `7110` occurs **twice** — that is the UN/EDIFACT composite, and the MIG
+/// carries the five-component shape in seven places. Gas fixtures send
+/// `CAV+:::1:1`, whose fifth component the four-component reading cannot
+/// address at all.
 const C889: &[ComponentRef] = &[
     ComponentRef::new(1, "7111", C),
     ComponentRef::new(2, "1131", C),
     ComponentRef::new(3, "3055", C),
     ComponentRef::new(4, "7110", C),
+    ComponentRef::new(5, "7110", C),
 ];
 
 const CAV_ELEMENTS: &[ElementRef] = &[ElementRef::composite(1, "C889", M, 1, C889)];
@@ -278,10 +329,17 @@ const STS_ELEMENTS: &[ElementRef] = &[
     // `C556` occupies three consecutive *element positions* under
     // Statuskategorie `7`: Transaktionsgrund, Ergänzung and Transaktionsgrund
     // für das Lieferende einer befristeten Anmeldung — `STS+7++E01+ZW4+E03'`,
-    // the MIG's own example. Only the first is code-addressable (a data element
-    // declared at two positions cannot be resolved by code); elements 4 and 5
-    // are read positionally by `UtilmdTransaction::transaktionsgrund`.
+    // the MIG's own example.
+    //
+    // All three are declared. Only the first is addressable *by code* — a data
+    // element at two positions cannot be resolved by its id — so elements 4 and
+    // 5 are read positionally by `UtilmdTransaction::transaktionsgrund`. That is
+    // a limit on how they are read, not a reason to leave them out of the shape:
+    // undeclared, a `STS+7++E01+ZW6` reads as carrying an element the segment
+    // does not have.
     ElementRef::composite(3, "C556", C, 1, C556),
+    ElementRef::composite(4, "C556", C, 1, C556),
+    ElementRef::composite(5, "C556", C, 1, C556),
 ];
 /// `STS` — Status. Polymorphic in DE 9015; see the module docs.
 pub const STS: SegmentDefinition = SegmentDefinition::new("STS", "Status", STS_ELEMENTS);

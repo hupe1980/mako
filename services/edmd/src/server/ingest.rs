@@ -7,6 +7,7 @@ use super::*;
 
 /// One 15-min (or other fixed-length) metered interval in a direct-push batch.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DirectInterval {
     /// Interval start (RFC 3339 UTC).  Must be an exact quarter-hour for iMSys.
     #[serde(with = "time::serde::rfc3339")]
@@ -1046,6 +1047,7 @@ pub struct BulkReadRequest {
 
 /// One interval in a bulk read batch.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BulkReadEntry {
     /// Interval start (RFC 3339 UTC).
     pub dtm_from: String,

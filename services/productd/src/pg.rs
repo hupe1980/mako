@@ -821,6 +821,7 @@ pub struct CreateAngebotRequest {
 
 /// One commodity/site position within an Angebot.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct AngebotPositionInput {
     pub product_code: String,
     pub sparte: String,
@@ -881,6 +882,7 @@ pub struct AngebotPositionInput {
 
 /// One alternative pricing scenario.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct AngebotVariante {
     /// Human-readable label, e.g. "12 Monate Festpreis" / "24 Monate Festpreis".
     pub label: String,
@@ -1400,8 +1402,19 @@ pub struct ComparisonFeedResponse {
 /// | Dynamic only | `dyn_source IS NOT NULL` |
 /// | Exclude dynamic | `dyn_source IS NULL` |
 /// | Cursor | `(updated_at, product_code) < (cursor_ts, cursor_code)` |
+/// The § 41c Abs. 2 EnWG comparison feed for one supplier within one tenant.
+///
+/// `tenant` is the data-isolation key and `lf_mp_id` is the supplier filter;
+/// they are not interchangeable and only one of them is the caller's to choose.
+/// `products` is unique on `(tenant, lf_mp_id, product_code, …)`, so two tenants
+/// may legitimately hold rows with the same `lf_mp_id` *and* `product_code` —
+/// which makes a missing tenant predicate worse than a disclosure. `DISTINCT ON
+/// (product_code)` would then pick arbitrarily between rows that tie on
+/// `valid_from`, and the statutory feed a Vergleichsportal imports could carry
+/// one operator's price under another operator's name.
 pub async fn fetch_comparison_feed(
     pool: &PgPool,
+    tenant: &str,
     lf_mp_id: &str,
     q: &ComparisonFeedQuery,
 ) -> anyhow::Result<Vec<ProductRow>> {
@@ -1435,23 +1448,25 @@ pub async fn fetch_comparison_feed(
     sqlx::query_as::<_, ProductRow>(
         r"SELECT DISTINCT ON (product_code) *
           FROM products
-          WHERE lf_mp_id = $1
-            AND category = ANY($2)
+          WHERE tenant = $1
+            AND lf_mp_id = $2
+            AND category = ANY($3)
             AND (valid_to IS NULL OR valid_to >= heute())
             AND (valid_from IS NULL OR valid_from <= heute())
-            AND ($3::text IS NULL OR sparte = $3)
-            AND ($4::text IS NULL OR kundentyp = $4)
-            AND ($5::bool IS FALSE OR dyn_source IS NOT NULL)
-            AND ($6::bool IS FALSE OR dyn_source IS NULL)
-            AND ($7::text[] IS NULL OR oekolabel @> $7)
+            AND ($4::text IS NULL OR sparte = $4)
+            AND ($5::text IS NULL OR kundentyp = $5)
+            AND ($6::bool IS FALSE OR dyn_source IS NOT NULL)
+            AND ($7::bool IS FALSE OR dyn_source IS NULL)
+            AND ($8::text[] IS NULL OR oekolabel @> $8)
             AND product_status = 'PUBLISHED'
             AND (
-                $8::timestamptz IS NULL
-                OR updated_at < $8
-                OR (updated_at = $8 AND ($9::text IS NULL OR product_code > $9))
+                $9::timestamptz IS NULL
+                OR updated_at < $9
+                OR (updated_at = $9 AND ($10::text IS NULL OR product_code > $10))
             )
           ORDER BY product_code, valid_from DESC NULLS LAST",
     )
+    .bind(tenant)
     .bind(lf_mp_id)
     .bind(FEED_CATEGORIES)
     .bind(&q.sparte)

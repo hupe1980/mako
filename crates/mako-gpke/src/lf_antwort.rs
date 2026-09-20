@@ -35,7 +35,6 @@ pub use mako_engine::lf_vorgang::LfVorgangsdaten;
 /// not an independent judgement. A separate boolean could disagree with the
 /// code, and send `A35` „Es besteht eine Vertragsbindung" as a Bestätigung.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LfAntwort {
     /// `SG4 STS+E01` DE 9013 — the EBD Antwortcode (`A10`, `A35`, `E15`, …).
     pub antwort_code: String,
@@ -185,7 +184,6 @@ impl AntwortForm {
 /// codes are Muss on a Bestätigung Anmeldung: the acting MSB, on what basis it
 /// acts, and which grundzuständiger MSB stands behind the Messstelle.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ZugeordneterMsb {
     /// `CAV+Z91` DE 1131 — the MSB that operates the Messstelle.
     pub mp_id: String,
@@ -239,7 +237,6 @@ impl ZugeordneterMsb {
 /// Marktlokation benötigt werden" — a MaLo fed by two Messlokationen names
 /// both, and they can have different Messstellenbetreiber.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AntwortMesslokation {
     /// `SG5 LOC+Z17` DE 3225 and `SG8 RFF+Z19` DE 1154 — 33 characters.
     pub melo_id: String,

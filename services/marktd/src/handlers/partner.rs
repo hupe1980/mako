@@ -205,7 +205,7 @@ where
             .with_extensions(EventExtensions {
                 ..Default::default()
             });
-            if let Err(e) = crate::outbox::enqueue(&pool, &evt, &state.notify).await {
+            if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
                 tracing::error!(error = %e, "partner: durable enqueue failed");
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,

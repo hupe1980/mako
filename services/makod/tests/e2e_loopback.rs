@@ -100,6 +100,9 @@ async fn loopback_round_trip_spawns_process() {
         std::collections::HashMap::new(),
         None,
         store.clone(),
+        // No TR-03116-3 signing key: the loopback has no counterparty to
+        // present one to.
+        None,
     );
     let sender = makod::as4_sender::BdewAs4Sender::new(
         Arc::new(session),
@@ -110,6 +113,9 @@ async fn loopback_round_trip_spawns_process() {
         Some(loopback),
         platform,
         false,
+        // The loopback opens no outbound connection, so there is no partner MSH
+        // to present a client certificate to.
+        None,
     )
     .expect("sender");
 

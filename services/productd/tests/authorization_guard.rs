@@ -327,9 +327,23 @@ fn the_public_feeds_serve_only_published_rows() {
          two unauthenticated routes now serve draft and withdrawn tariffs to the open internet"
     );
     assert!(
-        body.contains("category = ANY($2)") && body.contains("FEED_CATEGORIES"),
+        body.contains("category = ANY($3)") && body.contains("FEED_CATEGORIES"),
         "fetch_comparison_feed no longer restricts the § 41c feed to the FEED_CATEGORIES \
          allowlist, so categories that are not a comparable tariff offer are published"
+    );
+    // `lf_mp_id` is the supplier filter and is the caller's to choose; `tenant`
+    // is the isolation key and is not. `products` is unique on
+    // `(tenant, lf_mp_id, product_code, …)`, so two tenants may hold the same
+    // `lf_mp_id` *and* `product_code`. Without the tenant predicate the routes
+    // — which carry no `Claims` and no Cedar check — answer a caller-supplied
+    // `?lf_mp_id=` out of another operator's catalogue, and `DISTINCT ON
+    // (product_code)` picks arbitrarily between rows tying on `valid_from`, so
+    // the statutory feed can carry one operator's price under another's name.
+    assert!(
+        body.contains("tenant = $1"),
+        "fetch_comparison_feed no longer bounds the § 41c feed by tenant, so the two \
+         unauthenticated routes serve another tenant's catalogue for a caller-supplied \
+         ?lf_mp_id="
     );
 
     let handlers = src(&format!("{HANDLER_MODULE}.rs"));
@@ -339,9 +353,9 @@ fn the_public_feeds_serve_only_published_rows() {
             .unwrap_or_else(|| panic!("{name} is defined"));
         let body = compact(item_source(&handlers, start));
         assert!(
-            body.contains("fetch_comparison_feed(&pool,&lf_mp_id,&q)"),
+            body.contains("fetch_comparison_feed(&pool,&cfg.tenant,&lf_mp_id,&q)"),
             "{name} no longer reads through `fetch_comparison_feed`, so the PUBLISHED bound \
-             above no longer applies to it"
+             and tenant bounds above no longer apply to it"
         );
     }
 }

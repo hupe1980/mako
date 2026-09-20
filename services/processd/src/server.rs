@@ -687,8 +687,30 @@ mod rest {
     ///
     /// § 20 Abs. 1 EnWG parity evidence and the GoBD trail both need to say
     /// *who* decided, so this is the principal's `sub`, never a fixed label.
-    fn decided_by(claims: &Claims) -> String {
-        claims.principal().sub
+    /// Who this queue decision is recorded against.
+    ///
+    /// Always the authenticated principal. When the request also asserts an
+    /// `X-Decided-By` — which processd's own MCP surface sets from the identity
+    /// its middleware verified, because an MCP tool body cannot read the token
+    /// itself — both are recorded, as `asserted (via principal)`.
+    ///
+    /// Recording **both** is what makes the assertion safe to honour without a
+    /// separate on-behalf-of grant: the route already requires `decide-queue`,
+    /// so the header cannot widen anyone's authority, and because the
+    /// authenticated principal is never dropped, an operator cannot use it to
+    /// attribute their own decision to somebody else. Replacing the principal
+    /// with the assertion is what would make this forgeable.
+    ///
+    /// A duplicated header is an error, not a first-wins: two values mean two
+    /// claims about who decided, and this is § 20 Abs. 1 EnWG parity evidence.
+    fn decided_by(claims: &Claims, headers: &axum::http::HeaderMap) -> String {
+        let principal = claims.principal().sub;
+        match mako_service::headers::single_str(headers, "X-Decided-By") {
+            Ok(Some(asserted)) if !asserted.trim().is_empty() => {
+                format!("{} (via {principal})", asserted.trim())
+            }
+            _ => principal,
+        }
     }
 
     /// Turn a failed `makod` command dispatch into a response.
@@ -1011,12 +1033,13 @@ mod rest {
         Extension(pool): Extension<PgPool>,
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
         claims: Claims,
+        headers: axum::http::HeaderMap,
         Path(id_str): Path<String>,
     ) -> impl IntoResponse {
         if let Err(deny) = authorize(&enforcer, &claims, "decide-queue", &state.tenant) {
             return deny;
         }
-        decide_queue_entry(&state, pool, &id_str, true, &decided_by(&claims)).await
+        decide_queue_entry(&state, pool, &id_str, true, &decided_by(&claims, &headers)).await
     }
 
     /// Reject an approval-queue entry: claim it, then dispatch its command.
@@ -1025,12 +1048,13 @@ mod rest {
         Extension(pool): Extension<PgPool>,
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
         claims: Claims,
+        headers: axum::http::HeaderMap,
         Path(id_str): Path<String>,
     ) -> impl IntoResponse {
         if let Err(deny) = authorize(&enforcer, &claims, "decide-queue", &state.tenant) {
             return deny;
         }
-        decide_queue_entry(&state, pool, &id_str, false, &decided_by(&claims)).await
+        decide_queue_entry(&state, pool, &id_str, false, &decided_by(&claims, &headers)).await
     }
 
     /// The one `standard` Bilanzkreis this deployment declared, if any.

@@ -700,9 +700,14 @@ async fn billing_period_fallback(
     let edmd = cfg.edmd(client.clone())?;
     let day = window.start.date();
     let path = format!("/api/v1/billing-period/{malo_id}");
-    let request = edmd
-        .get(&path)
-        .query(&[("from", day.to_string()), ("to", day.to_string())]);
+    // A Redispatch Kostenblatt is a Strom document; state the Sparte rather
+    // than inheriting edmd's default, so the aggregation boundary is a decision
+    // and not a coincidence.
+    let request = edmd.get(&path).query(&[
+        ("from", day.to_string()),
+        ("to", day.to_string()),
+        ("sparte", "strom".to_owned()),
+    ]);
     let body: serde_json::Value = edmd.json(request).await.ok().flatten()?;
     body.get("arbeitsmenge_kwh")
         .and_then(decimal_from_json)

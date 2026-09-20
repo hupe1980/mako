@@ -94,7 +94,7 @@ impl ServiceBuilder {
     /// Responds with `429 Too Many Requests` when the token bucket is empty.
     /// The limiter is global across all inbound requests regardless of client,
     /// so it bounds total load but not any individual caller — pair it with
-    /// [`Self::with_tenant_rate_limit`] on a multi-tenant deployment.
+    /// [`Self::with_caller_rate_limit`] on a multi-tenant deployment.
     #[must_use]
     #[cfg(feature = "rate-limit")]
     pub fn with_rate_limit(self, config: &crate::rate_limit::RateLimitConfig) -> Self {
@@ -124,30 +124,43 @@ impl ServiceBuilder {
         }
     }
 
-    /// Add a per-tenant GCRA rate limiter (requires feature `rate-limit`).
+    /// Add a per-caller GCRA rate limiter (requires feature `rate-limit`).
     ///
-    /// Each caller gets its own bucket, keyed on the authenticated tenant when
-    /// the request carries one and on the peer address otherwise. This keeps a
-    /// single busy tenant from consuming the whole service allowance.
+    /// Each caller gets its own bucket, keyed on the **peer address**. This
+    /// layer runs before authentication — which is the point of it, since
+    /// rejecting a flood only after verifying its signatures costs exactly what
+    /// the flood is trying to spend — so any credential it could read is
+    /// unverified and therefore caller-chosen. See
+    /// [`crate::rate_limit::caller_key`]: keying on a presented token lets a
+    /// client mint a fresh bucket per request and escape the limiter entirely.
+    /// Limiting per *tenant* belongs after the token is verified.
     ///
     /// Rejections carry `Retry-After`, so a well-behaved client backs off for
     /// the right interval instead of retrying immediately and deepening the
     /// overload.
     #[must_use]
     #[cfg(feature = "rate-limit")]
-    pub fn with_tenant_rate_limit(self, config: &crate::rate_limit::RateLimitConfig) -> Self {
+    pub fn with_caller_rate_limit(self, config: &crate::rate_limit::RateLimitConfig) -> Self {
         use axum::{extract::Request, middleware::Next};
         use governor::RateLimiter;
         use std::sync::Arc;
 
-        let quota = quota(config.per_tenant_requests_per_second, config.burst);
+        let quota = quota(config.per_caller_requests_per_second, config.burst);
         let limiter: Arc<governor::DefaultKeyedRateLimiter<String>> =
             Arc::new(RateLimiter::keyed(quota));
+        // `governor` prunes its keyed store only when asked. Without this the
+        // map grows one permanent entry per distinct caller for the process
+        // lifetime, which is a slow leak on any public route.
+        let calls = Arc::new(std::sync::atomic::AtomicU64::new(0));
         Self {
             router: self.router.layer(axum::middleware::from_fn(
                 move |req: Request, next: Next| {
                     let limiter = Arc::clone(&limiter);
+                    let calls = Arc::clone(&calls);
                     async move {
+                        if crate::rate_limit::prune_due(&calls) {
+                            limiter.retain_recent();
+                        }
                         let key = crate::rate_limit::caller_key(&req);
                         match limiter.check_key(&key) {
                             Ok(()) => next.run(req).await,

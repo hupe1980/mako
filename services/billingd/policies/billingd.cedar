@@ -80,3 +80,21 @@ permit(
 // many. `released_by`/`released_at` record who released what in the meantime,
 // so the action is attributable even where it is not separately authorised.
 // Adding a function-role axis is tracked in ROADMAP.md.
+
+// ── Speaking MCP at all ───────────────────────────────────────────────────────
+// `use-mcp` is the blanket gate the shared MCP middleware applies to **every**
+// frame before any tool name is looked at — `mako_service::mcp_auth` checks it
+// whenever a Cedar enforcer is wired, and `CedarEnforcer::check` is
+// default-deny. A policy that does not name it therefore does not merely leave
+// the surface ungoverned: it returns 403 to every caller, and the whole tool and
+// prompt surface is unreachable.
+//
+// It is tenant-scoped and nothing more. What a frame may then *do* is decided by
+// the per-action rules above; this one only says the caller may open its mouth.
+permit(
+    principal,
+    action == Action::"use-mcp",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant
+};

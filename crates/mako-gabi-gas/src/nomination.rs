@@ -154,7 +154,6 @@ impl NomresAcceptance {
 
 /// Data captured when the BKV submits a NOMINT nomination.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct NominationData {
     /// Which end of the nomination this process holds.
     pub richtung: NominationRichtung,
@@ -209,7 +208,6 @@ pub enum NominationRichtung {
 /// One `LIN` position of a NOMINT: a point, a direction, the Bilanzkreise and
 /// the rates per period (NOMINT 4.6 §2 — `LOC`, `QTY`, `SG41 NAD`).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct NominationPosition {
     /// `LOC` DE 3227 — `Z19` Netzkopplungspunkt, `172` Meldepunkt, `Z17` Marktlokation.
     pub ort_qualifier: String,
@@ -228,7 +226,6 @@ pub struct NominationPosition {
 
 /// One rate of a nomination: kWh/h over `[von, bis)`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct NominationMenge {
     /// Start of the period, UTC.
     #[serde(with = "time::serde::rfc3339")]
@@ -252,7 +249,6 @@ impl NominationMenge {
 /// A re-nomination names the nomination it corrects (`RFF+AGO`) and when
 /// that one was processed (`DTM+9`).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Renominierung {
     /// The corrected nomination's Dokumentennummer.
     pub nomination_ref: MessageRef,

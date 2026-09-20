@@ -29,7 +29,7 @@ const ORDER_REF: &str = "ORD-17115-REF"; // Belegnummer echoed by the Stornierun
 /// A minimal ORDCHG 39000 Stornierung carrying `RFF+ON:<order_ref>` (no LOC).
 fn ordchg_39000(order_ref: &str) -> String {
     format!(
-        "UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'\
+        "UNB+UNOC:3+4012345000023:14+9900357000004:500+230101:0000+1'\
 UNH+STORNO-1+ORDCHG:D:20B:UN:1.1'\
 BGM+Z51+00039000'\
 DTM+137:202301010000?+00:303'\

@@ -30,7 +30,7 @@ use mako_engine::{
     deadline::{Deadline, DeadlineStore, InMemoryDeadlineStore},
     event_store::{EventStore, InMemoryEventStore},
     ids::TenantId,
-    inbox::{InMemoryInboxStore, InboxStore, inbox_key},
+    inbox::{InMemoryInboxStore, InboxClaim, InboxStore, inbox_key},
     outbox::{InMemoryOutboxStore, OutboxMessage, OutboxStore},
     projection::ProjectionRunner,
     registry::{InMemoryProcessRegistry, ProcessRegistry, RegistryKey},
@@ -55,7 +55,7 @@ use mako_geli_gas::{
 //   qualifier where Strom uses `Z16`; both name a MaLo, not a MeLo.
 // - MaLo ID: 52695662076 (11 characters, BDEW check digit)
 const UTILMD_LIEFERBEGINN_GAS: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9800357000004:14+250115:0800+GELI-2025-001'\
+UNB+UNOC:3+4012345000023:14+9800357000004:502+250115:0800+GELI-2025-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:G1.1'\
 BGM+E01+MSG-001'\
 DTM+137:202501150800?+00:303'\
@@ -194,11 +194,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[2/6] Inbox deduplication...");
 
     let key = inbox_key(sender.as_str(), msg_ref.as_str()).map_err(|e| anyhow::anyhow!(e))?;
-    if !inbox.accept(&key).await? {
+    // Claim the key, and settle it once the message is handled. A two-state
+    // "seen?" check would record the key before the workflow ran, so a failure
+    // after it could never be retried: the retransmission carries the same key
+    // and would be dismissed as a duplicate.
+    if inbox.claim(&key).await? != InboxClaim::Claimed {
         println!("  ✗ DUPLICATE — idempotency key: {key}");
         return Ok(());
     }
-    println!("  ✓ New message accepted — key: {key}");
+    println!("  ✓ New message claimed — key: {key}");
+
+    // Settled below, once the message has actually been handled. Claiming and
+    // settling are separate steps on purpose: a store that recorded the key
+    // here would make a message that fails afterwards unretryable, because the
+    // retransmission carries the same key and would be dismissed as a
+    // duplicate while nothing was done.
 
     // ── Step 3: ReceiveUtilmd — domain command (pure, no I/O) ────────────────
     println!();
@@ -431,8 +441,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ✓ Rejected: {guard_err}");
 
     println!();
+    // An unsettled claim is *in flight*, not a duplicate — nothing has been
+    // handled yet, so answering "duplicate" would acknowledge a message that
+    // may still fail.
+    println!("[+] Guard: an unsettled claim is in flight, not a duplicate...");
+    assert_eq!(inbox.claim(&key).await?, InboxClaim::InFlight);
+
+    // Settle it: the process above ran to completion, so the message is
+    // handled and every later delivery of it is a replay.
+    inbox.accept(&key).await?;
+
     println!("[+] Guard: AS4 retry duplicate is rejected by inbox...");
-    assert!(!inbox.accept(&key).await?);
+    assert_eq!(
+        inbox.claim(&key).await?,
+        InboxClaim::Duplicate,
+        "a settled key is a duplicate on replay"
+    );
     println!("  ✓ Duplicate UTILMD G rejected");
 
     println!();

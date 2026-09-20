@@ -70,7 +70,7 @@ use energy_api::models::electricity::{IdentificationParameter, WimAnmeldungReque
 use energy_api::server::{control_measures, malo_ident, wim_order};
 use mako_engine::deadline::Deadline;
 use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId};
-use mako_engine::inbox::InboxStore as _;
+use mako_engine::inbox::{InboxClaim, InboxStore as _};
 use mako_engine::outbox::{OutboxMessage, OutboxStore as _};
 use mako_engine::registry::ProcessRegistry as _;
 use mako_engine::store_slatedb::SlateDbStore;
@@ -200,21 +200,28 @@ impl malo_ident::MaloIdentHandler for MakodApiHandler {
         async move {
             // Idempotency check — `accept` returns true the first time only.
             let inbox_key = format!("maloid:{tenant_id}:{tx_id}");
-            let is_new = store
-                .as_inbox_store()
-                .accept(&inbox_key)
-                .await
-                .map_err(|e| energy_api::Error::Http {
-                    status: 500,
-                    body: format!("inbox error: {e}"),
-                })?;
-
-            if !is_new {
-                info!(
-                    tx_id,
-                    "duplicate MaLo-ID request — returning early (idempotent)"
-                );
-                return Ok(());
+            match claim_inbox(&store, &inbox_key).await? {
+                InboxClaim::Duplicate => {
+                    info!(
+                        tx_id,
+                        "duplicate MaLo-ID request — returning early (idempotent)"
+                    );
+                    return Ok(());
+                }
+                InboxClaim::InFlight => {
+                    // A concurrent request holds an unsettled claim. Not a
+                    // duplicate — nothing is recorded yet — so answering `Ok`
+                    // would report work that may still fail.
+                    info!(
+                        tx_id,
+                        "MaLo-ID request already in flight — refusing the concurrent request"
+                    );
+                    return Err(energy_api::Error::Http {
+                        status: 409,
+                        body: "a request with this transactionId is already in flight".to_owned(),
+                    });
+                }
+                InboxClaim::Claimed => {}
             }
 
             // Enqueue outbox message for async callback delivery.
@@ -235,13 +242,15 @@ impl malo_ident::MaloIdentHandler for MakodApiHandler {
                 "internal://malo-ident-callback",
                 payload,
             );
-            store.enqueue(&[msg]).await.map_err(|e| {
+            if let Err(e) = store.enqueue(&[msg]).await {
+                settle_abandoned(&store, &inbox_key).await;
                 tracing::error!("outbox enqueue error: {e}");
-                energy_api::Error::Http {
+                return Err(energy_api::Error::Http {
                     status: 500,
                     body: "internal error".to_string(),
-                }
-            })?;
+                });
+            }
+            settle_accepted(&store, &inbox_key).await;
 
             info!(
                 tx_id,
@@ -249,6 +258,43 @@ impl malo_ident::MaloIdentHandler for MakodApiHandler {
             );
             Ok(())
         }
+    }
+}
+
+/// Claim `key` for this request, mapping a store failure to a 500.
+///
+/// Fail-closed: a storage error is an error, never "first seen".
+async fn claim_inbox(store: &SlateDbStore, key: &str) -> Result<InboxClaim, energy_api::Error> {
+    store
+        .as_inbox_store()
+        .claim(key)
+        .await
+        .map_err(|e| energy_api::Error::Http {
+            status: 500,
+            body: format!("inbox error: {e}"),
+        })
+}
+
+/// Settle `key` as handled, once the request is durably recorded.
+///
+/// A settlement failure is logged rather than returned: the work is already
+/// done, so failing the request would report that nothing happened when
+/// something did. The claim's lease expires and a retry is reprocessed, which
+/// is the safe direction.
+async fn settle_accepted(store: &SlateDbStore, key: &str) {
+    if let Err(e) = store.as_inbox_store().accept(key).await {
+        tracing::error!(inbox_key = %key, error = %e, "inbox accept failed");
+    }
+}
+
+/// Release `key` because nothing durable recorded the request.
+///
+/// This is what makes a retry a recovery path: without it the key stays
+/// claimed and the caller's next attempt is answered as a duplicate of work
+/// that never happened.
+async fn settle_abandoned(store: &SlateDbStore, key: &str) {
+    if let Err(e) = store.as_inbox_store().abandon(key).await {
+        tracing::error!(inbox_key = %key, error = %e, "inbox abandon failed");
     }
 }
 
@@ -280,20 +326,28 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
             let sender = caller.ok_or_else(missing_caller_error)?;
             // Idempotency — accept only the first delivery of this tx_id.
             let inbox_key = format!("steuerungsauftrag:{tenant_id}:{tx_id}");
-            let is_new = store
-                .as_inbox_store()
-                .accept(&inbox_key)
-                .await
-                .map_err(|e| energy_api::Error::Http {
-                    status: 500,
-                    body: format!("inbox error: {e}"),
-                })?;
-            if !is_new {
-                info!(
-                    tx_id,
-                    "duplicate Steuerungsauftrag konfiguration — returning early (idempotent)"
-                );
-                return Ok(());
+            match claim_inbox(&store, &inbox_key).await? {
+                InboxClaim::Duplicate => {
+                    info!(
+                        tx_id,
+                        "duplicate Steuerungsauftrag konfiguration — returning early (idempotent)"
+                    );
+                    return Ok(());
+                }
+                InboxClaim::InFlight => {
+                    // A concurrent request holds an unsettled claim. Not a
+                    // duplicate — nothing is recorded yet — so answering `Ok`
+                    // would report work that may still fail.
+                    info!(
+                        tx_id,
+                        "Steuerungsauftrag konfiguration already in flight — refusing the concurrent request"
+                    );
+                    return Err(energy_api::Error::Http {
+                        status: 409,
+                        body: "a request with this transactionId is already in flight".to_owned(),
+                    });
+                }
+                InboxClaim::Claimed => {}
             }
 
             let domain_cmd = SteuerungsauftragCommand::ReceiveKonfiguration {
@@ -312,12 +366,16 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
                 produkt_code: None,
             };
 
-            spawn_steuerungsauftrag(store, tenant_id, &tx_id, domain_cmd)
-                .await
-                .map_err(|e| energy_api::Error::Http {
+            if let Err(e) =
+                spawn_steuerungsauftrag(store.clone(), tenant_id, &tx_id, domain_cmd).await
+            {
+                settle_abandoned(&store, &inbox_key).await;
+                return Err(energy_api::Error::Http {
                     status: 500,
                     body: e.to_string(),
-                })?;
+                });
+            }
+            settle_accepted(&store, &inbox_key).await;
 
             info!(
                 tx_id,
@@ -343,20 +401,28 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
         async move {
             let sender = caller.ok_or_else(missing_caller_error)?;
             let inbox_key = format!("steuerungsauftrag:{tenant_id}:{tx_id}");
-            let is_new = store
-                .as_inbox_store()
-                .accept(&inbox_key)
-                .await
-                .map_err(|e| energy_api::Error::Http {
-                    status: 500,
-                    body: format!("inbox error: {e}"),
-                })?;
-            if !is_new {
-                info!(
-                    tx_id,
-                    "duplicate Steuerungsauftrag initialZustand — returning early (idempotent)"
-                );
-                return Ok(());
+            match claim_inbox(&store, &inbox_key).await? {
+                InboxClaim::Duplicate => {
+                    info!(
+                        tx_id,
+                        "duplicate Steuerungsauftrag initialZustand — returning early (idempotent)"
+                    );
+                    return Ok(());
+                }
+                InboxClaim::InFlight => {
+                    // A concurrent request holds an unsettled claim. Not a
+                    // duplicate — nothing is recorded yet — so answering `Ok`
+                    // would report work that may still fail.
+                    info!(
+                        tx_id,
+                        "Steuerungsauftrag initialZustand already in flight — refusing the concurrent request"
+                    );
+                    return Err(energy_api::Error::Http {
+                        status: 409,
+                        body: "a request with this transactionId is already in flight".to_owned(),
+                    });
+                }
+                InboxClaim::Claimed => {}
             }
 
             let domain_cmd = SteuerungsauftragCommand::ReceiveInitialZustand {
@@ -366,12 +432,16 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
                 execution_time_from: command.execution_time_from.clone(),
             };
 
-            spawn_steuerungsauftrag(store, tenant_id, &tx_id, domain_cmd)
-                .await
-                .map_err(|e| energy_api::Error::Http {
+            if let Err(e) =
+                spawn_steuerungsauftrag(store.clone(), tenant_id, &tx_id, domain_cmd).await
+            {
+                settle_abandoned(&store, &inbox_key).await;
+                return Err(energy_api::Error::Http {
                     status: 500,
                     body: e.to_string(),
-                })?;
+                });
+            }
+            settle_accepted(&store, &inbox_key).await;
 
             info!(
                 tx_id,
@@ -422,20 +492,28 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
 
             // Idempotency — accept only the first delivery of this tx_id.
             let inbox_key = format!("wim-order:{tenant_id}:{tx_id}");
-            let is_new = store
-                .as_inbox_store()
-                .accept(&inbox_key)
-                .await
-                .map_err(|e| energy_api::Error::Http {
-                    status: 500,
-                    body: format!("inbox error: {e}"),
-                })?;
-            if !is_new {
-                info!(
-                    tx_id,
-                    "duplicate WiM Anmeldung — returning early (idempotent)"
-                );
-                return Ok(());
+            match claim_inbox(&store, &inbox_key).await? {
+                InboxClaim::Duplicate => {
+                    info!(
+                        tx_id,
+                        "duplicate WiM Anmeldung — returning early (idempotent)"
+                    );
+                    return Ok(());
+                }
+                InboxClaim::InFlight => {
+                    // A concurrent request holds an unsettled claim. Not a
+                    // duplicate — nothing is recorded yet — so answering `Ok`
+                    // would report work that may still fail.
+                    info!(
+                        tx_id,
+                        "WiM Anmeldung already in flight — refusing the concurrent request"
+                    );
+                    return Err(energy_api::Error::Http {
+                        status: 409,
+                        body: "a request with this transactionId is already in flight".to_owned(),
+                    });
+                }
+                InboxClaim::Claimed => {}
             }
 
             let sender_mp_id = party_id_to_marktpartner(caller);
@@ -452,12 +530,18 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
                 process_date: request.process_date.clone(),
             };
 
-            let process_id = spawn_device_change(store, tenant_id, &tx_id, domain_cmd)
-                .await
-                .map_err(|e| energy_api::Error::Http {
-                    status: 500,
-                    body: e.to_string(),
-                })?;
+            let process_id =
+                match spawn_device_change(store.clone(), tenant_id, &tx_id, domain_cmd).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        settle_abandoned(&store, &inbox_key).await;
+                        return Err(energy_api::Error::Http {
+                            status: 500,
+                            body: e.to_string(),
+                        });
+                    }
+                };
+            settle_accepted(&store, &inbox_key).await;
 
             info!(
                 tx_id,

@@ -75,22 +75,24 @@ spec:
       | Execution: **6 Werktage** after the earliest possible Sperrtermin | `frist_ueberschritten` | GPKE Teil 2 § 3.5.1.2 Nr. 1 — the regulatory one |
       | IFTSTA back to the Lieferant: **1 Werktag** after the order is closed | `iftsta_ueberfaellig` (of the `iftsta_outstanding`) | GPKE Teil 2 § 3.5 |
 
-      Two things this list is correcting, because both were asserted here and
-      classified real orders:
+      Two things this list fixes, each of which misclassifies real orders when
+      it is got wrong:
 
       - There *is* a regulatory execution window, and it is the 6 Werktage of
-        GPKE Teil 2 § 3.5.1.2 Nr. 1. This file used to say GPKE fixes none, so
-        `frist_ueberschritten` — the counter sperrd computes for exactly that —
-        was never read.
-      - It is **not** two Werktage from BK6-22-024. That figure appears in no
-        BNetzA or BDEW document.
+        GPKE Teil 2 § 3.5.1.2 Nr. 1. Reading GPKE as fixing no window leaves
+        `frist_ueberschritten` — the counter sperrd computes for precisely that
+        window — permanently unread, so a breach is never reported.
+      - The window is **not** two Werktage from BK6-22-024. That figure appears
+        in no BNetzA or BDEW document, so nothing can be checked against it.
 
       The ORDRSP window — 1 Werktag for the NB's answer to the ORDERS — belongs to
       makod, not to this queue.
 
   # What this agent is in a multi-agent arrangement.
   #
-  # MAST measures inter-agent misalignment at 36.9 % of observed multi-agent
+  # MAST — the Multi-Agent System Failure Taxonomy of Cemri et al., „Why Do
+  # Multi-Agent LLM Systems Fail?", arXiv:2503.13657 Fig. 4 (210 traces) —
+  # measures inter-agent misalignment at 36.9 % of observed multi-agent
   # failures — a class that exists only if you choose it. Declaring the shape is
   # how you choose not to: `single` means one agent, one context, many tools, and
   # the inter-agent failure surface is structurally absent. `specialist` means it

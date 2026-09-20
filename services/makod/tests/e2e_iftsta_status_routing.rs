@@ -29,7 +29,7 @@ const LOCATION: &str = "51238696012";
 /// A minimal IFTSTA for `pid` carrying the addressed location in a LOC segment.
 fn iftsta(pid: u32) -> String {
     format!(
-        "UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'\
+        "UNB+UNOC:3+4012345000023:14+9900357000004:500+230101:0000+1'\
 UNH+1+IFTSTA:D:18A:UN:2.1'\
 BGM+Z03+000{pid}'\
 DTM+137:202301010000?+00:303'\

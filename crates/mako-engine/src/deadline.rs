@@ -23,6 +23,17 @@
 //! The process workflow then handles the command — e.g. by escalating the
 //! case or switching to a failure path.
 //!
+//! **A deadline is registered when the process spawns and is not cancelled when
+//! the process settles.** It fires for every process, including the ones that
+//! completed well inside the window, and the workflow's handler is what decides
+//! that a fired deadline is moot. That is deliberate rather than an omission:
+//! cancelling on settle is a second write that can fail independently, and a
+//! cancel that fails produces exactly the spurious fire the handler must
+//! tolerate anyway. Making the handler authoritative leaves one code path
+//! instead of two and one failure mode instead of three. [`DeadlineStore::cancel`]
+//! therefore exists for the scheduler's own use — it removes a deadline **after**
+//! it has fired, so it cannot fire twice — and not as a settle-time hook.
+//!
 //! # Usage
 //!
 //! ```rust,ignore
@@ -40,13 +51,15 @@
 //! );
 //! deadline_store.register(&deadline).await?;
 //!
-//! // When the counterparty responds in time, cancel the deadline:
-//! deadline_store.cancel(deadline.deadline_id()).await?;
+//! // Nothing cancels it when the counterparty responds in time. The deadline
+//! // fires, and the workflow's `TimeoutDeadline` arm sees a settled state and
+//! // returns no events.
 //!
 //! // Background scheduler (runs every N minutes):
 //! let result = deadline_store.due_now(100).await?;
 //! for d in result.deadlines {
 //!     process_handle.execute(TimeoutDeadline { deadline_id: d.deadline_id() }).await?;
+//!     // Cancel *after* dispatch, so a fired deadline cannot fire again.
 //!     deadline_store.cancel(d.deadline_id()).await?;
 //! }
 //! ```
@@ -71,9 +84,10 @@ use crate::{
 
 /// A registered regulatory deadline for a single process stream.
 ///
-/// Create with [`Deadline::new`], persist via [`DeadlineStore::register`], and
-/// cancel via [`DeadlineStore::cancel`] when the process advances past the
-/// deadline before it fires.
+/// Create with [`Deadline::new`] and persist via [`DeadlineStore::register`].
+/// It is **not** cancelled when the process settles inside its window — see the
+/// module documentation for why the workflow's handler, and not a settle-time
+/// cancel, is what decides a fired deadline is moot.
 ///
 /// The `label` field identifies the deadline type (e.g.
 /// `"aperak-response-window"`) and is used by the scheduler to dispatch the
@@ -268,10 +282,14 @@ pub struct DueNowResult {
 /// 2. Dispatch a `TimeoutDeadline` command to each owning process.
 /// 3. Call [`DeadlineStore::cancel`] to remove the fired deadline.
 ///
-/// Cancelling a deadline before the scheduler fires it prevents a spurious
-/// `TimeoutDeadline` command from being dispatched to the process. Always
-/// cancel deadlines when the process advances past them naturally (e.g. when
-/// the expected counterparty response arrives in time).
+/// Step 3 is what stops a fired deadline firing twice; it is the only place the
+/// production host cancels. A deadline is **not** cancelled when the process
+/// advances past it naturally — a counterparty answering inside its window
+/// leaves the timer registered, and the workflow's `TimeoutDeadline` arm sees a
+/// settled state and returns no events. Cancelling there would be a second
+/// write that can fail on its own, and a failed cancel produces exactly the
+/// spurious fire the handler already has to tolerate, so the handler is made
+/// authoritative instead.
 ///
 /// ## Blanket `Arc` implementation
 ///

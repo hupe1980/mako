@@ -144,7 +144,6 @@ impl AllocationVersion {
 
 /// Data captured when an ALOCAT allocation message is received.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AllocationData {
     /// The Prüfidentifikator that identifies the Anwendungsfall (70001–70023).
     pub pruefidentifikator: u32,

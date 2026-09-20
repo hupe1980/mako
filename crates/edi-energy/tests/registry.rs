@@ -19,7 +19,7 @@ use edi_energy::{EdiEnergyMessage, Error, MessageType, Release, ReleaseTrack};
 /// Well-formed UTILMD message with the registered release S2.1 (fv20251001 Strom).
 #[cfg(feature = "utilmd")]
 const UTILMD_S2_1: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+261001:0700+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:500+261001:0700+1'\
 UNH+1+UTILMD:D:11A:UN:S2.1'\
 BGM+E01+DOK55001'\
 DTM+137:202610010000?+00:303'\
@@ -49,7 +49,7 @@ UNZ+1+1'";
 /// registered profile — represents a future / unknown release version.
 #[cfg(feature = "utilmd")]
 const UTILMD_554A_UNKNOWN: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+240101:0000+2'\
+UNB+UNOC:3+4012345000023:14+9900357000004:500+240101:0000+2'\
 UNH+1+UTILMD:D:11A:UN:5.5.4a'\
 BGM+E01:::+11001+9'\
 DTM+137:202401010000?+00:303'\

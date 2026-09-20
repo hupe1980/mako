@@ -89,7 +89,12 @@ BILLING_MONTH=6
 # reading — a push without this code stores registers no settlement can see.
 OBIS_EINSPEISUNG="1-0:2.8.0"
 EXPECTED_KWH=2880
-EXPECTED_EUR=233.57
+# 2880 kWh × 8.11 ct/kWh = 233.568 EUR exactly, and that is what `settlement_eur`
+# carries: `eeg-billing` holds money in `billing::Amount<5>`, so the entitlement
+# keeps its sub-cent precision. Rounding to a payable cent amount belongs to the
+# §14 UStG Gutschrift, which is a separate document with its own net, VAT and
+# gross. Asserting 233.57 here would demand that the settlement round twice.
+EXPECTED_EUR=233.568
 
 # ── Pre-load: seed MaLo into marktd ──────────────────────────────────────────
 
@@ -175,14 +180,14 @@ for i in $(seq 0 95); do
     if [ "$HH2" -eq 24 ]; then TO="2026-06-02T00:00:00Z"; fi
     SEP=","
     if [ "$i" -eq 0 ]; then SEP=""; fi
-    READS="${READS}${SEP}{\"from\":\"${FROM}\",\"to\":\"${TO}\",\"value\":1.0,\"quality\":\"MEASURED\"}"
+    READS="${READS}${SEP}{\"from\":\"${FROM}\",\"to\":\"${TO}\",\"value\":\"1.0\",\"quality\":\"MEASURED\"}"
 done
 READS="${READS}]"
 
 HTTP=$(curl -s -w '\n%{http_code}' -X POST "${EDMD_URL}/api/v1/meter-reads/rlm/${MALO_ID}" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer demo-secret-change-me" \
-    -d "{\"intervals\":${READS},\"sparte\":\"STROM\",\"source\":\"DIRECT_PUSH\",\"obis_code\":\"${OBIS_EINSPEISUNG}\"}" 2>/dev/null || printf "\n000")
+    -d "{\"intervals\":${READS},\"source\":\"DIRECT_PUSH\",\"obis_code\":\"${OBIS_EINSPEISUNG}\"}" 2>/dev/null || printf "\n000")
 CODE=$(echo "$HTTP" | tail -1)
 BODY=$(echo "$HTTP" | sed '$d')
 STORED=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('intervals_accepted',d.get('stored_count',0)))" 2>/dev/null || echo "?")
@@ -203,14 +208,14 @@ for day in $(seq 2 30); do
     TO="${FROM_NEXT}-${ND}T00:00:00Z"
     SEP=","
     if [ "$day" -eq 2 ]; then SEP=""; fi
-    DAILY_READS="${DAILY_READS}${SEP}{\"from\":\"${FROM}\",\"to\":\"${TO}\",\"value\":96.0,\"quality\":\"MEASURED\"}"
+    DAILY_READS="${DAILY_READS}${SEP}{\"from\":\"${FROM}\",\"to\":\"${TO}\",\"value\":\"96.0\",\"quality\":\"MEASURED\"}"
 done
 DAILY_READS="${DAILY_READS}]"
 
 HTTP=$(curl -s -w '\n%{http_code}' -X POST "${EDMD_URL}/api/v1/meter-reads/rlm/${MALO_ID}" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer demo-secret-change-me" \
-    -d "{\"intervals\":${DAILY_READS},\"sparte\":\"STROM\",\"source\":\"DIRECT_PUSH\",\"obis_code\":\"${OBIS_EINSPEISUNG}\"}" 2>/dev/null || printf "\n000")
+    -d "{\"intervals\":${DAILY_READS},\"source\":\"DIRECT_PUSH\",\"obis_code\":\"${OBIS_EINSPEISUNG}\"}" 2>/dev/null || printf "\n000")
 CODE=$(echo "$HTTP" | tail -1)
 if [[ "$CODE" == "200" || "$CODE" == "201" ]]; then
     pass "POST /api/v1/meter-reads/rlm/${MALO_ID} → ${CODE}  (29 daily buckets, 2784 kWh)"
@@ -321,14 +326,16 @@ fi
 # ── Verify settlement receipt ─────────────────────────────────────────────────
 
 info "[6/6] Verify settlement receipt in einsd"
-# Receipts come back newest first, so the most recent one is the month just settled.
+# Address the month, not "the newest row". einsd settles every past month it has
+# a plant for, so by the time this runs there are already receipts for July and
+# August — both `no_data` — and the newest is whichever the worker wrote last.
 HTTP=$(curl -s -w '\n%{http_code}' \
-    "${EINSD_URL}/api/v1/anlagen/${TR_ID}/settlements?limit=1" \
+    "${EINSD_URL}/api/v1/anlagen/${TR_ID}/settlements?year=${BILLING_YEAR}&month=${BILLING_MONTH}" \
     -H "Authorization: Bearer demo-secret-change-me" 2>/dev/null || printf "\n000")
 CODE=$(echo "$HTTP" | tail -1)
 BODY=$(echo "$HTTP" | sed '$d')
 if [[ "$CODE" != "200" ]]; then
-    fail "GET /settlements?limit=1 → ${CODE}: ${BODY}"
+    fail "GET /settlements?year=${BILLING_YEAR}&month=${BILLING_MONTH} → ${CODE}: ${BODY}"
 fi
 read_receipt() {
     echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d[0] if isinstance(d,list) else d; print(r.get('$1','?'))" 2>/dev/null || echo "?"
@@ -342,7 +349,7 @@ if [[ "$RECEIPT_STATUS" != "calculated" || "$RECEIPT_MONTH" != "$BILLING_MONTH" 
     fail "receipt: month=${RECEIPT_MONTH} status=${RECEIPT_STATUS} settlement_eur=${RECEIPT_EUR}, \
 expected month=${BILLING_MONTH} status=calculated settlement_eur=${EXPECTED_EUR}"
 fi
-pass "GET /settlements?limit=1 → status=${RECEIPT_STATUS}  einspeisemenge_kwh=${RECEIPT_KWH}  settlement_eur=${RECEIPT_EUR}"
+pass "GET /settlements?year=${BILLING_YEAR}&month=${BILLING_MONTH} → status=${RECEIPT_STATUS}  einspeisemenge_kwh=${RECEIPT_KWH}  settlement_eur=${RECEIPT_EUR}"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 
@@ -361,7 +368,7 @@ if [[ -n "${SETTLE_EUR:-}" && "${SETTLE_EUR}" != "?" ]]; then
 fi
 echo
 echo "  edmd Einspeisung: ${EDMD_URL}/api/v1/energy/${MALO_ID}?direction=EINSPEISUNG&from=2026-06-01T00:00:00%2B02:00&to=2026-07-01T00:00:00%2B02:00"
-echo "  einsd receipt:    ${EINSD_URL}/api/v1/anlagen/${TR_ID}/settlements?limit=1"
+echo "  einsd receipt:    ${EINSD_URL}/api/v1/anlagen/${TR_ID}/settlements?year=${BILLING_YEAR}&month=${BILLING_MONTH}"
 echo "  einsd MCP:        ${EINSD_URL}/mcp"
 echo "  edmd MCP:         ${EDMD_URL}/mcp"
 echo "  ERP events:       ${WEBHOOK_URL}/events"

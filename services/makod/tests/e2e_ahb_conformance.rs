@@ -324,7 +324,7 @@ fn ahb_invalid_utilmd_fails_validation() {
     // A minimal UTILMD that is syntactically valid but violates profile rules
     // (missing required segments like DTM, RFF, etc. per AHB S2.1).
     const INVALID_BYTES: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:500+230101:0000+1'\
 UNH+1+UTILMD:D:11A:UN:S2.1'\
 BGM+E01:::+00055001::+9'\
 UNT+3+1'\

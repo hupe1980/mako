@@ -130,7 +130,6 @@ impl EventPayload for AllokationslisteEvent {
 
 /// Data from the sent ORDERS.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AnforderungData {
     /// ORDERS PID.
     pub orders_pid: Pruefidentifikator,

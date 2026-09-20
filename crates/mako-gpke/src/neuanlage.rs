@@ -190,7 +190,6 @@ impl EventPayload for NeuanlageEvent {
 
 /// Business data captured at `AnmeldungErhalten` time.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct NeuanlageData {
     /// EIC/MaLo code of the new location.
     pub location_id: MaLo,

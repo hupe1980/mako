@@ -8,8 +8,6 @@
 
 pub mod http;
 
-#[cfg(feature = "crypto")]
 pub mod jws;
 
-#[cfg(feature = "crypto")]
 pub mod content_security;

@@ -118,21 +118,47 @@ async fn replay_dedup_blocks_duplicate_message_id() {
     // durable=false because in-memory store has volatile dedup state.
     let dedup = SlateDbDedupBridge::new(inbox, false);
 
+    use asx_rs::storage::DedupVerdict;
+
     let message_id = format!("dedup-test-{}", uuid::Uuid::new_v4());
 
-    // First delivery — must be accepted (first_seen = true)
-    let first = dedup.first_seen(&message_id).await.expect("first_seen 1");
-    assert!(
-        first,
-        "First delivery of a message_id must be accepted (first_seen = true)"
+    // First delivery takes the key.
+    assert_eq!(
+        dedup.claim(&message_id).await.expect("claim 1"),
+        DedupVerdict::Claimed,
+        "the first delivery of a message_id must be claimable"
     );
 
-    // Second delivery — same message_id — must be detected as replay
-    let second = dedup.first_seen(&message_id).await.expect("first_seen 2");
-    assert!(
-        !second,
-        "Second delivery of the same message_id must be detected as replay \
-         (first_seen = false) — BDEW AS4-Profil v1.2 §4.2 (72-hour dedup window)"
+    // Still unsettled: a concurrent delivery is in flight, *not* a duplicate.
+    // Answering "duplicate" here would acknowledge a message nothing has
+    // handled yet, which is the failure the three phases exist to prevent.
+    assert_eq!(
+        dedup.claim(&message_id).await.expect("claim 2"),
+        DedupVerdict::InFlight,
+        "an unsettled claim is in flight, not a replay"
+    );
+
+    // Once settled as handled, every later delivery is a replay — BDEW
+    // AS4-Profil v1.2 §4.2 (72-hour dedup window).
+    dedup.accept(&message_id).await.expect("accept");
+    assert_eq!(
+        dedup.claim(&message_id).await.expect("claim 3"),
+        DedupVerdict::Duplicate,
+        "a settled message_id must be detected as a replay"
+    );
+
+    // A message that was *not* handled releases its key, so the counterparty's
+    // retransmission is a recovery path rather than a silent drop.
+    let unhandled = format!("dedup-test-{}", uuid::Uuid::new_v4());
+    assert_eq!(
+        dedup.claim(&unhandled).await.expect("claim 4"),
+        DedupVerdict::Claimed
+    );
+    dedup.abandon(&unhandled).await.expect("abandon");
+    assert_eq!(
+        dedup.claim(&unhandled).await.expect("claim 5"),
+        DedupVerdict::Claimed,
+        "an abandoned key must be claimable again"
     );
 }
 
@@ -259,7 +285,7 @@ async fn sign_encrypt_round_trip_via_mock_endpoint() {
     // ── Zero-config test event bus (asx-rs v0.8.0 FR-2) ──────────────────────
     let event_bus = Arc::new(EventBus::new_for_testing());
 
-    let payload = b"UNB+UNOC:3+9900000000001:293+9900000000002:293+260101:0000+1'\
+    let payload = b"UNB+UNOC:3+9900000000001:500+9900000000002:500+260101:0000+1'\
                     UNH+1+UTILMD:D:11A:UN:5.2S'\
                     UNZ+1+1'";
 
@@ -484,8 +510,8 @@ async fn sign_only_round_trip_envelope_contains_wssec_signature() {
 #[tokio::test]
 async fn tampered_signature_is_rejected() {
     use asx_rs::as4::{
-        As4ReceivePushRequest, As4SendRequest, As4WsSecVerifier,
-        receive_push_with_dedup_async_with_custom_verifier, send_async,
+        As4ReceivePush, As4ReceivePushRequest, As4SendRequest, As4WsSecVerifier,
+        receive_push_with_custom_verifier, send_async,
     };
     use asx_rs::core::SessionContextBuilder;
     use asx_rs::observability::EventBus;
@@ -559,17 +585,21 @@ async fn tampered_signature_is_rejected() {
     let mut receive_policy = bdew_push_policy(None);
     receive_policy.fail_closed_audit_events = false;
 
-    let result = receive_push_with_dedup_async_with_custom_verifier(
+    let result = receive_push_with_custom_verifier(
         &receiver_session,
         &event_bus,
-        As4ReceivePushRequest {
-            http_content_type: content_type,
-            payload: Arc::from(tampered_body.as_slice()),
-            receipt_payload: None,
-            policy: receive_policy,
-            authenticated_sender_scope: Some(Arc::from("test-sender")),
+        As4ReceivePush {
+            request: As4ReceivePushRequest {
+                http_content_type: content_type,
+                payload: Arc::from(tampered_body.as_slice()),
+                receipt_payload: None,
+                policy: receive_policy,
+                authenticated_sender_scope: Some(Arc::from("test-sender")),
+            },
+            dedup,
+            ordering: None,
+            signer_pins: None,
         },
-        dedup,
         As4WsSecVerifier,
     )
     .await;
@@ -610,8 +640,7 @@ async fn tampered_signature_is_rejected() {
 #[tokio::test]
 async fn inbound_encryption_enforced_when_decryption_key_set() {
     use asx_rs::as4::{
-        As4ReceivePushRequest, As4SendRequest, InsecureBypassAs4Verifier,
-        receive_push_with_dedup_async_with_custom_verifier, send_async,
+        As4ReceivePushRequest, As4SendRequest, InsecureBypassAs4Verifier, send_async,
     };
     use asx_rs::core::SessionContextBuilder;
     use asx_rs::observability::EventBus;
@@ -673,17 +702,21 @@ async fn inbound_encryption_enforced_when_decryption_key_set() {
     // Feed the SIGN-ONLY (unencrypted) message to a receiver with strict
     // inbound-encryption policy.  Use InsecureBypassAs4Verifier so the test
     // exercises only the policy-level encryption check, not PKI verification.
-    let result = receive_push_with_dedup_async_with_custom_verifier(
+    let result = asx_rs::as4::receive_push_with_custom_verifier(
         &sender_session, // receiver session; PKI not relevant here
         &event_bus,
-        As4ReceivePushRequest {
-            http_content_type: output.http_content_type.clone(),
-            payload: Arc::from(output.soap_envelope.body.as_ref()),
-            receipt_payload: None,
-            policy: strict_policy,
-            authenticated_sender_scope: Some(Arc::from("test-sender")),
+        asx_rs::as4::As4ReceivePush {
+            request: As4ReceivePushRequest {
+                http_content_type: output.http_content_type.clone(),
+                payload: Arc::from(output.soap_envelope.body.as_ref()),
+                receipt_payload: None,
+                policy: strict_policy,
+                authenticated_sender_scope: Some(Arc::from("test-sender")),
+            },
+            dedup,
+            ordering: None,
+            signer_pins: None,
         },
-        dedup,
         InsecureBypassAs4Verifier,
     )
     .await;
@@ -746,7 +779,7 @@ async fn sync_receipt_is_verified_and_correlated() {
     );
     let event_bus = Arc::new(EventBus::new_for_testing());
 
-    let payload = b"UNB+UNOC:3+9900000000001:293+9900000000002:293+260101:0000+1'\
+    let payload = b"UNB+UNOC:3+9900000000001:500+9900000000002:500+260101:0000+1'\
                     UNH+1+APERAK:D:07B:UN:2.1i'UNZ+1+1'";
 
     // A sign-only send is enough for a receipt round trip (no recipient encryption cert).
@@ -792,4 +825,123 @@ async fn sync_receipt_is_verified_and_correlated() {
         receipt.ref_to_message_id, output.message_id,
         "verify_sync_response must correlate the receipt to the sent message_id"
     );
+}
+
+// ── D2: the inbound path accepts a well-formed signed message ────────────────
+
+/// A correctly signed, untampered message is **accepted**.
+///
+/// This is the control for [`tampered_signature_is_rejected`], and without it
+/// that test proves nothing: it asserts `is_err()`, and a pipeline that refused
+/// *every* signed message would satisfy it. Its error-substring check does not
+/// separate the two either — `asx-rs` refuses a signed message carrying no
+/// pinned fingerprint with „AS4 receive requires cert_handle.fingerprint_sha256
+/// when verifying signed messages", and that sentence contains „verify".
+///
+/// What this pins is the property the transport exists for: BDEW AS4-Profil
+/// v1.2 §2.2.6.2.1 makes signing mandatory, so *every* conformant message a
+/// counterparty sends is signed. A receiver that rejects them all is not
+/// strict, it is offline — and it fails in a way that reads, in the log, like
+/// the counterparty's fault.
+#[tokio::test]
+async fn an_untampered_signed_message_is_accepted() {
+    use asx_rs::as4::{
+        As4ReceiveOutcome, As4ReceivePush, As4ReceivePushRequest, As4SendRequest, As4WsSecVerifier,
+        receive_push_with_custom_verifier, send_async,
+    };
+    use asx_rs::core::SessionContextBuilder;
+    use asx_rs::observability::EventBus;
+    use asx_rs::storage::DurableInMemoryDedupBackend;
+    use mako_as4::testing::BdewTestPki;
+    use mako_as4::{bdew_pmode_sign_only, bdew_push_policy, pmode::BdewAction};
+    use std::sync::Arc;
+
+    let sender_pki = BdewTestPki::generate("Control NB 9900000000012");
+    const SENDER_GLN: &str = "9900000000012";
+    const RECEIVER_GLN: &str = "9900000000013";
+
+    let sender_session = Arc::new(
+        SessionContextBuilder::new("control-sender", SENDER_GLN)
+            .with_signing_material(
+                sender_pki.signing.cert_pem_str(),
+                sender_pki.signing.key_pem_str(),
+            )
+            .with_trust_anchor_pem(sender_pki.signing.cert_pem_str())
+            .build()
+            .expect("sender session must build"),
+    );
+
+    // The receiver pins the sender's signing certificate. Trusting the CA says
+    // the signer is *a* market participant; the pin is what says *which*.
+    let receiver_session = Arc::new(
+        SessionContextBuilder::new("control-receiver", RECEIVER_GLN)
+            .with_trust_anchor_pem(sender_pki.signing.cert_pem_str())
+            // The fixture PKI publishes no OCSP responder; revocation is a
+            // separate control and not what this test is about.
+            .with_ocsp_mode(asx_rs::core::OcspMode::Disabled)
+            // The pin: the trust anchor says the signer is *a* BDEW market
+            // participant, and ~1500 parties hold such a certificate. This says
+            // *which*, and without it `asx-rs` refuses the message outright.
+            .with_fingerprint_sha256(
+                asx_rs::crypto::CertFingerprint::from_cert_pem(
+                    sender_pki.signing.cert_pem_str().as_bytes(),
+                )
+                .expect("fingerprint of the test signing certificate")
+                .to_string(),
+            )
+            .build()
+            .expect("receiver session must build"),
+    );
+
+    let event_bus = Arc::new(EventBus::new_for_testing());
+    let pm = bdew_pmode_sign_only("pm-control", RECEIVER_GLN, BdewAction::Aperak);
+    let output = send_async(
+        &sender_session,
+        &event_bus,
+        As4SendRequest {
+            message_id: format!("control-{}", uuid::Uuid::new_v4()),
+            payload: b"UNB+UNOC:3+original+payload+260101:0000+1'".to_vec(),
+            policy: pm.to_send_policy().expect("policy must build"),
+            credentials: None,
+            payload_filename: None,
+            payload_mime_type: Some(mako_as4::constants::PAYLOAD_MIME_TYPE.to_owned()),
+            payload_content_id: None,
+            additional_payloads: Vec::new(),
+        },
+    )
+    .await
+    .expect("valid signed SOAP must be built");
+
+    let mut receive_policy = bdew_push_policy(None);
+    receive_policy.fail_closed_audit_events = false;
+
+    let result = receive_push_with_custom_verifier(
+        &receiver_session,
+        &event_bus,
+        As4ReceivePush {
+            request: As4ReceivePushRequest {
+                http_content_type: output.http_content_type.clone(),
+                payload: Arc::from(output.soap_envelope.body.to_vec().as_slice()),
+                receipt_payload: None,
+                policy: receive_policy,
+                authenticated_sender_scope: Some(Arc::from("test-sender")),
+            },
+            dedup: Arc::new(DurableInMemoryDedupBackend::new(
+                std::time::Duration::from_secs(3600),
+            )),
+            ordering: None,
+            signer_pins: None,
+        },
+        As4WsSecVerifier,
+    )
+    .await;
+
+    match result.map(asx_rs::as4::As4Ordered::into_inner) {
+        Ok(As4ReceiveOutcome::FirstSeen { .. }) => {}
+        Ok(other) => panic!("expected FirstSeen, got {other:?}"),
+        Err(e) => panic!(
+            "a correctly signed, untampered message must be accepted, but the inbound \
+             pipeline refused it: {e}"
+        ),
+    }
 }

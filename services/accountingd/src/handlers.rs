@@ -765,7 +765,25 @@ pub async fn ingest_webhook(
         // When cfg.eeg.auto_payout = true: also auto-generates pain.001 SEPA Credit Transfer
         // (SCT Inst or SCT CORE per cfg.eeg.sepa_instant) for immediate payout to plant operator.
         mako_events::eeg::VERGUETUNG_BERECHNET => {
-            let malo_id = ce.get("subject").and_then(|v| v.as_str()).unwrap_or("");
+            // The Marktlokation comes from `data.malo_id`, never from `subject`:
+            // einsd sets the CloudEvent subject to the **Technische Ressource**
+            // (`tr_id`) and carries the MaLo in the payload. Reading `subject`
+            // opened a phantom Kontokorrent keyed on a TR-ID, so the plant's real
+            // account never saw the credit — balance, aging, Verzug and every
+            // Mahnwesen decision were computed without it, and the IBAN lookup
+            // `WHERE malo_id = $1` missed, silently skipping the SEPA payout.
+            let Some(malo_id) = data
+                .and_then(|d| d.get("malo_id"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            else {
+                tracing::error!(
+                    ce_type = %ce_type,
+                    "EEG settlement event carries no data.malo_id — refusing rather \
+                     than booking the credit against an account keyed on nothing"
+                );
+                return StatusCode::UNPROCESSABLE_ENTITY.into_response();
+            };
             let tr_id = data
                 .and_then(|d| d.get("tr_id"))
                 .and_then(|v| v.as_str())
@@ -946,7 +964,25 @@ pub async fn ingest_webhook(
         // de.eeg.marktpraemie.berechnet: Direktvermarktung / Ausschreibung settlement.
         // Gleitende Marktprämie (§20 EEG) + Managementprämie → EEG_MARKTPRAEMIE credit.
         mako_events::eeg::MARKTPRAEMIE_BERECHNET => {
-            let malo_id = ce.get("subject").and_then(|v| v.as_str()).unwrap_or("");
+            // The Marktlokation comes from `data.malo_id`, never from `subject`:
+            // einsd sets the CloudEvent subject to the **Technische Ressource**
+            // (`tr_id`) and carries the MaLo in the payload. Reading `subject`
+            // opened a phantom Kontokorrent keyed on a TR-ID, so the plant's real
+            // account never saw the credit — balance, aging, Verzug and every
+            // Mahnwesen decision were computed without it, and the IBAN lookup
+            // `WHERE malo_id = $1` missed, silently skipping the SEPA payout.
+            let Some(malo_id) = data
+                .and_then(|d| d.get("malo_id"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            else {
+                tracing::error!(
+                    ce_type = %ce_type,
+                    "EEG settlement event carries no data.malo_id — refusing rather \
+                     than booking the credit against an account keyed on nothing"
+                );
+                return StatusCode::UNPROCESSABLE_ENTITY.into_response();
+            };
             let amount_ct: i64 = data
                 .and_then(|d| d.get("settlement_eur"))
                 .and_then(|v| v.as_str())

@@ -208,7 +208,6 @@ impl EventPayload for LfAnmeldungEvent {
 
 /// Business data captured at `Initiated` time.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LfAnmeldungData {
     /// PID of the outbound Anfrage (55001, 55004, 55016, or 55077).
     pub pruefidentifikator: Pruefidentifikator,

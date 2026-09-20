@@ -606,7 +606,6 @@ impl EventPayload for BillingEvent {
 
 /// Settlement facts shared by every version of one stream.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct BillingData {
     /// Which Summenzeitreihe of Tabelle 1 this stream settles.
     pub zeitreihe: Zeitreihe,

@@ -153,7 +153,6 @@ impl EventPayload for TechnikAenderungEvent {
 
 /// Request data.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AuftragData {
     /// ORDERS PID.
     pub orders_pid: Pruefidentifikator,

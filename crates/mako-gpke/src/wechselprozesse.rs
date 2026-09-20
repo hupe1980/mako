@@ -313,7 +313,6 @@ impl EventPayload for SupplierChangeEvent {
 /// All fields are structurally guaranteed to be present once the process moves
 /// past `New` — no `unwrap()` required downstream.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct InitiatedData {
     /// EIC/MaLo code for the supply location.
     pub location_id: MaLo,

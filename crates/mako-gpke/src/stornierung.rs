@@ -158,7 +158,6 @@ impl EventPayload for GpkeStornierungEvent {
 
 /// Business data recorded at `StornierungReceived` time and carried throughout.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct GpkeStornierungData {
     /// Prüfidentifikator of the inbound 55022 message.
     pub pruefidentifikator: Pruefidentifikator,

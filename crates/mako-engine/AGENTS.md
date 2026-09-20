@@ -68,8 +68,9 @@ let due = fristen::aperak_strom_due_at(received_at);
 let obligation: Option<&'static AntwortObligation> =
     fristen::antwort::antwort_obligation(55_001);
 
-// Werktage arithmetic, where a Festlegung really does count days:
-// Saturday counts, Sunday and a BDEW MaKo holiday do not.
+// Werktage arithmetic, where a Festlegung really does count days.
+// A Werktag is any day that is not a Samstag, a Sonntag or a gesetzlicher
+// Feiertag (GPKE Teil 1 Kap. 1.7) — Saturday does NOT count.
 let deadline = fristen::add_werktage(received_date, 5, HolidayCalendar::BdewMaKo);
 ```
 

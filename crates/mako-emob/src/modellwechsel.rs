@@ -223,7 +223,6 @@ pub const ABMELDUNG: LegWire = LegWire {
 
 /// What one leg of a Modellwechsel is about.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Modellwechseldaten {
     /// The physical Marktlokation, `SG5 LOC+Z16`.
     pub malo: MaLo,

@@ -23,26 +23,17 @@
 
 use edi_energy::{AnyMessage, EdiEnergyMessage, Platform};
 
-const MSCONS_BYTES: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+240115:0800+INTER-MS-001'\
-UNH+MSG-002+MSCONS:D:04B:UN:2.4c'\
-BGM+7+13002+9'\
-DTM+137:202401150800?+00:303'\
-NAD+MS+4012345000023::293'\
-NAD+MR+9900357000004::293'\
-UNS+D'\
-NAD+DP+DE0001234567890123456789012345::293'\
-LOC+172+DE0001234567890123456789012345::293'\
-DTM+163:20240101:102'\
-DTM+164:20240131:102'\
-LIN+1'\
-PIA+5+1-1:1.29.0:SRW'\
-QTY+220:1234.567:KWH'\
-DTM+163:20240101000000:203'\
-DTM+164:20240131235959:203'\
-STS+7::293'\
-UNT+17+MSG-002'\
-UNZ+1+INTER-MS-001'";
+/// A conformant MSCONS 13002, taken from the validated fixture corpus.
+///
+/// Included rather than inlined, and that is the point. This example carried
+/// its own hand-written interchange, and it was wrong in eleven ways at once —
+/// no SG1 Prüfidentifikator, no SG7 Referenzangaben, `KWH` where the
+/// Prüfschablone admits no Maßeinheit, an OBIS whose colon was never released
+/// so the code silently truncated to `1-1`. None of it showed, because the
+/// example parsed and printed without ever validating. A fixture the test suite
+/// already holds to the AHB cannot drift that way on its own.
+const MSCONS_BYTES: &[u8] =
+    include_bytes!("../tests/fixtures/mscons/valid/beispiel_13002_release_2_4c.edi");
 
 fn main() -> Result<(), edi_energy::Error> {
     let msg = Platform::with_all_profiles().parse(MSCONS_BYTES)?;
@@ -132,6 +123,26 @@ fn main() -> Result<(), edi_energy::Error> {
             }
         }
     }
+
+    // ── Validation ───────────────────────────────────────────────────────────
+    //
+    // Asserted, not printed. An example that parses a fixture and exits `0`
+    // certifies nothing about the fixture: this one carried an OBIS whose colon
+    // was never released (`1-1:1.29.0` split into two components, so the code
+    // silently truncated to `1-1`) and a 30-character Messlokations-ID, and it
+    // printed both without complaint for as long as nobody validated it.
+    let report = msg.validate()?;
+    assert!(
+        report.is_valid(),
+        "the embedded MSCONS no longer conforms to its own profile:\n{}",
+        report
+            .errors()
+            .iter()
+            .map(|e| format!("  [{}] {}", e.rule_id.as_deref().unwrap_or("-"), e.message))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    println!("\nValidation   : OK ({report})");
 
     // Serialize and verify round-trip
     let bytes = msg.serialize()?;

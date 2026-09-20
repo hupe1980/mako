@@ -357,7 +357,6 @@ impl EventPayload for AktivierungEvent {
 
 /// Core activation data set at `AcoReceived` time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AcoData {
     /// MRID of the initiating ACO.
     pub mrid: String,

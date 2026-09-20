@@ -7,6 +7,7 @@ use super::*;
 
 /// One decoded interval in an IoT push.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct IotInterval {
     /// RFC 3339 interval start (inclusive).
     from: String,

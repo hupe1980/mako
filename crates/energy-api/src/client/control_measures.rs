@@ -23,7 +23,6 @@ use crate::models::electricity::{
     ReferenceId, StateNegative, StatePositive, StateUnknown,
 };
 
-#[cfg(feature = "crypto")]
 use p256::ecdsa::SigningKey;
 
 /// HTTP client for the [EDI-Energy Control Measures API v1][spec].
@@ -39,7 +38,6 @@ use p256::ecdsa::SigningKey;
 pub struct ControlMeasuresClient {
     inner: Client,
     base_url: Url,
-    #[cfg(feature = "crypto")]
     signing_key: Option<SigningKey>,
 }
 
@@ -49,7 +47,6 @@ impl ControlMeasuresClient {
         Self {
             inner: client,
             base_url,
-            #[cfg(feature = "crypto")]
             signing_key: None,
         }
     }
@@ -58,7 +55,6 @@ impl ControlMeasuresClient {
     ///
     /// The `key` must belong to an EMT.API certificate from the BSI SM-PKI.
     /// Every request will carry `DIGEST` and `SIGNATURE` HTTP headers.
-    #[cfg(feature = "crypto")]
     pub fn with_signing(mut self, key: SigningKey) -> Self {
         self.signing_key = Some(key);
         self
@@ -394,21 +390,15 @@ impl ControlMeasuresClient {
     fn sign_if_enabled(
         &self,
         req: reqwest::RequestBuilder,
-        _uri: &str,
-        _canonical_payload: &[u8],
-        _creation_dt: &str,
-        _tx_id: &str,
+        uri: &str,
+        canonical_payload: &[u8],
+        creation_dt: &str,
+        tx_id: &str,
     ) -> Result<reqwest::RequestBuilder, Error> {
-        #[cfg(feature = "crypto")]
         if let Some(key) = &self.signing_key {
             use crate::transport::content_security::{self, HEADER_DIGEST, HEADER_SIGNATURE};
-            let (digest, sig) = content_security::sign_request(
-                _uri,
-                _canonical_payload,
-                _creation_dt,
-                _tx_id,
-                key,
-            )?;
+            let (digest, sig) =
+                content_security::sign_request(uri, canonical_payload, creation_dt, tx_id, key)?;
             return Ok(req
                 .header(HEADER_DIGEST, digest)
                 .header(HEADER_SIGNATURE, sig));

@@ -32,10 +32,14 @@ and fails when one moves. Two things it cannot express are asserted separately:
   may fail to parse or to validate.
 - **`demo_fixtures.rs`** — the fixtures under `demos/` are outside this corpus
   and are validated there instead.
-- **`party_agency_code.rs`** — every `NAD` stamps the agency its MP-ID range
-  implies: `99…` is `293` (BDEW), `98…` is `332` (DVGW), a GLN is `9`. Gas
-  columns admit only `9`/`332`, so a Gas fixture carries `98…` ids in `UNB`
-  and `NAD` alike.
+- **`party_agency_code.rs`** — every party field names the office its MP-ID
+  range implies, on **both** code lists, because `UNB` DE 0007 and `NAD`
+  DE 3055 spell the same office differently: `99…` is `500`/`293` (BDEW),
+  `98…` is `502`/`332` (DVGW), a GLN is `14`/`9`. Gas columns admit only
+  GS1/DVGW on a party `NAD`, so a Gas fixture carries `98…` ids throughout.
+  Both directions read the checked-in `.edi` files, `demos/` included — the
+  demo fixtures are what an evaluator copies, and the AHB validation
+  `demo_fixtures.rs` runs says nothing about which office issued a code.
 
 ## Naming
 

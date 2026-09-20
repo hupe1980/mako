@@ -717,7 +717,7 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
                 .layer(Extension(pool_arc.clone()))
                 .merge(crate::mcp_server::router(mcp_state, cfg.shutdown.clone())),
         )
-        .with_tenant_rate_limit(&cfg.rate_limit)
+        .with_caller_rate_limit(&cfg.rate_limit)
         .with_rate_limit(&cfg.rate_limit)
         .build();
 

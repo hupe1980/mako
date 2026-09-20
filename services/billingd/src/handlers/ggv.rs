@@ -9,6 +9,7 @@ use super::*;
 /// Each entry represents one tenant delivery point under the shared PV installation.
 /// `consumption_kwh` is the metered actual consumption for the billing period from `edmd`.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GgvTenantInput {
     /// 11-digit MaLo-ID for this tenant's delivery point.
     pub malo_id: String,
@@ -80,6 +81,7 @@ pub struct GgvBillingRequest {
 
 /// One entry in the GGV Nutzungsplan submitted via the billing API.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NutzungsplanInput {
     pub malo_id: String,
     pub fraction: rust_decimal::Decimal,

@@ -26,7 +26,7 @@
 //! | Clock | Window | Meaning |
 //! |---|---|---|
 //! | **CONTRL** | 6 wall-clock hours; **15 min** for a Strom UTILMD/ORDERS Syntaxfehlermeldung (6 h on a Saturday), **45 min** for a GABi-Gas ALOCAT; deferred to the end of a Formatumstellung window (CONTRL AHB 1.0 §2.3.1, §2.4.1) | the syntax check of the Übertragungsdatei |
-//! | **APERAK** | 45 min Strom weekday; Gas: next Werktag 12:00 (Folgeprozess) or 3 Werktage (Initialprozess) | the message was accepted for processing |
+//! | **APERAK** | 45 min Strom on every day but Samstag (Samstag → Sonntag 12:00); Gas: next Werktag 12:00 (Folgeprozess) or 3 Werktage (Initialprozess) | the message was accepted for processing |
 //! | **Antwortfrist** | per PID — 11:00 of the 1. Werktag for a GPKE Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom | the *business* answer is owed |
 //!
 //! **There is no 24-hour GPKE window**, under BK6-24-174 or anything else.
@@ -233,11 +233,17 @@ fn formatumstellung_toleranz_ende(at: OffsetDateTime) -> Option<OffsetDateTime> 
 
 // ── APERAK Strom 45-minute / Saturday-noon sending window ────────────────────
 
-/// Minutes within which a Strom APERAK must be sent on weekdays (Mon–Fri).
+/// Minutes within which a Strom APERAK for a UTILMD or an ORDERS must be sent.
 ///
-/// Per APERAK AHB 1.0 §2.4.1: "UTILMD und ORDERS: an Werktagen (Montag–Freitag):
-/// 45 Minuten".
-pub const APERAK_STROM_WEEKDAY_MINUTES: i64 = 45;
+/// APERAK AHB 1.1 § 2.4.1 states the 45 minutes **unqualified** and carves out
+/// **Samstag** alone, so this applies on every other day — Sunday included.
+/// There is no Montag–Freitag restriction in the document; a „weekday" reading
+/// silently grants an extra day on Sundays, on a window measured in minutes.
+///
+/// Do not attach a verbatim quotation here that has not been grepped out of the
+/// PDF: the Mo–Fr reading entered this file once before, carried by an invented
+/// one.
+pub const APERAK_STROM_UTILMD_ORDERS_MINUTES: i64 = 45;
 
 /// Shared prefix of every APERAK delivery-window label.
 ///
@@ -369,7 +375,7 @@ pub fn aperak_strom_due_at(received: OffsetDateTime) -> OffsetDateTime {
     } else {
         // Every other day: 45 wall-clock minutes. The AHB carves out Saturday
         // and nothing else.
-        received + Duration::minutes(APERAK_STROM_WEEKDAY_MINUTES)
+        received + Duration::minutes(APERAK_STROM_UTILMD_ORDERS_MINUTES)
     }
 }
 
@@ -1912,17 +1918,17 @@ mod tests {
 
     // ── aperak_strom_due_at ───────────────────────────────────────────────────
 
-    /// Weekday (Monday): deadline is exactly 45 minutes after receipt.
-    /// APERAK AHB 1.0 §2.4.1: "an Werktagen (Montag–Freitag): 45 Minuten".
+    /// Any day but Samstag: the deadline is exactly 45 minutes after receipt.
+    /// APERAK AHB 1.1 § 2.4.1 carves out Samstag and nothing else.
     #[test]
-    fn aperak_strom_weekday_is_45_minutes() {
+    fn aperak_strom_non_saturday_is_45_minutes() {
         // Monday 2025-01-06 10:00 UTC (= 11:00 CET)
         let received = OffsetDateTime::new_utc(date(2025, 1, 6), Time::from_hms(10, 0, 0).unwrap());
         let due = aperak_strom_due_at(received);
         assert_eq!(
             due - received,
             time::Duration::minutes(45),
-            "weekday: due at received + 45 min"
+            "any day but Samstag: due at received + 45 min"
         );
     }
 

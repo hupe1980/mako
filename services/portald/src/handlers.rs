@@ -825,16 +825,25 @@ pub async fn put_portal_sepa(
         Err(resp) => return resp,
     };
 
-    let body = serde_json::json!({
-        "malo_id":        &malo_id,
-        "lf_mp_id":       cfg.lf_mp_id(),
-        "iban":           &req.iban,
-        "bic":            req.bic,
-        "kontoinhaber":   req.kontoinhaber,
-        "mandatsref":     mandatsref(&malo_id),
-        "signed_at":      mako_fristen::heute().to_string(),
-        "debtor_address": req.debtor_address,
+    // `debtor_address` is **omitted** when absent, never sent as `null`.
+    // `accountingd`'s `CreateMandateRequest` denies unknown fields and takes the
+    // address as `#[serde(default)] AddressParts` — a plain struct, not an
+    // `Option` — so `default` fills a *missing* key while an explicit `null` is
+    // `invalid type: null, expected struct` and refuses the whole body. The
+    // address stays optional until 15.11.2026, so that is today's normal case:
+    // every customer without one would get a 422 on mandate registration.
+    let mut body = serde_json::json!({
+        "malo_id":      &malo_id,
+        "lf_mp_id":     cfg.lf_mp_id(),
+        "iban":         &req.iban,
+        "bic":          req.bic,
+        "kontoinhaber": req.kontoinhaber,
+        "mandatsref":   mandatsref(&malo_id),
+        "signed_at":    mako_fristen::heute().to_string(),
     });
+    if let Some(addr) = req.debtor_address {
+        body["debtor_address"] = addr;
+    }
 
     match accountingd.post_json("/api/v1/sepa/mandates", &body).await {
         Ok((200..=299, body)) => (StatusCode::CREATED, Json(body)).into_response(),

@@ -56,10 +56,15 @@ const SCANNED: &[&str] = &["crates", "services"];
 /// The lowest number of production `impl … Workflow for …` blocks a healthy
 /// scan may find.
 ///
-/// There were 62 when this guard was written. The floor sits far enough below
-/// that a genuine deletion of a workflow or two does not trip it, and far enough
-/// above zero that a scanner which stopped matching cannot pass.
-const MIN_WORKFLOW_IMPLS: usize = 40;
+/// **This is the measured value, not a margin below it.** A floor set well under
+/// what the tree holds tolerates exactly the failure it exists to catch: a
+/// pattern that stops matching most of the corpus still passes, and the run
+/// reports the clean line for workflows it never read. Set to the measured count
+/// the same way `engine_modules`, `readme_snippets` and `COVERED_FLOOR` are, so
+/// that deleting a workflow is a deliberate edit here rather than a silent
+/// erosion — which is the only version of this constant that carries
+/// information.
+const MIN_WORKFLOW_IMPLS: usize = 62;
 
 /// What a pure workflow may not reach for, and what the call actually is.
 ///

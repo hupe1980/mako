@@ -316,7 +316,6 @@ impl EventPayload for GasStammdatenEvent {
 
 /// Business data captured when the process starts (either role).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct GasStammdatenData {
     /// Gas-Marktlokation.
     pub location_id: MaLo,

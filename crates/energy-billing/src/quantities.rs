@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 
 // ── Meter input types ─────────────────────────────────────────────────────────
 
-/// Metering mode of the delivery point (§3/§ 12 StromNZV, §41a EnWG).
+/// Metering mode of the delivery point (§ 3 / § 12 StromNZV bis 31.12.2025, §41a EnWG).
 ///
 /// Determines billing granularity, permissible tariff types, and substitution
 /// rules for missing interval data.
@@ -28,7 +28,7 @@ pub enum MeteringMode {
     #[default]
     Slp,
     /// Registrierende Leistungsmessung (RLM) — measured 15-minute interval billing.
-    /// Required for customers ≥ 100 MWh/year (§ 12 StromNZV, §14 NAV).
+    /// Required for customers ≥ 100 MWh/year (§ 12 StromNZV bis 31.12.2025, §14 NAV).
     Rlm,
     /// Intelligentes Messsystem (iMSys) — Smart Meter Gateway.
     ///
@@ -102,7 +102,7 @@ pub struct MeterInput {
     /// Low-tariff energy in kWh (NT, for Zweitarif). `None` = single tariff.
     #[serde(default)]
     pub arbeitsmenge_nt_kwh: Option<Decimal>,
-    /// Peak demand in kW (Spitzenleistung, § 12 StromNZV).
+    /// Peak demand in kW (Spitzenleistung, § 12 StromNZV bis 31.12.2025).
     #[serde(default)]
     pub spitzenleistung_kw: Option<Decimal>,
     /// §14a EnWG: hours the controllable device was under NB management.

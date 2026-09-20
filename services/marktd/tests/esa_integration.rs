@@ -628,7 +628,6 @@ async fn an_expiry_whose_event_fails_stays_open_for_the_next_sweep() {
         return;
     };
     let repo = PgEinwilligungRepository::new(pool.clone());
-    let notify = tokio::sync::Notify::new();
     let today = time::macros::date!(2026 - 06 - 15);
 
     let id = repo
@@ -657,7 +656,7 @@ async fn an_expiry_whose_event_fails_stays_open_for_the_next_sweep() {
             .expect("claim")
             .expect("the lapsed consent is claimable");
         assert_eq!(claimed.id, id);
-        marktd::outbox::enqueue(&mut *tx, &widerrufen_event(&claimed), &notify)
+        marktd::outbox::enqueue(&mut *tx, &widerrufen_event(&claimed))
             .await
             .expect_err("the event INSERT must fail with event_log gone");
         tx.rollback().await.expect("roll back the failed sweep");
@@ -690,7 +689,7 @@ async fn an_expiry_whose_event_fails_stays_open_for_the_next_sweep() {
         .await
         .expect("claim")
         .expect("still claimable");
-    marktd::outbox::enqueue(&mut *tx, &widerrufen_event(&claimed), &notify)
+    marktd::outbox::enqueue(&mut *tx, &widerrufen_event(&claimed))
         .await
         .expect("enqueue");
     tx.commit().await.expect("commit");

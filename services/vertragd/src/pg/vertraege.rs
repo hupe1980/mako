@@ -64,6 +64,7 @@ pub struct CreateVersorgungsvertragInput {
 
 /// One commodity position of a supply contract.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateKomponenteInput {
     pub sparte: String,
     pub malo_id: Option<String>,
@@ -160,6 +161,7 @@ pub struct TarifwechselInput {
 /// Amounts are decimal strings — the same convention the document views use, so
 /// the value travels from the API to the page without ever becoming a float.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AngekuendigterPreis {
     /// What is priced, as the customer's tariff names it — `"Arbeitspreis"`,
     /// `"Grundpreis"`, `"Arbeitspreis HT"`.
@@ -1317,14 +1319,23 @@ pub async fn storniere_vertrag(pool: &PgPool, id: Uuid, tenant: &str) -> Result<
     // register. One that already reached processd is the operator's to cancel
     // there — which is exactly what the response says.
     sqlx::query(
+        // The tenant predicate is carried on both sides rather than inferred
+        // from the join: `komp_id` is a foreign key, not this table's own key,
+        // so the subquery alone decides which rows are reached and an id that
+        // resolves in another tenant would dead-letter that tenant's tasks.
         r"UPDATE outbound_tasks
           SET dead_lettered_at = now(),
               last_error = 'Vertrag storniert vor Lieferbeginn'
           WHERE kind = 'LIEFERBEGINN'
             AND completed_at IS NULL AND dead_lettered_at IS NULL
-            AND komp_id IN (SELECT id FROM vertragskomponenten WHERE vertrag_id = $1)",
+            AND tenant = $2
+            AND komp_id IN (
+                SELECT id FROM vertragskomponenten
+                 WHERE vertrag_id = $1 AND tenant = $2
+            )",
     )
     .bind(id)
+    .bind(tenant)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;

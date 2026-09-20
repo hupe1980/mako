@@ -94,6 +94,7 @@ pub const fn bank_to_ledger_ct(signed_ct: i64) -> i64 {
 /// omission, because "we thought we sent the address" is exactly the failure the
 /// cut-over will surface.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AddressParts {
     /// `TwnNm` — mandatory from the cut-over.
     pub town: Option<String>,

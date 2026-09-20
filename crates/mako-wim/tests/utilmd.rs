@@ -53,7 +53,7 @@ use mako_wim::{DeviceChangeCommand, DeviceChangeState, WimDeviceChangeWorkflow};
 /// - UNT  — message trailer
 /// - UNZ  — interchange trailer
 const UTILMD_55042_BYTES: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+WIM-2025-001'\
+UNB+UNOC:3+4012345000023:14+9900357000004:500+250115:0800+WIM-2025-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
 BGM+E01:::+00055042::+9'\
 DTM+137:202501150800?+00:303'\
@@ -219,7 +219,7 @@ async fn end_to_end_geraetewechsel_pipeline() {
 fn negative_ahb_wrong_bgm_qualifier_pid_55042() {
     // Valid PID 55042 uses BGM+E01; inject BGM+E99 (never valid for any WiM PID).
     let invalid_bytes: &[u8] = b"\
-UNB+UNOC:3+9900357000004:14+4012345000023:14+261001:0700+WIM-NEG-001'\
+UNB+UNOC:3+9900357000004:500+4012345000023:14+261001:0700+WIM-NEG-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
 BGM+E99+DOK55042'\
 DTM+137:202610010000?+00:303'\
@@ -276,7 +276,7 @@ UNZ+1+WIM-NEG-001'";
 #[test]
 fn negative_ahb_undefined_ide_qualifier_pid_55039() {
     let invalid_bytes: &[u8] = b"\
-UNB+UNOC:3+9900357000004:14+4012345000023:14+261001:0700+WIM-NEG-002'\
+UNB+UNOC:3+9900357000004:500+4012345000023:14+261001:0700+WIM-NEG-002'\
 UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
 BGM+E35+DOK55039'\
 DTM+137:202610010000?+00:303'\

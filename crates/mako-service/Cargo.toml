@@ -31,10 +31,9 @@ cedar = ["dep:cedar-policy"]
 ## Provides the `Claims` Axum extractor for use in handlers.
 ##
 ## Implies `cedar`: `oidc.rs` builds a `cedar::CedarPrincipal` from the verified
-## claims, so `oidc` without `cedar` does not compile. It was previously left to
-## each caller to enable both, which meant a crate that wanted only
-## authentication had to name an authorization feature it does not use — and one
-## that omitted it got a build error rather than a clear signal.
+## claims, so `oidc` without `cedar` does not compile. Implied rather than left
+## to the caller, so a crate wanting only authentication does not have to name an
+## authorization feature it never uses to get a build that works.
 oidc = ["dep:jsonwebtoken", "cedar"]
 
 ## Enables real Prometheus metrics at `GET /metrics`.
@@ -59,8 +58,8 @@ axum       = { version = "0.8" }
 tokio      = { version = "1", features = ["rt", "net", "signal", "macros"] }
 # Always-on: `shutdown` (CancellationToken) and `http`/`cloudevent` (reqwest
 # outbound client + signed CloudEvent publisher) are compiled unconditionally, so
-# these are core deps, not feature-gated. (Previously mis-declared optional under
-# `oidc`, which only ever resolved because every consumer enables `oidc`.)
+# these are core deps and must not be feature-gated. Gating them under `oidc`
+# builds only because every consumer happens to enable `oidc`.
 tokio-util = { workspace = true }
 reqwest    = { workspace = true }
 subtle     = "2"

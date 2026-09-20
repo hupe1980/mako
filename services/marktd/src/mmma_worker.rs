@@ -452,7 +452,7 @@ async fn emit_event(sink: &EventSink<'_>, tenant: &str, event_type: &str, data: 
     // Background worker: no HTTP request to fail, so an enqueue failure is
     // logged at error level (the event is not silently dropped). Correctness of
     // the fan-out still holds — nothing is fanned out unless it is durable.
-    if let Err(e) = crate::outbox::enqueue(sink.pool, &evt, sink.notify).await {
+    if let Err(e) = crate::outbox::enqueue(sink.pool, &evt).await {
         tracing::error!(error = %e, event_type, "mmma-worker: durable enqueue failed");
     }
 }
@@ -461,7 +461,6 @@ async fn emit_event(sink: &EventSink<'_>, tenant: &str, event_type: &str, data: 
 /// so the import cycle can persist events without an in-memory channel.
 pub struct EventSink<'a> {
     pub pool: &'a sqlx::PgPool,
-    pub notify: &'a tokio::sync::Notify,
 }
 
 /// Spawn the MMMA background import worker.
@@ -477,7 +476,6 @@ pub fn spawn_mmma_worker(
     strom_repo: Arc<PgMmmPreisStromRepository>,
     tenant: String,
     pool: sqlx::PgPool,
-    notify: Arc<tokio::sync::Notify>,
     shutdown: CancellationToken,
 ) {
     if !cfg.enabled {
@@ -547,10 +545,7 @@ pub fn spawn_mmma_worker(
                 &gas_repo,
                 &strom_repo,
                 &tenant,
-                &EventSink {
-                    pool: &pool,
-                    notify: &notify,
-                },
+                &EventSink { pool: &pool },
             )
             .await;
         }

@@ -275,7 +275,6 @@ pub const WORKFLOW_NAME: &str = "mabis-anforderung";
 
 /// Data captured for one Anforderung, in either direction.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AnforderungData {
     /// ORDERS Prüfidentifikator.
     pub pruefidentifikator: Pruefidentifikator,

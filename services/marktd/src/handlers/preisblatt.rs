@@ -218,7 +218,6 @@ pub async fn put_preisblatt(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
-    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     claims: Claims,
     Path(nb_mp_id): Path<String>,
     Json(req): Json<PreisblattUpsertRequest>,
@@ -362,7 +361,7 @@ pub async fn put_preisblatt(
             "valid_from": valid_from.to_string(),
         }),
     );
-    if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt, &notify).await {
+    if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt).await {
         tracing::error!(error = %e, "put_preisblatt: pricat.published enqueue failed");
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }

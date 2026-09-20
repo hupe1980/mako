@@ -343,7 +343,6 @@ pub async fn put_konfigurationsprodukte(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
-    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     claims: Claims,
     Path(sr_id): Path<String>,
     Json(body): Json<serde_json::Value>,
@@ -435,7 +434,7 @@ pub async fn put_konfigurationsprodukte(
                     "count": canonical.as_array().map(|a| a.len()).unwrap_or(0),
                 }),
             );
-            if let Err(e) = crate::outbox::enqueue(&pool, &evt, &notify).await {
+            if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
                 tracing::error!(error = %e, "device: durable enqueue failed");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
@@ -466,7 +465,6 @@ pub async fn delete_konfigurationsprodukt(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
-    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     claims: Claims,
     Path((sr_id, produktcode)): Path<(String, String)>,
 ) -> impl IntoResponse {
@@ -523,7 +521,7 @@ pub async fn delete_konfigurationsprodukt(
                     "count": new_list.as_array().map(|a| a.len()).unwrap_or(0),
                 }),
             );
-            if let Err(e) = crate::outbox::enqueue(&pool, &evt, &notify).await {
+            if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
                 tracing::error!(error = %e, "device: durable enqueue failed");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
@@ -795,6 +793,7 @@ pub struct PutKonfigurationenRequest {
 
 /// A single entry in `PutKonfigurationenRequest`.
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct KonfigurationenEntry {
     #[schema(value_type = String, example = "FIRMWARE_VERSION")]
     pub parameter: Konfigurationsparameter,
@@ -926,7 +925,6 @@ pub async fn put_geraet_konfigurationen(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
-    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     claims: Claims,
     Path((zaehler_id, geraet_id)): Path<(String, String)>,
     Json(req): Json<PutKonfigurationenRequest>,
@@ -983,7 +981,7 @@ pub async fn put_geraet_konfigurationen(
                     "count":      count,
                 }),
             );
-            if let Err(e) = crate::outbox::enqueue(&pool, &evt, &notify).await {
+            if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
                 tracing::error!(error = %e, "device: durable enqueue failed");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }

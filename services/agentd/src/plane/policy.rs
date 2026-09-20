@@ -176,13 +176,20 @@ mod tests {
     /// The tempting rule — `forbid when { context.mutates && label.trust ==
     /// "untrusted" }` — denies every mutating call a tool-calling agent will
     /// ever make, because the arguments were written by a model that had just
-    /// read a counterparty's event. What binds instead is per-argument:
+    /// read a counterparty's event. What *would* bind is per-argument:
     /// `protected_fields` with `require_trusted` on `/malo_id`, `/pid` and
     /// `/mp_id`, plus a named human on every mutating grant.
     ///
-    /// This test exists so that re-adding the rule fails here rather than in
-    /// production, where it presents as agents that run, succeed, and never do
-    /// anything.
+    /// **Neither is configured today**, and cannot be: no manifest declares
+    /// `mutates: true`, so there is nothing to attach them to. This test pins
+    /// the policy layer's deliberate permissiveness, not a live control — the
+    /// advisory posture holds by the absence of a mutating grant. Read it as the
+    /// precondition it is: the first mutating grant owes `protected_fields` and
+    /// the human gate in the same change.
+    ///
+    /// This test exists so that re-adding the blanket rule fails here rather
+    /// than in production, where it presents as agents that run, succeed, and
+    /// never do anything.
     #[test]
     fn a_mutating_call_on_model_written_arguments_is_not_denied_by_policy() {
         let context = json!({

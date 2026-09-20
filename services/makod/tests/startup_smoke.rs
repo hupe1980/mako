@@ -278,6 +278,7 @@ fn the_landing_page_figures_match_the_registered_engine() {
     let landing_page_workflows = stat("MaKo workflows");
     let landing_page_message_types = stat("EDI@Energy message types");
     let landing_page_services = stat("services");
+    let landing_page_roles = stat("role-scoped deployments");
 
     assert_eq!(
         edi_energy::MessageType::ALL.len(),
@@ -297,6 +298,30 @@ fn the_landing_page_figures_match_the_registered_engine() {
         services, landing_page_services,
         "site/templates/index.html advertises {landing_page_services} services, the \
          workspace has {services} — update the page"
+    );
+
+    // § 6a EnWG informational unbundling is the claim behind this number, so it
+    // has to be the number of binaries that can actually be built in isolation —
+    // makod's own top-level role features, not the Marktrollen the Rollenmodell
+    // defines (twelve) nor the answer-rule families `mako-pruefung` carries
+    // (six). Counted from the manifest the build reads.
+    let manifest = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
+    )
+    .expect("makod's manifest");
+    let makod_roles: std::collections::BTreeSet<&str> = manifest
+        .lines()
+        .filter_map(|l| l.split_once('='))
+        .filter_map(|(name, _)| name.trim().strip_prefix("role-"))
+        // The role, not the build: `role-lf`, `role-lf-strom` and `role-lf-gas`
+        // are one deployment scoped three ways, and ESA is Strom-only so it has
+        // no dual-fuel alias to count instead.
+        .map(|rest| rest.split('-').next().unwrap_or(rest))
+        .collect();
+    let makod_roles = makod_roles.len();
+    assert_eq!(
+        makod_roles, landing_page_roles,
+        "site/templates/index.html advertises {landing_page_roles} role-scoped deployments,          makod declares {makod_roles} top-level role features — update the page"
     );
 
     assert_eq!(

@@ -1103,13 +1103,38 @@ impl Reduktionsfaktor {
 
     /// Build a factor.
     ///
+    /// **The only admissible value is [`Self::REGELFALL`].** BK8-22/010-A
+    /// Tenor 2. b) fixes the reduced Arbeitspreis at 40 % of the
+    /// Niederspannungs-Arbeitspreis ohne Leistungsmessung, and Tenor 2. c) makes
+    /// Modul 2 verpflichtend — so the percentage is not a parameter a
+    /// Netzbetreiber publishes around. Only the *reference* Arbeitspreis
+    /// (`basis.preis_ct_per_kwh`) is the operator's.
+    ///
+    /// A range check of `(0, 1]` would admit `0.90`, which bills a 10 %
+    /// reduction where the Beschluss prescribes 60 % — under a
+    /// `BnetzaDecision { reference: "BK8-22/010-A" }` citing the very Beschluss
+    /// it breaks. `1.0` would be no reduction at all. Neither is distinguishable
+    /// from a correct invoice downstream, which is why the constructor refuses
+    /// rather than the caller remembering.
+    ///
+    /// If a later Festlegung nach § 30 Abs. 6 / § 33 MsbG replaces the rate, add
+    /// the new value as its own dated constant with its own citation — do not
+    /// widen this check back into a range.
+    ///
     /// # Errors
     ///
-    /// Returns [`crate::error::BillingError::InvalidInput`] outside `(0, 1]`.
+    /// Returns [`crate::error::BillingError::InvalidInput`] for any value other
+    /// than [`Self::REGELFALL`].
     pub fn new(factor: Decimal) -> Result<Self, crate::error::BillingError> {
-        if factor <= Decimal::ZERO || factor > Decimal::ONE {
+        if factor != Self::REGELFALL.0 {
             return Err(crate::error::BillingError::InvalidInput {
-                reason: format!("§14a Modul 2 reduction factor must be in (0, 1], got {factor}"),
+                reason: format!(
+                    "§14a Modul 2 reduction factor is fixed at {} by BK8-22/010-A Tenor 2. b) \
+                     (reduzierter Arbeitspreis = 40 % des Arbeitspreises ohne Leistungsmessung \
+                     in der Niederspannung); got {factor}. The reference Arbeitspreis is the \
+                     Netzbetreiber's, the percentage is not.",
+                    Self::REGELFALL.0
+                ),
             });
         }
         Ok(Self(factor))
@@ -2568,28 +2593,38 @@ pub fn validate_gas_awh_input(input: &GasAwhInput) -> ValidationResult {
 #[cfg(test)]
 mod input_model_tests {
 
-    /// A factor arriving over the wire is range-checked, not merely parsed.
+    /// The Modul 2 factor is the statutory rate, and a wire value that is not it
+    /// is refused.
     ///
-    /// The whole point of the newtype is that an out-of-range value cannot
-    /// exist; a derived `Deserialize` would have let one in through a request
-    /// body and multiplied the Arbeitspreis by it.
+    /// BK8-22/010-A Tenor 2. b) fixes the reduced Arbeitspreis at 40 % of the
+    /// Niederspannungs-Arbeitspreis ohne Leistungsmessung. A range check would
+    /// admit `0.90` — a 10 % reduction where 60 % is owed — and `1`, which is no
+    /// reduction at all, both of which bill a customer wrongly under a citation
+    /// to the Beschluss they break. Neither is distinguishable from a correct
+    /// invoice downstream, so the refusal has to be at construction.
     #[test]
-    fn a_wire_reduktionsfaktor_is_range_checked() {
-        // A `Decimal` is a JSON string on the wire, so the factor is too — a
-        // float cannot carry 0.85 exactly and this one multiplies a tariff.
-        let ok: Reduktionsfaktor = serde_json::from_str(r#""0.85""#).expect("in range");
-        assert_eq!(ok.get(), dec!(0.85));
+    fn a_wire_reduktionsfaktor_is_pinned_to_the_statutory_rate() {
+        // A `Decimal` is a JSON string on the wire, so the factor is too.
+        let ok: Reduktionsfaktor = serde_json::from_str(r#""0.40""#).expect("the statutory rate");
+        assert_eq!(ok.get(), Reduktionsfaktor::REGELFALL.get());
 
-        for bad in [r#""0""#, r#""-0.5""#, r#""1.01""#, r#""5""#] {
+        // Out of range, and — the point of this test — plausible but wrong.
+        for bad in [
+            r#""0""#,
+            r#""-0.5""#,
+            r#""1.01""#,
+            r#""5""#,    // out of any range
+            r#""0.90""#, // a 10 % reduction: plausible, and not the Beschluss's
+            r#""1""#,    // no reduction at all
+            r#""0.6""#,  // the *reduction*, not the retained share — the easy inversion
+        ] {
             assert!(
                 serde_json::from_str::<Reduktionsfaktor>(bad).is_err(),
                 "{bad} must be refused"
             );
         }
-        // The boundary is inclusive at 1 — no reduction is still a valid factor.
-        assert!(serde_json::from_str::<Reduktionsfaktor>(r#""1""#).is_ok());
-        // A bare number is refused before the range is even considered.
-        assert!(serde_json::from_str::<Reduktionsfaktor>("0.85").is_err());
+        // A bare number is refused before the value is even considered.
+        assert!(serde_json::from_str::<Reduktionsfaktor>("0.40").is_err());
     }
 
     /// The Arbeitspreis model round-trips, so a settlement input can be stored
@@ -2618,28 +2653,37 @@ mod input_model_tests {
     use super::*;
     use rust_decimal::dec;
 
-    /// A reduction factor outside `(0, 1]` cannot be built.
+    /// The reduction factor is the statutory rate, not a range.
     ///
-    /// The type is the check. A bare `Decimal` range-checked in a validator
-    /// leaves `settle_nne` free to multiply the published tariff by 5 whenever
-    /// the engine does not call it.
+    /// The type is the check, and the check is an equality rather than a
+    /// bound: BK8-22/010-A Tenor 2. b) fixes the reduced Arbeitspreis at 40 % of
+    /// the Niederspannungs-Arbeitspreis ohne Leistungsmessung. A range of
+    /// `(0, 1]` admits `0.90` — a 10 % reduction where 60 % is owed — and `1`,
+    /// which is no reduction at all. Both bill a customer wrongly while the
+    /// position carries a `BnetzaDecision` naming the Beschluss they break, and
+    /// neither is distinguishable from a correct invoice downstream.
     #[test]
-    fn a_reduction_factor_must_actually_reduce() {
-        assert!(Reduktionsfaktor::new(dec!(0.85)).is_ok());
-        assert!(
-            Reduktionsfaktor::new(dec!(1)).is_ok(),
-            "no reduction is still valid"
-        );
-        assert!(
-            Reduktionsfaktor::new(dec!(0)).is_err(),
-            "zero is not a reduction"
-        );
-        assert!(Reduktionsfaktor::new(dec!(-0.5)).is_err());
-        assert!(
-            Reduktionsfaktor::new(dec!(5)).is_err(),
-            "5x is not a reduction"
-        );
+    fn a_reduction_factor_is_the_statutory_rate() {
+        assert!(Reduktionsfaktor::new(dec!(0.40)).is_ok());
         assert_eq!(Reduktionsfaktor::REGELFALL.get(), dec!(0.40));
+
+        for (bad, why) in [
+            (dec!(0.85), "a plausible but unsourced rate"),
+            (
+                dec!(0.90),
+                "a 10 % reduction where the Beschluss prescribes 60 %",
+            ),
+            (dec!(1), "no reduction at all"),
+            (
+                dec!(0.6),
+                "the reduction, not the retained share — the easy inversion",
+            ),
+            (dec!(0), "zero is not a reduction"),
+            (dec!(-0.5), "negative"),
+            (dec!(5), "5x is not a reduction"),
+        ] {
+            assert!(Reduktionsfaktor::new(bad).is_err(), "{bad}: {why}");
+        }
     }
 
     /// The charged energy is the same figure whichever model priced it.

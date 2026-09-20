@@ -238,9 +238,10 @@ pub struct MmmStromUpsertRequest {
 /// `PUT /api/v1/mmm-preise/strom/{year}/{month}`
 ///
 /// Upsert the nationwide Strom Mehr-/Mindermengenpreise for an application
-/// month. § 13 Abs. 3 StromNZV makes them *einheitlich* and the BDEW publishes
-/// one series for the whole market, so the month is the entire key — there is
-/// no per-Netzbetreiber variant to select.
+/// month. They are *einheitlich* — § 13 Abs. 3 StromNZV for a period to
+/// 31.12.2025, § 20 Abs. 3 EnWG via BK6-24-174 from 01.01.2026 — and the BDEW
+/// publishes one series for the whole market, so the month is the entire key:
+/// there is no per-Netzbetreiber variant to select.
 pub async fn put_mmm_strom(
     Extension(repo): Extension<MmmStromRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -348,7 +349,6 @@ pub async fn post_import_trigger(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
-    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Extension(http): Extension<reqwest::Client>,
     claims: Claims,
     Query(q): Query<ImportTriggerQuery>,
@@ -374,10 +374,7 @@ pub async fn post_import_trigger(
         &gas_repo,
         &strom_repo,
         &tenant,
-        &crate::mmma_worker::EventSink {
-            pool: &pool,
-            notify: &notify,
-        },
+        &crate::mmma_worker::EventSink { pool: &pool },
     )
     .await;
 

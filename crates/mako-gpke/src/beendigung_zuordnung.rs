@@ -228,7 +228,6 @@ impl EventPayload for BeendigungZuordnungEvent {
 
 /// Business data captured at `AnfrageErhalten` time.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct BeendigungZuordnungData {
     /// EIC/MaLo code.
     pub location_id: MaLo,

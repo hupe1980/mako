@@ -1295,6 +1295,40 @@ impl BillingProvider for GasProvider {
                     .to_owned(),
             });
         }
+        // Volume → energy is the conversion that decides the whole gas bill, so
+        // a missing factor is a refusal and never a default. `messung_qm3` is a
+        // volume; what is billed is kWh_Hs = m³ × Brennwert × Zustandszahl
+        // (§ 25 Nr. 4 MessEV, DVGW G 685). Substituting a plausible Brennwert
+        // misprices every unit of the period in a way nothing downstream can
+        // see: a guessed 10.55 kWh/m³ against a real L-Gas 9.8 overstates the
+        // energy by ~8 %, and the Energiesteuer, the BEHG levy and the
+        // Netzentgelt are all computed on the same inflated base.
+        if let Some(m) = quantities.gas.as_ref()
+            && m.kwh_hs.is_none()
+            && m.messung_qm3 > Decimal::ZERO
+            && (m.brennwert_kwh_per_qm3.is_none() || m.zustandszahl.is_none())
+        {
+            let missing = match (m.brennwert_kwh_per_qm3, m.zustandszahl) {
+                (None, None) => "Brennwert und Zustandszahl",
+                (None, Some(_)) => "Brennwert",
+                (Some(_), None) => "Zustandszahl",
+                (Some(_), Some(_)) => unreachable!("guarded above"),
+            };
+            w.push(BillingWarning {
+                code: "GAS_UMWERTUNG_UNVOLLSTAENDIG",
+                severity: WarningSeverity::Error,
+                message: format!(
+                    "Gasabrechnung über {} m³ ohne kwh_hs und ohne {missing}: die \
+                     Umwertung m³ → kWh_Hs (§ 25 Nr. 4 MessEV, DVGW G 685) ist die \
+                     Grundlage der gesamten Abrechnung und darf nicht mit einem \
+                     angenommenen Wert erfolgen. Entweder kwh_hs liefern oder \
+                     brennwert_kwh_per_qm3 und zustandszahl aus der Abrechnung des \
+                     Netzbetreibers.",
+                    m.messung_qm3
+                ),
+            });
+        }
+
         // The BEHG CO₂ price (§10 BEHG) steps at each calendar-year boundary. A
         // period spanning a year-end where the rate changes has no single correct
         // levy — split at 31.12./01.01. and bill each portion at its year's rate.
@@ -1334,12 +1368,16 @@ impl BillingProvider for GasProvider {
                 .and_then(|s| s.gas_arbeitspreis_ct_per_kwh_hs)
         });
 
-        // Compute kWh_Hs
+        // Compute kWh_Hs. `GAS_UMWERTUNG_UNVOLLSTAENDIG` refuses the run in
+        // pass 0 when a factor is missing, so both `unwrap_or` arms below are
+        // unreachable — they yield zero rather than a plausible constant, so a
+        // hole in that guard surfaces as an obviously wrong invoice instead of a
+        // quietly wrong one.
         let kwh_hs = if let Some(kwh) = meter.kwh_hs {
             kwh
         } else {
-            let hs = meter.brennwert_kwh_per_qm3.unwrap_or(dec!(10.55));
-            let z = meter.zustandszahl.unwrap_or(dec!(1.0));
+            let hs = meter.brennwert_kwh_per_qm3.unwrap_or(Decimal::ZERO);
+            let z = meter.zustandszahl.unwrap_or(Decimal::ZERO);
             (meter.messung_qm3 * hs * z).round_kfm(3)
         };
 
@@ -1347,8 +1385,8 @@ impl BillingProvider for GasProvider {
 
         // ── Brennwertkorrektur (info position) ────────────────────────────────
         if meter.kwh_hs.is_none() && meter.brennwert_kwh_per_qm3.is_some() {
-            let hs = meter.brennwert_kwh_per_qm3.unwrap_or(dec!(10.55));
-            let z = meter.zustandszahl.unwrap_or(dec!(1.0));
+            let hs = meter.brennwert_kwh_per_qm3.unwrap_or(Decimal::ZERO);
+            let z = meter.zustandszahl.unwrap_or(Decimal::ZERO);
             positions.push(BillingPosition {
                 description: format!(
                     "Brennwertkorrektur: {:.4} kWh/m³ × {:.4} = {:.3} kWh_Hs",
@@ -1587,13 +1625,12 @@ impl BillingProvider for GasProvider {
             .auf_abschlag_ct_per_kwh
             .filter(|v| *v != Decimal::ZERO)
         {
-            let kwh_total = meter.kwh_hs.unwrap_or_else(|| {
-                // Same default as the main kWh_Hs conversion — a diverging
-                // fallback made the AufAbschlag quantity base inconsistent.
-                let bw = meter.brennwert_kwh_per_qm3.unwrap_or(dec!(10.55));
-                let zz = meter.zustandszahl.unwrap_or(dec!(1.0));
-                meter.messung_qm3 * bw * zz
-            });
+            // The energy this period carries is one figure, computed once above
+            // — § 40 EnWG asks for the quantity, once. Recomputing it here
+            // produced a second, unrounded value, so the Arbeitspreis line and
+            // the Auf-/Abschlag line stated different kWh for the same gas on
+            // the same invoice.
+            let kwh_total = kwh_hs;
             if kwh_total > Decimal::ZERO {
                 let (label, cat) = if aa_ct < Decimal::ZERO {
                     ("Rabatt Gas (Arbeitspreis)", PositionCategory::Discount)

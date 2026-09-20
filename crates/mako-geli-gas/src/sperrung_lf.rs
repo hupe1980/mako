@@ -95,7 +95,6 @@ pub const ANTWORT_WINDOW_LABEL: &str = "geli-gas-sperrung-lf-antwort";
 
 /// Business data captured when the LF initiates a Gas-Sperrauftrag.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct GasSperrungAuftragData {
     /// Marktlokations-ID (EIC/MaLo) of the gas supply point.
     pub location_id: MaLo,

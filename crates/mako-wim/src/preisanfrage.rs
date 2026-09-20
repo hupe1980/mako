@@ -223,7 +223,6 @@ impl EventPayload for PreisanfrageEvent {
 
 /// Business data captured at `AnfrageErhalten` time.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct PreisanfrageData {
     /// GLN of the requesting nMSB.
     pub sender: MarktpartnerCode,

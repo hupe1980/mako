@@ -70,7 +70,7 @@ between when an operator must decide and when the answer is due.
 
 | Clock | Window | Owner |
 |---|---|---|
-| Technical acknowledgement (APERAK) | **45 min** on weekdays; Sunday 12:00 Berlin for a Saturday arrival | **`makod`**, automatically |
+| Technical acknowledgement (APERAK) | **45 min** on every day but Saturday; Sunday 12:00 Berlin for a Saturday arrival | **`makod`**, automatically |
 | Business answer | the per-PID Frist above | `processd` / the operator |
 
 The approval queue is bounded by the **business** window, less an hour of

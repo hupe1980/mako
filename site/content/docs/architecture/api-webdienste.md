@@ -187,7 +187,14 @@ and REST payloads.
 | `client` | HTTP clients for every API — `ControlMeasuresClient`, `MaloIdentClient`, `DirectoryServiceClient` (reqwest + rustls) and TR-03116-3 content signing |
 | `server` | Axum router factories for `ControlMeasuresHandler`, `MaloIdentHandler`, and `WimOrderHandler` receive handlers |
 | `websocket` | The Verzeichnisdienst subscription client (tokio-tungstenite) |
-| `crypto` | JWS ECDSA-SHA256 sign/verify for directory records (p256) — `ControlMeasuresClient::with_signing` uses it to attach `DIGEST` + `SIGNATURE` automatically |
+
+TR-03116-3 content-layer signing (`DIGEST` / `SIGNATURE` over RFC 8785 canonical
+JSON) and JWS verification are **not** features — they are always compiled.
+Behind a flag they could be absent at the one moment they matter, and the
+absence was silent: with the flag off `with_signing` did not exist, and a
+request went out unsigned with no error and no warning. Whether a request is
+signed is now one question with one answer — whether a signing key is configured
+on the client.
 
 ---
 

@@ -59,8 +59,17 @@ fn the_policy_permits_every_action_the_code_checks() {
 
 #[test]
 fn the_policy_grants_no_action_the_code_never_checks() {
+    let mut used = actions_used_in_code();
+    // `use-mcp` is the blanket gate the shared MCP middleware applies to every
+    // frame (`mako_service::mcp_auth::McpAuth::authenticate`), one crate over —
+    // there is no `cedar.check("use-mcp")` in `handlers.rs` to scrape. Omitting
+    // it here made this guard refuse the very grant the surface needs, so the
+    // policy stayed silent and `CedarEnforcer`'s default-deny answered 403 to
+    // every MCP caller: a guard holding a defect in place rather than catching
+    // it.
+    used.insert("use-mcp".to_owned());
     let dead: Vec<_> = actions_permitted_in_policy()
-        .difference(&actions_used_in_code())
+        .difference(&used)
         .cloned()
         .collect();
     assert!(

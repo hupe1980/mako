@@ -1101,6 +1101,20 @@ principal entity ID in your policies.
 
 ### `[as4]` — AS4/ebMS3 inbound and outbound
 
+The BDEW WIRK triplet appears here as three *different* settings, and mixing
+them up is the expensive mistake. `signing_*` is this operator's own identity on
+the message. `partner_certs` are the counterparties' **encryption** certificates
+and are used when **sending**. `partner_signing_certs` are their **signing**
+certificates and are what an **inbound** message is authenticated against — the
+trust anchor only establishes that a signer is *a* BDEW/DVGW market participant,
+and every one of them holds such a certificate. `client_tls_*` is the third
+certificate, the transport credential presented when opening the connection.
+
+**An AS4 listener with no `partner_signing_certs` accepts nothing**, and `makod`
+refuses to start rather than discovering it per message; `--allow-unencrypted-as4`
+is the dev and demo escape. `client_tls_*` is optional by contrast: an egress
+proxy may present it instead, and `makod` cannot tell the two deployments apart.
+
 | TOML key | Env var | CLI flag | Description |
 |---|---|---|---|
 | `addr` | `MAKOD_AS4_ADDR` | `--as4-addr` | TCP listen address |
@@ -1116,6 +1130,12 @@ principal entity ID in your policies.
 | `partners` | `MAKOD_AS4_PARTNER` | `--as4-partner` | Trading-partner `MP-ID=HTTPS-URL` pairs |
 | `partner_certs` | `MAKOD_AS4_PARTNER_CERT` | `--as4-partner-cert` | Trading-partner encryption certificates, `MP-ID=<PEM>` pairs (see [AS4 / BDEW](@/docs/reference/as4-bdew.md)). Required for every partner: a send to a partner with no registered certificate fails with a policy violation rather than going out unencrypted |
 | `partner_cert_files` | — | — | Trading-partner encryption certificates as `MP-ID=/path/to/cert.pem` pairs *(preferred)* |
+| `partner_signing_certs` | `MAKOD_AS4_PARTNER_SIGNING_CERT` | `--as4-partner-signing-cert` | Trading-partner **signing** certificates, `MP-ID=<PEM>` pairs — what inbound messages are authenticated against |
+| `partner_signing_cert_files` | — | — | Trading-partner signing certificates as `MP-ID=/path/to/cert.pem` pairs *(preferred)* |
+| `client_tls_cert_pem` | `MAKOD_AS4_CLIENT_TLS_CERT_PEM` | `--as4-client-tls-cert-pem` | WIRK **TLS** certificate chain presented to a partner MSH (inline) |
+| `client_tls_cert_pem_file` | — | — | Path to the client TLS certificate file *(preferred)* |
+| `client_tls_key_pem` | `MAKOD_AS4_CLIENT_TLS_KEY_PEM` | `--as4-client-tls-key-pem` | PEM key for the client TLS certificate (inline) |
+| `client_tls_key_pem_file` | — | — | Path to the client TLS key file *(preferred)* |
 | `allow_unencrypted` | `MAKOD_ALLOW_UNENCRYPTED_AS4` | `--allow-unencrypted-as4` | **Dev/test only:** downgrade missing-encryption-material startup refusals to warnings |
 | `allow_no_signing` | `MAKOD_ALLOW_NO_AS4_SIGNING` | `--allow-no-as4-signing` | **Dev/test only:** start without signing material and without an EDIFACT outbox webhook; outbound EDIFACT is logged instead of sent |
 | `allow_no_trust_anchor` | `MAKOD_ALLOW_NO_AS4_TRUST_ANCHOR` | `--allow-no-as4-trust-anchor` | **Dev/test only:** run the AS4 listener with no counterparty trust anchor, accepting that every partner's signature is rejected |
@@ -1289,9 +1309,39 @@ cargo test -p makod --test as4_security
 
 ### `[webdienste]` — BDEW API-Webdienste Strom
 
+One section, **both directions**. `addr` and the two trust declarations describe
+the inbound port this daemon serves; the `client_*` and `signing_key_*` keys
+describe the identity it presents when it *calls* somebody else's
+API-Webdienste. A deployment may need either half alone — one that only calls
+out sets no `addr`.
+
 | TOML key | Env var | CLI flag | Description |
 |---|---|---|---|
 | `addr` | `MAKOD_API_WEBDIENSTE_ADDR` | `--api-webdienste-addr` | TCP listen address |
+| `client_cert_pem` / `_file` | `MAKOD_WEBDIENSTE_CLIENT_CERT_PEM` | `--webdienste-client-cert-pem` | **Outbound** mTLS certificate chain (EMT.API, BSI SM-PKI) |
+| `client_key_pem` / `_file` | `MAKOD_WEBDIENSTE_CLIENT_KEY_PEM` | `--webdienste-client-key-pem` | PKCS#8 key for the above |
+| `client_root_ca_pem_files` | — | `--webdienste-root-ca-pem` | SM-PKI roots to trust when calling out |
+| `signing_key_pem` / `_file` | `MAKOD_WEBDIENSTE_SIGNING_KEY_PEM` | `--webdienste-signing-key-pem` | EMT.API key for **TR-03116-3** content signing |
+| `allow_unauthenticated_client` | `MAKOD_ALLOW_UNAUTHENTICATED_WEBDIENSTE_CLIENT` | `--allow-unauthenticated-webdienste-client` | DEV/TEST: call out with no identity |
+
+> **The outbound identity is not optional in production.** The EDI-Energy
+> API-Webdienste authenticate their callers by mutual TLS with an EMT.API
+> certificate from the BSI SM-PKI. Without one the TLS handshake still completes
+> locally — a client simply presents nothing — and the call is refused *at the
+> counterparty*, which is the harder place to read it from: a remote `4xx` on a
+> Frist that looks like the other side's outage. `makod` therefore refuses to
+> start when `--verzeichnisdienst-url` or `--maloid-partner` is configured and
+> no client identity is; `--allow-unauthenticated-webdienste-client` is the
+> dev and demo escape.
+>
+> **TR-03116-3 content signing is a second layer, not a substitute.** It signs
+> the URI, the RFC 8785 canonical body, the `creationDateTime` and the
+> `transactionId`, and travels in `DIGEST` / `SIGNATURE` headers — above TLS, so
+> mutual TLS does not provide it and it does not provide mutual TLS. It applies
+> to the Control Measures and MaLo Identification APIs; the Verzeichnisdienst
+> uses JWS instead. The key is parsed at startup, so a malformed one fails the
+> boot rather than every callback: a send that cannot sign must not fall back to
+> sending unsigned.
 | `allow_unauthenticated` | `MAKOD_WEBDIENSTE_ALLOW_UNAUTHENTICATED` | `--webdienste-allow-unauthenticated` | Disable the built-in bearer/OIDC + Cedar auth layer on `:8090` — only behind an mTLS-terminating proxy |
 | `trust_client_mp_id_header` | `MAKOD_WEBDIENSTE_TRUST_CLIENT_MP_ID_HEADER` | `--webdienste-trust-client-mp-id-header` | Read the caller's Marktpartner-ID from `X-Mako-Client-MP-ID`. Implied by `allow_unauthenticated` |
 
@@ -1636,7 +1686,7 @@ POST /edifact HTTP/1.1
 Content-Type: text/plain; charset=utf-8
 Authorization: Bearer <token>
 
-UNB+UNOC:3+9900357000004:500+4012345000023:500+261001:1200+001++TL
+UNB+UNOC:3+9900357000004:500+4012345000023:14+261001:1200+001++TL
 UNH+...
 ```
 

@@ -91,7 +91,7 @@ Festlegung states it.
 Process KPIs for **one PID** over one calendar period, bucketed by `started_at`.
 
 **The two deadline clocks are two fields.** `total_aperak_timeout` is the
-*technical acknowledgement* (45 min Strom weekday; Gas next Werktag 12:00 or
+*technical acknowledgement* (45 min Strom on every day but Samstag; Gas next Werktag 12:00 or
 3 Werktage); `total_frist_breached` is the *business Antwortfrist*. They differ
 by orders of magnitude and fail for different reasons, so reporting one under the
 other's name points an operator at the wrong problem.

@@ -99,6 +99,18 @@ BrainpoolP256r1. These are called the WIRK certificates:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+**All three are `makod` settings, but the TLS one only outbound.** The signing
+and encryption certificates are used in both directions. The **TLS** certificate
+splits by direction:
+
+- **Outbound**, `makod` can present it — `--as4-client-tls-cert-pem` and
+  `--as4-client-tls-key-pem` — when connecting to a partner MSH that requires
+  client-certificate authentication. It is optional because an egress proxy may
+  present it instead, and `makod` cannot tell the two deployments apart.
+- **Inbound**, `makod` terminates no TLS at all: `--as4-addr` binds a plain HTTP
+  listener, so the server side of mutual TLS belongs to whatever terminates TLS
+  in front of it. That is a deployment contract, not a gap.
+
 ### Obtaining WIRK certificates
 
 1. Register as a Marktpartner at [bdew-codes.de](https://www.bdew-codes.de)
@@ -245,7 +257,20 @@ sufficient.
 | `--as4-decryption-key-pem <PEM>` | `MAKOD_AS4_DECRYPTION_KEY_PEM` | Own EC decryption private key |
 | `--as4-party-id <GLN>` | `MAKOD_AS4_PARTY_ID` | AS4 `<eb:PartyId>` (defaults to primary `[[party]]` `mp_id`) |
 | `--as4-partner <GLN=URL>` | `MAKOD_AS4_PARTNER` | Trading partner endpoint (repeatable) |
-| `--as4-partner-cert <GLN=PEM>` | `MAKOD_AS4_PARTNER_CERT` | Per-partner encryption cert (repeatable) |
+| `--as4-partner-cert <GLN=PEM>` | `MAKOD_AS4_PARTNER_CERT` | Per-partner encryption cert, for **sending** (repeatable) |
+| `--as4-partner-signing-cert <GLN=PEM>` | `MAKOD_AS4_PARTNER_SIGNING_CERT` | Per-partner **signing** cert, for **receiving** (repeatable) |
+
+The last two are different certificates for opposite directions and are not
+interchangeable. The encryption certificate is the partner's public key you
+encrypt *to*; the signing certificate is what an inbound message from that
+partner is authenticated *against*.
+
+**An AS4 listener without partner signing certificates accepts nothing**, and
+`makod` refuses to start rather than discovering it per message. The trust
+anchor establishes that a signer is *a* BDEW/DVGW market participant — every one
+of them holds such a certificate — so the per-partner pin is what establishes
+*which*. A message whose claimed `eb:From/PartyId` has no registered signing
+certificate is refused. `--allow-unencrypted-as4` is the dev and demo escape.
 
 ### Example production startup
 
@@ -359,16 +384,19 @@ Static `--maloid-partner GLN=URL` entries always take priority.
 sequenceDiagram
     autonumber
     participant LF as LF counterparty
-    participant TLS as mTLS (port 4080)
+    participant TLS as TLS terminator (port 4080)
     participant makod as makod AS4 ingest
     participant sig as WS-Security verify
     participant dec as XML decrypt
     participant edifact as edi-energy
 
-    LF->>TLS: HTTPS POST (mutual TLS — TLS cert)
+    LF->>TLS: HTTPS POST
+    Note over TLS: makod terminates no TLS itself —<br/>the listener is plain HTTP and TLS is the proxy's
     TLS->>makod: As4HttpIngress (body bytes)
+    makod->>makod: read claimed eb:From/PartyId
+    Note over makod: selects that party's pinned session —<br/>an MP-ID with no pin is refused here
     makod->>sig: verify ECDSA-SHA256 signature
-    Note over sig: trust anchor = BDEW PKI CA cert
+    Note over sig: trust anchor = BDEW PKI CA cert (membership)<br/>+ pinned SHA-256 of that partner's signing cert (which partner)
     sig->>dec: decrypt AES-128-GCM payload
     Note over dec: ECDH-ES key agreement<br/>using own EC decryption key
     dec->>edifact: raw EDIFACT bytes

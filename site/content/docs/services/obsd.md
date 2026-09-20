@@ -54,7 +54,7 @@ as two numbers. Conflating them is the defect this service is shaped to prevent.
 
 | Clock | Window | A breach means | Where it shows |
 |---|---|---|---|
-| **APERAK Frist** | 45 min Strom weekday; Gas next Werktag 12:00 (Folgeprozess) or 3 Werktage (Initialprozess) | the message was not *acknowledged* — a transport or validation fault | `state = aperak_timeout`, from `de.mako.aperak.timeout` |
+| **APERAK Frist** | 45 min Strom on every day but Samstag; Gas next Werktag 12:00 (Folgeprozess) or 3 Werktage (Initialprozess) | the message was not *acknowledged* — a transport or validation fault | `state = aperak_timeout`, from `de.mako.aperak.timeout` |
 | **Antwortfrist** | per PID — see below | the *business answer* is owed and has not been sent | `deadline_at`, computed on `process.initiated` |
 
 They differ by orders of magnitude and fail for different reasons. Never report

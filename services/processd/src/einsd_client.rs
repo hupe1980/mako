@@ -44,7 +44,7 @@ pub struct RegisterAuskunft {
 
 /// `einsd`'s answer, as the handler renders it.
 #[derive(serde::Deserialize)]
-struct VeraeusserungsformBody {
+struct VeraeusserungsformAnswer {
     /// The `CCI+Z22` DE 7037 code, absent for a settlement model that has none.
     veraeusserungsform: Option<String>,
     #[serde(default)]
@@ -85,7 +85,7 @@ impl EinsdClient {
         let path = format!("/api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform");
         let Some(body) = self
             .0
-            .json::<VeraeusserungsformBody>(self.0.get(&path))
+            .json::<VeraeusserungsformAnswer>(self.0.get(&path))
             .await?
         else {
             return Ok(None);

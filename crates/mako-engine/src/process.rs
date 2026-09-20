@@ -1004,7 +1004,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
         }
         let ctx = CommandContext::new(self.tenant_id, self.process_id, self.workflow_id.clone());
         let mut conflict_err: Option<EngineError> = None;
-        for _ in 0..max_attempts {
+        for attempt in 0..max_attempts {
             match crate::workflow::execute_command_atomic::<W, S>(
                 &self.store,
                 &self.stream_id,
@@ -1014,7 +1014,28 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
             .await
             {
                 Ok(envs) => return Ok(envs),
-                Err(e) if e.is_version_conflict() => conflict_err = Some(e),
+                Err(e) if e.is_version_conflict() => {
+                    conflict_err = Some(e);
+                    // Back off before re-reading the stream. A `VersionConflict`
+                    // means another writer won the same stream, so retrying
+                    // immediately is the case that produces it again: several
+                    // ERP commands against one Marktlokation would spin against
+                    // each other, burning the whole budget inside a few
+                    // milliseconds and failing a command that would have
+                    // succeeded on a second look. Delay is uniform random in
+                    // [0, 10ms × attempt], capped at 80ms, drawn from the OS
+                    // CSPRNG so two writers that collided do not re-collide.
+                    if attempt + 1 < max_attempts {
+                        let entropy: u64 = rand::random();
+                        let window_ms: u64 = (10 * (u64::from(attempt) + 1)).min(80);
+                        let jitter_ms = if window_ms == 0 {
+                            0
+                        } else {
+                            entropy % window_ms
+                        };
+                        tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
+                    }
+                }
                 Err(e) => return Err(e),
             }
         }

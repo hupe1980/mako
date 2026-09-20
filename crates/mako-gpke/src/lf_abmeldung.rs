@@ -152,7 +152,6 @@ impl EventPayload for LfAbmeldungEvent {
 
 /// Business data captured at `AnkuendigungErhalten` time.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LfAbmeldungData {
     /// EIC/MaLo code.
     pub location_id: MaLo,

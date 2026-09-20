@@ -153,7 +153,6 @@ impl EventPayload for GeliGasLfAnmeldungEvent {
 
 /// Business data captured at `Initiated` time.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct GeliGasLfAnmeldungData {
     /// PID of the outbound Anfrage.
     pub pruefidentifikator: Pruefidentifikator,

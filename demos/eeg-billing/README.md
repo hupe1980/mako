@@ -31,7 +31,7 @@ sequenceDiagram
     ERP->>einsd: POST /api/v1/anlagen/TR0000000001/settle/2026/6
     einsd->>edmd: GET /api/v1/energy/17835382008?direction=EINSPEISUNG
     edmd-->>einsd: Einspeisemenge = 2880 kWh
-    Note over einsd: Vergütung 8.11 ct/kWh ≈ EUR 233.57<br/>§14 UStG Gutschrift as a BO4E Rechnung<br/>stored in settlement_receipts.rechnung_json
+    Note over einsd: Vergütung 8.11 ct/kWh = EUR 233.568<br/>§14 UStG Gutschrift as a BO4E Rechnung<br/>stored in settlement_receipts.rechnung_json
     einsd-->>hook: de.eeg.verguetung.berechnet
 ```
 
@@ -69,7 +69,13 @@ The demo plant:
 `foerderendedatum` is derived from the Inbetriebnahme (2044-03-31, 20 years) and `status`
 from the lifecycle, so neither is stated at registration.
 
-June 2026 result: 2880 kWh × 8.11 ct = **EUR 233.57**.
+June 2026 result: 2880 kWh × 8.11 ct = **EUR 233.568**.
+
+That is not a typo for 233.57. `settlement_eur` is the *entitlement*, held in
+`billing::Amount<5>`, so it keeps the sub-cent precision the arithmetic produces.
+Rounding to a payable cent amount happens once, in the §14 UStG Gutschrift, which
+carries its own net, VAT and gross — a settlement that rounded as well would round
+twice.
 
 The readings are pushed under **OBIS `1-0:2.8.0`** (Wirkarbeit Export). `edmd` never reads
 an unlabelled reading as feed-in — an unqualified quantity is that measuring point's
@@ -135,19 +141,23 @@ Expected output:
 ✓ PUT /api/v1/malos/17835382008 → 201
 ✓ PUT /api/v1/einspeiser/EIN-0001 → 204 (operator registered)
 ✓ PUT /api/v1/anlagen/TR0000000001 → 204 (plant registered)
-✓ GET /api/v1/anlagen/TR0000000001 → status=aktiv  verguetungssatz_ct=8.11 ct/kWh
-✓ POST /api/v1/meter-reads/rlm/17835382008 → 200  stored=96 intervals
-✓ POST /api/v1/meter-reads/rlm/17835382008 → 200  (29 daily buckets, 2784 kWh)
-✓ GET /api/v1/energy/17835382008?direction=EINSPEISUNG → 2880 kWh
+✓ GET /api/v1/anlagen/TR0000000001 → status=aktiv  verguetungssatz_ct=8.1100 ct/kWh
+✓ POST /api/v1/meter-reads/rlm/17835382008 → 201  stored=96 intervals
+✓ POST /api/v1/meter-reads/rlm/17835382008 → 201  (29 daily buckets, 2784 kWh)
+✓ GET /api/v1/energy/17835382008?direction=EINSPEISUNG → 2880.000000 kWh
 ✓ POST /settle/2026/6 → 200
-      settlement_eur=233.57  einspeisemenge_kwh=2880.000  status=calculated
+      settlement_eur=233.56800  einspeisemenge_kwh=2880.000000  status=calculated
 ✓ CloudEvent received: type=de.eeg.verguetung.berechnet
-✓ GET /settlements?limit=1 → status=calculated  einspeisemenge_kwh=2880.000  settlement_eur=233.57
+✓ GET /settlements?year=2026&month=6 → status=calculated  einspeisemenge_kwh=2880.000  settlement_eur=233.56800
 All EEG billing smoke tests passed.
 ```
 
+A second run against the same stack prints `→ 200` and `stored=0` for the pushes:
+both doors are idempotent, `edmd` keyed on (MaLo, Intervall, OBIS). The end-state
+assertions are the same either way, which is why the run is repeatable.
+
 Each step asserts the outcome, not just the status code: the settlement must come back
-`status=calculated` at EUR 233.57, and the CloudEvent must reach the webhook. A run that
+`status=calculated` at EUR 233.568, and the CloudEvent must reach the webhook. A run that
 stored no feed-in fails at the `/energy` check rather than reporting a green EUR 0.
 
 ## Explore the APIs
@@ -155,7 +165,7 @@ stored no feed-in fails at the `/energy` check rather than reporting a green EUR
 | Endpoint | Description |
 |---|---|
 | `http://localhost:9180/api/v1/anlagen/TR0000000001` | Plant registration details |
-| `http://localhost:9180/api/v1/anlagen/TR0000000001/settlements?limit=1` | Most recent settlement receipt |
+| `http://localhost:9180/api/v1/anlagen/TR0000000001/settlements?year=2026&month=6` | The June settlement receipt. Addressed by month, not `?limit=1`: einsd settles every past month it has a plant for, so the newest row is July or August with `no_data` |
 | `http://localhost:9180/api/v1/einspeiser/EIN-0001` | Operator record — § 19 UStG election, payout account |
 | `http://localhost:8380/api/v1/energy/17835382008?direction=EINSPEISUNG&from=2026-06-01T00:00:00%2B02:00&to=2026-07-01T00:00:00%2B02:00` | The projected Einspeisung series the settlement reads |
 | `http://localhost:9180/mcp` | einsd MCP server (19 tools) |

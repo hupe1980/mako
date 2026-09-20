@@ -155,7 +155,6 @@ impl EventPayload for GeliGasStornierungEvent {
 
 /// Business data recorded at `StornierungReceived` time and carried throughout.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct GeliGasStornierungData {
     /// Prüfidentifikator of the inbound 44022 message.
     pub pruefidentifikator: Pruefidentifikator,

@@ -120,14 +120,12 @@ async fn enqueue_then_worker_fans_out_and_delivers() {
     let url = spawn_mock_webhook(Arc::clone(&captured)).await;
     insert_subscription(&pool, &url).await;
 
-    let notify = Arc::new(tokio::sync::Notify::new());
     let shutdown = CancellationToken::new();
     fanout::spawn(
         pool.clone(),
         PgSubscriptionRepository::new(pool.clone()),
         mako_service::http::default_client(),
         FanoutConfig::default(),
-        Arc::clone(&notify),
         shutdown.clone(),
     );
 
@@ -138,9 +136,7 @@ async fn enqueue_then_worker_fans_out_and_delivers() {
         "MALO-1".to_owned(),
         serde_json::json!({ "version": 1 }),
     );
-    marktd::outbox::enqueue(&pool, &ev, &notify)
-        .await
-        .expect("enqueue");
+    marktd::outbox::enqueue(&pool, &ev).await.expect("enqueue");
 
     assert!(
         wait_delivered(&pool, &ev.id).await,
@@ -198,14 +194,12 @@ async fn undelivered_event_log_recovered_by_fresh_worker() {
 
     // A FRESH worker with a never-signalled notify: recovery must come purely
     // from the durable table via the worker's first poll tick.
-    let notify = Arc::new(tokio::sync::Notify::new());
     let shutdown = CancellationToken::new();
     fanout::spawn(
         pool.clone(),
         PgSubscriptionRepository::new(pool.clone()),
         mako_service::http::default_client(),
         FanoutConfig::default(),
-        notify,
         shutdown.clone(),
     );
 
@@ -295,7 +289,6 @@ async fn events_about_one_malo_arrive_in_order_even_when_the_first_fails() {
     let url = spawn_ordering_webhook(Arc::clone(&captured)).await;
     insert_subscription(&pool, &url).await;
 
-    let notify = Arc::new(tokio::sync::Notify::new());
     let shutdown = CancellationToken::new();
     fanout::spawn(
         pool.clone(),
@@ -308,7 +301,6 @@ async fn events_about_one_malo_arrive_in_order_even_when_the_first_fails() {
             poll_interval: Duration::from_millis(200),
             ..FanoutConfig::default()
         },
-        Arc::clone(&notify),
         shutdown.clone(),
     );
 
@@ -325,9 +317,7 @@ async fn events_about_one_malo_arrive_in_order_even_when_the_first_fails() {
             marktmaloid: Some(malo.to_owned()),
             ..Default::default()
         });
-        marktd::outbox::enqueue(&pool, &ev, &notify)
-            .await
-            .expect("enqueue");
+        marktd::outbox::enqueue(&pool, &ev).await.expect("enqueue");
         ids.push(ev.id.clone());
     }
 
@@ -389,14 +379,12 @@ async fn a_strom_only_subscriber_is_not_woken_by_a_gas_event() {
     .await
     .expect("insert subscription");
 
-    let notify = Arc::new(tokio::sync::Notify::new());
     let shutdown = CancellationToken::new();
     fanout::spawn(
         pool.clone(),
         PgSubscriptionRepository::new(pool.clone()),
         mako_service::http::default_client(),
         FanoutConfig::default(),
-        Arc::clone(&notify),
         shutdown.clone(),
     );
 
@@ -410,7 +398,7 @@ async fn a_strom_only_subscriber_is_not_woken_by_a_gas_event() {
         marktsparte: Some("GAS".to_owned()),
         ..Default::default()
     });
-    marktd::outbox::enqueue(&pool, &gas, &notify)
+    marktd::outbox::enqueue(&pool, &gas)
         .await
         .expect("enqueue gas");
 
@@ -424,7 +412,7 @@ async fn a_strom_only_subscriber_is_not_woken_by_a_gas_event() {
         marktsparte: Some("STROM".to_owned()),
         ..Default::default()
     });
-    marktd::outbox::enqueue(&pool, &strom, &notify)
+    marktd::outbox::enqueue(&pool, &strom)
         .await
         .expect("enqueue strom");
 
@@ -531,7 +519,6 @@ async fn a_transient_fault_on_the_delivered_write_does_not_duplicate_the_webhook
     .await
     .expect("install chaos trigger");
 
-    let notify = Arc::new(tokio::sync::Notify::new());
     let shutdown = CancellationToken::new();
     fanout::spawn(
         pool.clone(),
@@ -544,7 +531,6 @@ async fn a_transient_fault_on_the_delivered_write_does_not_duplicate_the_webhook
             poll_interval: Duration::from_millis(200),
             ..FanoutConfig::default()
         },
-        Arc::clone(&notify),
         shutdown.clone(),
     );
 
@@ -554,9 +540,7 @@ async fn a_transient_fault_on_the_delivered_write_does_not_duplicate_the_webhook
         "MALO-DUP".to_owned(),
         serde_json::json!({ "version": 1 }),
     );
-    marktd::outbox::enqueue(&pool, &ev, &notify)
-        .await
-        .expect("enqueue");
+    marktd::outbox::enqueue(&pool, &ev).await.expect("enqueue");
 
     assert!(
         wait_delivered(&pool, &ev.id).await,
@@ -608,7 +592,6 @@ async fn a_delivery_whose_failure_write_is_lost_still_dead_letters() {
     .expect("install chaos trigger");
 
     let max_attempts = 3;
-    let notify = Arc::new(tokio::sync::Notify::new());
     let shutdown = CancellationToken::new();
     fanout::spawn(
         pool.clone(),
@@ -620,7 +603,6 @@ async fn a_delivery_whose_failure_write_is_lost_still_dead_letters() {
             poll_interval: Duration::from_millis(200),
             ..FanoutConfig::default()
         },
-        Arc::clone(&notify),
         shutdown.clone(),
     );
 
@@ -630,9 +612,7 @@ async fn a_delivery_whose_failure_write_is_lost_still_dead_letters() {
         "MALO-DLQ".to_owned(),
         serde_json::json!({ "version": 1 }),
     );
-    marktd::outbox::enqueue(&pool, &ev, &notify)
-        .await
-        .expect("enqueue");
+    marktd::outbox::enqueue(&pool, &ev).await.expect("enqueue");
 
     assert!(
         wait_dead_lettered(&pool, &ev.id).await,

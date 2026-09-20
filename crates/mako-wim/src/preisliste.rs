@@ -87,7 +87,6 @@ impl EventPayload for PreislisteEvent {
 
 /// Business data captured at `PreislisteErhalten` time.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct PreislisteData {
     /// GLN of the price-list publisher.
     pub sender: MarktpartnerCode,

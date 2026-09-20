@@ -243,7 +243,7 @@ versus days for Strom UTILMD. Conflating them is the classic WiM error.
 | `berlin_mtu_count(date, mtu_minutes)` | market time units the day has — 92, 96 or 100 |
 | `format_303(instant)` | the instant as EDIFACT `CCYYMMDDHHMMZZZ` |
 | `contrl_due_at(received, anlass)` | CONTRL: 6 hours, 15 minutes for a Strom UTILMD/ORDERS, 45 for a GABi-Gas ALOCAT, deferred to the end of an open Formatumstellung window |
-| `aperak_strom_due_at(received)` | 45 minutes on a weekday |
+| `aperak_strom_due_at(received)` | 45 minutes on every day but Samstag |
 | `aperak_gas_folgeprozess_due_at(received)` | next Werktag 12:00 |
 | `aperak_gas_initialprozess_due_at(received)` | 3 Werktage |
 | `add_hours(received, hours)` | wall-clock hours — runs through weekends |

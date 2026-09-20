@@ -146,7 +146,7 @@ a call site. Every business answer window comes from one table,
 
 Two clocks sit outside that table and are deliberately separate:
 
-- the **APERAK** technical acknowledgement — 45 minutes on a Werktag
+- the **APERAK** technical acknowledgement — 45 minutes on every day but Samstag
   (`mako_fristen::aperak_strom_due_at`), with its own Gas variants;
 - an **INVOIC** answer, which counts back from the Zahlungsziel the invoice
   itself carries (`SG8 DTM+265`) rather than forward from receipt — that one is

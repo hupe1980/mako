@@ -315,51 +315,24 @@ fn account_iban_hash(iban: Option<&str>, iban_key: Option<&[u8; 32]>) -> Option<
     iban.map(|iban| crate::ledger::iban_hash(iban_key, iban))
 }
 
-pub async fn update_account(
-    pool: &PgPool,
-    malo_id: &str,
-    lf_mp_id: &str,
-    iban_key: Option<&[u8; 32]>,
-    req: UpdateAccountRequest,
-) -> anyhow::Result<()> {
-    let iban_hash = account_iban_hash(req.iban.as_deref(), iban_key);
-    sqlx::query(
-        r"UPDATE accounts SET
-              iban        = COALESCE($3, iban),
-              iban_hash   = COALESCE($7, iban_hash),
-              mandatsref  = COALESCE($4, mandatsref),
-              abschlag_ct = COALESCE($5, abschlag_ct),
-              billing_day = COALESCE($6, billing_day),
-              addr_town            = COALESCE($8,  addr_town),
-              addr_country         = COALESCE($9,  addr_country),
-              addr_street          = COALESCE($10, addr_street),
-              addr_building_number = COALESCE($11, addr_building_number),
-              addr_post_code       = COALESCE($12, addr_post_code),
-              addr_country_subdivision = COALESCE($13, addr_country_subdivision),
-              updated_at  = now()
-          WHERE malo_id = $1 AND lf_mp_id = $2",
-    )
-    .bind(malo_id)
-    .bind(lf_mp_id)
-    .bind(req.iban)
-    .bind(req.mandatsref)
-    .bind(req.abschlag_ct)
-    .bind(req.billing_day)
-    .bind(iban_hash)
-    .bind(req.address.town)
-    .bind(req.address.country)
-    .bind(req.address.street)
-    .bind(req.address.building_number)
-    .bind(req.address.post_code)
-    .bind(req.address.country_subdivision)
-    .execute(pool)
-    .await
-    .context("update_account")?;
-    Ok(())
-}
-
-/// Tenant-scoped variant of `update_account` —
-/// Always filter by tenant to prevent cross-tenant data modification.
+/// Update the payment and address details of one account.
+///
+/// `(malo_id, lf_mp_id)` is **not** a key. `accounts` is keyed on `account_id`
+/// and carries only non-unique indexes over those two columns, so the pair
+/// matches a row in every tenant holding that Marktlokation. The tenant
+/// predicate is what makes this statement address one account, and what it
+/// writes is the IBAN, the Mandatsreferenz and the Abschlag — a redirected
+/// direct debit is the failure mode.
+///
+/// A tenant-scoped read by the caller beforehand is not a substitute: the read
+/// proves the row exists in this tenant, not that it is the only row the
+/// `UPDATE` reaches. This is the single entry point for that reason — an
+/// untenanted twin is indistinguishable from it at the call site.
+///
+/// # Errors
+///
+/// Returns an error when the statement matches no row, so a caller cannot read
+/// „nothing happened" as success.
 pub async fn update_account_tenanted(
     executor: impl sqlx::PgExecutor<'_>,
     malo_id: &str,

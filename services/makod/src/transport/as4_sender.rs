@@ -422,8 +422,19 @@ impl BdewAs4Sender {
         loopback: Option<Arc<crate::edifact_api::EdifactApiState>>,
         platform: Arc<edi_energy::Platform>,
         lenient_receipts: bool,
+        client_identity: Option<asx_rs::transport::ClientIdentity>,
     ) -> anyhow::Result<Self> {
-        let transport = As4HttpTransport::new(TransportConfig::default())
+        // The WIRK **TLS** certificate, when the operator holds it here rather
+        // than on an egress proxy. It authenticates the *connection*; the
+        // signing certificate above authenticates the *message*, and a partner
+        // MSH may require both. Absent, no client certificate is offered and a
+        // partner that demands one refuses the connection — which is why this
+        // is a deployment declaration rather than a default.
+        let mut transport_config = TransportConfig::default();
+        if let Some(identity) = client_identity {
+            transport_config = transport_config.with_client_identity(identity);
+        }
+        let transport = As4HttpTransport::new(transport_config)
             .map_err(|e| anyhow::anyhow!("AS4 HTTP transport init failed: {e}"))?;
         let mp_id_registry_party = mp_id_registry.primary_mp_id().to_owned();
         Ok(Self {

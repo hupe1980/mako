@@ -741,10 +741,14 @@ impl EdmdClient {
         period_from: time::Date,
         period_to: time::Date,
     ) -> Result<Option<MeterInput>> {
+        // `sparte` selects the day boundary edmd aggregates on; omitting it
+        // defaults to Strom's calendar day. Stated rather than defaulted, so the
+        // gas twin below cannot be copied without noticing it.
         let path = format!("/api/v1/billing-period/{malo_id}");
         let request = self.up.get(&path).query(&[
             ("from", period_from.to_string()),
             ("to", period_to.to_string()),
+            ("sparte", "strom".to_owned()),
         ]);
         let Some(body) = self
             .up
@@ -873,10 +877,14 @@ impl EdmdClient {
         period_from: time::Date,
         period_to: time::Date,
     ) -> Result<Option<GasBillingPeriod>> {
+        // The Gastag runs 06:00–06:00 (GaBi Gas). Without `sparte=gas` edmd
+        // aggregates over the calendar day, so a monthly gas invoice would bill
+        // six hours of the previous month and drop six hours of its own.
         let path = format!("/api/v1/billing-period/{malo_id}");
         let request = self.up.get(&path).query(&[
             ("from", period_from.to_string()),
             ("to", period_to.to_string()),
+            ("sparte", "gas".to_owned()),
         ]);
         let Some(body) = self
             .up

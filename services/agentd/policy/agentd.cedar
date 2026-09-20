@@ -78,13 +78,22 @@ permit(principal, action == Action::"effect:perform", resource);
 // context assembled to suit the rule; an end-to-end run is what caught it
 // (`tests/oversight.rs`).
 //
-// What binds instead is finer-grained and structural: each mutating grant
-// declares `protected_fields` with `require_trusted` on its authority-bearing
-// arguments — `/malo_id`, `/pid`, `/mp_id` — so a counterparty-derived value
-// cannot choose *which* MaLo a dispatch names, while the model may still fill
-// in the parts it is there to decide. On top of that, every mutating grant in
-// every manifest requires a named human. Trust is a per-argument question, and
-// Cedar sees the call, not the fields.
+// What would bind instead is finer-grained and structural, and it is a
+// **precondition on the first mutating grant rather than a control that runs
+// today**: such a grant would declare `protected_fields` with `require_trusted`
+// on its authority-bearing arguments — `/malo_id`, `/pid`, `/mp_id` — so a
+// counterparty-derived value cannot choose *which* MaLo a dispatch names, while
+// the model still fills in the parts it is there to decide, and it would require
+// a named human. Trust is a per-argument question, and Cedar sees the call, not
+// the fields.
+//
+// **Neither is configured anywhere today, because there is nothing to configure
+// them on: no manifest declares `mutates: true`.** So the plane's advisory
+// posture — the one `concepts/AIFIRST.md` rests the AI Act Annex III position on
+// — holds by the *absence* of a mutating grant and not by this policy. Adding
+// the first one without `protected_fields` and the human gate would be
+// unguarded, and nothing in `just ci` would say so. That guard is owed at the
+// same time as the grant, not after it.
 
 // mako's own services, and nothing else. The plane reaches MCP servers over a
 // deployment-configured transport, so a mis-typed `[mcp_servers]` entry pointing

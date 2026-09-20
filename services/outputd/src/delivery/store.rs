@@ -36,6 +36,7 @@ pub struct NewDocument<'a> {
 /// A copy rather than a reference into `vertragd`: a dispute asks where the
 /// notice *was sent*, which live master data cannot answer.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Recipient {
     /// The addressee as printed.
     #[serde(default)]
@@ -337,7 +338,7 @@ pub async fn by_subject(
     .context("document by subject")?;
     let Some(row) = row else { return Ok(None) };
     let document = document_row(&row)?;
-    let deliveries = deliveries_of(pool, document.document_id).await?;
+    let deliveries = deliveries_of(pool, tenant, document.document_id).await?;
     Ok(Some(IssuedDocument {
         document,
         deliveries,
@@ -363,7 +364,7 @@ pub async fn by_id(pool: &PgPool, tenant: &str, id: Uuid) -> Result<Option<Issue
     .context("document by id")?;
     let Some(row) = row else { return Ok(None) };
     let document = document_row(&row)?;
-    let deliveries = deliveries_of(pool, document.document_id).await?;
+    let deliveries = deliveries_of(pool, tenant, document.document_id).await?;
     Ok(Some(IssuedDocument {
         document,
         deliveries,
@@ -393,13 +394,28 @@ pub async fn content(pool: &PgPool, tenant: &str, id: Uuid) -> Result<Option<(Ve
 /// # Errors
 ///
 /// Propagates database errors.
-pub async fn deliveries_of(pool: &PgPool, document_id: Uuid) -> Result<Vec<DeliveryRow>> {
+/// Every delivery attempt recorded for one document.
+///
+/// Bounded by tenant as well as by document: `document_id` is a foreign key
+/// here, not this table's own key, so it is the predicate that decides which
+/// rows are returned. What these rows carry is delivery evidence — the target
+/// address, the timestamps, the read receipt — so an id resolving in another
+/// tenant would disclose that tenant's, and the caller having read the document
+/// in-tenant is a property of the caller rather than of this statement.
+pub async fn deliveries_of(
+    pool: &PgPool,
+    tenant: &str,
+    document_id: Uuid,
+) -> Result<Vec<DeliveryRow>> {
     let rows = sqlx::query(
         r"SELECT delivery_id, document_id, channel, status, target, attempts,
                  next_attempt_at, first_sent_at, delivered_at, read_at, evidence, last_error
-          FROM document_deliveries WHERE document_id = $1 ORDER BY channel",
+          FROM document_deliveries
+          WHERE document_id = $1 AND tenant = $2
+          ORDER BY channel",
     )
     .bind(document_id)
+    .bind(tenant)
     .fetch_all(pool)
     .await
     .context("deliveries of document")?;

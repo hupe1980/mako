@@ -34,7 +34,7 @@ messages with separate commands:
 
 | Clock | Window | Message | Source |
 |---|---|---|---|
-| **APERAK** — technical acknowledgement | Strom **45 Minuten** (UTILMD/ORDERS am Werktag); Gas nächster WT 12:00 bzw. **3 WT** auf einem Initialprozess | APERAK BGM+312/313 (Gas: nur 313) | APERAK AHB 1.1 §2.3.1/§2.4.1 |
+| **APERAK** — technical acknowledgement | Strom **45 Minuten** (UTILMD/ORDERS an jedem Tag außer Samstag); Gas nächster WT 12:00 bzw. **3 WT** auf einem Initialprozess | APERAK BGM+312/313 (Gas: nur 313) | APERAK AHB 1.1 §2.3.1/§2.4.1 |
 | **Antwort** — business Bestätigung/Ablehnung | **per PID**, in beiden Sparten gleich: 55039·44039 → 3 WT, 55042·44042 → 5 WT, 55051·44051 → 7 WT, 55168·44168 → 1 WT | the Antwort-PID's UTILMD | WiM Teil 1 Kap. 2.2.2 / 2.3.2 / 2.4.2 · AWH WiM Gas 2.0 Kap. 3.3.2 / 3.5.2 / 3.6.2 |
 | **Vorlauffrist** — was the requested date admissible? | 15 / 7 WT (Anmeldung), 20 WT (Abmeldung), ±9 WT Realisierungskorridor | the date inside the message | WiM Teil 1 Kap. 2.3.2 Nr. 1 / 2.4.2 Nr. 1 |
 

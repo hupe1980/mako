@@ -721,7 +721,7 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
             limit: Some(p.limit.unwrap_or(50).min(100)),
             cursor: None,
         };
-        let rows = fetch_comparison_feed(&self.state.pool, &p.lf_mp_id, &q)
+        let rows = fetch_comparison_feed(&self.state.pool, &self.state.tenant, &p.lf_mp_id, &q)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 

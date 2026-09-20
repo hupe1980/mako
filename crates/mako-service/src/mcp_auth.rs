@@ -772,6 +772,47 @@ impl McpAuth {
     }
 }
 
+impl McpAuth {
+    /// The verified caller behind `headers`, without authorising anything.
+    ///
+    /// [`authorize`][Self::authorize] proves a caller *may* act and then throws
+    /// the caller away; [`authenticate`][Self::authenticate] records who they
+    /// are but only as a request extension, which an MCP tool body never sees.
+    /// This is the third thing a surface sometimes needs: the identity, in
+    /// middleware, to put into the record the tool is about to write.
+    ///
+    /// In dev mode this is the same `dev-mode` identity
+    /// [`authenticate`][Self::authenticate] injects — visibly not a person,
+    /// which is the honest record for a deployment that authenticates nobody.
+    ///
+    /// Returns `None` when a caller was presented and could not be verified: a
+    /// missing, malformed or unverifiable token. A caller that gets `None` must
+    /// **refuse to attribute**, never substitute a placeholder — an audit record
+    /// naming the wrong principal is worse than one that is absent, because it
+    /// reads as evidence.
+    #[must_use]
+    pub fn identify(&self, headers: &axum::http::HeaderMap) -> Option<McpIdentity> {
+        if self.is_dev_mode() {
+            return Some(McpIdentity {
+                name: "dev-mode".to_owned(),
+                method: McpAuthMethod::DevMode,
+            });
+        }
+        let token = headers
+            .get("Authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "))?;
+        if OidcVerifier::looks_like_jwt(token) {
+            let claims = self.oidc.verify(token).ok()?;
+            return Some(McpIdentity {
+                name: claims.sub.clone(),
+                method: McpAuthMethod::Oidc,
+            });
+        }
+        self.try_api_key(token).map(McpApiKey::identity)
+    }
+}
+
 impl McpApiKey {
     /// The audit identity this key authenticates as.
     fn identity(&self) -> McpIdentity {

@@ -78,7 +78,7 @@ const FV: &str = "FV2025-10-01";
 // produce. The UNH message reference ("MSG-SPERR-001") is intentionally
 // non-trivial so the adapter's reference-preservation logic is exercised.
 const ORDERS_17115_BYTES: &[u8] = b"\
-UNB+UNOC:3+9900357000004:14+4012345000023:14+250115:0800+SPERR-2025-001'\
+UNB+UNOC:3+9900357000004:500+4012345000023:14+250115:0800+SPERR-2025-001'\
 UNH+MSG-SPERR-001+ORDERS:D:09B:UN:1.4b'\
 BGM+Z55+00017115+9'\
 DTM+137:202501150800?+00:303'\

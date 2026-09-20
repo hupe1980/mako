@@ -400,7 +400,6 @@ impl EventPayload for WertebestellungEvent {
 
 /// Business data carried from the Anfrage through the whole process.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct WertebestellungData {
     /// GLN of the ESA.
     pub esa: MarktpartnerCode,

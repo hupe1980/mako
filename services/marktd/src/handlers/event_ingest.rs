@@ -249,7 +249,7 @@ where
     //    event are enqueued on the same transaction as the idempotency marker,
     //    so a crash can never leave the marker committed without the events.
     for evt in std::iter::once(&markt_event).chain(derived.iter()) {
-        if let Err(e) = crate::outbox::enqueue(&mut *tx, evt, &state.notify).await {
+        if let Err(e) = crate::outbox::enqueue(&mut *tx, evt).await {
             error!(event_id = %event_id_for_vs, error = %e, "event_ingest: durable enqueue failed");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
@@ -1238,7 +1238,6 @@ async fn apply_object_stammdaten<Ma, Me, Su, Ci, Pa>(
     // Emit a stammdaten-changed CloudEvent after a successful typed patch —
     // durable enqueue to the outbox (best-effort logging: these are secondary
     // events derived from an already-persisted primary ingest).
-    let notify: &tokio::sync::Notify = &state.notify;
     let emit = |ce_type: &'static str, is_malo: bool| {
         let evt = MarktEvent::new(
             &state.tenant,
@@ -1261,7 +1260,7 @@ async fn apply_object_stammdaten<Ma, Me, Su, Ci, Pa>(
             ..Default::default()
         });
         async move {
-            if let Err(e) = crate::outbox::enqueue(pool, &evt, notify).await {
+            if let Err(e) = crate::outbox::enqueue(pool, &evt).await {
                 error!(error = %e, ce_type, "event_ingest: stammdaten enqueue failed");
             }
         }

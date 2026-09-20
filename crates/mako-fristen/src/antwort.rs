@@ -247,8 +247,8 @@ pub const ERSTEINBAU_VORABINFORMATION_PID: u32 = 21_029;
 /// „3 Monate und 3 WT" lead time buys, so the two must not drift.
 ///
 /// `vorlauf`'s `wim.information-bestandsschutz-eigenausbau` row reads this
-/// constant, so they cannot. It used to be a second literal `3` in another file
-/// under a comment saying they must agree.
+/// constant, so they cannot. A second literal `3` there under a comment saying
+/// the two must agree is the shape that lets them stop agreeing.
 pub const ERSTEINBAU_ANTWORT_WERKTAGE: u32 = 3;
 
 /// The MSB's window to answer an Anfrage einer Konfiguration with a QUOTES

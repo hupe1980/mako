@@ -2453,70 +2453,176 @@ impl SlateDbInboxStore {
     }
 }
 
+use crate::inbox::InboxClaim;
+
+/// Refuse a key too long to store, on every phase.
+///
+/// All three phases check it rather than `claim` alone: `accept` and `abandon`
+/// are reachable from a recovery path that did not just claim, and a key the
+/// backend cannot store must fail loudly wherever it arrives.
+fn check_inbox_key_len(key: &str) -> Result<(), EngineError> {
+    if key.len() > crate::inbox::MAX_INBOX_KEY_LEN {
+        return Err(EngineError::inbox(format!(
+            "inbox key is {} bytes, exceeds maximum of {}",
+            key.len(),
+            crate::inbox::MAX_INBOX_KEY_LEN,
+        )));
+    }
+    Ok(())
+}
+
+impl SlateDbInboxStore {
+    /// Encode an unsettled claim: `C` followed by the lease expiry, as RFC 3339.
+    fn claimed_value(until: OffsetDateTime) -> Vec<u8> {
+        let mut v = vec![b'C'];
+        v.extend_from_slice(
+            until
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default()
+                .as_bytes(),
+        );
+        v
+    }
+
+    /// Whether a stored claim's lease has run out and may be taken over.
+    ///
+    /// An unparseable expiry counts as expired: the alternative is a key no
+    /// delivery can ever claim, which strands the message permanently. A
+    /// corrupt lease should cost one reprocessing, not the message.
+    fn lease_expired(value: &[u8], now: OffsetDateTime) -> bool {
+        let Ok(text) = std::str::from_utf8(&value[1..]) else {
+            return true;
+        };
+        OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339)
+            .map_or(true, |until| until <= now)
+    }
+}
+
 impl InboxStore for SlateDbInboxStore {
-    async fn accept(&self, key: &str) -> Result<bool, EngineError> {
-        const MAX_ACCEPT_RETRIES: usize = 8;
-        if key.len() > crate::inbox::MAX_INBOX_KEY_LEN {
-            return Err(EngineError::inbox(format!(
-                "inbox key is {} bytes, exceeds maximum of {}",
-                key.len(),
-                crate::inbox::MAX_INBOX_KEY_LEN,
-            )));
-        }
+    async fn claim(&self, key: &str) -> Result<InboxClaim, EngineError> {
+        const MAX_CLAIM_RETRIES: usize = 8;
+        check_inbox_key_len(key)?;
         let ib_k = ib_key(key);
 
-        // Use a Serializable Snapshot Isolation (SSI) transaction to make
-        // the existence-check + write atomic and linearisable — both within
-        // a single process and across multiple concurrent `makod` instances
-        // sharing the same SlateDB storage.
-        //
-        // Under SSI, reading `ib_k` registers it in the transaction's read
-        // set. If a concurrent transaction commits a write to the same key
-        // before we commit, SlateDB detects the conflict and returns
-        // `ErrorKind::Transaction`. We retry; the next read will see the
-        // committed write and return `false` (duplicate).
-        //
-        // A retry loop is safe because conflicts imply forward progress by a
-        // competing acceptor; under bounded concurrency the loop terminates.
-        for _attempt in 0..MAX_ACCEPT_RETRIES {
+        // Serializable Snapshot Isolation makes inspect-and-write one atomic
+        // step, within a process and across `makod` instances sharing the same
+        // SlateDB. Reading `ib_k` puts it in the transaction's read set, so a
+        // concurrent commit to it is a conflict we retry rather than a claim
+        // two deliveries both believe they hold.
+        for _attempt in 0..MAX_CLAIM_RETRIES {
             let txn = self
                 .db
                 .begin(IsolationLevel::SerializableSnapshot)
                 .await
                 .map_err(to_inbox_err)?;
 
-            if txn
-                .get(ib_k.as_bytes())
-                .await
-                .map_err(to_inbox_err)?
-                .is_some()
-            {
-                // Key already exists — duplicate message. The read itself is
-                // sufficient; no need to commit the read-only transaction.
-                txn.rollback();
-                return Ok(false);
+            let now = OffsetDateTime::now_utc();
+            let existing = txn.get(ib_k.as_bytes()).await.map_err(to_inbox_err)?;
+
+            match existing.as_deref() {
+                // Settled as handled — every later delivery is a replay.
+                Some([b'A', ..]) => {
+                    txn.rollback();
+                    return Ok(InboxClaim::Duplicate);
+                }
+                // Someone else holds an unsettled claim that has not run out.
+                Some(v @ [b'C', ..]) if !Self::lease_expired(v, now) => {
+                    txn.rollback();
+                    return Ok(InboxClaim::InFlight);
+                }
+                // Absent, an expired lease, or a value written before this
+                // encoding existed — all claimable.
+                _ => {}
             }
 
-            let now = OffsetDateTime::now_utc();
             let nonce = uuid::Uuid::new_v4().to_string();
             let time_key = it_key(now, &nonce);
-            txn.put(ib_k.as_bytes(), b"").map_err(to_inbox_err)?;
+            txn.put(
+                ib_k.as_bytes(),
+                Self::claimed_value(now + crate::inbox::CLAIM_LEASE),
+            )
+            .map_err(to_inbox_err)?;
             txn.put(time_key.as_bytes(), key.as_bytes())
                 .map_err(to_inbox_err)?;
 
             match txn.commit().await {
-                Ok(_) => return Ok(true),
+                Ok(_) => return Ok(InboxClaim::Claimed),
                 Err(e) if e.kind() == ErrorKind::Transaction => {
-                    // Conflict: a concurrent acceptor committed to the same
-                    // key between our read and our commit. Retry — the next
-                    // iteration will observe the concurrent write and return
-                    // false.
+                    // A competing delivery committed between our read and our
+                    // commit. Retry; the next read observes its write.
                 }
                 Err(e) => return Err(to_inbox_err(e)),
             }
         }
         Err(EngineError::inbox(
-            "accept conflict: too many retries (concurrent accept storm)",
+            "inbox claim conflict: too many retries (concurrent claim storm)",
+        ))
+    }
+
+    async fn accept(&self, key: &str) -> Result<(), EngineError> {
+        check_inbox_key_len(key)?;
+        // Idempotent, and a genuine no-op when the key is absent.
+        //
+        // "No-op" is literal here rather than "write it anyway": the retention
+        // index is written by `claim`, so a state row created by an accept that
+        // claimed nothing would have no index entry and `purge_expired` could
+        // never reach it — an unbounded leak, one row per stray settlement.
+        let ib_k = ib_key(key);
+        let txn = self
+            .db
+            .begin(IsolationLevel::SerializableSnapshot)
+            .await
+            .map_err(to_inbox_err)?;
+        if txn
+            .get(ib_k.as_bytes())
+            .await
+            .map_err(to_inbox_err)?
+            .is_none()
+        {
+            txn.rollback();
+            return Ok(());
+        }
+        txn.put(ib_k.as_bytes(), b"A").map_err(to_inbox_err)?;
+        // A conflicting commit means a concurrent settlement of the same key,
+        // which reaches the same state; there is nothing to retry.
+        match txn.commit().await {
+            Ok(_) | Err(_) => Ok(()),
+        }
+    }
+
+    async fn abandon(&self, key: &str) -> Result<(), EngineError> {
+        const MAX_ABANDON_RETRIES: usize = 8;
+        check_inbox_key_len(key)?;
+        let ib_k = ib_key(key);
+        for _attempt in 0..MAX_ABANDON_RETRIES {
+            let txn = self
+                .db
+                .begin(IsolationLevel::SerializableSnapshot)
+                .await
+                .map_err(to_inbox_err)?;
+            match txn
+                .get(ib_k.as_bytes())
+                .await
+                .map_err(to_inbox_err)?
+                .as_deref()
+            {
+                // Never release an accepted key: that would re-open a message
+                // already recorded as handled.
+                Some([b'A', ..]) | None => {
+                    txn.rollback();
+                    return Ok(());
+                }
+                _ => {}
+            }
+            txn.delete(ib_k.as_bytes()).map_err(to_inbox_err)?;
+            match txn.commit().await {
+                Ok(_) => return Ok(()),
+                Err(e) if e.kind() == ErrorKind::Transaction => {}
+                Err(e) => return Err(to_inbox_err(e)),
+            }
+        }
+        Err(EngineError::inbox(
+            "inbox abandon conflict: too many retries",
         ))
     }
 }
@@ -3996,18 +4102,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inbox_new_message_accepted() {
+    async fn inbox_new_message_is_claimed() {
         let (store, _) = make_deadline_store().await;
         let inbox = make_inbox_store(&store);
-        assert!(inbox.accept("sender:ref-001").await.unwrap());
+        assert_eq!(
+            inbox.claim("sender:ref-001").await.unwrap(),
+            InboxClaim::Claimed
+        );
     }
 
+    /// Only a *settled* key is a duplicate; an unsettled one is in flight.
     #[tokio::test]
-    async fn inbox_duplicate_rejected() {
+    async fn inbox_duplicate_is_only_after_acceptance() {
         let (store, _) = make_deadline_store().await;
         let inbox = make_inbox_store(&store);
-        assert!(inbox.accept("sender:ref-001").await.unwrap());
-        assert!(!inbox.accept("sender:ref-001").await.unwrap());
+        assert_eq!(
+            inbox.claim("sender:ref-001").await.unwrap(),
+            InboxClaim::Claimed
+        );
+        assert_eq!(
+            inbox.claim("sender:ref-001").await.unwrap(),
+            InboxClaim::InFlight
+        );
+        inbox.accept("sender:ref-001").await.unwrap();
+        assert_eq!(
+            inbox.claim("sender:ref-001").await.unwrap(),
+            InboxClaim::Duplicate
+        );
     }
 
     #[tokio::test]
@@ -4015,17 +4136,20 @@ mod tests {
         use crate::inbox::inbox_key;
         let (store, _) = make_deadline_store().await;
         let inbox = make_inbox_store(&store);
-        assert!(
+        assert_eq!(
             inbox
-                .accept(&inbox_key("sender-A", "ref-001").unwrap())
+                .claim(&inbox_key("sender-A", "ref-001").unwrap())
                 .await
-                .unwrap()
+                .unwrap(),
+            InboxClaim::Claimed
         );
-        assert!(
+        assert_eq!(
             inbox
-                .accept(&inbox_key("sender-B", "ref-001").unwrap())
+                .claim(&inbox_key("sender-B", "ref-001").unwrap())
                 .await
-                .unwrap()
+                .unwrap(),
+            InboxClaim::Claimed,
+            "the sender is part of the key"
         );
     }
 
@@ -4034,6 +4158,7 @@ mod tests {
         let (store, _) = make_deadline_store().await;
         let inbox = make_inbox_store(&store);
 
+        inbox.claim("sender:old-ref").await.unwrap();
         inbox.accept("sender:old-ref").await.unwrap();
 
         // Purge everything before well into the future.
@@ -4041,9 +4166,10 @@ mod tests {
         let purged = inbox.purge_expired(far_future).await.unwrap();
         assert_eq!(purged, 1, "one entry should have been purged");
 
-        // The key must be gone — it should be accepted as new now.
-        assert!(
-            inbox.accept("sender:old-ref").await.unwrap(),
+        // The key must be gone — claimable as new again.
+        assert_eq!(
+            inbox.claim("sender:old-ref").await.unwrap(),
+            InboxClaim::Claimed,
             "key should be gone after purge"
         );
     }

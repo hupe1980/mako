@@ -92,10 +92,20 @@ fn msb_writes_readings_nb_dispatches_orders() {
     );
 }
 
+/// The operator role reaches every write.
+///
+/// Spelled as the platform mints it. `mako_roles` carries `ADMIN` — the role
+/// `OidcVerifier::disabled_claims` issues for operator-level capabilities — and
+/// Cedar's `contains` is an exact match, so a policy written against any other
+/// spelling is a disjunct that is false for every caller. A test may not settle
+/// that by constructing the principal it wants: the assertion below pins the
+/// lowercase form as *unprivileged*, so the two spellings cannot both pass and
+/// the policy has to name the issued one.
 #[test]
 fn admin_role_covers_all_writes() {
     let e = enforcer();
-    let admin = principal(&["admin"]);
+    let admin = principal(&["ADMIN"]);
+    let misspelled = principal(&["admin"]);
     for action in [
         "write-meter-reads",
         "write-timeseries",
@@ -107,7 +117,12 @@ fn admin_role_covers_all_writes() {
     ] {
         assert!(
             e.check(&admin, action, TENANT).is_ok(),
-            "admin may {action}"
+            "ADMIN may {action}"
+        );
+        assert!(
+            e.check(&misspelled, action, TENANT).is_err(),
+            "a role the platform does not mint must not reach {action} — \
+             `contains` is an exact match, so this spelling grants nobody anything"
         );
     }
 }

@@ -24,7 +24,7 @@ use makod::adapters::gpke_registry;
 /// test. The Bilanzierungsgebiet is Amprion's published Regelzonen-EIC, which
 /// carries a valid ENTSO-E check character.
 const ANMELDUNG: &str = "\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:500+230101:0000+1'\
 UNH+1+UTILMD:D:11A:UN:S2.1'\
 BGM+E01:::+00055001::+9'\
 DTM+137:202301010000?+00:303'\

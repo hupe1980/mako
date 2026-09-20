@@ -55,6 +55,7 @@ use metering::reading::{LastgangConfig, MeterReading as Zaehlerstand, to_lastgan
 
 /// One register reading in a Zählerstandsgang push.
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ZsgReading {
     /// The instant the register held this value (RFC 3339 UTC).
     #[serde(with = "time::serde::rfc3339")]

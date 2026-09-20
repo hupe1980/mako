@@ -180,11 +180,10 @@ impl Daemon for Marktd {
         // No in-memory event channel: producers persist every event to the
         // `event_log` outbox (marktd::outbox::enqueue) BEFORE any fan-out, and
         // the durable fan-out worker is the sole consumer of
-        // `event_log`/`event_delivery`. `notify` is only a low-latency wake-up
-        // hint — correctness rests on the tables, so a missed notification
-        // delays delivery, never drops it.
-        let notify = Arc::new(tokio::sync::Notify::new());
-
+        // `event_log`/`event_delivery`. There is no wake-up handle to pass
+        // around either: the `event_log_notify` trigger raises a Postgres
+        // NOTIFY that the worker listens for, so the hint arrives on the
+        // producer's COMMIT and reaches every replica.
         let sub_repo = pg::PgSubscriptionRepository::new(pool.clone());
         let state = Arc::new(AppState {
             malo_repo: pg::PgMaloRepository::new(pool.clone()),
@@ -193,7 +192,6 @@ impl Daemon for Marktd {
             correlation_index: pg::PgCorrelationIndex::new(pool.clone()),
             partner_repo: pg::PgPartnerRepository::new(pool.clone()),
             makod_client: Arc::clone(&makod_client),
-            notify: Arc::clone(&notify),
             tenant: tenant.clone(),
         });
 
@@ -202,7 +200,6 @@ impl Daemon for Marktd {
             &pool,
             sub_repo,
             &http,
-            &notify,
             &shutdown,
             Arc::clone(&makod_client),
             &tenant,
@@ -245,7 +242,6 @@ impl Daemon for Marktd {
             .layer(Extension(InboundWebhookSecret(inbound_secret)))
             .layer(Extension(cedar))
             .layer(Extension(Tenant(tenant.clone())))
-            .layer(Extension(notify))
             .layer(Extension(makod_client))
             .layer(Extension(http))
             .layer(Extension(Arc::new(cfg.mmma_import.clone())))
@@ -672,7 +668,6 @@ fn spawn_workers(
     pool: &PgPool,
     sub_repo: pg::PgSubscriptionRepository,
     http: &reqwest::Client,
-    notify: &Arc<tokio::sync::Notify>,
     shutdown: &tokio_util::sync::CancellationToken,
     makod: Arc<mako_markt::makod_client::MakodClient>,
     tenant: &str,
@@ -686,7 +681,6 @@ fn spawn_workers(
             max_attempts: i16::try_from(cfg.webhook.max_retry_attempts).unwrap_or(i16::MAX),
             ..Default::default()
         },
-        Arc::clone(notify),
         shutdown.clone(),
     );
 
@@ -697,7 +691,6 @@ fn spawn_workers(
         Arc::new(pg::PgMmmPreisStromRepository::new(pool.clone())),
         cfg.markt.tenant.clone(),
         pool.clone(),
-        Arc::clone(notify),
         shutdown.clone(),
     );
 
@@ -708,7 +701,6 @@ fn spawn_workers(
         Arc::new(pg::PgEinwilligungRepository::new(pool.clone())),
         makod,
         pool.clone(),
-        Arc::clone(notify),
         tenant.to_owned(),
         shutdown.clone(),
     );

@@ -232,7 +232,6 @@ pub async fn put_nb_contract(
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(tenant): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
-    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Path(id): Path<String>,
     Json(req): Json<NbContractUpsertRequest>,
 ) -> impl IntoResponse {
@@ -272,7 +271,7 @@ pub async fn put_nb_contract(
                 marktsparte: Some(sparte),
                 ..Default::default()
             });
-            if let Err(e) = crate::outbox::enqueue(&pool, &evt, &notify).await {
+            if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
                 tracing::error!(error = %e, "nb_contract: durable enqueue failed");
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,

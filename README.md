@@ -164,7 +164,7 @@ is [mako docs · Services](https://hupe1980.github.io/mako/docs/services/).
 | 📦 **17 message types** | UTILMD, MSCONS, APERAK, CONTRL, INVOIC, REMADV, ORDERS, IFTSTA, INSRPT, REQOTE, PARTIN, ORDCHG, ORDRSP, QUOTES, COMDIS, PRICAT, UTILTS |
 | 🔍 **Validation from the documents** | Nachrichtenstruktur, Segmentlayouts, formats and code lists of the MIG; the Prüfschablone of the AHB column with its Bedingungen; semantic cross-field rules — all appended to one `ValidationReport`, every finding naming its place by the MIG's `Nr` |
 | 🔤 **Declared character repertoire** | `UNB+UNOC:3` is ISO 8859-1, not UTF-8 — parsing transcodes by the repertoire the interchange itself declares, and `InterchangeBuilder` encodes back into it |
-| 📅 **Annual release lifecycle** | Multi-version profile registry keyed on the *Anwendungszeitpunkt*. There is **no** grace window: Allgemeine Festlegungen 6.1 § 2.5 gives each EDIFACT format one cut-over instant (1 April / 1 October) with no overlap, so `DEFAULT_RECEIVE_TOLERANCE_DAYS` is `0`. `with_receive_tolerance_days` raises it as a local *inbound* policy — never a licence to send late |
+| 📅 **Annual release lifecycle** | Multi-version registry keyed on the *Anwendungszeitpunkt*. No grace window — Allgemeine Festlegungen 6.1 § 2.5 gives each format one cut-over instant (1 April / 1 October), so `DEFAULT_RECEIVE_TOLERANCE_DAYS` is `0` |
 | 🔒 **Security by default** | DoS limits (max 10 MB, 10 000 segments), log-injection sanitisation, eight cargo-fuzz targets over the untrusted-input boundary — compiled on every push, run weekly |
 | 🛠️ **Fluent message builders** | Type-state builder API with compile-time mandatory field enforcement |
 | 🔁 **Round-trip serialisation** | Parse → validate → serialize with byte-exact EDIFACT output |
@@ -200,7 +200,7 @@ is [mako docs · Services](https://hupe1980.github.io/mako/docs/services/).
 | 🗂️ **29 repository traits** | One trait per aggregate — `MaloRepository`, `MeloRepository`, `NbContractRepository`, `PartnerRepository`, `LokationszuordnungRepository`, `TechnischeRessourceRepository`, `SteuerbareRessourceRepository`, `CorrelationIndex`, … — AFIT, no `dyn Trait` overhead |
 | ⏳ **Temporal role assignments** | `Rollenzuordnung` with `valid_from`/`valid_to` — evaluated against CET/CEST German calendar date at query time |
 | 📨 **CloudEvents 1.0** | Outbound events (`MarktEvent`) with HMAC-SHA256 signing; `InboundMakoEvent` for receiving `makod` lifecycle events |
-| 🧪 **`testing` feature** | Two in-memory doubles — `InMemoryVersorgungsStatusRepository` (§§ 36/38 EnWG supply status) and `InMemoryNbEnergiemixRepository` (§ 42 EnWG disclosure). Deliberately only two: a hand-written double is a second implementation of the same contract and the two drift, so every other repository is checked against real PostgreSQL in `marktd`'s testcontainers suites |
+| 🧪 **`testing` feature** | Two in-memory doubles only — `InMemoryVersorgungsStatusRepository` (§§ 36/38 EnWG) and `InMemoryNbEnergiemixRepository` (§ 42 EnWG). A double is a second implementation that drifts, so every other repository is tested against real PostgreSQL |
 | 🚫 **Zero framework deps** | No axum, sqlx, or async runtime — pure domain library; all I/O lives in `services/marktd` |
 
 ### BO4E typed API (`marktd`)
@@ -225,7 +225,7 @@ is [mako docs · Services](https://hupe1980.github.io/mako/docs/services/).
 | 🗂️ **Fallgruppe + Bilanzierungsmethode auto-extract** | `makod` adapters extract `bilanzierungsmethode` (Z01→SLP, Z02→RLM, Z04→IMS) and `fallgruppe` (GaBi Gas, TM+Z10) from UTILMD `TM+EM` / `TM+Z10` segments. `marktd` `event_ingest` calls `patch_typenmerkmal()` on `de.mako.process.initiated` (PIDs 55001/44001) to keep `malo.fallgruppe` / `malo.bilanzierungsmethode` in sync. |
 | 🏷️ **`Tarifpreisblatt` + `Preisblatt`** | `productd` stores all energy products as `Tarifpreisblatt` JSONB; category drives calculator selection; all prices are user-defined; schema validated on PUT (wrong `_typ` → 422); queried by `billingd` calculator for pricing inputs |
 | 🔒 **One vocabulary per column** | Typed columns are derived from the typed BO, never a string lookup on its JSON, and hold BO4E wire values only. Each enum column's SQL `CHECK` is that enum's `VARIANTS`, compared against the schema by a `mako-markt` test. |
-| 🧭 **UTILMD characteristics read by class** | `makod` reads SG10 `CCI`/`CAV` by DE 7059 Klassentyp *and* DE 7037 Merkmal — the two code spaces overlap (`Z18` = Regelzone or „Kein Haushaltskunde") — and maps them to BO4E enums: `CCI+Z30++Z06/Z07` → `Energierichtung`, `CAV+E03…E09` / `Y01…Y03` → `Netzebene`. Each mapping cites its MIG Strom S2.2 / Gas G1.2 segment number. |
+| 🧭 **UTILMD characteristics read by class** | `makod` reads SG10 `CCI`/`CAV` by DE 7059 Klassentyp *and* DE 7037 Merkmal, because the code spaces overlap (`Z18` = Regelzone or „Kein Haushaltskunde"), and maps them to BO4E enums — each citing its MIG Strom S2.2 / Gas G1.2 segment number |
 | 🏷️ **Namespaced BO4E extensions** | What BO4E does not model rides in a `ZusatzAttribut` named `mako:<snake_case>` — 42, each registered with what it carries. BO4E mandates no convention for its extension slot; `mako` is a prefix `rubo4e` itself registers, and `cargo xtask check-bo4e-attributes` reads it from there |
 | ✅ **Outbound BO4E conformance** | Every emission site crosses the same gate, because an engine test covers the shapes a builder produces but not the values a request supplies. Out-of-schema **fields** are refused alongside values; documents are built typed, never assembled as JSON |
 | 🧾 **`Steuerbetrag` + `Registeranzahl`** | `energy-billing` projects the EN 16931 BG-23 tax breakdown into BO4E `Steuerbetrag` entries on the Rechnung JSON; `Registeranzahl` (Eintarif/Zweitarif) drives HT/NT position branching |
@@ -259,11 +259,19 @@ file and a `smoke.sh` that asserts every step.
 
 ```bash
 just build-demo                 # makod, marktd, processd
-cd demos/nb-stp && docker compose up -d && bash smoke.sh
+cd demos/nb-stp     && docker compose up -d && bash smoke.sh
+
+just build-demo-eeg             # marktd, edmd, einsd
+cd demos/eeg-billing && docker compose up -d && bash smoke.sh
 
 just build-demo-o2c             # productd, vertragd, billingd, outputd, accountingd
-cd demos/o2c    && docker compose up -d && bash smoke.sh
+cd demos/o2c        && docker compose up -d && bash smoke.sh
 ```
+
+`just build-demo` is the quick one: its three images come out of a `demo-builder`
+stage that compiles only what the Lieferbeginn path needs. The other two build
+every service in the workspace in one `cargo build`, so budget 20–45 minutes on
+a cold cache and a few minutes on a warm one.
 
 The [Getting Started guide](https://hupe1980.github.io/mako/docs/guide/getting-started/)
 walks the first one step by step.

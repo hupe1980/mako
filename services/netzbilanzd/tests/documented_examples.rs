@@ -168,7 +168,7 @@ fn the_documented_sect14a_modules_parse() {
             "pauschale_eur_pro_jahr": "120.00", "jahresanteil": "0.0849"
         }}),
         serde_json::json!({ "Modul2ProzentualeReduzierung": {
-            "basis": { "menge_kwh": "800", "preis_ct_per_kwh": "3.5" }, "reduktion": "0.85"
+            "basis": { "menge_kwh": "800", "preis_ct_per_kwh": "3.5" }, "reduktion": "0.40"
         }}),
         serde_json::json!({ "Modul3ZeitVariabel": {
             "ht": { "menge_kwh": "600", "preis_ct_per_kwh": "4.20" },

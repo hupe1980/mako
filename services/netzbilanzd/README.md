@@ -158,9 +158,13 @@ Pass the module instead of a flat rate. The three are mutually exclusive by cons
 }}
 
 // Modul 2 — prozentuale Reduzierung of the controllable device's own
-// Arbeitspreis. The factor is range-checked at the request boundary.
+// Arbeitspreis. `reduktion` is the *retained* share and it is the statutory
+// rate, not a parameter: BK8-22/010-A Tenor 2. b) fixes the reduced
+// Arbeitspreis at 40 % of the Niederspannungs-Arbeitspreis ohne
+// Leistungsmessung, so any other value is refused at the request boundary.
+// Only the reference Arbeitspreis in `basis` is the Netzbetreiber's.
 "arbeitspreis": { "Modul2ProzentualeReduzierung": {
-  "basis": { "menge_kwh": "800", "preis_ct_per_kwh": "3.5" }, "reduktion": "0.85"
+  "basis": { "menge_kwh": "800", "preis_ct_per_kwh": "3.5" }, "reduktion": "0.40"
 }}
 
 // Modul 3 — zeitvariable Netzentgelte (opt-in since 01.04.2025). All three

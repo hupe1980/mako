@@ -53,14 +53,14 @@ fn forbidden(action: &'static str) -> axum::response::Response {
 pub type EinwilligungRepoExt = Arc<crate::pg::PgEinwilligungRepository>;
 async fn emit(
     pool: &sqlx::PgPool,
-    notify: &tokio::sync::Notify,
     tenant: &str,
     ce_type: &str,
     subject: String,
     data: serde_json::Value,
 ) -> Result<(), sqlx::Error> {
     let evt = MarktEvent::new(tenant, ce_type, subject, data);
-    crate::outbox::enqueue(pool, &evt, notify).await
+    crate::outbox::enqueue(pool, &evt).await?;
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,7 +89,6 @@ pub async fn grant_einwilligung(
     Extension(repo): Extension<EinwilligungRepoExt>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
-    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Json(body): Json<GrantBody>,
 ) -> impl IntoResponse {
     if enforcer
@@ -123,7 +122,6 @@ pub async fn grant_einwilligung(
         Ok(id) => {
             if let Err(e) = emit(
                 &pool,
-                &notify,
                 &tenant,
                 mako_events::markt::EINWILLIGUNG_ERTEILT,
                 id.to_string(),
@@ -209,7 +207,6 @@ pub async fn revoke_einwilligung(
     Extension(repo): Extension<EinwilligungRepoExt>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
-    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Extension(makod): Extension<Arc<MakodClient>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -227,7 +224,6 @@ pub async fn revoke_einwilligung(
 
     if let Err(e) = emit(
         &pool,
-        &notify,
         &tenant,
         mako_events::markt::EINWILLIGUNG_WIDERRUFEN,
         id.to_string(),
@@ -369,6 +365,7 @@ pub struct EsaPreiseBody {
 
 /// One `SG27 PIA+Z02` / `SG31 PRI+CAL` pair of an accepted Angebot.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EsaPreisPosition {
     pub artikel_id: String,
     /// `SG31 PRI` DE 5387 — `Z01` / `Z02` / `Z03`.

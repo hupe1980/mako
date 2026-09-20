@@ -134,7 +134,6 @@ impl ClearinglisteKind {
 
 /// Data captured when a Clearingliste UTILMD is received.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ClearinglisteData {
     /// BDEW Prüfidentifikator of the inbound UTILMD.
     pub pruefidentifikator: Pruefidentifikator,

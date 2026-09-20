@@ -98,7 +98,9 @@ permit(
 //
 //   write-preisblatt     PreisblattNetznutzung / -Messung / -KA / -Dienstleistung
 //                        / -Hardware — the tariff basis invoic-checker validates
-//                        INVOIC plausibility against (§ 22 MessZV).
+//                        INVOIC plausibility against. The Netznutzung sheet is
+//                        published under § 20 Abs. 1 EnWG; the Messung sheets
+//                        are bounded by the § 30 MsbG Preisobergrenzen.
 //   write-nelo           Netz-Element-Lokationen for Redispatch 2.0.
 //   write-tranche        GPKE Teil 4 „Daten der Tranche" balancing topology.
 //   write-malo-grid      NB grid topology feeding processd's Anmeldung STP.

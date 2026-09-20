@@ -98,7 +98,7 @@ UNZ+1+THE123456789'";
 /// SSQNOT 5.7 §3.2 — the segment examples of the Segmentlayout, wrapped in an
 /// interchange. The Absender the specification prints has twelve digits; it is
 /// carried as printed.
-const SSQNOT: &[u8] = b"UNB+UNOA:3+987004760000:502+9870112500011:502+180104:2056+IC5'\
+const SSQNOT: &[u8] = b"UNB+UNOA:3+987004760000:500+9870112500011:502+180104:2056+IC5'\
 UNH+123456+ORDRSP:D:07A:UN:DVGW17'\
 BGM+BAG::332+SSQNOT00052'\
 DTM+Z05:0:805'\
@@ -531,7 +531,7 @@ fn nomres_positions_stay_separable_by_their_imd_label() {
 /// Edig@s `SG37` repeats up to 199 times: a `LOC` group is a time series.
 #[test]
 fn every_quantity_of_a_profile_survives_the_walk() {
-    let profile = b"UNB+UNOA:3+A:502+B:502+260301:0500+IC3'\
+    let profile = b"UNB+UNOA:3+A:500+B:500+260301:0500+IC3'\
 UNH+1+ORDERS:D:07A:UN:DVGW17'\
 BGM+55G::332+NOMINT77'\
 DTM+Z05:0:805'\
@@ -578,7 +578,7 @@ UNZ+1+IC3'";
 #[test]
 fn a_multi_message_interchange_does_not_merge_into_one() {
     let mut raw = Vec::new();
-    raw.extend_from_slice(b"UNB+UNOA:3+A:502+B:502+260301:0500+IC4'");
+    raw.extend_from_slice(b"UNB+UNOA:3+A:500+B:500+260301:0500+IC4'");
     for (n, doc) in [(1, "01G"), (2, "55G")] {
         raw.extend_from_slice(
             format!(
@@ -1037,7 +1037,7 @@ fn the_gas_day_accessor_reads_dtm_z01() {
 /// are one hour each, which is exactly why the mistake survives casual testing.
 #[test]
 fn energy_is_the_integral_of_the_rate_over_its_period() {
-    let profile = b"UNB+UNOA:3+A:502+B:502+260301:0500+IC3'\
+    let profile = b"UNB+UNOA:3+A:500+B:500+260301:0500+IC3'\
 UNH+1+ORDERS:D:07A:UN:DVGW17'\
 BGM+55G::332+NOMINT77'\
 DTM+Z05:0:805'\
@@ -1073,7 +1073,7 @@ UNZ+1+IC3'";
 /// wearing a total's clothes.
 #[test]
 fn entry_and_exit_quantities_are_totalled_separately() {
-    let both = b"UNB+UNOA:3+A:502+B:502+260301:0500+IC4'\
+    let both = b"UNB+UNOA:3+A:500+B:500+260301:0500+IC4'\
 UNH+1+ORDERS:D:07A:UN:DVGW17'\
 BGM+55G::332+NOMINT78'\
 DTM+Z05:0:805'\

@@ -732,9 +732,20 @@ pub struct Cav {
     /// DE 7111 — Merkmalswert, Code.
     #[edifact(element = "7111")]
     pub value_code: Option<String>,
-    /// DE 7110 — Merkmalswert.
-    #[edifact(element = "7110")]
+    /// DE 7110, first occurrence — Merkmalswert.
+    ///
+    /// Addressed by index rather than by DE id: `C889` carries `7110` **twice**,
+    /// so the id alone does not name a slot.
+    #[edifact(element = 0, component = 3)]
     pub value: Option<String>,
+    /// DE 7110, second occurrence — the other half of a two-part Merkmalswert.
+    ///
+    /// Populated where the characteristic is a pair rather than a scalar: the
+    /// MIG's „Vor- und Nachkommastellen des Zählwerks" sends `CAV+:::1:1`, one
+    /// digit each side of the decimal point. Read as a single-value composite,
+    /// the second figure is unreachable and a Zählwerk's precision is lost.
+    #[edifact(element = 0, component = 4)]
+    pub second_value: Option<String>,
 }
 
 // ── SEQ ───────────────────────────────────────────────────────────────────────
@@ -793,7 +804,13 @@ pub struct Sts {
     /// DE 9013 — Statusanlass, Code (C556). Populated for the `7` / `Z33`
     /// categories — this is where the UTILMD **Transaktionsgrund**
     /// (`E01` Einzug, `E03` Wechsel, `E05` Stornierung, …) is carried.
-    #[edifact(element = "9013")]
+    ///
+    /// Addressed by index: `C556` sits at three consecutive element positions
+    /// under Statuskategorie `7`, so DE 9013 alone does not name a slot. This is
+    /// the first of them; the Ergänzung and the Lieferende-Transaktionsgrund at
+    /// positions 4 and 5 are read positionally by
+    /// `UtilmdTransaction::transaktionsgrund`.
+    #[edifact(element = 2, component = 0)]
     pub reason_code: Option<String>,
 }
 
