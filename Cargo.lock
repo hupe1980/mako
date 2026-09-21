@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "accountingd"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "agentd"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "agentplane",
  "anyhow",
@@ -1461,7 +1461,7 @@ dependencies = [
 
 [[package]]
 name = "billingd"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3680,7 +3680,7 @@ dependencies = [
 
 [[package]]
 name = "dvgw-edi"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "edifact-rs",
  "rust_decimal",
@@ -3779,7 +3779,7 @@ dependencies = [
 
 [[package]]
 name = "edi-energy"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "criterion",
  "edifact-rs",
@@ -3821,7 +3821,7 @@ dependencies = [
 
 [[package]]
 name = "edmd"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -3876,7 +3876,7 @@ dependencies = [
 
 [[package]]
 name = "eeg-billing"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "billing",
  "mako-markt",
@@ -3890,7 +3890,7 @@ dependencies = [
 
 [[package]]
 name = "einsd"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4015,7 +4015,7 @@ dependencies = [
 
 [[package]]
 name = "energy-api"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "axum",
  "base64ct",
@@ -4039,7 +4039,7 @@ dependencies = [
 
 [[package]]
 name = "energy-billing"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "billing",
  "eeg-billing",
@@ -4859,7 +4859,7 @@ dependencies = [
 
 [[package]]
 name = "grid-billing"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "billing",
  "mako-markt",
@@ -5825,7 +5825,7 @@ dependencies = [
 
 [[package]]
 name = "invoic-checker"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "billing",
  "mako-fristen",
@@ -5840,7 +5840,7 @@ dependencies = [
 
 [[package]]
 name = "invoicd"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6619,7 +6619,7 @@ dependencies = [
 
 [[package]]
 name = "mabis-syncd"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6666,7 +6666,7 @@ dependencies = [
 
 [[package]]
 name = "mako-as4"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "asx-rs",
  "thiserror 2.0.20",
@@ -6674,7 +6674,7 @@ dependencies = [
 
 [[package]]
 name = "mako-emob"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "mako-engine",
  "mako-fristen",
@@ -6690,7 +6690,7 @@ dependencies = [
 
 [[package]]
 name = "mako-engine"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "criterion",
  "mako-events",
@@ -6711,11 +6711,11 @@ dependencies = [
 
 [[package]]
 name = "mako-events"
-version = "0.21.0"
+version = "0.22.0"
 
 [[package]]
 name = "mako-fristen"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "time",
  "time-tz",
@@ -6723,7 +6723,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gabi-gas"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "dvgw-edi",
  "mako-engine",
@@ -6741,7 +6741,7 @@ dependencies = [
 
 [[package]]
 name = "mako-geli-gas"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -6757,7 +6757,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gpke"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -6775,7 +6775,7 @@ dependencies = [
 
 [[package]]
 name = "mako-invoic"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "mako-engine",
  "rubo4e",
@@ -6787,7 +6787,7 @@ dependencies = [
 
 [[package]]
 name = "mako-mabis"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "edi-energy",
  "mako-engine",
@@ -6805,7 +6805,7 @@ dependencies = [
 
 [[package]]
 name = "mako-markt"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "energy-api",
  "mako-events",
@@ -6826,7 +6826,7 @@ dependencies = [
 
 [[package]]
 name = "mako-nbw"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "mako-fristen",
  "rubo4e",
@@ -6838,7 +6838,7 @@ dependencies = [
 
 [[package]]
 name = "mako-obs"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "mako-events",
  "mako-fristen",
@@ -6852,7 +6852,7 @@ dependencies = [
 
 [[package]]
 name = "mako-pruefung"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "edi-energy",
  "mako-fristen",
@@ -6868,7 +6868,7 @@ dependencies = [
 
 [[package]]
 name = "mako-redispatch"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "mako-engine",
  "mako-fristen",
@@ -6882,7 +6882,7 @@ dependencies = [
 
 [[package]]
 name = "mako-service"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6925,7 +6925,7 @@ dependencies = [
 
 [[package]]
 name = "mako-wim"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -6943,7 +6943,7 @@ dependencies = [
 
 [[package]]
 name = "makod"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "asx-rs",
@@ -7002,7 +7002,7 @@ dependencies = [
 
 [[package]]
 name = "makotest-native"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "edi-energy",
  "edifact-rs",
@@ -7016,7 +7016,7 @@ dependencies = [
 
 [[package]]
 name = "marktd"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7345,7 +7345,7 @@ checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"
 
 [[package]]
 name = "netzbilanzd"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7682,7 +7682,7 @@ dependencies = [
 
 [[package]]
 name = "obsd"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8082,7 +8082,7 @@ dependencies = [
 
 [[package]]
 name = "outputd"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8731,7 +8731,7 @@ dependencies = [
 
 [[package]]
 name = "portald"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8897,7 +8897,7 @@ dependencies = [
 
 [[package]]
 name = "processd"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8957,7 +8957,7 @@ dependencies = [
 
 [[package]]
 name = "productd"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -9483,7 +9483,7 @@ dependencies = [
 
 [[package]]
 name = "redispatch-xml"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",
@@ -10884,7 +10884,7 @@ dependencies = [
 
 [[package]]
 name = "sperrd"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -13031,7 +13031,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vertragd"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "axum",

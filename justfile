@@ -413,7 +413,7 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check check-fuzz test test-doc test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-outbox-notify check-event-payloads check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+ci: check check-fuzz test test-doc test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-event-payloads check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -672,6 +672,12 @@ check-business-dates:
 check-workflow-purity:
     cargo xtask check-workflow-purity
 
+# Refuse a `${{ }}` value interpolated into a `run:` script. GitHub substitutes
+# it as text before bash parses the line, so one `'` in the value ends the
+# quoted string and the remainder is executed. Pass it through `env:`.
+check-workflow-interpolation:
+    cargo xtask check-workflow-interpolation
+
 # Hold each durable outbox's wake-up in the database, where it belongs. Postgres
 # queues a NOTIFY until the raising transaction commits, so an AFTER INSERT
 # trigger cannot wake the worker onto a snapshot without the row — and reaches
@@ -784,6 +790,13 @@ check-crate-lints:
 # `/health/*` and `/metrics`, and `Router::merge` panics on an overlapping
 # method route — while the router is assembled, so the daemon does not boot.
 # `accountingd` shipped exactly that for its ledger gauges.
+# Refuse a workflow job that compiles this workspace without first reclaiming
+# runner disk. A hosted runner has ~14 GB free; the overflow arrives as
+# `No space left on device` mid-compile or as a linker SIGBUS, and neither reads
+# as a disk problem.
+check-runner-disk:
+    cargo xtask check-runner-disk
+
 check-runner-routes:
     cargo xtask check-runner-routes
 

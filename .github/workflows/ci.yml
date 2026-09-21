@@ -315,6 +315,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Reclaim runner disk
+        run: |
+          df -h /
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
       # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
       # command needs an interpreter >= 3.11. `.cargo/config.toml` points
       # PYO3_PYTHON at the developer's `.venv`, which does not exist here — and
@@ -346,6 +352,12 @@ jobs:
         with:
           toolchain: "1.94"
       - uses: Swatinem/rust-cache@v2
+      - name: Reclaim runner disk
+        run: |
+          df -h /
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
       # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
       # command needs an interpreter >= 3.11. `.cargo/config.toml` points
       # PYO3_PYTHON at the developer's `.venv`, which does not exist here — and

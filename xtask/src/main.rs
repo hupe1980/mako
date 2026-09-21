@@ -24,6 +24,8 @@ Commands:
   check-db-suites     Every real-PostgreSQL suite is ignored and run by a recipe
   check-expected-tenant  A service reading `Claims` pins the tenant it expects
   check-vorlauf-consulted  Every catalogued Mindestvorlaufzeit is read by something
+  check-runner-disk   Refuse a workflow job that compiles the workspace without reclaiming
+                        runner disk — ~14 GB does not fit, and it fails as a linker SIGBUS
   check-runner-routes No daemon claims a route `mako_service::run` already mounts
                               (`Router::merge` panics on those at startup)
   check-sql           Every service's SQL literals prepare against its own schema
@@ -40,6 +42,8 @@ Commands:
   check-outbox-notify    Hold each durable outbox's commit-coupled wake-up together: the
                         AFTER INSERT trigger, the channel it raises on, the worker's LISTEN
                         — and refuse an in-process notify on a producer path
+  check-workflow-interpolation  Refuse a `${{ }}` value interpolated into a `run:` script —
+                        substituted as text before bash parses, so one quote executes the rest
   check-workflow-purity  Refuse a clock, random, environment or filesystem read inside an
                         `impl … Workflow for …` block — a workflow is a pure function of
                         (state, command), re-run on retry and re-folded on every replay
@@ -104,12 +108,14 @@ mod check_release_coverage;
 mod check_request_bodies;
 mod check_rounding;
 mod check_routes;
+mod check_runner_disk;
 mod check_runner_routes;
 mod check_sql;
 mod check_tenant_predicate;
 mod check_tool_grants;
 mod check_vorlauf_consulted;
 mod check_wire_timestamps;
+mod check_workflow_interpolation;
 mod check_workflow_purity;
 mod import_profiles;
 mod pid_overview;
@@ -130,6 +136,7 @@ fn main() {
         Some("check-expected-tenant") => check_expected_tenant(),
         Some("check-vorlauf-consulted") => check_vorlauf_consulted(),
         Some("check-routes") => check_routes(),
+        Some("check-runner-disk") => check_runner_disk(),
         Some("check-runner-routes") => check_runner_routes(),
         Some("check-sql") => check_sql(),
         Some("check-publish-order") => check_publish_order::check_publish_order(),
@@ -148,6 +155,7 @@ fn main() {
         Some("check-licenses") => check_licenses(),
         Some("check-wire-timestamps") => check_wire_timestamps(),
         Some("check-outbox-notify") => check_outbox_notify(),
+        Some("check-workflow-interpolation") => check_workflow_interpolation(),
         Some("check-workflow-purity") => check_workflow_purity(),
         Some("check-event-payloads") => check_event_payloads(),
         Some("check-cedar-roles") => check_cedar_roles(),
@@ -252,6 +260,13 @@ fn check_outbox_notify() {
     }
 }
 
+fn check_workflow_interpolation() {
+    let (workspace_root, _) = workspace_info();
+    if !check_workflow_interpolation::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
 fn check_workflow_purity() {
     let (workspace_root, _) = workspace_info();
     if !check_workflow_purity::run(std::path::Path::new(&workspace_root)) {
@@ -290,6 +305,13 @@ fn check_as4_controls() {
 fn check_routes() {
     let (workspace_root, _) = workspace_info();
     if !check_routes::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_runner_disk() {
+    let (workspace_root, _) = workspace_info();
+    if !check_runner_disk::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

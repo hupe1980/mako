@@ -492,6 +492,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # A hosted runner has ~14 GB free and this workspace does not compile into
+      # it alongside Docker's layer store. The failure arrives as
+      # `No space left on device` mid-compile, or as a linker SIGBUS — `rust-lld`
+      # mmaps its output, so a write to a full disk is not reported as ENOSPC.
+      # Neither reads as "out of disk".
+      - name: Reclaim runner disk
+        run: |
+          df -h /
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -516,6 +528,25 @@ jobs:
             OCI_CREATED=${{ github.event.head_commit.timestamp }}
           cache-from: type=gha,scope=mako-builder-${{ matrix.platform }}
           cache-to:   type=gha,scope=mako-builder-${{ matrix.platform }},mode=max
+
+      # `demo-builder` is the second builder stage, and `makod`, `marktd` and
+      # `processd` copy their binaries from it — so a cache covering only
+      # `builder` leaves those three to compile from scratch in every bake.
+      # The two stages are siblings on `chef`, not a chain, so building
+      # `--target builder` never populates the other's cargo layers.
+      - name: Build and push demo builder stage (${{ matrix.platform }})
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: demo-builder
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/mako-demo-builder:${{ matrix.tag }}
+          build-args: |
+            OCI_REVISION=${{ github.sha }}
+            OCI_CREATED=${{ github.event.head_commit.timestamp }}
+          cache-from: type=gha,scope=mako-demo-builder-${{ matrix.platform }}
+          cache-to:   type=gha,scope=mako-demo-builder-${{ matrix.platform }},mode=max
 
   # One bake invocation per platform builds all 17 service images from one build
   # graph, sharing the builder stage. Digests are exported for manifest merging.
@@ -542,6 +573,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # A hosted runner has ~14 GB free and this workspace does not compile into
+      # it alongside Docker's layer store. The failure arrives as
+      # `No space left on device` mid-compile, or as a linker SIGBUS — `rust-lld`
+      # mmaps its output, so a write to a full disk is not reported as ENOSPC.
+      # Neither reads as "out of disk".
+      - name: Reclaim runner disk
+        run: |
+          df -h /
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -565,7 +608,9 @@ jobs:
           set: |
             *.platform=${{ matrix.platform }}
             *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/mako-builder:${{ matrix.tag }}
+            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/mako-demo-builder:${{ matrix.tag }}
             *.cache-from=type=gha,scope=mako-builder-${{ matrix.platform }}
+            *.cache-from=type=gha,scope=mako-demo-builder-${{ matrix.platform }}
             *.cache-to=
           # SLSA build provenance and an SBOM per image — Cyber Resilience Act
           # Annex I Part II(1), which market surveillance may ask for from
@@ -589,11 +634,24 @@ jobs:
           OCI_CREATED:  ${{ github.event.head_commit.timestamp }}
 
       # Extract one digest artifact per service for the manifest merge step.
+      # `BAKE_METADATA` is passed through the environment, never interpolated
+      # into the script. `${{ steps.bake.outputs.metadata }}` inside `run:` is
+      # substituted as *text* before bash parses the line, so one `'` anywhere in
+      # the blob ends the quoted string and the remainder is executed — which
+      # with `provenance: mode=max` is a megabyte of SLSA material, base64 source
+      # maps and build arguments for 17 targets. That is a shell-injection shape
+      # as much as a syntax one, and an environment variable cannot have it: the
+      # value never reaches the parser.
       - name: Export per-service digests
+        env:
+          BAKE_METADATA: ${{ steps.bake.outputs.metadata }}
         run: |
           platform_safe="${{ matrix.platform }}"
           platform_safe="${platform_safe//\//-}"
           mkdir -p /tmp/digests
+          printf '%s' "$BAKE_METADATA" > /tmp/bake-metadata.json
+          jq -e 'type == "object" and length > 0' /tmp/bake-metadata.json >/dev/null \
+            || { echo "::error::bake produced no metadata — nothing to tag"; exit 1; }
           # Every target in `docker-bake.hcl`'s `default` group. A service the
           # bake builds but this loop omits is pushed by digest and then never
           # tagged: no manifest job runs for it, so the image exists in the
@@ -602,7 +660,15 @@ jobs:
                         netzbilanzd sperrd einsd \
                         productd billingd outputd accountingd vertragd \
                         portald agentd mabis-syncd; do
-            digest=$(echo '${{ steps.bake.outputs.metadata }}' | jq -r --arg svc "$service" '.[$svc]["containerimage.digest"]')
+            digest=$(jq -r --arg svc "$service" '.[$svc]["containerimage.digest"] // empty' \
+                        /tmp/bake-metadata.json)
+            # An empty digest means the bake did not produce that image. Writing
+            # it anyway uploads a blank artifact, and the manifest job then tags
+            # nothing while reporting success.
+            if [ -z "$digest" ]; then
+              echo "::error::no containerimage.digest for ${service} in the bake metadata"
+              exit 1
+            fi
             echo "${digest#sha256:}" > "/tmp/digests/${service}"
             echo "${service}: ${digest}"
           done
@@ -698,11 +764,18 @@ jobs:
             org.opencontainers.image.description=${{ matrix.description }}
             org.opencontainers.image.licenses=MIT OR Apache-2.0
 
+      # `META_JSON` through the environment for the same reason the bake's
+      # metadata is: interpolated into `run:` it is substituted as text before
+      # bash parses, and this blob carries the OCI descriptions — free prose,
+      # already holding parentheses, one apostrophe away from ending the quoted
+      # string and handing the rest to the shell.
       - name: Create and push multi-arch manifest for ${{ matrix.service }}
+        env:
+          META_JSON: ${{ steps.meta.outputs.json }}
         run: |
           amd64=$(cat /tmp/digests/amd64/${{ matrix.service }})
           arm64=$(cat /tmp/digests/arm64/${{ matrix.service }})
-          tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< '${{ steps.meta.outputs.json }}')
+          tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$META_JSON")
           # shellcheck disable=SC2086
           docker buildx imagetools create $tags \
             "ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.service }}@sha256:${amd64}" \
@@ -715,8 +788,10 @@ jobs:
       # surveillance authority may request under CRA Annex I Part II(1), and the
       # release would look entirely ordinary. So the release asserts it.
       - name: Assert provenance and SBOM survived the merge
+        env:
+          META_JSON: ${{ steps.meta.outputs.json }}
         run: |
-          tag=$(jq -r '.tags[0]' <<< '${{ steps.meta.outputs.json }}')
+          tag=$(jq -r '.tags[0]' <<< "$META_JSON")
           raw=$(docker buildx imagetools inspect --raw "$tag")
           # An attestation rides the index as its own manifest, tagged by the
           # `vnd.docker.reference.type` annotation BuildKit writes. Counting
