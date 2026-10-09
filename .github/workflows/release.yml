@@ -37,7 +37,7 @@ jobs:
       # workflow-scoped: `publish` must not deny warnings it does not own.
       RUSTFLAGS: "-D warnings"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Toolchain is rust-toolchain.toml's
         shell: bash
@@ -55,7 +55,7 @@ jobs:
       # PYO3_PYTHON at the developer's `.venv`, which does not exist here — and
       # cargo leaves an already-set variable alone, so naming the runner's
       # interpreter here is what makes the workspace build.
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
@@ -109,7 +109,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: preflight
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Toolchain is rust-toolchain.toml's
         shell: bash
         run: |
@@ -143,7 +143,7 @@ jobs:
       contents: read
       id-token: write   # the OIDC token crates.io exchanges for a publish token
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0   # semver needs the previous release tag
 
@@ -158,7 +158,7 @@ jobs:
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         with:
           tool: cargo-semver-checks,just
 
@@ -555,7 +555,7 @@ jobs:
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Toolchain is rust-toolchain.toml's
         shell: bash
         run: |
@@ -563,7 +563,7 @@ jobs:
           have=$(rustc --version | cut -d' ' -f2)
           case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
             *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"   # the abi3 floor
 
@@ -584,7 +584,7 @@ jobs:
           args: --release --manifest-path makotest/Cargo.toml --out dist
           manylinux: auto
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: makotest-wheel-${{ matrix.target }}
           path: dist/*.whl
@@ -594,13 +594,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: preflight
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build sdist
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           command: sdist
           args: --manifest-path makotest/Cargo.toml --out dist
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: makotest-sdist
           path: dist/*.tar.gz
@@ -615,7 +615,7 @@ jobs:
       # of a long-lived API token. Nothing else in this job needs write access.
       id-token: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: makotest-*
           merge-multiple: true
@@ -650,10 +650,10 @@ jobs:
             runner: ubuntu-24.04-arm
             tag: linux-arm64
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # A hosted runner has ~14 GB free and this workspace does not compile into
       # it alongside Docker's layer store. The failure arrives as
@@ -668,7 +668,7 @@ jobs:
           df -h /
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -679,7 +679,7 @@ jobs:
       # fully-compiled builder image via cache-from=type=registry — no Rust
       # recompilation in the runtime stage, even when the GHA cache is evicted.
       - name: Build and push Rust builder stage (${{ matrix.platform }})
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           target: builder
@@ -698,7 +698,7 @@ jobs:
       # The two stages are siblings on `chef`, not a chain, so building
       # `--target builder` never populates the other's cargo layers.
       - name: Build and push demo builder stage (${{ matrix.platform }})
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           target: demo-builder
@@ -731,10 +731,10 @@ jobs:
             runner: ubuntu-24.04-arm
             tag: linux-arm64
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # A hosted runner has ~14 GB free and this workspace does not compile into
       # it alongside Docker's layer store. The failure arrives as
@@ -749,7 +749,7 @@ jobs:
           df -h /
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -763,7 +763,7 @@ jobs:
       # cache-from=type=registry restores from the pushed builder image — guaranteed hit.
       # --metadata-file captures per-service OCI digests for the manifest job.
       - name: Bake all service images (${{ matrix.platform }})
-        uses: docker/bake-action@5be5f02ff8819ecd3092ea6b2e6261c31774f2b4 # v6.10.0
+        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
         id: bake
         with:
           files: docker-bake.hcl
@@ -838,7 +838,7 @@ jobs:
           echo "PLATFORM_SAFE=${platform_safe}" >> "$GITHUB_ENV"
 
       - name: Upload digest artifacts (${{ matrix.platform }})
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: digests-${{ env.PLATFORM_SAFE }}
           path: /tmp/digests/*
@@ -894,22 +894,22 @@ jobs:
             description: "MaBiS UTILTS synchronisation daemon — ÜNB/NB role, Summenzeitreihe day-3/day-8"
     steps:
       - name: Download amd64 digests
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: digests-linux-amd64
           path: /tmp/digests/amd64
 
       - name: Download arm64 digests
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: digests-linux-arm64
           path: /tmp/digests/arm64
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -917,7 +917,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.service }}
           tags: |
@@ -998,7 +998,7 @@ jobs:
           esac
 
       - name: Download the CycloneDX SBOMs
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sbom
           path: sbom
@@ -1106,7 +1106,7 @@ jobs:
             > "attestations/${{ matrix.service }}.json"
           cat "attestations/${{ matrix.service }}.json"
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: attestations-${{ matrix.service }}
           path: attestations/${{ matrix.service }}.json
@@ -1126,7 +1126,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: preflight
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Toolchain is rust-toolchain.toml's
         shell: bash
         run: |
@@ -1148,7 +1148,7 @@ jobs:
           cp services/*/*_bin.cdx.json sbom/
           ls -l sbom
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sbom
           path: sbom/*.cdx.json
@@ -1172,7 +1172,7 @@ jobs:
       id-token: write       # attests the evidence pack
       attestations: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Toolchain is rust-toolchain.toml's
         shell: bash
         run: |
@@ -1182,7 +1182,7 @@ jobs:
             *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
 
       - name: Reclaim runner disk
         run: |
@@ -1215,13 +1215,13 @@ jobs:
           done
 
       - name: Download the CycloneDX SBOMs
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sbom
           path: evidence/sbom
 
       - name: Download the attestation records
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: attestations-*
           merge-multiple: true
@@ -1239,7 +1239,7 @@ jobs:
           subject-path: evidence-${{ github.ref_name }}.json
 
       - name: Create the GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           fail_on_unmatched_files: true
           files: |
