@@ -82,7 +82,7 @@ ARG PROFILE=release
 # official rust image. The tagging scheme is:
 #   latest-rust-<rust-version>-<debian-variant>
 # The tag is for the reader; the digest is what is pulled.
-FROM lukemathwalker/cargo-chef:latest-rust-1.94-bookworm@sha256:7e550e59b8c14e74aa86ca9e5950b75d937c9d51e7f5a4c840e726a33b4b8455 AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-1.99-bookworm@sha256:2ee6e8edf0b91b5a7295071299596601710bccb243bd9735e0b9abf6e114582b AS chef
 
 # Native build dependencies required by -sys crates:
 #   pkg-config      openssl-sys build script
