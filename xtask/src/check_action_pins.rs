@@ -12,7 +12,7 @@
 //!
 //! - every `uses:` names a 40-hex commit SHA and carries the tag it stands for
 //!   in a trailing comment (`# v4.4.0`) — the SHA is read, the comment is for
-//!   the reviewer of a Dependabot bump. Local actions (`./…`) are exempt; a
+//!   the reviewer of a pin bump. Local actions (`./…`) are exempt; a
 //!   `docker://` image needs an `@sha256:` digest.
 //! - every `FROM` in a Dockerfile names an `@sha256:` digest, unless it names
 //!   an earlier stage of the same file or `scratch`.

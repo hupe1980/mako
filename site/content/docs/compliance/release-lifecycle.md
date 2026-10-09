@@ -184,8 +184,8 @@ compiler cannot pass silently.
 SHA with its release tag in a trailing comment, every Dockerfile base image to
 an `@sha256:` digest, and every workflow grants `contents: read` by default with
 each job declaring what more it needs. `cargo xtask check-action-pins` refuses a
-tag-pinned `uses:`, a digest-less `FROM` and a wider workflow default; Dependabot
-proposes the next SHA or digest. OpenSSF Scorecard scores the repository weekly
+tag-pinned `uses:`, a digest-less `FROM` and a wider workflow default; a pin
+moves only in a reviewed change. OpenSSF Scorecard scores the repository weekly
 (`scorecard.yml`), publishes the result and fails below a recorded floor.
 
 #### The evidence pack
