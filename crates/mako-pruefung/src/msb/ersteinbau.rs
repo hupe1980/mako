@@ -46,7 +46,7 @@ use super::types::MsbEntscheidung;
 /// One PID, four Prozessschritte and three different recipients: the wMSB
 /// (Kap. 3.5.2 Nr. 1), the LF (Nr. 3) and the NB (Nr. 4). Only the wMSB owes an
 /// answer.
-pub const VORABINFORMATION_PID: u32 = 21_029;
+pub const VORABINFORMATION_PID: u32 = mako_fristen::antwort::ERSTEINBAU_VORABINFORMATION_PID;
 
 /// IFTSTA 21030 „iMS-Ersteinbauzustimmung" — the wMSB consents.
 pub const ZUSTIMMUNG_PID: u32 = 21_030;

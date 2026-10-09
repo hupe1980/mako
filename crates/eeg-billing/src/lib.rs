@@ -104,7 +104,6 @@ mod model;
 pub mod negativpreis;
 pub mod rates;
 pub mod reductions;
-pub mod rounding;
 pub mod scheme;
 pub mod seed;
 pub mod settlement_state;
@@ -135,6 +134,7 @@ pub use foerderdauer::{
     verguetungszeitraum_verlaengerung_qh, wind_onshore_korrekturfaktor_corrected_aw,
 };
 pub use formula::calculate_settlement;
+pub use grid_billing::{RoundMoney, round_money};
 pub use kwkg::{
     KwkAnlagenart, KwkFoerderdauerInput, KwkLeistungsanteil, KwkVerwendung, KwkZuschlagInput,
     foerderdauer_vollbenutzungsstunden, jahreshoechstbetrag_vollbenutzungsstunden,
@@ -147,7 +147,6 @@ pub use model::{
 pub use negativpreis::{
     NegativpreisInterval, NegativpreisRegime, NegativpreisResult, derive_negativpreis,
 };
-pub use rounding::RoundMoney;
 pub use scheme::{
     ANLAGE1_NR2_STICHTAG, AusschreibungMetadata, CorrectionReason, MarktpreisKategorie,
     Marktwertserie, Paragraph100Rule, SettlementScheme, SettlementType, TariffSource,
@@ -158,7 +157,10 @@ pub use technology::{
     ErzeugungsArt, InbetriebnahmeTyp, InvalidErzeugungsArt, InvalidInbetriebnahmeTyp,
     RepoweringScope,
 };
-pub use version::{EegGesetz, InvalidEegGesetz};
+pub use version::{
+    Beihilfegenehmigung, Beihilfevorbehalt, EEG2023_BEIHILFEGENEHMIGUNG_BIS, EegGesetz, Fassung,
+    InvalidEegGesetz, beihilfevorbehalt,
+};
 pub use zusammenfassung::{
     AnlageFuerZusammenfassung, SolarMontage, Steckersolar, ZusammenfassungErgebnis,
     ZusammenfassungGrund, sind_eine_anlage, zusammenlegung_within_12_months,

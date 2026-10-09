@@ -996,7 +996,10 @@ impl Bestellgegenstand {
 /// The facts a Zähler answers, reduced to the four the Kapitel-4.6 catalogue
 /// asks about. Derived from the BO4E `Zaehler` and its `Zaehlwerke`, which is
 /// where `marktd` holds them.
-#[allow(clippy::struct_excessive_bools)] // one field per device capability
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one field per device capability"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Geraeteausstattung {
     /// `Zaehlertyp::INTELLIGENTES_MESSSYSTEM` — a Smart-Meter-Gateway is

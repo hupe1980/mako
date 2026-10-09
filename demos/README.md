@@ -60,8 +60,8 @@ checked by ordinary tests rather than only by running the stack:
 |---|---|
 | `just test-demo-payloads` | every body a `smoke.sh` posts deserialises into the real request type — a field the endpoint does not have is a refusal, not a discarded value |
 | `just test-demo-configs` | every `*.toml` a stack mounts names no key its service ignores |
-| `crates/edi-energy/tests/demo_fixtures.rs` | every `.edi` fixture validates against its AHB profile |
-| `crates/edi-energy/tests/party_agency_code.rs` | every fixture stamps the coding authority its MP-ID implies, in `UNB` DE 0007 and `NAD` DE 3055 alike |
+| `crates/edi-energy/tests/it/demo_fixtures.rs` | every `.edi` fixture validates against its AHB profile |
+| `crates/edi-energy/tests/it/party_agency_code.rs` | every fixture stamps the coding authority its MP-ID implies, in `UNB` DE 0007 and `NAD` DE 3055 alike |
 
 Both `just` recipes are shortcuts: the tests behind them are ordinary
 `#[test]`s under `services/*/tests/`, so `just ci` runs them too.

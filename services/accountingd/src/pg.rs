@@ -19,7 +19,10 @@ use crate::ledger::{PgLedger, PostEntry};
 /// deterministic key (`ABSCHLAG-{malo}-{YYYY}-{MM}`, `mahngebuehr:{case_id}:{stufe}`).
 /// A replay is a no-op returning the original entry id. Returns the doubleentry
 /// `EntryId` as a `Uuid` (for linking satellites like interest_charges).
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn post_entry(
     ledger: &PgLedger,
     pool: &PgPool,
@@ -404,7 +407,10 @@ pub async fn jahresabschluss_already_settled(
 }
 
 /// Record a completed Jahresabschluss for idempotency.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn record_jahresabschluss(
     executor: impl sqlx::PgExecutor<'_>,
     tenant: &str,
@@ -1072,7 +1078,10 @@ pub async fn reject_submitted_entries_of_group(
 }
 
 /// Record a generated pain.007 reversal.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn record_sepa_reversal(
     executor: impl sqlx::PgExecutor<'_>,
     tenant: &str,
@@ -1228,7 +1237,6 @@ pub async fn recallable_entries(
 ///
 /// The unique index on `(tenant, assignment_id)` makes a replayed request a
 /// conflict rather than a second case.
-#[allow(clippy::too_many_arguments)]
 pub async fn record_sepa_recall(
     executor: impl sqlx::PgExecutor<'_>,
     tenant: &str,
@@ -1366,7 +1374,10 @@ pub async fn mark_sepa_collection_dispatched(
 }
 
 /// Append an entry to the account master-data audit log (§238 HGB traceability).
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn log_account_audit(
     pool: &PgPool,
     account_id: Uuid,
@@ -3098,7 +3109,10 @@ pub async fn list_eeg_payouts(
 /// # Errors
 ///
 /// Propagates database errors.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn place_dunning_lock(
     exec: impl sqlx::PgExecutor<'_>,
     case_id: Uuid,
@@ -3312,7 +3326,10 @@ pub struct EinwandRow {
 /// # Errors
 ///
 /// Propagates database errors.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn record_einwand(
     exec: impl sqlx::PgExecutor<'_>,
     tenant: &str,
@@ -3462,7 +3479,10 @@ pub async fn mark_sperrauftrag_dispatched(
 /// Case insert and outbox enqueue share one transaction: the outbox is
 /// persist-before-dispatch, so a crash between them would open a dunning case
 /// nobody downstream ever hears about.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn create_dunning_case_announced(
     pool: &PgPool,
     tenant: &str,
@@ -4268,7 +4288,10 @@ pub async fn fetch_ecb_base_rate_segments(
 /// is charged at the rate in force for it; the row's `rate_pct` is the
 /// resulting effective annual rate and `rate_segments` carries the breakdown a
 /// disputing customer would ask for.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn create_interest_charge(
     ledger: &PgLedger,
     pool: &PgPool,
@@ -4703,7 +4726,10 @@ pub async fn bank_import_already_processed(
 /// Record a bank transaction import in the deduplication log.
 ///
 /// Uses `ON CONFLICT DO NOTHING` so concurrent calls are safe.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn record_bank_import(
     pool: &PgPool,
     tenant: &str,
@@ -4797,7 +4823,6 @@ impl AbschlagForderung {
 /// # Errors
 ///
 /// Propagates ledger and database errors.
-#[allow(clippy::too_many_arguments)]
 pub async fn raise_abschlagsforderung(
     ledger: &PgLedger,
     pool: &PgPool,
@@ -4932,7 +4957,10 @@ pub async fn list_abschlag_forderungen(
 /// # Errors
 ///
 /// Propagates ledger and database errors.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn verrechne_abschlaege(
     ledger: &PgLedger,
     pool: &PgPool,

@@ -16,7 +16,10 @@
 //! cargo bench --bench benchmarks -- parse
 //! cargo bench --bench benchmarks -- build
 //! ```
-#![allow(clippy::result_large_err)]
+#![expect(
+    clippy::result_large_err,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use edi_energy::{EdiEnergyMessage, Platform, Pruefidentifikator, Release, parse_envelope_only};
@@ -361,7 +364,7 @@ fn in_force_date(message_type: edi_energy::MessageType, release: &str) -> time::
 /// Comparing this against `validate()` shows the cost of the date lookup.
 ///
 /// Each fixture is validated on a date its own declared release is in force on
-/// — see [`in_force_date`]. The two messages therefore no longer share one
+/// — see [`in_force_date`]. The two messages therefore do not share one
 /// literal, because `S2.1` and MSCONS `2.4c` have no day in common with every
 /// other release a fixture here declares.
 fn bench_validate_on_date(c: &mut Criterion) {

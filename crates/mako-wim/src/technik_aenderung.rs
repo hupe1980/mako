@@ -48,7 +48,7 @@ use mako_engine::{
     ids::DeadlineId,
     outbox::PendingOutbox,
     types::{MarktpartnerCode, MessageRef, Pruefidentifikator},
-    workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
+    workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
 
 // ── PID sets ──────────────────────────────────────────────────────────────────
@@ -196,10 +196,18 @@ pub enum TechnikAenderungState {
         /// Rejection reason.
         reason: Option<String>,
     },
-    /// Deadline expired.
-    DeadlineExpired {
-        /// Original request data.
-        auftrag: AuftragData,
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// No Festlegung states a consequence of the Änderung der Technik going unanswered. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<TechnikAenderungState>,
     },
 }
 
@@ -212,17 +220,23 @@ impl TechnikAenderungState {
             Self::AuftragGesendet(_) => "AuftragGesendet",
             Self::Bestaetigt { .. } => "Bestaetigt",
             Self::Abgelehnt { .. } => "Abgelehnt",
-            Self::DeadlineExpired { .. } => "DeadlineExpired",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
     /// Whether terminal.
     #[must_use]
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
-            Self::Bestaetigt { .. } | Self::Abgelehnt { .. } | Self::DeadlineExpired { .. }
-        )
+        matches!(self, Self::Bestaetigt { .. } | Self::Abgelehnt { .. })
     }
 }
 
@@ -243,6 +257,9 @@ pub enum TechnikAenderungCommand {
         message_ref: MessageRef,
         /// ORDERS body payload.
         payload: serde_json::Value,
+        /// When the ORDERS leaves — the Übertragungstag the counterparty's
+        /// Antwortfrist counts from ([`mako_fristen::antwort::antwort_deadline`]).
+        gesendet_am: time::OffsetDateTime,
     },
     /// Inbound ORDRSP received.
     ReceiveOrdrsp {
@@ -269,27 +286,39 @@ impl CommandPayload for TechnikAenderungCommand {}
 /// WiM Technikänderung workflow — device/config change requests.
 pub struct WimTechnikAenderungWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the Auftrag waits for its ORDRSP
+/// (`AuftragGesendet`).
+fn window_open(label: &str, state: &TechnikAenderungState) -> bool {
+    label == ANTWORT_WINDOW_LABEL && matches!(state, TechnikAenderungState::AuftragGesendet(_))
+}
+
 impl Workflow for WimTechnikAenderungWorkflow {
     type State = TechnikAenderungState;
     type Event = TechnikAenderungEvent;
     type Command = TechnikAenderungCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANTWORT_WINDOW_LABEL];
+
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (ANTWORT_WINDOW_LABEL, TechnikAenderungState::AuftragGesendet(_)) => {
-                Some(TechnikAenderungCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| TechnikAenderungCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            TechnikAenderungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             TechnikAenderungEvent::AuftragGesendet {
                 orders_pid,
@@ -323,9 +352,12 @@ impl Workflow for WimTechnikAenderungWorkflow {
                 }
                 other => other,
             },
-            TechnikAenderungEvent::DeadlineExpired { .. } => match state {
-                TechnikAenderungState::AuftragGesendet(auftrag) => {
-                    TechnikAenderungState::DeadlineExpired { auftrag }
+            TechnikAenderungEvent::DeadlineExpired { label, .. } => match state {
+                TechnikAenderungState::AuftragGesendet(_) => {
+                    TechnikAenderungState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
                 }
                 other => other,
             },
@@ -336,6 +368,10 @@ impl Workflow for WimTechnikAenderungWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             TechnikAenderungCommand::SendAuftrag {
                 orders_pid,
@@ -343,6 +379,7 @@ impl Workflow for WimTechnikAenderungWorkflow {
                 location_id,
                 message_ref,
                 payload,
+                gesendet_am,
             } => {
                 if !matches!(state, TechnikAenderungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -368,7 +405,18 @@ impl Workflow for WimTechnikAenderungWorkflow {
                         "payload":    payload,
                     }),
                 )];
-                Ok(WorkflowOutput::with_outbox(vec![event], outbox))
+                // The counterparty's Antwortfrist, from the published row for
+                // this ORDERS; a PID no Festlegung quantifies registers nothing.
+                let frist: Vec<PendingDeadline> =
+                    mako_fristen::antwort::antwort_deadline(orders_pid.as_u32(), gesendet_am)
+                        .map(|due| PendingDeadline::new(ANTWORT_WINDOW_LABEL, due))
+                        .into_iter()
+                        .collect();
+                Ok(WorkflowOutput::with_outbox_and_deadlines(
+                    vec![event],
+                    outbox,
+                    frist,
+                ))
             }
 
             TechnikAenderungCommand::ReceiveOrdrsp {
@@ -406,11 +454,52 @@ impl Workflow for WimTechnikAenderungWorkflow {
             }
 
             TechnikAenderungCommand::TimeoutExpired { deadline_id, label } => {
-                if state.is_terminal() {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![TechnikAenderungEvent::DeadlineExpired { deadline_id, label }].into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn auftrag(pid: u32, gesendet_am: time::OffsetDateTime) -> TechnikAenderungCommand {
+        TechnikAenderungCommand::SendAuftrag {
+            orders_pid: Pruefidentifikator::new(pid).expect("valid PID"),
+            recipient: MarktpartnerCode::new("9900000000003"),
+            location_id: None,
+            message_ref: MessageRef::new("ORDERS-1"),
+            payload: serde_json::json!({}),
+            gesendet_am,
+        }
+    }
+
+    /// A 17011 starts the MSB's 10-WT answer window (WiM Teil 1 Kap. 3.3);
+    /// a 17118, which no Festlegung on hand quantifies, starts none.
+    #[test]
+    fn the_auftrag_registers_the_published_answer_window() {
+        let sent = time::macros::datetime!(2026-10-07 10:00 UTC);
+        let out = WimTechnikAenderungWorkflow::handle(
+            &TechnikAenderungState::default(),
+            auftrag(17_011, sent),
+        )
+        .expect("accepted");
+        assert_eq!(out.deadlines.len(), 1);
+        assert_eq!(out.deadlines[0].label, ANTWORT_WINDOW_LABEL);
+        assert_eq!(
+            Some(out.deadlines[0].due_at),
+            mako_fristen::antwort::antwort_deadline(17_011, sent)
+        );
+
+        let out = WimTechnikAenderungWorkflow::handle(
+            &TechnikAenderungState::default(),
+            auftrag(17_118, sent),
+        )
+        .expect("accepted");
+        assert!(out.deadlines.is_empty());
     }
 }

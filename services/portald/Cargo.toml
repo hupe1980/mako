@@ -1,6 +1,6 @@
 [package]
 name        = "portald"
-description = "Customer portal read-model gateway (LF role) — Lastgang, Rechnungen, Dokumente, Kontostand und Versorgungsstatus hinter einer OIDC-API"
+description = "Customer portal gateway (LF): load profiles, invoices, documents, balance and supply status behind an OIDC API"
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
@@ -40,6 +40,10 @@ tokio-util   = { workspace = true }
 futures      = "0.3"
 
 [dev-dependencies]
+mako-service = { workspace = true, features = ["testing"] }
 tower          = "0.5"
 http-body-util = "0.1"
 toml           = { version = "0.8", default-features = false, features = ["parse"] }
+
+[lints]
+workspace = true

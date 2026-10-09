@@ -112,7 +112,10 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::pedantic, clippy::must_use_candidate)]
-#![allow(clippy::doc_markdown)] // German MaKo terms produce many false positives
+#![expect(
+    clippy::doc_markdown,
+    reason = "German MaKo terms produce many false positives"
+)]
 
 pub mod kalender;
 pub mod meilenstein;

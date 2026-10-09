@@ -1,0 +1,480 @@
+//! Full end-to-end test: LFN ↔ NB Abmeldung Strom (PID 55004).
+//!
+//! Two mock ERP backends — [`MockLfn`] (Lieferant) and [`MockNb`]
+//! (Netzbetreiber) — exchange EDIFACT over the **production**
+//! render → wire bytes → parse → adapt pipeline.
+//!
+//! # Protocol trace
+//!
+//! ```text
+//!   LFN ERP (MockLfn)                          NB ERP (MockNb)
+//!   ──────────────────────────────────────────────────────────
+//!   submit_anmeldung(55004)
+//!     → asserts outbox payload invariants
+//!     → renders UTILMD 55004 wire bytes
+//!                        ──── UTILMD 55004 ────►
+//!                                               receive_utilmd(wire)
+//!                                                 → asserts UNH ref ≠ "1"
+//!                                               send_antwort(accepted=true)
+//!                                                 → asserts UTILMD 55005
+//!                                                 → no MSCONS (Lieferende
+//!                                                    has no Bewegungsdaten
+//!                                                    obligation — BK6-22-024)
+//!                        ◄─── UTILMD 55005 ────
+//!   receive_antwort(wire)
+//!   ──────────────────────────────────────────────────────────
+//!   final: Active                               AntwortGesendet
+//! ```
+//!
+//! # Regulatory context
+//!
+//! - **PID 55004**: Abmeldung (LF → NB)
+//! - **PID 55005**: Bestätigung Abmeldung (NB → LF, accept)
+//! - **PID 55006**: Ablehnung Abmeldung (NB → LF, reject)
+//! - **Deadline**: **06:00 Uhr des 1. Werktags nach dem ÜT** for the NB's answer
+//!   to a 55004 Abmeldung (BK6-24-174 GPKE Teil 2 § 2.5.1.2 Nr. 2/3)
+//! - **No MSCONS 13015**: Bewegungsdaten obligations are triggered **only** by
+//!   PID 55001 (Anmeldung). For PID 55004 (Abmeldung) the acceptance does
+//!   not require a subsequent MSCONS 13015 — there are no Bewegungsdaten to
+//!   request when a supply relationship is ending.
+//!
+//! AHB validation is bypassed for the NB's inbound `ReceiveUtilmd` because
+//! `render_to_wire_bytes` generates a minimal UTILMD that does not satisfy
+//! all S2.1 profile rules.  AHB conformance is tested separately in
+//! `crates/edi-energy/tests/`.
+
+use mako_engine::process::RunOptions;
+use std::any::Any;
+
+use edi_energy::{EdiEnergyMessage, Platform};
+use mako_engine::{
+    event_store::InMemoryEventStore,
+    ids::TenantId,
+    process::Process,
+    types::{MaLo, MarktpartnerCode, Pruefidentifikator},
+    version::{FormatVersion, WorkflowId},
+};
+use mako_gpke::{
+    GpkeLfAnmeldungWorkflow, GpkeSupplierChangeWorkflow, LfAnmeldungCommand, LfAnmeldungState,
+    SupplierChangeCommand, SupplierChangeState,
+};
+use makod::{
+    adapters::{gpke_lf_anmeldung_registry, gpke_registry},
+    config::PartyConfig,
+    edifact_renderer::render_to_wire_bytes,
+    party_registry::MpIdRegistry,
+};
+
+fn make_registry(mp_id: &str, role: &str) -> MpIdRegistry {
+    MpIdRegistry::from_config(&[PartyConfig {
+        mp_id: mp_id.to_owned(),
+        roles: vec![role.to_owned()],
+        primary: true,
+        agency: None,
+    }])
+    .expect("test registry")
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const LFN_ID: &str = "4012345000023"; // Lieferant (outgoing supplier)
+const NB_ID: &str = "9900357000004"; // Netzbetreiber
+const MALO_ID: &str = "51238696781"; // Marktlokations-ID
+const FV: &str = "FV2025-10-01";
+
+// ── Mock LFN ERP backend ───────────────────────────────────────────────────────
+
+/// Simulates the **Lieferant's ERP** triggering and receiving MaKo commands.
+///
+/// Owns a single `GpkeLfAnmeldungWorkflow` process backed by an in-memory
+/// store.
+struct MockLfn {
+    process: Process<GpkeLfAnmeldungWorkflow, InMemoryEventStore>,
+    platform: Platform,
+    fv: FormatVersion,
+}
+
+impl MockLfn {
+    fn new() -> Self {
+        Self {
+            process: Process::new(
+                InMemoryEventStore::new(),
+                TenantId::from_party_id(LFN_ID),
+                WorkflowId::new("gpke-lf-anmeldung", FV),
+            ),
+            platform: Platform::with_all_profiles(),
+            fv: FormatVersion::new(FV),
+        }
+    }
+
+    /// ERP action: submit an Abmeldung (PID 55004).
+    ///
+    /// Asserts that the resulting outbox payload contains the ERP-supplied
+    /// fields and that renderer-derived fields (`message_ref`, `document_date`)
+    /// are absent from the payload.
+    ///
+    /// Returns the rendered EDIFACT wire bytes for transport to the NB.
+    async fn submit_anmeldung(&self, malo_id: &str, process_date: &str) -> Vec<u8> {
+        let (_, outbox) = self
+            .process
+            .run(
+                LfAnmeldungCommand::InitiateAnmeldung {
+                    transaktionsgrund_ergaenzung: None,
+                    tranchengroesse: None,
+                    pid: Pruefidentifikator::new(55004).unwrap(),
+                    sender: MarktpartnerCode::new(LFN_ID),
+                    receiver: MarktpartnerCode::new(NB_ID),
+                    location_id: MaLo::new(malo_id),
+                    process_date: process_date.to_owned(),
+                    transaktionsgrund: None,
+                    bilanzkreis: Some("11XBK-LF-------9".to_owned()),
+                },
+                RunOptions::new(),
+            )
+            .await
+            .map(|ran| (ran.events, ran.outbox))
+            .expect("LFN: execute InitiateAnmeldung 55004");
+
+        assert_eq!(
+            outbox.len(),
+            1,
+            "LFN must enqueue exactly one outbound message"
+        );
+        let msg = &outbox[0];
+        assert_eq!(msg.message_type.as_ref(), "UTILMD");
+        assert_eq!(
+            msg.payload["pid"].as_u64().unwrap(),
+            55004_u64,
+            "outbox payload must carry PID 55004 (Abmeldung)"
+        );
+        assert_eq!(msg.payload["malo"].as_str().unwrap(), malo_id);
+        assert_eq!(msg.payload["sender"].as_str().unwrap(), LFN_ID);
+        assert_eq!(msg.payload["receiver"].as_str().unwrap(), NB_ID);
+        assert_eq!(msg.payload["process_date"].as_str().unwrap(), process_date,);
+        assert_eq!(msg.recipient.as_ref(), NB_ID);
+        assert!(
+            msg.payload.get("message_ref").is_none(),
+            "message_ref must not appear in outbox payload — derived at render time"
+        );
+        assert!(
+            msg.payload.get("document_date").is_none(),
+            "document_date must not appear in outbox payload — set to today at dispatch time"
+        );
+
+        render_to_wire_bytes(msg, &make_registry(LFN_ID, "LF"))
+            .expect("LFN: render_to_wire_bytes 55004")
+            .bytes
+    }
+
+    /// ERP notification: receive NB's UTILMD response wire bytes and process them.
+    async fn receive_antwort(&self, wire: &[u8]) {
+        let raw = self
+            .platform
+            .parse(wire)
+            .expect("LFN: parse NB UTILMD wire");
+        let cmd = gpke_lf_anmeldung_registry()
+            .dispatch(&raw as &dyn Any, &self.fv)
+            .expect("LFN: adapt NB response to LfAnmeldungCommand");
+        self.process
+            .run(cmd, RunOptions::new())
+            .await
+            .expect("LFN: execute HandleAntwort");
+    }
+
+    async fn state(&self) -> LfAnmeldungState {
+        self.process.state().await.unwrap()
+    }
+}
+
+// ── Mock NB ERP backend ────────────────────────────────────────────────────────
+
+/// Simulates the **Netzbetreiber's ERP** receiving and responding to the
+/// Lieferende request.
+///
+/// Owns a single `GpkeSupplierChangeWorkflow` process backed by an in-memory
+/// store.
+struct MockNb {
+    process: Process<GpkeSupplierChangeWorkflow, InMemoryEventStore>,
+    platform: Platform,
+    fv: FormatVersion,
+}
+
+impl MockNb {
+    fn new() -> Self {
+        Self {
+            process: Process::new(
+                InMemoryEventStore::new(),
+                TenantId::from_party_id(NB_ID),
+                WorkflowId::new("gpke-supplier-change", FV),
+            ),
+            platform: Platform::with_all_profiles(),
+            fv: FormatVersion::new(FV),
+        }
+    }
+
+    /// ERP notification: receive LFN's UTILMD 55004 wire bytes, adapt, and execute.
+    ///
+    /// AHB validation is forced to `true` — the minimal rendered UTILMD does
+    /// not satisfy all S2.1 profile rules; AHB conformance is tested separately.
+    ///
+    /// Asserts the UNH message reference is derived from `causation_event_id`
+    /// (not the fallback `"1"`).
+    async fn receive_utilmd(&self, wire: &[u8]) {
+        let raw = self
+            .platform
+            .parse(wire)
+            .expect("NB: parse LFN UTILMD wire");
+
+        let unh_ref = raw.message_ref().to_owned();
+        assert!(
+            !unh_ref.is_empty() && unh_ref != "1",
+            "UNH message_ref must be derived from causation_event_id; got: {unh_ref:?}",
+        );
+
+        let cmd = gpke_registry()
+            .dispatch(&raw as &dyn Any, &self.fv)
+            .expect("NB: adapt LFN UTILMD to SupplierChangeCommand");
+
+        let cmd = match cmd {
+            SupplierChangeCommand::ReceiveUtilmd {
+                pid,
+                sender,
+                receiver,
+                location_id,
+                document_date,
+                process_date,
+                message_ref,
+                ..
+            } => {
+                assert_eq!(
+                    pid.as_u32(),
+                    55004,
+                    "NB adapter must extract PID 55004 from wire"
+                );
+                assert_eq!(
+                    message_ref.as_str(),
+                    unh_ref.as_str(),
+                    "adapter must preserve UNH message_ref from parsed UTILMD",
+                );
+                SupplierChangeCommand::ReceiveUtilmd {
+                    pid,
+                    sender,
+                    receiver,
+                    location_id,
+                    document_date,
+                    process_date,
+                    message_ref,
+                    received_at: time::OffsetDateTime::now_utc(),
+                    bilanzierungsgebiet: None,
+                    bilanzierungsmethode: None,
+                    fallgruppe: None,
+                    transaktionsgrund: None,
+                    transaktionsgrund_ergaenzung: None,
+                    veraeusserungsform: None,
+                    tranchengroesse_prozent: None,
+                    vorgangsnummer: None,
+                    produktpaket_id: Some("1".to_owned()),
+                    kunde_name: None,
+                    kunde_namensformat: None,
+                    validation_passed: true, // bypass AHB profile check
+                    validation_errors: vec![],
+                }
+            }
+            _ => panic!("expected SupplierChangeCommand::ReceiveUtilmd"),
+        };
+
+        self.process
+            .run(cmd, RunOptions::new())
+            .await
+            .expect("NB: execute ReceiveUtilmd 55004");
+    }
+
+    /// ERP action: send Bestätigung (`accepted = true`, PID 55005) or Ablehnung
+    /// (`accepted = false`, PID 55006) for the pending Lieferende request.
+    ///
+    /// Asserts outbox content:
+    /// - Both accept and reject produce exactly **one** UTILMD outbox entry.
+    /// - **No MSCONS 13015** in either case: Bewegungsdaten obligations are
+    ///   triggered only by PID 55001 (Anmeldung). For PID 55004 (Abmeldung)
+    ///   `post_acceptance::lieferbeginn_obligations(55004, …)` returns empty.
+    ///
+    /// Returns the rendered UTILMD wire bytes for transport back to the LFN.
+    async fn send_antwort(&self, accepted: bool, reason: Option<&str>) -> Vec<u8> {
+        // PID 55004 Abmeldung has no post-acceptance obligations.
+        // `lieferbeginn_obligations` guards on `anfrage_pid != 55001` and
+        // returns an empty Vec for all other PIDs.
+        let obligations: Vec<mako_engine::outbox::PendingOutbox> = vec![];
+
+        let (_, outbox) = self
+            .process
+            .run(
+                SupplierChangeCommand::SendAntwort {
+                    antwort: nb_antwort(accepted, reason),
+                    obligations,
+                    lfa_lieferende: None,
+                },
+                RunOptions::new(),
+            )
+            .await
+            .map(|ran| (ran.events, ran.outbox))
+            .expect("NB: execute SendAntwort");
+
+        let expected_pid: u64 = if accepted { 55005 } else { 55006 };
+        assert_eq!(
+            outbox.len(),
+            1,
+            "Lieferende Antwort must enqueue exactly one UTILMD (PID {expected_pid}); \
+             no MSCONS obligations for 55004"
+        );
+
+        let utilmd = &outbox[0];
+        assert_eq!(utilmd.message_type.as_ref(), "UTILMD");
+        assert_eq!(
+            utilmd.payload["pid"].as_u64().unwrap(),
+            expected_pid,
+            "NB outbox UTILMD must be PID {expected_pid}"
+        );
+        assert_eq!(
+            utilmd.recipient.as_ref(),
+            LFN_ID,
+            "NB Antwort must be addressed to the LFN"
+        );
+
+        render_to_wire_bytes(utilmd, &make_registry(NB_ID, "NB"))
+            .expect("NB: render_to_wire_bytes")
+            .bytes
+    }
+
+    async fn state(&self) -> SupplierChangeState {
+        self.process.state().await.unwrap()
+    }
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────────
+
+/// Lieferende Strom — acceptance path (PID 55002 → 55005).
+///
+/// LFN ERP terminates the supply relationship; NB ERP confirms; LFN reaches
+/// `Active` (both parties agreed the supply ends on the given date).
+///
+/// Key invariant: the acceptance does **not** trigger MSCONS 13015. Requesting
+/// Bewegungsdaten is only required when a new supplier takes over (PID 55001).
+/// When supply ends without a new supplier, there are no Bewegungsdaten to
+/// request.
+#[tokio::test]
+async fn e2e_lieferende_strom_happy_path() {
+    let lfn = MockLfn::new();
+    let nb = MockNb::new();
+
+    // ── LFN ERP: submit Lieferende Anmeldung ──────────────────────────────────
+    let wire_55002 = lfn.submit_anmeldung(MALO_ID, "20251001").await;
+    assert!(
+        matches!(lfn.state().await, LfAnmeldungState::Pending(_)),
+        "LFN must be Pending after InitiateAnmeldung 55002"
+    );
+
+    // ── NB ERP: receive UTILMD 55002 ──────────────────────────────────────────
+    nb.receive_utilmd(&wire_55002).await;
+    assert!(
+        matches!(nb.state().await, SupplierChangeState::ValidationPassed(_)),
+        "NB must be ValidationPassed after ReceiveUtilmd 55002"
+    );
+
+    // ── NB ERP: send Bestätigung (55005, no MSCONS) ───────────────────────────
+    let wire_55005 = nb.send_antwort(true, None).await;
+    assert!(
+        matches!(
+            nb.state().await,
+            SupplierChangeState::AntwortGesendet { .. }
+        ),
+        "NB must be AntwortGesendet after sending Bestätigung 55005"
+    );
+
+    // ── LFN ERP: receive Bestätigung ──────────────────────────────────────────
+    lfn.receive_antwort(&wire_55005).await;
+
+    let lfn_final = lfn.state().await;
+    assert!(
+        matches!(lfn_final, LfAnmeldungState::Active(_)),
+        "LFN must be Active after receiving Bestätigung 55005; got: {lfn_final:?}"
+    );
+    if let LfAnmeldungState::Active(data) = lfn_final {
+        assert_eq!(data.pruefidentifikator.as_u32(), 55004);
+        assert_eq!(data.location_id.as_str(), MALO_ID);
+        assert_eq!(data.process_date, "20251001");
+        assert_eq!(data.sender.as_str(), LFN_ID);
+        assert_eq!(data.receiver.as_str(), NB_ID);
+    }
+}
+
+/// Lieferende Strom — rejection path (PID 55002 → 55006).
+///
+/// NB ERP rejects the Lieferende request; both parties end in `Rejected`.
+///
+/// Rejection of Lieferende is permitted (e.g. the MaLo is unknown at the NB,
+/// or the data provided is inconsistent).  The LFN must then either correct
+/// the data and re-submit or escalate via a dispute process.
+#[tokio::test]
+async fn e2e_lieferende_strom_rejection_path() {
+    let lfn = MockLfn::new();
+    let nb = MockNb::new();
+
+    // ── LFN ERP: submit Lieferende Anmeldung ──────────────────────────────────
+    let wire_55002 = lfn.submit_anmeldung(MALO_ID, "20251001").await;
+
+    // ── NB ERP: receive UTILMD 55002, then reject ─────────────────────────────
+    nb.receive_utilmd(&wire_55002).await;
+    let wire_55006 = nb
+        .send_antwort(false, Some("MaLo Lieferdatum ungültig"))
+        .await;
+
+    // NB state: Rejected (SendAntwort with accepted=false transitions via
+    // AntwortGesendet event but apply() moves to Rejected).
+    let nb_state = nb.state().await;
+    assert!(
+        matches!(nb_state, SupplierChangeState::Rejected { .. }),
+        "NB must be Rejected after sending Ablehnung 55006; got: {nb_state:?}"
+    );
+
+    // ── LFN ERP: receive Ablehnung ────────────────────────────────────────────
+    lfn.receive_antwort(&wire_55006).await;
+
+    let lfn_final = lfn.state().await;
+    assert!(
+        matches!(lfn_final, LfAnmeldungState::Rejected { .. }),
+        "LFN must be Rejected after receiving Ablehnung 55006; got: {lfn_final:?}"
+    );
+}
+
+/// The NB's answer, resolved from the tree that governs the inbound PID.
+///
+/// A Bestätigung of a Lieferbeginn is `A51` out of `E_0623`; of a Lieferende
+/// `A11` out of `E_0607`. An Ablehnung uses that tree's Vorlauffrist code —
+/// `A07` (`E_0622`) and `A02` (`E_0607`) respectively. `SG4 STS+E01` is Muss on
+/// every Antwortnachricht, so there is no "no code" answer to construct.
+fn nb_antwort(accepted: bool, reason: Option<&str>) -> mako_gpke::LfAntwort {
+    let (code, ebd) = match (accepted, reason.is_some()) {
+        (true, _) => ("A51", "E_0623"),
+        (false, _) => ("A07", "E_0622"),
+    };
+    {
+        let antwort = if accepted {
+            mako_gpke::LfAntwort::zustimmung(code, ebd)
+                // Muss on a Bestätigung Anmeldung: the Klassifizierung, the
+                // Produktpaket-ID the NB will implement, and the Messlokation
+                // with its Messstellenbetreiber.
+                .with_klassifizierung("ZW7")
+                .with_produktpaket("1")
+                .with_messlokation(
+                    "DE00056266802AO6G56M11SN51G21M24S",
+                    mako_gpke::ZugeordneterMsb::grundzustaendig("9903456000009"),
+                )
+        } else {
+            mako_gpke::LfAntwort::ablehnung(code, ebd)
+        };
+        match reason {
+            Some(r) => antwort.with_bemerkung(r),
+            None => antwort,
+        }
+    }
+}

@@ -1,13 +1,14 @@
 # mako-fristen
 
-**Every Frist in German market communication, in one leaf crate.**
+[![Crates.io](https://img.shields.io/crates/v/mako-fristen?label=mako-fristen&color=f59e0b&logo=rust)](https://crates.io/crates/mako-fristen)
 
-Deadlines are the regulatory asset the [mako](https://github.com/hupe1980/mako)
-platform is built around, and this crate is the one answer to *when is this due*.
-It depends on nothing but `time`, so any service can read it without pulling in
-a workflow engine — which is what keeps the calendar, the per-Prüfidentifikator
-(PID — the five-digit BDEW code naming a message's Anwendungsfall) answer tables and the alerting from each carrying a copy that disagrees with the
-others.
+Every Frist in German market communication, in one leaf crate: Werktage and the
+BDEW MaKo holiday calendar, the Berlin business date, the CONTRL and APERAK
+clocks, and the per-Prüfidentifikator Antwort-, Meldungs- and Vorlauffristen.
+It depends only on `time` and `time-tz`, so any service reads its deadlines
+here instead of carrying a copy.
+
+## Example
 
 ```rust
 use mako_fristen::{self as fristen, HolidayCalendar};
@@ -29,11 +30,9 @@ assert_eq!(due, Date::from_calendar_date(2025, Month::January, 13).unwrap());
 | Which messages does receiving it oblige me to send? | `meldung` |
 | How much Vorlauf does this Anmeldung need? | `vorlauf`, `abmeldung` |
 | When must the CONTRL / APERAK go out? | `contrl_due_at`, `aperak_strom_due_at`, `aperak_gas_folgeprozess_due_at`, `aperak_gas_initialprozess_due_at` |
+| Is this deadline label a delivery window (retired on delivery, owned by no workflow)? | `is_delivery_window` |
 
 ## Three clocks, never one number
-
-The mistake this crate is shaped to prevent is treating any of these as the
-others. They differ by orders of magnitude and they fail for different reasons.
 
 | Clock | Window | Meaning |
 |---|---|---|
@@ -41,61 +40,19 @@ others. They differ by orders of magnitude and they fail for different reasons.
 | **APERAK** | 45 min Strom on every day but Samstag (a Saturday arrival is due Sonntag 12:00); Gas: next Werktag 12:00 (Folgeprozess) or 3 Werktage (Initialprozess) | the message was accepted for processing |
 | **Antwortfrist** | per PID — 11:00 of the 1. Werktag for a GPKE Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom | the *business* answer is owed |
 
-**There is no 24-hour GPKE window**, under BK6-24-174 or anything else. A flat
-24 h is neither of the two real clocks, and it is wrong in the direction that
-does not announce itself: it reports a lapsed Frist as still running.
+There is no 24-hour GPKE window (`antwort::GPKE_IS_NOT_TWENTY_FOUR_HOURS`), and
+the GeLi Gas „10 Werktage" is the supplier's Vorlauffrist, not the
+Netzbetreiber's answer window (`antwort::TEN_WERKTAGE_IS_THE_SUPPLIERS_VORLAUFFRIST`).
 
-The same trap has a Gas half. **„10 Werktage" is the GeLi Gas supplier's
-*Vorlauffrist*** — how far ahead of Lieferbeginn the LF must send (GeLi Gas 3.0
-Kap. 3.2.3) — and not the Netzbetreiber's answer window, which is 4 / 3 / 2 / 3
-Werktage by Geschäftsvorfall (44001 / 44004 / 44013 / 44016). Both constants are spelled out in `antwort` so a
-reader who reaches for the familiar number finds the correction:
-`GPKE_IS_NOT_TWENTY_FOUR_HOURS` and
-`TEN_WERKTAGE_IS_THE_SUPPLIERS_VORLAUFFRIST`.
+## Rules
 
-## A business date is a Berlin date
+- **A business date is a Berlin date.** `heute()` reads `Europe/Berlin`;
+  `cargo xtask check-business-dates` refuses a business date read in UTC.
+- **`HolidayCalendar::BdewMaKo`** counts every holiday observed in any
+  Bundesland, plus 24.12. and 31.12.; Saturday is not a Werktag.
+- **Every window carries its source** (document and chapter). A window with no
+  source is absent — `antwort_obligation` answers `None`, which means unknown,
+  never unbounded. `cargo xtask check-vorlauf-consulted` holds every `vorlauf`
+  row to having a reader.
 
-`heute()` returns the current date in `Europe/Berlin`, never in UTC. Between
-00:00 and 01:00 CEST the two disagree by a day, which is a day of Frist. Every
-service reads the date through this crate; `cargo xtask check-business-dates`
-refuses a business date read in UTC.
-
-## Holiday calendar: BDEW-defined, Germany-wide
-
-`HolidayCalendar::BdewMaKo` is the single holiday calendar used in all BNetzA
-MaKo processes. BDEW EDI@Energy specifies a conservative-inclusive approach:
-every public holiday observed in *any* German state is a non-Werktag, so no
-Frist is ever shorter than the AHB requires. Per-state calendars are **not**
-used in BDEW MaKo.
-
-## Sourcing
-
-Every window in `antwort`, `meldung` and `vorlauf` carries the document and
-chapter it was read from. A window with no source is absent from the table
-rather than filled with a plausible default: a fabricated Frist fails silently,
-in whichever direction it was guessed.
-
-A sourced window has the opposite failure mode, and it is quieter: the citation
-sitting beside the number reads as evidence the window is applied. `cargo xtask
-check-vorlauf-consulted` separates the two — it holds every `vorlauf` row to
-having a reader outside this crate, and lists the rest with what each still
-needs. That list may only shrink.
-
-## Related crates
-
-The crates below read their deadlines from here rather than carrying a copy of them.
-
-| Crate | Role |
-|---|---|
-| [`mako-fristen`](https://docs.rs/mako-fristen) ← **this crate** | Werktage, the BDEW MaKo holiday calendar, the per-PID Antwort-, Meldungs- and Vorlauffristen |
-| [`mako-pruefung`](https://docs.rs/mako-pruefung) | *What* the answer must be — the BDEW Entscheidungsbäume, executable |
-| [`mako-engine`](https://docs.rs/mako-engine) | Event-sourced workflow runtime — `Workflow`, `Process`, `EventStore`, deadlines |
-| [`edi-energy`](https://docs.rs/edi-energy) | The EDIFACT layer whose CONTRL / APERAK clocks are defined here |
-| [`mako-gpke`](https://docs.rs/mako-gpke) · [`mako-geli-gas`](https://docs.rs/mako-geli-gas) · [`mako-wim`](https://docs.rs/mako-wim) · [`mako-mabis`](https://docs.rs/mako-mabis) | The domain packs that arm these windows |
-
-Part of **mako**, an open-source Rust platform for German energy market
-communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>
-
-## License
-
-MIT OR Apache-2.0
+API documentation: <https://docs.rs/mako-fristen>.

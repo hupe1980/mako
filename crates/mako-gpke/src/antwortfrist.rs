@@ -36,6 +36,10 @@ pub fn antwort_deadline(trigger_pid: u32, received: OffsetDateTime) -> Option<Of
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::items_after_statements,
+    reason = "a test's constants sit beside the loop that reads them"
+)]
 mod tests {
     use super::*;
     use time::{Date, Month, Time};

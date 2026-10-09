@@ -221,8 +221,12 @@ pub async fn post_tarifwechsel(
     let product_code = summary.product_code;
 
     // The risk gate scores the document against the rates in force at its end.
-    let rates_b =
-        cfg.try_regulatory_rates_for_period(req.new_tariff.category_str(), switch_date, period_to)?;
+    let rates_b = cfg.try_regulatory_rates_for_period(
+        req.new_tariff.category_str(),
+        switch_date,
+        period_to,
+        None,
+    )?;
 
     // A Tarifwechsel invoice is an invoice: it goes through the same risk gate
     // and stores the same EN 16931 model as every other document, or the
@@ -274,7 +278,7 @@ pub async fn post_tarifwechsel(
         issue_record(&mut tx, &cfg, record_id, &ce).await?;
     }
     persist_risk(&mut *tx, record_id, assessment.as_ref()).await?;
-    crate::einvoice::store(&mut *tx, record_id, &merged, &cfg, &malo_id).await?;
+    crate::einvoice::store(&mut tx, record_id, &merged, &cfg, &malo_id).await?;
     tx.commit().await?;
 
     Ok((
@@ -317,7 +321,6 @@ pub async fn post_tarifwechsel(
 ///
 /// The price advantage on the shared portion is contractual (§42b Abs. 2 Nr. 2
 /// EnWG names the Vergütung as a contract term), not a statutory rebate.
-#[allow(clippy::too_many_arguments)]
 pub async fn post_ggv_billing(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -386,7 +389,7 @@ pub async fn post_ggv_billing(
             std::collections::HashMap::new()
         };
 
-    let rates = cfg.try_regulatory_rates_for_period("SOLAR", period_from, period_to)?;
+    let rates = cfg.try_regulatory_rates_for_period("SOLAR", period_from, period_to, None)?;
 
     // ── Phase 1: calculate everything, touching no transaction ────────────────
     // Resolving a tariff and a buyer per participant is a round-trip to productd
@@ -683,7 +686,7 @@ pub async fn post_ggv_billing(
             Ok(id) => id,
             Err(e) => return Err(period_conflict(&pool, &cfg.tenant, e).await),
         };
-        crate::einvoice::store(&mut *tx, record_id, &t.invoice, &cfg, &t.malo_id).await?;
+        crate::einvoice::store(&mut tx, record_id, &t.invoice, &cfg, &t.malo_id).await?;
         tenant_results.push(serde_json::json!({
             "record_id": record_id,
             "malo_id": t.malo_id,
@@ -719,7 +722,7 @@ pub async fn post_ggv_billing(
         issue_record(&mut tx, &cfg, sammel_id, &ce).await?;
     }
     persist_risk(&mut *tx, sammel_id, assessment.as_ref()).await?;
-    crate::einvoice::store(&mut *tx, sammel_id, &sammel_invoice, &cfg, &ggv_id).await?;
+    crate::einvoice::store(&mut tx, sammel_id, &sammel_invoice, &cfg, &ggv_id).await?;
     // Link the participant records to the bundle inside the same transaction:
     // the risk baseline and the record listings treat them as its children, and
     // a child that committed unlinked would be double-counted alongside the

@@ -6,5 +6,5 @@ sort_by = "weight"
 template = "section.html"
 page_template = "page.html"
 +++
-Engineering playbook for the annual BDEW release cycle, profile schema
-versioning policy, and format-version lifecycle management.
+The semi-annual BDEW release cycle, the profile file format, and licence
+governance.

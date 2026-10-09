@@ -1,0 +1,72 @@
+name: Scorecard
+
+# OpenSSF Scorecard, weekly and on every push to main: the repository's
+# supply-chain posture — pinned dependencies, token permissions, dangerous
+# workflow patterns, signed releases and the rest — scored by a third party and
+# published to the Scorecard API, where the badge and anyone else can read it.
+#
+# `publish_results: true` restricts the job that runs the action: no `run:`
+# steps, no top-level `env:` or `defaults:`, only allow-listed actions. The
+# floor is therefore checked in a second job that reads the uploaded result.
+
+on:
+  schedule:
+    # Every Monday at 07:30 UTC, after the advisory sweep in audit.yml.
+    - cron: "30 7 * * 1"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # publishes the result to the Scorecard API
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: scorecard.json
+          results_format: json
+          publish_results: true
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scorecard
+          path: scorecard.json
+          retention-days: 30
+
+  # The recorded floor. A score below it fails, so a change that loosens the
+  # posture — a tag-pinned action, a workflow granting write-all — is a red
+  # run rather than a lower number nobody looks at. Raise it when the measured
+  # score rises; it never moves down to make a run pass.
+  floor:
+    name: Score at or above the floor
+    runs-on: ubuntu-latest
+    needs: analysis
+    env:
+      SCORECARD_FLOOR: "5.0"
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: scorecard
+
+      - name: Compare the aggregate score with the floor
+        run: |
+          set -euo pipefail
+          score=$(jq -er '.score' scorecard.json)
+          jq -r '.checks[] | "\(.score)\t\(.name)"' scorecard.json | sort -n
+          echo "aggregate score ${score}, floor ${SCORECARD_FLOOR}"
+          if ! awk -v s="$score" -v f="$SCORECARD_FLOOR" 'BEGIN { exit !(s >= f) }'; then
+            echo "::error::OpenSSF Scorecard ${score} is below the recorded floor ${SCORECARD_FLOOR}"
+            exit 1
+          fi

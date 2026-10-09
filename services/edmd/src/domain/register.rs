@@ -414,7 +414,10 @@ pub fn billable_share_pct(reads: &[MeterRead], direction: EnergyDirection) -> Op
             billable += secs;
         }
     }
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a count or ratio reported as a float, never a money amount"
+    )]
     (total > 0).then(|| billable as f64 / total as f64 * 100.0)
 }
 

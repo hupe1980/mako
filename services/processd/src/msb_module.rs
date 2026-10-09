@@ -681,6 +681,12 @@ async fn dispatch(
                         "auto_accept ist aus — die Prüfung ergibt Bestätigung {antwortcode} für {}",
                         msb_wechsel_process_name(payload.pid)
                     ),
+                    Some(answer_body(
+                        payload,
+                        antwortcode,
+                        None,
+                        *abweichender_termin,
+                    )),
                 )
                 .await
             }
@@ -719,25 +725,24 @@ async fn dispatch(
                 reason,
                 "processd MSB: Eskalation — in die Freigabewarteschlange gestellt"
             );
-            enqueue(cfg, payload, queue, reason.clone()).await
+            enqueue(cfg, payload, queue, reason.clone(), None).await
         }
     }
 }
 
-/// Post a Bestätigung or Ablehnung to `makod`.
-#[allow(clippy::too_many_arguments)]
-async fn post_answer(
-    makod: &mako_markt::makod_client::MakodClient,
+/// The body of a Bestätigung or Ablehnung — what the automatic path posts and
+/// what a held Accept is frozen with on the approval queue.
+fn answer_body(
     payload: &MsbWechselPayload,
-    command_name: &str,
-    marktrolle: &str,
     antwortcode: &str,
     bemerkung: Option<&String>,
     abweichender_termin: Option<time::Date>,
-    idem_kind: &str,
-) -> anyhow::Result<()> {
+) -> serde_json::Value {
     let mut body = serde_json::json!({
         "process_id": payload.process_id,
+        // The queue forwards only the row's MaLo, so the MeLo the answer is
+        // addressed by rides in the body.
+        "melo_id": payload.melo_id,
         // The Antwortcode rides `SG4 STS+E01` DE 9013; makod resolves the EBD
         // (DE 1131) from the process's own PID, so it cannot drift from the
         // tree the code was drawn from.
@@ -755,6 +760,25 @@ async fn post_answer(
             t.day()
         ));
     }
+    body
+}
+
+/// Post a Bestätigung or Ablehnung to `makod`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
+async fn post_answer(
+    makod: &mako_markt::makod_client::MakodClient,
+    payload: &MsbWechselPayload,
+    command_name: &str,
+    marktrolle: &str,
+    antwortcode: &str,
+    bemerkung: Option<&String>,
+    abweichender_termin: Option<time::Date>,
+    idem_kind: &str,
+) -> anyhow::Result<()> {
+    let body = answer_body(payload, antwortcode, bemerkung, abweichender_termin);
     let cmd = mako_markt::makod_client::ForwardCommand {
         marktrolle: Some(marktrolle.to_owned()),
         command: command_name.to_owned(),
@@ -781,11 +805,16 @@ async fn post_answer(
 }
 
 /// Put the decision in front of an operator, with its WiM Frist attached.
+///
+/// `answer` is the frozen Bestätigung of a held Accept. Either way both
+/// decisions are addressed by the order's MeLo, which the queue row does not
+/// carry in a column of its own.
 async fn enqueue(
     cfg: &MsbModuleConfig,
     payload: &MsbWechselPayload,
     queue: &PgApprovalQueue,
     reason: String,
+    answer: Option<serde_json::Value>,
 ) -> anyhow::Result<()> {
     let (approve, reject) = (
         geraetewechsel_answer_command(payload.pid, true),
@@ -803,7 +832,11 @@ async fn enqueue(
         window.expires_at,
         cfg.tenant.clone(),
     )
-    .with_commands(approve.0, reject.0, Some(approve.1));
+    .with_commands(approve.0, reject.0, Some(approve.1))
+    .with_answer_payload(
+        answer.unwrap_or_else(|| serde_json::json!({ "melo_id": payload.melo_id })),
+    )
+    .with_reject_payload(serde_json::json!({ "melo_id": payload.melo_id }));
     queue.enqueue(&entry).await?;
     Ok(())
 }
@@ -921,7 +954,10 @@ pub async fn handle_preisanfrage_reqote(
         .with_approve_command(
             mako_markt::commands::WIM_PREISANFRAGE_ANGEBOT_SENDEN,
             Some("MSB"),
-        );
+        )
+        // `makod` finds the Preisanfrage by its MeLo, which the row's MaLo
+        // column does not hold.
+        .with_answer_payload(serde_json::json!({ "melo_id": melo_id }));
         queue.enqueue(&entry).await?;
         warn!(
             %process_id, pid, %melo_id, %nmsb_mp_id,

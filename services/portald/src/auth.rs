@@ -9,7 +9,7 @@
 //! context as a *value*, so a route that forgets to authorise does not compile
 //! — it has no `kunden_id` to work with.
 //!
-//! `tests/authorization_guard.rs` drives every route the router exposes against
+//! `tests/it/authorization_guard.rs` drives every route the router exposes against
 //! a `vertragd` that refuses everything, so a route that skips the gate fails
 //! the build rather than serving one customer's ledger to another.
 //!
@@ -31,13 +31,11 @@
 //! vertragd's policy header: **the portal IdP realm must not issue
 //! `mako_roles`.**
 //!
-//! The `X-Api-Key` this module sends is inert on the `authenticate` route —
-//! `vertragd` reads no API key there. It is sent so the call is
-//! indistinguishable from portald's other `vertragd` calls to a gateway, and
-//! costs nothing if `vertragd` later gates the route on it. Those *other*
-//! calls go through `clients.vertragd` with the service credential, whose
-//! `mako_roles` must include one of `LF`/`MSB`/`ESA`/`ADMIN`; `ServiceKey::new`
-//! defaults to all five, so only a key explicitly narrowed to `NB` would 403.
+//! The `X-Api-Key` is inert on the `authenticate` route; it is sent so the call
+//! looks like portald's other `vertragd` calls to a gateway. Those go through
+//! `clients.vertragd` with the service credential, whose `mako_roles` must
+//! include one of `LF`/`MSB`/`ESA`/`ADMIN`; `ServiceKey::new` defaults to all
+//! five, so only a key explicitly narrowed to `NB` would 403.
 
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};

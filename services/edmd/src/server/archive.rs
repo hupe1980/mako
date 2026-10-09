@@ -3,7 +3,10 @@
 //! meterstore across the hot + cold tiers. External Iceberg clients use
 //! meterstore's own catalog facade, not an edmd-hosted REST catalog.
 
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "used only in some feature or target combinations"
+)]
 use super::*;
 use crate::store::TENANT_COL;
 
@@ -697,7 +700,7 @@ pub(crate) async fn post_sql_query(
             let total = result.num_rows();
 
             // Analytical clients ask for the columnar stream directly; the tier
-            // provenance rides in headers since the body is now binary.
+            // provenance rides in headers since the body is binary.
             if req.format == SqlOutputFormat::ArrowIpc {
                 return match batches_to_arrow_ipc(&result.schema(), result.batches()) {
                     Ok(bytes) => (

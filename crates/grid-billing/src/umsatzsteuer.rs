@@ -66,6 +66,7 @@ pub enum Leistungsart {
 /// depending on the Sparte, and a single "reverse charge: yes/no" flag would put
 /// that judgement in the caller — which is where it was getting made wrongly.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Wiederverkaeuferstatus {
     /// The issuing party holds it. Relevant for electricity only.
     pub leistender: bool,

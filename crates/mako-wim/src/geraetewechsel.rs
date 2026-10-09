@@ -30,6 +30,7 @@
 
 use std::collections::HashMap;
 
+use mako_engine::payload::AperakPayload;
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     envelope::EventEnvelope,
@@ -222,7 +223,7 @@ pub const fn zuordnungs_stunde(sparte: Sparte) -> u8 {
 /// | 55039   | 55040/55041 | **3 WT** | Kap. 2.2.2 Nr. 2 |
 /// | 55042   | 55043/55044 | **5 WT** | Kap. 2.3.2 Nr. 2 |
 /// | 55051   | 55052/55053 | **7 WT** | Kap. 2.4.2 Nr. 2 |
-/// | 55168   | 55169/55170 | **1 WT** | Kap. 2.5.2 Nr. 4 |
+/// | 55168   | 55169/55170 | **1 WT** | Kap. 2.4.2 Nr. 4 |
 ///
 /// A view on [`mako_fristen::antwort::WIM`], which is the same table
 /// `makod` registers the deadline from, `processd` sizes its operator queue by
@@ -491,7 +492,7 @@ fn parse_yyyymmdd(raw: &str) -> Option<time::Date> {
 ///
 /// | Sparte | Window | Fundstelle |
 /// |---|---|---|
-/// | Strom | **45 Minuten** on a Werktag for UTILMD/ORDERS; Saturday → Sonntag 12:00 | APERAK AHB 1.1 §2.4.1 |
+/// | Strom | **45 Minuten** for UTILMD/ORDERS; Saturday → Sonntag 12:00 | APERAK AHB 1.1 §2.4.1 |
 /// | Gas | nächster Werktag **12:00** (Folgeprozess) / **3 Werktage** (Initialprozess) | APERAK AHB 1.1 §2.3.1 |
 ///
 /// The Gas branch picks its window from the Prüfidentifikator, because that is
@@ -509,12 +510,10 @@ fn aperak_deadline(sparte: Sparte, pid: u32, received_at: OffsetDateTime) -> Pen
     }
 }
 
-/// A calendar date as the 17:00 Europe/Berlin MaKo cut-off instant on it.
+/// The end of a calendar date in Europe/Berlin: a Frist naming a Werktag runs
+/// to the end of that day.
 fn berlin_cutoff(date: time::Date) -> OffsetDateTime {
-    mako_fristen::berlin_at(
-        date,
-        time::Time::from_hms(17, 0, 0).expect("17:00 is valid"),
-    )
+    mako_fristen::end_of_day_berlin(date)
 }
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -551,6 +550,12 @@ pub enum DeviceChangeEvent {
         /// see [`transaktionsgruende`].
         #[serde(default)]
         transaktionsgrund: Option<String>,
+        /// When the order arrived — the anchor of the APERAK window, which a
+        /// later [`DeviceChangeCommand::DispatchAperak`] may still have to
+        /// open. `None` for an order raised over the command API, which no
+        /// APERAK answers.
+        #[serde(default, with = "time::serde::rfc3339::option")]
+        received_at: Option<OffsetDateTime>,
     },
     /// EDIFACT message passed profile validation (no rule violations).
     ValidationPassed {
@@ -559,7 +564,7 @@ pub enum DeviceChangeEvent {
     },
     /// A positive or negative APERAK was dispatched.
     ///
-    /// The **technical** acknowledgement only (APERAK AHB 1.0 §2.1.1,
+    /// The **technical** acknowledgement only (APERAK AHB 1.1 §2.1.1,
     /// BGM+312 / BGM+313), due 45 minutes after receipt for Strom UTILMD. It
     /// says the message could be processed — it decides nothing. The business
     /// decision is [`Self::AntwortGesendet`].
@@ -633,7 +638,8 @@ pub enum DeviceChangeEvent {
         /// Human-readable rejection reason.
         reason: String,
     },
-    /// A registered deadline expired before the process completed.
+    /// A window lapsed that no Festlegung gives an outcome: the process waits
+    /// on in [`DeviceChangeState::FristAbgelaufen`].
     DeadlineExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
@@ -770,6 +776,10 @@ pub struct DeviceChangeData {
     /// windows, and the date `marktd` records — measures against this one.
     #[serde(default)]
     pub bestaetigter_zuordnungsbeginn: Option<String>,
+    /// When the order arrived — the anchor of the Gas APERAK window that a
+    /// Verarbeitbarkeitsfehlermeldung sent after validation opens.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub received_at: Option<OffsetDateTime>,
     /// `SG4 STS+7` DE 9013 — the Transaktionsgrund the order stated.
     ///
     /// Muss on the Anfrage **and** on both answers, so the answer has to echo
@@ -824,6 +834,20 @@ pub enum DeviceChangeState {
         /// Human-readable rejection reason.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// WiM Teil 1 Kap. 2 states the answer windows (3 / 5 / 7 / 1 WT), the
+    /// 10-WT Gesamtvorgang and the 1-WT Zuordnungsantwort, but no consequence
+    /// of the counterpart — or this party — missing one, so the lapse is a
+    /// Frist breach for the operator, not a rejection. Every command `offen`
+    /// accepts is still accepted, and the next event moves the process on.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<DeviceChangeState>,
+    },
 }
 
 impl mako_engine::workflow::OccupiesBusinessKey for DeviceChangeState {
@@ -838,6 +862,8 @@ impl mako_engine::workflow::OccupiesBusinessKey for DeviceChangeState {
             | Self::AperakSent(_)
             | Self::AntwortGesendet(_)
             | Self::GesamtvorgangGemeldet(_) => true,
+            // A lapsed window leaves the Vorgang open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
             // Terminal. A meter can be changed more than once, so a completed
             // Gerätewechsel must not retire the MeLo.
             Self::New | Self::Completed(_) | Self::Rejected { .. } => false,
@@ -860,6 +886,16 @@ impl DeviceChangeState {
             Self::GesamtvorgangGemeldet(_) => "GesamtvorgangGemeldet",
             Self::Completed(_) => "Completed",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 }
@@ -984,7 +1020,7 @@ pub enum DeviceChangeCommand {
     },
     /// Dispatch the APERAK — the technical acknowledgement, on its own clock.
     ///
-    /// Strom: **45 Minuten** for a UTILMD received on a Werktag, both
+    /// Strom: **45 Minuten** for a UTILMD (Sonntag 12:00 on a Saturday), both
     /// polarities. Gas: **only** the Verarbeitbarkeitsfehlermeldung, by the
     /// next Werktag 12:00 or, on an Initialprozess, within 3 Werktagen
     /// (APERAK AHB 1.1 §2.3.1/§2.4.1). A `positive: true` in Gas is refused.
@@ -1075,8 +1111,9 @@ pub enum DeviceChangeCommand {
     },
     /// A registered deadline fired and was dispatched by the scheduler.
     ///
-    /// Transitions the process to `Rejected` unless it has already reached
-    /// a terminal state (`Completed` or `Rejected`), in which case this is a no-op.
+    /// Acts only while the window the label names is still open — see
+    /// [`WimDeviceChangeWorkflow::on_deadline`] for the table — and is a no-op
+    /// otherwise.
     TimeoutExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
@@ -1124,70 +1161,69 @@ impl CommandPayload for DeviceChangeCommand {}
 /// ```
 pub struct WimDeviceChangeWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// Each window belongs to one waiting state — the table on
+/// [`WimDeviceChangeWorkflow::on_deadline`]. Once the process leaves it, the
+/// window is discharged, and a firing on the healthy path does nothing. A
+/// lapsed window does not lapse twice.
+fn window_open(label: &str, state: &DeviceChangeState) -> bool {
+    use DeviceChangeState as S;
+    match label {
+        ANTWORT_FRIST_WINDOW_LABEL => {
+            matches!(
+                state,
+                S::Initiated(_) | S::ValidationPassed(_) | S::AperakSent(_)
+            )
+        }
+        AUFTRAG_ANTWORT_WINDOW_LABEL => matches!(state, S::AuftragGesendet(_)),
+        GESAMTVORGANG_MELDUNG_WINDOW_LABEL => matches!(state, S::AuftragBestaetigt(_)),
+        GESAMTVORGANG_AUSBLEIBEN_WINDOW_LABEL => matches!(state, S::AntwortGesendet(_)),
+        ZUORDNUNG_ANTWORT_WINDOW_LABEL => matches!(state, S::GesamtvorgangGemeldet(_)),
+        _ => false,
+    }
+}
+
 impl Workflow for WimDeviceChangeWorkflow {
     type State = DeviceChangeState;
     type Event = DeviceChangeEvent;
     type Command = DeviceChangeCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[
+        ANTWORT_FRIST_WINDOW_LABEL,
+        AUFTRAG_ANTWORT_WINDOW_LABEL,
+        GESAMTVORGANG_MELDUNG_WINDOW_LABEL,
+        GESAMTVORGANG_AUSBLEIBEN_WINDOW_LABEL,
+        ZUORDNUNG_ANTWORT_WINDOW_LABEL,
+    ];
+
     /// Deadline compensation for the windows this workflow arms.
     ///
-    /// | Label | State guard | Frist |
-    /// |---|---|---|
-    /// | [`ANTWORT_FRIST_WINDOW_LABEL`] | `Initiated` / `ValidationPassed` | 3 / 5 / 7 / 1 WT per PID |
-    /// | [`AUFTRAG_ANTWORT_WINDOW_LABEL`] | `AuftragGesendet` | the counterparty's, same numbers |
-    /// | [`GESAMTVORGANG_MELDUNG_WINDOW_LABEL`] | `AuftragBestaetigt` | 10 WT nach dem bestätigten Zuordnungsbeginn |
-    /// | [`GESAMTVORGANG_AUSBLEIBEN_WINDOW_LABEL`] | `AntwortGesendet` | 11 WT |
-    /// | [`ZUORDNUNG_ANTWORT_WINDOW_LABEL`] | `GesamtvorgangGemeldet` | 1 WT |
+    /// | Label | Open while | Frist | Lapse |
+    /// |---|---|---|---|
+    /// | [`ANTWORT_FRIST_WINDOW_LABEL`] | `Initiated` / `ValidationPassed` / `AperakSent` | 3 / 5 / 7 / 1 WT per PID | `FristAbgelaufen` |
+    /// | [`AUFTRAG_ANTWORT_WINDOW_LABEL`] | `AuftragGesendet` | the counterparty's, same numbers | `FristAbgelaufen` |
+    /// | [`GESAMTVORGANG_MELDUNG_WINDOW_LABEL`] | `AuftragBestaetigt` | 10 WT nach dem bestätigten Zuordnungsbeginn | `FristAbgelaufen` |
+    /// | [`GESAMTVORGANG_AUSBLEIBEN_WINDOW_LABEL`] | `AntwortGesendet` | 11 WT | `Rejected` — „Der MSBA bleibt der einzelnen Messlokation zugeordnet" (Kap. 2.3.2 Nr. 16) |
+    /// | [`ZUORDNUNG_ANTWORT_WINDOW_LABEL`] | `GesamtvorgangGemeldet` | 1 WT | `FristAbgelaufen` |
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (
-                ANTWORT_FRIST_WINDOW_LABEL,
-                DeviceChangeState::Initiated(_) | DeviceChangeState::ValidationPassed(_),
-            ) => Some(DeviceChangeCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            }),
-            // Counterparty missed its answer window on our outbound order.
-            (AUFTRAG_ANTWORT_WINDOW_LABEL, DeviceChangeState::AuftragGesendet(_)) => {
-                Some(DeviceChangeCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            // We are the MSBN and let the 10-Werktage Gesamtvorgang window
-            // lapse. The NB will report the Scheitern on the 11. WT and the
-            // MSBA stays assigned (Kap. 2.3.2 Nr. 16), so the process is over.
-            (GESAMTVORGANG_MELDUNG_WINDOW_LABEL, DeviceChangeState::AuftragBestaetigt(_)) => {
-                Some(DeviceChangeCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            // We are the NB and no Gesamtvorgang report arrived. „Es liegt nach
-            // maximaler Frist des Gesamtvorgangs zu Geräteübernahme /
-            // Gerätewechsel keine Meldung des MSBN beim NB vor. Der MSBA bleibt
-            // der einzelnen Messlokation zugeordnet."
-            (GESAMTVORGANG_AUSBLEIBEN_WINDOW_LABEL, DeviceChangeState::AntwortGesendet(_)) => {
-                Some(DeviceChangeCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            // We owe the Zuordnungsantwort and did not send it.
-            (ZUORDNUNG_ANTWORT_WINDOW_LABEL, DeviceChangeState::GesamtvorgangGemeldet(_)) => {
-                Some(DeviceChangeCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| DeviceChangeCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            DeviceChangeState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             DeviceChangeEvent::AuftragGesendet {
                 melo_id,
@@ -1213,6 +1249,8 @@ impl Workflow for WimDeviceChangeWorkflow {
                 vorgangsnummer: None,
                 process_date: Some(process_date.clone()),
                 bestaetigter_zuordnungsbeginn: None,
+                // An outbound order is answered, not acknowledged, by this party.
+                received_at: None,
             }),
             DeviceChangeEvent::AntwortEmpfangen {
                 is_confirmed,
@@ -1250,6 +1288,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                 vorgangsnummer,
                 process_date,
                 transaktionsgrund,
+                received_at,
             } => DeviceChangeState::Initiated(DeviceChangeData {
                 transaktionsgrund: transaktionsgrund.clone(),
                 melo_id: melo_id.clone(),
@@ -1262,6 +1301,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                 vorgangsnummer: vorgangsnummer.clone(),
                 process_date: process_date.clone(),
                 bestaetigter_zuordnungsbeginn: None,
+                received_at: *received_at,
             }),
             DeviceChangeEvent::ValidationPassed { .. } => {
                 if let DeviceChangeState::Initiated(data) = state {
@@ -1362,9 +1402,12 @@ impl Workflow for WimDeviceChangeWorkflow {
                 reason: reason.clone(),
             },
             DeviceChangeEvent::DeadlineExpired { label, .. } => match state {
-                DeviceChangeState::Completed(_) | DeviceChangeState::Rejected { .. } => state,
-                _ => DeviceChangeState::Rejected {
-                    reason: format!("deadline expired: {label}"),
+                DeviceChangeState::New
+                | DeviceChangeState::Completed(_)
+                | DeviceChangeState::Rejected { .. } => state,
+                _ => DeviceChangeState::FristAbgelaufen {
+                    label: label.to_string(),
+                    offen: Box::new(state),
                 },
             },
 
@@ -1377,6 +1420,10 @@ impl Workflow for WimDeviceChangeWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             DeviceChangeCommand::InitiateDeviceChange {
                 pid,
@@ -1532,6 +1579,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                         // has no field for `SG4 STS+7`, so the render-time
                         // default applies.
                         transaktionsgrund: None,
+                        received_at: None,
                         // The REST channel carries no EDIFACT Vorgangsnummer;
                         // the transaction id is what the counterparty echoes.
                         vorgangsnummer: Some(tx_id.clone()),
@@ -1587,6 +1635,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                     vorgangsnummer,
                     process_date,
                     transaktionsgrund,
+                    received_at: Some(received_at),
                 }];
                 if validation_passed {
                     events.push(DeviceChangeEvent::ValidationPassed {
@@ -1596,34 +1645,45 @@ impl Workflow for WimDeviceChangeWorkflow {
                     // DispatchAperak is the single decision point for both the
                     // positive (BGM+312) and the negative (BGM+313) one.
                     //
-                    // Register TWO deadlines atomically with the events:
-                    //   1. APERAK Strom *sending* deadline (APERAK AHB 1.0 §2.4.1):
-                    //      weekday = 45 min; Saturday = Sunday noon.
+                    // Deadlines registered atomically with the events:
+                    //   1. Strom only: the APERAK *sending* deadline (APERAK AHB
+                    //      1.1 §2.4.1) — 45 min, a Saturday arrival = Sunday
+                    //      noon — retired when the Anerkennungsmeldung goes out.
+                    //      Gas sends no APERAK for a processable message (§2.3),
+                    //      so a Gas window here could only fire.
                     //   2. The *business answer* deadline — Bestätigung or Ablehnung.
                     //      Sized per PID (3 / 5 / 7 / 1 WT), never flat: see
                     //      `antwort_frist_werktage`. The PID guard above already
                     //      rejected anything outside the family, so the lookup
                     //      cannot fail here.
-                    let aperak_send_dl = aperak_deadline(sparte, pid.as_u32(), received_at);
                     let frist_wt = antwort_frist_werktage(pid.as_u32())
                         .expect("PID guard above restricts this to the MSB-Wechsel family");
                     let process_dl = PendingDeadline::new(
                         ANTWORT_FRIST_WINDOW_LABEL,
                         deadline_at_werktage(received_at, frist_wt, HolidayCalendar::BdewMaKo),
                     );
+                    let deadlines = match sparte {
+                        Sparte::Strom => {
+                            vec![
+                                aperak_deadline(sparte, pid.as_u32(), received_at),
+                                process_dl,
+                            ]
+                        }
+                        Sparte::Gas => vec![process_dl],
+                    };
                     Ok(WorkflowOutput::with_outbox_and_deadlines(
                         events,
                         vec![],
-                        vec![aperak_send_dl, process_dl],
+                        deadlines,
                     ))
                 } else {
                     let reason = validation_errors.join("; ");
                     events.push(DeviceChangeEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
                     // Validation failed → APERAK sent immediately: register the 45-min
-                    // *sending* deadline so the OutboxWorker is monitored (APERAK AHB 1.0 §2.4.1).
+                    // *sending* deadline so the OutboxWorker is monitored (APERAK AHB 1.1 §2.4.1).
                     let aperak_send_dl = aperak_deadline(sparte, pid.as_u32(), received_at);
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
@@ -1671,30 +1731,46 @@ impl Workflow for WimDeviceChangeWorkflow {
                         data.pruefidentifikator
                     ))
                 })?;
-                let suppress_wire = positive
-                    && !mako_fristen::aperak_hat_anerkennungsmeldung(sparte == Sparte::Gas);
                 // `sender` = grid_operator: the answering party sends the APERAK
-                // back to the party that sent the order.
-                let mut aperak_payload = serde_json::json!({
-                    "sender":   data.grid_operator.as_str(),
-                    "pid":      data.pruefidentifikator.as_u32(),
-                    "melo":     data.melo_id.as_str(),
-                    "positive": positive,
-                });
-                if suppress_wire {
-                    aperak_payload["suppress_wire"] = serde_json::Value::Bool(true);
-                }
-                aperak_payload["orig_message_ref"] =
-                    serde_json::Value::String(data.message_ref.as_str().to_owned());
-                if let Some(ref r) = reason {
-                    aperak_payload["reason"] = serde_json::Value::String(r.clone());
-                }
-                let outbox_entry =
-                    PendingOutbox::new("APERAK", data.incoming_msb.as_str(), aperak_payload)
-                        .caused_by(0);
-                Ok(WorkflowOutput::with_outbox(
+                // back to the party that sent the order, naming that order.
+                let from = data.grid_operator.as_str();
+                let to = data.incoming_msb.as_str();
+                let orig = data.message_ref.as_str();
+                let aperak = if positive {
+                    let ok = AperakPayload::anerkennung(from, to, orig);
+                    if mako_fristen::aperak_hat_anerkennungsmeldung(sparte == Sparte::Gas) {
+                        ok
+                    } else {
+                        ok.off_the_wire()
+                    }
+                } else {
+                    // The Fehlermeldung says what could not be processed
+                    // (`FTX+ABO`); the ERP decided it and must say why.
+                    let why = reason.clone().ok_or_else(|| {
+                        WorkflowError::validation(
+                            "a Verarbeitbarkeitsfehlermeldung needs its reason (FTX+ABO)",
+                        )
+                    })?;
+                    AperakPayload::fehler(from, to, orig, mako_engine::erc::codes::Z29, why)
+                };
+                let outbox_entry = PendingOutbox::typed(to, &aperak).caused_by(0);
+                // Strom registered its APERAK window on receipt. Gas registered
+                // none — a processable Gas message is acknowledged by silence —
+                // so a Verarbeitbarkeitsfehlermeldung decided only now opens its
+                // window here, anchored on the order's arrival (APERAK AHB 1.1
+                // §2.3.1).
+                let window: Vec<PendingDeadline> = data
+                    .received_at
+                    .filter(|_| sparte == Sparte::Gas && !positive)
+                    .map(|received_at| {
+                        aperak_deadline(sparte, data.pruefidentifikator.as_u32(), received_at)
+                    })
+                    .into_iter()
+                    .collect();
+                Ok(WorkflowOutput::with_outbox_and_deadlines(
                     vec![DeviceChangeEvent::AperakDispatched { positive, reason }],
                     vec![outbox_entry],
+                    window,
                 ))
             }
 
@@ -2128,13 +2204,23 @@ impl Workflow for WimDeviceChangeWorkflow {
             }
 
             DeviceChangeCommand::TimeoutExpired { deadline_id, label } => {
-                if matches!(
-                    state,
-                    DeviceChangeState::Completed(_) | DeviceChangeState::Rejected { .. }
-                ) {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
-                Ok(vec![DeviceChangeEvent::DeadlineExpired { deadline_id, label }].into())
+                let event = if &*label == GESAMTVORGANG_AUSBLEIBEN_WINDOW_LABEL {
+                    // The one lapse the Festlegung decides: „Es liegt nach
+                    // maximaler Frist des Gesamtvorgangs … keine Meldung des
+                    // MSBN beim NB vor. Der MSBA bleibt der einzelnen
+                    // Messlokation zugeordnet." (Kap. 2.3.2 Nr. 16)
+                    DeviceChangeEvent::Rejected {
+                        reason: "Gesamtvorgang ausgeblieben — der MSBA bleibt zugeordnet \
+                                 (WiM Teil 1 Kap. 2.3.2 Nr. 16)"
+                            .to_owned(),
+                    }
+                } else {
+                    DeviceChangeEvent::DeadlineExpired { deadline_id, label }
+                };
+                Ok(vec![event].into())
             }
 
             DeviceChangeCommand::ReceiveInformation {
@@ -2386,7 +2472,7 @@ impl Projection for DeviceChangeProjection {
             }
             DeviceChangeEvent::DeadlineExpired { .. } => {
                 if let DeviceChangeRecord::Active { status, .. } = record {
-                    *status = "Rejected";
+                    *status = "FristAbgelaufen";
                 }
             }
             DeviceChangeEvent::InformationEmpfangen { .. } => {
@@ -2502,6 +2588,51 @@ mod tests {
             matches!(&state, DeviceChangeState::Completed(d) if d.device_id == DeviceId::new("ZHR-99999999")),
             "expected Completed with new device_id",
         );
+    }
+
+    /// A Gas order that passed validation registered no APERAK window; the
+    /// Verarbeitbarkeitsfehlermeldung the ERP decides afterwards opens one,
+    /// anchored on the order's arrival. A positive decision sends nothing and
+    /// opens nothing.
+    #[test]
+    fn a_late_gas_verarbeitbarkeitsfehlermeldung_opens_its_window() {
+        let state = DeviceChangeState::default();
+        let received =
+            WimDeviceChangeWorkflow::handle(&state, make_receive_cmd(44_042, true)).expect("valid");
+        assert!(
+            received
+                .deadlines
+                .iter()
+                .all(|d| !mako_fristen::is_delivery_window(&d.label)),
+            "a processable Gas message arms no APERAK window"
+        );
+        let state = received.iter().fold(state, WimDeviceChangeWorkflow::apply);
+
+        let negative = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::DispatchAperak {
+                positive: false,
+                reason: Some("Z29".to_owned()),
+            },
+        )
+        .expect("negative APERAK");
+        let windows: Vec<&str> = negative
+            .deadlines
+            .iter()
+            .map(|d| d.label.as_str())
+            .collect();
+        assert_eq!(windows.len(), 1, "{windows:?}");
+        assert!(mako_fristen::is_delivery_window(windows[0]), "{windows:?}");
+
+        let positive = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::DispatchAperak {
+                positive: true,
+                reason: None,
+            },
+        )
+        .expect("positive decision");
+        assert!(positive.deadlines.is_empty());
     }
 
     /// An acknowledged order whose business answer never went out is not a
@@ -2756,11 +2887,16 @@ mod tests {
             },
         )
         .expect("Bestätigung");
-        assert!(
-            out.deadlines
-                .iter()
-                .any(|d| d.label == GESAMTVORGANG_AUSBLEIBEN_WINDOW_LABEL),
-            "confirming an Anmeldung must arm the 11-Werktage Ausbleiben window"
+        let ausbleiben = out
+            .deadlines
+            .iter()
+            .find(|d| d.label == GESAMTVORGANG_AUSBLEIBEN_WINDOW_LABEL)
+            .expect("confirming an Anmeldung must arm the 11-Werktage Ausbleiben window");
+        // The window names a Werktag, so it runs to the end of that day, not
+        // to an hour inside it.
+        assert_eq!(
+            ausbleiben.due_at,
+            mako_fristen::end_of_day_berlin(mako_fristen::berlin_date(ausbleiben.due_at))
         );
         let state = out
             .events

@@ -43,7 +43,7 @@
 //! - **BNetzA BK6-22-024 Anlage 1d** — GPKE Teil 4 Kap. 1.4.4 / 1.5.4. The
 //!   Festlegung has no numbered § 5 and no 24-hour window; the windows are the
 //!   2 and 10 Werktage in the table above.
-//! - **APERAK Frist: 45 Minuten** für eine UTILMD (APERAK AHB 1.0 § 2.4.1, same as all GPKE
+//! - **APERAK Frist: 45 Minuten** für eine UTILMD (APERAK AHB 1.1 § 2.4.1, same as all GPKE
 //!   processes)
 
 use mako_engine::{
@@ -189,10 +189,23 @@ pub enum AnfrageBestellungState {
     ValidationPassed(AnfrageData),
     /// NB dispatched a data response. Process complete (accepted or rejected by NB).
     ResponseDispatched(AnfrageData),
-    /// Process rejected — validation failure or deadline expiry.
+    /// Process rejected — validation failure.
     Rejected {
         /// Human-readable reason for diagnostics and audit.
         reason: String,
+    },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// GPKE Teil 4 Kap. 1.4.4 / 1.5.4 give the NB its answer window and no consequence of missing it. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<AnfrageBestellungState>,
     },
 }
 
@@ -206,6 +219,16 @@ impl AnfrageBestellungState {
             Self::ValidationPassed(_) => "ValidationPassed",
             Self::ResponseDispatched(_) => "ResponseDispatched",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 }
@@ -279,31 +302,43 @@ impl CommandPayload for AnfrageBestellungCommand {}
 /// Governed by **BK6-22-024 Anlage 1d**, GPKE Teil 4 Kap. 1.4.4 / 1.5.4.
 pub struct GpkeAnfrageBestellungWorkflow;
 
+/// The one guard a fired deadline passes: the answer window is open while the
+/// NB still owes its answer (`Initiated`, `ValidationPassed`).
+fn window_open(label: &str, state: &AnfrageBestellungState) -> bool {
+    label == ANFRAGE_WINDOW_LABEL
+        && matches!(
+            state,
+            AnfrageBestellungState::Initiated(_) | AnfrageBestellungState::ValidationPassed(_)
+        )
+}
+
 impl Workflow for GpkeAnfrageBestellungWorkflow {
     type State = AnfrageBestellungState;
     type Event = AnfrageBestellungEvent;
     type Command = AnfrageBestellungCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANFRAGE_WINDOW_LABEL];
+
     /// Deadline compensation: fire `TimeoutExpired` when the Bearbeitungsstand
     /// window lapses without a response having been dispatched.
     ///
-    /// Only non-terminal states (`Initiated`, `ValidationPassed`) will trigger
-    /// a `TimeoutExpired` command; terminal states (`ResponseDispatched`,
-    /// `Rejected`) absorb the late-firing deadline as a no-op.
+    /// Only the waiting states (`Initiated`, `ValidationPassed`) trigger a
+    /// `TimeoutExpired` command; every other state absorbs the late-firing
+    /// deadline as a no-op.
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (
-                ANFRAGE_WINDOW_LABEL,
-                AnfrageBestellungState::Initiated(_) | AnfrageBestellungState::ValidationPassed(_),
-            ) => Some(AnfrageBestellungCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            }),
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| AnfrageBestellungCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            AnfrageBestellungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             AnfrageBestellungEvent::AnfrageErhalten {
                 pruefidentifikator,
@@ -355,11 +390,14 @@ impl Workflow for GpkeAnfrageBestellungWorkflow {
             },
 
             AnfrageBestellungEvent::DeadlineExpired { label, .. } => match state {
-                AnfrageBestellungState::ResponseDispatched(_)
-                | AnfrageBestellungState::Rejected { .. } => state,
-                _ => AnfrageBestellungState::Rejected {
-                    reason: format!("deadline expired: {label}"),
-                },
+                AnfrageBestellungState::Initiated(_)
+                | AnfrageBestellungState::ValidationPassed(_) => {
+                    AnfrageBestellungState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
+                }
+                other => other,
             },
         }
     }
@@ -368,6 +406,10 @@ impl Workflow for GpkeAnfrageBestellungWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             AnfrageBestellungCommand::ReceiveAnfrage {
                 pid,
@@ -426,13 +468,14 @@ impl Workflow for GpkeAnfrageBestellungWorkflow {
                 ]))
             }
 
-            AnfrageBestellungCommand::TimeoutExpired { deadline_id, label } => match state {
-                AnfrageBestellungState::ResponseDispatched(_)
-                | AnfrageBestellungState::Rejected { .. } => Ok(WorkflowOutput::events(vec![])),
-                _ => Ok(WorkflowOutput::events(vec![
+            AnfrageBestellungCommand::TimeoutExpired { deadline_id, label } => {
+                if !window_open(&label, lapsed) {
+                    return Ok(WorkflowOutput::events(vec![]));
+                }
+                Ok(WorkflowOutput::events(vec![
                     AnfrageBestellungEvent::DeadlineExpired { deadline_id, label },
-                ])),
-            },
+                ]))
+            }
         }
     }
 }
@@ -667,8 +710,10 @@ mod tests {
 
     // ── TimeoutExpired ────────────────────────────────────────────────────
 
+    /// The NB's own window lapsing is a Frist breach, not a rejection: GPKE
+    /// Teil 4 gives the lapse no outcome, and the answer is still owed.
     #[test]
-    fn timeout_in_validation_passed_transitions_to_rejected() {
+    fn timeout_in_validation_passed_leaves_the_answer_owed() {
         let state = make_validation_passed_state();
         let cmd = AnfrageBestellungCommand::TimeoutExpired {
             deadline_id: DeadlineId::new(),
@@ -686,7 +731,23 @@ mod tests {
             .fold(state, GpkeAnfrageBestellungWorkflow::apply);
         assert!(matches!(
             final_state,
-            AnfrageBestellungState::Rejected { reason } if reason.contains("deadline")
+            AnfrageBestellungState::FristAbgelaufen { ref label, .. } if label == ANFRAGE_WINDOW_LABEL
+        ));
+        let late = GpkeAnfrageBestellungWorkflow::handle(
+            &final_state,
+            AnfrageBestellungCommand::DispatchResponse {
+                data_provided: true,
+                reason: None,
+            },
+        )
+        .expect("a late answer still goes out");
+        let answered = late
+            .events
+            .iter()
+            .fold(final_state, GpkeAnfrageBestellungWorkflow::apply);
+        assert!(matches!(
+            answered,
+            AnfrageBestellungState::ResponseDispatched(_)
         ));
     }
 

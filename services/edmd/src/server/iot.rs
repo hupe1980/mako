@@ -1,6 +1,9 @@
 //! IoT meter ingest (LoRaWAN / M-Bus / REST heat meters).
 
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "used only in some feature or target combinations"
+)]
 use super::*;
 
 // ── IoT meter ingest (LoRaWAN / M-Bus / REST heat meters) ────────────────────

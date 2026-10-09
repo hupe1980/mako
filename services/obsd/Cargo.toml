@@ -1,7 +1,7 @@
 [package]
 name             = "obsd"
 version.workspace = true
-description      = "Business-process observability daemon — process projection, BNetzA KPI reports, Alertmanager bridge"
+description      = "Business-process observability daemon: process projections, BNetzA KPI reports and Fristen alerts"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -24,10 +24,8 @@ mako-obs  = { workspace = true }
 mako-fristen = { workspace = true }
 
 anyhow             = { workspace = true }
-thiserror          = { workspace = true }
 axum               = { version = "0.8", features = [] }
 serde              = { workspace = true }
-toml               = { version = "0.8", default-features = false, features = ["parse"] }
 serde_json         = { workspace = true }
 time               = { workspace = true }
 uuid               = { workspace = true }
@@ -42,7 +40,11 @@ reqwest            = { workspace = true }
 sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json"] }
 
 [dev-dependencies]
+mako-service = { workspace = true, features = ["testing"] }
 mako-obs  = { workspace = true, features = ["testing"] }
 tokio     = { version = "1", features = ["full"] }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+
+[lints]
+workspace = true

@@ -6,11 +6,9 @@ sort_by = "weight"
 template = "section.html"
 page_template = "page.html"
 +++
-The reference layer beneath the guides: EDIFACT parsing, validation and message
-builders via `edi-energy` (including the `Platform` struct for multi-party use),
-the BDEW AS4 profile that carries those messages, the catalogue of every MaKo
-process, Redispatch 2.0, DVGW gas transport, and the `makotest` Python toolkit
-for testing against all of it.
+The reference layer beneath the guides: `edi-energy` parsing, validation and
+builders, the AS4 transport, the process catalogue, Redispatch 2.0, DVGW gas
+transport, and the `makotest` Python toolkit.
 
 ## The pages
 
@@ -26,17 +24,12 @@ for testing against all of it.
 | [BDEW AS4](@/docs/reference/as4-bdew.md) | The transport that carries every EDIFACT interchange between market partners |
 | [makotest](@/docs/reference/makotest.md) | Writing tests in Python against the real Fristen and the real validator |
 
-Two pages are large enough to be used as lookup tables rather than read
-end to end: the [process catalogue](@/docs/reference/processes.md), which is
-ordered by regulatory framework, and the
-[PID reference](@/docs/regulatory/pid-reference.md) over in Regulatory, which
-maps every Prüfidentifikator to the crate and workflow that owns it.
+The process catalogue and the [PID reference](@/docs/regulatory/pid-reference.md)
+are lookup tables, ordered by regulatory framework and by message type.
 
 ## Vocabulary
 
-German market communication has a small, load-bearing vocabulary. These terms
-recur on every page below. Fuller definitions, with the identifier formats and
-the check-digit rules, are in the
+The terms every page below uses; fuller definitions are in the
 [glossary](@/docs/architecture/domain-model.md#glossary).
 
 | Term | What it is |

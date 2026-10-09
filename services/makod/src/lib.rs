@@ -71,5 +71,8 @@ pub use crate::transport::{
 // are pub(crate) and called only from main.rs. The lib target sees them as dead code
 // because main.rs is a separate compilation unit. Allow dead_code here; the binary
 // target's own dead-code check (via the bin unit) correctly skips these.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "reached only in some feature or target combinations"
+)]
 pub mod startup;

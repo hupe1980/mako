@@ -1,0 +1,20 @@
+# portald.toml — local development: `just dev portald` starts portald with this file against
+# the PostgreSQL of dev/docker-compose.yml (`just infra-up`). Authentication is
+# off and the secrets are fixed strings. DO NOT use in production.
+#
+# Every key can be overridden by an environment variable — `PORTALD_<KEY>`, nested
+# keys joined with `__`. `portald --help` lists the conventions.
+
+allow_insecure_no_auth = true
+
+port     = 9480
+tenant   = "9900357000004"
+lf_mp_id = "9900357000004"
+
+vertragd_url    = "http://127.0.0.1:9780"
+edmd_url        = "http://127.0.0.1:8380"
+billingd_url    = "http://127.0.0.1:9280"
+accountingd_url = "http://127.0.0.1:9380"
+einsd_url       = "http://127.0.0.1:9180"
+marktd_url      = "http://127.0.0.1:8180"
+outputd_url     = "http://127.0.0.1:9880"

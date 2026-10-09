@@ -1,6 +1,9 @@
 //! Jahresablesung campaign scheduler and compliance report (§ 40b Abs. 1 EnWG).
 
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "used only in some feature or target combinations"
+)]
 use super::*;
 
 // ── Jahresablesung campaign (N7 — § 40b Abs. 1 EnWG) ───────────────────────────
@@ -114,6 +117,7 @@ impl CampaignOutcome {
 }
 
 /// Why a campaign run could not complete.
+#[derive(Debug)]
 pub enum CampaignError {
     /// `nb_mp_id` is not a 13-digit BDEW/DVGW Codenummer.
     InvalidNbMpId,
@@ -159,6 +163,75 @@ impl CampaignError {
             Self::Marktd(d) | Self::Store(d) => d.clone(),
         }
     }
+}
+
+/// Every SLP Marktlokation in `nb_mp_id`'s grid area, with its Sparte, up to
+/// `max_malos` — paged through `marktd`'s `GET /api/v1/malos`.
+async fn enumerate_slp_malos(
+    marktd: &mako_service::http::Upstream,
+    nb_mp_id: &str,
+    max_malos: i64,
+) -> Result<Vec<(String, crate::domain::Sparte)>, CampaignError> {
+    // The MaLo **and its Sparte**. A campaign enumerates SLP Marktlokationen,
+    // and an SLP point is as often gas as electricity — the Sparte decides
+    // whether the Zählerstand the order comes back with is kWh or m³, and a
+    // reading filed in the wrong dimension is refused rather than stored.
+    let mut malos: Vec<(String, crate::domain::Sparte)> = Vec::new();
+    // `marktd` pages from 0 (`offset = page × size`); starting at 1 skips the
+    // first page, whose MaLos would receive no reading order.
+    let mut page = 0i64;
+    let page_size = 500i64;
+
+    loop {
+        let request = marktd.get("/api/v1/malos").query(&[
+            ("bilanzierungsmethode", "SLP".to_owned()),
+            ("zuordnungstyp", "NB".to_owned()),
+            ("rollencodenummer", nb_mp_id.to_owned()),
+            ("size", page_size.to_string()),
+            ("page", page.to_string()),
+        ]);
+        let body: serde_json::Value = match marktd.json(request).await {
+            Ok(Some(v)) => v,
+            // marktd knows no MaLos for this grid area — an empty campaign, not
+            // a failure.
+            Ok(None) => break,
+            Err(e) => {
+                tracing::error!(error = %e, "edmd: campaign could not enumerate MaLos");
+                return Err(CampaignError::Marktd(e.to_string()));
+            }
+        };
+
+        let items = match body.get("items").and_then(|v| v.as_array()) {
+            Some(a) => a.clone(),
+            None => break,
+        };
+        if items.is_empty() {
+            break;
+        }
+
+        for item in &items {
+            if let Some(mid) = item.get("malo_id").and_then(|v| v.as_str()) {
+                let sparte = item
+                    .get("sparte")
+                    .and_then(|v| v.as_str())
+                    .and_then(crate::domain::parse_sparte)
+                    .unwrap_or(crate::domain::Sparte::Strom);
+                malos.push((mid.to_owned(), sparte));
+                if malos.len() as i64 >= max_malos {
+                    break;
+                }
+            }
+        }
+
+        // Check pagination — stop when we've retrieved all or hit max.
+        let total: i64 = body.get("total").and_then(|v| v.as_i64()).unwrap_or(0);
+        if malos.len() as i64 >= total || malos.len() as i64 >= max_malos {
+            break;
+        }
+        page += 1;
+    }
+
+    Ok(malos)
 }
 
 /// Create the Jahresablesung reading orders for one NB's grid area.
@@ -213,62 +286,7 @@ pub async fn run_jahresablesung_campaign(
     if nb_mp_id.len() != 13 || !nb_mp_id.chars().all(|c| c.is_ascii_digit()) {
         return Err(CampaignError::InvalidNbMpId);
     }
-    // The MaLo **and its Sparte**. A campaign enumerates SLP Marktlokationen,
-    // and an SLP point is as often gas as electricity — the Sparte decides
-    // whether the Zählerstand the order comes back with is kWh or m³, and a
-    // reading filed in the wrong dimension is refused rather than stored.
-    let mut malos: Vec<(String, crate::domain::Sparte)> = Vec::new();
-    let mut page = 1i64;
-    let page_size = 500i64;
-
-    loop {
-        let request = marktd.get("/api/v1/malos").query(&[
-            ("bilanzierungsmethode", "SLP".to_owned()),
-            ("zuordnungstyp", "NB".to_owned()),
-            ("rollencodenummer", nb_mp_id.to_owned()),
-            ("size", page_size.to_string()),
-            ("page", page.to_string()),
-        ]);
-        let body: serde_json::Value = match marktd.json(request).await {
-            Ok(Some(v)) => v,
-            // marktd knows no MaLos for this grid area — an empty campaign, not
-            // a failure.
-            Ok(None) => break,
-            Err(e) => {
-                tracing::error!(error = %e, "edmd: campaign could not enumerate MaLos");
-                return Err(CampaignError::Marktd(e.to_string()));
-            }
-        };
-
-        let items = match body.get("items").and_then(|v| v.as_array()) {
-            Some(a) => a.clone(),
-            None => break,
-        };
-        if items.is_empty() {
-            break;
-        }
-
-        for item in &items {
-            if let Some(mid) = item.get("malo_id").and_then(|v| v.as_str()) {
-                let sparte = item
-                    .get("sparte")
-                    .and_then(|v| v.as_str())
-                    .and_then(crate::domain::parse_sparte)
-                    .unwrap_or(crate::domain::Sparte::Strom);
-                malos.push((mid.to_owned(), sparte));
-                if malos.len() as i64 >= max_malos {
-                    break;
-                }
-            }
-        }
-
-        // Check pagination — stop when we've retrieved all or hit max.
-        let total: i64 = body.get("total").and_then(|v| v.as_i64()).unwrap_or(0);
-        if malos.len() as i64 >= total || malos.len() as i64 >= max_malos {
-            break;
-        }
-        page += 1;
-    }
+    let malos = enumerate_slp_malos(&marktd, nb_mp_id, max_malos).await?;
 
     let total_malos = malos.len();
 
@@ -427,7 +445,10 @@ pub(crate) async fn jahresablesung_compliance(
     // knows what was ordered, and `marktd` owns how many MaLos exist. A
     // population-based rate computed here would overstate coverage whenever a
     // MaLo was never scheduled at all.
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a count or ratio reported as a float, never a money amount"
+    )]
     let quote = if total > 0 {
         ausgefuehrt as f64 / total as f64
     } else {
@@ -451,4 +472,73 @@ pub(crate) async fn jahresablesung_compliance(
         })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::enumerate_slp_malos;
+
+    /// A `marktd` stand-in paging `n` SLP MaLos the way `marktd` pages: from
+    /// page 0, `size` per page, with the total beside each page.
+    async fn marktd_with(n: usize) -> mako_service::http::Upstream {
+        use axum::{Json, extract::Query, routing::get};
+        use std::collections::HashMap;
+        let app = axum::Router::new().route(
+            "/api/v1/malos",
+            get(move |Query(q): Query<HashMap<String, String>>| async move {
+                let page: usize = q["page"].parse().unwrap();
+                let size: usize = q["size"].parse().unwrap();
+                let items: Vec<_> = (page * size..((page + 1) * size).min(n))
+                    .map(
+                        |i| serde_json::json!({ "malo_id": format!("M{i:05}"), "sparte": "STROM" }),
+                    )
+                    .collect();
+                Json(serde_json::json!({ "items": items, "total": n, "page": page, "size": size }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        mako_service::http::Upstream::new(
+            "marktd",
+            &format!("http://{addr}"),
+            None,
+            mako_service::http::default_client(),
+        )
+    }
+
+    /// `marktd` pages from 0. Starting at 1 skips the first page, so with 501
+    /// MaLos the first 500 receive no § 40b Abs. 1 EnWG reading order.
+    #[tokio::test]
+    async fn the_first_page_is_enumerated() {
+        let marktd = marktd_with(501).await;
+        let malos = enumerate_slp_malos(&marktd, "9900000000001", 5_000)
+            .await
+            .expect("enumerates");
+        assert_eq!(malos.len(), 501, "every MaLo, not only the last page");
+        assert_eq!(malos[0].0, "M00000", "page 0 is the first page");
+    }
+
+    /// Exactly one page's worth is one page, and the ceiling still holds.
+    #[tokio::test]
+    async fn the_page_boundary_and_the_ceiling_hold() {
+        let marktd = marktd_with(500).await;
+        assert_eq!(
+            enumerate_slp_malos(&marktd, "9900000000001", 5_000)
+                .await
+                .expect("enumerates")
+                .len(),
+            500
+        );
+        let marktd = marktd_with(1_200).await;
+        assert_eq!(
+            enumerate_slp_malos(&marktd, "9900000000001", 600)
+                .await
+                .expect("enumerates")
+                .len(),
+            600
+        );
+    }
 }

@@ -5,6 +5,7 @@
 //!   GET  /api/v1/versorgung/:malo_id/history    — full supply-state change history
 //!   PUT  /api/v1/versorgung/:malo_id            — upsert supply state (ERP / processd)
 
+use crate::state::AppState;
 use std::sync::Arc;
 
 use axum::{
@@ -18,9 +19,8 @@ use mako_markt::{
     domain::MaloId,
     error::MdmError,
     repository::{
-        AppState, CorrelationIndex, LfZuordnung, LieferStatus, MaloRepository, MeloRepository,
-        PartnerRepository, SubscriptionRepository, VersorgungsStatusHistoryRecord,
-        VersorgungsStatusRecord, VersorgungsStatusRepository, ZuordnungsStatus,
+        LfZuordnung, LieferStatus, VersorgungsStatusHistoryRecord, VersorgungsStatusRecord,
+        VersorgungsStatusRepository, ZuordnungsStatus,
     },
 };
 use mako_service::Json;
@@ -183,9 +183,8 @@ fn default_history_size() -> u32 {
 ///
 /// Returns the current supply state.  Add `?at=YYYY-MM-DD` to query the state
 /// as of a specific calendar date (German local time, CET/CEST).
-#[expect(clippy::type_complexity)]
-pub async fn get_versorgungsstatus<Ma, Me, Su, Ci, Pa, Vs>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn get_versorgungsstatus<Vs>(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(malo_id): Path<String>,
@@ -193,11 +192,6 @@ pub async fn get_versorgungsstatus<Ma, Me, Su, Ci, Pa, Vs>(
     Extension(vs_repo): Extension<Arc<Vs>>,
 ) -> impl IntoResponse
 where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
     Vs: VersorgungsStatusRepository + Send + Sync,
 {
     if enforcer
@@ -272,9 +266,8 @@ where
 ///
 /// Returns the full supply-state change history for a MaLo, newest first.
 /// Backed by the `versorgungsstatus_history` table.
-#[expect(clippy::type_complexity)]
-pub async fn get_versorgungsstatus_history<Ma, Me, Su, Ci, Pa, Vs>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn get_versorgungsstatus_history<Vs>(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(malo_id): Path<String>,
@@ -282,11 +275,6 @@ pub async fn get_versorgungsstatus_history<Ma, Me, Su, Ci, Pa, Vs>(
     Extension(vs_repo): Extension<Arc<Vs>>,
 ) -> impl IntoResponse
 where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
     Vs: VersorgungsStatusRepository + Send + Sync,
 {
     if enforcer
@@ -324,23 +312,15 @@ where
 }
 
 /// PUT /api/v1/versorgung/:malo_id
-#[expect(clippy::type_complexity)]
-pub async fn put_versorgungsstatus<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn put_versorgungsstatus(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<sqlx::PgPool>,
     claims: Claims,
     Path(malo_id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<VersorgungsStatusUpsertRequest>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(
             &claims.principal(),

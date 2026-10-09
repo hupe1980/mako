@@ -455,34 +455,14 @@ pub async fn build_router(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Resu
 
 // ── § 7a Abs. 5 EnWG Gleichbehandlungsbericht evidence ───────────────────────
 
-/// Per-PID parity counts for one **calendar year**, bucketed by `started_at`.
-///
-/// **The bucket is `started_at`, not `updated_at`.** Grouping by `updated_at`
-/// moved rows between report years as later events touched them, so re-running
-/// last year's filing produced different numbers — the one property an annual
-/// regulatory filing must not have. A process that started on 30 December and
-/// completed in January belongs to the year it started, in every re-run.
-///
-/// The `state` literals are the ones `ProcessState::as_str` writes — lowercase.
-/// They were `'Completed'` / `'Rejected'` here, which matches nothing, so every
-/// PID reported perfect parity and unequal treatment was invisible in the
-/// artefact the filing rests on. `report_state_literals_match_projection` pins
-/// them.
-const GLEICHBEHANDLUNG_SQL: &str = r"SELECT
-      pid::int,
-      initiator_is_affiliate,
-      COUNT(*)                                      AS total,
-      COUNT(*) FILTER (WHERE state = 'completed')   AS completed,
-      COUNT(*) FILTER (WHERE state = 'rejected')    AS rejected,
-      COUNT(*) FILTER (
-          WHERE deadline_at IS NOT NULL
-            AND deadline_at < COALESCE(completed_at, now())
-      )                                             AS frist_breached
-  FROM process_projections
-  WHERE EXTRACT(YEAR FROM started_at)::int = $1
-    AND tenant = $2
-  GROUP BY pid, initiator_is_affiliate
-  ORDER BY pid, initiator_is_affiliate";
+/// The header row of the `format=csv` Gleichbehandlung report — one column per
+/// field each data row writes, in that order.
+const GLEICHBEHANDLUNG_CSV_HEADER: &str = concat!(
+    "pid,affiliate_total,affiliate_completed,affiliate_rejected,affiliate_frist_breached,",
+    "affiliate_completion_rate,affiliate_frist_compliance_rate,third_party_total,",
+    "third_party_completed,third_party_rejected,third_party_frist_breached,",
+    "third_party_completion_rate,third_party_frist_compliance_rate,gap_pp,frist_gap_pp\n",
+);
 
 /// Query parameters for `GET /api/v1/audit/gleichbehandlung`.
 #[derive(Debug, Deserialize)]
@@ -539,19 +519,17 @@ async fn get_gleichbehandlung_report(
     let year = params.year.unwrap_or_else(|| mako_fristen::heute().year());
     let format = params.format.as_deref().unwrap_or("json");
 
-    let rows: Vec<(i32, bool, i64, i64, i64, i64)> =
-        match sqlx::query_as::<_, (i32, bool, i64, i64, i64, i64)>(GLEICHBEHANDLUNG_SQL)
-            .bind(year)
-            .bind(&state.tenant)
-            .fetch_all(state.repo.pool())
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(%e, year, "obsd: Gleichbehandlung report query failed");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-        };
+    let rows = match state
+        .repo
+        .gleichbehandlung_counts(year, &state.tenant)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(%e, year, "obsd: Gleichbehandlung report query failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
 
     // Collate into per-PID affiliate / third-party pairs.
     use std::collections::BTreeMap;
@@ -575,10 +553,7 @@ async fn get_gleichbehandlung_report(
         .collect();
 
     if format == "csv" {
-        let mut csv = String::from(
-            "pid,affiliate_total,affiliate_completed,affiliate_rejected,affiliate_frist_breached,             affiliate_completion_rate,affiliate_frist_compliance_rate,third_party_total,             third_party_completed,third_party_rejected,third_party_frist_breached,             third_party_completion_rate,third_party_frist_compliance_rate,gap_pp,frist_gap_pp
-",
-        );
+        let mut csv = String::from(GLEICHBEHANDLUNG_CSV_HEADER);
         for (pid, c) in &comparisons {
             // An unstatable rate is an empty CSV cell, never a 0 that reads as a
             // measured "completed none of them".
@@ -662,43 +637,25 @@ async fn get_gleichbehandlung_report(
 
 #[cfg(test)]
 mod tests {
-    use super::{GLEICHBEHANDLUNG_SQL, TERMINAL_STATE_SQL};
+    use super::{GLEICHBEHANDLUNG_CSV_HEADER, TERMINAL_STATE_SQL};
     use mako_obs::domain::ProcessState;
 
-    /// The Gleichbehandlungsbericht must count the states the projection
-    /// actually writes. Casing drift here is silent: every PID reports
-    /// completed=0/rejected=0 and therefore perfect parity — in the artefact
-    /// the § 7a Abs. 5 filing rests on.
+    /// Every CSV column name is bare, and the header has as many columns as a
+    /// data row: a name with leading whitespace is a different column to every
+    /// CSV reader the filing is loaded into.
     #[test]
-    fn report_state_literals_match_projection() {
-        for s in [ProcessState::Completed, ProcessState::Rejected] {
+    fn the_csv_header_names_fifteen_bare_columns() {
+        let header = GLEICHBEHANDLUNG_CSV_HEADER
+            .strip_suffix('\n')
+            .expect("one line");
+        let columns: Vec<&str> = header.split(',').collect();
+        assert_eq!(columns.len(), 15, "{columns:?}");
+        for c in &columns {
             assert!(
-                GLEICHBEHANDLUNG_SQL.contains(&format!("state = '{}'", s.as_str())),
-                "the report does not filter on the stored literal for {s:?}"
+                !c.is_empty() && c.chars().all(|ch| ch.is_ascii_lowercase() || ch == '_'),
+                "column {c:?} is not a bare name"
             );
         }
-        assert!(
-            !GLEICHBEHANDLUNG_SQL.contains("'Completed'")
-                && !GLEICHBEHANDLUNG_SQL.contains("'Rejected'"),
-            "the report still carries the PascalCase literals"
-        );
-    }
-
-    /// An annual filing must reproduce when re-run.
-    ///
-    /// Bucketing by `updated_at` migrated rows between report years every time a
-    /// later event touched them, so last year's numbers changed after it was
-    /// filed. `started_at` is fixed once the process begins.
-    #[test]
-    fn the_report_year_is_the_year_the_process_started() {
-        assert!(
-            GLEICHBEHANDLUNG_SQL.contains("EXTRACT(YEAR FROM started_at)"),
-            "the report year must be the process's own, not the row's last touch"
-        );
-        assert!(
-            !GLEICHBEHANDLUNG_SQL.contains("updated_at"),
-            "a filing bucketed on updated_at does not reproduce"
-        );
     }
 
     /// The metrics gauges count non-terminal rows; the literal list they

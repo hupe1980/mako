@@ -60,7 +60,7 @@
 //! - **BK6-24-174 GPKE Teil 2** § 2.1.2 SD Lieferbeginn Nr. 2 / 10 / 13 and
 //!   § 2.5.2 SD Lieferende von NB an LF Nr. 11 / 13
 //! - **UTILMD AHB Strom 2.1 / 2.2** Kap. 8.11
-//! - **APERAK AHB 1.0 § 2.4.1** — 45 Minuten on a Werktag, a separate clock
+//! - **APERAK AHB 1.1 § 2.4.1** — 45 Minuten (Sonntag 12:00 on a Saturday), a separate clock
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -619,7 +619,7 @@ impl Workflow for GpkeZuordnungsmeldungWorkflow {
                 }
                 // The APERAK is the only thing that goes back — the business
                 // answer channel does not exist for these PIDs. Strom owes one
-                // either way (APERAK AHB 1.0 § 2.4): `312` Anerkennung on a
+                // either way (APERAK AHB 1.1 § 2.4): `312` Anerkennung on a
                 // clean message, `313` Verarbeitbarkeitsfehler otherwise.
                 let aperak = if validation_passed {
                     PendingOutbox::aperak_anerkennung(
@@ -669,7 +669,10 @@ impl Workflow for GpkeZuordnungsmeldungWorkflow {
 }
 
 /// The renderer payload for one Meldung.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 fn meldung_payload(
     meldung: Zuordnungsmeldung,
     sender: &MarktpartnerCode,

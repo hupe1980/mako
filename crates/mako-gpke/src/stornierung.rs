@@ -53,7 +53,7 @@
 //!   the WiM Teil 1 Kündigung Messstellenbetrieb — and states no Frist.
 //! - **EDI@Energy Allgemeine Festlegungen 6.1d § 7.3** — a Stornierung is a new
 //!   message carrying Transaktionsgrund „Stornierung"; also no Frist.
-//! - **APERAK Frist: 45 Minuten** für eine UTILMD (APERAK AHB 1.0 § 2.4.1)
+//! - **APERAK Frist: 45 Minuten** für eine UTILMD (APERAK AHB 1.1 § 2.4.1)
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -201,10 +201,23 @@ pub enum GpkeStornierungState {
     AperakSent(GpkeStornierungData),
     /// Cancellation fully completed (positive APERAK sent, original process cancelled).
     Completed(GpkeStornierungData),
-    /// Process rejected — validation failure, negative APERAK, or deadline expiry.
+    /// Process rejected — validation failure or negative APERAK.
     Rejected {
         /// Human-readable reason for the rejection.
         reason: String,
+    },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// The Stornierung is answered within the original message's Antwortfrist, and no Festlegung states a consequence of the NB missing it. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<GpkeStornierungState>,
     },
 }
 
@@ -219,6 +232,16 @@ impl GpkeStornierungState {
             Self::AperakSent(_) => "AperakSent",
             Self::Completed(_) => "Completed",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 }
@@ -286,30 +309,43 @@ impl CommandPayload for GpkeStornierungCommand {}
 /// See the module header — no Festlegung publishes a window for 55022 itself.
 pub struct GpkeStornierungWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the NB still owes its 55023 / 55024
+/// (`Initiated`, `ValidationPassed`).
+fn window_open(label: &str, state: &GpkeStornierungState) -> bool {
+    label == STORNIERUNG_ANTWORT_WINDOW_LABEL
+        && matches!(
+            state,
+            GpkeStornierungState::Initiated(_) | GpkeStornierungState::ValidationPassed(_)
+        )
+}
+
 impl Workflow for GpkeStornierungWorkflow {
     type State = GpkeStornierungState;
     type Event = GpkeStornierungEvent;
     type Command = GpkeStornierungCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[STORNIERUNG_ANTWORT_WINDOW_LABEL];
+
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (
-                STORNIERUNG_ANTWORT_WINDOW_LABEL,
-                GpkeStornierungState::Initiated(_)
-                | GpkeStornierungState::ValidationPassed(_)
-                | GpkeStornierungState::AperakSent(_),
-            ) => Some(GpkeStornierungCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            }),
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| GpkeStornierungCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            GpkeStornierungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             GpkeStornierungEvent::StornierungReceived {
                 pruefidentifikator,
@@ -355,10 +391,13 @@ impl Workflow for GpkeStornierungWorkflow {
             },
 
             GpkeStornierungEvent::DeadlineExpired { label, .. } => match state {
-                GpkeStornierungState::Completed(_) | GpkeStornierungState::Rejected { .. } => state,
-                _ => GpkeStornierungState::Rejected {
-                    reason: format!("deadline expired: {label}"),
-                },
+                GpkeStornierungState::Initiated(_) | GpkeStornierungState::ValidationPassed(_) => {
+                    GpkeStornierungState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
+                }
+                other => other,
             },
         }
     }
@@ -367,6 +406,10 @@ impl Workflow for GpkeStornierungWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             GpkeStornierungCommand::ReceiveUtilmd {
                 pid,
@@ -404,7 +447,7 @@ impl Workflow for GpkeStornierungWorkflow {
                     events.push(GpkeStornierungEvent::ValidationFailed {
                         errors: validation_errors,
                     });
-                    // APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
                     // It has to be emitted here: `ValidationFailed` folds to
                     // `Rejected`, which is terminal, and `DispatchAperak`
                     // requires `ValidationPassed` — so a refusal raised later
@@ -433,8 +476,8 @@ impl Workflow for GpkeStornierungWorkflow {
                         ));
                     }
                 };
-                // APERAK AHB 1.0 §2.4: Strom UTILMD always requires APERAK (BGM+312 or BGM+313).
-                // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
+                // APERAK AHB 1.1 §2.4: Strom UTILMD always requires APERAK (BGM+312 or BGM+313).
+                // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
                 let aperak = if positive {
                     PendingOutbox::aperak_anerkennung(
                         data.receiver.as_str(),
@@ -457,14 +500,14 @@ impl Workflow for GpkeStornierungWorkflow {
                 ))
             }
 
-            GpkeStornierungCommand::TimeoutExpired { deadline_id, label } => match state {
-                GpkeStornierungState::Completed(_) | GpkeStornierungState::Rejected { .. } => {
-                    Ok(WorkflowOutput::events(vec![]))
+            GpkeStornierungCommand::TimeoutExpired { deadline_id, label } => {
+                if !window_open(&label, lapsed) {
+                    return Ok(WorkflowOutput::events(vec![]));
                 }
-                _ => Ok(WorkflowOutput::events(vec![
+                Ok(WorkflowOutput::events(vec![
                     GpkeStornierungEvent::DeadlineExpired { deadline_id, label },
-                ])),
-            },
+                ]))
+            }
         }
     }
 }
@@ -525,7 +568,7 @@ mod tests {
 
     /// A refused Stornierung must answer with the negative APERAK.
     ///
-    /// APERAK AHB 1.0 § 2.1.1 makes it mandatory, and it has to be emitted on
+    /// APERAK AHB 1.1 § 2.1.1 makes it mandatory, and it has to be emitted on
     /// this transition: `ValidationFailed` folds to `Rejected`, which is
     /// terminal, and `DispatchAperak` requires `ValidationPassed` — so a refusal
     /// raised anywhere later is unreachable and the counterparty waits with no
@@ -612,8 +655,9 @@ mod tests {
         assert!(matches!(state, GpkeStornierungState::Rejected { .. }));
     }
 
+    /// The NB's own answer window lapsing is a Frist breach, not a rejection.
     #[test]
-    fn deadline_expired_rejects_initiated_process() {
+    fn deadline_expired_is_a_frist_breach() {
         let state = GpkeStornierungState::New;
         let output = GpkeStornierungWorkflow::handle(&state, stornierung_cmd(55022, true)).unwrap();
         let state = output
@@ -633,7 +677,10 @@ mod tests {
             .events
             .iter()
             .fold(state, GpkeStornierungWorkflow::apply);
-        assert!(matches!(state, GpkeStornierungState::Rejected { .. }));
+        assert!(matches!(
+            state,
+            GpkeStornierungState::FristAbgelaufen { .. }
+        ));
     }
 
     #[test]

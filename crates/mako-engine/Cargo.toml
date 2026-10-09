@@ -1,7 +1,7 @@
 [package]
 name         = "mako-engine"
 version.workspace     = true
-description  = "Event-sourced process engine for German energy market communication (MaKo)"
+description  = "Event-sourced process runtime for German energy market communication (MaKo)"
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true
@@ -67,3 +67,6 @@ required-features = ["testing"]
 name     = "workers"
 harness  = false
 required-features = ["testing"]
+
+[lints]
+workspace = true

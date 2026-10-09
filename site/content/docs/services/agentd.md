@@ -3,14 +3,14 @@ title = "agentd Operator Guide"
 description = "agentd operator guide: 28 specialist manifests on agentplane — typed results, durable triage, semantic trust labels and journal-backed runs."
 weight = 38
 +++
-`agentd` is the **AI automation layer** for the mako platform. It connects large
-language models to [the production services](@/docs/services/_index.md) via MCP, enabling
-automated analysis, decision support and workflow orchestration.
-
-Every specialist is a **declarative manifest** run by
-[agentplane](https://github.com/hupe1980/agentplane), a journal-first durable
-agent runtime. Every model call and tool call is a journaled effect, so a run is
-resumable after a crash and replayable for audit.
+`agentd` is the **AI automation layer**. It connects language models to
+[the production services](@/docs/services/_index.md) over MCP for analysis and
+decision support. Every specialist is a **declarative manifest** run by
+[agentplane](https://github.com/hupe1980/agentplane) 0.29, a journal-first
+durable agent runtime: every model call and tool call is a journaled effect, so a
+run resumes after a crash and replays for audit. As an MCP client it offers
+protocol revision `2026-07-28` (`server/discover`) and falls back to the
+`2025-11-25` `initialize` handshake for servers that do not speak it.
 
 Port: **`:9580`**
 
@@ -32,7 +32,7 @@ Port: **`:9580`**
 | `GET /api/v1/agents/catalog` | Every specialist compiled into this binary. OIDC + `api:agent.list` |
 | `GET /.well-known/agents/{name}` | A2A Agent Card, derived from the manifest |
 | `/api/v1/oversight/*` | The operator surface: worklist, runs, cases, breached obligations, event delivery (OIDC required) |
-| `GET /health` · `GET /health/ready` | Liveness / readiness |
+| `GET /health/live` · `GET /health/ready` · `GET /metrics` | Liveness, readiness, agentplane instruments (from the `mako_service` runner) |
 
 ---
 
@@ -40,47 +40,27 @@ Port: **`:9580`**
 
 ### The manifest is the agent
 
-A specialist is `agents/<name>.yaml`. It declares the procedure, the model, each
-tool the agent may call, the ceilings it runs under and the schema its result
-must satisfy. The manifest is digest-covered: editing a procedure changes
-the digest, which is a version bump a reviewer sees in a diff.
-
-What stays in Rust is the one thing agentplane has no notion of — **which
-CloudEvent types reach which specialist**. That subscription table is
-`src/builtin/mod.rs`, and it holds nothing else. A second copy of the prompt in
-Rust could disagree with the manifest, and the manifest is the copy the model
-actually reads.
-
-There are correspondingly **no per-agent config overrides**. Moving a regulated
-decision onto a different model is a manifest edit, which is the reviewable path
-by design.
+A specialist is `agents/<name>.yaml`: procedure, model, each granted tool,
+ceilings and the result schema. The manifest is digest-covered, so editing a
+procedure is a version change a reviewer sees. The only Rust routing is the
+subscription table in `src/builtin/mod.rs` — which CloudEvent types reach which
+specialist. There are **no per-agent config overrides**: moving a decision to a
+different model is a manifest edit.
 
 ### Two properties that matter for a regulated deployment
 
 **The active plane is advisory.** All 150 grants are read-only. Model-backed
 specialists collect evidence and return structured findings; terminal findings
-open triage rows. They do not dispatch market commands.
+open triage rows. An approved decision becomes an ordinary `makod` command, so
+what goes on the wire is still a pure function of a recorded command.
 
 **Trust is semantic.** MaLo and market-participant check digits, EIC check
-characters, UUID version 4 and real calendar dates are validated before a field
-is promoted. Free text, amounts, malformed identifiers and the tenant isolation
-key remain untrusted.
-
-Deterministic procedures do not use a model. `deadline-alert-agent` and
-`gabi-gas-agent` are coded skills, retaining journal, policy, case, deadline and
-worklist controls with zero inference spend.
-
-The deterministic boundary is unchanged: an agent may prepare and may wait,
-`makod` still dispatches. An approved decision becomes an ordinary command
-through the command API, so what goes on the wire is still a pure function of a
-recorded command.
+characters, UUID v4 and real calendar dates are validated before a field is
+promoted; free text, amounts, malformed identifiers and the tenant key stay
+untrusted. `deadline-alert-agent` and `gabi-gas-agent` are coded skills with
+zero inference spend and the same journal, policy, case and worklist controls.
 
 ### What the record is worth to somebody who is not us
-
-The journal is hash-chained, so a rewritten record is detectable and a removed
-run breaks the Merkle root. That is a real property and it is not the whole
-claim, because each mechanism answers a different question and only the last one
-involves anybody but the operator.
 
 | Mechanism | Answers | Configured by |
 |---|---|---|
@@ -88,168 +68,80 @@ involves anybody but the operator.
 | Per-record attestation | Which workload wrote each record? | `[attestation]` |
 | Checkpoint cosignature | Does a *second* history exist? | `[witness]` |
 
-Only the third breaks the symmetry. The first two are checks whose every input
-comes from the party being checked: two divergent histories can both be
-internally perfect, and whoever controls the store controls the evidence. A
-witness remembers the last checkpoint it saw for this log and cosigns a new one
-only when it **provably extends** it, so a split view stops being invisible and
-becomes either a witness that refuses or two cosignatures that contradict each
-other and can be shown to anyone.
+Only the witness involves a party other than the operator: it cosigns a
+checkpoint only when it provably extends the last one it saw, so a split view
+becomes a refusal or two contradicting cosignatures. A witness you host
+yourself proves nothing about you.
 
-`plane::attest` supplies attestation on both seams from one key — the **store**
-signs records, the runtime signs outward claims — so an auditor reading a record
-and a tool server reading a provenance block see one workload. `tests/evidence.rs`
-verifies a real run's records with a public key and `require_signature` on, checks
-that a different key rejects them, and checks that an unattested plane fails
-honestly rather than passing quietly.
+`plane::attest` signs records (store) and outward claims (runtime) from one key.
+The key comes from the deployment and is never minted here. An unattested plane
+starts with a warning; `required = true` refuses. History written unattested
+stays unattested. `tests/it/evidence.rs` verifies a real run's records against
+the public key and checks a different key is rejected.
 
-Three properties follow from how the key is handled, and each is a refusal:
-
-- **The key comes from the deployment and cannot be minted here.** A plane that
-  generated its own identity would produce records that look attested and prove
-  nothing, because the party being audited chose the key.
-- **An unattested plane starts, loudly.** It warns and names the consequence, the
-  same shape an unsealed plane takes; `required = true` turns it into a refusal.
-  History written unattested stays unattested — it cannot be signed later.
-- **A witness you host yourself proves nothing about you.** The configuration
-  makes it easy to point this at a URL in the same cluster and read the green log
-  line as evidence. The counterparty has to be one that would not cooperate in a
-  rewrite.
-
-Witnessing sits **off the run path**. It is retrospective evidence gathered after
-sealing, so a run whose witnesses are unreachable finished long ago; making the
-plane's availability depend on a third party would be the wrong trade for
-evidence that is read after the fact. A shortfall is reported as a finding rather
-than a log line, and an integrity refusal — a witness that remembers a different
-history — is reported *even when the quorum was met*, because the other
-cosigners may simply never have seen the history the refusing one remembers.
-
-The cosignatures are kept at the witness and not beside the log. Storing a copy
-here would put the evidence back under the control of the party it is evidence
-about, which is the symmetry the mechanism exists to break: an auditor asks the
-witness what it last cosigned for `mako/agentd/<tenant>` and compares that with
-what mako hands them.
+Witnessing runs **off the run path**, after sealing. A shortfall is reported as
+a finding, and a witness that remembers a different history is reported even
+when the quorum was met. Cosignatures stay at the witness: an auditor asks it
+what it last cosigned for `mako/agentd/<tenant>`.
 
 ### Durability instead of a dead-letter queue
 
-A failed run is not a message with nowhere to go. Its effects are journaled, so
-it resumes from the last completed effect rather than being replayed from the
-top by a retry loop. There is no retry worklist to drain and no exhaustion event
-to subscribe to.
-
-`de.agent.decision.made` carries the run's real outcome — `completed`,
-`failed`, `suspended`, `exhausted`, `quarantined`, `replanning`, `cancelled` or
-`abandoned` —
-so a subscriber sees a run waiting on human approval as readily as a successful
-one. What travels with it, and what deliberately does not, is set out under
-[decision delivery](#decision-delivery).
+A failed run resumes from its last completed effect; there is no retry worklist
+and no exhaustion event. `de.agent.decision.made` carries the real outcome —
+`completed`, `failed`, `suspended`, `exhausted`, `quarantined`, `replanning`,
+`cancelled` or `abandoned` — see [decision delivery](#decision-delivery).
 
 ### At-least-once delivery, at-most-once admission
 
-Inbound delivery is at-least-once: [`marktd`](@/docs/services/marktd.md)'s durable fan-out
-retries until it sees a 2xx, and a dead-lettered delivery can be replayed by an operator days
-later.
+Inbound delivery is at-least-once ([`marktd`](@/docs/services/marktd.md)'s fan-out
+retries until 2xx, and an operator may replay a dead letter days later). A `202`
+therefore means *this message will be acted on*: the policy gate, quota
+reservation, case binding and admission-key claim all commit before
+`POST /webhook` returns, and the body carries the run ids. A run then holds a
+lease; a lapsed lease is resumed by the sweeper. `tests/it/ingest.rs` pins this:
+a second delivery is answered with the first one's run the instant the first
+call returns.
 
-**A `202` therefore has to mean *this message will be acted on*, not *this
-message was received*** — the emitter advances its outbox cursor past whatever
-that answer promised. So admission completes *inside the request*: the policy
-gate, the quota reservation, the case binding and the claim on the admission key
-all commit before `POST /webhook` returns, and the response carries the run ids.
-The work continues afterwards and is durable by its own mechanism — a run holds
-a lease, and a lease that lapses without release is taken over and resumed by the
-sweeper's recovery pass.
-
-Every CloudEvent ingest door in mako completes its work before it answers, for
-the same reason: an acknowledgement that returns before anything durable is
-written turns a deploy, a SIGTERM or a crash into a lost event. `tests/ingest.rs`
-pins it by its observable consequence rather than by crashing a process — a
-second delivery is answered with the first one's run *the instant the first call
-returns*, which can only be true if the key was claimed before the return.
-
-**The status code is a retry instruction**, because mako's emitter treats 429 and
-5xx as transient and every other 4xx as permanent:
+The status code is a retry instruction (mako's emitter retries 429 and 5xx):
 
 | Answer | When | What the emitter does |
 |---|---|---|
 | `202` | at least one specialist admitted — the run ids are in the body | done; a retry meets the runs already holding its keys |
 | `204` | nothing subscribes to this event type | done |
+| `400` | `id`, `source` or `type` missing | dead-letters |
 | `429` | nothing admitted, something transient — a `[quota]` ceiling reached | resends |
-| `422` | nothing admitted and resending cannot help — no subscribing specialist can act on this payload | dead-letters **now**, where an operator sees it |
+| `422` | nothing admitted and resending cannot help | dead-letters **now**, where an operator sees it |
 
-Unknown refusals count as transient, and the asymmetry is deliberate:
-`RuntimeError` is `#[non_exhaustive]`, so a variant added upstream lands in the
-default — and losing a market message is not recoverable, while spending five
-attempts on one that was never going to succeed is.
-
-Each run is admitted under a key built from the CloudEvent's `(source, id)` —
-the standard's own uniqueness pair, which mako's sender also puts in
-`webhook-id` — joined with the specialist's name. The store claims that key
-**inside the transaction that appends the run's first record**, so a ledger can
-never be left holding a key for a run that never existed. A refused admission
-spends no key, so a corrected redelivery is still admitted.
-
-A duplicate is **answered, not refused**: a caller that retried wants the
-original run, not a conflict to interpret. The case that earns the mechanism is
-the suspended one. Elsewhere a duplicate costs only model spend — no effect is
-duplicated inside a run, and no market message is dispatched twice, because the
-one dispatching grant needs a human and the engine sends the message. But a run
-parked on a four-eyes decision has already opened its task, and a reviewer who
-cannot tell two proposals from one proposal shown twice is a four-eyes control
-degrading into a guess.
-
-The key is **per specialist**, because one event fans out to several independent
-runs; an event-wide key would answer the second and third opinions with the
-first's. An event missing `id`, `source` or `type` is `400` rather than
-defaulted: an unset attribute arrives as `""`, which is a perfectly good key.
-
-Retiring a key reopens the door it closed, so nothing retires one by default.
-`admission_retention_days` is the opt-in; 30 days is sized for an operator
-replaying a dead letter, not for the emitter's retry schedule.
+Unknown refusals count as transient (`RuntimeError` is `#[non_exhaustive]`).
+The admission key is the CloudEvent's `(source, id)` joined with the
+specialist's name, claimed inside the transaction that appends the run's first
+record; a refused admission spends no key. A duplicate is **answered** with the
+original run, which matters most for a run parked on a four-eyes decision. Keys
+are kept forever unless `admission_retention_days` is set.
 
 ### A2A Protocol compliance
 
 Each specialist exposes an [A2A Agent Card](https://a2a-protocol.org/) at
-`/.well-known/agents/{name}` — a standards-based capability declaration that
-lets external systems discover mako specialists without prior configuration.
-
-The card is **derived from the manifest** by agentplane rather than assembled by
-hand, so it advertises exactly what the declaration says: its skills are the
-capabilities the plane would actually dispatch, and its version is the
-manifest's. A hand-written card is a second statement of the same facts, and the
-two disagree the first time somebody edits one.
+`/.well-known/agents/{name}`, derived from the manifest by agentplane — its
+skills and version are the declaration's.
 
 ### Fan-out
 
-When several specialists subscribe to one event they are independent opinions —
-a [`billingd`](@/docs/services/billingd.md) event runs an anomaly check *and* a regulatory
-guard — so each gets its own run and its own journal rather than sharing one.
-
-There is deliberately **no first-wins mode**. Returning the first specialist and
-dropping the rest cancels the losers at their next `await`, and a cancelled
-specialist may already have called a mutating tool: a request that reached the
-server while nothing on this side recorded it. That is an unrecoverable unknown
-outcome for a regulated action, so every branch runs to completion and every
-outcome is on the record. agentplane declines the same primitive for the same
-reason.
+Several specialists subscribed to one event are independent opinions, each with
+its own run and journal. There is **no first-wins mode**: cancelling the losers
+could leave a mutating call with an unknown outcome, so every branch runs to
+completion.
 
 ---
 
 ## Role scoping (§§ 6a, 7a EnWG)
 
-`agentd` builds role-scoped like every other daemon: `role-lf`, `role-nb`, `role-msb`, with
-no flags meaning all roles.
-
-This matters more here than elsewhere. `agentd` is the one service that reaches all the
-others, so in a combined-role (VIU) deployment it is the component that cannot be separated
-by policy alone — a single process holding credentials to both the grid arm and the supply
-arm. Cedar can refuse an NB principal access to LF process state, and does, but that is a
-runtime control over a process that structurally holds both sets of keys.
-
-A role build therefore **does not contain** the other arm's specialists. An LF binary has no
-grid-billing and no Sperrung specialist compiled into it, so no configuration mistake can
-enable one. The five cross-cutting specialists carry no `#[cfg]` gate at all — protocol
-(`mako-agent`), deadlines, compliance, process and regulatory reporting — because those
-surfaces exist for every Marktrolle.
+`agentd` builds role-scoped: `role-lf`, `role-nb`, `role-msb`, no flags meaning
+all roles. It reaches every other service, so in a combined-role deployment a
+role build **does not contain** the other arm's specialists — Cedar refusing an
+NB principal LF state is a runtime control; absence is structural. The five
+cross-cutting specialists (`mako-agent`, deadlines, compliance, process,
+regulatory reporting) carry no gate.
 
 | Build | Specialists |
 |---|---|
@@ -258,21 +150,16 @@ surfaces exist for every Marktrolle.
 | `role-nb` | 5 cross-cutting + 8 grid-side (NNE billing, Sperrung, EEG ×2, grid anomaly, MaBiS, GaBi Gas, einsd batch) |
 | `role-msb` | 5 cross-cutting + 4 metering (MSB history, meter data, Ersatzwerte, SMGW diagnostics) |
 
-`just clippy-roles` lints each profile and runs the guard test that asserts the exclusions,
-so a specialist added without a role decision fails the gate rather than quietly appearing
-in every deployment.
-
-A worklist row travels the other way and is checked with it. Desks are classified by arm —
-supply, grid, metering, and the cross-cutting three — and no compiled specialist may hand a
-finding to another arm's: the row carries the run's state across the boundary, and in a
-role build that desk may not exist to answer it.
+`just clippy-roles` lints each profile and runs the guard test asserting the
+exclusions. A worklist row may not cross arms either: desks are classified
+supply, grid, metering or cross-cutting, and no compiled specialist hands a
+finding to another arm's desk.
 
 ---
 
 ## Human oversight
 
-A person enters an agent's loop in one of two places, and the difference is
-whether the agent is about to *act* or has finished *reporting*.
+A person enters an agent's loop in front of the answer or beside it:
 
 | | **Approval** — in front of the answer | **Triage** — beside the answer |
 |---|---|---|
@@ -282,28 +169,18 @@ whether the agent is about to *act* or has finished *reporting*.
 | When it fires | reaching a mutating tool | the answer matches a predicate over `output.schema` |
 | Used by | — no active manifest grants a mutating tool | 18 specialists, on a terminal finding |
 
-The two coded specialists — `deadline-alert-agent` and `gabi-gas-agent` — are a
-third case, reaching the same worklist by a different road: a manifest with no
-`execution` block cannot declare `oversight` at all, so a terminal finding opens
-its row from Rust through `StepCtx::open_task` — same store, same audience rules,
-same escalation on expiry, and the run still completes because the finding is
-about something that has already happened and there is nothing left to gate.
+The two coded specialists reach the same worklist from Rust through
+`StepCtx::open_task` (a manifest without `execution` cannot declare
+`oversight`): same store, audience rules and escalation.
 
-Triage exists because most specialists **cannot** act: a `tool-calling` agent's
-arguments come out of a model completion, which the taint gate refuses at a
-mutating sink, so gating its answer would gate nothing while suspending a run
-per finding. A triage rule changes nothing about the run — same answer, same
-validation, same memories — and its only effect is a worklist row: a § 40 EnWG
-invoice-content violation, an EEG breach accruing a Pflichtzahlung per month, a
-§ 7a Abs. 5 parity deviation, a MaLo with no grid assignment, arrears at the
-§ 41f threshold.
-
-That asymmetry is deliberate: a triage rule may carry a predicate, `approval`
-may not. Reporting is the one place a declaration can carry a condition without
-becoming control flow. Every predicate `path` is typed against that agent's own
-`output.schema` at parse time, so a rule that could never fire is refused rather
-than reading in review exactly like one that works — and a specialist whose
-schema can report a terminal finding with nobody to tell fails a test.
+Triage exists because most specialists **cannot** act: a `tool-calling`
+agent's arguments come from a model completion, which the taint gate refuses at
+a mutating sink. A triage rule changes nothing about the run; its only effect
+is a worklist row — a § 40 EnWG invoice-content violation, an EEG breach, a § 7a
+Abs. 5 parity deviation, arrears at the § 41f threshold. A triage rule may
+carry a predicate, `approval` may not. Every predicate `path` is typed against
+the agent's own `output.schema` at parse time, and a schema that can report a
+terminal finding with no rule to tell anyone fails a test.
 
 The worklist itself is agentplane's operator surface, mounted at
 `/api/v1/oversight`:
@@ -323,146 +200,73 @@ The worklist itself is agentplane's operator surface, mounted at
 | `GET /push` · `POST /push/rearm` | Which receivers stopped acknowledging, and resume one |
 | `POST /events` | This message arrived; wake whoever wanted it |
 
-Four properties are worth stating because each is a control rather than a
-convenience:
+Controls on that surface:
 
-- **An approval may carry edited arguments, and they are the call.** A reviewer
-  answering „approved, with these values" has their `amendment` dispatched in
-  place of what the model proposed — labelled trusted, attributed to
-  `task:agent.approve_call`, and put through every gate the original faced: the
-  tool's schema at the decision, menus, ceilings and field rules at dispatch. An
-  approval *without* an amendment releases nothing, so a field that demands a
-  trusted author still refuses a waved-through value. What it cannot prevent is a
-  reviewer being talked into typing an attacker's value; the journal's actor
-  attribution is the accountability for that.
-- **Who is acting comes from the token, never from the body.** The wire types
-  carry no actor field, so an approval cannot be forged by the thing being
-  approved. Four-eyes is enforced in the task store: whoever proposed an action
-  cannot approve it, and a reviewer barred by that rule still *sees* the task —
-  told so on the item rather than by a refusal after they have read the case.
-- **No OIDC, no surface.** When OIDC is disabled the routes are not mounted at
-  all. Every other dev-mode relaxation in mako accepts an unauthenticated request
-  and warns; an approval is the one place where that is a forged signature on a
-  regulated dispatch rather than a relaxation.
-- **Every role a manifest names can actually reach the worklist.** Eligibility
-  is two layers: Cedar decides who may use the surface at all, the task store
-  narrows per task by `candidate_roles` — a `metering` reviewer who passes Cedar
-  still cannot decide `gabi-gas-agent`'s dispatch. The Cedar set admits the
-  union of every `oversight.approvers` entry, every `triage[].audience` and
-  every `escalate_to` role, and a test parses the manifests and fails when one
-  names a role the policy does not admit. Without that guard the two drift apart
-  silently, and a worklist row whose audience is refused at the door is worse
-  than no row at all. The escalation audience needs the check most: it arrives
-  hours late, from the sweeper, and a widening to somebody Cedar refuses looks —
-  from the worklist — exactly like the row having been answered.
-- **Every route is authorized, not just authenticated.** Each one asks the
-  plane's Cedar policy under an `api:` action — reading, claiming and deciding
-  are separate verbs, and `POST /events` (the machine door for mako's own
-  services) is separate from all of them.
+- **An approval may carry an `amendment`, and it is the call** — labelled
+  trusted, attributed to `task:agent.approve_call`, and put through the tool's
+  schema, menus, ceilings and field rules. An approval without one releases
+  nothing a trusted field demands.
+- **The actor comes from the token, never the body.** Four-eyes is enforced in
+  the task store: the proposer cannot approve; a barred reviewer still sees the
+  task, marked so.
+- **No OIDC, no surface.** Without OIDC the routes are not mounted.
+- **Two-layer eligibility.** Cedar decides who may use the surface; the task
+  store narrows by `candidate_roles`. A test parses the manifests and fails when
+  an `oversight.approvers`, `triage[].audience` or `escalate_to` role is not
+  admitted by the policy.
+- **Every route is authorized** under its own `api:` verb (read, claim, decide;
+  `POST /events` is the machine door). A test walks
+  `agentplane::api::action::ALL` and fails on a verb granted to no role.
+  `api:obligation.list` is held to `mako-operations` and `regulatory`, because
+  `GET /obligations` does not narrow by domain.
+- **A quarantine has three verbs.** A run is quarantined when an effect's
+  outcome cannot be established. *Reconcile* (look the outcome up; domain
+  audience), *reopen* (judge again; an intervention) and *abandon* (close
+  without unwinding; `mako-operations` / `regulatory`). Cancelling a
+  quarantined run is refused.
 
-  A verb the runtime asks about and the policy set never mentions is a
-  **permanent 403** on that route, with a policy set that compiles clean and
-  nothing anywhere reporting it — so a test walks
-  `agentplane::api::action::ALL` and fails when any verb is granted to no role.
-  `api:obligation.list` is its own verb so that *what did we miss* can be
-  granted to a compliance function without the contents of every matter; it is
-  held to `mako-operations` and `regulatory`, because `GET /obligations` does
-  not narrow by domain and handing it to `metering` would hand `metering` every
-  other domain's missed Fristen.
+The **sweeper** ticks every `sweep_interval_secs`: it warns on approaching
+obligations, breaches passed ones, applies each overdue task's `on_expiry`,
+wakes runs and dead-letters uncorrelated events. An approval expires with
+`deny` (an unanswered window sends nothing); all eighteen triage specialists
+declare `escalate` with an `escalate_to` audience, which joins the audience and
+keeps the row waiting.
 
-- **A quarantine is three verbs with three audiences.** The runtime quarantines
-  a run when it cannot establish what an effect did — a dispatch whose answer
-  never came back. *Reconciling* is looking that outcome up where the truth is
-  (the counterparty's answer, the ledger), so it carries the same domain
-  audience as deciding a task; what an operator supplies is untrusted by
-  construction, and a run that needed the output trusted unwinds at its next
-  gate rather than proceeding on a typed value. *Reopening* lets the run be
-  judged again — it decides nothing about the verdict, which the run re-derives
-  — and is an intervention, like cancelling. *Abandoning* closes the run and
-  unwinds nothing: whatever it put in the market stays there, unexplained, so it
-  is held to the same two roles as the breach listing. Cancelling a quarantined
-  run is refused outright: it promises to put the world back, which is the one
-  thing a run holding an unknown outcome may not do.
-
-Behind it, the **sweeper** ticks every `sweep_interval_secs`: it warns on
-approaching obligations, breaches the ones that passed, applies each overdue
-task's declared `on_expiry`, wakes runs whose instant arrived, and dead-letters
-events nobody correlated. A deadline nobody looks at is not a deadline.
-
-`on_expiry` has one name and two jobs, and mako answers it opposite ways. An
-**approval** gates a real market message, so an unanswered window must send
-nothing: `deny`. A **triage row** gates nothing — the run already finished, and
-the row *is* the finding — so `deny` there would delete the delivery of a breach
-the agent correctly detected. All eighteen triage specialists declare
-`escalate` with an `escalate_to` audience: the wider roles **join** the
-audience rather than replacing it, the stale reservation is cleared, and the row
-keeps waiting.
-
-Deadlines resolve through **mako's own BDEW Werktage calendar**, so
-`kind: working-days` means the same thing to an agent's approval window as it
-does to a [`makod`](@/docs/services/makod.md) APERAK Frist — same holiday table, same Europe/Berlin resolution,
-and the calendar's digest is journaled with the instant it produced, so a later
-correction cannot retroactively move a window somebody relied on.
+`kind: working-days` resolves through mako's BDEW Werktage calendar — the same
+holiday table and Europe/Berlin resolution as a [`makod`](@/docs/services/makod.md)
+Frist — and the calendar's digest is journaled with the instant it produced.
 
 ---
 
 ## Cases, and erasure (GDPR Art. 17)
 
-Every run is admitted with **correlation keys** taken from the event's
-re-validated identifiers — `malo`, `melo`, `process` — so every run about one
-Marktlokation joins one case. An event carrying no identifier that re-validates
-gets a case of its own, keyed on the CloudEvent id: a run outside a case cannot
-register an obligation or open a task, so "no case" is not an option.
+Every run is admitted with **correlation keys** from the event's re-validated
+identifiers — `malo`, `melo`, `process` — so every run about one Marktlokation
+joins one case; an event with none gets a case keyed on its CloudEvent id. The
+case is the matter an operator reads, the retention unit and the erasure unit.
 
-The case is therefore three things at once: the **matter** an operator reads, the
-**retention** unit, and the **erasure** unit.
+Runs are sealed: a key ring wraps journal, case state, buffered events and task
+proposals, and erasing a case (`POST /api/v1/erasure`) destroys its wrapping
+key — reaching backups and replicas too. Specialists are handed identifiers,
+not customer records, and each declares `max_sensitivity_journaled`.
 
-Agent runs are sealed. The runtime is built with a key ring, which wraps the journal, case
-state, buffered events and task proposals — so a run's payloads are ciphertext at rest, and
-erasing a case destroys the wrapping key that opens them. That reaches every copy, including
-backups and replicas, which row-level pseudonymisation in a database does not.
+> **Deployment note.** A HashiCorp Vault transit key must be created with
+> deletion allowed; erasure against a default key fails loudly.
 
-Two layers sit in front of it as defence in depth: specialists are handed identifiers rather
-than customer records and fetch details through an authorised tool call, and each agent
-declares `max_sensitivity_journaled`, so material above the ceiling is refused at dispatch
-rather than discovered at an erasure request.
-
-> **Deployment note.** A HashiCorp Vault transit key must be created with deletion allowed.
-> A default transit key cannot be deleted, so an erasure against one fails loudly rather
-> than reporting a success that did not happen.
-
-> **A plane with no key ring starts, and says so.** The warning names the
-> consequence — personal data written into an append-only chain cannot be erased
-> by any later configuration change — because an operator who reads it after the
-> first production run cannot act on it. `[keyring] required = true` turns the
-> warning into a refusal to start.
+A plane with no key ring starts with a warning that personal data written to the
+chain cannot be erased later; `[keyring] required = true` refuses instead.
 
 ---
 
 ## Where the trust boundary is
 
-A CloudEvent payload is emitted by one of mako's own services, but almost
-everything in it originated on the wire: a MaLo came out of a counterparty's
-UTILMD, an amount off their INVOIC, a `reference` is free text they wrote. So the
-payload is **not admitted as trusted**.
-
-A field is promoted to trusted only if `agentd` **re-validates it at admission**,
-against the format that identifier is defined to have — an 11-digit MaLo, a
-5-digit Prüfidentifikator, a 33-character MeLo, a UUID mako generated itself.
-Not because the emitting service says so, and not because the key looks like an
-identifier. Everything else — free text, amounts, nested objects, and any
-identifier whose value fails re-validation — is untrusted and carries a source
-naming the event it arrived on.
-
-This is what makes `protected_fields` mean something. A grant marking `/malo_id`
-as `require_trusted` is satisfied by a re-validated identifier and refused for a
-counterparty-authored string. Admitting the payload wholesale would have
-satisfied it with either.
-
-Re-validating is also why the promotion is honest rather than convenient: an
-11-digit MaLo has no room for an instruction. Collapsing the value space to one
-that cannot carry a payload is the whole justification, and it is checked at the
-boundary rather than assumed from an emitter's good behaviour.
+A CloudEvent payload comes from mako's own services, but almost everything in it
+originated on the wire. A field is promoted to trusted only if `agentd`
+**re-validates it at admission** against its defined format — an 11-digit MaLo,
+a 5-digit Prüfidentifikator, a 33-character MeLo, a UUID mako generated.
+Everything else is untrusted and names the event it arrived on. That is what
+makes `protected_fields` with `require_trusted` meaningful: a re-validated
+identifier satisfies it, a counterparty-authored string does not.
 
 ### Two shapes, and what each buys
 
@@ -474,33 +278,13 @@ boundary rather than assumed from an emitter's good behaviour.
 | Model spend | bounded by the manifest | zero; `models: {}` |
 | Best fit | open-ended investigation | total functions and event translation |
 
-`deadline-alert-agent` and `gabi-gas-agent` declare `models: {}` — agentplane's spelling of *no
-inference, on purpose*, the thing that distinguishes a rules-only agent from one
-whose model wiring somebody forgot — and no `execution` block, so its behaviour
-is a registered skill in `agentd::skills`.
-
-Its whole procedure is a subtraction and three comparisons: read `deadline_at`
-and `partner_mp_id` from what `obsd` returned, subtract from the journaled
-clock, classify — `BREACH` past the Frist, `CRITICAL` under 30 minutes,
-`WARNING` under 2 hours, `COMPLIANT` beyond. A model would apply those bands at
-a per-event cost, under BNetzA monitoring, with no way to test *"is 29 minutes
-CRITICAL?"* except by calling it. In Rust the bands are four unit tests at every
-boundary, running without a network.
-
-**The governance is identical.** The tool call is still a journaled effect
-through the policy gate; the clock read is still an effect, so a replay
-classifies against the instant the original run saw; the manifest still binds
-the grants, ceilings, egress and digest. Governance was never what a model was
-buying — only judgement is.
-
-Least privilege is also legible here in a way it cannot be for a model: the
-skill calls exactly one tool, so it grants exactly one.
-
-A specialist belongs in `skills/` when its procedure is a total function of what
-the tools return — arithmetic, thresholds, field extraction, set logic. It does
-**not** when the task is judgement over open-ended input: a counterparty's
-free-text objection, an unfamiliar failure, an operator narrative. Those keep
-their models.
+The coded skills declare `models: {}` and no `execution` block; their behaviour
+is a registered skill in `agentd::skills`. `deadline-alert-agent` reads
+`deadline_at` and `partner_mp_id` from `obsd`, subtracts the journaled clock and
+classifies — `BREACH` past the Frist, `CRITICAL` under 30 minutes, `WARNING`
+under 2 hours, `COMPLIANT` beyond — tested at every boundary. The tool call and
+the clock read are still journaled effects through the policy gate. A procedure
+belongs in `skills/` when it is a total function of what the tools return.
 
 > [!NOTE]
 > A model-free agent declares **no** `max_tokens`. A zero ceiling reads as
@@ -510,89 +294,48 @@ their models.
 
 ### Every answer is a shape
 
-All 28 specialists declare `output.schema`, and none states its result contract
-in prose. A fenced `## OUTPUT FORMAT` block inside a prompt is a contract in the
-one place nothing can enforce it: the model may or may not honour it, every
-consumer becomes a parser of free text, and a reworded heading is a silent
-break. As a schema the model is held to it, the runtime folds it into the effect
-key — so editing the schema reports divergence on replay rather than
-reinterpreting a stored answer — and it is covered by the manifest digest.
-
-Every schema is also **closed** (`additionalProperties: false`, pinned by a
-test): the model cannot pad the answer with fields nobody declared, so the
-declared shape is the whole shape — which also keeps a triage rule's `path`
-total over what the model can actually return.
+All 28 specialists declare `output.schema`, and every schema is **closed**
+(`additionalProperties: false`, pinned by a test). The runtime folds the schema
+into the effect key and the manifest digest, so editing it reports divergence on
+replay.
 
 ### The legal basis is part of the answer
 
-A specialist's output is a recommendation with a § attached, so a wrong citation
-is a wrong answer that reads as a right one. Two rules: **quote the service that
-computes the number** where one exists — [`sperrd`](@/docs/services/sperrd.md)'s
-`frist_ueberschritten` for the GPKE execution window, `energy-billing`'s
-`guthabenerstattung` for the § 40c Abs. 3 refund — because a restated rule is a second copy that drifts
-silently; and **label anything else as ours**, because § 60 Abs. 2 MsbG names no
-substitution method and § 20 EnWG names no straight-through rate, so a table or a
-target attributed to either is an operating default wearing a statute.
+A wrong citation is a wrong answer. Specialists **quote the service that
+computes the number** where one exists ([`sperrd`](@/docs/services/sperrd.md)'s
+`frist_ueberschritten`, `energy-billing`'s `guthabenerstattung` for § 40c
+Abs. 3) and **label anything else as an operating default**: § 60 Abs. 2 MsbG
+names no substitution method and § 20 EnWG no straight-through rate.
 
 ### Knowledge is granted, not copied
 
 mako's MCP servers publish 57 step-by-step prompts across 15 servers, and 25
-specialists declare `context.prompts` against their own service rather than
-carrying a hand-typed paraphrase in `constraints` — a second copy of a procedure
-that drifts the first time either side changes, with the copy being what the
-model reads.
-
-A context grant is not a tool grant: reading a prompt authorises no action, but
-it does cross a trust and data-egress boundary, so it is declared where a
-reviewer sees it. The three that grant none need none: the two coded skills have no model
-to read a prompt, and `vpp-billing-agent`'s procedure is a completeness and arithmetic check
-whose steps are fixed before anything untrusted is read.
+specialists declare `context.prompts` against their own service instead of a
+paraphrase in `constraints`. A context grant authorises no action but is
+declared where a reviewer sees it. The three without one: the two coded skills,
+and `vpp-billing-agent`, whose steps are fixed before anything untrusted is read.
 
 ### Memory, scoped to the party the run is about
 
-`memory_formation.subject` is the unit `forget_subject` erases, so the scope of
-a subject is a GDPR decision. Seven specialists form memories, in two shapes:
-**five bind `$correlation/malo`** (`billing-anomaly`, `grid-anomaly`,
-`meter-data`, `msb-history`, `payment-reconciliation`) — the subject resolves
-per run to the Marktlokation the run was correlated on, so one customer's facts
-never surface in another's run and an Art. 17 erasure destroys exactly one
-person's pile — and **two carry a literal** (`compliance-agent`,
-`regulatory-reporting-agent`) because their subject genuinely is the operator
-itself: parity posture and BNetzA KPI history are one pile for every run by
-nature.
-
-A lint holds the line: a literal subject is refused unless it is one of the two
-operator-wide scopes, and a binding to a correlation namespace the labeller does
-not produce is refused too. A binding that cannot resolve **fails the run**
-rather than falling back — a memory filed under the wrong scope is worse than no
-memory. The other 21 specialists have no memory block, and the absence is argued
-in the files.
-
-The memory store is one of the eight seams the single backend supplies, wired at
-build: a plane that registers a memory-forming manifest without one refuses to
-start rather than failing after a run has already paid for its model calls.
-
-Formation reads the agent's own answer — model output, therefore untrusted — so
-every remembering specialist declares a **quarantined** model to do it. That is
-the one place besides a plan's `parse` steps where the declarative tier points a
-model at untrusted-derived content, and it is what makes the second model role
-mean something. Every other specialist declares no quarantined model on purpose:
-nothing would select it, so the declaration would read as dual-model isolation
-while one model did all the work — which agentplane refuses at parse.
+`memory_formation.subject` is the unit `forget_subject` erases. Seven
+specialists form memories: **five bind `$correlation/malo`** (`billing-anomaly`,
+`grid-anomaly`, `meter-data`, `msb-history`, `payment-reconciliation`), so an
+Art. 17 erasure destroys exactly one customer's pile; **two carry a literal**
+(`compliance-agent`, `regulatory-reporting-agent`) because their subject is the
+operator itself. A lint refuses any other literal and any binding the labeller
+does not produce; an unresolvable binding fails the run. A plane registering a
+memory-forming manifest without a memory store refuses to start. Formation reads
+model output, so every remembering specialist declares a **quarantined** model;
+no other specialist declares one.
 
 ### Nobody delegates
 
-All 28 declare `topology: { mode: single, role: specialist }`. `mode: single` is
-one agent, one context, many tools — the inter-agent failure surface is
-structurally absent, which matters because MAST measures inter-agent misalignment
-at **36.9 %** of observed multi-agent failures. mako routes in Rust, so no agent
-hands off to another and none has the authority to. agentplane refuses
-`mode: single` with `role: orchestrator` outright: an orchestrator with nobody to
-orchestrate is a claim the file cannot back.
+All 28 declare `topology: { mode: single, role: specialist }`: one agent, one
+context, many tools. mako routes in Rust, so no agent hands off to another.
 
 ## Build-time guards
 
-Four checks run in CI, and each closes a failure that is silent at runtime.
+Four checks run in CI:
 
 | Guard | Refuses |
 |---|---|
@@ -612,26 +355,13 @@ The `plane::` suite parses every manifest and refuses:
   policy set does not admit;
 - a model id nobody reviewed.
 
-The prompt guard is the least obvious, and it runs in both directions.
-
-**A call the agent cannot make.** agentplane reports an unknown tool name back to
-the model as a failed call rather than ending the run — deliberately, so the
-model can correct itself — so a procedure naming an ungranted tool does not
-crash: the model asks, is refused, improvises, and the step silently does not
-happen. The check reads a *sentence*: an instruction verb outside the backticks
-(call, use, query, fetch, retrieve, invoke, consult, poll, check) with no
-negation, and any tool-shaped backticked name in it. Sentence scope is what
-catches ``Call accountingd `get_balance` … and `list_ledger` ``. A name merely
-mentioned is left alone — "processd's `check_anmeldung` would fail check 5" is
-documentation, and so is "Do not call `calculate_billing`: it mutates".
-
-**A grant no step mentions.** The quieter direction, and the one that keeps a
-specialist from holding a server's whole read surface: unreviewed reach no test
-can see, a model choosing between seventeen marktd tools where two are needed,
-and a § 6a EnWG data boundary drawn wider than any procedure asked for. The
-grants and the procedure are the **same set** — 150 grants across 28 manifests — and
-widening one means writing the sentence that says when the model should reach for
-it.
+`check-prompt-tools` runs both ways. A procedure naming an ungranted tool does
+not crash — agentplane reports the unknown tool to the model, which improvises —
+so the check reads each *sentence*: an instruction verb outside the backticks
+(call, use, query, fetch, retrieve, invoke, consult, poll, check), no negation,
+and a tool-shaped backticked name. A grant no step mentions is refused too, so
+the grants and the procedure are the **same set** —
+150 grants across 28 manifests.
 
 ---
 
@@ -713,13 +443,8 @@ sequenceDiagram
 ## Specialists
 
 Each row is a subscription in `src/builtin/mod.rs` paired with a manifest in
-`agents/`. The capability is what `Runtime::run` is given; the manifest owns
-everything else.
-
-The **shape** column is either `tool-calling` for open-ended investigation or
-`coded` for a deterministic transformation. The **reach** is every tool the specialist may call, and every one of
-them is a tool its own procedure names — the two are held to the same set by
-`cargo xtask check-prompt-tools`, in both directions.
+`agents/`. **Reach** is every tool the specialist may call, held to its
+procedure by `cargo xtask check-prompt-tools`.
 
 | Specialist | Capability | Shape | Reach | Subscribes to |
 |---|---|---|---|---|
@@ -770,20 +495,12 @@ The key must match the `provider` a manifest's `spec.models` names.
 | Self-hosted | `chat-completions` | The OpenAI-compatible wire: TGI, vLLM, Ollama, llama.cpp. `api_base` is **required** — there is no default for your own server — and a local endpoint may have no key at all |
 | AWS Bedrock | `bedrock` | Behind `--features bedrock`: the AWS SDK is a substantial dependency tree, so a deployment that does not use it does not pay for it. Credentials come from the standard AWS chain, never from `agentd.toml` |
 
-The **table key** is the name a manifest refers to; `backend` is the wire that
-driver speaks. They are separate on purpose: `[providers.anthropic]` backed by
-`chat-completions` against your own vLLM changes not one of the 28 manifests —
-which matters, because a manifest edit is a digest change and a review.
-
-That is also the answer to a data-protection question. Customer data reaching a
-third-party inference endpoint is an Art. 28 / Art. 44 DSGVO matter; *the
-endpoint is ours* answers it without a contract.
-
-`agentd` refuses to start with no provider configured — an agent layer that
-cannot reach a model is a silent no-op, not a degraded mode. It also refuses an
-unknown `backend`, a hosted driver with no key, and `chat-completions` with no
-`api_base`: each of those otherwise presents as every run failing identically at
-its first model call.
+The table key is the name a manifest refers to; `backend` is the wire. So
+`[providers.anthropic]` backed by `chat-completions` against your own vLLM
+changes not one of the 28 manifests — and keeps customer data off a third-party endpoint
+(Art. 28 / Art. 44 DSGVO). `agentd` refuses to start with no provider, an unknown
+`backend`, a hosted driver with no key, or `chat-completions` without
+`api_base`.
 
 ---
 
@@ -797,7 +514,7 @@ its first model call.
 | **Oversight authorization** | Cedar `api:*` verbs; reading, claiming and deciding are separate, and `POST /events` is the machine door |
 | **Effect authorization** | Cedar on every effect: server allowlist, secret-to-model refusal, delegation depth, no declassification. `DenyAll` baseline — there is no `AllowAll` |
 | **Inbound webhook HMAC** | Standard Webhooks (`webhook-signature`) required in production; constant-time verification; 401 on mismatch |
-| **Mutating tools** | None are granted by active manifests. Agentplane's approval mechanism remains available for a future reviewed use case |
+| **Mutating tools** | None are granted by active manifests |
 | **Admission** | payload fields are re-validated at the boundary; only identifiers that pass are trusted |
 | **Authority-bearing arguments** | `protected_fields` with `require_trusted` — counterparty-derived values are refused |
 | **Tool transport** | one MCP client per server, routed by the server component of a `tool://` grant, so a call cannot reach a different server offering the same tool name |
@@ -812,7 +529,6 @@ its first model call.
 | **Observability** | agentplane's instrument catalogue is bridged onto `GET /metrics` — runs by terminal status, policy denials, budget refusals, quarantines, breached obligations, open cases and tasks. Emitted at `info` under the global filter, so a `warn` deployment must admit `agentplane.metric=info` or the series flatline |
 | **Manual-run timeout** | `session_timeout_secs` bounds a *manual* run's wait; `POST /webhook` waits for nothing. Each run stays journaled and resumable either way |
 | **API keys** | `api_key`, `mcp_api_key`, `keyring.vault.token`, `audit_hmac_secret` are `SecretString` — never in logs or debug output. Bedrock credentials come from the AWS chain, not from config |
-| **Route syntax** | `cargo xtask check-routes` refuses axum 0.7 `/:param` literals, which panic while the router is assembled — i.e. at startup, where no test looks |
 | **Grant truth** | `cargo xtask check-tool-grants` checks every `tool://` grant against the server's own `read_only_hint`, and refuses a mutating grant on a `tool-calling` agent |
 | **Least privilege** | `cargo xtask check-prompt-tools` holds the grants and the procedure to the same set in both directions, so a specialist cannot hold a server's whole read surface again |
 
@@ -990,10 +706,8 @@ curl -X POST http://agentd:9580/webhook \
   }'
 ```
 
-`type`, `source` and `id` are all required — `source` and `id` are the identity
-a redelivery keeps, and therefore the admission key, so neither may be defaulted.
-Posting the same envelope again is answered `202` with the run it already
-started rather than starting a second one.
+`type`, `source` and `id` are required; reposting the same envelope answers
+`202` with the run it already started.
 
 **Manual run** — `agent` addresses one specialist directly, bypassing routing.
 An `Idempotency-Key` makes a retried request answer with the run it already
@@ -1038,39 +752,17 @@ curl -X POST -H "Authorization: Bearer $JWT" -H "Content-Type: application/json"
 |---|---|
 | `de.agent.decision.made` | A run reaches a terminal state. Carries `{run, case, outcome, chain_head}` under a `tenantid` extension, with the run id as both `id` and `subject`. |
 
-The **answer is deliberately not in it.** A run's output is domain data with a
-label on it, and shipping it by default would make an egress decision nobody
-declared. `chain_head` is the hash the conclusion was drawn over, so a receiver
-can ask this plane to prove the run it was told about;
-`GET /api/v1/oversight/runs/{run}` is where the reasoning lives.
-
-There is no `time` attribute, and that is honest: time inside a run comes from
-journaled `clock.now` effects so a replay sees the instant the run saw, and
-stamping the moment the outbox swept would be a lie about when the run finished.
+The answer is not in it: shipping a run's output would be an undeclared egress.
+`chain_head` lets a receiver ask this plane to prove the run;
+`GET /api/v1/oversight/runs/{run}` holds the reasoning. There is no `time`
+attribute — time inside a run comes from journaled `clock.now` effects.
 
 `outcome` is one of `completed`, `failed`, `suspended`, `exhausted`,
-`quarantined`, `replanning`, `cancelled`, `abandoned` or `not-admitted` — the
-wire label for a successful run is `completed`, not `succeeded`. A **suspended**
-run is not a failure — it waits for a human decision or an inbound event — and a
-**quarantined** one is the runtime saying it cannot establish what an effect
-did, which is why it is its own outcome rather than `failed`: a failure may be
-unwound, an unknown outcome may not. **`abandoned`** is that doubt closed by a
-person without unwinding it.
-
-A failed run also carries **`reason`** — the refusal in the runtime's own words,
-which is the only actionable part of a failure. It is **absent** on a success
-rather than `null`, because a null there reads as a failure with no explanation.
-Both halves are asserted in `tests/evidence.rs`: the failure mode is silence, and
-a delivery with no reason is a well-formed CloudEvent that parses cleanly and
-tells an operator nothing.
-
-There is deliberately no second, in-memory view of the same fact. The journal
-owns it, and a per-process ring buffer would be the weaker copy — lost on a
-restart, and holding only what one instance handled on a service whose Postgres
-backend exists for several. `/api/v1/oversight/runs/{run}` answers the reasoning
-behind one run, `/api/v1/oversight/runs?outcome=…` the runs that ended a given
-way, `/api/v1/oversight/tasks` what is waiting on a person, and this delivery
-feeds a dashboard.
+`quarantined`, `replanning`, `cancelled`, `abandoned` or `not-admitted`.
+`suspended` waits for a human or an event; `quarantined` means an effect's
+outcome cannot be established (a failure may be unwound, an unknown outcome may
+not); `abandoned` is that doubt closed by a person. A failed run carries
+**`reason`**, absent (not `null`) on success — asserted in `tests/it/evidence.rs`.
 
 ---
 
@@ -1090,34 +782,20 @@ graph LR
     RX -.->|"non-2xx"| W
 ```
 
-The registration is made at **admission**, so no run exists unwatched, and the
-cursor advances **only on HTTP 2xx**. A crash between the POST and the cursor
-write re-delivers rather than loses; a receiver that is down for a deploy is
-caught up afterwards instead of having missed everything; one that has gone away — or that
-refuses permanently — is **parked** past the retry ceiling and reported. Parking is not
-deletion: the rows and the cursor survive and the registration is listed by
-`PushStore::parked`, so a registration nobody removes is a queue an operator can see rather
-than one that only grows. This is the same persist-before-dispatch
-discipline every other mako service applies to its transactional outbox.
+The registration is made at admission and the cursor advances **only on HTTP
+2xx**, so a crash re-delivers rather than loses. A receiver past the retry
+ceiling is **parked**, not deleted: rows and cursor survive and
+`PushStore::parked` lists it; `POST /api/v1/oversight/push/rearm` resumes it.
 
 ```toml
 audit_webhook_url = "https://erp.example/hooks/agent-decisions"
 # Standard Webhooks: `webhook-signature: v1,<base64>` over
-# `{webhook-id}.{webhook-timestamp}.{body}` — the same scheme every other mako
-# outbound carries, so `mako_service::webhook::verify_request` accepts an agentd
-# delivery like any other. Because the id and the timestamp are inside the
-# signed material, a captured delivery stops verifying once the tolerance
-# window passes; the body-only HMAC this replaced replayed forever.
+# `{webhook-id}.{webhook-timestamp}.{body}`, verifiable with
+# `mako_service::webhook::verify_request`.
 audit_hmac_secret = "env:AGENTD_AUDIT_HMAC"
 
-# Mid-rotation only. `webhook-signature` is a space-separated list, so a
-# delivery can present both keys and a receiver holding either verifies —
-# which makes a rollover each receiver's own pace instead of a flag day.
-# Remove once every receiver has the new key. Setting it alone is a startup
-# failure: "also" with no primary key signs nothing.
+# Mid-rotation only: deliveries carry both signatures; alone it is a startup failure.
 # audit_hmac_secret_previous = "env:AGENTD_AUDIT_HMAC_OLD"
 ```
 
-A bad key is refused at startup naming the destination, rather than aborting the
-process — a panic inside `Daemon::build` arrives before the exit code and the
-log line that would have said which destination was wrong.
+A bad key is refused at startup, naming the destination.

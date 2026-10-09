@@ -217,7 +217,6 @@ pub enum MesswerteLieferungCommand {
         /// Carried through to `edmd` so a Typ-2 gap can be reported against the
         /// subscription that is actually silent instead of being inferred from
         /// whichever OBIS registers happened to stop.
-        #[allow(clippy::doc_markdown)]
         bestellung_ref: Option<String>,
     },
 }

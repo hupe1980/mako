@@ -22,7 +22,7 @@ use crate::{
 
 // ── ExpectedVersion ───────────────────────────────────────────────────────────
 
-/// Optimistic concurrency control contract for [`EventStore::append`].
+/// Optimistic concurrency control contract for [`AtomicAppend::append`].
 ///
 /// The caller declares which sequence number they expect the stream to be at.
 /// The store atomically checks this before writing; a mismatch means a
@@ -52,7 +52,7 @@ pub enum ExpectedVersion {
 
 // ── AppendResult ──────────────────────────────────────────────────────────────
 
-/// Metadata returned after a successful [`EventStore::append`].
+/// What a successful [`AtomicAppend::append`] wrote.
 #[derive(Debug, Clone)]
 pub struct AppendResult {
     /// The sequence number of the last event written in this batch.
@@ -63,11 +63,17 @@ pub struct AppendResult {
     /// `timestamp` stamped by the store. Callers use these for return values
     /// and projection seeding without re-loading from storage.
     pub events: Vec<EventEnvelope>,
+    /// The outbox entries enqueued in the same write, materialised against the
+    /// stamped events (`causation_event_id` names the event that caused each).
+    pub outbox: Vec<crate::outbox::OutboxMessage>,
 }
 
 // ── EventStore trait ──────────────────────────────────────────────────────────
 
-/// Append-only, ordered event stream storage contract.
+/// The read side of an append-only, ordered event stream store.
+///
+/// Writing is [`AtomicAppend::append`]: one batch, one method, so no store can
+/// persist the events of a command and drop what must land with them.
 ///
 /// ## Implementation requirements
 ///
@@ -84,29 +90,12 @@ pub struct AppendResult {
 ///
 /// `Arc<S>` implements `EventStore` whenever `S: EventStore`, so
 /// `Process<W, Arc<MyStore>>` works without any extra wrapper type.
-#[allow(async_fn_in_trait)] // RPIT-in-traits with Send bounds require AFIT; use #[allow] until
+#[expect(
+    async_fn_in_trait,
+    reason = "RPIT-in-traits with Send bounds require AFIT; use #[allow] until"
+)]
 // the ecosystem settles on a stable pattern for Rust 1.85 MSRV.
 pub trait EventStore: Send + Sync {
-    /// Atomically append `events` to `stream_id`.
-    ///
-    /// The store assigns `event_id`, `sequence_number`, `stream_id`, and
-    /// `timestamp` on each event. The fully materialised envelopes are
-    /// returned in [`AppendResult::events`].
-    ///
-    /// # Errors
-    ///
-    /// - [`EngineError::VersionConflict`] when `expected_version` is
-    ///   [`ExpectedVersion::NoStream`] or [`ExpectedVersion::Exact`] and the
-    ///   actual stream version does not match.
-    /// - [`EngineError::Store`] for underlying storage failures.
-    #[must_use = "dropping an append Result silently discards a version-conflict or store error"]
-    async fn append(
-        &self,
-        stream_id: &StreamId,
-        expected_version: ExpectedVersion,
-        events: &[NewEvent],
-    ) -> Result<AppendResult, EngineError>;
-
     /// Load all events from `stream_id` in sequence order.
     ///
     /// Returns an empty `Vec` when the stream does not exist.
@@ -283,17 +272,6 @@ pub trait EventStore: Send + Sync {
 // ── Arc<S> blanket impl ───────────────────────────────────────────────────────
 
 impl<S: EventStore> EventStore for Arc<S> {
-    async fn append(
-        &self,
-        stream_id: &StreamId,
-        expected_version: ExpectedVersion,
-        events: &[NewEvent],
-    ) -> Result<AppendResult, EngineError> {
-        self.as_ref()
-            .append(stream_id, expected_version, events)
-            .await
-    }
-
     async fn load(&self, stream_id: &StreamId) -> Result<Vec<EventEnvelope>, EngineError> {
         self.as_ref().load(stream_id).await
     }
@@ -342,211 +320,220 @@ impl<S: EventStore> EventStore for Arc<S> {
 
 // ── Arc<S>: AtomicAppend blanket impl ────────────────────────────────────────
 
-/// Blanket delegation so `Arc<S>` inherits the `AtomicAppend` contract from
-/// `S`.
-///
-/// This enables `Process<W, Arc<SlateDbStore>>` to call
-/// `execute_and_enqueue` and its retry/snapshot variants without requiring
-/// callers to unwrap the `Arc`.
+/// `Arc<S>` inherits the [`AtomicAppend`] contract from `S`, so
+/// `Process<W, Arc<SlateDbStore>>` runs commands without unwrapping the `Arc`.
 impl<S: AtomicAppend> AtomicAppend for Arc<S> {
-    async fn append_with_outbox(
-        &self,
-        stream_id: &StreamId,
+    async fn append(&self, batch: AppendBatch<'_>) -> Result<AppendResult, EngineError> {
+        self.as_ref().append(batch).await
+    }
+}
+
+// ── AppendBatch ───────────────────────────────────────────────────────────────
+
+/// One atomic write: events, and everything that must land with them.
+///
+/// A command's output is more than its events. The outbox entries are the
+/// messages the events promise to send, the deadlines are the Fristen they
+/// start, and the correlation entries are how the counterparty's reply finds
+/// the process. Each is worthless without the events and the events are wrong
+/// without each, so the four travel as one value into one method.
+///
+/// Built from the events up; every other part defaults to empty:
+///
+/// ```rust,ignore
+/// store.append(
+///     AppendBatch::new(&stream_id, ExpectedVersion::Exact(n), &events)
+///         .outbox(&outbox)
+///         .deadlines(&deadlines)
+///         .correlations(&correlations),
+/// ).await?;
+/// ```
+#[derive(Debug, Clone, Copy)]
+#[must_use = "an AppendBatch writes nothing until it is passed to AtomicAppend::append"]
+pub struct AppendBatch<'a> {
+    /// The stream the events are appended to.
+    pub stream_id: &'a StreamId,
+    /// The optimistic-concurrency check the write must pass.
+    pub expected_version: ExpectedVersion,
+    /// The events, stamped by the store.
+    pub events: &'a [NewEvent],
+    /// Outbound messages, materialised against the stamped events.
+    pub outbox: &'a [crate::outbox::PendingOutbox],
+    /// Deadlines registered in the same write.
+    pub deadlines: &'a [crate::deadline::Deadline],
+    /// Correlation-index entries written in the same write.
+    pub correlations: &'a [CorrelationEntry],
+}
+
+impl<'a> AppendBatch<'a> {
+    /// A batch of `events` alone.
+    pub fn new(
+        stream_id: &'a StreamId,
         expected_version: ExpectedVersion,
-        events: &[NewEvent],
-        outbox: &[crate::outbox::PendingOutbox],
-    ) -> Result<AppendResult, EngineError> {
-        self.as_ref()
-            .append_with_outbox(stream_id, expected_version, events, outbox)
-            .await
+        events: &'a [NewEvent],
+    ) -> Self {
+        Self {
+            stream_id,
+            expected_version,
+            events,
+            outbox: &[],
+            deadlines: &[],
+            correlations: &[],
+        }
     }
 
-    async fn append_with_outbox_and_deadlines(
-        &self,
-        stream_id: &StreamId,
-        expected_version: ExpectedVersion,
-        events: &[NewEvent],
-        outbox: &[crate::outbox::PendingOutbox],
-        deadlines: &[crate::deadline::Deadline],
-    ) -> Result<AppendResult, EngineError> {
-        self.as_ref()
-            .append_with_outbox_and_deadlines(
-                stream_id,
-                expected_version,
-                events,
-                outbox,
-                deadlines,
-            )
-            .await
+    /// Enqueue `outbox` in the same write.
+    pub fn outbox(mut self, outbox: &'a [crate::outbox::PendingOutbox]) -> Self {
+        self.outbox = outbox;
+        self
     }
 
-    async fn append_with_outbox_deadlines_and_correlations(
-        &self,
-        stream_id: &StreamId,
-        expected_version: ExpectedVersion,
-        events: &[NewEvent],
-        outbox: &[crate::outbox::PendingOutbox],
-        deadlines: &[crate::deadline::Deadline],
-        correlations: &[CorrelationEntry],
-    ) -> Result<AppendResult, EngineError> {
-        self.as_ref()
-            .append_with_outbox_deadlines_and_correlations(
-                stream_id,
-                expected_version,
-                events,
-                outbox,
-                deadlines,
-                correlations,
-            )
-            .await
+    /// Register `deadlines` in the same write.
+    pub fn deadlines(mut self, deadlines: &'a [crate::deadline::Deadline]) -> Self {
+        self.deadlines = deadlines;
+        self
     }
+
+    /// Write `correlations` in the same write.
+    pub fn correlations(mut self, correlations: &'a [CorrelationEntry]) -> Self {
+        self.correlations = correlations;
+        self
+    }
+
+    /// Refuse a batch no store may write, before anything is staged.
+    ///
+    /// An outbox entry names the event that caused it; with no event there is
+    /// nothing to name, and the message would be sent with no record in the
+    /// stream of why. A malformed correlation tag would corrupt the index key.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Outbox`] for an outbox entry without an event,
+    /// [`EngineError::Registry`] for a malformed correlation tag.
+    pub fn validate(&self) -> Result<(), EngineError> {
+        if self.events.is_empty() && !self.outbox.is_empty() {
+            return Err(EngineError::outbox(
+                "an outbox entry needs an event in the same batch to name as its cause",
+            ));
+        }
+        for c in self.correlations {
+            validate_correlation_tag(&c.tag)?;
+        }
+        Ok(())
+    }
+}
+
+/// Validate a correlation-index tag before it becomes part of a key.
+///
+/// Rejects tags that would corrupt the `ci/{tenant}/{tag}/{process}` key
+/// structure and leak across tags in a prefix scan:
+///
+/// - `\0` corrupts key scan boundaries on byte-string backends.
+/// - An empty tag collapses the tag segment and makes lookups ambiguous.
+/// - `/` creates a sub-prefix that leaks into or out of sibling tags.
+/// - More than 128 bytes offers nothing and produces abnormally long keys.
+pub(crate) fn validate_correlation_tag(tag: &str) -> Result<(), EngineError> {
+    if tag.contains('\0') {
+        return Err(EngineError::registry(
+            "ci tag must not contain NUL bytes ('\\0')",
+        ));
+    }
+    if tag.is_empty() {
+        return Err(EngineError::registry("ci tag must not be empty"));
+    }
+    if tag.contains('/') {
+        return Err(EngineError::registry(
+            "ci tag must not contain '/' — use '-' or ':' as a separator",
+        ));
+    }
+    if tag.len() > 128 {
+        return Err(EngineError::registry(
+            "ci tag exceeds the 128-byte maximum length",
+        ));
+    }
+    Ok(())
 }
 
 // ── AtomicAppend trait ────────────────────────────────────────────────────────
 
-/// Extension of [`EventStore`] that atomically appends events **and** enqueues
-/// outbox messages in a single write operation.
+/// The write side of an event store: one batch, written whole or not at all.
 ///
-/// Implementations must guarantee that either both the events and the outbox
-/// messages are persisted, or neither is — even across process crashes. For
-/// SlateDB this is achieved via a single `WriteBatch` (requires `slatedb` feature).
+/// [`AtomicAppend::append`] is the only write a store offers, and it has no
+/// default body. A store therefore cannot persist a command's events while
+/// dropping its outbox entries, its deadlines or its correlation entries: there
+/// is no narrower method to implement instead. For SlateDB the batch is one
+/// SSI transaction.
 ///
-/// # Why a separate trait?
+/// A store that implements only an events-and-outbox write does not compile:
 ///
-/// Not every [`EventStore`] backend supports atomic dual-writes (e.g. an
-/// in-memory test store). Keeping atomicity in a separate trait allows
-/// `Process::execute` to work against any `EventStore`, while
-/// `Process::execute_and_enqueue` requires the stronger `AtomicAppend` bound.
+/// ```compile_fail
+/// use mako_engine::{
+///     envelope::{EventEnvelope, NewEvent},
+///     error::EngineError,
+///     event_store::{AppendResult, AtomicAppend, EventStore, ExpectedVersion},
+///     ids::StreamId,
+///     outbox::PendingOutbox,
+/// };
+///
+/// struct ForgetsDeadlines;
+///
+/// impl EventStore for ForgetsDeadlines {
+///     async fn load(&self, _: &StreamId) -> Result<Vec<EventEnvelope>, EngineError> { todo!() }
+///     async fn load_from(&self, _: &StreamId, _: u64) -> Result<Vec<EventEnvelope>, EngineError> { todo!() }
+///     async fn stream_version(&self, _: &StreamId) -> Result<u64, EngineError> { todo!() }
+///     async fn list_streams(&self, _: Option<&str>) -> Result<Vec<StreamId>, EngineError> { todo!() }
+///     async fn fold_stream<T: Send, F>(&self, _: &StreamId, _: u64, _: T, _: F) -> Result<T, EngineError>
+///     where F: FnMut(T, EventEnvelope) -> Result<T, EngineError> + Send { todo!() }
+/// }
+///
+/// // Events and outbox, and nothing for the deadlines: refused, because the
+/// // trait's one method takes the whole batch and has no default.
+/// impl AtomicAppend for ForgetsDeadlines {
+///     async fn append_with_outbox(
+///         &self,
+///         _: &StreamId,
+///         _: ExpectedVersion,
+///         _: &[NewEvent],
+///         _: &[PendingOutbox],
+///     ) -> Result<AppendResult, EngineError> {
+///         todo!()
+///     }
+/// }
+/// ```
 ///
 /// # Safety
 ///
-/// Only call `append_with_outbox` from the engine's `execute_and_enqueue`
-/// path. Never write events first and outbox messages second — a crash
-/// between the two produces a silent lost APERAK.
-///
-/// `WriteBatch`: see `slatedb::WriteBatch` (requires `slatedb` feature)
-#[allow(async_fn_in_trait)]
+/// Never write events first and the rest second — a crash between the two
+/// produces a lost APERAK, a Frist that never fires, or a process its
+/// counterparty's reply cannot find.
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait AtomicAppend: EventStore {
-    /// Atomically append `events` to `stream_id` and schedule `outbox` messages.
+    /// Write `batch` atomically: its events, outbox entries, deadlines and
+    /// correlation entries all land, or none does.
     ///
-    /// The `outbox` slice carries lightweight [`crate::outbox::PendingOutbox`]
-    /// values produced by [`Workflow::handle`]. The implementation is
-    /// responsible for materialising them into fully-typed
-    /// [`crate::outbox::OutboxMessage`] values using the store-assigned fields
-    /// of the stamped envelopes (e.g. `event_id` as `causation_event_id`).
-    ///
-    /// When `outbox` is empty, this degenerates to a plain `EventStore::append`.
+    /// The store stamps the events and materialises each outbox entry against
+    /// the event it names (`caused_by_event_index`), returning both.
     ///
     /// # Errors
     ///
-    /// - [`EngineError::VersionConflict`] — optimistic concurrency check
+    /// - [`EngineError::VersionConflict`] — the optimistic concurrency check
     ///   failed; reload state and retry.
-    /// - [`EngineError::Store`] or [`EngineError::Outbox`] — storage failure.
-    ///
-    /// [`Workflow::handle`]: crate::workflow::Workflow::handle
-    #[must_use = "dropping an append_with_outbox Result silently discards a version-conflict or store error"]
-    async fn append_with_outbox(
-        &self,
-        stream_id: &StreamId,
-        expected_version: ExpectedVersion,
-        events: &[NewEvent],
-        outbox: &[crate::outbox::PendingOutbox],
-    ) -> Result<AppendResult, EngineError>;
-
-    /// Atomically append `events`, schedule `outbox` messages, **and** register
-    /// `deadlines` in a single write operation.
-    ///
-    /// Stronger guarantee than calling [`append_with_outbox`] followed by
-    /// [`DeadlineStore::register`]: either all three sets of writes land or
-    /// none do. This eliminates the non-atomic window where a process event is
-    /// persisted but its regulatory deadline is lost (e.g. on a crash between
-    /// the two calls).
-    ///
-    /// # Default implementation
-    ///
-    /// The default falls back to [`append_with_outbox`] only — **deadlines are
-    /// not persisted**. Override this in [`AtomicAppend`] implementations that
-    /// include a deadline store in the same underlying database (e.g.
-    /// `SlateDbStore` (requires `slatedb` feature)) to achieve full atomicity.
-    ///
-    /// Callers using the default must register deadlines separately via
-    /// [`DeadlineStore::register`] after this returns.
-    ///
-    /// # Errors
-    ///
-    /// Same as [`append_with_outbox`].
-    ///
-    /// [`append_with_outbox`]: AtomicAppend::append_with_outbox
-    /// [`DeadlineStore::register`]: crate::deadline::DeadlineStore::register
-    /// `SlateDbStore`: see `crate::store_slatedb` (requires `slatedb` feature)
-    #[must_use = "dropping an append_with_outbox_and_deadlines Result silently discards a version-conflict or store error"]
-    async fn append_with_outbox_and_deadlines(
-        &self,
-        stream_id: &StreamId,
-        expected_version: ExpectedVersion,
-        events: &[NewEvent],
-        outbox: &[crate::outbox::PendingOutbox],
-        _deadlines: &[crate::deadline::Deadline],
-    ) -> Result<AppendResult, EngineError> {
-        // Default: non-atomic fallback — deadlines must be registered separately.
-        self.append_with_outbox(stream_id, expected_version, events, outbox)
-            .await
-    }
-
-    /// Append events, outbox entries, deadlines **and** correlation-index
-    /// entries in one atomic write.
-    ///
-    /// # Why this exists
-    ///
-    /// A spawn is not complete when its events are durable. Until the business
-    /// key is in the correlation index, nothing can *find* the process: the
-    /// counterparty's reply resolves to no process and is skipped, and the only
-    /// subsequent event is the process's own Frist expiring as a false timeout.
-    /// Registering the key after the append left exactly that window, and the
-    /// failure was warn-only — a crash in between produced a live process that
-    /// was unreachable by business key for the rest of its life, with the
-    /// business key itself blocked against a fresh spawn.
-    ///
-    /// Passing the entries here puts them in the same batch as the events that
-    /// justify them, so a spawn is either wholly visible or wholly absent.
-    ///
-    /// # Default implementation
-    ///
-    /// Falls back to [`append_with_outbox_and_deadlines`] — **correlations are
-    /// not persisted**. Override in implementations whose registry shares the
-    /// underlying database.
-    ///
-    /// # Errors
-    ///
-    /// Same as [`append_with_outbox`].
-    ///
-    /// [`append_with_outbox`]: AtomicAppend::append_with_outbox
-    /// [`append_with_outbox_and_deadlines`]: AtomicAppend::append_with_outbox_and_deadlines
-    #[must_use = "dropping the Result silently discards a version-conflict or store error"]
-    async fn append_with_outbox_deadlines_and_correlations(
-        &self,
-        stream_id: &StreamId,
-        expected_version: ExpectedVersion,
-        events: &[NewEvent],
-        outbox: &[crate::outbox::PendingOutbox],
-        deadlines: &[crate::deadline::Deadline],
-        _correlations: &[CorrelationEntry],
-    ) -> Result<AppendResult, EngineError> {
-        self.append_with_outbox_and_deadlines(
-            stream_id,
-            expected_version,
-            events,
-            outbox,
-            deadlines,
-        )
-        .await
-    }
+    /// - [`EngineError::Outbox`] / [`EngineError::Registry`] — the batch is
+    ///   malformed ([`AppendBatch::validate`]); nothing was written.
+    /// - [`EngineError::Store`], [`EngineError::Outbox`],
+    ///   [`EngineError::Deadline`] or [`EngineError::Registry`] — storage
+    ///   failure; nothing was written.
+    #[must_use = "dropping an append Result silently discards a version-conflict or store error"]
+    async fn append(&self, batch: AppendBatch<'_>) -> Result<AppendResult, EngineError>;
 }
 
 /// One correlation-index entry: "this business key resolves to this process".
 ///
-/// Written in the same batch as the events that created the process — see
-/// [`AtomicAppend::append_with_outbox_deadlines_and_correlations`].
+/// Written in the same batch as the events that justify it — see
+/// [`AppendBatch::correlations`].
 #[derive(Debug, Clone)]
 pub struct CorrelationEntry {
     /// Tenant the key is scoped to.
@@ -574,13 +561,25 @@ struct InMemoryState {
     /// sequence namespaces, which would produce an arbitrary ordering when
     /// multiple streams are active.
     global: Vec<EventEnvelope>,
+    /// Outbox entries, in enqueue order.
+    outbox: Vec<crate::outbox::OutboxMessage>,
+    /// Registered deadlines, in registration order.
+    deadlines: Vec<crate::deadline::Deadline>,
+    /// Correlation-index entries, in write order.
+    correlations: Vec<CorrelationEntry>,
 }
 
-/// A fully in-memory [`EventStore`] for testing and development.
+/// A fully in-memory [`EventStore`] and [`AtomicAppend`] for testing and
+/// development.
 ///
-/// Backed by two logs protected by a `RwLock`:
+/// Backed by logs protected by one `RwLock`, so an [`AppendBatch`] lands
+/// whole:
 /// - A per-stream `HashMap` for sequence-ordered access.
 /// - A global flat `Vec` that preserves cross-stream insertion order.
+/// - The outbox entries, deadlines and correlation entries each batch carried,
+///   readable through [`InMemoryEventStore::outbox_messages`],
+///   [`InMemoryEventStore::deadlines_for`] and
+///   [`InMemoryEventStore::correlations`].
 ///
 /// The store assigns `event_id`, `sequence_number`, `stream_id`, and
 /// `timestamp` to each appended event — callers submit [`NewEvent`] values.
@@ -642,16 +641,45 @@ impl InMemoryEventStore {
             .cloned()
             .unwrap_or_default()
     }
+
+    /// Every outbox entry enqueued so far, in enqueue order.
+    #[must_use]
+    pub async fn outbox_messages(&self) -> Vec<crate::outbox::OutboxMessage> {
+        self.inner.read().await.outbox.clone()
+    }
+
+    /// Every deadline registered for `stream_id`, in registration order.
+    #[must_use]
+    pub async fn deadlines_for(&self, stream_id: &StreamId) -> Vec<crate::deadline::Deadline> {
+        self.inner
+            .read()
+            .await
+            .deadlines
+            .iter()
+            .filter(|d| d.stream_id() == stream_id)
+            .cloned()
+            .collect()
+    }
+
+    /// Every correlation-index entry written so far, in write order.
+    #[must_use]
+    pub async fn correlations(&self) -> Vec<CorrelationEntry> {
+        self.inner.read().await.correlations.clone()
+    }
 }
 
 #[cfg(any(test, feature = "testing"))]
-impl EventStore for InMemoryEventStore {
-    async fn append(
-        &self,
-        stream_id: &StreamId,
-        expected_version: ExpectedVersion,
-        new_events: &[NewEvent],
-    ) -> Result<AppendResult, EngineError> {
+impl AtomicAppend for InMemoryEventStore {
+    async fn append(&self, batch: AppendBatch<'_>) -> Result<AppendResult, EngineError> {
+        batch.validate()?;
+        let AppendBatch {
+            stream_id,
+            expected_version,
+            events: new_events,
+            outbox,
+            deadlines,
+            correlations,
+        } = batch;
         let mut inner = self.inner.write().await;
 
         let current = inner.streams.get(stream_id).map_or(0, |s| s.len() as u64);
@@ -686,23 +714,33 @@ impl EventStore for InMemoryEventStore {
                 EventEnvelope::from_new(new.clone(), stream_id.clone(), current + i as u64 + 1, now)
             })
             .collect();
+        let messages: Vec<crate::outbox::OutboxMessage> = outbox
+            .iter()
+            .map(|p| crate::outbox::materialise(p, stream_id, &envelopes, now))
+            .collect();
 
-        // Append to the per-stream log.
+        // Everything below is infallible, so the batch lands whole under the
+        // one write lock.
         inner
             .streams
             .entry(stream_id.clone())
             .or_default()
             .extend_from_slice(&envelopes);
-
-        // Append to the global insertion-order log.
         inner.global.extend_from_slice(&envelopes);
+        inner.outbox.extend_from_slice(&messages);
+        inner.deadlines.extend_from_slice(deadlines);
+        inner.correlations.extend_from_slice(correlations);
 
         Ok(AppendResult {
             last_sequence: current + new_events.len() as u64,
             events: envelopes,
+            outbox: messages,
         })
     }
+}
 
+#[cfg(any(test, feature = "testing"))]
+impl EventStore for InMemoryEventStore {
     async fn load(&self, stream_id: &StreamId) -> Result<Vec<EventEnvelope>, EngineError> {
         let inner = self.inner.read().await;
         Ok(inner.streams.get(stream_id).cloned().unwrap_or_default())
@@ -831,11 +869,11 @@ mod tests {
         let stream = StreamId::new("test/s1");
 
         let result = store
-            .append(
+            .append(AppendBatch::new(
                 &stream,
                 ExpectedVersion::NoStream,
                 &[make_new_event(), make_new_event()],
-            )
+            ))
             .await
             .unwrap();
 
@@ -854,7 +892,11 @@ mod tests {
         let stream = StreamId::new("test/stamp");
 
         let result = store
-            .append(&stream, ExpectedVersion::NoStream, &[make_new_event()])
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::NoStream,
+                &[make_new_event()],
+            ))
             .await
             .unwrap();
 
@@ -869,12 +911,20 @@ mod tests {
         let stream = StreamId::new("test/s2");
 
         store
-            .append(&stream, ExpectedVersion::NoStream, &[make_new_event()])
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::NoStream,
+                &[make_new_event()],
+            ))
             .await
             .unwrap();
 
         let err = store
-            .append(&stream, ExpectedVersion::NoStream, &[make_new_event()])
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::NoStream,
+                &[make_new_event()],
+            ))
             .await
             .unwrap_err();
 
@@ -888,7 +938,11 @@ mod tests {
         let events: Vec<_> = (0..5).map(|_| make_new_event()).collect();
 
         store
-            .append(&stream, ExpectedVersion::NoStream, &events)
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::NoStream,
+                &events,
+            ))
             .await
             .unwrap();
 
@@ -905,15 +959,27 @@ mod tests {
         let s2 = StreamId::new("test/order-s2");
 
         store
-            .append(&s1, ExpectedVersion::NoStream, &[make_new_event()])
+            .append(AppendBatch::new(
+                &s1,
+                ExpectedVersion::NoStream,
+                &[make_new_event()],
+            ))
             .await
             .unwrap();
         store
-            .append(&s2, ExpectedVersion::NoStream, &[make_new_event()])
+            .append(AppendBatch::new(
+                &s2,
+                ExpectedVersion::NoStream,
+                &[make_new_event()],
+            ))
             .await
             .unwrap();
         store
-            .append(&s1, ExpectedVersion::Exact(1), &[make_new_event()])
+            .append(AppendBatch::new(
+                &s1,
+                ExpectedVersion::Exact(1),
+                &[make_new_event()],
+            ))
             .await
             .unwrap();
 
@@ -930,7 +996,11 @@ mod tests {
         let stream = StreamId::new("test/arc-s1");
 
         store
-            .append(&stream, ExpectedVersion::NoStream, &[make_new_event()])
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::NoStream,
+                &[make_new_event()],
+            ))
             .await
             .unwrap();
 
@@ -945,7 +1015,11 @@ mod tests {
         let events: Vec<_> = (0..4).map(|_| make_new_event()).collect();
 
         store
-            .append(&stream, ExpectedVersion::NoStream, &events)
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::NoStream,
+                &events,
+            ))
             .await
             .unwrap();
 

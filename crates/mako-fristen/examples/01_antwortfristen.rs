@@ -8,10 +8,11 @@
 //! Three facts do most of the damage, and this example shows each:
 //!
 //! 1. **The Frist has four shapes**, not one. „11:00 Uhr des 1. WT nach dem ÜT"
-//!    is a wall-clock instant on a Werktag; „bis zum Ablauf des 4. Werktags" is
-//!    day-granular; „spätester ÜT ist der 2. WT" resolves to the 17:00 MaKo
-//!    cut-off; and „am ÜT" is the same day the message arrived. They are not
-//!    interchangeable, and a `+ n days` shorthand is wrong for all four.
+//!    is a wall-clock instant on a Werktag; „bis zum Ablauf des 4. Werktags" and
+//!    „spätester ÜT ist der 2. WT" are one day-granular shape that runs to the
+//!    end of the Werktag it names; „15:00 Uhr am ÜT" is a clock time on the day
+//!    of arrival; and „am ÜT" is that whole day. They are not interchangeable,
+//!    and a `+ n days` shorthand is wrong for all four.
 //! 2. **Werktag is BDEW's calendar**, not the Bundesland's. A holiday observed
 //!    in *any* German state is a non-Werktag, so no Frist is ever computed
 //!    shorter than the AHB requires for any participant.

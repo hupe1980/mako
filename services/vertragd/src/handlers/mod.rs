@@ -16,7 +16,7 @@
 //! operator's: `portald` forwards an end customer's own token to the two routes
 //! whose answer is about that token's subject. So every route additionally calls
 //! `authorize`, which evaluates `policies/vertragd.cedar` and separates the
-//! customer-scoped actions from the operator ones. `tests/authorization_guard.rs`
+//! customer-scoped actions from the operator ones. `tests/it/authorization_guard.rs`
 //! pins that every routed handler does both.
 
 pub mod inbound;

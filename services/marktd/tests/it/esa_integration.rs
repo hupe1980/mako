@@ -1,0 +1,757 @@
+//! Real-PostgreSQL guards for the ESA consent registry (§49 Abs. 2 Nr. 9 MsbG).
+//!
+//! ```bash
+//! PostgreSQL is self-managed via testcontainers (only a Docker daemon is
+//! required); tests skip gracefully when Docker is unavailable:
+//!
+//! just test-marktd-db
+//! ```
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test connects straight to its throwaway container; pool sizing and lifetimes are a deployment concern"
+)]
+
+use mako_markt::repository::{
+    ConsentCode, ConsentPerspective, EinwilligungRecord, EinwilligungRepository as _,
+    EsaFrameworkAgreement, EsaMessproduktPreis,
+};
+use marktd::pg::PgEinwilligungRepository;
+use sqlx::PgPool;
+use uuid::Uuid;
+
+const MSB: &str = "9900357000004";
+
+const SCHEMA: &str = include_str!("../../migrations/0001_initial.sql");
+const TENANT: &str = "9900357000004";
+const ESA: &str = "9905550000005";
+
+async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
+    let (url, container) = pg_container().await?;
+    let pool = PgPool::connect(&url).await.ok()?;
+    sqlx::raw_sql(SCHEMA)
+        .execute(&pool)
+        .await
+        .expect("apply schema");
+    Some((pool, container))
+}
+
+fn consent(an_ref: &str, locations: &[&str]) -> EinwilligungRecord {
+    EinwilligungRecord {
+        id: Uuid::nil(),
+        tenant: TENANT.to_owned(),
+        anschlussnutzer_ref: an_ref.to_owned(),
+        esa_mp_id: ESA.to_owned(),
+        location_ids: locations.iter().map(|s| (*s).to_owned()).collect(),
+        scope: "werte".to_owned(),
+        granted_at: time::OffsetDateTime::now_utc(),
+        valid_from: time::macros::date!(2026 - 01 - 01),
+        valid_to: None,
+        revoked_at: None,
+        evidence_uri: Some("s3://consents/an-1.pdf".to_owned()),
+        evidence_hash: Some("deadbeef".to_owned()),
+    }
+}
+
+/// Grant → list → revoke returns the record → revoke again is a no-op.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn consent_lifecycle() {
+    let Some((pool, _pg)) = test_pool("lifecycle").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool);
+
+    let id = repo.grant(consent("AN-1", &["51238696012"])).await.unwrap();
+    let active = repo.list_for_esa(TENANT, ESA).await.unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].location_ids, vec!["51238696012".to_owned()]);
+    // Evidence is stored verbatim, never validated.
+    assert_eq!(active[0].evidence_hash.as_deref(), Some("deadbeef"));
+
+    // Revoke returns the record (so the caller can fire the 17008 Abbestellung).
+    let revoked = repo.revoke(TENANT, id).await.unwrap();
+    assert!(revoked.is_some());
+    assert_eq!(revoked.unwrap().esa_mp_id, ESA);
+    // Revoking again is a no-op — the Abbestellung fires exactly once.
+    assert!(repo.revoke(TENANT, id).await.unwrap().is_none());
+    // No active consents remain.
+    assert!(repo.list_for_esa(TENANT, ESA).await.unwrap().is_empty());
+}
+
+/// A new grant supersedes the active consent for the same Anschlussnutzer.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn new_grant_supersedes_active_consent() {
+    let Some((pool, _pg)) = test_pool("supersede").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool);
+
+    repo.grant(consent("AN-2", &["51238696012"])).await.unwrap();
+    // Second grant for the same (tenant, esa, Anschlussnutzer) must succeed by
+    // superseding the first — the partial UNIQUE index stays satisfied.
+    let id2 = repo
+        .grant(consent("AN-2", &["51238696012", "51238696781"]))
+        .await
+        .unwrap();
+    let active = repo.list_for_esa(TENANT, ESA).await.unwrap();
+    assert_eq!(active.len(), 1, "only the latest consent is active");
+    assert_eq!(active[0].id, id2);
+    assert_eq!(active[0].location_ids.len(), 2);
+}
+
+/// The inbound-message gate: active consent allows, revocation blocks, a fresh
+/// grant re-allows, an absent record is self-assertion, and an unestablished
+/// framework agreement blocks regardless of consent.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn consent_check_gates_inbound_messages() {
+    let Some((pool, _pg)) = test_pool("check").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool);
+    let loc = "51238696012";
+    let msb_in = ConsentPerspective::MsbInbound;
+    let esa_out = ConsentPerspective::EsaOutbound;
+
+    // No record: self-assertion for the MSB (allow), no lawful basis for the ESA
+    // (block). This is the asymmetry the outbound direction depends on.
+    let d = repo
+        .consent_check(TENANT, ESA, MSB, loc, msb_in)
+        .await
+        .unwrap();
+    assert_eq!(d.code, ConsentCode::SelfAssertion);
+    assert!(d.allowed);
+    let d = repo
+        .consent_check(TENANT, ESA, MSB, loc, esa_out)
+        .await
+        .unwrap();
+    assert_eq!(d.code, ConsentCode::NoConsent);
+    assert!(!d.allowed);
+
+    // Active consent → allow from both sides.
+    let id = repo.grant(consent("AN-9", &[loc])).await.unwrap();
+    let d = repo
+        .consent_check(TENANT, ESA, MSB, loc, msb_in)
+        .await
+        .unwrap();
+    assert_eq!(d.code, ConsentCode::Active);
+    assert!(d.allowed);
+    let d = repo
+        .consent_check(TENANT, ESA, MSB, loc, esa_out)
+        .await
+        .unwrap();
+    assert_eq!(d.code, ConsentCode::Active);
+    assert!(d.allowed);
+
+    // Revoked, none superseding → the Widerruf clearing case blocks either way.
+    repo.revoke(TENANT, id).await.unwrap();
+    let d = repo
+        .consent_check(TENANT, ESA, MSB, loc, msb_in)
+        .await
+        .unwrap();
+    assert_eq!(d.code, ConsentCode::Revoked);
+    assert!(!d.allowed);
+    let d = repo
+        .consent_check(TENANT, ESA, MSB, loc, esa_out)
+        .await
+        .unwrap();
+    assert_eq!(d.code, ConsentCode::Revoked);
+
+    // A fresh grant re-allows.
+    repo.grant(consent("AN-9", &[loc])).await.unwrap();
+    let d = repo
+        .consent_check(TENANT, ESA, MSB, loc, msb_in)
+        .await
+        .unwrap();
+    assert_eq!(d.code, ConsentCode::Active);
+
+    // A framework agreement on record but not established blocks everything.
+    repo.upsert_framework(EsaFrameworkAgreement {
+        tenant: TENANT.to_owned(),
+        msb_mp_id: MSB.to_owned(),
+        esa_mp_id: ESA.to_owned(),
+        signed_at: None,
+        edi_agreement: false,
+        cert_state: "pending".to_owned(),
+    })
+    .await
+    .unwrap();
+    let d = repo
+        .consent_check(TENANT, ESA, MSB, loc, msb_in)
+        .await
+        .unwrap();
+    assert_eq!(d.code, ConsentCode::FrameworkRejected);
+    assert!(!d.allowed);
+}
+
+/// The expiry sweep is tenant-scoped.
+///
+/// It runs on a timer with no caller-supplied input, so an unscoped statement
+/// would revoke every tenant's consents and publish their `anschlussnutzer_ref`
+/// and `location_ids` in an event routed to this deployment's subscribers.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_expiry_sweep_does_not_reach_another_tenant() {
+    let Some((pool, _pg)) = test_pool("expiry-tenant").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool);
+    let today = time::macros::date!(2026 - 06 - 15);
+    let other = "9905550000005";
+
+    let mine = EinwilligungRecord {
+        valid_to: Some(time::macros::date!(2026 - 06 - 14)),
+        ..consent("AN-MINE", &["51238696012"])
+    };
+    let theirs = EinwilligungRecord {
+        tenant: other.to_owned(),
+        valid_to: Some(time::macros::date!(2026 - 06 - 14)),
+        ..consent("AN-THEIRS", &["51238696013"])
+    };
+    repo.grant(mine).await.unwrap();
+    let theirs_id = repo.grant(theirs).await.unwrap();
+
+    let expired = repo.revoke_expired(today, TENANT).await.expect("sweep");
+    assert_eq!(
+        expired.len(),
+        1,
+        "only this tenant's lapsed consent closes: {expired:?}"
+    );
+    assert_eq!(expired[0].anschlussnutzer_ref, "AN-MINE");
+
+    // The other tenant's consent is untouched and still theirs to close.
+    let still_open = repo.get(other, theirs_id).await.unwrap().expect("present");
+    assert!(
+        still_open.revoked_at.is_none(),
+        "another tenant's consent must survive this deployment's sweep"
+    );
+}
+
+/// Tenant isolation: another tenant cannot read or revoke a consent.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn consent_is_tenant_scoped() {
+    let Some((pool, _pg)) = test_pool("tenant").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool);
+    let id = repo.grant(consent("AN-3", &["51238696012"])).await.unwrap();
+
+    assert!(repo.get("9900000000000", id).await.unwrap().is_none());
+    assert!(repo.revoke("9900000000000", id).await.unwrap().is_none());
+    assert!(repo.get(TENANT, id).await.unwrap().is_some());
+}
+/// The Postgres container guard a test holds until it ends — dropping it removes
+/// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
+type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
+
+/// Start a fresh throwaway `postgres:17-alpine` and return its URL plus the
+/// container guard. `None` when Docker is unavailable (tests skip gracefully).
+/// The accepted QUOTES 15003 Angebot — the ESA's **only** price basis for an
+/// INVOIC 31009.
+///
+/// `preisblaetter_messung` holds what an MSB publishes toward the NB and the LF;
+/// there is none for a Kapitel-4.6 Messprodukt, because §35 MsbG leaves the
+/// Entgelt for a Zusatzleistung to be agreed per request. So the offer the ESA
+/// ordered against is the agreement, and `invoicd` joins the invoice's
+/// Artikel-IDs (`SG26 LIN` DE 7143 `Z09`) onto these rows.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn accepted_angebot_prices_round_trip() {
+    let Some((pool, _pg)) = test_pool("esa_preise").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool);
+
+    let preis = |artikel: &str, typ: &str, betrag: &str, einheit: &str| EsaMessproduktPreis {
+        tenant: TENANT.to_owned(),
+        esa_mp_id: ESA.to_owned(),
+        msb_mp_id: MSB.to_owned(),
+        lokations_id: "51238696012".to_owned(),
+        messprodukt: "9991000003056".to_owned(),
+        artikel_id: artikel.to_owned(),
+        preistyp: typ.to_owned(),
+        betrag: betrag.parse().expect("decimal"),
+        einheit: einheit.to_owned(),
+        waehrung: "EUR".to_owned(),
+        bestellung_ref: Some("ESABE0000000001".to_owned()),
+        valid_from: Some(time::macros::date!(2026 - 03 - 01)),
+        valid_to: None,
+    };
+
+    repo.upsert_esa_preise(&[
+        // The Einrichtungspreis is per Stück, the Betriebspreis per Tag —
+        // QUOTES AHB 1.1a conditions [86]–[88].
+        preis("9990001100001", "Z01", "25.000000", "H87"),
+        preis("9990001100002", "Z03", "0.004500", "DAY"),
+    ])
+    .await
+    .expect("record the accepted Angebot");
+
+    let at = time::macros::date!(2026 - 04 - 01);
+    let got = repo
+        .esa_preise_at(TENANT, ESA, MSB, at)
+        .await
+        .expect("read back");
+    assert_eq!(got.len(), 2);
+    // Six decimal places survive: a Betriebspreis per Tag lands in the last of
+    // them, and rounding it away would silently change the agreement.
+    let betrieb = got
+        .iter()
+        .find(|p| p.preistyp == "Z03")
+        .expect("the Betriebspreis is on record");
+    assert_eq!(betrieb.betrag.to_string(), "0.004500");
+    assert_eq!(betrieb.einheit, "DAY");
+    assert_eq!(betrieb.bestellung_ref.as_deref(), Some("ESABE0000000001"));
+
+    // Before the subscription started, nothing is agreed — the window is
+    // half-open `[valid_from, valid_to)` like every other dated table here.
+    assert!(
+        repo.esa_preise_at(TENANT, ESA, MSB, time::macros::date!(2026 - 02 - 01))
+            .await
+            .expect("read back")
+            .is_empty()
+    );
+
+    // A re-accepted offer replaces the price for the same Artikel-ID and
+    // window rather than adding a second answer.
+    repo.upsert_esa_preise(&[preis("9990001100002", "Z03", "0.009900", "DAY")])
+        .await
+        .expect("supersede");
+    let got = repo
+        .esa_preise_at(TENANT, ESA, MSB, at)
+        .await
+        .expect("read back");
+    assert_eq!(got.len(), 2, "superseded, not duplicated");
+    assert_eq!(
+        got.iter()
+            .find(|p| p.preistyp == "Z03")
+            .expect("still there")
+            .betrag
+            .to_string(),
+        "0.009900"
+    );
+}
+
+/// Prices are tenant-scoped like every other row here.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn accepted_angebot_prices_are_tenant_scoped() {
+    let Some((pool, _pg)) = test_pool("esa_preise_tenant").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool);
+    repo.upsert_esa_preise(&[EsaMessproduktPreis {
+        tenant: TENANT.to_owned(),
+        esa_mp_id: ESA.to_owned(),
+        msb_mp_id: MSB.to_owned(),
+        lokations_id: "51238696012".to_owned(),
+        messprodukt: "9991000003056".to_owned(),
+        artikel_id: "9990001100001".to_owned(),
+        preistyp: "Z01".to_owned(),
+        betrag: "25.000000".parse().expect("decimal"),
+        einheit: "H87".to_owned(),
+        waehrung: "EUR".to_owned(),
+        bestellung_ref: None,
+        valid_from: Some(time::macros::date!(2026 - 03 - 01)),
+        valid_to: None,
+    }])
+    .await
+    .expect("record");
+
+    assert!(
+        repo.esa_preise_at(
+            "9900002000002",
+            ESA,
+            MSB,
+            time::macros::date!(2026 - 04 - 01)
+        )
+        .await
+        .expect("read back")
+        .is_empty(),
+        "another tenant sees nothing"
+    );
+}
+
+/// **The Messprodukt-Katalog answers the walks' one commercial question — and
+/// cannot refuse a Pflichtprodukt.**
+///
+/// `E_0252` Prüfschritt 2 and `E_0256` Prüfschritte 4/5 ask which of the
+/// *optional* Kapitel-4.6 products this MSB carries. The seven Pflichtprodukte
+/// are outside the operator's gift: BNetzA *Mitteilung Nr. 3* removed the MSB's
+/// discretion over them and §34 Abs. 2 S. 2 Nr. 10 MsbG makes serving an ESA a
+/// mandatory Zusatzleistung, so an empty catalogue must never turn into a
+/// refusal.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_messprodukt_katalog_answers_optional_products_only() {
+    use mako_markt::repository::EsaMessproduktAngebot;
+
+    let Some((pool, _pg)) = test_pool("esa_katalog").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool);
+    let at = time::macros::date!(2026 - 04 - 01);
+
+    // An optional Rohdaten product, served as an Abo but not one-off.
+    repo.upsert_esa_messprodukt_katalog(&[EsaMessproduktAngebot {
+        tenant: TENANT.to_owned(),
+        msb_mp_id: MSB.to_owned(),
+        messprodukt: "9991000000416".to_owned(),
+        als_abo: true,
+        als_einmalig: false,
+        valid_from: Some(time::macros::date!(2026 - 01 - 01)),
+        valid_to: None,
+    }])
+    .await
+    .expect("record the catalogue");
+
+    let carried = repo
+        .esa_messprodukt_angebot(TENANT, MSB, "9991000000416", at)
+        .await
+        .expect("lookup")
+        .expect("on file");
+    assert!(carried.als_abo);
+    // The two modes are separate because `E_0256` refuses them with different
+    // codes — `A04` for a declined Abo, `A05` for a declined one-shot.
+    assert!(!carried.als_einmalig);
+
+    // An optional product with **no** row is „nothing recorded", not „not
+    // carried": the walks escalate on the difference.
+    assert!(
+        repo.esa_messprodukt_angebot(TENANT, MSB, "9991000000747", at)
+            .await
+            .expect("lookup")
+            .is_none()
+    );
+
+    // Dated: the same product before the window opened is not yet carried.
+    assert!(
+        repo.esa_messprodukt_angebot(
+            TENANT,
+            MSB,
+            "9991000000416",
+            time::macros::date!(2025 - 06 - 01)
+        )
+        .await
+        .expect("lookup")
+        .is_none(),
+        "a catalogue entry does not apply before its valid_from"
+    );
+
+    // Tenant-scoped like every other read here.
+    assert!(
+        repo.esa_messprodukt_angebot("9900002000002", MSB, "9991000000416", at)
+            .await
+            .expect("lookup")
+            .is_none()
+    );
+}
+
+/// **A subscription's Messprodukt is resolvable from its Belegnummer.**
+///
+/// `edmd`'s Typ-2 delivery surveillance sizes its silence threshold from the
+/// cadence the ordered product publishes (Codeliste 1.4 Kap. 4.6 — the Rohdaten
+/// products state „spätestens bis 9:30 Uhr", the aufbereitete-Daten ones defer
+/// to WiM Kap. 2.5.5). An inbound MSCONS 13027 names only the Belegnummer of the
+/// ORDERS it belongs to (`SG1 RFF+AGI`), never the product, and
+/// `esa_messprodukt_preise` is the only place that pairing exists outside the
+/// running `makod` process.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_belegnummer_resolves_to_the_messprodukt_it_ordered() {
+    let Some((pool, _pg)) = test_pool("esa_subscription").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool);
+
+    let preis = |artikel: &str, messprodukt: &str, bestellung: &str| EsaMessproduktPreis {
+        tenant: TENANT.to_owned(),
+        esa_mp_id: ESA.to_owned(),
+        msb_mp_id: MSB.to_owned(),
+        lokations_id: "51238696012".to_owned(),
+        messprodukt: messprodukt.to_owned(),
+        artikel_id: artikel.to_owned(),
+        preistyp: "Z03".to_owned(),
+        betrag: "0.004500".parse().expect("decimal"),
+        einheit: "DAY".to_owned(),
+        waehrung: "EUR".to_owned(),
+        bestellung_ref: Some(bestellung.to_owned()),
+        valid_from: Some(time::macros::date!(2026 - 03 - 01)),
+        valid_to: None,
+    };
+
+    repo.upsert_esa_preise(&[
+        // One subscription, priced over two Artikel-IDs — both name the same
+        // product, which is why `DISTINCT` collapses them to one answer.
+        preis("9990001100001", "9991000000416", "ESABE0000000001"),
+        preis("9990001100002", "9991000000416", "ESABE0000000001"),
+        // A second subscription at the same location, on a different product.
+        preis("9990001100003", "9991000003056", "ESABE0000000002"),
+    ])
+    .await
+    .expect("record the accepted Angebote");
+
+    assert_eq!(
+        repo.esa_messprodukt_of_bestellung(TENANT, "ESABE0000000001")
+            .await
+            .expect("lookup")
+            .as_deref(),
+        Some("9991000000416"),
+    );
+    assert_eq!(
+        repo.esa_messprodukt_of_bestellung(TENANT, "ESABE0000000002")
+            .await
+            .expect("lookup")
+            .as_deref(),
+        Some("9991000003056"),
+    );
+    // A Belegnummer nothing was filed under is the ordinary state for a
+    // delivery whose sender omitted the `RFF+AGI` Muss — `None`, not an error,
+    // and the sweep falls back to its configured threshold.
+    assert!(
+        repo.esa_messprodukt_of_bestellung(TENANT, "UNBEKANNT")
+            .await
+            .expect("lookup")
+            .is_none()
+    );
+    // Tenant-scoped like every other read here.
+    assert!(
+        repo.esa_messprodukt_of_bestellung("9900002000002", "ESABE0000000001")
+            .await
+            .expect("lookup")
+            .is_none()
+    );
+}
+
+/// **An expired consent is no lawful basis, and nothing stops on its own.**
+///
+/// §49 Abs. 2 Nr. 9 MsbG makes the Einwilligung the ESA's whole entitlement,
+/// and `E_0256` Prüfschritt 8 treats a lapsed one exactly like a withdrawn one
+/// („widerrufen **oder ihre Gültigkeit ist abgelaufen**" → `A08`). But the only
+/// protocol-level stop is the ORDERS 17008 the *ESA* sends. Nothing else closes
+/// the gap: the gate refuses only *new* orders, the list endpoint drops the row,
+/// and the MSB has no reason to act.
+///
+/// `revoke_expired` closes a tenant's lapsed consents in one statement and
+/// returns the records. The hourly sweep takes the transactional path instead
+/// (`expired_candidates` + `claim_expired`, each row closed together with its
+/// event — see `an_expiry_whose_event_fails_stays_open_for_the_next_sweep`);
+/// what this pins is the expiry boundary both paths share.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_expired_consent_is_closed_and_returned_for_the_abbestellung() {
+    let Some((pool, _pg)) = test_pool("expiry").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool);
+    let today = time::macros::date!(2026 - 06 - 15);
+
+    // Expired yesterday — `valid_to` is the last day the consent is good for.
+    let abgelaufen = repo
+        .grant(EinwilligungRecord {
+            valid_to: Some(time::macros::date!(2026 - 06 - 14)),
+            ..consent("AN-EXP", &["51238696012", "51238696013"])
+        })
+        .await
+        .unwrap();
+    // Expires **today**, so it is still a basis today.
+    let heute = repo
+        .grant(EinwilligungRecord {
+            valid_to: Some(today),
+            ..consent("AN-HEUTE", &["51238696014"])
+        })
+        .await
+        .unwrap();
+    // Open-ended — only a Widerruf ends it.
+    let offen = repo
+        .grant(consent("AN-OFFEN", &["51238696015"]))
+        .await
+        .unwrap();
+
+    let expired = repo.revoke_expired(today, TENANT).await.expect("sweep");
+    assert_eq!(
+        expired.len(),
+        1,
+        "only the lapsed consent closes: {expired:?}"
+    );
+    assert_eq!(expired[0].id, abgelaufen);
+    assert_eq!(
+        expired[0].location_ids.len(),
+        2,
+        "every covered location comes back — losing the basis loses it for all \
+         of them, and each needs its own 17008"
+    );
+
+    // Idempotent: the 17008 goes out once per consent, so a second sweep must
+    // return nothing.
+    assert!(
+        repo.revoke_expired(today, TENANT)
+            .await
+            .expect("sweep")
+            .is_empty(),
+        "a closed consent must not be swept twice"
+    );
+
+    // The two that are still valid are untouched and still gate as active.
+    for (id, label) in [(heute, "expires today"), (offen, "open-ended")] {
+        let rec = repo.get(TENANT, id).await.unwrap().expect(label);
+        assert!(rec.revoked_at.is_none(), "{label} must stay active");
+    }
+    let decision = repo
+        .consent_check(
+            TENANT,
+            ESA,
+            MSB,
+            "51238696012",
+            ConsentPerspective::EsaOutbound,
+        )
+        .await
+        .expect("check");
+    assert!(
+        !decision.allowed,
+        "the swept consent no longer authorises its locations"
+    );
+}
+
+/// **A revocation whose event is lost must stay revocable.**
+///
+/// `revoked_at` is the sweep's own filter, so committing it is spending the
+/// only retry there is: a consent closed without its
+/// `de.markt.einwilligung.widerrufen` event can never be selected again, no
+/// Abbestellung is ever sent, and the ESA keeps receiving Typ-2 Messwerte with
+/// no lawful basis (Art. 6 Abs. 1 lit. a DSGVO). The revocation and the event
+/// therefore commit together — this drives the two halves
+/// `consent_lifecycle::close_expired` composes, with the event INSERT made to
+/// fail between them.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_expiry_whose_event_fails_stays_open_for_the_next_sweep() {
+    let Some((pool, _pg)) = test_pool("expiry-atomic").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool.clone());
+    let today = time::macros::date!(2026 - 06 - 15);
+
+    let id = repo
+        .grant(EinwilligungRecord {
+            valid_to: Some(time::macros::date!(2026 - 06 - 14)),
+            ..consent("AN-ATOMIC", &["51238696012"])
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.expired_candidates(today, TENANT).await.unwrap(),
+        vec![id],
+        "the lapsed consent is a sweep candidate"
+    );
+
+    // Sweep 1 — the event INSERT fails. `event_log` is renamed away, which is
+    // what a lost event looks like from inside the transaction.
+    sqlx::query("ALTER TABLE event_log RENAME TO event_log_away")
+        .execute(&pool)
+        .await
+        .expect("rename event_log away");
+    {
+        let mut tx = pool.begin().await.unwrap();
+        let claimed = PgEinwilligungRepository::claim_expired(&mut tx, id, today, TENANT)
+            .await
+            .expect("claim")
+            .expect("the lapsed consent is claimable");
+        assert_eq!(claimed.id, id);
+        marktd::outbox::enqueue(&mut *tx, &widerrufen_event(&claimed))
+            .await
+            .expect_err("the event INSERT must fail with event_log gone");
+        tx.rollback().await.expect("roll back the failed sweep");
+    }
+    sqlx::query("ALTER TABLE event_log_away RENAME TO event_log")
+        .execute(&pool)
+        .await
+        .expect("restore event_log");
+
+    // The consent is exactly as it was: still open, and still a candidate.
+    let after = repo
+        .get(TENANT, id)
+        .await
+        .unwrap()
+        .expect("consent present");
+    assert!(
+        after.revoked_at.is_none(),
+        "a consent whose event was lost must stay open — a committed revoked_at \
+         is invisible to every later sweep, so the ESA would deliver on forever"
+    );
+    assert_eq!(
+        repo.expired_candidates(today, TENANT).await.unwrap(),
+        vec![id],
+        "the next sweep retries it"
+    );
+
+    // Sweep 2 — the event lands, and both commit together.
+    let mut tx = pool.begin().await.unwrap();
+    let claimed = PgEinwilligungRepository::claim_expired(&mut tx, id, today, TENANT)
+        .await
+        .expect("claim")
+        .expect("still claimable");
+    marktd::outbox::enqueue(&mut *tx, &widerrufen_event(&claimed))
+        .await
+        .expect("enqueue");
+    tx.commit().await.expect("commit");
+
+    let closed = repo
+        .get(TENANT, id)
+        .await
+        .unwrap()
+        .expect("consent present");
+    assert!(closed.revoked_at.is_some(), "the consent is now closed");
+    assert!(
+        repo.expired_candidates(today, TENANT)
+            .await
+            .unwrap()
+            .is_empty(),
+        "a closed consent is not swept twice"
+    );
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM event_log WHERE ce_type = $1 AND envelope->'data'->>'grund' = $2",
+    )
+    .bind(mako_events::markt::EINWILLIGUNG_WIDERRUFEN)
+    .bind(marktd::consent_lifecycle::GRUND_ABGELAUFEN)
+    .fetch_one(&pool)
+    .await
+    .expect("count events");
+    assert_eq!(
+        events, 1,
+        "exactly one expiry event — the failed sweep left none behind"
+    );
+}
+
+/// The event the expiry sweep writes beside the revocation.
+fn widerrufen_event(rec: &EinwilligungRecord) -> mako_markt::cloudevents::MarktEvent {
+    mako_markt::cloudevents::MarktEvent::new(
+        TENANT,
+        mako_events::markt::EINWILLIGUNG_WIDERRUFEN,
+        rec.id.to_string(),
+        serde_json::json!({
+            "einwilligung_id": rec.id,
+            "esa_mp_id": rec.esa_mp_id,
+            "anschlussnutzer_ref": rec.anschlussnutzer_ref,
+            "location_ids": rec.location_ids,
+            "grund": marktd::consent_lifecycle::GRUND_ABGELAUFEN,
+            "valid_to": rec.valid_to.map(|d| d.to_string()),
+        }),
+    )
+}
+
+async fn pg_container() -> Option<(String, PgContainer)> {
+    use testcontainers::ImageExt;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
+    let container = Postgres::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .ok()?;
+    let port = container.get_host_port_ipv4(5432).await.ok()?;
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    Some((url, container))
+}

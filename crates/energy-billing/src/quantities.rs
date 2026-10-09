@@ -92,6 +92,7 @@ impl Ablesungsart {
 
 /// Electricity meter data for one billing period.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MeterInput {
     /// Total energy in kWh (Arbeitsmenge).
     #[serde(default)]
@@ -194,6 +195,7 @@ impl MeterInput {
 
 /// Gas meter data for one billing period.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GasMeterInput {
     /// Share of the billing period covered by billable readings, 0–100.
     ///
@@ -281,6 +283,7 @@ impl AbsetzungsGrund {
 /// Municipal statutes require a separately installed, calibrated meter
 /// (geeichter Absetzungszähler) for each deduction.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Absetzung {
     /// Metered volume in m³.
     pub m3: Decimal,
@@ -290,6 +293,7 @@ pub struct Absetzung {
 
 /// Water / wastewater meter and property data (WASSER).
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WasserMeterInput {
     /// Drinking water delivered in m³ — the basis for the Trinkwasser
     /// Mengenpreis **and** (minus Absetzungen) the Schmutzwasser volume.
@@ -317,6 +321,7 @@ impl WasserMeterInput {
 
 /// District heat meter data.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WaermeMeterInput {
     /// Thermal energy delivered (kWh_th).
     #[serde(default)]
@@ -331,6 +336,7 @@ pub struct WaermeMeterInput {
 
 /// Solar / Eigenverbrauch / Mieterstrom / GGV meter data.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SolarMeterInput {
     /// Metered self-consumption or locally delivered kWh.
     pub eigenverbrauch_kwh: Decimal,
@@ -499,6 +505,7 @@ impl GgvNutzungsplan {
 
 /// EEG feed-in settlement meter data (simplified LF view).
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EegMeterInput {
     /// Total kWh fed into the grid during the billing period.
     pub einspeisung_kwh: Decimal,
@@ -509,6 +516,7 @@ pub struct EegMeterInput {
 
 /// HEMS (Home Energy Management System) subscription usage.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HemsMeterInput {
     /// Billing months (for monthly subscription fee).
     #[serde(default)]
@@ -523,6 +531,7 @@ pub struct HemsMeterInput {
 
 /// E-Mobility CPO/EMSP usage data.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EmobilityMeterInput {
     #[serde(default)]
     pub months: Option<Decimal>,
@@ -536,6 +545,7 @@ pub struct EmobilityMeterInput {
 
 /// Energiedienstleistung service usage.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServiceMeterInput {
     #[serde(default)]
     pub months: Option<Decimal>,
@@ -614,8 +624,14 @@ impl Sect41aAnnualComparison {
 
 // ── Grid pass-through costs ───────────────────────────────────────────────────
 
-/// Grid infrastructure charges sourced from `marktd` or supplied directly.
+/// Grid infrastructure charges, supplied by the caller.
+///
+/// Every field is optional and a provider adds a position only for a field
+/// that is set, so an unknown key is refused rather than dropped: a mistyped
+/// override would otherwise leave the real field `None` and bill no
+/// Netzentgelt at all.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GridInput {
     // ── Strom ─────────────────────────────────────────────────────────────────
     #[serde(default)]
@@ -661,6 +677,7 @@ pub struct GridInput {
 /// credits the sharing allocation (via `EnergyShareProvider`) at the contracted
 /// rate — typically below the retail tariff and above the wholesale price.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EnergyShareMeterInput {
     /// kWh allocated from the community energy pool to this participant.
     ///
@@ -1277,6 +1294,31 @@ impl GgvSolarInput {
 mod tests {
     use super::*;
     use rust_decimal::dec;
+
+    /// A grid override naming a field `GridInput` does not have is refused.
+    ///
+    /// Every field is optional and a provider adds a position only for a
+    /// field that is set, so a dropped key leaves the real one `None` and the
+    /// invoice carries no Netzentgelt at all — an unknown key that silently
+    /// prices to zero.
+    #[test]
+    fn a_grid_override_with_an_unknown_field_is_refused() {
+        let body = serde_json::json!({
+            "netzentgelt_eur": "0", "messentgelt_eur": "0",
+            "umlagen_eur": "0", "konzessionsabgabe_eur": "0",
+            "stromsteuer_eur": "0"
+        });
+        let err = serde_json::from_value::<GridInput>(body)
+            .expect_err("an unknown grid field must be refused");
+        assert!(err.to_string().contains("unknown field"), "{err}");
+
+        let real: GridInput = serde_json::from_value(serde_json::json!({
+            "nne_arbeitspreis_ct_per_kwh": "8.5",
+            "ka_ct_per_kwh": "1.59"
+        }))
+        .expect("the real field names deserialise");
+        assert_eq!(real.nne_arbeitspreis_ct_per_kwh, Some(dec!(8.5)));
+    }
 
     fn plan(fractions: &[(&str, &str)]) -> GgvNutzungsplan {
         GgvNutzungsplan(

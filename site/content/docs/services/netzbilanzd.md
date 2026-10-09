@@ -3,13 +3,12 @@ title = "netzbilanzd Operator Guide"
 description = "Operator guide for netzbilanzd, the NB billing daemon: Netznutzungsentgelt, Konzessionsabgabe and Mehr-/Mindermengen settlement into INVOIC drafts."
 weight = 25
 +++
-`netzbilanzd` settles, checks and dispatches every invoice a German network operator owes
-its counterparties, and carries the Redispatch 2.0 cost sheets. It is the outbound half of
-the NB role: what the operator bills, under which paragraph, and what happened to the money.
+`netzbilanzd` settles, checks and dispatches every invoice a network operator owes its
+counterparties, and carries the Redispatch 2.0 cost sheets.
 
-**Port:** `:8680`
-**Storage:** PostgreSQL — `invoice_drafts`, `invoice_number_seq`, `abschlag_verrechnungen`, `kostenblatt_records`, `fremdkosten_records`
-**Role:** NB / GNB only
+**Port:** `:8680` · **Role:** NB / GNB (and MSB for PID 31009) ·
+**Storage:** PostgreSQL — `invoice_drafts`, `invoice_number_seq`, `abschlag_verrechnungen`,
+`kostenblatt_records`, `fremdkosten_records`
 
 1. TOC
 {:toc}
@@ -85,28 +84,20 @@ graph LR
 | PID | Document | Direction | `billing_type` | Regulatory basis |
 |---|---|---|---|---|
 | 31001 | Abschlagsrechnung Netznutzung (payment on account) | NB → LF | `abschlag` | INVOIC AHB 1.0b · §14 Abs. 5 UStG |
-| 31002 | NN-Rechnung (Netznutzungsentgelt + Konzessionsabgabe) | NB → LF | `nne` | StromNEV §§17/21 · GasNEV §§14/15 · KAV §2 |
+| 31002 | NN-Rechnung (Netznutzungsentgelt + Konzessionsabgabe) | NB → LF | `nne` | StromNEV §§17/21 · GasNEV §15 · KAV §2 |
 | 31005 | Mehr-/Mindermengensaldo | NB → LF | `mmm` | GPKE (BK6-24-174) Teil 1 Kap. 8.4 · GaBi Gas 2.1 (BK7-24-01-008) |
 | 31009 | MSB-Rechnung (Messstellenbetrieb) | **MSB → NB / LF / ESA** | `msb` | §30 MsbG |
 | 31011 | Rechnung sonstige Leistung (AWH Sperrprozesse) | GNB → LFG | `gas_awh` | GeLi Gas 3.0 (BK7-24-01-009) §5.4 |
 
-A **Prüfidentifikator** (PID) is the four- or five-digit code the BDEW rulebooks use to name
-one business message in one direction — it is what tells a receiver which Anwendungsfall of
-an EDIFACT message type it is holding. Every invoice here is an **INVOIC**, and the PID says
-which kind.
+Every document is an INVOIC; the [PID](@/docs/architecture/domain-model.md#prufidentifikator-pid)
+names which kind. Two properties cost money when missed:
 
-Two properties of this table are easy to get wrong, and both cost money.
-
-**The Sparte is not in the Prüfidentifikator.** NN-Rechnung Strom and Gas share PID 31002;
-the two MMM variants share 31005. Every settlement therefore states its `sparte`, and that
-one field decides three things: whether the Arbeit position cites StromNEV §21 or
-GasNEV §15, whether the three EnFG network levies are billed at all, and what
-`Rechnung.sparte` says on the wire — the only place a receiver can read which Sparte a
-31002 settles.
-
-**PID 31009 runs the other way.** The Messstellenbetreiber issues it in all seven of its
-Anwendungsfälle (*Anwendungsübersicht der Prüfidentifikatoren* 4.0); it is never addressed
-to one. The draft stores the MSB as `sender_mp_id`, and the dispatch declares `marktrolle: MSB`.
+- **The Sparte is not in the PID.** Strom and Gas share 31002 and 31005, so every settlement
+  states its `sparte`. It decides whether the Arbeit position cites StromNEV §21 or GasNEV §15,
+  whether the EnFG levies are billed, and what `Rechnung.sparte` says on the wire.
+- **PID 31009 runs MSB → NB / LF / ESA** in all seven Anwendungsfälle (*Anwendungsübersicht der
+  Prüfidentifikatoren* 4.0). The draft stores the MSB as `sender_mp_id`; dispatch declares
+  `marktrolle: MSB`.
 
 ---
 
@@ -117,19 +108,15 @@ Abs. 6 of the Gesetz v. 22.12.2023, BGBl. 2023 I Nr. 405). The successor compete
 §20 Abs. 3 EnWG, exercised through BNetzA Festlegungen — for MMM Strom that is
 **GPKE (BK6-24-174) Teil 1 Kap. 8.4**, for MMM Gas **GaBi Gas 2.1 (BK7-24-01-008)**.
 
-Two consequences for this service:
-
-- **MMM prices come from the VNB, not the ÜNB.** GPKE Kap. 8.4 Nr. 3: *"Der Betreiber von
-  Elektrizitätsverteilernetzen berechnet für Jahresmehr- und Jahresmindermengen auf
-  Grundlage der monatlichen Marktpreise einen einheitlichen Preis."*
-- **Konzessionsabgabe is KAV §2**, never StromNZV. The rate bands key on the municipality's
-  inhabitant count, not on annual consumption.
+Consequently MMM prices come from the VNB (GPKE Kap. 8.4 Nr. 3: *"Der Betreiber von
+Elektrizitätsverteilernetzen berechnet für Jahresmehr- und Jahresmindermengen auf Grundlage der
+monatlichen Marktpreise einen einheitlichen Preis."*), and the Konzessionsabgabe is KAV §2, its
+rate bands keyed on the municipality's inhabitant count.
 
 ### The network levies (EnFG)
 
-Three levies ride on the electricity Netzentgelt and are billed to the network user through
-the NN-Rechnung. `netzbilanzd` adds them to every Strom NNE settlement and to **no** Gas
-settlement:
+Three levies ride on the Strom Netzentgelt; `netzbilanzd` adds them to every Strom NNE
+settlement and to no Gas settlement:
 
 | Levy | 2026 rate (A′) | Basis |
 |---|---|---|
@@ -137,29 +124,22 @@ settlement:
 | Offshore-Netzumlage | 0.941 ct/kWh | §17f EnWG |
 | KWKG-Umlage | 0.446 ct/kWh | §26 KWKG |
 
-The §19 StromNEV levy is published as an explicit A′/B′/C′ schedule — B′ is capped at
-0.050 ct/kWh and C′ at 0.025 ct/kWh. Set `letztverbrauchergruppe` on the settlement to bill
-a privileged band. The Offshore- and KWKG-Umlage are published as the non-privileged rate
-only; a privilege under §§ 21 ff. EnFG is granted per Entnahmestelle, so supply the granted
-rate through `offshore_umlage_ct_per_kwh` / `kwkg_umlage_ct_per_kwh` where one applies.
+The §19 StromNEV levy has an A′/B′/C′ schedule (B′ capped at 0.050, C′ at 0.025 ct/kWh); set
+`letztverbrauchergruppe` to bill a privileged band. Offshore- and KWKG-Umlage are published at
+the non-privileged rate only; a privilege under §§ 21 ff. EnFG is granted per Entnahmestelle, so
+supply it via `offshore_umlage_ct_per_kwh` / `kwkg_umlage_ct_per_kwh`.
 
-**The privilege is a tranche, not a rate.** B′ and C′ are published „für Strommengen
-über 1 000 000 kWh" at one Entnahmestelle, so the year's first Gigawattstunde carries A′
-whatever the group. The threshold is annual and a settlement covers one period, so supply
-`enfg_jahresvorverbrauch_kwh` — the kWh already consumed there earlier in the same year.
-A period straddling the boundary then bills **two** §19 positions. Omit the field and the
-period is billed as though it opened the year — the over-billing direction — with
-`ENFG_VORVERBRAUCH_MISSING`.
-
-A levy with no published rate for the delivery year is **omitted with a warning**, never
-billed at zero silently — an understated invoice is one the ÜNB reclaims later.
+B′ and C′ apply „für Strommengen über 1 000 000 kWh" at one Entnahmestelle, so the year's first
+GWh carries A′. Supply `enfg_jahresvorverbrauch_kwh` (kWh consumed there earlier in the year); a
+period straddling the boundary bills **two** §19 positions. Omitted, the period is billed as if
+it opened the year, with `ENFG_VORVERBRAUCH_MISSING`. A levy with no published rate for the
+delivery year is omitted with a warning, never billed at zero silently.
 
 ### The §30 MsbG Preisobergrenze is derived, not asserted
 
-§30 Abs. 1 MsbG states five Nummern, each a disjunction over facts about the metering
-point — Jahresstromverbrauch, installierte Leistung, and whether a §14a EnWG Vereinbarung
-covers a steuerbare Verbrauchseinrichtung there. `messstellen_kategorie` therefore carries
-those **facts**, not a band:
+§30 Abs. 1 MsbG states five Nummern, each a disjunction over facts about the metering point
+(Jahresstromverbrauch, installierte Leistung, a §14a EnWG Vereinbarung). `messstellen_kategorie`
+carries those **facts**, not a band:
 
 ```json
 {
@@ -173,43 +153,30 @@ those **facts**, not a band:
 }
 ```
 
-The engine walks the Nummern top down, so a point meeting several takes the highest and
-a request cannot pick its own ceiling. `{"OptionalerEinbau": null}` is the §30 Abs. 3
-case — 30 EUR each side, regardless of consumption. With no fact supplied the tightest
-ceiling applies: a Pflichteinbaufall exists only above 6 000 kWh (§29 Abs. 1), so Nr. 5
-is the catalogue's floor rather than a guess.
+The engine walks the Nummern top down, so a point meeting several takes the highest and a request
+cannot pick its ceiling. `{"OptionalerEinbau": null}` is §30 Abs. 3 (30 EUR each side). With no
+fact supplied, Nr. 5 applies — a Pflichteinbaufall exists only above 6 000 kWh (§29 Abs. 1).
 
 ### Umsatzsteuer
 
-Every invoice states its tax. §14 Abs. 4 Nr. 8 UStG requires "den anzuwendenden Steuersatz
-sowie den auf das Entgelt entfallenden Steuerbetrag" — or a note saying why neither is stated —
-and an invoice carrying only a net figure is worth no Vorsteuerabzug to the counterparty.
-
-What is taxed how turns on **what is being supplied**, which is a different axis from the Sparte:
+Every invoice states its tax (§14 Abs. 4 Nr. 8 UStG). The treatment follows what is supplied:
 
 | Settlement | Nature | Treatment |
 |---|---|---|
-| NNE, MSB, Gas AWH | *sonstige Leistung* | 19 %. UStAE 13b.3a excludes them from §13b by name — the provision reaches the energy, not "die Bereitstellung und Unterhaltung des Netzes" |
+| NNE, MSB, Gas AWH | *sonstige Leistung* | 19 %. UStAE 13b.3a excludes "die Bereitstellung und Unterhaltung des Netzes" from §13b |
 | MMM Strom / Gas | **Lieferung** of the commodity | 19 %, or reverse-charged under §13b Abs. 2 Nr. 5 Buchst. b |
 
-**The §13b condition is asymmetric**, and §13b Abs. 5 states it twice on purpose:
-
-| Supply | Who must hold §3g status |
-|---|---|
-| Elektrizität | the supplier **and** the recipient |
-| Gas über das Erdgasnetz | the **recipient** alone |
-
-An MMM settlement therefore carries both facts rather than a `reverse_charge: bool` the caller
-has to reason out — status is evidenced by a valid *USt 1 TH* (UStAE 13b.3a):
+§13b Abs. 5 is asymmetric: for Elektrizität supplier **and** recipient must hold §3g status, for
+Gas über das Erdgasnetz the recipient alone (evidenced by a *USt 1 TH*, UStAE 13b.3a). An MMM
+settlement therefore carries both facts:
 
 ```jsonc
 "wiederverkaeufer": { "leistender": true, "empfaenger": true }
 ```
 
-Getting it backwards is not a rounding error. Tax shown on a reverse-charge invoice is owed
-under §14c Abs. 1 UStG **and** gives the recipient no Vorsteuerabzug, because the recipient
-still owes it under §13b — the worst of both. The pre-dispatch gate refuses both shapes: an
-invoice with no tax block at all, and a reverse-charge invoice that states tax anyway.
+Tax shown on a reverse-charge invoice is owed under §14c Abs. 1 UStG and gives the recipient no
+Vorsteuerabzug. The pre-dispatch gate refuses an invoice with no tax block and a reverse-charge
+invoice that states tax.
 
 **Rate windows.** The departures from 19 % the engine knows:
 
@@ -218,10 +185,8 @@ invoice with no tax block at all, and a reverse-charge invoice that states tax a
 | 01.07.2020 – 31.12.2020 | 16 % | every supply | §28 Abs. 1–3 UStG a. F. |
 | 01.10.2022 – 31.03.2024 | 7 % | gas through the Erdgasnetz | §28 Abs. 5 UStG |
 
-The gas reduction reached the **Lieferung**, not the network: a Gas MMM inside that window is
-7 % while a Netznutzung Gas invoice for the same period is 19 %. A delivery period that
-**straddles** a rate change is refused rather than billed at one of the two — no single rate
-describes it, and picking one misbills part of it invisibly, because the invoice still adds up.
+The gas reduction reached the Lieferung, not the network: a Gas MMM in that window is 7 %, a
+Netznutzung Gas invoice 19 %. A delivery period straddling a rate change is refused.
 
 ### Mehr-/Mindermengen sign convention
 
@@ -232,20 +197,14 @@ Named from the network operator's side, which inverts the intuitive reading:
 | measured **<** profiled | ungewollte **Mehrmenge** | NB vergütet → credit |
 | measured **>** profiled | ungewollte **Mindermenge** | NB stellt in Rechnung → charge |
 
-Consuming below the profile leaves surplus energy the network absorbed, and that surplus is
-reimbursed.
 
 ---
 
 ## Settling an invoice
 
-A billing run carries an issue date, a due date, an optional Rechnungskreis and a list of
-positions. Each position names one MaLo, one delivery period and one settlement.
-
-The settlement is a **tagged union**: each `billing_type` carries exactly its own fields.
-A field belonging to another settlement kind is a `422`, not a silently ignored key — which
-is how a `grundpreis` on a GGV position once went unbilled, and how the documented §14a
-time-of-use fields were accepted and never read.
+A billing run carries an issue date, a due date, an optional Rechnungskreis and up to **1 000
+positions** (one MaLo, one period, one settlement each), all in **one transaction**. The
+settlement is a **tagged union** on `billing_type`; a field belonging to another kind is a `422`.
 
 ```bash
 curl -X POST http://localhost:8680/api/v1/billing/run \
@@ -293,9 +252,7 @@ curl -X POST http://localhost:8680/api/v1/billing/run \
     "netto_eur":     "598.34",
     "steuer_eur":    "113.68",
     "brutto_eur":    "712.02",
-    // What is left to collect once the Abschläge this invoice settles are
-    // deducted. Equal to the gross when there are none, and the figure the
-    // payment run collects — see "Abschläge" below.
+    // gross less the Abschläge this invoice settles — see "Abschläge" below
     "zu_zahlen_eur": "712.02"
   }]
 }
@@ -303,56 +260,32 @@ curl -X POST http://localhost:8680/api/v1/billing/run \
 
 ### `leistungspreis.system` — which Leistungspreissystem the Preisblatt states
 
-§ 17 Abs. 2 Satz 1 StromNEV builds the Netzentgelt „aus einem **Jahresleistungspreis** in Euro
-pro Kilowatt und einem Arbeitspreis in Cent pro Kilowattstunde", and Satz 2 states the
-Entgelt: „Das Jahresleistungsentgelt ist das Produkt aus dem jeweiligen Jahresleistungspreis
-und der Jahreshöchstleistung in Kilowatt der jeweiligen Entnahme im Abrechnungsjahr." Two
-figures multiplied — the ordinance sets no day-count convention, so there is nothing to
-pro-rate by. Abs. 8 nevertheless lets a Netzbetreiber offer Tagesleistungspreise for Landstrom
-„neben einem Jahres- und **Monatsleistungspreissystem**", which presupposes the monthly one;
-StromNEV does not define it, and it is published in the Netzbetreiber's own Preisblatt as a
-EUR/kW·Monat price against the month's Höchstleistung.
-
-`system` is where the settlement says which of the two it is:
+§ 17 Abs. 2 StromNEV: „Das Jahresleistungsentgelt ist das Produkt aus dem jeweiligen
+Jahresleistungspreis und der Jahreshöchstleistung", with no pro-rating. Abs. 8 presupposes a
+Monatsleistungspreissystem, published in the Netzbetreiber's Preisblatt. `system` selects:
 
 | Value | Billed as | Use on |
 |---|---|---|
 | `"JAHR"` (**default**) | Jahresleistungspreis × Jahreshöchstleistung (§ 17 Abs. 2 Satz 2) | a yearly settlement |
 | `{ "MONAT": { "monate": "1" } }` | Höchstleistung × Monate × Monatsleistungspreis (§ 17 Abs. 8) | a monthly or quarterly settlement |
 
-**The default is a real answer, not a placeholder.** A monthly invoice that omits `system`
-bills the whole Abrechnungsjahr's demand charge in January — the engine bills what § 17 Abs. 2
-Satz 2 says rather than inventing a share no Preisblatt publishes, and raises
-`JAHRESLEISTUNGSPREIS_UNTERJAEHRIG` in `settlement_warnings` to say the period is not the
-Abrechnungsjahr. A monthly settlement over a monthly period, as above, warns about nothing.
-
-The mirror-image check exists too: `MONATSLEISTUNGSPREIS_MONATE_MISMATCH` when `monate` and the
-period's own length disagree by more than a month.
-
-A run is **one transaction** and carries at most **1 000 positions**. Either every position is
-billed or none is; a portfolio job belongs in several runs rather than one that holds the
-Rechnungskreis row lock — and every concurrent billing job behind it — for minutes.
+A monthly invoice that omits `system` bills the whole year's demand charge and raises
+`JAHRESLEISTUNGSPREIS_UNTERJAEHRIG`; `MONATSLEISTUNGSPREIS_MONATE_MISMATCH` fires when `monate`
+and the period length disagree by more than a month.
 
 ### Invoice numbers are allocated here
 
-§14 Abs. 4 Nr. 4 UStG requires an *einmalig vergebene, fortlaufende* invoice number, so the
-caller does not supply one. `rechnungskreis` only names the series; the running number comes
-from `invoice_number_seq` under a row lock, **inside the drafting transaction**:
-
-- a rolled-back run consumes no number, so the sequence has no gaps;
-- a retried run cannot reuse one, and a reused number is refused by a unique index;
-- the counter restarts per tenant, per series and per calendar year.
-
-Numbers read `NNE-2026-000001`, or `2026-000001` when no series is named.
+§14 Abs. 4 Nr. 4 UStG requires an *einmalig vergebene, fortlaufende* number, so the caller
+supplies only the series (`rechnungskreis`). The number comes from `invoice_number_seq` under a
+row lock inside the drafting transaction: a rolled-back run consumes none, a reused one is refused
+by a unique index, and the counter restarts per tenant, series and calendar year. Numbers read
+`NNE-2026-000001`, or `2026-000001` with no series.
 
 ### Read the warnings
 
-`check_findings` comes from `invoic-checker` — the same library the receiving LF runs on
-arrival. `settlement_warnings` comes from the engine and records what it could not do. Both
-are returned on the run, stored on the draft, and readable through `get_draft`.
-
-The one most worth watching is `KA_ABOVE_KAV_MAXIMUM`. KAV §2 rates are *Höchstbeträge*, and
-the ceiling depends on the customer group:
+`check_findings` come from `invoic-checker` (the library the receiving LF runs);
+`settlement_warnings` record what the engine could not do. Both are stored on the draft. Watch
+`KA_ABOVE_KAV_MAXIMUM` — KAV §2 rates are Höchstbeträge per group (ct/kWh):
 
 | `klasse` | Strom | Gas |
 |---|---|---|
@@ -364,24 +297,16 @@ the ceiling depends on the customer group:
 | `Tarifkunde`, > 500 000 | 2.39 | 0.40 (0.93) |
 | `Exempt` (§2 Abs. 4 Strom / Abs. 5 Gas) | — | — |
 
-`Exempt` states that no Konzessionsabgabe is due, which is a different fact from a rate of
-zero: the position is not billed at all and the ceiling check has nothing to compare.
-
-The rate and the group travel together in one value, so the ceiling check can never be
-skipped. Sending 1.32 ct/kWh on a `Sondervertragskunde` — twelve times its lawful maximum —
-raises the warning rather than passing silently.
+`Exempt` means no Konzessionsabgabe is due, so no position is billed. The rate and the group
+travel in one value, so the ceiling check cannot be skipped.
 
 #### The group is a consequence, not a label
 
-KAV § 2 Abs. 7 decides which group a **Niederspannungslieferung** belongs to, and it decides
-it from facts: a supply counts as a Tariflieferung „es sei denn, die gemessene Leistung des
-Kunden überschreitet in mindestens zwei Monaten des Abrechnungsjahres 30 Kilowatt **und** der
-Jahresverbrauch beträgt mehr als 30.000 Kilowattstunden". Both limbs, measured on the
-einzelne Betriebsstätte oder Abnahmestelle — one of them alone leaves the point a Tarifkunde,
-and the two ceilings are 1,32 ct and 0,11 ct apart.
-
-State the facts in `konzessionsabgabe.niederspannung` and the settlement holds the group
-against them, raising `KA_GRUPPE_WIDERSPRICHT_KAV_ABS7` when the two disagree:
+KAV § 2 Abs. 7: a Niederspannungslieferung is a Tariflieferung „es sei denn, die gemessene
+Leistung des Kunden überschreitet in mindestens zwei Monaten des Abrechnungsjahres 30 Kilowatt
+**und** der Jahresverbrauch beträgt mehr als 30.000 Kilowattstunden". State the facts in
+`konzessionsabgabe.niederspannung` and a disagreeing group raises
+`KA_GRUPPE_WIDERSPRICHT_KAV_ABS7`:
 
 ```json
 "konzessionsabgabe": {
@@ -391,29 +316,24 @@ against them, raising `KA_GRUPPE_WIDERSPRICHT_KAV_ABS7` when the two disagree:
 }
 ```
 
-`leistungsgrenze_kw` and `verbrauchsgrenze_kwh` carry the lower figures Netzbetreiber and
-Gemeinde may agree under Satz 4; omitted, the statutory 30 kW and 30 000 kWh apply. The month
-count is the caller's, because only it holds the per-month Leistung.
+`leistungsgrenze_kw` / `verbrauchsgrenze_kwh` carry lower limits agreed under Satz 4 (default
+30 kW / 30 000 kWh).
 
 #### Two rules forbid a Konzessionsabgabe outright
 
-Neither is a ceiling, so neither is caught by the table above — a rate well inside the
-Höchstbetrag is still unlawful.
+Neither is a ceiling — a rate inside the Höchstbetrag is still unlawful:
 
 | Warning | Rule | Fact it needs |
 |---|---|---|
 | `KA_UNTER_GRENZPREIS` | § 2 Abs. 4 (Strom) resp. Abs. 5 Nr. 2 (Gas) — a Sondervertragskunde whose Durchschnittspreis im Kalenderjahr lies **under** the Grenzpreis | `konzessionsabgabe.grenzpreis`, both figures in ct/kWh ohne USt |
 | `KA_GAS_UEBER_GRENZMENGE` | § 2 Abs. 5 Nr. 1 — Gas above **5 Millionen kWh** je Jahr und Abnahmefall | none — read off `jahresarbeit_kwh` |
 
-The Grenzpreis is not derivable here: for Strom it is the Durchschnittserlös the amtliche
-Statistik published for the *vorletzte* Kalenderjahr, and the customer's own price is measured
-„unter Einschluß des Netznutzungsentgelts" over the whole supply. Both are supplied; omitted,
-the comparison is simply not made.
+The Grenzpreis (Strom: the Durchschnittserlös of the *vorletzte* Kalenderjahr) and the
+customer's price are supplied; omitted, the comparison is not made.
 
 ### §14a EnWG
 
-BNetzA BK6-22-300 / BK8-22/010-A define exactly three modules, and `ArbeitspreisModell`
-makes them mutually exclusive by construction:
+BK8-22/010-A numbers three modules; `ArbeitspreisModell` holds one at a time:
 
 | Module | Mechanism | Shape |
 |---|---|---|
@@ -429,19 +349,10 @@ makes them mutually exclusive by construction:
 }}
 ```
 
-All three bands are required — a band with no energy carries `menge_kwh: "0"`. That is the
-partial state the variant exists to prevent: independent per-band fields admit combinations
-that are not a Modul-3 tariff, and a half-filled set falls through to flat billing with no
-error at all.
-
-The Modul-2 `reduktion` is **pinned to the statutory rate** at the request boundary, not
-merely range-checked. BK8-22/010-A Tenor 2. b) fixes the reduced Arbeitspreis at **40 %**
-of the Niederspannungs-Arbeitspreis ohne Leistungsmessung, so `0.40` is the only admissible
-value and everything else is refused — `5`, which would multiply rather than reduce, but
-equally `0.90`, which bills a 10 % reduction where 60 % is owed, and `1`, which is no
-reduction at all. Those two are the dangerous ones: they are in range, they look ordinary,
-and the position they produce carries a `BnetzaDecision` citing the Beschluss it breaks.
-Only the reference Arbeitspreis is the Netzbetreiber's; the percentage is not.
+All three bands are required; a band with no energy carries `menge_kwh: "0"`. The Modul-2
+`reduktion` is **pinned to 0.40**: BK8-22/010-A Tenor 2. b) fixes the reduced Arbeitspreis at
+40 % of the Niederspannungs-Arbeitspreis ohne Leistungsmessung, so every other value is refused.
+Modul 1 + Modul 3, the one permitted pair, is not representable in one settlement.
 
 **Data sources.** Band quantities come from `edmd GET /api/v1/billing-period/{malo_id}`
 (HT/NT OBIS registers); band prices from the `PreisblattNetznutzung`
@@ -449,7 +360,7 @@ Only the reference Arbeitspreis is the Netzbetreiber's; the percentage is not.
 
 ### A fifth Arbeitspreis shape that is not a §14a module
 
-`ArbeitspreisModell` has one more variant beside `Einheitlich` and the three modules:
+`ArbeitspreisModell` has one more variant, which is not a §14a module:
 
 ```jsonc
 "arbeitspreis": { "SpotpreisNetzentgelt": { "intervalle": [
@@ -459,27 +370,21 @@ Only the reference Arbeitspreis is the Netzbetreiber's; the percentage is not.
 ] } }
 ```
 
-`SpotpreisNetzentgelt` bills a Netzentgelt whose rate follows the spot price under the
-Netzbetreiber's own `PreisblattNetznutzung` formula, one rate per dispatch interval.
-BK8-22/010-A defines exactly three modules and none of them is spot-linked, so this is
-deliberately outside the §14a table — and `grid-billing` never queries a spot market: the
-rates arrive already derived.
+`SpotpreisNetzentgelt` bills one rate per dispatch interval under the Netzbetreiber's own
+`PreisblattNetznutzung` formula; the rates arrive already derived.
 
 ### §19 Abs. 2 StromNEV — individuelle Netzentgelte
 
-Distinct from the §19 StromNEV-**Umlage** above, which compensates the network for exactly
-this. An agreed individual charge replaces the Netzentgelt — Arbeits- and Leistungspreis —
-and touches neither the Konzessionsabgabe nor the levies. Supply it as `sect19`:
+Distinct from the §19 Umlage. An agreed individual charge (`sect19`) replaces Arbeits- and
+Leistungspreis and touches neither the Konzessionsabgabe nor the levies:
 
 | Form | Qualification | Floor, as a share of the published charge |
 |---|---|---|
 | `AtypischeNetznutzung` (Satz 1) | annual peak predictably in the low-load window | 20 % |
 | `IntensiveNetznutzung` (Satz 2) | Benutzungsstundenzahl **≥** 7 000 h **and** consumption **>** 10 GWh | 20 % from 7 000 h · 15 % from 7 500 h · 10 % from 8 000 h |
 
-The hours are inclusive („erreicht mindestens") and the energy is not („übersteigt"), so an
-Abnahmestelle at exactly 10 GWh does not qualify. The agreed percentage arrives as an input
-— BK4-22-089's physikalischer Pfad is not derived here — and the engine refuses to let it
-fall below the statutory floor.
+Hours are inclusive („erreicht mindestens"), energy is not („übersteigt"): exactly 10 GWh does
+not qualify. The agreed percentage is an input and may not fall below the floor.
 
 ### Positions by settlement type
 
@@ -495,15 +400,9 @@ fall below the statutory floor.
 
 ## Abschläge and the invoice that settles them
 
-An **Abschlagsrechnung** (PID 31001) asks the Lieferant for a payment on account against a
-period the Netzbetreiber has not settled yet. It prices no energy, so it carries no quantity
-and no Arbeitspreis — and **exactly one** Positionszeile, which the INVOIC AHB 1.0b requires
-by name (Änd-ID 26817: *"Eine Abschlagsrechnung kann und muss genau eine Positionszeile
-enthalten"*, with `LIN DE1082` fixed at 1).
-
-How the amount was arrived at is **recorded, not computed**. The engine cannot check a
-forecast; an audit can ask which basis was used, and an invoice that answers "a share of the
-prior Turnusrechnung" is defensible where a bare figure is not:
+An **Abschlagsrechnung** (PID 31001) is a payment on account. It prices no energy and carries
+**exactly one** Positionszeile (INVOIC AHB 1.0b, Änd-ID 26817: *"Eine Abschlagsrechnung kann und
+muss genau eine Positionszeile enthalten"*). How the amount was arrived at is recorded:
 
 | `grundlage` | Meaning |
 |---|---|
@@ -525,48 +424,21 @@ The invoice that closes the period lists the Abschläge it settles, by draft ID:
 }
 ```
 
-Three properties are enforced rather than trusted:
+| Rule | Why |
+|---|---|
+| Only `zuZahlen` moves; `gesamtnetto` / `gesamtsteuer` stand | §14 Abs. 5 UStG taxed the Anzahlung on receipt; the AHB puts the deduction in `SG50 MOA+113` (*Vorausbezahlter Betrag inkl. USt.*) |
+| The amount is the stored Abschlag's gross `MOA+77`, never the request's | AHB rule **[526]** |
+| A storniertes or never-dispatched Abschlag is refused | AHB rule **[519]**; nothing was paid on it |
+| Each deduction names its invoice (`SG51 RFF+AFL`, `SG51 DTM+3`) | the counterparty can break the total down |
+| One Abschlag per MaLo, period and **Rechnungsdatum** (`409` on a same-day duplicate) | a replayed run would otherwise be deducted twice; the double-billing guard itself excludes 31001 |
 
-**It reduces what is owed, never what was supplied.** §14 Abs. 5 UStG taxes an Anzahlung when
-it is received, so the invoice that settles the period must not tax the same money a second
-time: `gesamtnetto` and `gesamtsteuer` stand unchanged and only `zuZahlen` moves. The INVOIC
-AHB puts the deduction in the Summenteil (`SG50 MOA+113`, *Vorausbezahlter Betrag inkl. USt.*)
-rather than among the positions for exactly that reason.
-
-**The amount comes from the stored Abschlag, not from the request.** AHB rule **[526]**: the
-deducted amount must be identical to the referenced Abschlagsrechnung's own `MOA+77`
-Rechnungsbetrag — which the MIG defines as *"Rechnungsbetrag (inkl. USt.)"*, so the deduction
-is gross. A caller-supplied figure is precisely the one that can disagree with the document
-the counterparty holds.
-
-**A reversed Abschlag is refused.** AHB rule **[519]**: a stornierte Abschlagsrechnung is not
-listed. Nothing was paid on it, so deducting it would credit money that never moved. An
-Abschlag that was never dispatched is refused on the same footing.
-
-Each deduction names the invoice it reconciles against — `SG51 RFF+AFL` for the number and
-`SG51 DTM+3` for its date — because a total the counterparty cannot break down is a total it
-will dispute.
-
-**A period carries many Abschläge and one final invoice.** A monthly Abschlag against a yearly
-period is the ordinary case, so the double-billing guard excludes PID 31001; the invoice number
-keeps them distinct and the Abschlussrechnung reconciles them by it.
-
-**But "many" is not "unbounded".** Abschläge carry their own, looser guard: one per MaLo, period
-and **Rechnungsdatum**. Instalments are billed on a cadence and differ by that date; a replayed
-`POST /billing/run` does not, and a second Abschlag under a fresh invoice number would be deducted
-twice by the Abschlussrechnung. A same-day duplicate answers `409`.
-
-**The collectible amount is stored.** `zu_zahlen_eur_units` sits beside the three amounts the
-invoice states, so the summary, the overdue alert and the audit export answer *what are we owed*
-rather than *what did we invoice*. A CHECK keeps the deduction directional — it only reduces — but
-lets it pass zero: an Abschlussrechnung settling for less than the Anzahlungen leaves a
-**Guthaben** the Netzbetreiber owes back, which is ordinary.
+`zu_zahlen_eur_units` is stored beside the three amounts, so summary, overdue alert and audit
+export answer *what are we owed*. A CHECK keeps the deduction directional but lets it pass zero:
+settling for less than the Anzahlungen leaves a Guthaben owed back.
 
 ### Billing cadence
 
-`cadence` is `IMD+7081` on the wire, and a **document fact** rather than a calculation one: the
-same settlement is the same arithmetic whether billed monthly, per Turnus, or as the
-Abschlussrechnung that closes a year. Left unset, the field is omitted rather than guessed.
+`cadence` is `IMD+7081` on the wire — a document fact, omitted when unset:
 
 | `cadence` | `IMD+7081` |
 |---|---|
@@ -587,53 +459,27 @@ curl -X PUT http://localhost:8680/api/v1/billing/fremdkosten/{draft_id} -d @frem
 curl -X PUT http://localhost:8680/api/v1/billing/drafts/{draft_id}/dispatch
 ```
 
-Dispatch does four things in order, inside one transaction:
+Dispatch runs four steps in one transaction:
 
-1. **Merges the Fremdkosten** into `Rechnung.fremdkosten`. BO4E models external cost
-   pass-through as a first-class field, so it does not travel as a free-text `ZusatzAttribut`
-   and the LF's own parser reads it.
-
-   Fremdkosten are **informational** — a BO4E cost breakdown beside the invoice, not
-   positions that add to it, so `gesamtnetto`, `gesamtsteuer` and `zuZahlen` are
-   untouched. Third-party costs the counterparty actually owes belong in the
-   settlement, which prices, traces and taxes them.
-
-   `PUT /fremdkosten/{draft_id}` therefore accepts them only while the invoice is a
-   `draft`, and answers `409` afterwards: the merge happens at dispatch, so a later
-   attachment would store costs nobody was sent.
-2. **Runs the outbound BO4E gate** over the merged document
-   ([`ensure_conformant`](@/docs/architecture/domain-model.md#the-bo4e-gate)).
-   This is the one place netzbilanzd assembles a document at runtime rather than
-   emitting it whole from the engine — a stored `Rechnung` plus a separately stored
-   `Fremdkosten`, each valid when written, combined into a shape no test has seen.
-   Step 3 covers the arithmetic; this covers the rest, notably an out-of-schema enum
-   anywhere in the merged tree. **mako does not send a document it would refuse to
-   receive.**
-3. **Re-checks the amended document.** The verdict stored at drafting time describes the
-   document as drafted; the counterparty checks what actually arrives. A `Dispute` verdict
-   blocks the send and returns the disputing findings.
-4. **Hands it to `makod`** under the idempotency key `netzbilanzd-invoic-{draft_id}`, with:
+1. **Merge the Fremdkosten** into `Rechnung.fremdkosten` (BO4E's first-class field). They are
+   informational and change no total; costs the counterparty owes belong in the settlement.
+   `PUT /fremdkosten/{draft_id}` answers `409` once the invoice has left `draft`.
+2. **Run the outbound BO4E gate** over the merged document
+   ([`ensure_conformant`](@/docs/architecture/domain-model.md#the-bo4e-gate)) — this is the one
+   document netzbilanzd assembles at runtime from two stored parts.
+3. **Re-check the amended document** with `invoic-checker`; `Dispute` blocks the send and returns
+   the findings.
+4. **Hand it to `makod`** under the idempotency key `netzbilanzd-invoic-{draft_id}`:
 
    | Field | Value |
    |---|---|
-   | `command` | one per PID: `invoic.nne-abschlag.stellen` (31001) · `invoic.nne.stellen` (31002) · `invoic.mmm.stellen` (31005) · `wim.msb-rechnung.stellen` (31009) · `invoic.sonstige-leistung.stellen` (31011) |
-   | `marktrolle` | `MSB` for PID 31009, `GNB` for a gas invoice, `NB` otherwise |
-   | `invoice_ref` | the **invoice number** — the business key the inbound REMADV correlates on |
+   | `command` | `invoic.nne-abschlag.stellen` (31001) · `invoic.nne.stellen` (31002) · `invoic.mmm.stellen` (31005) · `wim.msb-rechnung.stellen` (31009) · `invoic.sonstige-leistung.stellen` (31011) |
+   | `marktrolle` | `MSB` for PID 31009, `GNB` for 31011 and any gas invoice, `NB` otherwise — checked by `makod` against the licensed roles |
+   | `invoice_ref` | the invoice number — what the inbound REMADV correlates on |
    | `sender_mp_id` / `recipient_mp_id` | as the settlement resolved them |
    | `pid`, `sparte`, `rechnung` | the document and what identifies it |
 
-   **The command is Sparte-neutral; the asserted role is not.** The Prüfidentifikatoren are
-   the same in Strom and Gas, and so are the commands — `makod_command` reads the PID alone.
-   What the Sparte decides is the `marktrolle` the dispatch asserts, which `makod` checks
-   against the deployment's licensed roles: `MSB` for PID 31009 whatever the Sparte (the
-   Messstellenbetreiber issues it), `GNB` for PID 31011 and for **any** gas invoice, `NB`
-   otherwise. A `--marktrollen GNB` deployment is the only kind that issues the gas ones, and
-   asserting `NB` there fails its licence check.
-
-Every PID this service issues has an issuer-side process in `makod`. PID 31011 included: the
-GeLi Gas INVOIC workflow models both ends of the conversation — `SendInvoic` for the GNB and
-`ReceiveInvoic` for the LFG — so an AWH invoice dispatches and its REMADV correlates back like
-any other.
+The commands are Sparte-neutral. Every PID has an issuer-side process in `makod`, 31011 included.
 
 `POST /api/v1/billing/drafts/dispatch-batch` runs the same sequence per draft, each in its
 own transaction, and reports `207 Multi-Status` when some refused: one rejection never rolls
@@ -648,53 +494,19 @@ curl -X POST .../drafts/{id}/storno    -d '{"grund": "Messwertkorrektur"}'
 curl -X POST .../drafts/{id}/korrektur -d '{"grund": "Messwertkorrektur", "settlement": { … }}'
 ```
 
-A **Stornorechnung is recomputed, not edited.** The stored settlement input is replayed
-through the engine and the result negated by `grid_billing::reverse`, so every position
-flips sign, the total flips sign with them, and the rendered document declares itself a
-reversal on `ist_storno` + `original_rechnungsnummer` — the two fields `invoic-checker`
-stage 0 reads. A Storno that sets neither is not a Storno to any receiver; one that sets
-`ist_storno` without the reference is disputed on arrival (BK6-24-174 §5).
+| Rule | Behaviour |
+|---|---|
+| A Storno is **recomputed** | the stored settlement input is replayed and negated by `grid_billing::reverse`; the document sets `ist_storno` + `original_rechnungsnummer`, the fields `invoic-checker` stage 0 reads (BK6-24-174 §5) |
+| Only a dispatched invoice can be reversed or corrected | `draft` and `rejected` answer `409`; reject a draft and bill again |
+| A Korrektur needs the Storno first | it carries the whole corrected amount; `409` until the original is reversed |
+| A Korrektur corrects the **same** invoice | changing `settlement_type`, `sparte`, `sender_mp_id` or `recipient_mp_id` is a `422` naming the field |
+| The recomputation must match the original | net, Umsatzsteuer **and** gross; a mismatch (a tabled rate corrected since issue) is a `409` naming both figures |
+| One Storno per invoice | unique index; Korrekturrechnungen are not limited |
 
-**A Korrekturrechnung requires the Storno first.** It carries the *whole* corrected amount, not
-the difference, so issuing one against a live invoice bills the period twice — and both documents
-are well-formed, so nothing downstream notices. `/korrektur` answers `409` until the original is
-reversed.
-
-**Only a dispatched invoice can be reversed or corrected.** A `draft` was never sent and a
-`rejected` one was discarded before it could be, so both answer `409`. Reversing an invoice the
-counterparty never received issues a credit note against nothing — a negative amount an ERP will
-pay out. A draft that was never dispatched needs no correction: reject it and bill again.
-
-**A Korrekturrechnung must correct the *same* invoice.** The corrected settlement is a
-caller-supplied `SettlementRequest`, and corrections are exempt from the double-billing guard, so
-an unrelated second invoice would otherwise be stored linked to an original it has nothing to do
-with. Changing `settlement_type`, `sparte`, `sender_mp_id` or `recipient_mp_id` is a `422` naming
-the field.
-
-The recomputation is **checked against the original** — net, Umsatzsteuer *and* gross. It normally
-reproduces all three exactly, but the engine reads tabled figures (EnFG levy rates, KAV §2
-ceilings, the UStG rate window, the regime for the period), and a table corrected since issue
-produces a near-miss: a Storno that cancels most of an invoice and leaves a residue nothing
-reconciles. A mismatch is a `409` naming both figures.
-
-All three are compared because the tax is *derived* — from the §13b Wiederverkäufer status and the
-rate window — so a corrected table can move the Umsatzsteuer while the net matches, and a reversal
-that cancels the net but not the tax leaves a §14c Abs. 1 liability standing.
-
-A **Korrekturrechnung is a new settlement** from corrected inputs, run through the same
-engine and the same checks. It is not an operator-supplied document blob.
-
-Both carry a `grund` (`grid_billing::KorrekturGrund`), and the choice is part of the audit
-trail rather than decoration: `Rechenfehler` and `Stammdatenkorrektur` mark a defect in the
-original worth counting, while `RegulatorischeAenderung` marks a lawful recalculation. Both
-inherit the original's Rechnungskreis, so a correction stays in its series.
-
-The original is never mutated. `original_draft_id` and `korrektur_grund` are enforced by a
-CHECK constraint: an original carries neither, a correction carries both. A second Storno of
-the same invoice is refused by a unique index — it would credit the counterparty twice, and
-nothing downstream would notice, because both reversals are well-formed documents referencing
-the same original. Korrekturrechnungen are not limited that way: re-issuing corrected amounts
-is the point of having reversed.
+A Korrekturrechnung is a new settlement from corrected inputs through the same engine and checks.
+Both carry a `grund` (`grid_billing::KorrekturGrund`: `Rechenfehler`, `Stammdatenkorrektur`,
+`RegulatorischeAenderung`, …) and inherit the original's Rechnungskreis. The original is never
+mutated; a CHECK requires `original_draft_id` and `korrektur_grund` on corrections only.
 
 ---
 
@@ -717,33 +529,17 @@ stateDiagram-v2
     paid     --> [*]
 ```
 
-**REMADV 33001 is the only Zahlungsbestätigung.** 33002, 33003 and 33004 are all Abweisungen;
-33003 and 33004 are the itemised Strom rejections, not partial payments.
-
-A dispute is its own status with its own columns (`dispute_erc_code`, `dispute_reason`). It
-does **not** overwrite `check_outcome` — the NB's own pre-dispatch verdict is the evidence
-that says whether the invoice left the house defensible, and losing it is losing the
-argument.
-
-Rejecting a draft reopens the period: the partial unique index excludes rejected rows, so a
-corrected run can bill the same MaLo, period and PID again. Once dispatched, the way back is
-a Storno — and *only* then: `draft` and `rejected` are both "never left the house", and both
-refuse a Storno or a Korrektur.
-
-**Inbound REMADV is idempotent.** Delivery is at-least-once, so the same event arrives more than
-once. A replay that matches the state the invoice is already in answers `204`, not `404`: a sender
-told the event failed never stops retrying it.
-
-The two closing transitions are also reachable directly, for a REMADV that reached the
-operator by another route:
+**REMADV 33001 is the only Zahlungsbestätigung**; 33002–33004 are Abweisungen (33003/33004 the
+itemised Strom rejections). A dispute has its own columns (`dispute_erc_code`, `dispute_reason`)
+and leaves `check_outcome` — the NB's pre-dispatch evidence — untouched. Rejecting a draft reopens
+the period for a new run. REMADV ingest is idempotent: a replay matching the current state answers
+`204`. The closing transitions are also reachable directly (Cedar `record-payment`):
 
 | Method | Path | Body | Effect |
 |---|---|---|---|
 | `PUT` | `/api/v1/billing/drafts/{id}/mark-paid` | `remadv_ref` | `dispatched` or `disputed` → `paid` |
 | `PUT` | `/api/v1/billing/drafts/{id}/mark-disputed` | `erc_code`, `reason` | `dispatched` → `disputed` |
 
-Both sit behind the Cedar action `record-payment`, so falsifying a receivable is not
-something a read token can do.
 
 ---
 
@@ -755,30 +551,16 @@ curl -X POST http://localhost:8680/api/v1/billing/mmm-run/51238696012 \
        "period_year":2026,"period_month":1,"bilanziert_kwh":"1000.000"}'
 ```
 
-`bilanziert_kwh` is **required and cannot be fetched**. It is what the Bilanzkreis was
-charged from the load profile, which lives on the balancing side; `edmd` holds only the
-measured half. Supplying the measured total for both halves makes every saldo structurally
-zero.
+`bilanziert_kwh` is **required**: it is what the Bilanzkreis was charged from the load profile,
+which `edmd` does not hold. `sparte` selects the price series (Trading Hub Europe for Gas, the
+BDEW series for Strom) and is passed to `edmd` as the aggregation basis — Gas balances on the
+06:00 Gastag.
 
-`sparte` does two jobs here. It selects the price series — Trading Hub Europe per Marktgebiet
-for Gas, the nationwide BDEW series for Strom, so the application month is the whole key and
-there is nothing per-operator to configure — and it is passed through to `edmd` as the
-aggregation basis.
-
-Which paragraph the settlement **cites** follows the delivery period, because StromNZV and
-GasNZV both lapsed with the end of 31.12.2025: to that date `StromNZV §13 Abs. 3` and
-`GasNZV §25`, from 01.01.2026 `§20 Abs. 3 EnWG` with `BK6-24-174` for Strom and
-`GaBi Gas 2.1 (BK7-24-01-008)` for Gas. `grid_billing::regulatory::RegulatoryRegime`
-resolves it once per settlement, and a period straddling the turnover warns. **Gas balances on the 06:00 Gastag**, so a Gas saldo aggregated over
-calendar days misplaces six hours of every day's energy.
-
-Prices are auto-fetched only when the request leaves them open, and the fetched values are
-stored on the draft as part of the settlement input — an audit replays the same numbers
-rather than re-querying a service whose published series has since been revised.
-
-A monthly sweep settles every MaLo of one Sparte against the **same** published series, so the
-fetch is memoised per run: one `marktd` round-trip per `(Sparte, year, month)` instead of one
-per position. The memo is dropped with the run, so a later run reads the current series.
+The cited basis follows the delivery period: to 31.12.2025 `StromNZV §13 Abs. 3` / `GasNZV §25`,
+from 01.01.2026 `§20 Abs. 3 EnWG` with BK6-24-174 (Strom) or GaBi Gas 2.1 (BK7-24-01-008) (Gas),
+resolved by `grid_billing::regulatory::RegulatoryRegime`; a straddling period warns. Prices are
+fetched only when the request leaves them open, memoised per run per `(Sparte, year, month)`, and
+stored on the draft so an audit replays the same numbers.
 
 ---
 
@@ -792,15 +574,9 @@ curl -X POST http://localhost:8680/api/v1/billing/ggv-nne/{ggv_malo_id} \
        "tenant_consumption":{"51238696781":"450.000","51238696129":"550.000"}}'
 ```
 
-`tenant_consumption` is required. §42b attributes the Netzentgelt to each tenant
-Marktlokation, and an equal split is not an attribution — it bills one tenant for another's
-consumption. Meter the tenants, or do not bill them individually.
-
-The building settles in one transaction: either every tenant is billed or none is. A run
-that bills six of nine and reports success leaves the other three invisible, and a retry
-trips the double-billing guard on the six that landed.
-
-The response reports each tenant's share of the metered total; the shares add to 100 %.
+`tenant_consumption` is required: §42b attributes the Netzentgelt to each tenant Marktlokation,
+and an equal split is not an attribution. The building settles in one transaction; the response
+reports each tenant's share (summing to 100 %).
 
 ---
 
@@ -819,67 +595,23 @@ following month**.
 | `POST` | `/api/v1/redispatch/kostenblatt/submit/{year}/{month}` | Submit the month's pending records |
 | `POST` | `/api/v1/redispatch/verguetung/{activation_id}/compute` | §13a Abs. 2 EnWG compensation |
 
-### The Kostenblatt is built typed
+The stored `kosten_json` is a BO4E `Kosten` built as a struct and passed through
+[the outbound gate](@/docs/architecture/domain-model.md#the-bo4e-gate); an operator-supplied
+`kosten_json` or `fremdkosten_json` crosses the inbound gate as `Bo4e<Kosten>` and is stored as its
+canonical round-trip.
 
-The stored `kosten_json` is a BO4E `Kosten` with a `Kostenblock`, a
-`Kostenposition` and its `Menge`, `Preis` and `Betrag` — seven objects the ÜNB
-settles against. It is constructed as a struct and serialised, never assembled
-as JSON: a struct literal fails to compile on a field rename, whereas a JSON
-literal round-tripped through `from_value::<Kosten>()` proves nothing, because
-`rubo4e` absorbs an unknown key into `_additional` and the decode still returns
-`Ok`. `_typ` is stamped by `rubo4e` on all four nested components, and the value
-crosses [the outbound gate](@/docs/architecture/domain-model.md#the-bo4e-gate)
-before it is persisted.
+`compute` resolves the dispatched energy in one order and records it in `dispatch_source`:
 
-A `kosten_json` an **operator** supplies on
-`PUT /api/v1/redispatch/kostenblatt/{activation_id}` crosses the inbound gate as
-a `Bo4e<Kosten>`, and what is stored is the gate's canonical round-trip. A
-hand-rolled `serde_json::from_value::<Kosten>` beside a stored request body
-would let a wrong `_typ`, an out-of-schema enum and unbounded nesting into the
-column the ÜNB settles against. `fremdkosten_json` is gated the same way.
-
-### The dispatched energy comes from the projected series
-
-The quantity the ÜNB is invoiced for is read from `edmd`'s
-`GET /api/v1/energy/{malo_id}?direction=EINSPEISUNG` — the canonical projected series, one
-entry per interval in one direction. Both callers settle lost *generation*: the
-Kostenblatt prices the curtailed energy, and §13a Abs. 2 Ausfallarbeit is by
-definition what the resource would have produced.
-
-`GET /api/v1/lastgang/{malo_id}` is the BO4E **export** and is the wrong input to a
-figure: one object per register, both directions, every quality, non-kWh
-registers included. Folding it back into one number *is* the register
-projection, and doing it here would sum the grid **draw** into a figure that
-means feed-in, count a total register (`1-0:1.8.0`) on top of the tariff
-registers that already cover the same energy, and keep qualities that are not
-billable — a Schätzwert or an unvalidated reading is an estimate, and § 40a
-Abs. 2 EnWG lets one carry a settlement only where Satz 3's conspicuous
-disclosure is made.
-
-`coverage_pct` arrives with the projection, so a window `edmd` covers only in
-part is a fact the caller can act on rather than a smaller number indistinguishable
-from a small dispatch. It is logged; the figure is still produced, because the
-resource was curtailed for the part that is there.
-
-### Where the energy comes from
-
-`compute` resolves the dispatched energy in one order, and records which path it took in
-`dispatch_source`:
-
-1. `manual_override` — a verified operator figure, when supplied;
+1. `manual_override` — a verified operator figure;
 2. `lastgang_sum` — `edmd`'s projected feed-in series
-   (`/api/v1/energy/{malo_id}?direction=EINSPEISUNG`) summed over the **exact** activation window,
-   half-open `[start, end)`;
-3. `billing_period` — the monthly aggregate, only when no series exists.
+   (`GET /api/v1/energy/{malo_id}?direction=EINSPEISUNG`) over the exact window `[start, end)`;
+3. `einspeisung_tag` — the same series over the whole Europe/Berlin day, only when the window has
+   none. For a 15-minute activation this is wrong by up to two orders of magnitude: check
+   `dispatch_source` and supply `dispatch_kwh_override`. No Einspeisung that day → `404`.
 
-**Check `dispatch_source` on the result.** For a 15-minute activation the monthly aggregate
-is wrong by roughly three orders of magnitude — 2 500 kWh/month is not 2.5 kWh/quarter-hour.
-The fallback is logged loudly and should be replaced with a `dispatch_kwh_override`.
-
-`Einsatzkosten = dispatch_kwh × arbeitspreis_eur_per_kwh` is a generated column, so it cannot
-drift from its factors. The typed BO4E `Kosten` payload built for CIM export is validated
-against `rubo4e` before it is stored: a field rename upstream fails here rather than shipping
-a document the ÜNB's parser silently drops.
+The BO4E `/lastgang` export is never folded into a figure: it mixes registers, directions and
+non-billable qualities. `coverage_pct` from the projection is logged; a partial window still
+yields a figure. `Einsatzkosten = dispatch_kwh × arbeitspreis_eur_per_kwh` is a generated column.
 
 ### The redispatch case selects the §13a counterfactual
 
@@ -891,18 +623,9 @@ different figures for the same activation:
 | `DULDUNGSFALL` | The NB steered the resource, so what the plant would have produced was never transmitted | the measured `edmd` feed-in series over the window |
 | `AUFFORDERUNGSFALL` | The EIV steered to a transmitted schedule, and that schedule *is* the counterfactual | `ausfallarbeit_kwh_override` from that schedule — **required**; the request is refused `422` without it |
 
-Using the measured series for an Aufforderungsfall settles against what happened rather than against
-what was instructed — a money error in whichever direction the plant deviated, and one
-nothing downstream can detect. The chosen basis travels into the result and its calculation
-trace, so an audit can see which counterfactual a figure rests on.
+The chosen basis travels into the result and its calculation trace.
 
 ### BilAReM Kap. 3
-
-Every JSON request body in this service rejects unknown fields. A misspelt `konzessionsabgabe` on
-a GGV run would drop that charge, a misspelt `dispatch_kwh_override` would fall back to `edmd`, and
-a misspelt `p_bean` would remove the beanspruchbare-Leistung cap — each a money error a `400`
-prevents. Query strings are deliberately *not* strict: an unknown query parameter is a proxy
-artefact, not a missing charge.
 
 The stateless Ausfallarbeit engine (BK6-23-241) sits at `/api/v1/redispatch/ausfallarbeit/*`:
 `compute` (per-TR `W_A` series for every Abrechnungsvariante), `ueberbauung` (the Kap.-3.4
@@ -912,16 +635,16 @@ cap), `kf-bin` (the Kap.-3.2.3.2 offshore Wind-Bin factor), `malo-split`
 to the **beginning** of the Maßnahme on one side and to its **end** on the other)
 and `vergleichstag` (Kap. 3.2.4.1, solar: a whole calendar day without a Maßnahme
 against the SR). Callers supply the quarter-hour series; sourcing them from
-SCADA, `edmd` or DWD stays with the operator. All six return the same JSON problem
-body as every other endpoint here.
+SCADA, `edmd` or DWD stays with the operator.
+
+Every JSON request body here rejects unknown fields; query strings are not strict.
 
 ---
 
 ## Calculation audit trail
 
-Every position carries a `CalculationTrace` — the inputs it used, the arithmetic, the
-paragraphs it applied and where the rate came from. It answers *"why is this amount on the
-invoice?"* without re-running anything, which is what a §20 EnWG audit or an LF dispute needs.
+Every position carries a `CalculationTrace` — inputs, arithmetic, paragraphs and rate source —
+and the draft stores the replayable settlement input beside the document:
 
 ```
 GET /api/v1/billing/drafts/{id}
@@ -929,17 +652,13 @@ GET /api/v1/billing/drafts/{id}
     positionstext = "Netznutzung Arbeit HT (§14a Modul 3)"
     zusatzAttribute["mako:calculation_trace"]
       explanation   = "600.000 kWh × 0.042000 EUR/kWh = 25.20000 EUR"
-      legal_refs    = ["StromNEV §21", "§14a EnWG Modul 3", "BNetzA BK6-22-300"]
+      legal_refs    = ["StromNEV §21", "§14a EnWG Modul 3", "BNetzA BK8-22/010-A"]
       tariff_source = { sheet_id: "Preisblatt-NNE-2026-Q1" }
 → rechnung.zusatzAttribute
     "mako:legal_references"   — every paragraph the settlement rests on, deduplicated
     "mako:settlement_warnings" — what the engine could not do
 → settlement_input            — the request the figure was computed from, replayable
 ```
-
-Storing the **input** as well as the rendered document is what makes the trail complete: the
-document says what was billed, the input says what it was billed from, and a Storno
-recomputes rather than guesses.
 
 ```mermaid
 flowchart LR
@@ -974,14 +693,9 @@ Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6 (valid 01.09.2025).
 | Offshore-Netzumlage | `OffshoreHaftungsumlage` *(the BO4E `BdewArtikelnummer` variant for this levy; its wire value is `OFFSHORE_HAFTUNGSUMLAGE`)* | — |
 | KWKG-Umlage | `AbgabeKwkg` | — |
 
-Four position kinds carry **no** Artikelnummer at all: an Abschlag (it prices nothing), the
-Gas AWH positions (they carry a `2-01-7-xxx` Artikel-ID instead), a §19 Abs. 2 individuelles
-Entgelt, and a dezentrale Einspeisung, which is a bilateral payment outside the INVOIC
-market processes.
-
-> **NNE Strom.** BK6-20-160 replaced the classic `artikelnummer` with an `artikel_id` from
-> the Netznutzungspreisblatt. Supply it through the price sheet; the settlement states what
-> was charged, not how it is coded.
+No Artikelnummer: an Abschlag, Gas AWH positions (`2-01-7-xxx` Artikel-ID), a §19 Abs. 2
+individuelles Entgelt and a dezentrale Einspeisung. NNE Strom carries the `artikel_id` from the
+Netznutzungspreisblatt (BK6-20-160), supplied through the price sheet.
 
 **Gas AWH (PID 31011)** codes come from section 3.2 of the codelist, set per
 `AwhPositionInput.artikel_id`:
@@ -1007,50 +721,23 @@ market processes.
 | `GET` | `/api/v1/billing/summary?year=&month=` | Monthly net, Umsatzsteuer, gross **and `zu_zahlen`** by PID, Sparte, status, Rechnungsart |
 | `GET` | `/api/v1/billing/audit?from=&to=&pid=&status=` | § 147 AO / § 14b UStG export, up to 50 000 rows per page |
 
-Amounts are integers in units of 10⁻⁵ EUR, so a total never rounds through a float. The audit
-export omits the JSONB columns to keep a full-portfolio export manageable; fetch the document
-per draft.
-
-### Filter by Sparte
+Amounts are integers in 10⁻⁵ EUR. `sparte` is case-insensitive; anything but Strom/Gas is a
+`400`. `/drafts` and `/audit` page by keyset: `next_cursor` is the `(created_at, id)` of the last
+row, omitted on the last page.
 
 ```bash
-curl '.../api/v1/billing/drafts?sparte=Gas&status=dispatched'
-```
-
-PID 31002 (NN-Rechnung) and 31005 (Mehr-/Mindermengen) are each shared between Strom and Gas, so
-the Prüfidentifikator cannot answer *show me the gas invoices*. `sparte` is case-insensitive; a
-value that is neither Strom nor Gas is a `400`, since ignoring a typo would answer the wider
-question.
-
-### Paging
-
-```bash
-curl '.../api/v1/billing/drafts?limit=100'
+curl '.../api/v1/billing/drafts?sparte=Gas&status=dispatched&limit=100'
 # → { "count": 100, "next_cursor": "2026-02-01T08:30:00Z_550e8400-…", "drafts": [ … ] }
 curl '.../api/v1/billing/drafts?limit=100&after=2026-02-01T08:30:00Z_550e8400-…'
 ```
 
-`/drafts` and `/audit` both return `next_cursor`, omitted on the last page. It is the
-`(created_at, id)` of the last row, and the listing is ordered by that pair, so resuming is a range
-scan on `id_tenant_created`.
-
-It is a keyset, not an offset: `OFFSET n` re-reads the whole prefix, and it is unstable — a draft
-inserted between two page requests shifts the window and the caller skips a row. The audit export
-is ordered by `(created_at, id)` for the same reason; the delivery period is a filter, not the
-sort key.
-
-### What is owed, not what was invoiced
-
-`summary` totals `zu_zahlen` alongside the gross. On a portfolio with Abschläge the two differ —
-the gross is what the invoices state, `zu_zahlen` what is left to collect — so a month-end
-reconciliation runs against `zu_zahlen`.
+Reconcile month-end against `zu_zahlen`, not the gross.
 
 ---
 
 ## Background workers
 
-All three run only when `erp_webhook_url` is configured, and all three stop promptly on
-shutdown rather than holding the process open until their next tick.
+All three run only when `erp_webhook_url` is set, and stop promptly on shutdown:
 
 | Worker | Interval | Emits |
 |---|---|---|
@@ -1058,22 +745,13 @@ shutdown rather than holding the process open until their next tick.
 | Undispatched-draft alert | 1 h (`dispatch_alert_interval_secs`) | `de.netzbilanz.invoic.dispatch-overdue` — two clocks: a draft older than `dispatch_stale_hours`, **or** one whose own `due_date` falls inside that window |
 | Kostenblatt deadline alert | 1 d (`kostenblatt_alert_interval_secs`) | `de.netzbilanz.kostenblatt.deadline-approaching` on days 10–14 with pending records |
 
-Both alerts **enqueue on the outbox** rather than posting for themselves, so every
-`de.netzbilanz.*` event takes one delivery path with one retry policy and one dead-letter queue.
-
-The overdue alert names each draft's `zu_zahlen_eur` and `due_date`, not the gross: an exposure
-report over the gross overstates every period that carries Abschläge.
-
-The overdue alert watches the Zahlungsziel as well as the age, because age alone cannot answer
-the question: a 90-day payment term makes 48 hours meaningless, and a 7-day one makes it far
-too slow. It excludes drafts the checker disputed — those are blocked, not overdue, and
-alerting on them hourly trains an operator to ignore the alert.
+Both alerts enqueue on the outbox. The overdue alert reports `zu_zahlen_eur` and `due_date`, and
+skips drafts the checker disputed (blocked, not overdue).
 
 ## CloudEvents
 
-Every event is written to `event_outbox` and drained by the worker — persist-before-dispatch, so a
-crash never drops one. The five business events are enqueued in the same transaction as the change
-they describe; the two timer alerts describe no write, so they are enqueued on their own.
+Every event goes through `event_outbox`; the five business events are enqueued in the transaction
+of the change they describe.
 
 | Event | Trigger | Key `data` fields |
 |---|---|---|
@@ -1085,25 +763,15 @@ they describe; the two timer alerts describe no write, so they are enqueued on t
 | `de.netzbilanz.kostenblatt.computed` | an activation is quantified | `record_id`, `einsatzkosten_eur`, `dispatch_source` |
 | `de.netzbilanz.kostenblatt.deadline-approaching` | daily worker | `period_year`, `period_month`, `pending_count`, `days_until_deadline` |
 
-Inbound REMADV events arrive on `POST /api/v1/webhooks/remadv` and are HMAC-verified against
-`inbound_secret`. Set it: without it, a forged REMADV can mark an invoice paid or contest one
-that was not.
-
-Ingest is **idempotent**. Delivery is at-least-once, so the same REMADV arrives more than once; a
-replay whose target state the invoice already holds answers `204` rather than `404`, since a sender
-told the event failed retries indefinitely.
+Inbound REMADV events arrive on `POST /api/v1/webhooks/remadv`, HMAC-verified against
+`inbound_secret`, and are idempotent.
 
 ---
 
 ## MCP server
 
-At `/mcp` (Streamable HTTP). The tools read the whole invoice register, so the surface is
-gated by the same verifier and the same policy as REST: a JWT is verified and checked for
-`use-mcp`, and a configured `[mcp] api_key` stays accepted for agent clients that mint no
-OIDC token. Without either, `/mcp` refuses to start — see [Authentication and
-authorization](#authentication-and-authorization).
-
-**The surface is read-only.** Eight tools:
+At `/mcp` (Streamable HTTP), behind OIDC (`use-mcp`) or `[mcp] api_key`. **Read-only**, eight
+tools:
 
 | Tool | Purpose |
 |---|---|
@@ -1116,10 +784,8 @@ authorization](#authentication-and-authorization).
 | `list_pending_kostenblatt` | cost sheets awaiting the 15th |
 | `list_kostenblatt_gaps` | activations registered but never quantified |
 
-Dispatching an invoice sends EDIFACT to a counterparty and starts a payment obligation whose
-only reversal is a Stornorechnung. Model output is untrusted input, so settling, dispatching,
-rejecting and correcting live on the REST API, where the action is attributable to an
-operator. Read on MCP, act on REST.
+Settling, dispatching, rejecting and correcting live on REST, where the action is attributable
+to an operator.
 
 Six prompts walk the common workflows: `nb-invoic-overview`, `run-nne-billing`,
 `mmm-monthly-run`, `investigate-dispute`, `ggv-nne-billing`, `redispatch-monthly-submit`.
@@ -1128,13 +794,8 @@ Six prompts walk the common workflows: `nb-invoic-overview`, `run-nne-billing`,
 
 ## Authentication and authorization
 
-A route here dispatches an INVOIC to a counterparty over AS4, reverses one it already
-holds, marks a receivable paid, exports the § 147 AO / § 14b UStG record of a whole period,
-or files the month's Redispatch cost sheet. None of that is served to whoever can reach the
-port.
-
-Three doors, checked together at startup — `netzbilanzd` **refuses to boot** with any of
-them open, unless the deployment asks for that by name with `allow_insecure_no_auth = true`:
+`netzbilanzd` **refuses to boot** with any of three doors open, unless
+`allow_insecure_no_auth = true`:
 
 | Door | Guard | What it protects |
 |---|---|---|
@@ -1142,10 +803,7 @@ them open, unless the deployment asks for that by name with `allow_insecure_no_a
 | MCP | `[oidc]` or `[mcp] api_key` | the tenant's whole invoice register and its Redispatch cost sheets |
 | `POST /api/v1/webhooks/remadv` | `inbound_secret` HMAC over the raw body | a forged REMADV marking an invoice paid, or disputing one that was not |
 
-Authentication says who is calling; **Cedar** says what they may do, and the two are
-separate decisions — an auditor reads the § 147 AO export with the same token shape an
-operator dispatches invoices with. `services/netzbilanzd/policies/netzbilanzd.cedar` states
-13 actions in four grants:
+`services/netzbilanzd/policies/netzbilanzd.cedar` states 13 actions in four grants:
 
 | Grant | Actions | Requires |
 |---|---|---|
@@ -1154,21 +812,10 @@ operator dispatches invoices with. `services/netzbilanzd/policies/netzbilanzd.ce
 | Redispatch 2.0 | `compute-kostenblatt`, `submit-kostenblatt`, `compute-verguetung` | `NB` or `UENB` — the money moves between the NB that steered the resource and the ÜNB that asked for it |
 | MCP | `use-mcp` | a matching tenant; the tools are read-only by construction |
 
-The BilAReM calculators sit with the reads deliberately: they touch no stored data, take
-their whole input from the request body and persist nothing, so they disclose nothing about
-the tenant.
-
-`tests/authorization_guard.rs` pins the surface against three failure classes the compiler
-cannot see — a handler with no `Claims` extractor is unauthenticated; a handler that takes
-`Claims` and never authorizes is reachable by any accepted token; and a Cedar action checked
-in code but named in no policy is a permanent 403, while one named in the policy and checked
-nowhere is a dead grant. The REMADV webhook is the single documented exception, authenticated
-by HMAC rather than by a bearer token.
-
-> **Four-eyes is not implemented.** Separating "may settle a period" from "may dispatch the
-> invoice it produced" needs a job-function axis, and `mako_roles` carries **market** roles
-> only — a policy naming a BUCHHALTUNG role would deny every caller. Denials are logged with
-> the caller's `sub` and the action, so who tried what stays visible.
+`tests/it/authorization_guard.rs` pins every handler to a `Claims` extractor and an
+authorization call, and the action sets of code and policy to each other; the REMADV webhook is
+the documented HMAC exception. There is no four-eyes split: `mako_roles` carries market roles
+only, so "may settle" and "may dispatch" are one grant. Denials are logged with `sub` and action.
 
 ---
 
@@ -1213,122 +860,23 @@ underscore (`NETZBILANZD_DATABASE__URL`).
 
 ## PostgreSQL schema
 
-Migrations run at startup via `sqlx::migrate!`. Every table is tenant-scoped, and every read
-path filters on `tenant`.
+Migrations run at startup; every table is tenant-scoped. `invoice_drafts` enforces in SQL:
 
-```sql
--- Consecutive invoice numbering (§14 Abs. 4 Nr. 4 UStG), allocated under a row
--- lock inside the drafting transaction.
-CREATE TABLE invoice_number_seq (
-    tenant         TEXT     NOT NULL,
-    rechnungskreis TEXT     NOT NULL,      -- '' when the caller names no series
-    year           SMALLINT NOT NULL,
-    last_number    BIGINT   NOT NULL DEFAULT 0,
-    PRIMARY KEY (tenant, rechnungskreis, year)
-);
+| Constraint | Rule |
+|---|---|
+| `pid` CHECK | `31001, 31002, 31005, 31009, 31011` |
+| `id_totals_add_up` | `netto + steuer = brutto` (units of 10⁻⁵ EUR) |
+| `id_zu_zahlen_within_brutto` | the Abschlag deduction never flips the sign or exceeds the gross |
+| `id_reverse_charge_states_no_tax` | `AE` ⇒ zero tax and rate; `S` ⇒ rate > 0 |
+| `id_correction_is_linked` | `RECHNUNG` has no `original_draft_id` / `korrektur_grund`; corrections have both |
+| `id_rechnungsnummer_unique` | one invoice number, one invoice |
+| `id_no_double_billing` | one live `RECHNUNG` per MaLo × period × PID (rejected rows and 31001 excluded) |
+| `id_one_abschlag_per_invoice_date` | one 31001 per MaLo × period × `invoice_date` |
+| `id_one_storno_per_original` | one Stornorechnung per original |
+| `id_tenant_created` | the `(tenant, created_at, id)` index the keyset cursor walks |
 
-CREATE TABLE invoice_drafts (
-    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant              TEXT    NOT NULL,
-    malo_id             TEXT    NOT NULL,
-    sender_mp_id        TEXT    NOT NULL,   -- NB/GNB, or the MSB for 31009
-    recipient_mp_id     TEXT    NOT NULL,   -- LF, or NB/LF/ESA for 31009
-    pid                 INTEGER NOT NULL
-                        CHECK (pid IN (31001, 31002, 31005, 31009, 31011)),
-    sparte              TEXT    NOT NULL CHECK (sparte IN ('STROM', 'GAS')),
-    settlement_type     TEXT    NOT NULL,
-    period_from         DATE    NOT NULL,
-    period_to           DATE    NOT NULL,
-    CONSTRAINT id_period_ordered CHECK (period_from <= period_to),
-    rechnungsnummer     TEXT    NOT NULL,
-    -- The document's own dates: both are §14 UStG mandatory content, and both
-    -- are asked for outside the document — `invoice_date` is what an Abschlag is
-    -- referenced by (`SG51 DTM+3`), `due_date` is what an overdue report
-    -- measures against. Kept only inside the JSONB, neither could be queried.
-    invoice_date        DATE    NOT NULL,
-    due_date            DATE    NOT NULL,
-    CONSTRAINT id_due_after_invoice CHECK (due_date >= invoice_date),
-    settlement_input    JSONB   NOT NULL,   -- replayable: what the figure was computed from
-    rechnung            JSONB   NOT NULL,   -- rubo4e::current::Rechnung
-    bo4e_version        TEXT    NOT NULL DEFAULT '202607.1.0',
-
-    -- The three amounts an invoice states, each × 10⁻⁵ EUR, enforced to add up:
-    -- an invoice whose parts do not sum to its whole is the one error nobody
-    -- catches by reading it.
-    netto_eur_units     BIGINT  NOT NULL,
-    steuer_eur_units    BIGINT  NOT NULL,
-    brutto_eur_units    BIGINT  NOT NULL,
-    CONSTRAINT id_totals_add_up CHECK (netto_eur_units + steuer_eur_units = brutto_eur_units),
-    -- What the recipient actually pays: the gross less every Abschlagsrechnung
-    -- this invoice settles. Stored rather than derived — it is what the payment
-    -- run collects and what the overdue report measures, and deriving it would
-    -- mean re-reading the deducted drafts on every query.
-    zu_zahlen_eur_units BIGINT  NOT NULL,
-    -- A deduction reduces what is owed; it never flips the sign or exceeds the
-    -- invoice it is deducted from.
-    CONSTRAINT id_zu_zahlen_within_brutto CHECK (
-        (brutto_eur_units >= 0 AND zu_zahlen_eur_units BETWEEN 0 AND brutto_eur_units)
-     OR (brutto_eur_units <  0 AND zu_zahlen_eur_units BETWEEN brutto_eur_units AND 0)
-    ),
-    steuer_kategorie    TEXT    NOT NULL CHECK (steuer_kategorie IN ('S', 'AE')),
-    steuer_satz_prozent NUMERIC(5, 2) NOT NULL,
-    -- A reverse charge states no tax; a taxed supply states a rate.
-    CONSTRAINT id_reverse_charge_states_no_tax CHECK (
-        (steuer_kategorie = 'AE' AND steuer_eur_units = 0 AND steuer_satz_prozent = 0)
-     OR (steuer_kategorie = 'S'  AND steuer_satz_prozent > 0)
-    ),
-    rechnungsart        TEXT    NOT NULL DEFAULT 'RECHNUNG'
-                        CHECK (rechnungsart IN ('RECHNUNG','STORNORECHNUNG','KORREKTURRECHNUNG')),
-    original_draft_id   UUID REFERENCES invoice_drafts(id) ON DELETE RESTRICT,
-    korrektur_grund     TEXT,
-    CONSTRAINT id_correction_is_linked CHECK (
-        (rechnungsart =  'RECHNUNG' AND original_draft_id IS NULL     AND korrektur_grund IS NULL)
-     OR (rechnungsart <> 'RECHNUNG' AND original_draft_id IS NOT NULL AND korrektur_grund IS NOT NULL)
-    ),
-    check_outcome       TEXT  NOT NULL CHECK (check_outcome IN ('Ok','Warn','Dispute')),
-    check_findings      JSONB NOT NULL DEFAULT '[]',
-    settlement_warnings JSONB NOT NULL DEFAULT '[]',
-    status              TEXT  NOT NULL DEFAULT 'draft'
-                        CHECK (status IN ('draft','dispatched','paid','disputed','rejected')),
-    dispatch_ref        TEXT,
-    dispatched_at       TIMESTAMPTZ,
-    remadv_ref          TEXT,
-    dispute_erc_code    TEXT,
-    dispute_reason      TEXT,
-    reject_reason       TEXT,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- One invoice number identifies exactly one invoice.
-CREATE UNIQUE INDEX id_rechnungsnummer_unique ON invoice_drafts (tenant, rechnungsnummer);
-
--- One live RECHNUNG per MaLo × period × PID. Corrections and rejected drafts
--- are excluded — rejecting is how an operator reopens a period.
--- Abschlagsrechnungen are excluded: a period legitimately carries several.
-CREATE UNIQUE INDEX id_no_double_billing
-    ON invoice_drafts (tenant, malo_id, period_from, period_to, pid)
-    WHERE rechnungsart = 'RECHNUNG' AND status <> 'rejected' AND pid <> 31001;
-
--- Abschlagsrechnungen get their own, looser guard rather than none at all:
--- instalments differ by their Rechnungsdatum, a replayed billing run does not.
-CREATE UNIQUE INDEX id_one_abschlag_per_invoice_date
-    ON invoice_drafts (tenant, malo_id, period_from, period_to, invoice_date)
-    WHERE rechnungsart = 'RECHNUNG' AND status <> 'rejected' AND pid = 31001;
-
--- One reversal per invoice. A second Storno credits the counterparty twice.
-CREATE UNIQUE INDEX id_one_storno_per_original
-    ON invoice_drafts (tenant, original_draft_id)
-    WHERE rechnungsart = 'STORNORECHNUNG';
-
--- The listing orders by (created_at, id) and pages by that same pair, so the
--- cursor walks this index instead of counting rows it will discard.
-CREATE INDEX id_tenant_created ON invoice_drafts (tenant, created_at DESC, id DESC);
-```
-
-`kostenblatt_records` (unique per `tenant, activation_id, tr_id`, with a generated
-`einsatzkosten_eur` and a window-ordering CHECK) and `fremdkosten_records` (one per draft)
-complete the schema.
+`kostenblatt_records` is unique per `tenant, activation_id, tr_id` with a generated
+`einsatzkosten_eur`; `fremdkosten_records` holds one row per draft.
 
 ---
 
@@ -1336,10 +884,10 @@ complete the schema.
 
 | Regulation | Requirement handled |
 |---|---|
-| StromNEV §§17, 21 · GasNEV §§14, 15 | NNE Arbeits-, Leistungs-, Grund- and Kapazitätspreis; the §17 Abs. 6 Arbeitspreis-only check |
+| StromNEV §§17, 21 · GasNEV §15 | NNE Arbeits-, Leistungs-, Grund- and Kapazitätspreis; the §17 Abs. 6 Arbeitspreis-only check |
 | KAV §2 | Konzessionsabgabe as its own position, with the Höchstbetrag checked per customer group |
 | EnFG §§ 21 ff. · §19 Abs. 2 StromNEV · §17f EnWG · §26 KWKG | the three network levies, per Letztverbrauchergruppe, Strom only |
-| §14a EnWG (BK6-22-300, BK8-22/010-A) | Modul 1 pauschal, Modul 2 prozentual, Modul 3 zeitvariabel |
+| §14a EnWG (BK8-22/010-A) | Modul 1 pauschal, Modul 2 prozentual, Modul 3 zeitvariabel |
 | GPKE (BK6-24-174) Teil 1 Kap. 8.4 | Mehr-/Mindermengensaldo Strom and its sign convention |
 | GaBi Gas 2.1 (BK7-24-01-008) | Mehr-/Mindermengensaldo Gas, on the 06:00 Gastag |
 | §30 MsbG | MSB-Rechnung and its Preisobergrenze |
@@ -1353,13 +901,8 @@ complete the schema.
 
 ## Informatorisches Unbundling
 
-`netzbilanzd` is an **NB-only service**. The LF billing services (`billingd`, `accountingd`,
-`invoicd`) run independently:
-
-- Cedar ABAC gates every write on a market role — `NB` or `MSB` for invoicing, `NB` or
-  `UENB` for Redispatch (see [Authentication and
-  authorization](#authentication-and-authorization)).
-- `netzbilanzd` does not appear in the LF `agentd` MCP server list.
-- `billingd` and `invoicd` do not receive `de.netzbilanz.*` CloudEvents.
+`netzbilanzd` is an NB-side service: Cedar gates every write on `NB`/`MSB` (invoicing) or
+`NB`/`UENB` (Redispatch), it is not in the LF `agentd` MCP server list, and `billingd` /
+`invoicd` do not receive `de.netzbilanz.*` events.
 
 See [§ 6a EnWG Informatorisches Unbundling](@/docs/services/portald.md#informatorisches-unbundling-ss-6a-enwg).

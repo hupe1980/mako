@@ -4,7 +4,10 @@
 //! the config, the ledger, the Cedar enforcer, a path, a query and a body is
 //! already at seven before it has a line of body. The lint measures coupling,
 //! which is the framework's here rather than this module's.
-#![allow(clippy::too_many_arguments)]
+#![expect(
+    clippy::too_many_arguments,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 //!
 //! ## Security model
 //!
@@ -22,6 +25,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use mako_service::ApiError;
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;
@@ -49,17 +53,6 @@ pub use sepa::validate_iban;
 
 /// The 403 body every Cedar denial returns.
 ///
-/// A denial names the principal, the action and the tenant it was refused
-/// against — enough for an operator to see whether the caller's `mako_roles` are
-/// wrong or the policy is, without leaking anything about the resource.
-fn forbidden(e: &mako_service::cedar::CedarError) -> axum::response::Response {
-    (
-        StatusCode::FORBIDDEN,
-        Json(serde_json::json!({ "error": e.to_string() })),
-    )
-        .into_response()
-}
-
 /// The 500 body. The detail is returned because every caller of this service is
 /// an operator or an internal system, never an end customer.
 fn internal(e: &anyhow::Error) -> axum::response::Response {
@@ -91,7 +84,7 @@ pub async fn get_account(
     Query(q): Query<AccountQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
@@ -113,7 +106,7 @@ pub async fn put_account(
     Json(req): Json<crate::pg::UpdateAccountRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
     // Not `let _ =`: the update below keys on the row this creates, so a failed
@@ -148,7 +141,7 @@ pub async fn get_balance(
     Query(q): Query<AccountQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
@@ -175,7 +168,7 @@ pub async fn get_ledger(
     Query(q): Query<LedgerQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
@@ -206,7 +199,7 @@ pub async fn get_kontoauszug(
     Query(q): Query<KontoauszugQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     // `from`/`to` narrow the statement to a period. Both are needed for a
@@ -221,8 +214,8 @@ pub async fn get_kontoauszug(
             .into_response()
     };
     let (from, to) = match (
-        parse_iso_date("from", q.from.as_deref()),
-        parse_iso_date("to", q.to.as_deref()),
+        optional_date("from", q.from.as_deref()),
+        optional_date("to", q.to.as_deref()),
     ) {
         (Ok(from), Ok(to)) => (from, to),
         (Err(e), _) | (_, Err(e)) => return unprocessable(e),
@@ -267,14 +260,13 @@ pub async fn get_kontoauszug(
     .into_response()
 }
 
-/// Parse an optional ISO 8601 date, naming the field on failure.
-fn parse_iso_date(field: &str, raw: Option<&str>) -> Result<Option<time::Date>, String> {
-    let Some(raw) = raw.filter(|s| !s.is_empty()) else {
-        return Ok(None);
-    };
-    time::Date::parse(raw, &time::format_description::well_known::Iso8601::DATE)
-        .map(Some)
-        .map_err(|_| format!("{field} must be an ISO 8601 date (YYYY-MM-DD)"))
+/// An optional ISO 8601 date query parameter: absent or empty is `None`, a
+/// malformed one is refused naming the field.
+fn optional_date(field: &str, raw: Option<&str>) -> Result<Option<time::Date>, String> {
+    raw.filter(|s| !s.is_empty())
+        .map(|s| mako_service::dates::parse_iso_date(field, s))
+        .transpose()
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -329,7 +321,7 @@ pub async fn get_abschlaege(
     Query(q): Query<AbschlaegeQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let parse = |label: &str, raw: Option<&str>, fallback: time::Date| match raw {
@@ -403,7 +395,7 @@ pub async fn put_abschlag(
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let abschlag_ct = body.get("abschlag_ct").and_then(|v| v.as_i64());
     if let Some(ct) = abschlag_ct {
@@ -731,7 +723,6 @@ pub async fn ingest_webhook(
                     );
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
-                #[allow(clippy::collapsible_if)]
                 if let Err(e) = crate::pg::post_entry(
                     &ledger,
                     &pool,
@@ -1012,7 +1003,6 @@ pub async fn ingest_webhook(
                     );
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
-                #[allow(clippy::collapsible_if)]
                 if let Err(e) = crate::pg::post_entry(
                     &ledger,
                     &pool,
@@ -1087,7 +1077,7 @@ pub async fn import_payments(
     Json(entries): Json<Vec<serde_json::Value>>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "import-payments", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let mut accepted = 0usize;
     let mut deduplicated = 0usize;
@@ -1774,7 +1764,7 @@ pub async fn import_payments_camt054(
     body: String,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "import-payments", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let doc = match crate::sepa::parse_camt054(&body) {
         Ok(d) => d,
@@ -1855,7 +1845,7 @@ pub async fn import_payments_camt052(
     body: String,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "import-payments", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let doc = match crate::sepa::parse_camt052(&body) {
         Ok(d) => d,
@@ -1934,7 +1924,7 @@ pub async fn import_payments_camt053(
     body: String,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "import-payments", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let doc = match crate::sepa::parse_camt053(&body) {
         Ok(d) => d,
@@ -2103,7 +2093,7 @@ pub async fn put_account_business_partner(
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let Some(kunden_nr) = body.get("kunden_nr").and_then(|v| v.as_str()) else {
@@ -2130,7 +2120,7 @@ pub async fn get_bp_accounts(
     Path(kunden_nr): Path<String>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match crate::pg::list_accounts_by_bp(&pool, &cfg.tenant, &kunden_nr).await {
         Ok(rows) => Json(serde_json::json!({
@@ -2152,7 +2142,7 @@ pub async fn get_bp_balance(
     Path(kunden_nr): Path<String>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match crate::pg::bp_consolidated_balance(&pool, &cfg.tenant, &kunden_nr).await {
         Ok(total_ct) => Json(serde_json::json!({
@@ -2176,7 +2166,7 @@ pub async fn get_offene_posten(
     Query(q): Query<OffenePostenQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     // parse min_balance_eur as a decimal string to avoid f64 rounding errors.
     // e.g. "1.99" must produce 199 ct, not 198 ct from (1.99 * 100.0) as i64.
@@ -2224,7 +2214,7 @@ pub async fn get_dunning(
     Query(q): Query<DunningQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match list_open_dunning(&pool, &cfg.tenant, q.limit.unwrap_or(200).min(1000)).await {
         Ok(rows) => Json(rows).into_response(),
@@ -2242,7 +2232,7 @@ pub async fn escalate_dunning(
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let account = match fetch_account_by_id(&pool, account_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
@@ -2283,7 +2273,7 @@ pub async fn resolve_dunning(
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match resolve_dunning_case(&pool, id, &cfg.tenant).await {
         Ok(0) => StatusCode::NOT_FOUND.into_response(),
@@ -2312,7 +2302,7 @@ pub async fn abwendung_angebot(
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     // `Err` is not "no such case": a database fault answered 404, and a client
     // told the Mahnfall does not exist stops retrying instead of backing off.
@@ -2391,7 +2381,7 @@ pub async fn get_dormant_mandates(
     Query(q): Query<ReviewQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-banking", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let within = q.older_than_days.unwrap_or(30).clamp(0, 365);
     match crate::pg::list_dormant_mandates(&pool, &cfg.tenant, within).await {
@@ -2444,7 +2434,7 @@ pub async fn place_lock(
     Json(req): Json<PlaceLockRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     if matches!(req.grund, crate::pg::LockGrund::Operator) && req.note.is_none() {
         return (
@@ -2508,7 +2498,7 @@ pub async fn get_locks(
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match crate::pg::list_dunning_locks(&pool, id, &cfg.tenant).await {
         Ok(rows) => Json(rows).into_response(),
@@ -2528,7 +2518,7 @@ pub async fn get_locks_due_review(
     Query(q): Query<ReviewQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let days = q.older_than_days.unwrap_or(90).clamp(0, 3650);
     match crate::pg::list_locks_due_review(&pool, &cfg.tenant, days).await {
@@ -2571,7 +2561,7 @@ pub async fn lift_lock(
     Json(req): Json<LiftLockRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     if req.grund.trim().is_empty() {
         return (
@@ -2670,7 +2660,7 @@ pub async fn place_einwand(
     Json(req): Json<EinwandRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     if req.betrag_ct <= 0 {
         return (
@@ -2733,7 +2723,7 @@ pub async fn get_einwaende(
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let (account_id, _, _) = match crate::pg::dunning_case_account(&pool, id, &cfg.tenant).await {
         Ok(Some(row)) => row,
@@ -2770,7 +2760,7 @@ pub async fn close_einwand(
     Json(req): Json<CloseEinwandRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     if !matches!(
         req.erledigung.as_str(),
@@ -2831,7 +2821,7 @@ pub async fn post_mandate(
     Json(req): Json<CreateMandateRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "manage-sepa", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     // Validate IBAN checksum before writing to DB (B16).
     // Malformed IBANs cause SEPA return charges (€3–15/return) + Mahnstufe escalation.
@@ -2876,7 +2866,7 @@ pub async fn get_mandate(
     Path(mandate_id): Path<Uuid>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-banking", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match fetch_mandate(&pool, mandate_id, &cfg.tenant).await {
         Ok(Some(row)) => Json(row).into_response(),
@@ -2901,7 +2891,7 @@ pub async fn delete_mandate(
     Path(mandate_id): Path<Uuid>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "manage-sepa", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let today = mako_fristen::heute();
     let rows = sqlx::query(
@@ -2929,7 +2919,7 @@ pub async fn run_sepa(
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "manage-sepa", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let mandates = match list_active_mandates(&pool, &cfg.tenant, 10_000).await {
         Ok(m) => m,
@@ -3093,7 +3083,7 @@ pub async fn put_vorauszahlung(
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     use rubo4e::current::Vorauszahlung;
     use rust_decimal::Decimal;
@@ -3161,7 +3151,7 @@ pub async fn get_vorauszahlung(
     Query(q): Query<VorauszahlungQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     use rust_decimal::Decimal;
 
@@ -3275,7 +3265,7 @@ pub async fn post_buchen(
     Json(req): Json<BuchenRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     // Validate entry_type against the allowed set.
@@ -3550,7 +3540,7 @@ pub async fn post_jahresabschluss(
     Query(q): Query<JahresabschlussQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "close-period", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match settle_jahresabschluss(&pool, &ledger, &cfg, &malo_id, &q).await {
         Ok(body) => Json(body).into_response(),
@@ -3984,7 +3974,7 @@ pub async fn put_zahlungsinformation(
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     use rubo4e::current::Zahlungsinformation;
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
@@ -4071,7 +4061,7 @@ pub async fn get_zahlungsinformation(
     Query(q): Query<ZahlungsQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-banking", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     use rubo4e::current::Zahlungsinformation;
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
@@ -4178,7 +4168,7 @@ pub async fn get_open_items(
     Query(q): Query<AccountQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
@@ -4251,7 +4241,7 @@ pub async fn post_anonymize(
     Json(req): Json<AnonymizeRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "erase-pii", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     if req.requested_by.is_empty() || req.legal_basis.is_empty() {
         return (
@@ -4330,7 +4320,7 @@ pub async fn post_reconcile(
     Query(q): Query<ReconcileQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
@@ -4396,7 +4386,7 @@ pub async fn post_seal_period(
     Json(req): Json<SealPeriodRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "close-period", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     use time::format_description::well_known::Iso8601;
     let (Ok(start), Ok(end)) = (
@@ -4423,7 +4413,7 @@ pub async fn get_seals(
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let seals = match ledger.seals().await {
         Ok(s) => s,
@@ -4453,7 +4443,7 @@ pub async fn get_entry_proof(
     Path(entry_id): Path<String>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let Ok(uuid) = Uuid::parse_str(&entry_id) else {
         return (StatusCode::BAD_REQUEST, "invalid entry_id").into_response();
@@ -4507,7 +4497,7 @@ pub async fn get_period_balance_proof(
     Query(q): Query<BalanceProofQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let outcome = match ledger
         .prove_period_balance(&period_id, &q.lf_mp_id, &q.malo_id)
@@ -4618,7 +4608,7 @@ pub async fn get_consistency_proof(
     Query(q): Query<ConsistencyQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match ledger.prove_append_only(q.since).await {
         Ok((proof, then, now)) => Json(serde_json::json!({
@@ -4655,7 +4645,7 @@ pub async fn get_trial_balance(
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match ledger.trial_balance().await {
         Ok(lines) => {
@@ -4686,7 +4676,7 @@ pub async fn post_clear(
     Query(q): Query<AccountQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
@@ -4718,7 +4708,7 @@ pub async fn post_reset_clearing(
     Path(clearing_id): Path<String>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let Ok(uuid) = Uuid::parse_str(&clearing_id) else {
         return (StatusCode::BAD_REQUEST, "invalid clearing_id").into_response();
@@ -4772,7 +4762,7 @@ pub async fn get_eeg_payouts(
     Query(q): Query<EegPayoutQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-banking", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let filter = crate::pg::EegPayoutFilter {
         malo_id: q.malo_id.as_deref(),
@@ -4833,7 +4823,7 @@ pub async fn get_eeg_payout(
     Path(payout_id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-banking", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     use sqlx::Row;
     let row =
@@ -4907,7 +4897,7 @@ pub async fn post_run_eeg_payouts(
     Json(req): Json<RunEegPayoutsRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "run-payout", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     use crate::sepa::build_pain_001;
 
@@ -5147,7 +5137,7 @@ pub async fn put_eeg_payout_status(
     Json(req): Json<Pain002StatusUpdate>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "run-payout", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     if !["ACCP", "RJCT", "CANC"].contains(&req.status.as_str()) {
         return (
@@ -5268,7 +5258,7 @@ pub async fn import_pain002(
     body: String,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "manage-sepa", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let doc = match crate::sepa::parse_pain002(&body) {
         Ok(d) => d,
@@ -5670,7 +5660,7 @@ pub async fn post_sepa_reversal(
     Json(req): Json<CreateReversalRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "manage-sepa", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let entry = match crate::pg::fetch_collection_entry(&pool, req.collection_entry_id, &cfg.tenant)
         .await
@@ -5977,7 +5967,7 @@ pub async fn post_sepa_recall(
     Json(req): Json<CreateRecallRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "manage-sepa", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let Some(run) = (match crate::pg::fetch_sepa_run(&pool, req.run_id, &cfg.tenant).await {
@@ -6168,7 +6158,7 @@ pub async fn import_camt029(
     body: String,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "manage-sepa", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let doc = match crate::sepa::parse_camt029(&body) {
         Ok(d) => d,
@@ -6297,7 +6287,7 @@ pub async fn get_collection_entries(
     Path(run_id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-banking", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let rows = sqlx::query(
         r"SELECT ce.entry_id, ce.mandatsref, ce.end_to_end_id, ce.payment_info_id,
@@ -6576,7 +6566,7 @@ pub async fn get_aging(
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match crate::pg::list_aging_buckets(&pool, &cfg.tenant).await {
         Ok(buckets) => {
@@ -6607,7 +6597,7 @@ pub async fn get_interest_charges(
     Query(q): Query<AccountQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
@@ -6649,7 +6639,7 @@ pub async fn post_interest_charge(
     Json(req): Json<CreateInterestChargeRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     use time::format_description::well_known::Iso8601;
 
@@ -6704,7 +6694,7 @@ pub async fn get_payment_plans(
     Query(q): Query<AccountQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
@@ -6731,7 +6721,7 @@ pub async fn post_payment_plan(
     Json(mut req): Json<crate::pg::CreatePaymentPlanRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     req.malo_id = malo_id;
     match crate::pg::create_payment_plan(&pool, &cfg.tenant, req).await {
@@ -6753,7 +6743,7 @@ pub async fn get_payment_plan(
     Path(plan_id): Path<Uuid>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match crate::pg::get_payment_plan_with_installments(&pool, plan_id, &cfg.tenant).await {
         Ok(Some((plan, installments))) => Json(serde_json::json!({
@@ -6775,7 +6765,7 @@ pub async fn delete_payment_plan(
     Path(plan_id): Path<Uuid>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
-        return forbidden(&e);
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match crate::pg::cancel_payment_plan(&pool, plan_id, &cfg.tenant, Some(claims.sub())).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),

@@ -76,7 +76,7 @@ permit(principal, action == Action::"effect:perform", resource);
 // denial back to the model, and the run ends *successfully* having done
 // nothing. It passed every unit test, because a hand-written context is a
 // context assembled to suit the rule; an end-to-end run is what caught it
-// (`tests/oversight.rs`).
+// (`tests/it/oversight.rs`).
 //
 // What would bind instead is finer-grained and structural, and it is a
 // **precondition on the first mutating grant rather than a control that runs
@@ -89,7 +89,7 @@ permit(principal, action == Action::"effect:perform", resource);
 //
 // **Neither is configured anywhere today, because there is nothing to configure
 // them on: no manifest declares `mutates: true`.** So the plane's advisory
-// posture — the one `concepts/AIFIRST.md` rests the AI Act Annex III position on
+// posture — the one mako's AI Act Annex III position rests on
 // — holds by the *absence* of a mutating grant and not by this policy. Adding
 // the first one without `protected_fields` and the human gate would be
 // unguarded, and nothing in `just ci` would say so. That guard is owed at the

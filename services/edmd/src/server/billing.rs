@@ -1,6 +1,9 @@
 //! Deliveries, imbalance and billing-period read endpoints.
 
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "used only in some feature or target combinations"
+)]
 use super::*;
 
 /// Mehr-/Mindermengen are a GPKE / GaBi Gas process, not a StromNZV one.
@@ -195,7 +198,7 @@ pub(crate) async fn get_imbalance(
 /// Returns the aggregated billing-period summary for a MaLo.
 ///
 /// Consumed by `invoicd` for RLM plausibility and by `netzbilanzd` for
-/// NNE invoice generation (N4).  Includes:
+/// NNE invoice generation.  Includes:
 /// - `arbeitsmenge_kwh` — total energy quantity
 /// - `spitzenleistung_kw` — peak demand (RLM Strom only)
 /// - `brennwert_kwh_per_m3` / `zustandszahl` — Gas conversion factors
@@ -416,8 +419,11 @@ pub(crate) async fn list_billing_periods(
             WHERE "tenant" = $1 AND "from" >= $2 AND "from" < $3
             GROUP BY "malo_id"
             ORDER BY "malo_id"
-            LIMIT {limit}"#,
+            LIMIT {probe}"#,
         table = store.resolved_table(),
+        // One row past the cap, so a list of exactly `limit` MaLos is known to
+        // be complete rather than reported as truncated.
+        probe = limit + 1,
     );
 
     match store
@@ -433,7 +439,7 @@ pub(crate) async fn list_billing_periods(
         .and_then(|r| r.to_json())
     {
         Ok(rows) => {
-            let truncated = i64::try_from(rows.len()).unwrap_or(i64::MAX) >= limit;
+            let (rows, truncated) = capped(rows, limit);
             Json(serde_json::json!({
                 "billing_periods": rows,
                 "count":           rows.len(),
@@ -454,10 +460,50 @@ pub(crate) async fn list_billing_periods(
     }
 }
 
+/// `rows` cut to `limit`, and whether anything was cut.
+///
+/// The query reads one row past the cap: `rows.len() > limit` is truncation,
+/// `rows.len() == limit` is a complete list that happens to fill it.
+fn capped(mut rows: Vec<serde_json::Value>, limit: i64) -> (Vec<serde_json::Value>, bool) {
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    let truncated = rows.len() > limit;
+    rows.truncate(limit);
+    (rows, truncated)
+}
+
 /// The first day of the month before the one containing `day`.
 fn previous_month_start(day: time::Date) -> time::Date {
     let first = day.replace_day(1).unwrap_or(day);
     first.previous_day().map_or(first, |last_of_prev| {
         last_of_prev.replace_day(1).unwrap_or(last_of_prev)
     })
+}
+
+#[cfg(test)]
+mod discovery_cap_tests {
+    use super::capped;
+
+    fn rows(n: usize) -> Vec<serde_json::Value> {
+        (0..n)
+            .map(|i| serde_json::json!({ "malo_id": i }))
+            .collect()
+    }
+
+    /// A list that exactly fills the cap is complete — `mabis-syncd` refuses a
+    /// truncated discovery, so calling it truncated would refuse a filing whose
+    /// MaLos are all there.
+    #[test]
+    fn a_list_that_fills_the_cap_is_not_truncated() {
+        let (out, truncated) = capped(rows(1_000), 1_000);
+        assert_eq!(out.len(), 1_000);
+        assert!(!truncated);
+    }
+
+    /// One row past the cap is truncation, and the row is cut.
+    #[test]
+    fn one_row_past_the_cap_is_truncated() {
+        let (out, truncated) = capped(rows(1_001), 1_000);
+        assert_eq!(out.len(), 1_000);
+        assert!(truncated);
+    }
 }

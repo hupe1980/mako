@@ -22,7 +22,6 @@
 
 use mako_engine::{
     error::WorkflowError,
-    ids::DeadlineId,
     types::{MarktpartnerCode, MessageRef, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
@@ -157,17 +156,6 @@ pub enum PreislisteCommand {
     },
     /// Record the price list as acknowledged.
     Aufzeichnen,
-    /// A registered deadline fired.
-    ///
-    /// PRICAT is a publish-only workflow with no active deadlines; this
-    /// command is a no-op in all terminal states. It satisfies the engine
-    /// contract that every workflow must handle `TimeoutExpired`.
-    TimeoutExpired {
-        /// Unique deadline ID.
-        deadline_id: DeadlineId,
-        /// Deadline label.
-        label: Box<str>,
-    },
 }
 
 impl CommandPayload for PreislisteCommand {}
@@ -256,10 +244,6 @@ impl Workflow for WimPreislisteWorkflow {
                 }
                 Ok(vec![PreislisteEvent::Aufgezeichnet].into())
             }
-
-            // PRICAT is a publish-only workflow with no deadlines; a fired
-            // timeout is always a no-op.
-            PreislisteCommand::TimeoutExpired { .. } => Ok(vec![].into()),
         }
     }
 }

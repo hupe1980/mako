@@ -4,11 +4,13 @@
 # crates/mako-gpke
 
 - Governed by **BK6-24-174** (Teil 1–3, eff. 2025-06-06) and **BK6-22-024** (Teil 4 Konfiguration).
-- `GpkeModule::workflow_names()` (`src/lib.rs`) is the authoritative list of the
-  workflows this crate registers — 23 of them, each entry the owning module's own
-  `WORKFLOW_NAME` constant. Read it there; a list restated here drifts, and
-  `EngineBuilder::build` only checks `workflow_names()` against what
-  `register_pids_with_roles` routes to.
+- `GpkeModule::drivers()` (`src/lib.rs`) is the authoritative list of the
+  workflows this crate registers — 23 of them, each a `WorkflowDriver::of::<W>`
+  under the owning module's own `WORKFLOW_NAME` constant. Read it there; a list
+  restated here drifts. `EngineBuilder::build` refuses a name
+  `register_pids_with_roles` routes to without a driver, and makod decides
+  deadlines and migrations through the driver — adding a workflow is that one
+  line, nothing in makod's deadline dispatch.
 - A GPKE process keeps its creation `WorkflowId`; the inbound message's own FV
   picks the adapter. Every registry must cover every known FV — there is no
   per-workflow acceptance policy to set.
@@ -24,6 +26,9 @@
   carries `dvgw-edi` instead; `mako-redispatch` and `mako-emob` carry neither.
 - Shared decision and state-machine crates may be depended on: `mako-fristen`,
   `mako-pruefung`, `mako-invoic`. Sibling **workflow** crates may not.
+- A workflow lists every deadline label it registers in `DEADLINE_LABELS`;
+  `on_deadline` and the `TimeoutExpired` arm ask one `window_open` guard. See
+  `crates/mako-engine/AGENTS.md`.
 
 The authoritative PID-ownership and APERAK-Fristen tables are in the
 root `AGENTS.md` under *Domain Rules*.

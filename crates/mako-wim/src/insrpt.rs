@@ -22,9 +22,9 @@
 //! | 23001 | Störungsmeldung | Störungsmelder (LF/NB) → MSB | beide |
 //! | 23003 | Ablehnung der Störungsmeldung | MSB → Melder | beide |
 //! | 23004 | Bestätigung der Störungsmeldung | MSB → Melder | beide |
-//! | 23005 | Informationsmeldung über die Störung | MSB → NB | **Gas** |
+//! | 23005 | Informationsmeldung über die Störung | MSB → MSB (Strom) · MSB → NB (Gas) | beide |
 //! | 23008 | Ergebnisbericht (Mitteilung Ergebnis) | MSB → Melder | beide |
-//! | 23009 | Informationsmeldung über die Behebung | MSB → NB | **Gas** |
+//! | 23009 | Informationsmeldung über die Behebung | MSB → MSB (Strom) · MSB → NB (Gas) | beide |
 //! | 23011 | Information über Störung an betroffener Marktlokation | MSB → LF/NB | Strom |
 //! | 23012 | Information über Ergebnis an betroffener Marktlokation | MSB → LF/NB | Strom |
 //!
@@ -86,9 +86,9 @@ pub const INSRPT_ANFRAGE_PIDS: &[u32] = &[23001];
 /// |---|---|---|
 /// | 23003 | Ablehnung der Störungsmeldung | beide |
 /// | 23004 | Bestätigung der Störungsmeldung | beide |
-/// | 23005 | Informationsmeldung über die Störung an den NB | Gas |
+/// | 23005 | Informationsmeldung über die Störung (Strom an den MSB der Marktlokation, Gas an den NB) | beide |
 /// | 23008 | Ergebnisbericht — „Mitteilung Ergebnis" | beide |
-/// | 23009 | Informationsmeldung über die Behebung an den NB | Gas |
+/// | 23009 | Informationsmeldung über die Behebung (Strom an den MSB der Marktlokation, Gas an den NB) | beide |
 /// | 23011 | Information über die Störung an betroffener Marktlokation | Strom |
 /// | 23012 | Information über das Ergebnis an betroffener Marktlokation | Strom |
 ///
@@ -151,8 +151,8 @@ pub fn ergebnis_werktage(sparte: Sparte, messtechnik: Messtechnik) -> u32 {
     }
 }
 
-/// A pending deadline `n` Werktage after `from`, at the 17:00 Europe/Berlin
-/// MaKo cut-off.
+/// A pending deadline at the end of the `n`-th Werktag after `from`
+/// (Europe/Berlin).
 fn window(label: &'static str, from: OffsetDateTime, werktage: u32) -> PendingDeadline {
     PendingDeadline::new(
         label,
@@ -291,10 +291,18 @@ pub enum StoerungsmeldungState {
     Abgelehnt(Box<StoerungsmeldungData>),
     /// Ergebnisbericht exchanged (23008) — terminal.
     Ergebnisbericht(Box<StoerungsmeldungData>),
-    /// A window expired before its obligation was met — terminal.
-    DeadlineExpired {
-        /// Label of the expired deadline.
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// WiM Teil 2 Kap. 1.2 states the Antwort, Ergebnisbericht and Weiterleitung windows and no consequence of missing them. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
         label: String,
+        /// The state the process was waiting in.
+        offen: Box<StoerungsmeldungState>,
     },
 }
 
@@ -309,29 +317,36 @@ impl StoerungsmeldungState {
             Self::Bestaetigt(_) => "Bestaetigt",
             Self::Abgelehnt(_) => "Abgelehnt",
             Self::Ergebnisbericht(_) => "Ergebnisbericht",
-            Self::DeadlineExpired { .. } => "DeadlineExpired",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
     /// Returns `true` if this is a terminal state.
     #[must_use]
     pub const fn is_terminal(&self) -> bool {
-        matches!(
-            self,
-            Self::Abgelehnt(_) | Self::Ergebnisbericht(_) | Self::DeadlineExpired { .. }
-        )
+        matches!(self, Self::Abgelehnt(_) | Self::Ergebnisbericht(_))
     }
 
     /// The process data, where the state carries any.
     #[must_use]
-    pub const fn data(&self) -> Option<&StoerungsmeldungData> {
+    pub fn data(&self) -> Option<&StoerungsmeldungData> {
         match self {
+            Self::FristAbgelaufen { offen, .. } => offen.data(),
             Self::StoerungsmeldungGesendet(d)
             | Self::StoerungsmeldungEmpfangen(d)
             | Self::Bestaetigt(d)
             | Self::Abgelehnt(d)
             | Self::Ergebnisbericht(d) => Some(d),
-            Self::New | Self::DeadlineExpired { .. } => None,
+            Self::New => None,
         }
     }
 }
@@ -402,7 +417,7 @@ pub enum StoerungsmeldungCommand {
         status_code: Option<String>,
     },
     /// MSB side: send an accompanying Informationsmeldung
-    /// (23005/23009 Gas, 23011/23012 Strom).
+    /// (23005/23009 both Sparten, 23011/23012 Strom).
     DispatchInformationsmeldung {
         /// PID.
         pid: Pruefidentifikator,
@@ -447,6 +462,38 @@ impl CommandPayload for StoerungsmeldungCommand {}
 /// INSRPT Störungsbehebung workflow — both the Melder and the MSB side.
 pub struct WimInsrptWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// | Label | Open while |
+/// |---|---|
+/// | [`ANTWORT_WINDOW_LABEL`] | the Antwort is owed (`StoerungsmeldungEmpfangen`, `StoerungsmeldungGesendet`) |
+/// | [`ERGEBNIS_WINDOW_LABEL`] | the Ergebnisbericht is owed (`Bestaetigt`) |
+/// | [`WEITERLEITUNG_WINDOW_LABEL`] | a 23011 / 23012 is still unsent — in any state, terminal ones included: the Ergebnisbericht ends the Use-Case and still owes the 23012 |
+///
+/// A lapsed window does not lapse twice, but another window on the same
+/// waiting state still can.
+fn window_open(label: &str, state: &StoerungsmeldungState) -> bool {
+    use StoerungsmeldungState as S;
+    match state {
+        S::FristAbgelaufen {
+            label: lapsed,
+            offen,
+        } => lapsed.as_str() != label && window_open(label, offen),
+        _ => match label {
+            ANTWORT_WINDOW_LABEL => matches!(
+                state,
+                S::StoerungsmeldungEmpfangen(_) | S::StoerungsmeldungGesendet(_)
+            ),
+            ERGEBNIS_WINDOW_LABEL => matches!(state, S::Bestaetigt(_)),
+            WEITERLEITUNG_WINDOW_LABEL => state
+                .data()
+                .is_some_and(|d| !d.weiterleitung_offen.is_empty()),
+            _ => false,
+        },
+    }
+}
+
 impl WimInsrptWorkflow {
     /// The outbox payload for an outbound INSRPT of this process.
     ///
@@ -479,30 +526,29 @@ impl Workflow for WimInsrptWorkflow {
     type Event = StoerungsmeldungEvent;
     type Command = StoerungsmeldungCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[
+        ANTWORT_WINDOW_LABEL,
+        ERGEBNIS_WINDOW_LABEL,
+        WEITERLEITUNG_WINDOW_LABEL,
+    ];
+
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        // The Weiterleitung is the one window a *terminal* state does not close:
-        // the Ergebnisbericht ends the Use-Case and still owes the 23012. What
-        // closes it is the Weiterleitung going out.
-        let open = if deadline.label() == WEITERLEITUNG_WINDOW_LABEL {
-            state
-                .data()
-                .is_some_and(|d| !d.weiterleitung_offen.is_empty())
-        } else {
-            matches!(
-                deadline.label(),
-                ANTWORT_WINDOW_LABEL | ERGEBNIS_WINDOW_LABEL
-            ) && !state.is_terminal()
-        };
-        open.then(|| StoerungsmeldungCommand::TimeoutExpired {
+        window_open(deadline.label(), state).then(|| StoerungsmeldungCommand::TimeoutExpired {
             deadline_id: deadline.deadline_id(),
             label: deadline.label().into(),
         })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            StoerungsmeldungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             StoerungsmeldungEvent::StoerungsmeldungGesendet(d) => {
                 StoerungsmeldungState::StoerungsmeldungGesendet(d.clone())
@@ -573,15 +619,15 @@ impl Workflow for WimInsrptWorkflow {
                 }
             }
             StoerungsmeldungEvent::Informationsmeldung { .. } => state,
-            StoerungsmeldungEvent::DeadlineExpired { label, .. } => {
-                if state.is_terminal() {
-                    state
-                } else {
-                    StoerungsmeldungState::DeadlineExpired {
-                        label: label.to_string(),
-                    }
-                }
-            }
+            // `handle` records a lapse only for a window that was open, which
+            // the Weiterleitung can be after the Use-Case ended.
+            StoerungsmeldungEvent::DeadlineExpired { label, .. } => match state {
+                StoerungsmeldungState::New => state,
+                other => StoerungsmeldungState::FristAbgelaufen {
+                    label: label.to_string(),
+                    offen: Box::new(other),
+                },
+            },
         }
     }
 
@@ -589,6 +635,10 @@ impl Workflow for WimInsrptWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             StoerungsmeldungCommand::SendStoerungsmeldung {
                 pid,
@@ -806,10 +856,11 @@ impl Workflow for WimInsrptWorkflow {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 // 23004 is the Bestätigung and 23008 the Ergebnisbericht that
-                // follows it. 23005/23009 are the Gas Informationsmeldungen the
-                // MSB sends the NB alongside — they carry no decision at all,
-                // and reading them as a confirmation closed the process before
-                // the Störung was answered.
+                // follows it. 23005/23009 are Informationsmeldungen the MSB
+                // sends alongside (Strom to the MSB of the Marktlokation, Gas to
+                // the NB) — they carry no decision, so reading one as a
+                // confirmation would close the process before the Störung is
+                // answered.
                 if INSRPT_INFORMATIONS_PIDS.contains(&pid.as_u32()) {
                     return Ok(vec![StoerungsmeldungEvent::Informationsmeldung {
                         pruefidentifikator: pid,
@@ -842,11 +893,7 @@ impl Workflow for WimInsrptWorkflow {
             .into()),
 
             StoerungsmeldungCommand::TimeoutExpired { deadline_id, label } => {
-                let weiterleitung_offen = &*label == WEITERLEITUNG_WINDOW_LABEL
-                    && state
-                        .data()
-                        .is_some_and(|d| !d.weiterleitung_offen.is_empty());
-                if state.is_terminal() && !weiterleitung_offen {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![StoerungsmeldungEvent::DeadlineExpired { deadline_id, label }].into())

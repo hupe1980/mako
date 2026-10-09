@@ -3,7 +3,10 @@
 //! The phase table below links the functions it names. They are deliberately
 //! crate-private — a startup phase is not API — so the links only resolve under
 //! `--document-private-items`, which is the readership this module has.
-#![allow(rustdoc::private_intra_doc_links)]
+#![allow(
+    rustdoc::private_intra_doc_links,
+    reason = "the links resolve under --document-private-items, the readership of this module"
+)]
 //!
 //! `main` reads as the boot *order*; the work each step does lives here, so that
 //! order stays visible rather than buried under state construction. Each phase
@@ -182,11 +185,10 @@ pub(crate) fn lock_data_dir(
 /// Every domain module this build registers, in registration order.
 ///
 /// **The single list.** Production calls it from [`build_engine`]; the
-/// coverage guards in `tests/` call it instead of restating the stack. Four
-/// test files used to keep their own copy and two of them fell behind when a
-/// module was added — an omitted module registers workflows whose deadlines
-/// nothing dispatches and silently shrinks every figure the guards pin, so the
-/// list has to exist once.
+/// coverage guards in `tests/` call it instead of restating the stack. A copy
+/// falls behind when a module is added, and an omitted module registers
+/// workflows whose deadlines nothing dispatches and silently shrinks every
+/// figure the guards pin, so the list has to exist once.
 ///
 /// Each entry is gated on the deployment roles that need it, so a role-scoped
 /// build registers fewer. The `default` feature set names every role, which is
@@ -770,7 +772,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
                     crate::cedar_authz::CedarAuthorizer::unauthenticated()
                         .expect("CedarAuthorizer::unauthenticated is infallible"),
                 ),
-                max_body_bytes: 256 * 1024 * 1024, // 256 MiB — generous but finite (F-009)
+                max_body_bytes: 256 * 1024 * 1024, // 256 MiB — generous but finite
                 partner_store: None,
                 tenant_id: mako_engine::ids::TenantId::from_party_id(
                     cfg.mp_id_registry.primary_mp_id(),
@@ -944,7 +946,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
     // platform is `process/{tenant}/{process}` — `StreamId::for_process` builds
     // no other shape — so a prefix like `gpke/` selects nothing and the
     // projection folds zero events while its heartbeat reports it healthy. Two
-    // workers shipped exactly that way; `tests/projection_prefix_guard.rs`
+    // workers shipped exactly that way; `tests/it/projection_prefix_guard.rs`
     // refuses it now. Since there is no per-domain prefix, each projection sees
     // every workflow's events and filters on `event_type` itself.
     if cfg.projection_checkpoint_interval > 0 {

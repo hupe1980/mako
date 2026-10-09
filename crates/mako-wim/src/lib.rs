@@ -42,14 +42,14 @@
 //!       └── validate             (edi-energy)
 //!           └── extract fields   (application code)
 //!               └── DeviceChangeCommand { pid, melo_id, device_id, … }
-//!                   └── Process::execute(cmd)  ← pure domain logic here
+//!                   └── Process::run(cmd, opts)  ← pure domain logic here
 //! ```
 //!
 //! ## Three clocks, three messages
 //!
 //! | Clock | Window | Message |
 //! |---|---|---|
-//! | **APERAK** — processability | 45 min for Strom UTILMD/ORDERS (APERAK AHB 1.0 §2.4.1) | APERAK BGM+312/313 |
+//! | **APERAK** — processability | 45 min for Strom UTILMD/ORDERS (APERAK AHB 1.1 §2.4.1) | APERAK BGM+312/313 |
 //! | **Antwortfrist** — the business decision | 3 / 5 / 7 / 1 Werktage per process, from `antwort_frist_werktage(pid)` | the Antwort-PID's UTILMD or ORDRSP |
 //! | **Vorlauffrist** — was the requested date admissible? | anchored on the date the message carries, `mako_fristen::vorlauf` | the inbound message itself |
 //!
@@ -84,21 +84,48 @@
 //!                         .map(|i| format!("{i}")).collect(),
 //! };
 //!
-//! process.execute(cmd).await?;
+//! process.run(cmd, RunOptions::new()).await?;
 //! ```
 
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::pedantic, clippy::must_use_candidate)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::doc_markdown)] // German MaKo terms and BDEW acronyms produce many false positives
-#![allow(clippy::too_many_lines)] // process handle() functions are necessarily verbose
-#![allow(clippy::match_same_arms)] // sometimes intentional for process-family readability
-#![allow(clippy::manual_let_else)] // existing code style; rewrite in follow-up
-#![allow(clippy::redundant_closure_for_method_calls)]
-#![allow(clippy::unnested_or_patterns)]
-#![allow(clippy::map_unwrap_or)]
-#![allow(clippy::items_after_statements)]
+#![expect(
+    clippy::module_name_repetitions,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
+#![expect(
+    clippy::doc_markdown,
+    reason = "German MaKo terms and BDEW acronyms produce many false positives"
+)]
+#![expect(
+    clippy::too_many_lines,
+    reason = "process handle() functions are necessarily verbose"
+)]
+#![expect(
+    clippy::match_same_arms,
+    reason = "sometimes intentional for process-family readability"
+)]
+#![expect(
+    clippy::manual_let_else,
+    reason = "existing code style; rewrite in follow-up"
+)]
+#![expect(
+    clippy::redundant_closure_for_method_calls,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
+#![expect(
+    clippy::unnested_or_patterns,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
+#![expect(
+    clippy::map_unwrap_or,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
+#![expect(
+    clippy::items_after_statements,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 
 pub mod consent;
 pub mod ersteinbau;
@@ -227,25 +254,42 @@ impl mako_engine::builder::EngineModule for WimModule {
         "wim"
     }
 
-    fn workflow_names(&self) -> &'static [&'static str] {
-        // Every entry is the owning module's own constant. A literal here can
-        // disagree with the name `register_pids` routes to, and the two are
-        // checked against each other only at `EngineBuilder::build`.
-        &[
-            geraetewechsel::WORKFLOW_NAME,
-            geraeteubernahme::WORKFLOW_NAME,
-            ersteinbau::WORKFLOW_NAME,
-            stammdaten::WORKFLOW_NAME,
-            wertebestellung::WORKFLOW_NAME,
-            esa_wertebestellung::WORKFLOW_NAME,
-            steuerungsauftrag::WORKFLOW_NAME,
-            preisanfrage::WORKFLOW_NAME,
-            preisliste::WORKFLOW_NAME,
-            rechnungsabwicklung::WORKFLOW_NAME,
-            weiterverpflichtung::WORKFLOW_NAME,
-            invoic::WORKFLOW_NAME,
-            insrpt::WORKFLOW_NAME,
-            technik_aenderung::WORKFLOW_NAME,
+    fn drivers(&self) -> Vec<mako_engine::driver::WorkflowDriver> {
+        use mako_engine::driver::WorkflowDriver;
+        // Each workflow by type, under its module's own name constant.
+        vec![
+            WorkflowDriver::of::<geraetewechsel::WimDeviceChangeWorkflow>(
+                geraetewechsel::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<geraeteubernahme::WimGeraeteubernahmeWorkflow>(
+                geraeteubernahme::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<ersteinbau::WimErsteinbauWorkflow>(ersteinbau::WORKFLOW_NAME),
+            WorkflowDriver::of::<stammdaten::WimStammdatenWorkflow>(stammdaten::WORKFLOW_NAME),
+            WorkflowDriver::of::<wertebestellung::WimWertebestellungWorkflow>(
+                wertebestellung::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<esa_wertebestellung::EsaWertebestellungWorkflow>(
+                esa_wertebestellung::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<steuerungsauftrag::WimSteuerungsauftragWorkflow>(
+                steuerungsauftrag::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<preisanfrage::WimPreisanfrageWorkflow>(
+                preisanfrage::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<preisliste::WimPreislisteWorkflow>(preisliste::WORKFLOW_NAME),
+            WorkflowDriver::of::<rechnungsabwicklung::WimRechnungsabwicklungWorkflow>(
+                rechnungsabwicklung::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<weiterverpflichtung::WimWeiterverpflichtungWorkflow>(
+                weiterverpflichtung::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<invoic::WimInvoicWorkflow>(invoic::WORKFLOW_NAME),
+            WorkflowDriver::of::<insrpt::WimInsrptWorkflow>(insrpt::WORKFLOW_NAME),
+            WorkflowDriver::of::<technik_aenderung::WimTechnikAenderungWorkflow>(
+                technik_aenderung::WORKFLOW_NAME,
+            ),
         ]
     }
 
@@ -576,7 +620,8 @@ impl mako_engine::builder::EngineModule for WimModule {
         // and AWH WiM Gas 2.0 Kap. 4.3.
         //
         // 23001 Störungsmeldung (LF/NB → MSB), 23003/23004 Antwort, 23008
-        // Ergebnisbericht, 23005/23009 the Gas Informationsmeldungen an den NB,
+        // Ergebnisbericht, 23005/23009 the Informationsmeldungen (Strom MSB → MSB,
+        // Gas MSB → NB, PID-Übersicht 4.0),
         // 23011/23012 the Strom Weiterleitung an betroffene Marktlokationen.
         //
         // **One workflow for both Sparten.** The INSRPT AHB is Sparte-neutral;

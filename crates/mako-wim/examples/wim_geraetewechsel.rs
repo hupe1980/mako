@@ -33,7 +33,7 @@
 //! |---|---|---|
 //! | GPKE Lieferbeginn | 11:00 Uhr des 1. WT nach dem ÜT | `mako_fristen::antwort` |
 //! | WiM MSB-Wechsel (Antwort) | 3 / 5 / 7 / 1 WT je PID | `mako_wim::antwort_frist_werktage` |
-//! | APERAK Strom | 45 Minuten (UTILMD/ORDERS am Werktag) | `fristen::aperak_strom_due_at` |
+//! | APERAK Strom | 45 Minuten (UTILMD/ORDERS; Samstag → Sonntag 12:00) | `fristen::aperak_strom_due_at` |
 //! | APERAK Gas | nächster WT 12:00, bzw. 3 WT auf einem Initialprozess | `fristen::aperak_gas_due_at` |
 //!
 //! ## Run
@@ -43,6 +43,7 @@
 //! ```
 
 use edi_energy::{AnyMessage, EdiEnergyMessage, Platform};
+use mako_engine::process::RunOptions;
 use mako_engine::{
     builder::EngineBuilder,
     deadline::{Deadline, DeadlineStore, InMemoryDeadlineStore},
@@ -235,21 +236,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[3/7] Dispatching ReceiveUtilmd...");
 
     let envs = process
-        .execute(DeviceChangeCommand::ReceiveUtilmd {
-            transaktionsgrund: Some("E03".to_owned()),
-            pid,
-            sender: sender.clone(),
-            receiver: receiver.clone(),
-            melo_id: melo_id.clone(),
-            device_id: device_id.clone(),
-            document_date: document_date.clone(),
-            message_ref: msg_ref.clone(),
-            vorgangsnummer: Some("VG-TEST-001".to_owned()),
-            process_date: Some("20260401".to_owned()),
-            validation_passed,
-            validation_errors: validation_errors.clone(),
-            received_at: time::OffsetDateTime::now_utc(),
-        })
+        .run(
+            DeviceChangeCommand::ReceiveUtilmd {
+                transaktionsgrund: Some("E03".to_owned()),
+                pid,
+                sender: sender.clone(),
+                receiver: receiver.clone(),
+                melo_id: melo_id.clone(),
+                device_id: device_id.clone(),
+                document_date: document_date.clone(),
+                message_ref: msg_ref.clone(),
+                vorgangsnummer: Some("VG-TEST-001".to_owned()),
+                process_date: Some("20260401".to_owned()),
+                validation_passed,
+                validation_errors: validation_errors.clone(),
+                received_at: time::OffsetDateTime::now_utc(),
+            },
+            RunOptions::new(),
+        )
         .await?;
 
     for env in &envs {
@@ -334,12 +338,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_causation(utilmd_event_id.into());
 
     let aperak_envs = process
-        .execute_with(
+        .run(
             DeviceChangeCommand::DispatchAperak {
                 positive: true,
                 reason: None,
             },
-            aperak_ctx,
+            RunOptions::new().context(aperak_ctx),
         )
         .await?;
 
@@ -389,12 +393,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[5/7] Dispatching the business Antwort (UTILMD 55043 Bestätigung)...");
 
     let antwort_envs = process
-        .execute(DeviceChangeCommand::DispatchAntwort {
-            bestaetigt: true,
-            antwort_code: "E15".to_owned(),
-            bemerkung: None,
-            abweichender_termin: None,
-        })
+        .run(
+            DeviceChangeCommand::DispatchAntwort {
+                bestaetigt: true,
+                antwort_code: "E15".to_owned(),
+                bemerkung: None,
+                abweichender_termin: None,
+            },
+            RunOptions::new(),
+        )
         .await?;
     for env in &antwort_envs {
         println!("  ✓ {} (seq {})", env.event_type, env.sequence_number);
@@ -407,9 +414,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[6/7] Completing device change (meter swap confirmed)...");
 
     let complete_envs = process
-        .execute(DeviceChangeCommand::Complete {
-            device_id: DeviceId::new("ZHR-99999999"),
-        })
+        .run(
+            DeviceChangeCommand::Complete {
+                device_id: DeviceId::new("ZHR-99999999"),
+            },
+            RunOptions::new(),
+        )
         .await?;
     for env in &complete_envs {
         println!("  ✓ {} (seq {})", env.event_type, env.sequence_number);
@@ -477,21 +487,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("[+] Guard: stale ReceiveUtilmd on completed process is rejected...");
     let guard_err = process
-        .execute(DeviceChangeCommand::ReceiveUtilmd {
-            transaktionsgrund: Some("E03".to_owned()),
-            pid,
-            sender: sender.clone(),
-            receiver: receiver.clone(),
-            melo_id: melo_id.clone(),
-            device_id: device_id.clone(),
-            document_date: document_date.clone(),
-            message_ref: msg_ref.clone(),
-            vorgangsnummer: Some("VG-TEST-001".to_owned()),
-            process_date: Some("20260401".to_owned()),
-            validation_passed: true,
-            validation_errors: vec![],
-            received_at: time::OffsetDateTime::now_utc(),
-        })
+        .run(
+            DeviceChangeCommand::ReceiveUtilmd {
+                transaktionsgrund: Some("E03".to_owned()),
+                pid,
+                sender: sender.clone(),
+                receiver: receiver.clone(),
+                melo_id: melo_id.clone(),
+                device_id: device_id.clone(),
+                document_date: document_date.clone(),
+                message_ref: msg_ref.clone(),
+                vorgangsnummer: Some("VG-TEST-001".to_owned()),
+                process_date: Some("20260401".to_owned()),
+                validation_passed: true,
+                validation_errors: vec![],
+                received_at: time::OffsetDateTime::now_utc(),
+            },
+            RunOptions::new(),
+        )
         .await
         .unwrap_err();
     assert!(

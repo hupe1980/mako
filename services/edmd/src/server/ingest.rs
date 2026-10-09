@@ -1,6 +1,9 @@
 //! Direct-push ingest (iMSys/SMGW/Gas), V-rule validation, corrections and bulk ingestion.
 
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "used only in some feature or target combinations"
+)]
 use super::*;
 
 // ── iMSys / SMGW 15-min direct push ─────────────────────────────────────────
@@ -69,8 +72,8 @@ pub struct DirectPushRequest {
     ///
     /// Omit it and the endpoint's own default applies: `DIRECT_PUSH` for
     /// `/rlm/{malo_id}`, `DIRECT_GAS` for `/gas/{malo_id}`. A value outside the
-    /// vocabulary is refused rather than coerced — free-text labels like `SMGW`
-    /// used to parse as `MSCONS` and stamp EDIFACT provenance on a reading that
+    /// vocabulary is refused rather than coerced — a free-text label like `SMGW`
+    /// coerced to `MSCONS` would stamp EDIFACT provenance on a reading that
     /// never went near it.
     #[serde(default)]
     pub source: Option<String>,
@@ -179,7 +182,6 @@ pub async fn post_direct_reads_gas(
 }
 
 /// Internal implementation shared by Strom and Gas direct-push handlers.
-#[allow(clippy::too_many_lines)]
 /// Parse a caller-supplied quality flag from its wire spelling.
 ///
 /// Returns `None` for anything outside the set, so an unrecognised flag is

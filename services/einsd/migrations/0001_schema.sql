@@ -429,7 +429,7 @@ CREATE TABLE eeg_pflichtverstoesse (
     tenant             TEXT        NOT NULL,
     tr_id              TEXT        NOT NULL,
     -- `eeg_billing::SanktionsTyp::as_db_str` — held against the enum by
-    -- `tests/schema_code_guard.rs`, so a fourteenth breach cannot land in the
+    -- `tests/it/schema_code_guard.rs`, so a fourteenth breach cannot land in the
     -- code without landing here.
     typ                TEXT        NOT NULL CHECK (typ IN (
                            'FERNSTEUERBARKEIT_FEHLEND',
@@ -673,7 +673,7 @@ CREATE INDEX evs_lookup ON eeg_verguetungssaetze
 -- (Erzeugungsart, Vergütungsform, Leistungsband, Inbetriebnahme-Fenster).
 --
 -- GENERATED from `eeg_billing::seed::verguetungssatz_rows()`. Edit the crate and
--- regenerate; `tests/verguetungssaetze_seed_guard.rs` fails when the two drift.
+-- regenerate; `tests/it/verguetungssaetze_seed_guard.rs` fails when the two drift.
 --
 -- Rates are NET: the anzulegender Wert less the § 53 Abs. 1 deduction (0,4 ct
 -- for solar, 0,2 ct for the rest). The window bounds the plant's

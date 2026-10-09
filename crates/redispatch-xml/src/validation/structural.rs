@@ -11,14 +11,6 @@ use super::{ValidationError, ValidationResult};
 use crate::parse::Document;
 use crate::types::{DocumentId, DocumentVersion, MarketParticipantId, TimeInterval, UtcDateTime};
 
-// ── Trait for per-type structural validation ──────────────────────────────────
-
-/// Types that can validate their own structural integrity.
-pub trait ValidateStructural {
-    /// Append any structural violations found to `result`.
-    fn validate_structural(&self, result: &mut ValidationResult);
-}
-
 // ── Helper validators ─────────────────────────────────────────────────────────
 
 /// Validate a [`DocumentId`] field.

@@ -211,9 +211,15 @@ pub struct GetVersorgungAtParams {
 #[derive(Clone)]
 pub struct MdmdMcpHandler {
     state: Arc<MdmdMcpState>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     tool_router: ToolRouter<MdmdMcpHandler>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     prompt_router: PromptRouter<MdmdMcpHandler>,
 }
 
@@ -1253,7 +1259,7 @@ impl MdmdMcpHandler {
                  4. `get_versorgungsstatus_history` — review full transition timeline\n\
                  5. `get_rollenzuordnung` — verify new LF role assignment valid_from matches Lieferbeginn\n\
                  6. `get_nb_contract` — confirm NB contract valid_from ≤ Lieferbeginn\n\n\
-                 GPKE deadlines: NB must respond within 24h (APERAK) and 10 Werktage (55002/55003).\n\
+                 GPKE deadlines: the APERAK within 45 minutes; the NB's answer 55002/55003 by the Frist `mako_fristen::antwort` catalogues for 55001 (makod `get_process` shows it).\n\
                  APERAK 45-min deadline is enforced by makod automatically.",
             ),
         ]

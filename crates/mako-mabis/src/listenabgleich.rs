@@ -13,26 +13,16 @@
 //!   └───────────┴──→ Korrekturliste / Prüfmitteilung ──→ sender
 //! ```
 //!
-//! # Why this is not `mabis-clearingliste`
-//!
 //! The lists in [`crate::clearingliste`] (55067/55069/55070/55073) are
-//! **record-only**: they are distributed and nothing is expected back. The four
-//! here carry a reply leg, so modelling them the same way would drop the
-//! correction obligation entirely.
+//! **record-only**; the four here carry a reply leg, and modelling them the
+//! same way would drop the correction obligation. **55065 is one of them**: the
+//! PID overview gives the Lieferantenclearingliste a Prozessschritt-3 answer,
+//! **55066 „Korrekturliste zu Lieferantenclearingliste"** — an LF that never
+//! sends it has silently accepted whatever the NB filed.
 //!
-//! **55065 is one of them.** The PID overview gives the Lieferantenclearingliste
-//! a Prozessschritt-3 answer:
-//! **55066 „Korrekturliste zu Lieferantenclearingliste"**, LF → NB with EBD
-//! `E_0047` and LF → ÜNB with `E_0004`. An LF that never sends it has silently
-//! accepted whatever the NB filed.
-//!
-//! # Why the reply is not a Bestätigung/Ablehnung
-//!
-//! The lifecycle families in [`crate::zp_lifecycle`] answer with a binary
-//! confirm/reject pair. These do not: 55202 is a *Korrekturliste*, 55224 a
-//! *Prüfmitteilung*. A reply carrying corrections is neither an acceptance nor a
-//! rejection of the list — it is the reconciliation result. Forcing it into an
-//! accept/reject shape would make "list received, three positions corrected"
+//! Unlike [`crate::zp_lifecycle`], the reply is not a confirm/reject pair:
+//! 55202 is a *Korrekturliste*, 55224 a *Prüfmitteilung*. An accept/reject
+//! shape would make "list received, three positions corrected"
 //! unrepresentable.
 //!
 //! # Prüfidentifikatoren
@@ -81,10 +71,9 @@
 //! version is not admitted, the Zeitraum is implausible, or (`E_0070`) the list
 //! arrived outside the Clearingphase DZÜ.
 //!
-//! They are not interchangeable. Answering an unassessable list with an empty
-//! Korrekturliste states „reconciled, nothing to correct" — the opposite of what
-//! happened — and answering an assessable one with a whole-list refusal throws
-//! away every position the receiver did check. The whole-list Prüfschritte
+//! They are not interchangeable: an empty Korrekturliste states „reconciled,
+//! nothing to correct", and a whole-list refusal throws away every position the
+//! receiver did check. The whole-list Prüfschritte
 //! therefore run **first and to completion**
 //! ([`mako_pruefung::mabis::pruefe_liste`]), and which command the caller sends
 //! is checked against what that walk decides rather than trusted.
@@ -350,6 +339,14 @@ pub enum ListenabgleichState {
         /// Validation error summary.
         reason: String,
     },
+}
+
+impl mako_engine::workflow::OccupiesBusinessKey for ListenabgleichState {
+    /// Occupied while the Korrekturliste is owed; a reconciled, refused or
+    /// invalid list is settled.
+    fn occupies_business_key(&self) -> bool {
+        matches!(self, Self::ListeErhalten(_))
+    }
 }
 
 impl ListenabgleichState {

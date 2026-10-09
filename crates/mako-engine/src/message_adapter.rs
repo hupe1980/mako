@@ -326,7 +326,7 @@ mod tests {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Clone, Debug)]
     enum TestCommand {
         Fire,
     }

@@ -30,9 +30,8 @@
 //! # Domain background
 //!
 //! **GaBi Gas** (*Gasbilanzierung Gas*) is the German regulatory framework for
-//! gas balancing, established by the Bundesnetzagentur (BNetzA) under the
-//! Gasnetzzugangsverordnung (GasNZV). The current version, **GaBi Gas 2.1**,
-//! entered into force with BNetzA order **BK7-24-01-008**.
+//! gas balancing, set by Bundesnetzagentur (BNetzA) Festlegung. The current
+//! version, **GaBi Gas 2.1**, is BNetzA order **BK7-24-01-008**.
 //!
 //! The framework governs the exchange of gas quantity data between balance
 //! responsible parties (BKV), network operators (FNB/VNB), and market area
@@ -59,15 +58,18 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::pedantic, clippy::must_use_candidate)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::doc_markdown)] // German MaKo terms and BDEW acronyms produce many false positives
-#![allow(clippy::too_many_lines)] // process handle() functions are necessarily verbose
-#![allow(clippy::match_same_arms)] // sometimes intentional for process-family readability
-#![allow(clippy::manual_let_else)] // existing code style; rewrite in follow-up
-#![allow(clippy::redundant_closure_for_method_calls)]
-#![allow(clippy::unnested_or_patterns)]
-#![allow(clippy::map_unwrap_or)]
-#![allow(clippy::items_after_statements)]
+#![expect(
+    clippy::module_name_repetitions,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
+#![expect(
+    clippy::doc_markdown,
+    reason = "German MaKo terms and BDEW acronyms produce many false positives"
+)]
+#![expect(
+    clippy::too_many_lines,
+    reason = "process handle() functions are necessarily verbose"
+)]
 
 /// Core GaBi Gas domain types — [`GasDay`], [`GasQuantity`], [`GasBeschaffenheit`],
 /// [`Bilanzkreis`], [`NominationQuantity`], [`GasImbalanceSaldo`], etc.
@@ -149,7 +151,7 @@ pub use nomination::{
 /// [`mako_engine::pid_router::PidRouter`] at engine startup:
 ///
 /// **INVOIC billing (BDEW / edi-energy):**
-/// - PID 31010 → `"gabi-gas-invoic"` ([`GaBiGasInvoicWorkflow`], Kapazitätsrechnung, FNB/VNB → BKV)
+/// - PID 31010 → `"gabi-gas-invoic"` ([`GaBiGasInvoicWorkflow`], Kapazitätsrechnung, NB → KN)
 /// - PID 31007 → `"gabi-gas-invoic"` (Aggreg. MMM-Rechnung Gas, NB → MGV; Gas-only)
 /// - PID 31008 → `"gabi-gas-invoic"` (Aggreg. MMM-selbst ausgest. Rechnung Gas, NB → MGV; Gas-only)
 /// - PID 33001 → `"gabi-gas-invoic"` (REMADV Zahlungsavis, invoicer role)
@@ -178,16 +180,17 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
         "mako-gabi-gas"
     }
 
-    fn workflow_names(&self) -> &'static [&'static str] {
-        // Every entry is the owning module's own constant. A literal here can
-        // disagree with the name `register_pids` routes to, and the two are
-        // checked against each other only at `EngineBuilder::build`.
-        &[
-            invoic::WORKFLOW_NAME,
-            nomination::WORKFLOW_NAME,
-            allocation::WORKFLOW_NAME,
-            mmma::WORKFLOW_NAME,
-            mehr_mindermengen::WORKFLOW_NAME,
+    fn drivers(&self) -> Vec<mako_engine::driver::WorkflowDriver> {
+        use mako_engine::driver::WorkflowDriver;
+        // Each workflow by type, under its module's own name constant.
+        vec![
+            WorkflowDriver::of::<invoic::GaBiGasInvoicWorkflow>(invoic::WORKFLOW_NAME),
+            WorkflowDriver::of::<nomination::GaBiGasNominationWorkflow>(nomination::WORKFLOW_NAME),
+            WorkflowDriver::of::<allocation::GaBiGasAllocationWorkflow>(allocation::WORKFLOW_NAME),
+            WorkflowDriver::routing_only(mmma::WORKFLOW_NAME),
+            WorkflowDriver::of::<mehr_mindermengen::GaBiGasMehrMindermengenWorkflow>(
+                mehr_mindermengen::WORKFLOW_NAME,
+            ),
         ]
     }
 

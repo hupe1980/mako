@@ -27,27 +27,23 @@
 //! cross-reference section that points at it. This is the same mechanism a
 //! digital signature uses.
 //!
-//! Rewriting the file instead — parse, mutate, re-serialise — would be less
-//! code and considerably worse. A PDF/A file's conformance is a property of its
-//! exact structure, and re-serialising it through a general-purpose PDF library
-//! risks changing something the generator was careful about, silently, in a
-//! document nobody re-validates. Appending cannot: every byte `typst-pdf`
-//! produced is still there, in order.
+//! Re-serialising through a general-purpose PDF library would risk silently
+//! changing the exact structure PDF/A conformance rests on; appending keeps
+//! every byte `typst-pdf` produced, in order.
 //!
 //! # Reading is not ours
 //!
 //! Only the *writing* half lives here. [`extract`] delegates to
 //! `en16931-formats`' own reader, which walks the same catalogue route a
 //! receiver does and additionally reports every [`Divergence`] between what a
-//! PDF declares and what it contains. mako had its own name-tree walk and its
-//! own XMP scan; both are gone, and the checks they could not make — profile
-//! against BT-24, `/AFRelationship` against the profile, payload re-parsed as
-//! CII — are now part of the publish gate.
+//! PDF declares and what it contains. mako keeps no name-tree walk or XMP scan
+//! of its own, and the reader's checks — profile against BT-24,
+//! `/AFRelationship` against the profile, payload re-parsed as CII — are part
+//! of the publish gate.
 //!
-//! The [`Profile`] vocabulary is upstream's too. A private enum that knew about
-//! two of six profiles is exactly how a MINIMUM document — which carries no
-//! lines and is *not* an EN 16931 invoice — ends up wrapped in a carrier
-//! claiming it is one.
+//! The [`Profile`] vocabulary is upstream's too, all six profiles of it — a
+//! MINIMUM document carries no lines and is *not* an EN 16931 invoice, so a
+//! carrier must never claim it is one.
 //!
 //! # Sources
 //!
@@ -55,8 +51,7 @@
 //! Factur-X 1.0 info package and every reference implementation ships verbatim;
 //! the conformance-level spellings (`EN 16931`, with the space) are
 //! `Profile::as_str` upstream, corroborated against the Factur-X reference
-//! implementation's profile table. See `EN16931_FEEDBACK.md` at the repository
-//! root for the sources and for what was fed back to that crate's authors.
+//! implementation's profile table.
 
 use anyhow::{Context as _, Result, bail};
 

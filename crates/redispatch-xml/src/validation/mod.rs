@@ -8,7 +8,6 @@
 //! - **Semantic** — cross-field rules from the BDEW AWT (e.g. an `ACO`
 //!   document must contain at least one `ActivationTimeSeries`).
 
-use crate::error::RedispatchXmlError;
 use crate::parse::Document;
 
 pub mod semantic;
@@ -118,26 +117,13 @@ impl std::fmt::Display for ValidationResult {
 /// This function does not return `Err`; all findings are collected in the
 /// returned [`ValidationResult`]. Returns `Err` only when a validation
 /// precondition check fails (not currently possible).
-#[allow(unused_variables)]
+#[allow(
+    unused_variables,
+    reason = "read only in some feature or target combinations"
+)]
 pub fn validate(doc: &Document) -> ValidationResult {
     let mut result = ValidationResult::default();
     structural::validate(doc, &mut result);
     semantic::validate(doc, &mut result);
     result
-}
-
-/// Validate the structural integrity of a specific document without a
-/// [`Document`] enum wrapper.
-///
-/// Validates structural rules (presence of required fields, value ranges).
-pub fn validate_structural<T>(doc: &T) -> Result<(), RedispatchXmlError>
-where
-    T: structural::ValidateStructural,
-{
-    let mut result = ValidationResult::default();
-    doc.validate_structural(&mut result);
-    result
-        .into_result()
-        .map(|_| ())
-        .map_err(|e| RedispatchXmlError::StructuralError(e.to_string()))
 }

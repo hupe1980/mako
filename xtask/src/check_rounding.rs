@@ -25,8 +25,10 @@
 //!
 //! What is left is the explicit
 //! `round_dp_with_strategy(dp, RoundingStrategy::MidpointAwayFromZero)` and the
-//! `round_kfm` helpers the billing crates define over it — the guard, not a
-//! shared crate, is what keeps those from drifting apart.
+//! one `RoundMoney::round_kfm` / `round_money` helper over it, which lives in
+//! [`HELPER_HOME`]. A fifth refusal keeps it the only one: a `RoundMoney`
+//! trait, a `round_kfm` body or a `round_money` function defined anywhere else
+//! is a copy, and a copy is what drifts.
 //!
 //! `f64::round` is half away from zero already and is exempt — but only on two
 //! **structural** grounds, never because a float appears somewhere on the line:
@@ -46,6 +48,14 @@ const RULE_SITES: &[&str] = &["xtask/src/check_rounding.rs"];
 
 /// The one admissible rounding mode.
 const KAUFMAENNISCH: &str = "MidpointAwayFromZero";
+
+/// The one file that may define the kaufmännisch rounding helper. `grid-billing`
+/// is the lowest crate of the billing stack — `eeg-billing`, `energy-billing`
+/// and `productd` depend on it — so every caller reaches it without a cycle.
+pub const HELPER_HOME: &str = "crates/grid-billing/src/rounding.rs";
+
+/// The spellings that define the helper rather than call or import it.
+const HELPER_DEFINITIONS: &[&str] = &["trait RoundMoney", "fn round_kfm(", "fn round_money("];
 
 /// Scan the workspace for banker's rounding.
 ///
@@ -81,7 +91,8 @@ pub fn run(workspace_root: &Path) -> bool {
     }
 
     eprintln!(
-        "check-rounding: {} site(s) round with a mode other than kaufmännisch:",
+        "check-rounding: {} site(s) round with a mode other than kaufmännisch or \
+         define the rounding helper outside its one home:",
         findings.len()
     );
     for (path, line, text) in &findings {
@@ -90,8 +101,8 @@ pub fn run(workspace_root: &Path) -> bool {
     eprintln!(
         "\n`Decimal::round_dp` is banker's rounding (half to even). Round half away \n\
          from zero instead: `round_dp_with_strategy(dp, \
-         RoundingStrategy::MidpointAwayFromZero)`, or the crate-local \
-         `RoundMoney::round_kfm(dp)` where one is defined."
+         RoundingStrategy::MidpointAwayFromZero)`, or \
+         `grid_billing::RoundMoney::round_kfm(dp)` — defined once, in {HELPER_HOME}."
     );
     false
 }
@@ -125,6 +136,10 @@ fn collect(dir: &Path, root: &Path, scanned: &mut usize, findings: &mut Vec<Find
         for (line, i) in offending_lines(&src) {
             findings.push((path.clone(), i, line));
         }
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        for (line, i) in helper_definitions(&rel, &src) {
+            findings.push((path.clone(), i, line));
+        }
     }
 }
 
@@ -154,6 +169,23 @@ pub fn offending_lines(src: &str) -> Vec<(String, usize)> {
         }
     }
     out
+}
+
+/// The lines of `src` that define the rounding helper, unless `rel` is its
+/// [`HELPER_HOME`].
+#[must_use]
+pub fn helper_definitions(rel: &str, src: &str) -> Vec<(String, usize)> {
+    if rel == HELPER_HOME {
+        return Vec::new();
+    }
+    src.lines()
+        .enumerate()
+        .filter(|(_, l)| {
+            let t = l.trim_start();
+            !t.starts_with("//") && HELPER_DEFINITIONS.iter().any(|d| t.contains(d))
+        })
+        .map(|(i, l)| (l.to_owned(), i + 1))
+        .collect()
 }
 
 /// Whether a `round_dp_with_strategy(` starting on line `i` names a strategy
@@ -438,6 +470,29 @@ mod tests {
     #[test]
     fn an_as_cast_proves_the_float() {
         assert!(offending_lines("let at = (x0 * CELLS_PER_POINT).round() as usize;\n").is_empty());
+    }
+
+    /// The helper has one home. A second `RoundMoney` trait or `round_kfm`
+    /// body is the copy that drifts — the four that existed were identical
+    /// only because nobody had edited one yet.
+    #[test]
+    fn a_second_helper_definition_is_refused() {
+        use super::{HELPER_HOME, helper_definitions};
+        let copy = "pub trait RoundMoney {\n    fn round_kfm(&self, dp: u32) -> Decimal;\n}\n\
+                    pub fn round_money(v: Decimal, dp: u32) -> Decimal { v }\n";
+        assert_eq!(
+            helper_definitions("services/productd/src/rounding.rs", copy).len(),
+            3
+        );
+        assert!(helper_definitions(HELPER_HOME, copy).is_empty());
+        // Calling it and importing it is what every other file does.
+        assert!(
+            helper_definitions(
+                "crates/eeg-billing/src/wind.rs",
+                "use grid_billing::RoundMoney;\nlet x = v.round_kfm(2);\n"
+            )
+            .is_empty()
+        );
     }
 
     /// `round_sf` answers a different question (significant figures) and is not

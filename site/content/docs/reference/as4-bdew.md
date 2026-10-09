@@ -3,9 +3,8 @@ title = "BDEW AS4 Guide"
 description = "Configure makod for BDEW AS4-Profil v1.2: the certificate triplet, the P-Mode registry, Verzeichnisdienst endpoint discovery, and testing without WIRK certs."
 weight = 17
 +++
-AS4 became the mandatory transport for BDEW MaKo since **1 April 2024** (Strom, BK6-22-024)
-and **1 April 2025** (Gas, BK7-22-023). This guide covers everything needed to operate
-`makod` in a BDEW production environment.
+AS4 has been the mandatory BDEW MaKo transport since **1 April 2024** (Strom, BK6-22-024)
+and **1 April 2025** (Gas, BK7-22-023). This guide covers operating `makod` on it.
 
 ---
 
@@ -32,8 +31,7 @@ Verification is strict in one direction. A receiver that requires the full block
 rejects a sender that signs less than it; a receiver that checks only that *some*
 signature verified accepts a conformant sender either way.
 
-Conformant partner stacks sign the block, so strict verification rejects only
-non-conformant senders.
+
 
 ### Payload encryption
 
@@ -53,9 +51,8 @@ the payload.
 
 ## BDEW AS4-Profil v1.2 vs PEPPOL/CEF
 
-BDEW AS4 is based on the CEF eDelivery profile but extends it with mandatory BSI TR-03116-3
-cryptographic algorithms. The differences are significant enough to cause interoperability
-failures if you treat them as equivalent.
+BDEW AS4 builds on the CEF eDelivery profile with mandatory BSI TR-03116-3
+algorithms; treating the two as equivalent fails interoperability.
 
 | Aspect | PEPPOL / CEF eDelivery | BDEW AS4-Profil v1.2 (01.04.2026) |
 |---|---|---|
@@ -306,11 +303,11 @@ stringData:
 ```
 
 The `MAKOD_` prefix is part of the name — `makod`'s clap definitions read only
-the prefixed form (`services/makod/src/main.rs:470`).
+the prefixed form (`services/makod/src/main.rs`).
 
 To keep the key material out of the environment entirely, mount it as a file and
 name the path in the config instead. Each PEM key has a `*_file` companion,
-resolved by `either_inline_or_file` (`services/makod/src/core/config.rs:565`);
+resolved by `either_inline_or_file` (`services/makod/src/core/config.rs`);
 giving both is an error, not a precedence:
 
 ```toml
@@ -448,7 +445,7 @@ sequenceDiagram
 Retrying is not merely safe here, it is what the profile assumes: the P-Mode
 sets `ReceptionAwareness.DuplicateDetection` to true, so the receiver is
 required to eliminate the duplicate an InDoubt retry can produce
-(`services/makod/src/transport/as4_sender.rs:1001`). Since the `MessageId` is
+(`services/makod/src/transport/as4_sender.rs`). Since the `MessageId` is
 stable across attempts, a resend after an unverifiable receipt cannot deliver
 the business message twice.
 
@@ -470,7 +467,7 @@ to run integration tests locally immediately:
 ```toml
 [dev-dependencies]
 mako-as4 = { path = "../mako-as4", features = ["testing"] }
-asx-rs   = { version = "0.14", features = ["as4", "testing"] }
+asx-rs   = { version = "0.15", features = ["as4", "testing"] }
 ```
 
 No manual `CertHandle` construction or direct `zeroize` dependency is needed:
@@ -526,7 +523,7 @@ async fn test_as4_full_round_trip() {
 ```
 
 For a complete, runnable example with SOAP envelope verification, see
-`services/makod/tests/as4_security.rs` — covers the full BDEW AS4 security
+`services/makod/tests/it/as4_security.rs` — covers the full BDEW AS4 security
 envelope including tampered-signature rejection and `require_encrypted_inbound` enforcement.
 
 ### Generating test certificates manually with OpenSSL
@@ -699,7 +696,7 @@ AlgorithmID/PartyUInfo/PartyVInfo = empty strings (§2.2.6.2.2)
 
 ## Security test coverage
 
-`makod` ships **12 automated tests** in `services/makod/tests/as4_security.rs` that
+`makod` ships **13 tests** in `services/makod/tests/it/as4_security.rs` that
 verify the full BDEW AS4-Profil v1.2 security envelope without WIRK certificates:
 
 ```mermaid
@@ -735,8 +732,9 @@ sequenceDiagram
 | `sign_encrypt_round_trip_via_mock_endpoint` | Full sign+encrypt→transport→decrypt pipeline | §2.2.6 |
 | `sign_only_round_trip_envelope_contains_wssec_signature` | Sign-only maintains WS-Security elements | §2.2.6.2.1 |
 | `sync_receipt_is_verified_and_correlated` | Synchronous `eb:Receipt` is parsed namespace-correctly and correlated to the sent `message_id` | §4.6.3 |
+| `an_untampered_signed_message_is_accepted` | The real verifier accepts an intact signed message — the control for the tamper test | §2.2.6.2.1 |
 
-Run with: `cargo test -p makod --test as4_security`
+Run with: `cargo test -p makod --test it as4_security`
 
 ---
 

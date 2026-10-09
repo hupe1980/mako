@@ -40,6 +40,7 @@
 //!
 //! Results are written to `target/criterion/replay_latency/`.
 
+use mako_engine::event_store::{AppendBatch, AtomicAppend};
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -104,7 +105,11 @@ fn seeded_store(rt: &Runtime, n: usize) -> (InMemoryEventStore, StreamId) {
 
     rt.block_on(async {
         store
-            .append(&stream, ExpectedVersion::NoStream, &events)
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::NoStream,
+                &events,
+            ))
             .await
             .expect("seeded append must succeed");
     });

@@ -22,20 +22,20 @@
 //!
 //! # Write path
 //!
-//! The public write path is [`Process::execute`] / [`Process::execute_with`].
-//! These delegate to the crate-internal `execute_command` function. Direct
-//! use of `execute_command` is intentionally not part of the public API;
-//! use [`Process`] instead.
+//! The one write path is [`Process::run`] — or [`Process::run_timeout`], where
+//! the command is the one [`Workflow::on_deadline`] decides. Both persist the
+//! whole [`WorkflowOutput`] — events, outbox, deadlines — in one
+//! [`AtomicAppend::append`].
 //!
-//! [`Process`]: crate::process::Process
-//! [`Process::execute`]: crate::process::Process::execute
-//! [`Process::execute_with`]: crate::process::Process::execute_with
+//! [`Process::run`]: crate::process::Process::run
+//! [`Process::run_timeout`]: crate::process::Process::run_timeout
+//! [`AtomicAppend::append`]: crate::event_store::AtomicAppend::append
 
 use crate::{
     deadline::Deadline,
     envelope::{EventEnvelope, NewEvent},
     error::{EngineError, WorkflowError},
-    event_store::{EventStore, ExpectedVersion},
+    event_store::{AppendBatch, AppendResult, AtomicAppend, ExpectedVersion},
     ids::{CausationId, ConversationId, CorrelationId, ProcessId, TenantId},
     outbox::PendingOutbox,
     version::WorkflowId,
@@ -98,15 +98,15 @@ impl PendingDeadline {
 /// When the command must also send an EDIFACT message, add the corresponding
 /// [`PendingOutbox`] entries to `outbox`. The engine materialises them into
 /// fully-typed [`OutboxMessage`] values with correct `causation_event_id` links
-/// inside [`Process::execute_and_enqueue`].
+/// inside [`Process::run`].
 ///
 /// When the command must register a regulatory deadline (e.g. APERAK 45-min
-/// sending window per APERAK AHB 1.0 §2.4.1), add a [`PendingDeadline`].
+/// sending window per APERAK AHB 1.1 §2.4.1), add a [`PendingDeadline`].
 /// The engine injects the process-identity fields from [`CommandContext`] and
 /// persists the deadline atomically with the events.
 ///
 /// [`OutboxMessage`]: crate::outbox::OutboxMessage
-/// [`Process::execute_and_enqueue`]: crate::process::Process::execute_and_enqueue
+/// [`Process::run`]: crate::process::Process::run
 #[derive(Debug, Clone)]
 pub struct WorkflowOutput<E: EventPayload> {
     /// Domain events to persist in the event stream.
@@ -264,9 +264,12 @@ pub trait EventPayload:
 
 /// Marker trait for domain command types.
 ///
-/// Commands are transient — they are never persisted. Only `Send + 'static` is
-/// required.
-pub trait CommandPayload: Send + 'static {}
+/// Commands are transient — they are never persisted. `Clone` is required
+/// because [`Process::run`] hands the same command to `handle` again, on
+/// freshly replayed state, after a version conflict.
+///
+/// [`Process::run`]: crate::process::Process::run
+pub trait CommandPayload: Clone + Send + 'static {}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
@@ -296,6 +299,22 @@ pub trait Workflow: Send + Sync + 'static {
     /// Command type handled by this workflow.
     type Command: CommandPayload;
 
+    /// Every business-deadline label this workflow registers and decides.
+    ///
+    /// The one table registration and matching share. The engine refuses to
+    /// persist a deadline whose label is neither listed here nor a delivery
+    /// window ([`mako_fristen::is_delivery_window`]) — see
+    /// [`EngineError::UnownedDeadlineLabel`] — and
+    /// [`Process::run_timeout`] consults [`Workflow::on_deadline`] only for
+    /// a label listed here. A delivery window is never listed: it is retired
+    /// when its message is delivered, and one that fires is an alert about that
+    /// message, not a step of the process.
+    ///
+    /// Defaults to none, for a workflow that registers no Frist.
+    ///
+    /// [`Process::run_timeout`]: crate::process::Process::run_timeout
+    const DEADLINE_LABELS: &'static [&'static str] = &[];
+
     /// Fold a domain event into the current state.
     ///
     /// This function must be total (no panics, no errors) and must produce a
@@ -307,18 +326,17 @@ pub trait Workflow: Send + Sync + 'static {
     /// Return an empty [`WorkflowOutput`] (or `vec![].into()`) when the
     /// command is a no-op (already processed).
     ///
-    /// Outbox messages in the returned [`WorkflowOutput::outbox`] will be
-    /// atomically co-persisted with the events when the command is dispatched
-    /// via [`Process::execute_and_enqueue`]. If dispatched via
-    /// [`Process::execute`], the outbox field is silently ignored.
+    /// The whole output — events, outbox entries and deadlines — is persisted
+    /// in one atomic write by [`Process::run`]. An outbox entry or deadline
+    /// with no event beside it is refused
+    /// ([`EngineError::UnrecordedEffect`]).
     ///
     /// # Errors
     ///
     /// Return a [`WorkflowError`] when the command is invalid for the current
     /// state or when domain validation fails.
     ///
-    /// [`Process::execute`]: crate::process::Process::execute
-    /// [`Process::execute_and_enqueue`]: crate::process::Process::execute_and_enqueue
+    /// [`Process::run`]: crate::process::Process::run
     fn handle(
         state: &Self::State,
         command: Self::Command,
@@ -381,10 +399,15 @@ pub trait Workflow: Send + Sync + 'static {
 
     /// Map a fired deadline to a compensating command.
     ///
-    /// Called by [`Process::execute_timeout`] when a registered deadline
-    /// for this workflow's process becomes overdue. Return `Some(command)`
-    /// to trigger a compensating action; return `None` to acknowledge the
-    /// deadline as a no-op.
+    /// Called by [`Process::run_timeout`] when a registered deadline
+    /// for this workflow's process becomes overdue — and only for a label in
+    /// [`Workflow::DEADLINE_LABELS`]. Return `Some(command)` to act; return
+    /// `None` to acknowledge the deadline as a no-op.
+    ///
+    /// This is the one guard a timeout passes. Deadlines are never cancelled
+    /// when a process moves on, so every one fires — on the healthy path too —
+    /// and the hook must act only where the window the label names is still
+    /// open in `state`.
     ///
     /// This method must be **pure**: no I/O, no clock access, no global state.
     /// The same `(deadline, state)` must always produce the same `Option<Command>`.
@@ -420,7 +443,7 @@ pub trait Workflow: Send + Sync + 'static {
     /// Returns `None` for all deadlines — no automatic compensation. Override in
     /// any workflow that has deadline-triggered compensation requirements.
     ///
-    /// [`Process::execute_timeout`]: crate::process::Process::execute_timeout
+    /// [`Process::run_timeout`]: crate::process::Process::run_timeout
     fn on_deadline(_deadline: &Deadline, _state: &Self::State) -> Option<Self::Command> {
         None
     }
@@ -504,7 +527,7 @@ impl CommandContext {
     ///
     /// ```rust,ignore
     /// let ctx = CommandContext::from_envelope(&utilmd_envelope, workflow_id);
-    /// process.execute_with(DispatchAperak { positive: true, reason: None }, ctx).await?;
+    /// process.run(DispatchAperak { positive: true, reason: None }, RunOptions::new().context(ctx)).await?;
     /// ```
     #[must_use]
     pub fn from_envelope(env: &EventEnvelope, workflow_id: WorkflowId) -> Self {
@@ -528,7 +551,7 @@ impl CommandContext {
     ///
     /// ```rust,ignore
     /// let ctx = CommandContext::from_deadline(&overdue_deadline, workflow_id);
-    /// process.execute_with(HandleTimeout { label: overdue_deadline.label().into() }, ctx).await?;
+    /// process.run_timeout(&overdue_deadline, RunOptions::new().context(ctx)).await?;
     /// ```
     #[must_use]
     pub fn from_deadline(deadline: &crate::deadline::Deadline, workflow_id: WorkflowId) -> Self {
@@ -551,7 +574,7 @@ impl CommandContext {
     /// ```rust,ignore
     /// // Inside a MessageAdapter or test:
     /// let new_event = ctx.new_event(&SupplierChangeEvent::Activated)?;
-    /// store.append(&stream_id, ExpectedVersion::Any, &[new_event]).await?;
+    /// store.append(AppendBatch::new(&stream_id, ExpectedVersion::Any, &[new_event])).await?;
     /// ```
     pub fn new_event<E: EventPayload>(&self, event: &E) -> Result<NewEvent, EngineError> {
         let payload =
@@ -616,394 +639,144 @@ impl EventEnvelope {
     }
 }
 
-// ── execute_command ───────────────────────────────────────────────────────────
+// ── decide_and_append ─────────────────────────────────────────────────────────
 
-/// Dispatch a command through a workflow and persist the resulting events.
+/// Replay `stream_id`, let `decide` pick a command from the state, handle it,
+/// and persist the whole output in one [`AtomicAppend::append`].
 ///
-/// This is the crate-internal write-path entry point. The public API is
-/// [`Process::execute`] / [`Process::execute_with`].
+/// The crate-internal core of [`Process::run`] and [`Process::run_timeout`].
+/// In order:
 ///
-/// It performs, in order:
-///
-/// 1. **Load** all events from `stream_id` via `store`.
-/// 2. **Reconstruct state** by folding events through [`Workflow::apply`].
+/// 1. **Replay** the stream through [`Workflow::apply`].
+/// 2. **Decide**: `decide(&state)` returns the command, or `None` to write
+///    nothing (a deadline whose window is already closed).
 /// 3. **Handle** the command via [`Workflow::handle`] (pure, no I/O).
-/// 4. **Build** [`NewEvent`] values from each domain event + `ctx`.
-/// 5. **Append** atomically with optimistic concurrency
-///    (`ExpectedVersion::Exact(current_sequence)`).
+/// 4. **Append** events, outbox entries, the caller's and the workflow's
+///    deadlines, and the caller's correlation entries in one batch, guarded by
+///    `ExpectedVersion::Exact(current_sequence)`.
 ///
-/// Returns the persisted envelopes (with store-assigned IDs and sequence
-/// numbers). Returns an empty `Vec` when the workflow produced no events.
+/// A command that produces no event writes nothing — not the caller's
+/// deadlines, not its correlation entries — because nothing happened that they
+/// could belong to. One that produces an outbox entry or a deadline without an
+/// event is refused ([`EngineError::UnrecordedEffect`]).
+///
+/// [`Process::run`]: crate::process::Process::run
+/// [`Process::run_timeout`]: crate::process::Process::run_timeout
+/// [`AtomicAppend::append`]: crate::event_store::AtomicAppend::append
+pub(crate) async fn decide_and_append<W, S>(
+    store: &S,
+    stream_id: &crate::ids::StreamId,
+    ctx: &CommandContext,
+    decide: &mut (impl FnMut(&W::State) -> Option<W::Command> + Send),
+    deadlines: &[Deadline],
+    correlations: &[crate::event_store::CorrelationEntry],
+) -> Result<Option<(AppendResult, Vec<Deadline>)>, EngineError>
+where
+    W: Workflow,
+    S: AtomicAppend,
+{
+    // `fold_stream` feeds one owned envelope at a time, so the payload moves
+    // into `W::upcast` without a clone.
+    let (state, current_sequence) = store
+        .fold_stream(
+            stream_id,
+            0,
+            (W::State::default(), 0u64),
+            |(acc, _), env| {
+                let seq = env.sequence_number;
+                let payload = W::upcast(&env.event_type, env.schema_version, env.payload)?;
+                let event: W::Event = serde_json::from_value(payload)
+                    .map_err(|e| EngineError::Deserialization(e.to_string()))?;
+                Ok((W::apply(acc, &event), seq))
+            },
+        )
+        .await?;
+
+    let Some(command) = decide(&state) else {
+        return Ok(None);
+    };
+    let output = W::handle(&state, command)?;
+
+    if output.events.is_empty() {
+        if !output.outbox.is_empty() || !output.deadlines.is_empty() {
+            return Err(EngineError::UnrecordedEffect {
+                workflow: ctx.workflow_id.name.as_ref().into(),
+            });
+        }
+        return Ok(Some((
+            AppendResult {
+                last_sequence: current_sequence,
+                events: Vec::new(),
+                outbox: Vec::new(),
+            },
+            Vec::new(),
+        )));
+    }
+
+    let new_events = output
+        .events
+        .iter()
+        .map(|event| ctx.new_event(event))
+        .collect::<Result<Vec<NewEvent>, EngineError>>()?;
+    let all_deadlines = materialise_deadlines::<W>(stream_id, ctx, deadlines, &output.deadlines)?;
+
+    let result = store
+        .append(
+            AppendBatch::new(
+                stream_id,
+                ExpectedVersion::Exact(current_sequence),
+                &new_events,
+            )
+            .outbox(&output.outbox)
+            .deadlines(&all_deadlines)
+            .correlations(correlations),
+        )
+        .await?;
+    Ok(Some((result, all_deadlines)))
+}
+
+/// Does `W` own the deadline `label`?
+///
+/// Owned means listed in [`Workflow::DEADLINE_LABELS`], or a delivery window
+/// ([`mako_fristen::is_delivery_window`]) that the outbox worker retires on
+/// delivery.
+#[must_use]
+pub fn owns_deadline_label<W: Workflow>(label: &str) -> bool {
+    W::DEADLINE_LABELS.contains(&label) || mako_fristen::is_delivery_window(label)
+}
+
+/// The deadlines one command persists: the caller's, plus the
+/// [`PendingDeadline`]s `handle` returned, stamped with the process identity.
 ///
 /// # Errors
 ///
-/// - [`EngineError::VersionConflict`] when a concurrent writer raced ahead.
-/// - [`EngineError::Workflow`] when the workflow rejects the command.
-/// - [`EngineError::Deserialization`] when a stored event cannot be decoded.
-///
-/// [`Process::execute`]: crate::process::Process::execute
-/// [`Process::execute_with`]: crate::process::Process::execute_with
-pub(crate) async fn execute_command<W, S>(
-    store: &S,
+/// [`EngineError::UnownedDeadlineLabel`] when any of them carries a label `W`
+/// does not own — such a deadline would fire into a workflow that never
+/// decides it.
+fn materialise_deadlines<W: Workflow>(
     stream_id: &crate::ids::StreamId,
-    command: W::Command,
     ctx: &CommandContext,
-) -> Result<Vec<EventEnvelope>, EngineError>
-where
-    W: Workflow,
-    S: EventStore,
-{
-    execute_command_and_collect::<W, S>(store, stream_id, command, ctx)
-        .await
-        .map(|(envelopes, _outbox)| envelopes)
-}
-
-/// Like [`execute_command`] but also returns the [`PendingOutbox`] entries
-/// produced by [`Workflow::handle`].
-///
-/// Use this when the caller needs to inspect or render the outbox messages
-/// produced by the command — for example, in E2E tests that render EDIFACT
-/// wire bytes from the workflow's outbox.  Avoids calling `handle()` a second
-/// time just to recover the outbox that `execute_command` silently discards.
-///
-/// [`PendingOutbox`]: crate::outbox::PendingOutbox
-pub(crate) async fn execute_command_and_collect<W, S>(
-    store: &S,
-    stream_id: &crate::ids::StreamId,
-    command: W::Command,
-    ctx: &CommandContext,
-) -> Result<(Vec<EventEnvelope>, Vec<PendingOutbox>), EngineError>
-where
-    W: Workflow,
-    S: EventStore,
-{
-    // ── 1 + 2. Stream-fold: reconstruct state without materialising a Vec ─────
-    //
-    // `fold_stream` feeds `EventEnvelope` values one-at-a-time; the engine
-    // never holds more than one envelope in memory during replay.  Because
-    // the envelope is owned, `env.payload` is moved into `W::upcast` without
-    // a clone — no extra heap allocation per event.
-    let (state, current_sequence) = store
-        .fold_stream(
-            stream_id,
-            0,
-            (W::State::default(), 0u64),
-            |(acc, _), env| {
-                let seq = env.sequence_number;
-                // env.payload is moved here — no clone required.
-                let payload = W::upcast(&env.event_type, env.schema_version, env.payload)?;
-                let event: W::Event = serde_json::from_value(payload)
-                    .map_err(|e| EngineError::Deserialization(e.to_string()))?;
-                Ok((W::apply(acc, &event), seq))
-            },
-        )
-        .await?;
-
-    // ── 3. Handle command (pure) ──────────────────────────────────────────────
-    let output = W::handle(&state, command)?;
-
-    if output.events.is_empty() {
-        return Ok((Vec::new(), output.outbox));
-    }
-
-    // ── 4. Build NewEvent values (caller-known metadata) ──────────────────────
-    let new_events: Result<Vec<NewEvent>, EngineError> = output
-        .events
-        .iter()
-        .map(|event| ctx.new_event(event))
-        .collect();
-    let new_events = new_events?;
-
-    // ── 5. Persist with optimistic concurrency ────────────────────────────────
-    // The store assigns event_id, sequence_number, stream_id, and timestamp.
-    // Outbox messages (output.outbox) are intentionally ignored here — use
-    // execute_command_atomic when atomic dual-writes are required.
-    let result = store
-        .append(
-            stream_id,
-            ExpectedVersion::Exact(current_sequence),
-            &new_events,
-        )
-        .await?;
-
-    Ok((result.events, output.outbox))
-}
-
-/// Like [`execute_command`] but atomically co-persists any [`PendingOutbox`]
-/// messages produced by [`Workflow::handle`].
-///
-/// Requires `S: AtomicAppend`.  All internal logic is identical to
-/// `execute_command`; the only difference is the persistence call at the end.
-pub(crate) async fn execute_command_atomic<W, S>(
-    store: &S,
-    stream_id: &crate::ids::StreamId,
-    command: W::Command,
-    ctx: &CommandContext,
-) -> Result<Vec<EventEnvelope>, EngineError>
-where
-    W: Workflow,
-    S: crate::event_store::AtomicAppend,
-{
-    // ── 1 + 2. Stream-fold: reconstruct state without materialising a Vec ─────
-    let (state, current_sequence) = store
-        .fold_stream(
-            stream_id,
-            0,
-            (W::State::default(), 0u64),
-            |(acc, _), env| {
-                let seq = env.sequence_number;
-                let payload = W::upcast(&env.event_type, env.schema_version, env.payload)?;
-                let event: W::Event = serde_json::from_value(payload)
-                    .map_err(|e| EngineError::Deserialization(e.to_string()))?;
-                Ok((W::apply(acc, &event), seq))
-            },
-        )
-        .await?;
-
-    // ── 3. Handle command (pure) ──────────────────────────────────────────────
-    let output = W::handle(&state, command)?;
-
-    if output.events.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // ── 4. Build NewEvent values ──────────────────────────────────────────────
-    let new_events: Result<Vec<NewEvent>, EngineError> = output
-        .events
-        .iter()
-        .map(|event| ctx.new_event(event))
-        .collect();
-    let new_events = new_events?;
-
-    // ── 5. Persist events + outbox atomically ─────────────────────────────────
-    let result = store
-        .append_with_outbox(
-            stream_id,
-            ExpectedVersion::Exact(current_sequence),
-            &new_events,
-            &output.outbox,
-        )
-        .await?;
-
-    Ok(result.events)
-}
-
-/// Like [`execute_command_atomic`] but co-persists `deadlines` in the same
-/// atomic write as events and outbox entries.
-///
-/// On [`SlateDbStore`] all three sets of writes land in a single SSI
-/// transaction, eliminating the non-atomic window between event persistence
-/// and deadline registration. On stores that use the default
-/// [`AtomicAppend::append_with_outbox_and_deadlines`] fallback, deadlines are
-/// **not** persisted here — callers must register them separately via
-/// [`DeadlineStore::register`].
-///
-/// This is the canonical implementation path for commands that must register
-/// a regulatory deadline (GPKE 24h, WiM 5 WT, GeLi Gas / WiM Gas 10 WT,
-/// MABIS 1 WT).
-///
-/// [`SlateDbStore`]: crate::store_slatedb::SlateDbStore
-/// [`DeadlineStore::register`]: crate::deadline::DeadlineStore::register
-pub(crate) async fn execute_command_atomic_with_deadlines<W, S>(
-    store: &S,
-    stream_id: &crate::ids::StreamId,
-    command: W::Command,
-    ctx: &CommandContext,
-    deadlines: &[crate::deadline::Deadline],
-    correlations: &[crate::event_store::CorrelationEntry],
-) -> Result<Vec<EventEnvelope>, EngineError>
-where
-    W: Workflow,
-    S: crate::event_store::AtomicAppend,
-{
-    let (state, current_sequence) = store
-        .fold_stream(
-            stream_id,
-            0,
-            (W::State::default(), 0u64),
-            |(acc, _), env| {
-                let seq = env.sequence_number;
-                let payload = W::upcast(&env.event_type, env.schema_version, env.payload)?;
-                let event: W::Event = serde_json::from_value(payload)
-                    .map_err(|e| EngineError::Deserialization(e.to_string()))?;
-                Ok((W::apply(acc, &event), seq))
-            },
-        )
-        .await?;
-
-    let output = W::handle(&state, command)?;
-
-    if output.events.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let new_events: Result<Vec<NewEvent>, EngineError> = output
-        .events
-        .iter()
-        .map(|event| ctx.new_event(event))
-        .collect();
-    let new_events = new_events?;
-
-    // Merge externally-supplied deadlines with any PendingDeadline values
-    // returned by the workflow's handle function.
-    let mut all_deadlines: Vec<crate::deadline::Deadline> = deadlines.to_vec();
-    for pd in &output.deadlines {
-        all_deadlines.push(crate::deadline::Deadline::new(
+    supplied: &[Deadline],
+    pending: &[PendingDeadline],
+) -> Result<Vec<Deadline>, EngineError> {
+    let mut all: Vec<Deadline> = supplied.to_vec();
+    all.extend(pending.iter().map(|pd| {
+        Deadline::new(
             stream_id.clone(),
             ctx.process_id,
             ctx.tenant_id,
             ctx.workflow_id.clone(),
             pd.label.as_str(),
             pd.due_at,
-        ));
+        )
+    }));
+    if let Some(unowned) = all.iter().find(|d| !owns_deadline_label::<W>(d.label())) {
+        return Err(EngineError::UnownedDeadlineLabel {
+            workflow: ctx.workflow_id.name.as_ref().into(),
+            label: unowned.label().into(),
+        });
     }
-
-    let result = store
-        .append_with_outbox_deadlines_and_correlations(
-            stream_id,
-            ExpectedVersion::Exact(current_sequence),
-            &new_events,
-            &output.outbox,
-            &all_deadlines,
-            correlations,
-        )
-        .await?;
-
-    Ok(result.events)
-}
-
-/// Reconstruct `(W::State, current_sequence)` using an optional snapshot as a
-/// starting point.
-///
-/// When a snapshot with matching schema version exists, replay starts from
-/// `snap.sequence_number` (O(k) tail scan). Otherwise falls back to full replay.
-async fn reconstruct_with_snapshot<W, S, Snap>(
-    store: &S,
-    snap_store: &Snap,
-    stream_id: &crate::ids::StreamId,
-) -> Result<(W::State, u64), EngineError>
-where
-    W: Workflow,
-    W::State: serde::de::DeserializeOwned,
-    S: EventStore,
-    Snap: crate::snapshot::SnapshotStore,
-{
-    let maybe_snap = snap_store.load(stream_id).await?;
-    let (initial_state, from_sequence) = match &maybe_snap {
-        Some(snap) if snap.state_schema_version == W::state_schema_version() => {
-            let state = serde_json::from_value::<W::State>(snap.state.clone())
-                .map_err(|e| EngineError::Deserialization(e.to_string()))?;
-            (state, snap.sequence_number)
-        }
-        #[allow(unused_variables)]
-        Some(snap) => {
-            #[cfg(feature = "tracing")]
-            tracing::warn!(
-                expected = W::state_schema_version(),
-                actual   = snap.state_schema_version,
-                stream_id = %stream_id,
-                "snapshot schema version mismatch; falling back to full replay"
-            );
-            (W::State::default(), 0)
-        }
-        None => (W::State::default(), 0),
-    };
-    store
-        .fold_stream(
-            stream_id,
-            from_sequence,
-            (initial_state, from_sequence),
-            |(acc, _), env| {
-                let seq = env.sequence_number;
-                let payload = W::upcast(&env.event_type, env.schema_version, env.payload)?;
-                let event: W::Event = serde_json::from_value(payload)
-                    .map_err(|e| EngineError::Deserialization(e.to_string()))?;
-                Ok((W::apply(acc, &event), seq))
-            },
-        )
-        .await
-}
-
-/// Like [`execute_command`] but uses a snapshot store to skip full replay.
-///
-/// When a valid snapshot exists, only tail events since the snapshot are
-/// replayed — O(k) instead of O(n). Falls back to full replay when no snapshot
-/// exists or the schema version has changed.
-pub(crate) async fn execute_command_with_snapshot<W, S, Snap>(
-    store: &S,
-    snap_store: &Snap,
-    stream_id: &crate::ids::StreamId,
-    command: W::Command,
-    ctx: &CommandContext,
-) -> Result<Vec<EventEnvelope>, EngineError>
-where
-    W: Workflow,
-    W::State: serde::de::DeserializeOwned,
-    S: EventStore,
-    Snap: crate::snapshot::SnapshotStore,
-{
-    let (state, current_sequence) =
-        reconstruct_with_snapshot::<W, S, Snap>(store, snap_store, stream_id).await?;
-
-    let output = W::handle(&state, command)?;
-    if output.events.is_empty() {
-        return Ok(Vec::new());
-    }
-    let new_events: Result<Vec<NewEvent>, EngineError> = output
-        .events
-        .iter()
-        .map(|event| ctx.new_event(event))
-        .collect();
-    let new_events = new_events?;
-    let result = store
-        .append(
-            stream_id,
-            ExpectedVersion::Exact(current_sequence),
-            &new_events,
-        )
-        .await?;
-    Ok(result.events)
-}
-
-/// Like [`execute_command_atomic`] but uses a snapshot store to skip full replay.
-///
-/// Atomically co-persists outbox messages alongside events while using a
-/// snapshot as the starting point for state reconstruction.
-pub(crate) async fn execute_command_atomic_with_snapshot<W, S, Snap>(
-    store: &S,
-    snap_store: &Snap,
-    stream_id: &crate::ids::StreamId,
-    command: W::Command,
-    ctx: &CommandContext,
-) -> Result<Vec<EventEnvelope>, EngineError>
-where
-    W: Workflow,
-    W::State: serde::de::DeserializeOwned,
-    S: crate::event_store::AtomicAppend,
-    Snap: crate::snapshot::SnapshotStore,
-{
-    let (state, current_sequence) =
-        reconstruct_with_snapshot::<W, S, Snap>(store, snap_store, stream_id).await?;
-
-    let output = W::handle(&state, command)?;
-    if output.events.is_empty() {
-        return Ok(Vec::new());
-    }
-    let new_events: Result<Vec<NewEvent>, EngineError> = output
-        .events
-        .iter()
-        .map(|event| ctx.new_event(event))
-        .collect();
-    let new_events = new_events?;
-    let result = store
-        .append_with_outbox(
-            stream_id,
-            ExpectedVersion::Exact(current_sequence),
-            &new_events,
-            &output.outbox,
-        )
-        .await?;
-    Ok(result.events)
+    Ok(all)
 }
 
 // ── Business-key occupancy ────────────────────────────────────────────────────

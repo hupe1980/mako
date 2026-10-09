@@ -93,10 +93,14 @@ impl ProductdClient {
     }
 
     /// `GET /api/v1/nehs-prices/latest?date=…` — most recent nEHS certificate
-    /// price (EUR/t CO₂) at or before `date`. Since 2026 the nEHS price is
-    /// auction-formed (§10 Abs. 1 BEHG); billingd derives the Gas CO₂
-    /// component from this series when no explicit override is configured.
-    pub async fn get_latest_nehs_price(&self, date: time::Date) -> Result<Option<Decimal>> {
+    /// price (EUR/t CO₂) at or before `date`, with the date it was set. Since
+    /// 2026 the nEHS price is auction-formed (§10 Abs. 1 BEHG); billingd
+    /// prices the Gas CO₂ component from this series where the point lies in
+    /// the period's own year.
+    pub async fn get_latest_nehs_price(
+        &self,
+        date: time::Date,
+    ) -> Result<Option<crate::config::NehsPreis>> {
         let request = self
             .up
             .get("/api/v1/nehs-prices/latest")
@@ -109,14 +113,23 @@ impl ProductdClient {
         else {
             return Ok(None);
         };
-        Ok(body
+        let eur_per_t = body
             .get("eur_per_t")
             .and_then(|v| {
                 v.as_str()
                     .map(str::to_owned)
                     .or_else(|| v.as_f64().map(|f| f.to_string()))
             })
-            .and_then(|s| s.parse::<Decimal>().ok()))
+            .and_then(|s| s.parse::<Decimal>().ok());
+        let datum = body
+            .get("price_date")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|s| {
+                time::Date::parse(s, &time::format_description::well_known::Iso8601::DATE).ok()
+            });
+        Ok(eur_per_t
+            .zip(datum)
+            .map(|(eur_per_t, datum)| crate::config::NehsPreis { datum, eur_per_t }))
     }
 
     /// Fetch §41a EPEX spot prices for `[period_from, period_to]`, keyed on the
@@ -1282,6 +1295,9 @@ impl Rechnungsempfaenger {
             city: self.city.clone(),
             country: self.country.clone(),
             vat_id: self.vat_id.clone(),
+            // The segment lives on the contract, not on the party; the caller
+            // that holds the contract sets it.
+            unternehmer: None,
         }
     }
 }
@@ -1312,6 +1328,23 @@ pub struct VertragFacts {
     pub vertragsende: Option<time::Date>,
     /// Notice period in months.
     pub kuendigungsfrist_monate: i32,
+    /// `B2C` | `B2B_SLP` | `B2B_RLM` | `B2B_HV` — the customer segment
+    /// `vertragd` stores on the contract. See [`unternehmer_aus_kundentyp`].
+    #[serde(default)]
+    pub kundentyp: Option<String>,
+}
+
+/// Whether a `vertragd` customer segment is a Unternehmer receiving for his
+/// Unternehmen (§ 14 Abs. 2 Satz 2 Nr. 1 UStG): `B2C` is not, every `B2B_*`
+/// segment is, and anything else is unknown — which the e-invoicing duty
+/// treats as a refusal, never as either answer.
+#[must_use]
+pub fn unternehmer_aus_kundentyp(kundentyp: Option<&str>) -> Option<bool> {
+    match kundentyp? {
+        "B2C" => Some(false),
+        k if k.starts_with("B2B_") => Some(true),
+        _ => None,
+    }
 }
 
 impl VertragFacts {
@@ -1357,9 +1390,12 @@ pub struct RahmenvertragSites {
 #[derive(Debug, serde::Deserialize)]
 pub struct RahmenvertragMaloEntry {
     pub malo_id: String,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     pub product_code: Option<String>,
-    #[allow(dead_code)]
+    /// The site's customer segment — see [`unternehmer_aus_kundentyp`].
     pub kundentyp: Option<String>,
 }
 

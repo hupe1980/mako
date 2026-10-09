@@ -1,30 +1,26 @@
-# portald — Customer Portal Gateway (LF role)
+# portald
 
-Stateless REST gateway that aggregates the LF back-end services into one
-customer-facing API. No database, no cache, no session store: every response is
-assembled from the authoritative services on the request path.
+`portald` (`:9480`) is the customer portal gateway of the LF side: one
+customer-facing REST API assembled on the request path from `vertragd`, `edmd`,
+`billingd`, `accountingd`, `einsd`, `marktd` and `outputd`. It has no database,
+cache or session store — scale replicas freely.
 
-| | |
-|---|---|
-| **Port** | `:9480` |
-| **Authorization** | every route resolves `(customer token, malo_id)` through `vertragd` |
-| **State** | none — scale replicas freely |
+## Run it
+
+```bash
+just dev portald       # dev/config/portald.toml
+```
 
 ## Authorization
 
-`portald` verifies no tokens and holds no customer↔MaLo map. It forwards the
-customer's `Authorization: Bearer` header to
-`vertragd GET /api/v1/kunden/authenticate?malo_id=…` and relays the verdict;
-`vertragd` owns the OIDC verifier and the customer record.
+`portald` verifies no tokens itself. Every route forwards the customer's bearer
+token to `vertragd GET /api/v1/kunden/authenticate?malo_id=…` and serves only on
+its verdict; each handler takes the resulting `PortalAuthCtx`, and
+`tests/it/authorization_guard.rs` drives every route against a refusing
+`vertragd`.
 
-Every handler takes the resulting `PortalAuthCtx` by value, so a route cannot
-serve customer data without having asked. `tests/authorization_guard.rs` drives
-all 17 routes against a refusing `vertragd` and fails if any answers, and a
-further case counts `server::router`'s `.route(` calls so a route added without a
-guard case fails the build.
-
-Starting without `vertragd_url` is refused unless `allow_insecure_no_auth = true`
-is set explicitly.
+The invoice download additionally checks the record's own `malo_id`. Startup
+refuses without `vertragd_url` unless `allow_insecure_no_auth = true`.
 
 ## Endpoints
 
@@ -43,23 +39,12 @@ All paths are prefixed `/api/v1/portal/{malo_id}`.
 | `GET` | `/versorgung` | `marktd` |
 | `GET` | `/vertrag` · `/kuendigungsfrist` | `vertragd` |
 | `POST` | `/tarifwechsel` · `/kuendigen` | `vertragd` |
-| `PUT` | `/kontakt` | `vertragd` (GDPR Art. 16) |
+| `GET` · `PUT` | `/kontakt` | `vertragd` (GDPR Art. 16) |
 | `PUT` | `/sepa` | `accountingd` |
 
-`/health/live`, `/health/ready` and `/metrics` come from the service runner.
-
-The invoice download re-reads the record and compares its `malo_id` to the
-authorised one before rendering — authorising the path parameter alone would let
-any customer stream any invoice by id.
-
-### Notice periods and tariff rules live in `vertragd`
-
-`portald` validates date *format* only. Whether a `lieferende` or `wirksamkeit`
-is reachable depends on the Vertragsart, whether the customer is a Haushaltskunde
-and the termination reason (§ 20 Abs. 1 StromGVV/GasGVV, § 41b Abs. 5 EnWG,
-§ 41 Abs. 5 Satz 4 EnWG, § 309 Nr. 9 lit. c BGB) — all facts `vertragd` holds.
-Its 422 carries the rule it applied and is relayed unchanged; call
-`GET /kuendigungsfrist` to show the customer the reachable dates first.
+Notice periods and tariff rules live in `vertragd`: `portald` validates date
+format only and relays `vertragd`'s `422`, which names the rule applied. Health
+and `/metrics` come from the service runner.
 
 ## Configuration
 
@@ -80,26 +65,19 @@ marktd_url      = "http://marktd:8180"
 outputd_url     = "http://outputd:9880"   # the document inbox behind /dokumente
 # …_api_key = "env:…"  — opaque service Bearer tokens
 
-# Required — the MCP tools take a `malo_id` and carry no customer token, so
-# whoever reaches /mcp reads every customer in the tenant. portald refuses to
-# start without a key unless `allow_insecure_no_auth = true`.
+# Required unless `allow_insecure_no_auth = true`.
 [mcp]
 api_key = "env:PORTALD_MCP_API_KEY"
 ```
 
 ## MCP server
 
-`/mcp` (Streamable HTTP), 8 read-only tools —  `get_dashboard`, `get_lastgang`,
-`get_invoices`, `get_balance`, `get_kontoauszug`, `get_vorauszahlung`,
-`get_eeg_status`, `get_versorgung` — and 3 guided prompts (`customer-overview`,
-`billing-dispute`, `eeg-foerderung-check`).
-
-**Operator-facing.** The tools take a `malo_id` and carry no customer token, so
-whoever can call `/mcp` can read every customer in the tenant. Gate it with
+`/mcp` (Streamable HTTP), 8 read-only tools and 3 prompts. The tools take a
+`malo_id` and no customer token, so `/mcp` is operator-facing: gate it with
 `[mcp]` and keep it off the public ingress.
 
-## Information separation (§§ 6a, 7a EnWG)
+An LF-role service (§§ 6a, 7a EnWG): it reads `marktd` only for the LF's own
+VersorgungsStatus; `netzbilanzd` and `sperrd` are not reachable through it.
 
-An LF-role service. It reads `marktd` only for VersorgungsStatus — the LF's own
-supply records — never NB grid topology or NB billing data. `netzbilanzd` and
-`sperrd` are not reachable through it.
+The [operator guide](https://hupe1980.github.io/mako/docs/services/portald/)
+has the full reference.

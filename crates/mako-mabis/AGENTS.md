@@ -4,10 +4,12 @@
 # crates/mako-mabis
 
 - Governed by **BK6-24-174**.
-- `MabisModule::workflow_names()` (`src/lib.rs`) registers six workflows:
-  `mabis-billing` (MSCONS **13003 + 13010–13012**, Bilanzkreisabrechnung Strom,
-  BKV↔ÜNB/BIKO), `mabis-profile`, `mabis-clearingliste` (UTILMD Clearinglisten
-  **55065/55069/55070**), `mabis-zp-lifecycle`, `mabis-anforderung` and
+- `MabisModule::drivers()` (`src/lib.rs`) registers six workflows:
+  `mabis-billing` (MSCONS **13003**, the Ausfallarbeit series **13020/13023**
+  and IFTSTA **21000–21005**, Bilanzkreisabrechnung Strom, BKV↔ÜNB/BIKO),
+  `mabis-profile` (MSCONS **13010–13012** + the ORDERS Reklamation), `mabis-clearingliste` (UTILMD Clearinglisten
+  **55067/55069/55070/55073** — 55065 is a list/correction pair and belongs to
+  `mabis-listenabgleich`), `mabis-zp-lifecycle`, `mabis-anforderung` and
   `mabis-listenabgleich`. Each name is the owning module's own `WORKFLOW_NAME`
   constant — read the list from the function, not from a restatement.
 - The remaining 130xx Messwesen PIDs do **not** belong here.
@@ -44,6 +46,9 @@
   carries `dvgw-edi` instead; `mako-redispatch` and `mako-emob` carry neither.
 - Shared decision and state-machine crates may be depended on: `mako-fristen`,
   `mako-pruefung`, `mako-invoic`. Sibling **workflow** crates may not.
+- A workflow lists every deadline label it registers in `DEADLINE_LABELS`;
+  `on_deadline` and the `TimeoutExpired` arm ask one `window_open` guard. See
+  `crates/mako-engine/AGENTS.md`.
 
 The authoritative PID-ownership and APERAK-Fristen tables are in the
 root `AGENTS.md` under *Domain Rules*.

@@ -45,9 +45,9 @@ const DOC: &str = "site/content/docs/architecture/_index.md";
 
 /// Directories whose Markdown pages may name a dependency version in prose.
 ///
-/// `concepts/` is not tracked, so a checkout without it simply has fewer pages
-/// to check — the same rule the other doc guards follow.
-const PROSE_DIRS: &[&str] = &["site/content/docs", "concepts"];
+/// `concepts/` and `specs/` are not tracked, so a checkout without them simply
+/// has fewer pages to check — the same rule the other doc guards follow.
+const PROSE_DIRS: &[&str] = &["site/content/docs", "concepts", "specs"];
 
 /// External crates the architecture table does not have to name.
 ///

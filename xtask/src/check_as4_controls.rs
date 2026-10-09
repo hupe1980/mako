@@ -7,9 +7,9 @@
 //! **A declared floor nothing calls.** `BdewAs4Profile::validate()` asserts the
 //! BDEW sign-and-encrypt mandate over the base policy layer *and* every override
 //! — the implementation and its tests are correct — and its own doc says to call
-//! it at startup before serving traffic. Nothing did. `asx-rs` refuses a policy
-//! layer only when it disables signing **and** encryption, so a sign-only
-//! override validates cleanly there and would have sent in the clear.
+//! it at startup before serving traffic. Nothing did. `asx-rs` refuses an
+//! overlay below its declared `SIGN_AND_ENCRYPT` floor itself, but only when
+//! something runs the validation — an unvalidated profile is the gap.
 //!
 //! **A session with no pinned signer.** The inbound pipeline must be handed a
 //! session pinned to the signing certificate of the party a message claims to
@@ -67,8 +67,7 @@ const REQUIRED: &[Required] = &[Required {
     needle: "as4_profile.validate()",
     reason: "the BDEW sign-and-encrypt floor is asserted by `BdewAs4Profile::validate()`, and \
              it is only a control when the path that assembles the deployed profile runs it. \
-             `asx-rs` refuses a layer only when it disables signing AND encryption, so a \
-             sign-only override passes there and sends in the clear",
+             An override below the floor is refused by the validation and by nothing else",
 }];
 
 /// Text that must **not** appear, because it names a control being bypassed.

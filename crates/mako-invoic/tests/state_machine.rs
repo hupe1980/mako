@@ -16,6 +16,7 @@
 //! Any non-terminal state ──TimeoutExpired──► Rejected
 //! ```
 
+use mako_engine::process::{RunOptions, RunOutcome};
 use mako_engine::{
     event_store::InMemoryEventStore,
     ids::{DeadlineId, TenantId},
@@ -131,7 +132,9 @@ fn timeout(label: &str) -> InvoicCommand {
 #[tokio::test]
 async fn a_valid_invoice_opens_the_settlement_window() {
     let p = process::<BothRoles>();
-    p.execute(receive(31002, true)).await.unwrap();
+    p.run(receive(31002, true), RunOptions::new())
+        .await
+        .unwrap();
     let state = p.state().await.unwrap();
     assert!(
         matches!(state, InvoicState::ValidationPassed(_)),
@@ -143,7 +146,9 @@ async fn a_valid_invoice_opens_the_settlement_window() {
 #[tokio::test]
 async fn a_failing_validation_rejects_the_process() {
     let p = process::<BothRoles>();
-    p.execute(receive(31002, false)).await.unwrap();
+    p.run(receive(31002, false), RunOptions::new())
+        .await
+        .unwrap();
     let state = p.state().await.unwrap();
     match state {
         InvoicState::Rejected { reason } => assert!(reason.contains("MOA+77"), "{reason}"),
@@ -156,7 +161,11 @@ async fn a_failing_validation_rejects_the_process() {
 #[tokio::test]
 async fn a_validated_invoice_announces_itself() {
     let p = process::<BothRoles>();
-    let (_, outbox) = p.execute_and_collect(receive(31002, true)).await.unwrap();
+    let (_, outbox) = p
+        .run(receive(31002, true), RunOptions::new())
+        .await
+        .map(|ran| (ran.events, ran.outbox))
+        .unwrap();
     let initiated = outbox
         .iter()
         .find(|o| &*o.message_type == "ProcessInitiated")
@@ -173,7 +182,11 @@ async fn a_validated_invoice_announces_itself() {
 #[tokio::test]
 async fn a_rejected_invoice_announces_nothing() {
     let p = process::<BothRoles>();
-    let (_, outbox) = p.execute_and_collect(receive(31002, false)).await.unwrap();
+    let (_, outbox) = p
+        .run(receive(31002, false), RunOptions::new())
+        .await
+        .map(|ran| (ran.events, ran.outbox))
+        .unwrap();
     assert!(
         !outbox
             .iter()
@@ -186,7 +199,9 @@ async fn a_rejected_invoice_announces_nothing() {
 async fn settling_and_disputing_both_complete_the_process() {
     for (settle, expected) in [(true, "Settled"), (false, "Disputed")] {
         let p = process::<BothRoles>();
-        p.execute(receive(31002, true)).await.unwrap();
+        p.run(receive(31002, true), RunOptions::new())
+            .await
+            .unwrap();
         let cmd = if settle {
             InvoicCommand::SettleInvoice {
                 message_ref: MessageRef::new("REMADV-1"),
@@ -207,7 +222,11 @@ async fn settling_and_disputing_both_complete_the_process() {
                 }),
             }
         };
-        let (_, outbox) = p.execute_and_collect(cmd).await.unwrap();
+        let (_, outbox) = p
+            .run(cmd, RunOptions::new())
+            .await
+            .map(|ran| (ran.events, ran.outbox))
+            .unwrap();
         assert_eq!(p.state().await.unwrap().label(), expected);
         let completed = outbox
             .iter()
@@ -230,12 +249,18 @@ async fn an_answered_invoice_puts_a_remadv_on_the_wire() {
     // Zahlungsavis: BGM `481`, PID 33001, and no AJT — agreement carries no
     // Antwortcode (REMADV AHB 1.0a § 3.1.1).
     let p = process::<BothRoles>();
-    p.execute(receive(31002, true)).await.unwrap();
-    let (_, outbox) = p
-        .execute_and_collect(InvoicCommand::SettleInvoice {
-            message_ref: MessageRef::new("REMADV-OK"),
-        })
+    p.run(receive(31002, true), RunOptions::new())
         .await
+        .unwrap();
+    let (_, outbox) = p
+        .run(
+            InvoicCommand::SettleInvoice {
+                message_ref: MessageRef::new("REMADV-OK"),
+            },
+            RunOptions::new(),
+        )
+        .await
+        .map(|ran| (ran.events, ran.outbox))
         .unwrap();
     let avis = outbox
         .iter()
@@ -258,23 +283,29 @@ async fn an_answered_invoice_puts_a_remadv_on_the_wire() {
     // Nicht-Zahlungsavis: BGM `239`, the tree's own Prüfidentifikator, and the
     // `AJT` naming both the code and the tree that publishes it.
     let p = process::<BothRoles>();
-    p.execute(receive(31002, true)).await.unwrap();
-    let (_, outbox) = p
-        .execute_and_collect(InvoicCommand::DisputeInvoice {
-            message_ref: MessageRef::new("REMADV-NOK"),
-            reason: "Rechnungsbetrag ≠ Summe der Positionen".to_owned(),
-            antwort: Some(mako_invoic::RemadvAntwort {
-                ebd: "E_0406".to_owned(),
-                befunde: vec![mako_invoic::RemadvBefund {
-                    code: "A70".to_owned(),
-                    ebene: "summe".to_owned(),
-                    positionsnummer: None,
-                    detail: None,
-                }],
-                remadv_pid: 33_003,
-            }),
-        })
+    p.run(receive(31002, true), RunOptions::new())
         .await
+        .unwrap();
+    let (_, outbox) = p
+        .run(
+            InvoicCommand::DisputeInvoice {
+                message_ref: MessageRef::new("REMADV-NOK"),
+                reason: "Rechnungsbetrag ≠ Summe der Positionen".to_owned(),
+                antwort: Some(mako_invoic::RemadvAntwort {
+                    ebd: "E_0406".to_owned(),
+                    befunde: vec![mako_invoic::RemadvBefund {
+                        code: "A70".to_owned(),
+                        ebene: "summe".to_owned(),
+                        positionsnummer: None,
+                        detail: None,
+                    }],
+                    remadv_pid: 33_003,
+                }),
+            },
+            RunOptions::new(),
+        )
+        .await
+        .map(|ran| (ran.events, ran.outbox))
         .unwrap();
     let abweisung = outbox
         .iter()
@@ -299,20 +330,28 @@ async fn an_answered_invoice_puts_a_remadv_on_the_wire() {
 async fn a_comdis_reopens_the_answer_for_a_second_round() {
     // Round one: refuse.
     let p = process::<BothRoles>();
-    p.execute(receive(31002, true)).await.unwrap();
-    p.execute(InvoicCommand::DisputeInvoice {
-        message_ref: MessageRef::new("REMADV-1"),
-        reason: "Preis weicht ab".to_owned(),
-        antwort: None,
-    })
+    p.run(receive(31002, true), RunOptions::new())
+        .await
+        .unwrap();
+    p.run(
+        InvoicCommand::DisputeInvoice {
+            message_ref: MessageRef::new("REMADV-1"),
+            reason: "Preis weicht ab".to_owned(),
+            antwort: None,
+        },
+        RunOptions::new(),
+    )
     .await
     .unwrap();
     assert_eq!(p.state().await.unwrap().label(), "Disputed");
 
     // The issuer insists.
-    p.execute(InvoicCommand::ReceiveComdis {
-        comdis_ref: MessageRef::new("COMDIS-1"),
-    })
+    p.run(
+        InvoicCommand::ReceiveComdis {
+            comdis_ref: MessageRef::new("COMDIS-1"),
+        },
+        RunOptions::new(),
+    )
     .await
     .unwrap();
     assert_eq!(p.state().await.unwrap().label(), "ComdisRejected");
@@ -320,10 +359,14 @@ async fn a_comdis_reopens_the_answer_for_a_second_round() {
     // Round two: concede — and a REMADV goes out for it, because the issuer is
     // waiting on one just as it was in round one.
     let (_, outbox) = p
-        .execute_and_collect(InvoicCommand::SettleInvoice {
-            message_ref: MessageRef::new("REMADV-2"),
-        })
+        .run(
+            InvoicCommand::SettleInvoice {
+                message_ref: MessageRef::new("REMADV-2"),
+            },
+            RunOptions::new(),
+        )
         .await
+        .map(|ran| (ran.events, ran.outbox))
         .unwrap();
     assert_eq!(p.state().await.unwrap().label(), "Settled");
     let avis = outbox
@@ -339,35 +382,47 @@ async fn a_comdis_reopens_the_answer_for_a_second_round() {
 #[tokio::test]
 async fn the_second_round_may_refuse_again() {
     let p = process::<BothRoles>();
-    p.execute(receive(31002, true)).await.unwrap();
-    p.execute(InvoicCommand::DisputeInvoice {
-        message_ref: MessageRef::new("REMADV-1"),
-        reason: "Preis weicht ab".to_owned(),
-        antwort: None,
-    })
+    p.run(receive(31002, true), RunOptions::new())
+        .await
+        .unwrap();
+    p.run(
+        InvoicCommand::DisputeInvoice {
+            message_ref: MessageRef::new("REMADV-1"),
+            reason: "Preis weicht ab".to_owned(),
+            antwort: None,
+        },
+        RunOptions::new(),
+    )
     .await
     .unwrap();
-    p.execute(InvoicCommand::ReceiveComdis {
-        comdis_ref: MessageRef::new("COMDIS-1"),
-    })
+    p.run(
+        InvoicCommand::ReceiveComdis {
+            comdis_ref: MessageRef::new("COMDIS-1"),
+        },
+        RunOptions::new(),
+    )
     .await
     .unwrap();
     let (_, outbox) = p
-        .execute_and_collect(InvoicCommand::DisputeInvoice {
-            message_ref: MessageRef::new("REMADV-2"),
-            reason: "Einwände nicht entkräftet".to_owned(),
-            antwort: Some(mako_invoic::RemadvAntwort {
-                ebd: "E_0266".to_owned(),
-                befunde: vec![mako_invoic::RemadvBefund {
-                    code: "A25".to_owned(),
-                    ebene: "kopf".to_owned(),
-                    positionsnummer: None,
-                    detail: None,
-                }],
-                remadv_pid: 33_003,
-            }),
-        })
+        .run(
+            InvoicCommand::DisputeInvoice {
+                message_ref: MessageRef::new("REMADV-2"),
+                reason: "Einwände nicht entkräftet".to_owned(),
+                antwort: Some(mako_invoic::RemadvAntwort {
+                    ebd: "E_0266".to_owned(),
+                    befunde: vec![mako_invoic::RemadvBefund {
+                        code: "A25".to_owned(),
+                        ebene: "kopf".to_owned(),
+                        positionsnummer: None,
+                        detail: None,
+                    }],
+                    remadv_pid: 33_003,
+                }),
+            },
+            RunOptions::new(),
+        )
         .await
+        .map(|ran| (ran.events, ran.outbox))
         .unwrap();
     assert_eq!(p.state().await.unwrap().label(), "Disputed");
     let abweisung = outbox
@@ -384,9 +439,12 @@ async fn the_second_round_may_refuse_again() {
 async fn an_invoice_cannot_be_settled_before_it_validates() {
     let p = process::<BothRoles>();
     assert!(
-        p.execute(InvoicCommand::SettleInvoice {
-            message_ref: MessageRef::new("REMADV-1")
-        })
+        p.run(
+            InvoicCommand::SettleInvoice {
+                message_ref: MessageRef::new("REMADV-1")
+            },
+            RunOptions::new()
+        )
         .await
         .is_err(),
         "settling a process with no invoice in it must fail"
@@ -397,7 +455,7 @@ async fn an_invoice_cannot_be_settled_before_it_validates() {
 async fn a_foreign_pid_is_refused() {
     let p = process::<BothRoles>();
     let err = p
-        .execute(receive(31011, true))
+        .run(receive(31011, true), RunOptions::new())
         .await
         .expect_err("31011 does not belong to this family");
     assert!(format!("{err}").contains("31011"), "{err}");
@@ -408,7 +466,7 @@ async fn a_foreign_pid_is_refused() {
 #[tokio::test]
 async fn an_outbound_invoice_awaits_its_remadv() {
     let p = process::<BothRoles>();
-    p.execute(send(31009)).await.unwrap();
+    p.run(send(31009), RunOptions::new()).await.unwrap();
     assert_eq!(p.state().await.unwrap().label(), "InvoicSent");
 }
 
@@ -426,8 +484,8 @@ async fn only_33001_confirms_payment() {
         (33004, "PaymentDisputed"),
     ] {
         let p = process::<BothRoles>();
-        p.execute(send(31009)).await.unwrap();
-        p.execute(remadv(remadv_pid)).await.unwrap();
+        p.run(send(31009), RunOptions::new()).await.unwrap();
+        p.run(remadv(remadv_pid), RunOptions::new()).await.unwrap();
         assert_eq!(
             p.state().await.unwrap().label(),
             expected,
@@ -439,35 +497,42 @@ async fn only_33001_confirms_payment() {
 #[tokio::test]
 async fn a_remadv_without_an_outbound_invoice_is_refused() {
     let p = process::<BothRoles>();
-    assert!(p.execute(remadv(33001)).await.is_err());
+    assert!(p.run(remadv(33001), RunOptions::new()).await.is_err());
 }
 
 #[tokio::test]
 async fn a_non_remadv_pid_cannot_answer_an_invoice() {
     let p = process::<BothRoles>();
-    p.execute(send(31009)).await.unwrap();
-    assert!(p.execute(remadv(29001)).await.is_err());
+    p.run(send(31009), RunOptions::new()).await.unwrap();
+    assert!(p.run(remadv(29001), RunOptions::new()).await.is_err());
 }
 
 /// The first answer stands: a second REMADV does not overwrite it.
 #[tokio::test]
 async fn a_late_remadv_does_not_overwrite_the_first_answer() {
     let p = process::<BothRoles>();
-    p.execute(send(31009)).await.unwrap();
-    p.execute(remadv(33002)).await.unwrap();
+    p.run(send(31009), RunOptions::new()).await.unwrap();
+    p.run(remadv(33002), RunOptions::new()).await.unwrap();
     // The state is no longer InvoicSent, so the second is refused outright.
-    assert!(p.execute(remadv(33001)).await.is_err());
+    assert!(p.run(remadv(33001), RunOptions::new()).await.is_err());
     assert_eq!(p.state().await.unwrap().label(), "PaymentDisputed");
 }
 
 // ── Deadlines ─────────────────────────────────────────────────────────────────
 
+/// An unanswered invoice whose window closes is a Frist breach the operator
+/// sees, not a rejection: no Festlegung gives the payer's silence an outcome,
+/// and the REMADV is still owed.
 #[tokio::test]
-async fn an_unanswered_invoice_is_rejected_when_the_window_closes() {
+async fn an_unanswered_invoice_lapses_when_the_window_closes() {
     let p = process::<BothRoles>();
-    p.execute(receive(31002, true)).await.unwrap();
-    p.execute(timeout(BothRoles::DEADLINE_LABEL)).await.unwrap();
-    assert_eq!(p.state().await.unwrap().label(), "Rejected");
+    p.run(receive(31002, true), RunOptions::new())
+        .await
+        .unwrap();
+    p.run(timeout(BothRoles::DEADLINE_LABEL), RunOptions::new())
+        .await
+        .unwrap();
+    assert_eq!(p.state().await.unwrap().label(), "FristAbgelaufen");
 }
 
 /// A deadline that fires after the answer was given changes nothing. Deadlines
@@ -477,17 +542,24 @@ async fn a_deadline_firing_after_the_answer_is_absorbed() {
     for terminal in ["Settled", "PaymentDisputed"] {
         let p = process::<BothRoles>();
         if terminal == "Settled" {
-            p.execute(receive(31002, true)).await.unwrap();
-            p.execute(InvoicCommand::SettleInvoice {
-                message_ref: MessageRef::new("REMADV-1"),
-            })
+            p.run(receive(31002, true), RunOptions::new())
+                .await
+                .unwrap();
+            p.run(
+                InvoicCommand::SettleInvoice {
+                    message_ref: MessageRef::new("REMADV-1"),
+                },
+                RunOptions::new(),
+            )
             .await
             .unwrap();
         } else {
-            p.execute(send(31009)).await.unwrap();
-            p.execute(remadv(33002)).await.unwrap();
+            p.run(send(31009), RunOptions::new()).await.unwrap();
+            p.run(remadv(33002), RunOptions::new()).await.unwrap();
         }
-        p.execute(timeout(BothRoles::DEADLINE_LABEL)).await.unwrap();
+        p.run(timeout(BothRoles::DEADLINE_LABEL), RunOptions::new())
+            .await
+            .unwrap();
         assert_eq!(p.state().await.unwrap().label(), terminal);
     }
 }
@@ -500,11 +572,17 @@ async fn a_deadline_firing_after_the_answer_is_absorbed() {
 #[tokio::test]
 async fn a_payer_only_family_refuses_the_issuer_leg() {
     let p = process::<PayerOnly>();
-    let err = p.execute(send(31010)).await.expect_err("issuer leg");
+    let err = p
+        .run(send(31010), RunOptions::new())
+        .await
+        .expect_err("issuer leg");
     assert!(format!("{err}").contains("issuer role"), "{err}");
 
     let p = process::<PayerOnly>();
-    let err = p.execute(remadv(33001)).await.expect_err("inbound REMADV");
+    let err = p
+        .run(remadv(33001), RunOptions::new())
+        .await
+        .expect_err("inbound REMADV");
     assert!(format!("{err}").contains("never issues"), "{err}");
 }
 
@@ -513,11 +591,16 @@ async fn a_payer_only_family_refuses_the_issuer_leg() {
 #[tokio::test]
 async fn a_family_without_comdis_refuses_one() {
     let p = process::<NoComdis>();
-    p.execute(receive(31011, true)).await.unwrap();
+    p.run(receive(31011, true), RunOptions::new())
+        .await
+        .unwrap();
     let err = p
-        .execute(InvoicCommand::ReceiveComdis {
-            comdis_ref: MessageRef::new("COM-1"),
-        })
+        .run(
+            InvoicCommand::ReceiveComdis {
+                comdis_ref: MessageRef::new("COM-1"),
+            },
+            RunOptions::new(),
+        )
         .await
         .expect_err("this family publishes no COMDIS leg");
     assert!(format!("{err}").contains("COMDIS"), "{err}");
@@ -526,10 +609,15 @@ async fn a_family_without_comdis_refuses_one() {
 #[tokio::test]
 async fn a_comdis_refuses_our_payment_advice() {
     let p = process::<BothRoles>();
-    p.execute(receive(31002, true)).await.unwrap();
-    p.execute(InvoicCommand::ReceiveComdis {
-        comdis_ref: MessageRef::new("COM-1"),
-    })
+    p.run(receive(31002, true), RunOptions::new())
+        .await
+        .unwrap();
+    p.run(
+        InvoicCommand::ReceiveComdis {
+            comdis_ref: MessageRef::new("COM-1"),
+        },
+        RunOptions::new(),
+    )
     .await
     .unwrap();
     assert_eq!(p.state().await.unwrap().label(), "ComdisRejected");
@@ -542,22 +630,28 @@ async fn a_comdis_refuses_our_payment_advice() {
 #[tokio::test]
 async fn a_comdis_is_refused_in_the_issuers_states() {
     let p = process::<BothRoles>();
-    p.execute(send(31009)).await.unwrap();
+    p.run(send(31009), RunOptions::new()).await.unwrap();
     let err = p
-        .execute(InvoicCommand::ReceiveComdis {
-            comdis_ref: MessageRef::new("COM-1"),
-        })
+        .run(
+            InvoicCommand::ReceiveComdis {
+                comdis_ref: MessageRef::new("COM-1"),
+            },
+            RunOptions::new(),
+        )
         .await
         .expect_err("in InvoicSent we are the issuer — we send COMDIS, not receive it");
     assert!(format!("{err}").contains("InvoicSent"), "{err}");
 
     let p = process::<BothRoles>();
-    p.execute(send(31009)).await.unwrap();
-    p.execute(remadv(33001)).await.unwrap();
+    p.run(send(31009), RunOptions::new()).await.unwrap();
+    p.run(remadv(33001), RunOptions::new()).await.unwrap();
     assert!(
-        p.execute(InvoicCommand::ReceiveComdis {
-            comdis_ref: MessageRef::new("COM-1"),
-        })
+        p.run(
+            InvoicCommand::ReceiveComdis {
+                comdis_ref: MessageRef::new("COM-1"),
+            },
+            RunOptions::new()
+        )
         .await
         .is_err()
     );
@@ -569,27 +663,38 @@ async fn a_comdis_is_refused_in_the_issuers_states() {
 async fn a_comdis_is_accepted_in_every_payer_state() {
     for answer in [None, Some(true), Some(false)] {
         let p = process::<BothRoles>();
-        p.execute(receive(31002, true)).await.unwrap();
+        p.run(receive(31002, true), RunOptions::new())
+            .await
+            .unwrap();
         match answer {
             Some(true) => p
-                .execute(InvoicCommand::SettleInvoice {
-                    message_ref: MessageRef::new("REMADV-1"),
-                })
+                .run(
+                    InvoicCommand::SettleInvoice {
+                        message_ref: MessageRef::new("REMADV-1"),
+                    },
+                    RunOptions::new(),
+                )
                 .await
                 .unwrap(),
             Some(false) => p
-                .execute(InvoicCommand::DisputeInvoice {
-                    message_ref: MessageRef::new("REMADV-1"),
-                    reason: "Preisblatt".to_owned(),
-                    antwort: None,
-                })
+                .run(
+                    InvoicCommand::DisputeInvoice {
+                        message_ref: MessageRef::new("REMADV-1"),
+                        reason: "Preisblatt".to_owned(),
+                        antwort: None,
+                    },
+                    RunOptions::new(),
+                )
                 .await
                 .unwrap(),
-            None => vec![],
+            None => RunOutcome::default(),
         };
-        p.execute(InvoicCommand::ReceiveComdis {
-            comdis_ref: MessageRef::new("COM-1"),
-        })
+        p.run(
+            InvoicCommand::ReceiveComdis {
+                comdis_ref: MessageRef::new("COM-1"),
+            },
+            RunOptions::new(),
+        )
         .await
         .expect("a payer can always have its REMADV refused");
         assert_eq!(p.state().await.unwrap().label(), "ComdisRejected");
@@ -601,11 +706,14 @@ async fn a_comdis_is_accepted_in_every_payer_state() {
 async fn a_comdis_before_any_invoice_is_refused() {
     let p = process::<BothRoles>();
     assert!(
-        p.execute(InvoicCommand::ReceiveComdis {
-            comdis_ref: MessageRef::new("COM-1"),
-        },)
-            .await
-            .is_err()
+        p.run(
+            InvoicCommand::ReceiveComdis {
+                comdis_ref: MessageRef::new("COM-1"),
+            },
+            RunOptions::new()
+        )
+        .await
+        .is_err()
     );
 }
 
@@ -614,7 +722,9 @@ async fn a_comdis_before_any_invoice_is_refused() {
 #[tokio::test]
 async fn the_invoice_facts_survive_replay() {
     let p = process::<BothRoles>();
-    p.execute(receive(31002, true)).await.unwrap();
+    p.run(receive(31002, true), RunOptions::new())
+        .await
+        .unwrap();
     let state = p.state().await.unwrap();
     let data = state.data().expect("an invoice was received");
     assert_eq!(data.pruefidentifikator.as_u32(), 31002);

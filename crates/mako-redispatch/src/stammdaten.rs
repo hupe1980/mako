@@ -179,10 +179,18 @@ pub enum StammdatenState {
     Acknowledged(ReceivedData),
     /// Enriched document forwarded to ÜNB (VNB role only).
     Forwarded(ReceivedData),
-    /// Process terminated due to a missed deadline.
-    DeadlineExpired {
-        /// Human-readable description of the expired deadline.
-        reason: String,
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// Neither the 3-minute acknowledgement nor the forwarding window has an outcome of its own in the Redispatch documents. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<StammdatenState>,
     },
 }
 
@@ -195,7 +203,16 @@ impl StammdatenState {
             Self::Received(_) => "Received",
             Self::Acknowledged(_) => "Acknowledged",
             Self::Forwarded(_) => "Forwarded",
-            Self::DeadlineExpired { .. } => "DeadlineExpired",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 }
@@ -265,29 +282,42 @@ impl CommandPayload for StammdatenCommand {}
 /// ```
 pub struct StammdatenWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The ACK window is open while the document is unacknowledged (`Received`);
+/// the forwarding window (VNB → ÜNB) while an acknowledged document is not
+/// yet forwarded (`Acknowledged`).
+fn window_open(label: &str, state: &StammdatenState) -> bool {
+    matches!(
+        (label, state),
+        (ACK_WINDOW_LABEL, StammdatenState::Received(_))
+            | (FORWARD_WINDOW_LABEL, StammdatenState::Acknowledged(_))
+    )
+}
+
 impl Workflow for StammdatenWorkflow {
     type State = StammdatenState;
     type Event = StammdatenEvent;
     type Command = StammdatenCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[ACK_WINDOW_LABEL, FORWARD_WINDOW_LABEL];
+
     /// Fire deadline commands when the ACK or forward windows expire.
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            // ACK window while Received; forwarding window (VNB → ÜNB)
-            // while Acknowledged, so an acknowledged
-            // Stammdaten document that is never forwarded expires visibly.
-            (ACK_WINDOW_LABEL, StammdatenState::Received(_))
-            | (FORWARD_WINDOW_LABEL, StammdatenState::Acknowledged { .. }) => {
-                Some(StammdatenCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| StammdatenCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            StammdatenState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             StammdatenEvent::Received {
                 mrid,
@@ -315,8 +345,14 @@ impl Workflow for StammdatenWorkflow {
                 other => other,
             },
 
-            StammdatenEvent::DeadlineExpired { label, .. } => StammdatenState::DeadlineExpired {
-                reason: format!("deadline expired: {label}"),
+            StammdatenEvent::DeadlineExpired { label, .. } => match state {
+                StammdatenState::Received(_) | StammdatenState::Acknowledged(_) => {
+                    StammdatenState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
+                }
+                other => other,
             },
         }
     }
@@ -325,6 +361,10 @@ impl Workflow for StammdatenWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             StammdatenCommand::Receive {
                 mrid,
@@ -378,19 +418,10 @@ impl Workflow for StammdatenWorkflow {
             },
 
             StammdatenCommand::TimeoutExpired { deadline_id, label } => {
-                let is_forward_window = &*label == FORWARD_WINDOW_LABEL;
-                match state {
-                    // 1-Werktag forward window: an acknowledged document the
-                    // VNB never forwarded to the ÜNB expires visibly.
-                    StammdatenState::Acknowledged(_) if is_forward_window => {
-                        Ok(vec![StammdatenEvent::DeadlineExpired { deadline_id, label }].into())
-                    }
-                    // Terminal / already-progressed states — no-op.
-                    StammdatenState::Acknowledged(_)
-                    | StammdatenState::Forwarded(_)
-                    | StammdatenState::DeadlineExpired { .. } => Ok(vec![].into()),
-                    _ => Ok(vec![StammdatenEvent::DeadlineExpired { deadline_id, label }].into()),
+                if !window_open(&label, lapsed) {
+                    return Ok(vec![].into());
                 }
+                Ok(vec![StammdatenEvent::DeadlineExpired { deadline_id, label }].into())
             }
         }
     }

@@ -1,7 +1,9 @@
 [package]
 name             = "mako-obs"
 version.workspace = true
-description      = "Business-process observability library — process projection, KPI computation, BNetzA regulatory reports"
+description      = "Business-process observability for German energy market communication: process projections, KPIs and BNetzA reports. No I/O"
+categories       = ["data-structures"]
+keywords         = ["observability", "kpi", "energy", "mako", "bnetza"]
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,13 +17,14 @@ default = []
 testing = []
 
 [dependencies]
-mako-fristen = { workspace = true }
 mako-events  = { workspace = true }
 thiserror    = { workspace = true }
 serde        = { workspace = true }
-serde_json   = { workspace = true }
 time         = { workspace = true }
 uuid         = { workspace = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
+
+[lints]
+workspace = true

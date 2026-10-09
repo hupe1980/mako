@@ -375,7 +375,10 @@ pub struct Steuersatzpruefung {
 /// holding the published tree read this struct, and what keeps a wrong code
 /// from being reachable — collapsing the flags into a bitset or a status word
 /// would lose both.
-#[allow(clippy::struct_excessive_bools)] // one field per Prüfschritt, by design
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one field per Prüfschritt, by design"
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct RechnungsFakten {
     /// **`E_0266` Prüfschritt 1 only** — could the MSB's COMDIS 29001 rebut
@@ -558,7 +561,10 @@ fn walk(
 // Ten Prüfschritte in sequence, two of them family-gated. Splitting them across
 // functions would break the one-to-one correspondence with the published tree,
 // which is the property that makes this walk auditable.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one linear procedure; splitting it would scatter its steps across helpers used once"
+)]
 fn kopfebene(
     familie: RechnungsFamilie,
     tree: &'static str,
@@ -728,7 +734,10 @@ fn kopfebene(
 // Eight Prüfschritte in sequence. Splitting them across functions would break
 // the one-to-one correspondence with the published tree, which is the property
 // that makes this walk auditable.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one linear procedure; splitting it would scatter its steps across helpers used once"
+)]
 fn positionsebene(
     tree: &'static str,
     r: &RechnungsFakten,
@@ -1050,7 +1059,10 @@ impl StornoAntwort {
 }
 
 /// Everything `E_0267` asks about an inbound Stornorechnung (INVOIC 31004).
-#[allow(clippy::struct_excessive_bools)] // one field per Prüfschritt, by design
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one field per Prüfschritt, by design"
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct StornoFakten {
     /// Prüfschritt 10 — is the invoice being cancelled on the ESA's books?

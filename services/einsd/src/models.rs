@@ -3,7 +3,7 @@
 //! `eeg_anlagen.settlement_model` accepts exactly one token per model: no German
 //! and English spellings of the same thing, so a gate cannot apply to one and
 //! miss the other. These constants are the single source for it — [`ALL`] is
-//! asserted equal to the schema's `CHECK` list by `tests/schema_code_guard.rs`,
+//! asserted equal to the schema's `CHECK` list by `tests/it/schema_code_guard.rs`,
 //! so a token added to one and not the other fails the build rather than a
 //! settlement.
 

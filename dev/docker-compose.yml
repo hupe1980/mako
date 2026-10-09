@@ -1,7 +1,8 @@
 # dev/docker-compose.yml — infrastructure only for local development.
 #
 # Starts the dependencies that mako services need, but NOT the services themselves.
-# Run the Rust services directly with `cargo run` (or `just dev <service>`).
+# Run the Rust services directly with `just dev <service>`, which reads
+# dev/config/<service>.toml.
 #
 # Usage:
 #   docker compose -f dev/docker-compose.yml up -d
@@ -22,7 +23,7 @@
 #   accountingd: postgres://dev:dev@localhost:5432/accountingd
 #   billingd:    postgres://dev:dev@localhost:5432/billingd
 #   outputd:     postgres://dev:dev@localhost:5432/outputd
-#   productd:     postgres://dev:dev@localhost:5432/productd
+#   productd:    postgres://dev:dev@localhost:5432/productd
 #   vertragd:    postgres://dev:dev@localhost:5432/vertragd
 #   mabis-syncd: postgres://dev:dev@localhost:5432/mabis_syncd
 #   agentd:      postgres://dev:dev@localhost:5432/agentd
@@ -33,7 +34,8 @@ services:
     environment:
       POSTGRES_USER:     dev
       POSTGRES_PASSWORD: dev
-      POSTGRES_DB:       marktd       # first DB; the init script creates the rest
+      # POSTGRES_DB is not set: the default database is then named after the
+      # user, which is where init-db.sh connects to create one per service.
     ports:
       - "5432:5432"
     volumes:

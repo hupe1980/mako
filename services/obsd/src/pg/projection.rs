@@ -111,9 +111,38 @@ const KPI_SQL: &str = r"SELECT
       ) FILTER (WHERE completed_at IS NOT NULL)           AS p95_cycle_time_hours
   FROM process_projections
   WHERE pid = $1
-    AND started_at::date >= $2
-    AND started_at::date <= $3
+    AND (started_at AT TIME ZONE 'Europe/Berlin')::date >= $2
+    AND (started_at AT TIME ZONE 'Europe/Berlin')::date <= $3
     AND tenant = $4";
+
+/// Per-PID parity counts for one **calendar year**, bucketed by `started_at`.
+///
+/// **The bucket is `started_at`, not `updated_at`.** Grouping by `updated_at`
+/// moved rows between report years as later events touched them, so re-running
+/// last year's filing produced different numbers — the one property an annual
+/// regulatory filing must not have. A process that started on 30 December and
+/// completed in January belongs to the year it started, in every re-run.
+///
+/// The `state` literals are the ones `ProcessState::as_str` writes — lowercase.
+/// They were `'Completed'` / `'Rejected'` here, which matches nothing, so every
+/// PID reported perfect parity and unequal treatment was invisible in the
+/// artefact the filing rests on. `report_state_literals_match_projection` pins
+/// them.
+const GLEICHBEHANDLUNG_SQL: &str = r"SELECT
+      pid::int,
+      initiator_is_affiliate,
+      COUNT(*)                                      AS total,
+      COUNT(*) FILTER (WHERE state = 'completed')   AS completed,
+      COUNT(*) FILTER (WHERE state = 'rejected')    AS rejected,
+      COUNT(*) FILTER (
+          WHERE deadline_at IS NOT NULL
+            AND deadline_at < COALESCE(completed_at, now())
+      )                                             AS frist_breached
+  FROM process_projections
+  WHERE EXTRACT(YEAR FROM started_at AT TIME ZONE 'Europe/Berlin')::int = $1
+    AND tenant = $2
+  GROUP BY pid, initiator_is_affiliate
+  ORDER BY pid, initiator_is_affiliate";
 
 #[derive(Clone, Debug)]
 pub struct PgProcessProjectionRepository {
@@ -130,6 +159,27 @@ impl PgProcessProjectionRepository {
     #[must_use]
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    /// Per-PID, per-side counts for the § 7a Abs. 5 EnWG Gleichbehandlungsbericht
+    /// of calendar `year`: `(pid, initiator_is_affiliate, total, completed,
+    /// rejected, frist_breached)`.
+    ///
+    /// # Errors
+    ///
+    /// [`ObsError::Internal`] when `tenant` is empty, [`ObsError::Database`] on
+    /// a read failure.
+    pub async fn gleichbehandlung_counts(
+        &self,
+        year: i32,
+        tenant: &str,
+    ) -> Result<Vec<(i32, bool, i64, i64, i64, i64)>, ObsError> {
+        sqlx::query_as::<_, (i32, bool, i64, i64, i64, i64)>(GLEICHBEHANDLUNG_SQL)
+            .bind(year)
+            .bind(require_tenant(tenant)?)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| ObsError::Database(e.to_string()))
     }
 
     /// Read one projection, scoped to the tenant that owns it.
@@ -367,6 +417,37 @@ fn row_to_projection(row: &sqlx::postgres::PgRow) -> Result<ProcessProjection, O
 mod tests {
     use super::*;
 
+    /// The Gleichbehandlungsbericht must count the states the projection
+    /// actually writes. Casing drift here is silent: every PID reports
+    /// completed=0/rejected=0 and therefore perfect parity — in the artefact
+    /// the § 7a Abs. 5 filing rests on.
+    #[test]
+    fn report_state_literals_match_projection() {
+        for s in [ProcessState::Completed, ProcessState::Rejected] {
+            assert!(
+                GLEICHBEHANDLUNG_SQL.contains(&format!("state = '{}'", s.as_str())),
+                "the report does not filter on the stored literal for {s:?}"
+            );
+        }
+        assert!(
+            !GLEICHBEHANDLUNG_SQL.contains("'Completed'")
+                && !GLEICHBEHANDLUNG_SQL.contains("'Rejected'"),
+            "the report still carries the PascalCase literals"
+        );
+    }
+
+    /// An annual filing must reproduce when re-run: a report bucketed by
+    /// `updated_at` moves rows between report years every time a later event
+    /// touches them. Which Berlin year `started_at` falls in is pinned against
+    /// PostgreSQL in `tests/it/worker_integration.rs`.
+    #[test]
+    fn the_report_year_is_not_read_off_updated_at() {
+        assert!(
+            !GLEICHBEHANDLUNG_SQL.contains("updated_at"),
+            "a filing bucketed on updated_at does not reproduce"
+        );
+    }
+
     /// The SQL literals and `ProcessState::is_terminal` must name the same set,
     /// or the upsert guard lets a redelivered event reopen a finished process.
     #[test]
@@ -417,7 +498,7 @@ mod tests {
     /// numbers — which is the one property a regulatory filing must not have.
     #[test]
     fn the_kpi_bucket_is_keyed_on_started_at() {
-        assert!(KPI_SQL.contains("started_at::date >="));
+        assert!(KPI_SQL.contains("(started_at AT TIME ZONE 'Europe/Berlin')::date >="));
         assert!(
             !KPI_SQL.contains("updated_at"),
             "the KPI bucket must not depend on when a row was last touched"

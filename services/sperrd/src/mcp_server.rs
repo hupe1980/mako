@@ -89,9 +89,15 @@ pub struct GetSperrParams {
 #[derive(Clone)]
 pub struct SperrdMcpHandler {
     state: Arc<SperrdMcpState>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     tool_router: ToolRouter<SperrdMcpHandler>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     prompt_router: PromptRouter<SperrdMcpHandler>,
 }
 

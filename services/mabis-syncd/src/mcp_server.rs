@@ -103,9 +103,15 @@ fn run_json(r: &SubmissionRunRow) -> serde_json::Value {
 #[derive(Clone)]
 pub struct MabisMcpHandler {
     state: Arc<MabisMcpState>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     tool_router: ToolRouter<MabisMcpHandler>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     prompt_router: PromptRouter<MabisMcpHandler>,
 }
 

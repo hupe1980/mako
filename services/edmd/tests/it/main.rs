@@ -1,0 +1,10 @@
+//! Integration tests of `edmd`, linked as one test binary: one module per
+//! file in this directory. A crate links its dependency graph once per test
+//! binary, so a file per binary multiplies link time and disk by the file count.
+
+mod cedar_policy;
+mod demo_config;
+mod demo_payloads;
+mod dev_config;
+mod meterstore_integration;
+mod schema_code_guard;

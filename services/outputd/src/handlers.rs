@@ -495,7 +495,7 @@ mod tests {
     /// The tenant case is gone from here because it is gone from the code —
     /// `by_hash` is tenant-scoped, so another operator's layout does not
     /// resolve at all. `a_foreign_tenants_template_does_not_resolve` in
-    /// `tests/store_integration.rs` is what pins that.
+    /// `tests/it/store_integration.rs` is what pins that.
     #[test]
     fn a_render_refuses_a_template_of_the_wrong_kind() {
         // The proof-discipline case: an INVOICE render with a Textform-proven

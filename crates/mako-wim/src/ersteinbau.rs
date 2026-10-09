@@ -25,13 +25,15 @@
 //! them as informational drops a decision *and* the three-Werktage window the
 //! wMSB has to make it in.
 //!
-//! # The silent case is a refusal
+//! # Silence is not consent
 //!
 //! `E_0233` `A04` is „Zum jetzigen Zeitpunkt noch keine Aussage hinsichtlich
 //! Selbsteinbau möglich" and the BDEW clusters it as an **Ablehnung**. The
-//! gMSB may not roll out against it. So both a stated A04 and an expired
-//! Antwortfrist leave the rollout blocked — a Vorabinformation nobody answered
-//! is not consent, and [`ErsteinbauState::Abgelehnt`] is where both land.
+//! gMSB may not roll out against it. An expired Antwortfrist leaves the
+//! rollout blocked too — a Vorabinformation nobody answered is not consent —
+//! but WiM Teil 1 Kap. 3.5.2 Nr. 2 gives the lapse no outcome of its own, so
+//! it lands in [`ErsteinbauState::FristAbgelaufen`]: blocked, visible to the
+//! operator, and still open for the wMSB's late answer.
 //!
 //! # Sparte
 //!
@@ -65,12 +67,11 @@ pub const WORKFLOW_NAME: &str = "wim-ersteinbau";
 /// IFTSTA 21029 — „Vorabinformation zum Gerätewechsel", gMSB → wMSB / LF / NB.
 pub const VORABINFORMATION_PID: u32 = mako_fristen::antwort::ERSTEINBAU_VORABINFORMATION_PID;
 
-/// IFTSTA 21030 — „iMS-Ersteinbauzustimmung", wMSB → gMSB. Carries `E_0233` `A03`.
-pub const ZUSTIMMUNG_PID: u32 = 21_030;
-
-/// IFTSTA 21031 — „Bestandsschutz / Eigenausbau iMS", wMSB → gMSB.
-/// Carries `E_0233` `A01`, `A02` or `A04`.
-pub const ABLEHNUNG_PID: u32 = 21_031;
+/// IFTSTA 21030 — „iMS-Ersteinbauzustimmung", wMSB → gMSB, carrying `E_0233`
+/// `A03`; and IFTSTA 21031 — „Bestandsschutz / Eigenausbau iMS", wMSB → gMSB,
+/// carrying `E_0233` `A01`, `A02` or `A04`. Defined once, beside the
+/// Entscheidungsbaum that chooses between them.
+pub use mako_pruefung::msb::ersteinbau::{ABLEHNUNG_PID, ZUSTIMMUNG_PID};
 
 /// IFTSTA 21027 — „Information über das Scheitern", wMSB → gMSB (Kap. 3.5.2
 /// Nr. 6), and „Information kein Ersteinbau", gMSB → NB (Nr. 10).
@@ -203,10 +204,9 @@ pub enum ErsteinbauState {
     Angekuendigt(ErsteinbauData),
     /// `A03` — the wMSB waived its Selbsteinbau; the gMSB may fit the iMS.
     Zugestimmt(ErsteinbauData),
-    /// `A01`, `A02` or `A04`, or an expired Antwortfrist. The gMSB may **not**
-    /// fit the iMS.
+    /// `A01`, `A02` or `A04`. The gMSB may **not** fit the iMS.
     Abgelehnt {
-        /// The `E_0233` code, or `None` when the window simply expired.
+        /// The `E_0233` code, or `None` when no code was stated.
         antwort_code: Option<String>,
         /// Why, for the operator queue.
         reason: String,
@@ -221,6 +221,19 @@ pub enum ErsteinbauState {
         /// Reason.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// WiM Teil 1 Kap. 3.5.2 Nr. 2 gives the wMSB until the 3. WT nach dem ÜT and no consequence of missing it; the rollout stays blocked meanwhile. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<ErsteinbauState>,
+    },
 }
 
 impl ErsteinbauState {
@@ -234,6 +247,16 @@ impl ErsteinbauState {
             Self::Abgelehnt { .. } => "Abgelehnt",
             Self::Gescheitert { .. } => "Gescheitert",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -249,7 +272,7 @@ impl ErsteinbauState {
 
 impl mako_engine::workflow::OccupiesBusinessKey for ErsteinbauState {
     fn occupies_business_key(&self) -> bool {
-        matches!(self, Self::Angekuendigt(_))
+        matches!(self.offen(), Self::Angekuendigt(_))
     }
 }
 
@@ -323,27 +346,39 @@ impl CommandPayload for ErsteinbauCommand {}
 /// The WiM Ersteinbau workflow (IFTSTA 21029 → 21030 / 21031).
 pub struct WimErsteinbauWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The wMSB's answer window is open while the Vorabinformation is unanswered
+/// (`Angekuendigt`).
+fn window_open(label: &str, state: &ErsteinbauState) -> bool {
+    label == ANTWORT_WINDOW_LABEL && matches!(state, ErsteinbauState::Angekuendigt(_))
+}
+
 impl Workflow for WimErsteinbauWorkflow {
     type State = ErsteinbauState;
     type Event = ErsteinbauEvent;
     type Command = ErsteinbauCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANTWORT_WINDOW_LABEL];
+
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (ANTWORT_WINDOW_LABEL, ErsteinbauState::Angekuendigt(_)) => {
-                Some(ErsteinbauCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| ErsteinbauCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            ErsteinbauState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             ErsteinbauEvent::VorabinformationEmpfangen {
                 melo_id,
@@ -394,15 +429,10 @@ impl Workflow for WimErsteinbauWorkflow {
             // `A04` does: the gMSB never received the wMSB's waiver, so there
             // is nothing to install against.
             ErsteinbauEvent::DeadlineExpired { label, .. } => match state {
-                ErsteinbauState::Angekuendigt(_) | ErsteinbauState::New => {
-                    ErsteinbauState::Abgelehnt {
-                        antwort_code: None,
-                        reason: format!(
-                            "Antwortfrist abgelaufen ({label}) — ohne Zustimmung des wMSB darf \
-                             der gMSB kein iMS einbauen"
-                        ),
-                    }
-                }
+                ErsteinbauState::Angekuendigt(_) => ErsteinbauState::FristAbgelaufen {
+                    label: label.to_string(),
+                    offen: Box::new(state),
+                },
                 other => other,
             },
         }
@@ -412,6 +442,10 @@ impl Workflow for WimErsteinbauWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             ErsteinbauCommand::ReceiveVorabinformation {
                 pid,
@@ -536,7 +570,7 @@ impl Workflow for WimErsteinbauWorkflow {
             }
 
             ErsteinbauCommand::TimeoutExpired { deadline_id, label } => {
-                if !matches!(state, ErsteinbauState::Angekuendigt(_)) {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![ErsteinbauEvent::DeadlineExpired { deadline_id, label }].into())
@@ -606,7 +640,7 @@ impl Projection for ErsteinbauProjection {
             ErsteinbauEvent::Rejected { .. } => record.status = "Rejected",
             ErsteinbauEvent::DeadlineExpired { .. } => {
                 if record.status == "Angekuendigt" {
-                    record.status = "Abgelehnt";
+                    record.status = "FristAbgelaufen";
                     record.rollout_freigegeben = false;
                 }
             }
@@ -721,7 +755,8 @@ mod tests {
         }
     }
 
-    /// Silence is not consent — an expired window leaves the rollout blocked.
+    /// Silence is not consent — an expired window leaves the rollout blocked,
+    /// and the wMSB's answer still owed.
     #[test]
     fn an_expired_antwortfrist_blocks_the_rollout() {
         let state = WimErsteinbauWorkflow::apply(
@@ -732,10 +767,11 @@ mod tests {
             },
         );
         assert!(!state.rollout_freigegeben());
-        let ErsteinbauState::Abgelehnt { antwort_code, .. } = &state else {
-            panic!("expected Abgelehnt, got {}", state.label());
-        };
-        assert_eq!(*antwort_code, None, "no code was ever stated");
+        assert_eq!(state.label(), "FristAbgelaufen");
+        assert!(
+            mako_engine::workflow::OccupiesBusinessKey::occupies_business_key(&state),
+            "the unanswered Vorabinformation still holds the MeLo"
+        );
     }
 
     #[test]

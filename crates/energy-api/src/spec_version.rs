@@ -2,13 +2,22 @@
 //!
 //! Each constant identifies the OpenAPI / AsyncAPI document version that the
 //! corresponding module implements. All four EDI-Energy API-Webdienste are
-//! currently at version **1.0.0** — the only tag in either spec repository.
+//! at version **1.0.0**.
 //!
 //! The electricity specs live in `github.com/EDI-Energy/api-electricity`; the
 //! Verzeichnisdienst is a **separate** repository,
 //! `github.com/EDI-Energy/api-directory-service`.
 //!
-//! See [`RELEASE_2_0_0_STATUS`] for why 2.0.0 is tracked but not implemented.
+//! 1.0.0 is the version in force, and BNetzA Mitteilung Nr. 58 (01.10.2026)
+//! keeps it so: no API-Webdienste document is published for 01.04.2027, „Die
+//! API-Guideline verbleibt daher zunächst auf dem aktuell produktiven Stand",
+//! and „Die im Rahmen der Konsultation neu vorgesehenen APIs werden hingegen
+//! zurückgezogen" — the API-Webdienste stay limited to MaLo-Ident and Steuern,
+//! „Die UTILTS bleibt damit erhalten". The `2.0.0` tag in
+//! `EDI-Energy/api-electricity` adds new process APIs, among them
+//! `locationBundle` and `calculationFormula` — the Lokationsbündel and
+//! Berechnungsformel APIs Nr. 58 names as withdrawn. No Mitteilung makes 2.0.0
+//! binding, so nothing here implements it.
 //!
 //! Use these constants in server implementations to populate
 //! `ApiRecord::major_version` when self-registering at the
@@ -42,47 +51,3 @@ pub const MALO_IDENT: &str = "1.0.0";
 /// The `majorVersion` field value for all current specs as expected by the
 /// Verzeichnisdienst (`ApiRecord::major_version: i32`).
 pub const MAJOR: i32 = 1;
-
-// ── Release 2.0.0 — tracked, deliberately not implemented ────────────────────
-
-/// Why this crate targets 1.0.0 and not the announced 2.0.0.
-///
-/// Mitteilung Nr. 55 (02.02.2026) put **API-Webdienste Strom Release 2.0.0** out
-/// for consultation with a target date of 01.10.2026. **Mitteilung Nr. 56**
-/// (01.04.2026) then excluded it, verbatim:
-///
-/// > Die im Release 2.0.0 zur Konsultation gestellten Anpassungen an den
-/// > API-Webdiensten sind nicht Bestandteil dieser Veröffentlichung.
-///
-/// Only **API Guideline 1.0b** binds on 01.10.2026. `EDI-Energy/api-electricity`
-/// does carry a **`2.0.0`** tag, released 24.07.2026, whose own
-/// Änderungshistorie applies it *"ab dem 01.10.2027 00:00 Uhr"* — a cycle after
-/// FV 2027-04, so it is outside that import as well. The directory-service
-/// repository has only `1.0.0`.
-///
-/// Implementing against it now would be rework against a contract that binds a
-/// year later than the release currently being prepared.
-pub const RELEASE_2_0_0_STATUS: &str =
-    "deferred by Mitteilung Nr. 56; tagged 2.0.0 on 24.07.2026, applies ab 01.10.2027";
-
-/// What 2.0.0 actually changes, from the consultation branch.
-///
-/// It is **not** a decomposition of MaLo-Ident: `maloIdentV2.yaml` keeps all
-/// three operations. The changes are:
-///
-/// 1. **Modularisation** — a shared `schema/` library referenced by relative
-///    `$ref`, replacing the self-contained single-file specs of 1.x.
-/// 2. **Six new process APIs** alongside maloIdent — `locationBundle`,
-///    `calculationFormula`, `countingTime`, `powerCurve`, `switchingTime`,
-///    `complaintDefinition`.
-/// 3. **Property renames** in `identificationParameterId`:
-///    `maloId` → `marketLocationId`, `tranchenIds` → `marketTranchesIds`,
-///    `meloIds` → `meterLocationsIds`. The *component* stays `maloId`.
-///    [`crate::models::electricity`] implements the **1.x** names, pinned by a
-///    wire-contract test.
-/// 4. English operation paths (`/controlMeasure/configuration/v2`) replacing the
-///    German ones (`/[Post]/steuerbefehl/konfiguration/`).
-/// 5. An expanded error set (415/422/429/503/504) and `testFlag` / `referenceId`
-///    headers per the API Guideline.
-pub const RELEASE_2_0_0_SCOPE: &str =
-    "modularised schema/ library + 6 new process APIs + identificationParameterId renames";

@@ -1,23 +1,21 @@
 +++
 title = "Deadline Compensation"
-description = "Saga pattern for MaKo regulatory deadlines. How mako-engine compensates for failed outbox delivery and enforces APERAK Fristen."
+description = "How mako-engine decides a fired deadline: owned labels, on_deadline, the lapse outcomes, and the delivery windows the outbox retires."
 weight = 12
 +++
 ## Problem
 
-MaKo regulatory processes have hard SLA windows enforced by BNetzA rulings, and
-an inbound message starts **two independent clocks**:
+An inbound message starts **two independent clocks**:
 
 | Clock | Window | Source |
 |---|---|---|
-| **Technical acknowledgement** (APERAK) | **45 Minuten** for a UTILMD or ORDERS; Sonntag 12:00 for a Saturday arrival; nächster Werktag 12:00 for every other message type | APERAK AHB 1.0 § 2.4.1 |
+| **Technical acknowledgement** (APERAK) | **45 Minuten** for a UTILMD or ORDERS; Sonntag 12:00 for a Saturday arrival; nächster Werktag 12:00 for every other message type | APERAK AHB 1.1 § 2.4.1 |
 | **Business answer** | per Prüfidentifikator — a clock time, an end-of-Werktag, or a Werktag count | the Festlegung for that process |
 
-The two are routinely conflated, and the failure is asymmetric: a queue sized by
-the *looser* of them reports a lapsed Frist as still running.
-
-The business windows are data, not literals — one table keyed by inbound PID, so
-`makod`, `processd`, `obsd` and `agentd` cannot disagree about the same deadline:
+A queue sized by the looser of the two reports a lapsed Frist as still
+running. The business windows are one table keyed by inbound PID
+(`mako_fristen::antwort`), so `makod`, `processd`, `obsd` and `agentd` cannot
+disagree about a deadline:
 
 | Family | Shape | Examples |
 |---|---|---|
@@ -27,201 +25,158 @@ The business windows are data, not literals — one table keyed by inbound PID, 
 | GeLi Gas | Ablauf des *n*-ten Werktags | 4 (44001), 3 (44004/44007/44010/44016), 2 (44013) |
 | NZR-EMob (Modell 2) | Ablauf des *n*-ten Werktags | 7 (55238), 3 (55240, 55242) |
 
-`Family` names exactly these five — there is no MaBiS variant, because MaBiS
-publishes no answer Frist. The Prüfmitteilung in particular has none: Kap. 9.8.2
-Nr. 1 leaves the cell empty and the receiving party „kann" answer, and what
-bounds it is the clearing window of Kap. 3.10 Tabelle 2. The two genuine
-1-Werktag MaBiS obligations belong to the BIKO — forwarding a Prüfmitteilung
-(Kap. 9.8.2 Nr. 3) and dispatching the Datenstatus (Kap. 9.9.2 Nr. 1) — and live
-in `mako_mabis::fristen`, not in this table.
+`Family` names exactly these five. MaBiS publishes no answer Frist — the
+Prüfmitteilung's cell in Kap. 9.8.2 Nr. 1 is empty and the NB „kann" answer; the
+Kap. 3.10 Tabelle 2 clearing window bounds it. The two 1-Werktag MaBiS
+obligations belong to the BIKO (Kap. 9.8.2 Nr. 3, Kap. 9.9.2 Nr. 1) and live in
+`mako_mabis::fristen`.
 
-`mako_fristen::antwort::antwortfrist` resolves them and returns `None` for a PID
-the Festlegungen do not quantify — **unknown**, never *unbounded*. The
-GeLi Gas "10 Werktage" is not an answer window at all: it is the supplier's
-Vorlauffrist before Lieferbeginn, recorded as
-`TEN_WERKTAGE_IS_THE_SUPPLIERS_VORLAUFFRIST` because it is easy to re-introduce.
+`mako_fristen::antwort::antwortfrist` returns `None` for a PID the Festlegungen
+do not quantify — **unknown**, never *unbounded*. The GeLi Gas "10 Werktage" is
+the supplier's Vorlauffrist before Lieferbeginn, not an answer window
+(`TEN_WERKTAGE_IS_THE_SUPPLIERS_VORLAUFFRIST`).
 
-When a deadline lapses undischarged, the engine fires a `DeadlineExpired` event
-and enqueues an `AperakTimeout` ERP outbox message so the ERP/operator can act on
-the missed SLA.
+Deadlines are never cancelled when a process moves on, so every registered
+deadline fires — on the healthy path as much as on the failing one. Whether a
+firing acts is decided in exactly one place: the workflow's own
+`Workflow::on_deadline`, which reads the **label** to know which window fired
+and the **state** to know whether that window is still open.
 
 ## Architecture
 
-The compensation path flows through three layers:
-
 ```
 Deadline scheduler (makod/src/orchestrator/deadline_dispatch.rs)
-  └─ Process::execute_and_enqueue_with_retry(TimeoutExpired, 3)
-       └─ Workflow::handle(TimeoutExpired, state)
-            ├─ emit: DeadlineExpired event
-            └─ outbox: AperakTimeout → OutboxErpWorker → ERP webhook
+  ├─ delivery window (fristen::is_delivery_window) → regulatory alert, no workflow
+  ├─ label ∉ Workflow::DEADLINE_LABELS             → logged as unowned, nothing acts
+  └─ Process::run_timeout(&deadline, RunOptions::new())
+       └─ Workflow::on_deadline(deadline, state)   → None: the window is closed
+            └─ Some(TimeoutExpired) → Workflow::handle → events + outbox, one write
 ```
 
-### Key invariant: atomicity
+### Key invariant: one guard
 
-`execute_and_enqueue_with_retry` routes through
-`execute_command_atomic` → `SlateDbStore::append_with_outbox`, which writes the
-`DeadlineExpired` event **and** the `AperakTimeout` outbox entry in a single
-`WriteBatch`. There is no window where:
-- the event is persisted but the ERP notification is lost, or
-- the ERP notification is sent but the event is missing from the audit log.
+`Workflow::DEADLINE_LABELS` is the table registration and matching share. The
+engine refuses to persist a deadline whose label is neither listed there nor a
+delivery window (`EngineError::UnownedDeadlineLabel`), and
+`Process::run_timeout` consults `on_deadline` only for a listed label. Each
+workflow decides a listed label in one function — `on_deadline` and the
+`TimeoutExpired` arm of `handle` both call it — so a window acts only while the
+state it belongs to is current: an answer already sent, or received, closes it.
 
-### Key invariant: a deadline is discharged when its obligation is met
+Every retry re-reads the state and asks `on_deadline` again: the write that
+conflicted may be the very answer that closed the window.
 
-Deadlines fall into two kinds, and they are retired differently.
+### Key invariant: a lapse is not a rejection
 
-A **process-response window** waits on the counterparty (*did they answer inside
-the Frist their Prüfidentifikator publishes?*). It is meant to fire; `Workflow::on_deadline` inspects process state and
-returns `None` when the answer already arrived, which is why deadline dispatch
-should route through `Process::execute_timeout_with_retry` rather than
-constructing a `TimeoutExpired` command directly.
+When a window lapses with its answer still owed, the outcome is the one the
+Festlegung gives that silence, and nothing else:
 
-A **delivery window** waits on *us* (*did our APERAK go out within 45 minutes?*).
-It must never fire on the happy path, so `OutboxWorker` retires it the moment the
-message it watches is delivered — `fristen::discharges_delivery_window` maps each
-message type to the labels its delivery answers for:
+| The Festlegung says | The process |
+|---|---|
+| silence counts as consent — „Verstreicht die Frist, ohne dass eine Antwort beim NB eingeht, gilt dies als Bestätigung" (GPKE Teil 2), the Ersatz-/Grundversorger's silence on a 44013 (GeLi Gas 3.0 Kap. 3.3), the Altlieferant's on a 44010 (Kap. 3.2.3), a missing Rückmeldung (GPKE Teil 4 Kap. 1.4.2–1.4.5) | completes as if answered |
+| the step fails — no Gesamtvorgang report by the 11. WT, „Der MSBA bleibt der einzelnen Messlokation zugeordnet" (WiM Teil 1 Kap. 2.3.2 Nr. 16) | ends with that outcome |
+| nothing | `FristAbgelaufen` |
+
+`FristAbgelaufen { label, offen }` wraps the state the process was waiting in.
+It is a Frist breach for the operator — whether our own answer is late or the
+counterparty's — and not an outcome: every command `offen` accepts is still
+accepted, so a late answer still goes out or still lands, and the next event
+moves the process on. The `DeadlineExpired` event records the lapse, and the
+`TimeoutExpired` arm enqueues an `AperakTimeout` ERP notification where the
+workflow carries one, in the same write.
+
+### Key invariant: a delivery window watches a message that goes out
+
+A **delivery window** waits on *us* (*did our APERAK go out within 45
+minutes?*). `OutboxWorker` retires it the moment its message is delivered;
+`fristen::discharges_delivery_window` maps each message type to the labels it
+answers for:
 
 | Message | Discharges | Obligation |
 |---|---|---|
-| `APERAK` | `aperak-strom-45min-window`, `aperak-gas-folgeprozess-…`, `aperak-gas-initialprozess-…` | APERAK AHB 1.0 §2.4.1 / §2.3.1 |
+| `APERAK` | `aperak-strom-45min-window`, `aperak-gas-folgeprozess-…`, `aperak-gas-initialprozess-…` | APERAK AHB 1.1 §2.4.1 / §2.3.1 |
 | `CONTRL` | `contrl-delivery-window` | CONTRL AHB 1.0 §2.3.1 / §2.4.1 |
 
+A delivery window is registered only on a path that enqueues its message. In
+der Sparte Gas the APERAK is a Verarbeitbarkeitsfehlermeldung only (APERAK AHB
+1.1 §2.3), so a processable Gas message arms no APERAK window.
+
 A delivery discharges only its own windows — an acknowledged CONTRL says nothing
-about whether the application-level APERAK went out, and a deadline that merely
-shares the stream is left alone.
-
-**This discharge is what gives the miss counters meaning.** The scheduler selects
-deadlines on `due_at <= now`, so "fired after its due time" is true of every
-deadline it ever hands out and proves nothing on its own. A delivery window that
-survives to its due time is an undelivered message — that, and only that, is the
-violation. A new delivery window that `discharges_delivery_window` does not
-recognise is never retired, so it alerts on every process; the
-`every_delivery_window_label_is_discharged_by_its_message` test pins that.
-
-### Retry on conflict
-
-Deadline workers use `execute_and_enqueue_with_retry(..., 3)` so that a
-`VersionConflict` (concurrent event append by another task) is retried up to
-3 times before bubbling to the scheduler, which re-fires the deadline later.
+about the APERAK. A delivery window that survives to its due time is an
+undelivered message, and that alone is the violation the miss counters report.
+`every_delivery_window_label_is_discharged_by_its_message` (in `mako-engine`)
+pins that every delivery-window label is retired by its message.
 
 ## Workflow implementation pattern
 
-Every workflow that registers a regulatory deadline MUST implement
-`Workflow::on_deadline` AND add compensation outbox entries in the
-`TimeoutExpired` handler:
-
 ```rust
-// 1. on_deadline — map label → command (pure, no I/O)
-fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-    match (deadline.label(), state) {
-        ("aperak-window", SupplierChangeState::Initiated(_))
-        | ("aperak-window", SupplierChangeState::ValidationPassed(_)) => {
-            Some(SupplierChangeCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label:       deadline.label().into(),
-            })
-        }
-        // Terminal or unrecognised states → no-op (idempotent)
-        _ => None,
+impl Workflow for MyWorkflow {
+    // 1. The labels this workflow registers and decides.
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANTWORT_WINDOW_LABEL];
+
+    // 2. on_deadline asks the one guard.
+    fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
+        window_open(deadline.label(), state).then(|| MyCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
+
+    // 3. handle(TimeoutExpired) asks it again, on the state before any lapse.
+    //    MyCommand::TimeoutExpired { deadline_id, label } => {
+    //        if !window_open(&label, lapsed) { return Ok(WorkflowOutput::events(vec![])); }
+    //        Ok(vec![MyEvent::DeadlineExpired { deadline_id, label }].into())
+    //    }
 }
 
-// 2. handle(TimeoutExpired) — emit event + compensation outbox atomically
-SupplierChangeCommand::TimeoutExpired { deadline_id, label } => {
-    // Absorb silently on terminal states (late-firing deadline).
-    if matches!(state, SupplierChangeState::Active(_) | SupplierChangeState::Rejected { .. }) {
-        return Ok(WorkflowOutput::events(vec![]));
-    }
-    let mut outbox = vec![];
-    if let Some(data) = state.initiated_data() {
-        outbox.push(PendingOutbox::new(
-            "AperakTimeout",
-            data.new_supplier.as_str(),
-            serde_json::json!({
-                "pid":          data.pruefidentifikator.as_u32(),
-                "malo":         data.location_id.as_str(),
-                "new_supplier": data.new_supplier.as_str(),
-                "deadline_label": label.as_ref(),
-            }),
-        ));
-    }
-    let event = SupplierChangeEvent::DeadlineExpired { deadline_id, label };
-    if outbox.is_empty() {
-        Ok(vec![event].into())
-    } else {
-        Ok(WorkflowOutput::with_outbox(vec![event], outbox))
-    }
+/// The window is open while the answer is owed.
+fn window_open(label: &str, state: &MyState) -> bool {
+    label == ANTWORT_WINDOW_LABEL && matches!(state, MyState::Eingegangen(_))
 }
 ```
+
+`services/makod/tests/it/deadline_labels.rs` holds the pattern: every label
+constant is owned by a routed workflow, every owned label is matched by its
+workflow's guard, every `TimeoutExpired` arm asks that guard, and no guard
+decides a delivery window. `healthy_deadline_interleavings.rs` fires each
+family's deadlines in random order after their answers and requires that no
+healthy run ends lapsed or rejected.
 
 ## ERP delivery
 
-The `OutboxErpWorker` in `makod/src/core/erp_adapter.rs` picks up `AperakTimeout`
-messages and maps them to `ErpEventType::AperakTimeout`:
-
-```rust
-"AperakTimeout" => ErpEventType::AperakTimeout,
-```
-
-The ERP webhook receives a **CloudEvents 1.0** message with:
-
-```json
-{
-  "specversion": "1.0",
-  "type": "de.mako.aperak.timeout",
-  "source": "urn:mako:makod:tenant:9900357000004",
-  "id": "...",
-  "time": "...",
-  "makopid": 55001,
-  "data": {
-    "malo": "DE0004...",
-    "new_supplier": "9900000000001",
-    "deadline_label": "aperak-window"
-  }
-}
-```
+`OutboxErpWorker` (`services/makod/src/core/erp_adapter.rs`) maps an
+`AperakTimeout` outbox entry to `ErpEventType::AperakTimeout` and delivers it as
+the CloudEvent `de.mako.aperak.timeout`, with the inbound PID in the `makopid`
+extension. Envelope and receiver: [ERP Integration](@/docs/architecture/erp-integration.md).
 
 ## Adding a new workflow with compensation
 
-1. Add `TimeoutExpired { deadline_id, label }` to your `XxxCommand` enum.
-2. Register the deadline in your workflow's `Initiate` handler via
-   `PendingOutbox` with `deliver_after` derived from the regulatory Frist.
-3. Implement `on_deadline` to return `Some(TimeoutExpired)` for active states.
-4. Implement the `TimeoutExpired` arm in `handle` with:
-   - `DeadlineExpired` event (for audit log).
-   - `AperakTimeout` outbox entry (for ERP notification).
-   - Early return `WorkflowOutput::events(vec![])` for terminal states.
-5. Add a `match` arm to `deadline_dispatch::dispatch_deadline` calling
-   `execute_and_enqueue_with_retry(..., 3)`. This is not optional:
-   `build_scheduler` panics at startup if any workflow name an `EngineModule`
-   declares through `workflow_names` is absent from that table, which turns the
-   silent regulatory miss — deadline fires, falls into the `unknown` branch,
-   emits a `WARN` nobody reads — into a deployment that will not start.
+1. Add `TimeoutExpired { deadline_id, label }` to the command enum.
+2. Name the label as a `pub const …_LABEL`, list it in `DEADLINE_LABELS`, and
+   return the deadline from `handle` as a `PendingDeadline` (or pass it through
+   `RunOptions::deadlines` on spawn), its due time from `mako_fristen`.
+3. Implement `window_open` and `on_deadline` as above.
+4. In the `TimeoutExpired` arm, re-check `window_open`, then record the outcome
+   the Festlegung gives the silence — or a `DeadlineExpired` event that `apply`
+   folds into `FristAbgelaufen` — plus an `AperakTimeout` outbox entry where the
+   ERP must hear of it.
+5. Register the workflow in its module's `drivers()` with
+   `WorkflowDriver::of::<W>(WORKFLOW_NAME)`; `EngineBuilder::build` refuses a
+   routed workflow without one.
 
-## `execute_timeout` / `execute_timeout_with_retry`
+## `run_timeout`
 
-`Process::execute_timeout` and `Process::execute_timeout_with_retry` are
-convenience wrappers that call `on_deadline` and route the returned command
-through `execute_and_enqueue` / `execute_and_enqueue_with_retry`. Prefer these
-in custom deadline workers over manually calling `on_deadline` + `execute`.
+`Process::run_timeout(&deadline, opts)` answers `None` for a label outside
+`DEADLINE_LABELS`; otherwise it asks `on_deadline` on the current state and runs
+the returned command exactly as `Process::run` would — one write, the same
+version-conflict retry, `on_deadline` asked again on each attempt. The scheduler
+reaches it through the workflow's `WorkflowDriver`; nothing outside the workflow
+constructs `TimeoutExpired`.
 
-`deadline_dispatch.rs` uses both shapes, and which one is right depends on the
-clock. A workflow whose deadline is meant to fire — the counterparty simply did
-not answer — constructs the `TimeoutExpired` command directly, which reads
-plainly. A workflow where the deadline may already be discharged goes through
-`execute_timeout_with_retry`, so `on_deadline` gets to answer `None` for a
-settled process and no event is written at all. At present four arms take the
-direct form and three the `on_deadline` one.
-
-**A `Deadline` whose label no `on_deadline` arm matches is the silent failure
-this whole mechanism guards against.** `Workflow::on_deadline` defaults to
-`None`, so an unmatched label produces a deadline that fires, does nothing, and
-leaves the process in its waiting state — no error, no event, no alert, and the
-deadline store showing it as fired. Nothing ties the string being registered to
-the string being matched, so `makod`'s `tests/deadline_labels.rs` does: every
-`pub const …_LABEL` in a `mako-*` crate must appear inside some `on_deadline`
-body unless it is a delivery window, no label may be written twice (registration
-takes the owning crate's constant, never a literal), and no `on_deadline` may be
-a catch-all — a body that ignores `deadline.label()` also swallows the APERAK and
-CONTRL delivery windows running beside the business Frist, failing the business
-process because a technical acknowledgement was late.
+**A label no `on_deadline` arm matches fires into the default `None`** —
+no error, no event, the process left waiting. `deadline_labels.rs` therefore
+requires every `pub const …_LABEL` in a `mako-*` crate to appear in some
+`on_deadline` body unless it is a delivery window, every registration to take
+the owning crate's constant rather than a literal, and no `on_deadline` to be a
+catch-all that ignores `deadline.label()` — that would also swallow the APERAK
+and CONTRL delivery windows running beside the business Frist.

@@ -993,6 +993,10 @@ pub struct SettleInput {
     ///   Höchstanteil → `KeinAnspruch` (EUR 0)
     /// - **§44 Güllekleinanlage**: `ist_guellebonusanlage` recorded in audit positions
     pub biomasse: Option<eeg_billing::biomasse::BiomassSettlementData>,
+    /// Set when the payment is made under the open Beihilfevorbehalt by the
+    /// operator's `unter_vorbehalt` policy: the text of the zero-euro position
+    /// that states the reservation on the receipt and the Gutschrift.
+    pub beihilfevorbehalt_hinweis: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1427,7 +1431,7 @@ pub struct MarktwertTreffer {
     pub serie: eeg_billing::Marktwertserie,
     /// `true` when it is an ÜNB running estimate rather than the published
     /// binding figure — always `false` for a Monatsmarktwert, and for the EPEX
-    /// fallback, which is not a Marktwert at all but is at least final.
+    /// fallback of the Monatsmarktwert series, which is final.
     pub vorlaeufig: bool,
 }
 
@@ -1441,10 +1445,12 @@ pub struct MarktwertTreffer {
 /// Lookup order **within the requested series**:
 /// 1. exact technology match in `marktwert_preise`
 /// 2. the `DEFAULT` fallback row
-/// 3. the generic EPEX monthly average the caller passes
+/// 3. for the **Monatsmarktwert** only, the generic EPEX monthly average the
+///    caller passes
 /// 4. `None` — `PriceMissing`, which the monthly worker retries. That is the
 ///    honest answer for a post-2023 plant before the ÜNB have published
-///    anything: substituting the other series would misprice every kWh.
+///    anything: a Jahresmarktwert is an annual figure, and the monthly spot
+///    mean in its place — or the other series — misprices every kWh.
 ///
 /// # Errors
 ///
@@ -1486,11 +1492,13 @@ pub async fn fetch_marktwert(
             vorlaeufig,
         })
         .or_else(|| {
-            epex_fallback.map(|avg_ct_kwh| MarktwertTreffer {
-                avg_ct_kwh,
-                serie,
-                vorlaeufig: false,
-            })
+            epex_fallback
+                .filter(|_| serie == eeg_billing::Marktwertserie::Monatsmarktwert)
+                .map(|avg_ct_kwh| MarktwertTreffer {
+                    avg_ct_kwh,
+                    serie,
+                    vorlaeufig: false,
+                })
         }))
 }
 
@@ -1531,6 +1539,9 @@ pub struct SettleOverrides {
     /// Höchstdauer check; read from the receipts by
     /// [`crate::pg::ausfallverguetung_nutzung`].
     pub ausfallverguetung: crate::sect52::AusfallverguetungNutzung,
+    /// The Beihilfevorbehalt position for a payment made under it — see
+    /// [`SettleInput::beihilfevorbehalt_hinweis`].
+    pub beihilfevorbehalt_hinweis: Option<String>,
 }
 
 /// Build a [`SettleInput`] from a plant row and a billing period.
@@ -1692,6 +1703,7 @@ pub fn build_settle_input(
         // §§42–44 EEG 2023: derive biomass fuel composition from the three typed
         // DB columns. `None` for non-biomass plants.
         biomasse: derive_biomasse(anlage),
+        beihilfevorbehalt_hinweis: overrides.beihilfevorbehalt_hinweis,
     })
 }
 
@@ -1895,6 +1907,16 @@ pub async fn run_settlement(
     // Lock the plant and refresh everything that is a running total before any
     // entitlement is computed from it. This is the transaction's first statement
     // so that concurrent settlements of one plant queue here, in one order.
+    // The Inbetriebnahme decides the Marktwert series (Anlage 1 Nr. 2 EEG
+    // 2023), the Förderdauer and the § 51 regime. Without one there is nothing
+    // to decide them from; today's date is not a stand-in.
+    let Some(inbetriebnahme) = input.inbetriebnahme else {
+        anyhow::bail!(
+            "Anlage {}: keine Inbetriebnahme — sie bestimmt die Marktwertreihe nach Anlage 1 \
+             Nr. 2 EEG 2023; ohne sie wird nicht abgerechnet",
+            input.tr_id
+        );
+    };
     let mut input = input;
     refresh_cumulative_counters(&mut *conn, &mut input).await?;
 
@@ -2261,11 +2283,13 @@ pub async fn run_settlement(
     // Abgrenzungs- oder Pauschaloption moves onto Nr. 4 as well.
     //
     // Lookup order: caller override → the plant's own series in
-    // `marktwert_preise` (exact technology, then DEFAULT) → the generic EPEX
-    // monthly average → `PriceMissing`. It never falls back to the *other*
-    // series: that is the substitution this split exists to prevent.
+    // `marktwert_preise` (exact technology, then DEFAULT) → for the
+    // Monatsmarktwert only, the generic EPEX monthly average → `PriceMissing`.
+    // It never falls back to the *other* series, and a Jahresmarktwert is
+    // never the monthly spot mean: both are the substitution this split
+    // exists to prevent.
     let serie = eeg_billing::marktwertserie(
-        input.inbetriebnahme.unwrap_or(mako_fristen::heute()),
+        inbetriebnahme,
         input.zuschlag_datum,
         input.speicher_abgrenzungs_oder_pauschaloption,
     );
@@ -2393,6 +2417,20 @@ pub async fn run_settlement(
              assign a Direktvermarktung (§20) or the Ausfallvergütung (§21 Abs. 1 Satz 1 Nr. 3)"
         );
     }
+    // A payment made under the open Beihilfevorbehalt says so on the receipt
+    // and on the Gutschrift: a zero-euro position, so the amount is unchanged
+    // and the reservation travels with the document.
+    if let Some(hinweis) = &input.beihilfevorbehalt_hinweis
+        && output.settlement_eur.is_some()
+    {
+        output.positions.push(eeg_billing::SettlePosition {
+            description: hinweis.clone(),
+            legal_basis: crate::settle::BEIHILFEVORBEHALT_GRUNDLAGE.to_owned(),
+            kwh: rust_decimal::Decimal::ZERO,
+            rate_ct_kwh: rust_decimal::Decimal::ZERO,
+            eur: rust_decimal::Decimal::ZERO,
+        });
+    }
     let output = output;
 
     let status = match output.status {
@@ -2406,6 +2444,9 @@ pub async fn run_settlement(
         SettlementStatus::JahreskontingentErschoepft => "jahreskontingent_erschoepft",
         SettlementStatus::Sanctioned => "sanctioned",
         SettlementStatus::KeinAnspruch => "kein_anspruch",
+        // §§ 53b–54 apply and no EEG Fassung is tabled for the period: nothing
+        // settled, and the sweep retries it once the Fassung is tabled.
+        SettlementStatus::FassungNichtTabelliert => "fassung_nicht_tabelliert",
         // Forward-compatible: any future status variant stores as "unknown" and does not block
         _ => "unknown",
     };
@@ -2925,10 +2966,10 @@ pub async fn zusammenlegen(
         );
     }
 
-    // Both writes commit together. Run apart, a failure between them left the
-    // child deregistered — it stops settling immediately — while the parent kept
-    // the smaller capacity it is now supposed to carry, so the merged plant was
-    // billed in the wrong tariff band with no record of why.
+    // Both writes commit together. Run apart, a failure between them would leave
+    // the child deregistered — it stops settling immediately — while the parent
+    // kept the smaller capacity, so the merged plant would be billed in the wrong
+    // tariff band with no record of why.
     let mut tx = pool.begin().await.context("begin Zusammenlegung")?;
 
     // Mark child as merged (preserves history, stops future settlements).
@@ -3754,7 +3795,10 @@ pub async fn record_stromsteuerbefreiung(
 }
 
 /// Record §54 solar first-segment defects for a period.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn record_sect54_defekt(
     pool: &PgPool,
     tenant: &str,
@@ -3845,7 +3889,7 @@ pub async fn aw_reduktionen_am(
         cuts.push(serde_json::json!({
             "paragraph": "§53c EEG 2023",
             "grund": "Stromsteuerbefreiung für durchgeleiteten Strom",
-            "abzug_ct_kwh": ct.min(eeg_billing::aw_reductions::STROMSTEUER_VOLLSATZ_CT_KWH),
+            "abzug_ct_kwh": ct.min(eeg_billing::aw_reductions::STROMSTEUER_REGELSATZ_CT_PER_KWH),
         }));
     }
     if let Some(s54) = ctx.sect54_solar {

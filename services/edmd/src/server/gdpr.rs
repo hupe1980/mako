@@ -15,7 +15,10 @@
 //! the request while personal data survived, indistinguishable from a MaLo that
 //! legitimately held nothing.
 
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "used only in some feature or target combinations"
+)]
 use super::*;
 
 /// `DELETE /api/v1/gdpr/erasure/{malo_id}`

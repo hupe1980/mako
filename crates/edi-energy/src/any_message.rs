@@ -1,9 +1,6 @@
 use edifact_rs::OwnedSegment;
 
-use crate::{
-    CustomRulePack, EdiEnergyMessage, EdiEnergyReport, Error, MessageType, Pruefidentifikator,
-    Release,
-};
+use crate::{EdiEnergyMessage, EdiEnergyReport, Error, MessageType, Pruefidentifikator, Release};
 
 #[cfg(feature = "aperak")]
 use crate::messages::aperak::AperakMessage;
@@ -42,9 +39,11 @@ use crate::messages::utilts::UtiltsMessage;
 
 /// A parsed EDI@Energy message, dispatched to its concrete type.
 ///
-/// Match on the variants to access type-specific functionality, or use the
-/// [`EdiEnergyMessage`] trait methods (via `msg.validate()`, `msg.serialize()`, etc.)
-/// for common operations across all message types.
+/// Match on the variants to access type-specific functionality — the enum is
+/// public, so a pattern is the downcast and there are no per-type `as_*`
+/// accessors — or use the [`EdiEnergyMessage`] trait methods (via
+/// `msg.validate()`, `msg.serialize()`, etc.) for common operations across all
+/// message types.
 ///
 /// Each variant is only present when the corresponding Cargo feature is enabled.
 /// Compile with `--all-features` to enable exhaustive matching — this is the
@@ -265,195 +264,6 @@ impl AnyMessage {
         <Self as EdiEnergyMessage>::try_message_type(self)
     }
 
-    // ── Type-specific downcast helpers ────────────────────────────────────────
-
-    /// Returns a reference to the inner [`UtilmdMessage`], or `None`.
-    #[cfg(feature = "utilmd")]
-    #[must_use]
-    pub fn as_utilmd(&self) -> Option<&crate::messages::utilmd::UtilmdMessage> {
-        if let AnyMessage::Utilmd(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a reference to the inner [`MsconsMessage`], or `None`.
-    #[cfg(feature = "mscons")]
-    #[must_use]
-    pub fn as_mscons(&self) -> Option<&crate::messages::mscons::MsconsMessage> {
-        if let AnyMessage::Mscons(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a reference to the inner [`AperakMessage`], or `None`.
-    #[cfg(feature = "aperak")]
-    #[must_use]
-    pub fn as_aperak(&self) -> Option<&crate::messages::aperak::AperakMessage> {
-        if let AnyMessage::Aperak(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a reference to the inner [`ContrlMessage`], or `None`.
-    #[cfg(feature = "contrl")]
-    #[must_use]
-    pub fn as_contrl(&self) -> Option<&crate::messages::contrl::ContrlMessage> {
-        if let AnyMessage::Contrl(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a reference to the inner [`InvoicMessage`], or `None`.
-    #[cfg(feature = "invoic")]
-    #[must_use]
-    pub fn as_invoic(&self) -> Option<&crate::messages::invoic::InvoicMessage> {
-        if let AnyMessage::Invoic(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a reference to the inner [`RemadvMessage`], or `None`.
-    #[cfg(feature = "remadv")]
-    #[must_use]
-    pub fn as_remadv(&self) -> Option<&crate::messages::remadv::RemadvMessage> {
-        if let AnyMessage::Remadv(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a reference to the inner [`OrdersMessage`], or `None`.
-    #[cfg(feature = "orders")]
-    #[must_use]
-    pub fn as_orders(&self) -> Option<&crate::messages::orders::OrdersMessage> {
-        if let AnyMessage::Orders(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a reference to the inner [`IftstaMessage`], or `None`.
-    #[cfg(feature = "iftsta")]
-    #[must_use]
-    pub fn as_iftsta(&self) -> Option<&crate::messages::iftsta::IftstaMessage> {
-        if let AnyMessage::Iftsta(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a reference to the inner [`InsrptMessage`], or `None`.
-    #[cfg(feature = "insrpt")]
-    #[must_use]
-    pub fn as_insrpt(&self) -> Option<&crate::messages::insrpt::InsrptMessage> {
-        if let AnyMessage::Insrpt(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a reference to the inner [`ReqoteMessage`], or `None`.
-    #[cfg(feature = "reqote")]
-    #[must_use]
-    pub fn as_reqote(&self) -> Option<&crate::messages::reqote::ReqoteMessage> {
-        if let AnyMessage::Reqote(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a reference to the inner [`PartinMessage`], or `None`.
-    #[cfg(feature = "partin")]
-    #[must_use]
-    pub fn as_partin(&self) -> Option<&crate::messages::partin::PartinMessage> {
-        if let AnyMessage::Partin(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a reference to the inner [`OrdchgMessage`], or `None`.
-    #[cfg(feature = "ordchg")]
-    #[must_use]
-    pub fn as_ordchg(&self) -> Option<&crate::messages::ordchg::OrdchgMessage> {
-        if let AnyMessage::Ordchg(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a reference to the inner [`OrdrespMessage`], or `None`.
-    #[cfg(feature = "ordrsp")]
-    #[must_use]
-    pub fn as_ordrsp(&self) -> Option<&crate::messages::ordrsp::OrdrespMessage> {
-        if let AnyMessage::Ordrsp(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a reference to the inner [`QuotesMessage`], or `None`.
-    #[cfg(feature = "quotes")]
-    #[must_use]
-    pub fn as_quotes(&self) -> Option<&crate::messages::quotes::QuotesMessage> {
-        if let AnyMessage::Quotes(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a reference to the inner [`ComdisMessage`], or `None`.
-    #[cfg(feature = "comdis")]
-    #[must_use]
-    pub fn as_comdis(&self) -> Option<&crate::messages::comdis::ComdisMessage> {
-        if let AnyMessage::Comdis(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a reference to the inner [`PricatMessage`], or `None`.
-    #[cfg(feature = "pricat")]
-    #[must_use]
-    pub fn as_pricat(&self) -> Option<&crate::messages::pricat::PricatMessage> {
-        if let AnyMessage::Pricat(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a reference to the inner [`UtiltsMessage`], or `None`.
-    #[cfg(feature = "utilts")]
-    #[must_use]
-    pub fn as_utilts(&self) -> Option<&crate::messages::utilts::UtiltsMessage> {
-        if let AnyMessage::Utilts(m) = self {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
     /// Returns the inner [`MessageCore`][crate::messages::core::MessageCore], or `None`
     /// for the [`Unknown`][AnyMessage::Unknown] variant.
     ///
@@ -632,7 +442,10 @@ fn unknown_type_report(message_type_code: &str) -> EdiEnergyReport {
     EdiEnergyReport::new(inner)
 }
 
-#[allow(unreachable_patterns)]
+#[allow(
+    unreachable_patterns,
+    reason = "the arm is reachable in some feature combinations"
+)]
 impl EdiEnergyMessage for AnyMessage {
     fn try_message_type(&self) -> Option<MessageType> {
         match self {
@@ -671,7 +484,10 @@ impl EdiEnergyMessage for AnyMessage {
         }
     }
 
-    #[allow(unused_variables)]
+    #[allow(
+        unused_variables,
+        reason = "read only in some feature or target combinations"
+    )]
     fn validate_against(&self, release: &Release) -> Result<EdiEnergyReport, Error> {
         match self {
             AnyMessage::Unknown {
@@ -697,22 +513,10 @@ impl EdiEnergyMessage for AnyMessage {
         }
     }
 
-    fn validate_with_pack(&self, extra: CustomRulePack) -> Result<EdiEnergyReport, Error> {
-        match self {
-            // Same contract as the other four validate methods: report the
-            // unknown type inside the report rather than as a different error on
-            // this one method alone.
-            AnyMessage::Unknown {
-                message_type_code, ..
-            } => {
-                let _ = extra;
-                Ok(unknown_type_report(message_type_code))
-            }
-            _ => delegate_any!(self, m => m.validate_with_pack(extra)),
-        }
-    }
-
-    #[allow(unused_variables)]
+    #[allow(
+        unused_variables,
+        reason = "read only in some feature or target combinations"
+    )]
     fn validate_on_date(&self, reference_date: time::Date) -> Result<EdiEnergyReport, Error> {
         match self {
             AnyMessage::Unknown {

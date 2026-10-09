@@ -179,13 +179,6 @@ pub enum RechnungsabwicklungEvent {
         /// EDIFACT message reference.
         message_ref: MessageRef,
     },
-    /// APERAK 29001 dispatched.
-    AperakFehlerDispatched {
-        /// Error reason.
-        reason: String,
-        /// Outbound message reference.
-        outbound_ref: MessageRef,
-    },
     /// Process rejected.
     Rejected {
         /// Human-readable reason.
@@ -209,7 +202,6 @@ impl EventPayload for RechnungsabwicklungEvent {
             Self::BeendigungGesendet { .. } => "RechnungsabwicklungBeendigungGesendet",
             Self::AntwortGesendet { .. } => "RechnungsabwicklungAntwortGesendet",
             Self::AntwortErhalten { .. } => "RechnungsabwicklungAntwortErhalten",
-            Self::AperakFehlerDispatched { .. } => "RechnungsabwicklungAperakFehlerDispatched",
             Self::Rejected { .. } => "RechnungsabwicklungRejected",
             Self::DeadlineExpired { .. } => "RechnungsabwicklungDeadlineExpired",
         }
@@ -274,6 +266,19 @@ pub enum RechnungsabwicklungState {
         /// Reason.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// WiM Teil 1 gives the answer window on the Beendigung der Rechnungsabwicklung and no consequence of missing it. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<RechnungsabwicklungState>,
+    },
 }
 
 impl mako_engine::workflow::OccupiesBusinessKey for RechnungsabwicklungState {
@@ -282,7 +287,7 @@ impl mako_engine::workflow::OccupiesBusinessKey for RechnungsabwicklungState {
     /// must not block the next process on the same MaLo.
     fn occupies_business_key(&self) -> bool {
         matches!(
-            self,
+            self.offen(),
             Self::BeendigungEingegangen(_) | Self::BeendigungAngefragt
         )
     }
@@ -300,6 +305,16 @@ impl RechnungsabwicklungState {
             Self::BeendigungAngefragt => "BeendigungAngefragt",
             Self::Beendet { .. } => "Beendet",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 }
@@ -371,13 +386,6 @@ pub enum RechnungsabwicklungCommand {
         /// EDIFACT message reference.
         message_ref: MessageRef,
     },
-    /// Dispatch APERAK 29001.
-    DispatchAperakFehler {
-        /// Error reason.
-        reason: String,
-        /// Outbound APERAK message reference.
-        outbound_ref: MessageRef,
-    },
     /// Deadline expired.
     TimeoutExpired {
         /// Deadline ID.
@@ -394,26 +402,41 @@ impl CommandPayload for RechnungsabwicklungCommand {}
 /// WiM Rechnungsabwicklung workflow (ORDERS 17005/17006, ORDRSP 19009/19010).
 pub struct WimRechnungsabwicklungWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while a Beendigung is unanswered — owed by
+/// this party (`BeendigungEingegangen`) or to it (`BeendigungAngefragt`).
+fn window_open(label: &str, state: &RechnungsabwicklungState) -> bool {
+    label == RECHNUNGSABWICKLUNG_DEADLINE_LABEL
+        && matches!(
+            state,
+            RechnungsabwicklungState::BeendigungEingegangen(_)
+                | RechnungsabwicklungState::BeendigungAngefragt
+        )
+}
+
 impl Workflow for WimRechnungsabwicklungWorkflow {
     type State = RechnungsabwicklungState;
     type Event = RechnungsabwicklungEvent;
     type Command = RechnungsabwicklungCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[RECHNUNGSABWICKLUNG_DEADLINE_LABEL];
+
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (
-                RECHNUNGSABWICKLUNG_DEADLINE_LABEL,
-                RechnungsabwicklungState::BeendigungEingegangen(_)
-                | RechnungsabwicklungState::BeendigungAngefragt,
-            ) => Some(RechnungsabwicklungCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            }),
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| RechnungsabwicklungCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            RechnungsabwicklungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             RechnungsabwicklungEvent::BestellungErhalten {
                 sender,
@@ -459,21 +482,18 @@ impl Workflow for WimRechnungsabwicklungWorkflow {
                 }
                 other => other,
             },
-            RechnungsabwicklungEvent::AperakFehlerDispatched { reason, .. } => {
-                RechnungsabwicklungState::Rejected {
-                    reason: format!("APERAK 29001: {reason}"),
-                }
-            }
             RechnungsabwicklungEvent::Rejected { reason } => RechnungsabwicklungState::Rejected {
                 reason: reason.clone(),
             },
             RechnungsabwicklungEvent::DeadlineExpired { label, .. } => match state {
-                RechnungsabwicklungState::Bestellt(_)
-                | RechnungsabwicklungState::Beendet { .. }
-                | RechnungsabwicklungState::Rejected { .. } => state,
-                _ => RechnungsabwicklungState::Rejected {
-                    reason: format!("deadline expired: {label}"),
-                },
+                RechnungsabwicklungState::BeendigungEingegangen(_)
+                | RechnungsabwicklungState::BeendigungAngefragt => {
+                    RechnungsabwicklungState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
+                }
+                other => other,
             },
         }
     }
@@ -482,6 +502,10 @@ impl Workflow for WimRechnungsabwicklungWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             RechnungsabwicklungCommand::ReceiveOrders {
                 pid,
@@ -639,35 +663,12 @@ impl Workflow for WimRechnungsabwicklungWorkflow {
                 .into())
             }
 
-            RechnungsabwicklungCommand::DispatchAperakFehler {
-                reason,
-                outbound_ref,
-            } => {
-                if !matches!(
-                    state,
-                    RechnungsabwicklungState::New
-                        | RechnungsabwicklungState::BeendigungEingegangen(_)
-                ) {
-                    return Err(WorkflowError::invalid_state(
-                        "New or BeendigungEingegangen",
-                        state.label(),
-                    ));
+            RechnungsabwicklungCommand::TimeoutExpired { deadline_id, label } => {
+                if !window_open(&label, lapsed) {
+                    return Ok(vec![].into());
                 }
-                Ok(vec![RechnungsabwicklungEvent::AperakFehlerDispatched {
-                    reason,
-                    outbound_ref,
-                }]
-                .into())
+                Ok(vec![RechnungsabwicklungEvent::DeadlineExpired { deadline_id, label }].into())
             }
-
-            RechnungsabwicklungCommand::TimeoutExpired { deadline_id, label } => match state {
-                RechnungsabwicklungState::Bestellt(_)
-                | RechnungsabwicklungState::Beendet { .. }
-                | RechnungsabwicklungState::Rejected { .. } => Ok(vec![].into()),
-                _ => Ok(
-                    vec![RechnungsabwicklungEvent::DeadlineExpired { deadline_id, label }].into(),
-                ),
-            },
         }
     }
 }

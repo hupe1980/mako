@@ -4,7 +4,10 @@
 // generic parameters.  The types are deprecated to prevent instantiation in production code,
 // but using them as default type parameters in struct definitions (not instantiating them) is
 // the intended pattern for the type-state builder API.
-#![allow(deprecated)]
+#![allow(
+    deprecated,
+    reason = "the deprecated item is the one this code exists to support"
+)]
 //!
 //! # Summary
 //!
@@ -52,7 +55,7 @@
 //!
 //! // Spawn a fresh process:
 //! let p = ctx.spawn::<SupplierChangeWorkflow>(tenant_id, workflow_id);
-//! p.execute(ReceiveUtilmd { .. }).await?;
+//! p.run(ReceiveUtilmd { .. }, RunOptions::new()).await?;
 //!
 //! // Resume an existing process from a persisted identity:
 //! let identity = ctx.registry.lookup(&conv_id.to_string()).await?.unwrap();
@@ -67,12 +70,18 @@
 
 // Type-state generics can produce long signatures that trip up the
 // `type_complexity` lint; suppress it for this module only.
-#![allow(clippy::type_complexity)]
+#![expect(
+    clippy::type_complexity,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 
 // The Noop* types are marked #[deprecated] to guard against accidental
 // production use.  The builder is the only place they're instantiated as
 // defaults; suppress the lint here explicitly.
-#[allow(deprecated)]
+#[allow(
+    deprecated,
+    reason = "the deprecated item is the one this code exists to support"
+)]
 use crate::{
     dead_letter::{DeadLetterSink, LogDeadLetterSink},
     deadline::{Deadline, DeadlineStore, NoopDeadlineStore},
@@ -224,42 +233,44 @@ pub trait EngineModule: Send + 'static {
         self.register_pids(router);
     }
 
-    /// Every workflow this module owns, named.
+    /// Every workflow this module owns, each registered once by type under
+    /// its name.
     ///
-    /// These names are what [`EngineContext::registered_workflows`] collects,
-    /// and consumers build their deadline-dispatch coverage from that list — so
-    /// this declaration, not [`register_pids`], is what makes a workflow's
-    /// Fristen checkable.
+    /// A [`WorkflowDriver`] carries what a host needs to treat the workflow by
+    /// name — the labels it owns, and the typed entry points that run a fired
+    /// deadline or a format-version migration — so nothing outside the module
+    /// maps names back to types. [`EngineContext::drivers`] collects them, and
+    /// [`EngineContext::registered_workflows`] is their names.
     ///
     /// # The invariant
     ///
-    /// **Every name [`register_pids`] routes to must appear here.**
-    /// [`EngineBuilder::build`] panics otherwise, per module. A workflow that
-    /// is routed but undeclared still runs — it just becomes invisible to every
-    /// check made over the declarations, so a deadline it registers is never
-    /// held against a dispatch arm and fires into nothing.
+    /// **Every name [`register_pids`] routes to must have a driver.**
+    /// [`EngineBuilder::build`] panics otherwise, per module: a routed workflow
+    /// without one would run while every deadline it registers fired into
+    /// nothing. The converse is allowed — a command-initiated workflow (one an
+    /// ERP starts over the command API) has a driver and routes no inbound
+    /// Prüfidentifikator.
     ///
-    /// The converse is deliberately allowed: a command-initiated workflow (one
-    /// an ERP starts over the command API) declares a name and routes no
-    /// inbound Prüfidentifikator.
-    ///
-    /// Prefer each module's own `WORKFLOW_NAME` constant over a string literal.
-    /// A literal here can disagree with the name `register_pids` routes to, and
-    /// the two are only compared at build time:
+    /// Use each module's own `WORKFLOW_NAME` constant, never a literal:
     ///
     /// ```rust,ignore
-    /// fn workflow_names(&self) -> &'static [&'static str] {
-    ///     &[wechselprozesse::WORKFLOW_NAME, abrechnung::WORKFLOW_NAME]
+    /// fn drivers(&self) -> Vec<WorkflowDriver> {
+    ///     vec![
+    ///         WorkflowDriver::of::<GpkeSupplierChangeWorkflow>(wechselprozesse::WORKFLOW_NAME),
+    ///         WorkflowDriver::of::<GpkeAbrechnungWorkflow>(abrechnung::WORKFLOW_NAME),
+    ///     ]
     /// }
     /// ```
     ///
-    /// The default implementation returns an empty slice, which is correct only
-    /// for a module that routes no PIDs at all.
+    /// The default is empty, which is correct only for a module that routes no
+    /// PIDs at all.
     ///
+    /// [`WorkflowDriver`]: crate::driver::WorkflowDriver
     /// [`register_pids`]: EngineModule::register_pids
+    /// [`EngineContext::drivers`]: crate::builder::EngineContext::drivers
     /// [`EngineContext::registered_workflows`]: crate::builder::EngineContext::registered_workflows
-    fn workflow_names(&self) -> &'static [&'static str] {
-        &[]
+    fn drivers(&self) -> Vec<crate::driver::WorkflowDriver> {
+        Vec::new()
     }
 
     /// Declare the EDIFACT profile types this module requires at runtime.
@@ -362,10 +373,11 @@ pub struct EngineContext<
     /// PID-to-workflow routing table, populated from all registered modules.
     pid_router: PidRouter,
     registered_modules: Vec<&'static str>,
-    /// Workflow names declared by all registered modules via
-    /// [`EngineModule::workflow_names`]. Used to validate deadline scheduler
-    /// coverage at runtime (see [`EngineContext::registered_workflows`]).
+    /// The names of every registered workflow's driver
+    /// ([`EngineModule::drivers`]).
     registered_workflows: Vec<&'static str>,
+    /// The driver of every registered workflow.
+    drivers: Vec<crate::driver::WorkflowDriver>,
 }
 
 // ── Type aliases ──────────────────────────────────────────────────────────────
@@ -401,7 +413,7 @@ where
     ///
     /// ```rust,ignore
     /// let p = ctx.spawn::<SupplierChangeWorkflow>(tenant_id, workflow_id);
-    /// p.execute(ReceiveUtilmd { .. }).await?;
+    /// p.run(ReceiveUtilmd { .. }, RunOptions::new()).await?;
     /// ```
     #[must_use]
     pub fn spawn<W: Workflow>(
@@ -420,7 +432,7 @@ where
     ///     .await?
     ///     .ok_or(EngineError::Registry("unknown conversation".into()))?;
     /// let p = ctx.resume::<SupplierChangeWorkflow>(identity);
-    /// p.execute(HandleAperak { .. }).await?;
+    /// p.run(HandleAperak { .. }, RunOptions::new()).await?;
     /// ```
     #[must_use]
     pub fn resume<W: Workflow>(&self, identity: ProcessIdentity) -> Process<W, Arc<ES>> {
@@ -460,6 +472,13 @@ where
     #[must_use]
     pub fn registered_workflows(&self) -> &[&'static str] {
         &self.registered_workflows
+    }
+
+    /// The driver of every registered workflow, in registration order — what a
+    /// host looks a fired deadline's workflow name up in.
+    #[must_use]
+    pub fn drivers(&self) -> &[crate::driver::WorkflowDriver] {
+        &self.drivers
     }
 
     /// The event store backend (behind an `Arc`).
@@ -767,7 +786,10 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
     ///
     /// Panics if `time::Duration::try_from(delay)` overflows (unreachable for
     /// the delay values produced by `backoff_delay`).
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one linear procedure; splitting it would scatter its steps across helpers used once"
+    )]
     pub async fn run(self) {
         loop {
             if self
@@ -1115,7 +1137,7 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                     late_secs    = (now - deadline.due_at()).whole_seconds(),
                     "outbox worker: delivered after its delivery window closed — \
                      a missed Übertragungsfrist (CONTRL AHB 1.0 §2.3.1/§2.4.1, \
-                     APERAK AHB 1.0 §2.3/§2.4)"
+                     APERAK AHB 1.1 §2.3/§2.4)"
                 );
             }
             if let Err(e) = self.deadline_store.cancel(deadline.deadline_id()).await {
@@ -1226,7 +1248,7 @@ impl As4Sender for LogAs4Sender {
 ///
 /// The `dispatch` function receives a fired [`Deadline`] and returns a future
 /// that dispatches the appropriate timeout command to the process. The function
-/// is responsible for resuming the correct workflow and calling `execute`.
+/// is responsible for resuming the correct workflow and calling `run_timeout`.
 /// After the future completes, the scheduler cancels the deadline from the
 /// store regardless of the dispatch outcome (to prevent re-firing).
 ///
@@ -1333,7 +1355,7 @@ impl<DS: DeadlineStore> DeadlineScheduler<DS> {
                 let label = deadline.label().to_owned();
 
                 // An APERAK delivery window that reaches this point is a
-                // regulatory violation under APERAK AHB 1.0 §2.4.1 (Strom
+                // regulatory violation under APERAK AHB 1.1 §2.4.1 (Strom
                 // 45 min) / §2.3.1 (Gas 1 Werktag): the outbox worker discharges
                 // the window the moment the APERAK goes out, so one that is
                 // still registered when it comes due was never answered.
@@ -1353,7 +1375,7 @@ impl<DS: DeadlineStore> DeadlineScheduler<DS> {
                         fired_at    = %now,
                         overdue_secs = (now - deadline.due_at()).whole_seconds(),
                         "APERAK delivery window closed with no delivery — regulatory \
-                         violation (APERAK AHB 1.0 §2.4.1 Strom / §2.3.1 Gas). \
+                         violation (APERAK AHB 1.1 §2.4.1 Strom / §2.3.1 Gas). \
                          Counter: makod_aperak_missed_total",
                     );
                 }
@@ -1431,7 +1453,7 @@ where
     /// dispatches fired deadlines via `dispatch`.
     ///
     /// The `dispatch` function is called for every fired deadline. It should
-    /// resume the owning process and execute the appropriate timeout command.
+    /// resume the owning process and hand it to `Process::run_timeout`.
     ///
     /// `batch_size` — deadlines fetched per poll cycle.
     /// `poll_interval` — sleep duration when no deadlines are due.
@@ -1890,7 +1912,10 @@ where
     ///
     /// [`with_event_store`]: EngineBuilder::with_event_store
     #[must_use]
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one linear procedure; splitting it would scatter its steps across helpers used once"
+    )]
     pub fn build(self) -> EngineContext<ES, SS, OS, DS, PR> {
         // ── Noop store safety checks ──────────────────────────────────────────
         //
@@ -1921,7 +1946,7 @@ where
                     "EngineBuilder::build: NoopDeadlineStore is active in a \
                      non-testing build. This silently discards all APERAK deadlines, \
                      which is an immediately reportable BNetzA violation \
-                     (APERAK AHB 1.0 §2.4.1, AWH GeLi Gas BK7-24-01-009). \
+                     (APERAK AHB 1.1 §2.4.1, AWH GeLi Gas BK7-24-01-009). \
                      Call .with_deadline_store(SlateDbStore::as_deadline_store()) \
                      in your production engine assembly. \
                      If this is a test, enable the 'testing' feature."
@@ -2029,18 +2054,18 @@ where
             let mut scratch = PidRouter::new();
             module.register_pids_with_roles(&mut scratch, &self.deployment_roles);
 
-            // A module names its workflows twice — once by routing a PID to a
-            // name, once by declaring the name — and only the declared list is
-            // reachable from `EngineContext::registered_workflows`. Consumers
-            // build their deadline-dispatch coverage from that list, so a
-            // routed-but-undeclared workflow runs while being invisible to
-            // every check made over the declarations: its Fristen fire into a
-            // scheduler arm that was never required to exist.
+            // A module names a workflow when it routes a PID to it and when it
+            // registers its driver. Only the driver tells a host which type
+            // decides the workflow's deadlines, so a routed workflow without
+            // one would run while its Fristen fired into nothing.
             //
             // The converse is legitimate and not checked — a command-initiated
             // workflow declares a name and routes no inbound PID.
-            let declared: std::collections::HashSet<&str> =
-                module.workflow_names().iter().copied().collect();
+            let declared: std::collections::HashSet<&str> = module
+                .drivers()
+                .iter()
+                .map(crate::driver::WorkflowDriver::name)
+                .collect();
             let mut undeclared: Vec<&str> = scratch
                 .workflow_names()
                 .into_iter()
@@ -2050,11 +2075,10 @@ where
             undeclared.dedup();
             assert!(
                 undeclared.is_empty(),
-                "EngineBuilder::build: module '{}' routes PIDs to workflows it does not \
-                 declare in `workflow_names()`: {}. A workflow missing from that list is \
-                 excluded from `EngineContext::registered_workflows`, so any deadline it \
-                 registers is never checked for a dispatch arm. Add each name to the \
-                 module's `workflow_names()`.",
+                "EngineBuilder::build: module '{}' routes PIDs to workflows it registers \
+                 no driver for: {}. Without a driver, every deadline the workflow \
+                 registers fires into nothing. Add a `WorkflowDriver::of::<W>(NAME)` to \
+                 the module's `drivers()`.",
                 module.name(),
                 undeclared.join(", "),
             );
@@ -2126,10 +2150,11 @@ where
             }
         }
         let registered_modules = self.modules.iter().map(|m| m.name()).collect();
-        let registered_workflows = self
-            .modules
+        let drivers: Vec<crate::driver::WorkflowDriver> =
+            self.modules.iter().flat_map(|m| m.drivers()).collect();
+        let registered_workflows = drivers
             .iter()
-            .flat_map(|m| m.workflow_names().iter().copied())
+            .map(crate::driver::WorkflowDriver::name)
             .collect();
         EngineContext {
             event_store: Arc::new(self.event_store),
@@ -2141,6 +2166,7 @@ where
             pid_router,
             registered_modules,
             registered_workflows,
+            drivers,
         }
     }
 }
@@ -2148,6 +2174,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process::RunOptions;
     use crate::{
         deadline::InMemoryDeadlineStore,
         error::WorkflowError,
@@ -2172,14 +2199,20 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
     struct PingCommand;
 
     impl CommandPayload for PingCommand {}
 
-    #[derive(Default, Clone)]
+    #[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
     struct PingState;
 
     struct PingWorkflow;
+
+    /// A driver for `name`, typed as the ping workflow.
+    fn driver(name: &'static str) -> crate::driver::WorkflowDriver {
+        crate::driver::WorkflowDriver::of::<PingWorkflow>(name)
+    }
 
     impl Workflow for PingWorkflow {
         type State = PingState;
@@ -2271,7 +2304,7 @@ mod tests {
         let ctx = EngineBuilder::new().with_event_store(store).build();
 
         let p = ctx.spawn::<PingWorkflow>(TenantId::new(), WorkflowId::new("ping", "FV2024-10-01"));
-        p.execute(PingCommand).await.unwrap();
+        p.run(PingCommand, RunOptions::new()).await.unwrap();
 
         let identity = p.identity();
         let resumed = ctx.resume::<PingWorkflow>(identity);
@@ -2311,8 +2344,8 @@ mod tests {
             fn name(&self) -> &'static str {
                 "pid-module"
             }
-            fn workflow_names(&self) -> &'static [&'static str] {
-                &["gpke-supplier-change"]
+            fn drivers(&self) -> Vec<crate::driver::WorkflowDriver> {
+                vec![driver("gpke-supplier-change")]
             }
             fn register_pids(&self, router: &mut PidRouter) {
                 router.register(55001, "gpke-supplier-change");
@@ -2331,25 +2364,18 @@ mod tests {
         assert_eq!(ctx.pid_router().len(), 2);
     }
 
-    /// A workflow a module routes but does not declare is a build failure.
-    ///
-    /// The two lists are written independently — `register_pids` binds a PID to
-    /// a name, `workflow_names` declares it — and only the declared one reaches
-    /// [`EngineContext::registered_workflows`], which is where consumers build
-    /// their deadline-dispatch coverage from. An undeclared workflow therefore
-    /// runs while being exempt from every check made over the declarations, so
-    /// a Frist it registers can fire into a dispatch arm nobody required to
-    /// exist. Four workflows had drifted this way before the check existed.
+    /// A workflow a module routes but registers no driver for is a build
+    /// failure: its deadlines would fire into nothing.
     #[test]
-    #[should_panic(expected = "routes PIDs to workflows it does not declare")]
+    #[should_panic(expected = "routes PIDs to workflows it registers no driver for")]
     fn a_routed_workflow_must_be_declared() {
         struct Undeclaring;
         impl EngineModule for Undeclaring {
             fn name(&self) -> &'static str {
                 "undeclaring"
             }
-            fn workflow_names(&self) -> &'static [&'static str] {
-                &["declared-workflow"]
+            fn drivers(&self) -> Vec<crate::driver::WorkflowDriver> {
+                vec![driver("declared-workflow")]
             }
             fn register_pids(&self, router: &mut PidRouter) {
                 router.register(55_001, "declared-workflow");
@@ -2363,7 +2389,7 @@ mod tests {
             .build();
     }
 
-    /// Declaring a workflow that routes no PID is legitimate and must build.
+    /// A driver for a workflow that routes no PID is legitimate and must build.
     ///
     /// A command-initiated workflow — one an ERP starts over the command API —
     /// has no inbound Prüfidentifikator, so the containment only holds in one
@@ -2375,8 +2401,8 @@ mod tests {
             fn name(&self) -> &'static str {
                 "command-initiated"
             }
-            fn workflow_names(&self) -> &'static [&'static str] {
-                &["routed", "erp-initiated-only"]
+            fn drivers(&self) -> Vec<crate::driver::WorkflowDriver> {
+                vec![driver("routed"), driver("erp-initiated-only")]
             }
             fn register_pids(&self, router: &mut PidRouter) {
                 router.register(55_001, "routed");
@@ -2414,8 +2440,8 @@ mod tests {
             fn name(&self) -> &'static str {
                 "module-a"
             }
-            fn workflow_names(&self) -> &'static [&'static str] {
-                &["workflow-a"]
+            fn drivers(&self) -> Vec<crate::driver::WorkflowDriver> {
+                vec![driver("workflow-a")]
             }
             fn register_pids_with_roles(&self, router: &mut PidRouter, roles: &DeploymentRoles) {
                 if roles.contains(Marktrolle::Nb) {
@@ -2429,8 +2455,8 @@ mod tests {
             fn name(&self) -> &'static str {
                 "module-b"
             }
-            fn workflow_names(&self) -> &'static [&'static str] {
-                &["workflow-b"]
+            fn drivers(&self) -> Vec<crate::driver::WorkflowDriver> {
+                vec![driver("workflow-b")]
             }
             fn register_pids_with_roles(&self, router: &mut PidRouter, roles: &DeploymentRoles) {
                 // Only fires on explicit Nmsb, not on all() (backward-compat sentinel).
@@ -2477,8 +2503,8 @@ mod tests {
             fn name(&self) -> &'static str {
                 "conflict-a"
             }
-            fn workflow_names(&self) -> &'static [&'static str] {
-                &["workflow-a"]
+            fn drivers(&self) -> Vec<crate::driver::WorkflowDriver> {
+                vec![driver("workflow-a")]
             }
             fn register_pids_with_roles(&self, router: &mut PidRouter, roles: &DeploymentRoles) {
                 if roles.contains(Marktrolle::Nb) {
@@ -2492,8 +2518,8 @@ mod tests {
             fn name(&self) -> &'static str {
                 "conflict-b"
             }
-            fn workflow_names(&self) -> &'static [&'static str] {
-                &["workflow-b"]
+            fn drivers(&self) -> Vec<crate::driver::WorkflowDriver> {
+                vec![driver("workflow-b")]
             }
             fn register_pids_with_roles(&self, router: &mut PidRouter, roles: &DeploymentRoles) {
                 if !roles.is_all() && roles.contains(Marktrolle::Nmsb) {

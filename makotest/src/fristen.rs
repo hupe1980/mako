@@ -209,7 +209,7 @@ pub fn contrl_due_at(received: &str, anlass: &str) -> PyResult<String> {
 
 /// When the APERAK for an inbound **Strom** message is due.
 ///
-/// 45 minutes on a weekday; a Saturday arrival is due Sunday noon. This is the
+/// 45 minutes, on every day but Saturday; a Saturday arrival is due Sunday noon. This is the
 /// acknowledgement clock and it is **not** the business answer window — see
 /// [`antwort_obligation`]. Conflating the two is the classic WiM error.
 #[pyfunction]

@@ -267,46 +267,6 @@ impl MessageCore {
         }
     }
 
-    /// Run all validation layers plus an extra caller-supplied rule pack.
-    ///
-    /// For message types that have a built-in semantic rule pack (e.g. UTILMD, MSCONS),
-    /// the `extra` pack runs after it. For types without a semantic pack it is the only
-    /// Layer-5 equivalent, appended after L4 (AHB).
-    ///
-    /// Callers that need BOTH the built-in semantic pack AND extra rules should merge
-    /// them with `merge_with_override` and pass the result here, or call the public
-    /// trait method `validate_with_pack` on the concrete message type.
-    pub(crate) fn validate_with_extra_pack(
-        &self,
-        semantic_pack: Option<ProfileRulePack>,
-        extra: ProfileRulePack,
-    ) -> Result<EdiEnergyReport, Error> {
-        self.validate_with_extra_pack_and_registry(semantic_pack, extra, ReleaseRegistry::global())
-    }
-
-    /// Same as [`validate_with_extra_pack`] but uses `registry` instead of the global.
-    pub(crate) fn validate_with_extra_pack_and_registry(
-        &self,
-        semantic_pack: Option<ProfileRulePack>,
-        extra: ProfileRulePack,
-        registry: &ReleaseRegistry,
-    ) -> Result<EdiEnergyReport, Error> {
-        let combined = match semantic_pack {
-            Some(sem) => sem.merge_with_override(extra).map_err(|e| {
-                // A caller-supplied pack scoped to a different release is a
-                // configuration mistake, not a reason to abort the process.
-                Error::Profile(crate::ProfileError::InvalidField {
-                    field: "rule_pack",
-                    value: "caller-supplied CustomRulePack".to_owned(),
-                    reason: format!("cannot merge with the built-in semantic pack: {e}"),
-                })
-            })?,
-            None => extra,
-        };
-        let release = self.detect_release()?;
-        self.validate_against_with_semantic_and_registry(release, Some(combined), registry)
-    }
-
     pub(crate) fn serialize(&self) -> Result<Vec<u8>, Error> {
         Ok(edifact_rs::segments_to_bytes(&self.segments)?)
     }
@@ -317,6 +277,12 @@ impl MessageCore {
     ///
     /// Shared by the `EdifactDeserialize` impls on all complex message types
     /// (`AperakMessage`, `ContrlMessage`, `MsconsMessage`, `UtilmdMessage`).
+    #[cfg(any(
+        feature = "aperak",
+        feature = "contrl",
+        feature = "mscons",
+        feature = "utilmd",
+    ))]
     pub(crate) fn extract_unh_fields(
         segments: &[edifact_rs::Segment<'_>],
     ) -> Result<(String, String), edifact_rs::EdifactError> {
@@ -340,6 +306,7 @@ impl MessageCore {
     /// Uses the shared scanner, so this path resolves the same code the parser
     /// does. The profile registry is not consulted here (`EdifactDeserialize`
     /// has no release context), so `BGM` is tried first and `RFF+Z13` second.
+    #[cfg(any(feature = "aperak", feature = "mscons", feature = "utilmd",))]
     pub(crate) fn extract_bgm_pid(segments: &[edifact_rs::Segment<'_>]) -> Option<u32> {
         crate::pid_scan::detect(segments, crate::registry::PidSource::BgmDe1004)
     }
@@ -349,6 +316,12 @@ impl MessageCore {
     /// Shared `EdifactSerialize` body for all message types that store
     /// authoritative wire bytes in `self.segments` rather than re-deriving
     /// them from typed fields.
+    #[cfg(any(
+        feature = "aperak",
+        feature = "contrl",
+        feature = "mscons",
+        feature = "utilmd",
+    ))]
     pub(crate) fn emit_segments<E: edifact_rs::EventEmitter>(
         &self,
         emitter: &mut E,

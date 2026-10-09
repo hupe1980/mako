@@ -20,8 +20,6 @@ pub enum RuleOrigin {
     Ahb,
     /// Message-type-specific semantic rule.
     Semantic,
-    /// L6 — caller-supplied [`CustomRulePack`](crate::CustomRulePack) rule.
-    Custom,
     /// The message type is not validated in this build, so no layer ran.
     ///
     /// Its own value rather than a layer's: the finding reports the *absence* of
@@ -40,7 +38,6 @@ impl RuleOrigin {
             Self::Mig => "mig",
             Self::Ahb => "ahb",
             Self::Semantic => "semantic",
-            Self::Custom => "custom",
             Self::Unvalidated => "unvalidated",
         }
     }
@@ -75,7 +72,6 @@ fn classify_rule_origin(rule_id: &str) -> Option<RuleOrigin> {
         () if rule_id.starts_with("SEM-") => RuleOrigin::Semantic,
         () if rule_id.starts_with("PARSE-") => RuleOrigin::Parse,
         () if rule_id.starts_with("DIR-") => RuleOrigin::Directory,
-        () if rule_id.starts_with("CUSTOM-") => RuleOrigin::Custom,
         () => return None,
     };
     Some(origin)
@@ -160,8 +156,7 @@ pub struct ValidationIssueSummary {
     /// `None` when the rule ID is absent or matches no known prefix.
     ///
     /// Used by monitoring and audit systems to tell sender-side malformed EDI
-    /// (L1–L2) from conformance violations (L3–L5) from local business-rule
-    /// failures (L6).
+    /// (L1–L2) from conformance violations (L3–L5).
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub rule_origin: Option<RuleOrigin>,
 }
@@ -253,7 +248,7 @@ pub struct EdiEnergyReport {
 impl EdiEnergyReport {
     /// Construct from a raw [`ValidationReport`].
     #[must_use]
-    #[allow(dead_code)] // used by feature-gated message modules
+    #[allow(dead_code, reason = "used by feature-gated message modules")]
     pub(crate) fn new(inner: ValidationReport) -> Self {
         Self {
             inner,
@@ -269,7 +264,7 @@ impl EdiEnergyReport {
     /// Use this from message validation code that knows which PID-specific rule
     /// pack was applied, so the PID is available in serialized issue summaries.
     #[must_use]
-    #[allow(dead_code)] // used by feature-gated message modules
+    #[allow(dead_code, reason = "used by feature-gated message modules")]
     pub(crate) fn new_with_pid(inner: ValidationReport, pid: Option<u32>) -> Self {
         Self {
             inner,
@@ -287,7 +282,10 @@ impl EdiEnergyReport {
     /// can identify exactly which BDEW specification version governed the validation,
     /// including AHB correction revisions that share a wire code (see.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     pub(crate) fn with_profile_meta(
         mut self,
         release: crate::release::Release,
@@ -387,7 +385,7 @@ impl EdiEnergyReport {
     /// Iterate over issues from a specific validation layer.
     ///
     /// Separates "the sender sent garbage" (L1–L2) from "the sender violated a
-    /// BDEW process rule" (L3–L5) from a local business-rule failure (L6).
+    /// BDEW process rule" (L3–L5).
     ///
     /// # Example
     ///

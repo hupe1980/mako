@@ -1,27 +1,32 @@
-# sperrd — Sperr-/Entsperrauftrag execution queue (NB role)
+# sperrd
 
-The Netzbetreiber's work queue for the physical acts GPKE orders it to perform.
-An **ORDERS 17115 Sperrauftrag** or **17117 Entsperrauftrag** from a Lieferant
-becomes a job for the field team; the outcome goes back as **IFTSTA 21039**
-(Auftragsstatus Sperren/Entsperren). Without that message the LF's
-`gpke-sperrung-lf` process never reaches a terminal state, and GPKE gives them no
-way to find out what happened but to ask.
+`sperrd` (`:8780`) is the Netzbetreiber's execution queue for Sperr- and
+Entsperraufträge. An ORDERS **17115** Sperrauftrag or **17117** Entsperrauftrag
+from a Lieferant becomes a work order for the field team; the outcome goes back
+through `makod` as IFTSTA **21039**, which is what lets the LF's
+`gpke-sperrung-lf` process reach a terminal state.
+
+## Run it
+
+```bash
+just dev sperrd        # dev/config/sperrd.toml against the dev PostgreSQL
+```
+
+`sperrd --check` is the container `HEALTHCHECK`; the config file comes from
+`SPERRD_CONFIG`.
+
+## At a glance
 
 | Feature | Detail |
 |---|---|
-| **HTTP port** | `:8780` |
 | **Database** | PostgreSQL (`sperr_orders`) |
-| **Auth** | OIDC/JWT **+ Cedar ABAC** on every REST route; HMAC on the market ingest |
-| **Market ingest** | `POST /webhook` — `de.mako.process.initiated` for PIDs 17115/17117 becomes a work order, deduplicated per market process |
-| **Status machine** | `pending` → `executed` / `failed` / `cancelled` |
-| **IFTSTA 21039** | Dispatched via `makod` on a terminal outcome; **retried** by a background worker and escalated once the budget is spent |
-| **Events** | `de.sperr.{auftrag.eingegangen,ausgefuehrt,versuch.gescheitert,fehlgeschlagen,storniert,ausfuehrung.ueberfaellig,iftsta.ausstehend}` via the transactional outbox |
-| **Health** | `GET /health/live`, `GET /health/ready` |
+| **Auth** | OIDC + Cedar on every REST route; HMAC (`inbound_hmac_secret`) on the market ingest |
+| **Status machine** | `pending` → `executed` / `failed` / `cancelled`; two Sperrversuche per Sperrauftrag — the first `fail` keeps the order queued, `endgueltig: true` closes it |
+| **IFTSTA 21039** | sent on a terminal outcome; a leased retry queue with backoff, `de.sperr.iftsta.ausstehend` once the budget is spent. `execute`/`fail` answer `204` when `makod` took it, `202` when only recorded |
+| **Events** | `de.sperr.*` through the transactional outbox |
+| **MCP** | 4 read-only tools and 2 prompts at `/mcp` |
 
 ## What the queue carries
-
-The row is shaped by what the ORDERS AHB actually sends, so the field team has
-what it needs:
 
 | Column | EDIFACT | Meaning |
 |---|---|---|
@@ -34,12 +39,12 @@ what it needs:
 | `pruefschritt_code` | `SG15 STS DE9013` | The EBD Prüfschritt code the IFTSTA reports (**Muss**) |
 | `executed_at` | `DTM+293` | Fertigstellungsdatum — **Muss** on `Z14`, and must be ≤ the message date |
 
-`ausfuehrung_am` and `fruehestens_am` are mutually exclusive, in the API and in a
-database `CHECK` — the AHB's conditions [55]/[56] make them alternatives.
+`ausfuehrung_am` and `fruehestens_am` are mutually exclusive (AHB conditions
+[55]/[56]), in the API and in a `CHECK`.
 
-## Timing — three published clocks
+## Three published clocks
 
-BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2 state all three:
+BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2:
 
 | Clock | Frist | Tracked by |
 |---|---|---|
@@ -47,21 +52,10 @@ BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2 state all three:
 | The **physical act** | 6 WT nach dem frühestmöglichen Sperrtermin | `ausfuehrung_faellig_am` |
 | IFTSTA 21039 | 1. WT nach dem Abschluss des Sperrauftrags | `iftsta_faellig_am` |
 
-The Lieferant's `DTM+203` / `DTM+469` is a fourth date and a different question —
-what the LF asked for, not what the Festlegung requires. `/stats` reports both:
-`overdue_pending` for the LF's date, `frist_ueberschritten` for the regulatory
-window. A pending order past its window is announced once as
-`de.sperr.ausfuehrung.ueberfaellig`.
+`/stats` reports `overdue_pending` (the LF's requested date) apart from
+`frist_ueberschritten` (the regulatory window).
 
-**Two Sperrversuche** per Sperrauftrag (§ 3.5.1.2 Nr. 5): `PUT …/fail` records
-the first failed visit and leaves the order queued; the second closes it, as does
-`endgueltig: true` for a legal or factual impossibility.
-
-`tests/authorization_guard.rs` rejects the three claims that contradict
-§ 3.5.1.2 Nr. 1: a „2 Werktage" window, a citation of BK6-22-024 §3.4 or §9
-(neither exists), and the assertion that GPKE fixes no window at all.
-
-## Endpoints
+## Routes
 
 | Method | Path | Cedar action |
 |--------|------|---|
@@ -75,53 +69,8 @@ the first failed visit and leaves the order queued; the second closes it, as doe
 | `PUT` | `/api/v1/sperr-orders/{id}/cancel` | `cancel-sperr-order` |
 | `GET\|POST` | `/mcp` | *(McpAuth; read-only)* |
 
-The same `tests/authorization_guard.rs` pins the authorization surface at source
-level, because both defects it catches are silent until a request arrives: every
-`pub async fn` handler must take `Claims` *and* call `cedar.check(...)` unless it
-is listed as unauthenticated by design (`/webhook`, HMAC), the Cedar actions the
-code checks and the ones the policy permits must be the same set, and the MCP
-surface must stay read-only.
-
-`?status=` accepts `pending`/`executed`/`failed`/`cancelled` — an unknown value is
-a 400, not a filter that silently matches nothing. `?due=true` is the
-field-dispatch list.
-
-`execute` and `fail` answer **204** when the IFTSTA reached `makod` and **202**
-when it did not: the outcome is recorded either way — the field team's report is
-not discarded because a downstream service was unreachable — but only the first
-means the Lieferant has been told.
-
-## The IFTSTA retry queue
-
-A terminal order whose `iftsta_dispatched_at` is NULL is an order whose Lieferant
-does not know the outcome, so it is a queue rather than a one-shot. A worker
-**leases** one order at a time — an `UPDATE … RETURNING` that pushes
-`iftsta_next_attempt_at` forward, which is also the backoff (30 s → 2 min →
-8 min → 32 min → 2 h) — and re-sends it. The lease is what keeps two replicas
-from sending the same Sperrauftrag-Status: the idempotency key is logged by
-`makod`, not compared. The claim also spends the attempt, so an order runs out of
-budget even when no outcome is ever recorded.
-
-After `IFTSTA_MAX_ATTEMPTS` — about nine hours of retrying, and inside the „1. WT
-nach dem Abschluss" the Lieferant is owed the status by — it announces
-`de.sperr.iftsta.ausstehend` once and leaves the order alone: a dispatch that
-fails eight times over nine hours is not a transport problem but a `makod`
-process in the wrong state, and retrying forever only hides it. `/stats` reports
-`iftsta_outstanding` (in flight) apart from `iftsta_stuck` (needs someone).
-
-## MCP tools
-
-Read-only by construction; mutating actions stay on the authenticated REST
-routes.
-
-| Tool | Description |
-|------|-------------|
-| `list_sperr_orders` | The queue — filter by status, MaLo, or `due` |
-| `get_sperr_order` | One order, with its ORDERS provenance and IFTSTA state |
-| `get_sperr_stats` | Counters, including `frist_ueberschritten` (past the 6-WT execution window) and `iftsta_outstanding` / `iftsta_ueberfaellig` / `iftsta_stuck` |
-| `list_due_orders` | The field-dispatch list, with the Treffpunkt |
-
-Prompts: `execute-sperrung`, `iftsta-sweep`.
+`?status=` refuses an unknown value with `400`; `?due=true` is the field-dispatch
+list.
 
 ## Configuration
 
@@ -133,17 +82,10 @@ tenant         = "9900357000004"
 makod_url      = "http://makod:8080"
 makod_api_key  = "env:SPERRD_MAKOD_API_KEY"
 
-# Verifies webhook-signature on the market ingest. `POST /webhook` sits outside
-# OIDC and is authenticated by this secret alone, so without it the route accepts
-# unsigned bodies from any caller that can reach the port — and it queues physical
-# disconnections. Startup refuses without it unless `allow_insecure_no_auth` is
-# set explicitly.
+# The only authentication on POST /webhook; required unless allow_insecure_no_auth.
 inbound_hmac_secret = "env:SPERRD_INBOUND_HMAC_SECRET"
 
-# Where the de.sperr.* CloudEvents are delivered. Every Sperrung, Entsperrung and
-# Ankündigung is enqueued into `event_outbox` in the same transaction as the state
-# change; this is what drains it. Without a URL they accumulate undelivered and
-# startup says so.
+# Drains the de.sperr.* events from the transactional outbox.
 erp_webhook_url = "http://erp.internal/hooks/mako"
 erp_hmac_secret = "env:SPERRD_ERP_HMAC_SECRET"
 
@@ -156,14 +98,7 @@ issuer   = "https://keycloak:8080/realms/mako"
 audience = "sperrd"
 ```
 
-The service runs on the `mako-service` daemon runner (`mako_service::run::<Sperrd>()`),
-which owns tracing, the tuned connection pool (`application_name = "sperrd"`),
-migrations, graceful shutdown, and a real `/health/ready`. Start it with `sperrd`
-(config path via `SPERRD_CONFIG`); `sperrd --check` is the container HEALTHCHECK.
+DB suite: `just test-sperrd-db`.
 
-## Tests
-
-`cargo test -p sperrd` runs the unit and guard tests; `just test-sperrd-db` runs
-16 scenarios against real PostgreSQL — redelivery, the claim guard, two replicas
-racing for one IFTSTA, the retry queue and its backoff, tenant isolation, the
-mutually-exclusive ORDERS dates.
+The [operator guide](https://hupe1980.github.io/mako/docs/services/sperrd/)
+has the full reference.

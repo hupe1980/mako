@@ -1,4 +1,4 @@
-#![allow(clippy::result_large_err)] // the error *is* the HTTP response
+#![expect(clippy::result_large_err, reason = "the error *is* the HTTP response")]
 
 //! Axum router and daemon wiring for `invoicd`.
 //!
@@ -74,7 +74,7 @@ impl Daemon for Invoicd {
 ///
 /// Cedar is deny-by-default, so an action named here and missing from
 /// `policies/invoicd.cedar` is a permanent 403 no configuration can lift.
-/// `tests/cedar_actions.rs` pins the two together.
+/// `tests/it/cedar_actions.rs` pins the two together.
 fn authorize(
     cedar: &CedarEnforcer,
     claims: &Claims,
@@ -92,7 +92,7 @@ fn authorize(
         })
 }
 
-/// Every Cedar action this router checks — the list `tests/cedar_actions.rs`
+/// Every Cedar action this router checks — the list `tests/it/cedar_actions.rs`
 /// compares against the policy file.
 pub const CEDAR_ACTIONS: &[&str] = &[
     "read-receipt",
@@ -814,7 +814,7 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
 
     // No PID filter is sent: `marktd` narrows on `roles`, `event_types` and
     // `sparten` only. invoicd receives every `process.initiated` fan-out and
-    // routes it through `crate::routing::ROUTES` on arrival.
+    // decides each through `crate::routing::disposition_for` on arrival.
     marktd
         .put_subscription(
             &cfg.subscription.subscriber_id,

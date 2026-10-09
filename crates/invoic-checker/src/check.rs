@@ -452,13 +452,44 @@ impl InvoicCheckEngine {
         config: &CheckConfig,
     ) -> CheckReport {
         let mut findings: Vec<Finding> = Vec::new();
-
         let storno = is_stornierung(rechnung);
+        let computed_total = Self::document_stages(pid, rechnung, config, &mut findings);
 
+        // ── Stage 8: Tariff check (PRICAT vs INVOIC unit price) ───────────────
+        // Skipped for Stornorechnungen: they carry negated original amounts,
+        // not tariff positions. Skipping prevents false TariffDeviation disputes.
+        if !storno {
+            Self::check_tariffs(
+                rechnung,
+                sender_mp_id,
+                preisblatt_store,
+                config,
+                &mut findings,
+            );
+        }
+
+        CheckReport::from_findings(pid, rechnung, findings, computed_total)
+    }
+
+    /// Stages 1–7: what the document states about itself, before any price
+    /// basis is consulted.
+    ///
+    /// Every entry point that checks a whole invoice — [`check`](Self::check),
+    /// [`check_msb_rechnung_with_aufabschlaege`](Self::check_msb_rechnung_with_aufabschlaege)
+    /// and [`check_esa_rechnung`](Self::check_esa_rechnung) — runs exactly
+    /// these, so which door an invoice comes through decides only its price
+    /// basis. An entry point restating its own subset is how a stage goes
+    /// missing on one door while the others keep it.
+    fn document_stages(
+        pid: u32,
+        rechnung: &Rechnung,
+        config: &CheckConfig,
+        findings: &mut Vec<Finding>,
+    ) -> Option<EuroAmount> {
         // ── Stage 1: Stornierung reference check ──────────────────────────────
         // When ist_storno=true, original_rechnungsnummer must be present.
         // Source: BK6-24-174 §5; Allgemeine Festlegungen §8.
-        if storno
+        if is_stornierung(rechnung)
             && rechnung
                 .original_rechnungsnummer
                 .as_deref()
@@ -477,48 +508,35 @@ impl InvoicCheckEngine {
         }
 
         // ── Stage 2: Period validity ──────────────────────────────────────────
-        Self::check_periods(rechnung, &mut findings);
+        Self::check_periods(rechnung, findings);
 
         // ── Stage 3: Zahlungsziel check ───────────────────────────────────────
         // DTM+265 (faelligkeitsdatum) must not exceed max_zahlungsziel_days.
         // Source: §7 Allgemeine Festlegungen V6.1d.
         if config.max_zahlungsziel_days > 0 {
-            Self::check_zahlungsziel(rechnung, config, &mut findings);
+            Self::check_zahlungsziel(rechnung, config, findings);
         }
 
         // ── Stage 3a: the WiM 31003 send window ───────────────────────────────
         // Only this PID: the 20 Werktage are WiM Teil 1 Kap. 3.7.2's, and no
         // other invoice family publishes them.
-        Self::check_wim_dienstleistung_frist(pid, rechnung, &mut findings);
+        Self::check_wim_dienstleistung_frist(pid, rechnung, findings);
 
         // ── Stage 4: Currency agreement ───────────────────────────────────────
         // Before the arithmetic, which would otherwise read a CHF `Betrag` as
         // if it were EUR and find every later comparison consistent.
-        Self::check_waehrung(rechnung, &mut findings);
+        Self::check_waehrung(rechnung, findings);
 
         // ── Stage 5: Arithmetic (qty × unit_price ≈ gesamtpreis) ──────────────
-        Self::check_arithmetic(rechnung, config, &mut findings);
+        Self::check_arithmetic(rechnung, config, findings);
 
         // ── Stage 6: Total consistency (Σ gesamtpreis ≈ gesamtnetto) ──────────
-        let computed_total = Self::check_total(rechnung, config, &mut findings);
+        let computed_total = Self::check_total(rechnung, config, findings);
 
         // ── Stage 7: The Umsatzsteuer block ───────────────────────────────────
-        Self::check_steuer(rechnung, config, &mut findings);
+        Self::check_steuer(rechnung, config, findings);
 
-        // ── Stage 8: Tariff check (PRICAT vs INVOIC unit price) ───────────────
-        // Skipped for Stornorechnungen: they carry negated original amounts,
-        // not tariff positions. Skipping prevents false TariffDeviation disputes.
-        if !storno {
-            Self::check_tariffs(
-                rechnung,
-                sender_mp_id,
-                preisblatt_store,
-                config,
-                &mut findings,
-            );
-        }
-
-        CheckReport::from_findings(pid, rechnung, findings, computed_total)
+        computed_total
     }
 
     // ── Stage implementations ──────────────────────────────────────────────────
@@ -1346,14 +1364,9 @@ impl InvoicCheckEngine {
     ) -> CheckReport {
         let mut findings = Vec::new();
 
-        // The structural checks are the same invoice arithmetic as everywhere
-        // else; only the price basis differs.
-        Self::check_periods(rechnung, &mut findings);
-        Self::check_waehrung(rechnung, &mut findings);
-        Self::check_arithmetic(rechnung, config, &mut findings);
-        let computed_total = Self::check_total(rechnung, config, &mut findings);
-        Self::check_zahlungsziel(rechnung, config, &mut findings);
-        Self::check_steuer(rechnung, config, &mut findings);
+        // The document stages are the same as everywhere else; only the price
+        // basis differs.
+        let computed_total = Self::document_stages(31009, rechnung, config, &mut findings);
 
         Self::check_against_angebot(rechnung, sender_mp_id, agreed, config, &mut findings);
 
@@ -1449,9 +1462,8 @@ impl InvoicCheckEngine {
     /// Check a WiM MSB-Rechnung (PID 31003 / 31009) against `PreisblattMessung`.
     ///
     /// Replaces the standard [`check`](Self::check) call for those PIDs. The
-    /// only difference is the price basis: the document stages — period,
-    /// currency, position arithmetic, document total, Zahlungsziel and
-    /// Umsatzsteuer — run identically, and the tariff comparison reads
+    /// only difference is the price basis: the document stages (1–7, the
+    /// 31003 send window among them) run identically, and the tariff comparison reads
     /// `PreisblattMessung.preispositionen` instead of
     /// `PreisblattNetznutzung.preispositionen`.
     ///
@@ -1482,9 +1494,10 @@ impl InvoicCheckEngine {
     /// MSB-Rechnung (INVOIC 31003 / 31009) plausibility check with
     /// `AufAbschlag` validation.
     ///
-    /// Runs the document stages of [`check`](Self::check) — period, currency,
-    /// position arithmetic, document total, Zahlungsziel and Umsatzsteuer —
-    /// prices against `PreisblattMessung` instead of `PreisblattNetznutzung`,
+    /// Runs the document stages of [`check`](Self::check) — Storno reference,
+    /// period, Zahlungsziel, the 31003 send window, currency, position
+    /// arithmetic, document total and Umsatzsteuer — prices against
+    /// `PreisblattMessung` instead of `PreisblattNetznutzung`,
     /// and adds one check of its own:
     ///
     /// | # | Check | Source |
@@ -1504,43 +1517,12 @@ impl InvoicCheckEngine {
     ) -> CheckReport {
         let mut findings = Vec::new();
 
-        // The document-level stages are identical to the standard pipeline:
-        // period, currency, position arithmetic and document total.
-        Self::check_periods(rechnung, &mut findings);
-        Self::check_waehrung(rechnung, &mut findings);
-        Self::check_arithmetic(rechnung, config, &mut findings);
-        let computed_total = Self::check_total(rechnung, config, &mut findings);
-
-        // **The Zahlungsziel and the Umsatzsteuer block are checked here too.**
-        //
-        // They were not, and the omission was accidental rather than a
-        // judgement about MSB invoices: this entry point was written when the
-        // pipeline had five stages, and the two were added to `check()`
-        // afterwards without being wired in here. Nothing about a
-        // Messstellenbetriebs-Rechnung exempts it from either —
-        //
-        // - `SG8 DTM+265` (Fälligkeitsdatum, MIG Nr. 00033) is **Muss** on
-        //   PIDs 31003 and 31009 in the INVOIC AHB, exactly as it is on the
-        //   31001/31002 invoices the standard pipeline checks; and
-        // - `TAX` Nr. 00058 with `MOA` Nr. 00061/00062 is **Muss** on those
-        //   same PIDs, because §14 Abs. 4 Nr. 8 UStG makes the rate and the
-        //   tax amount (or the ground for stating neither) mandatory content
-        //   of *every* invoice. Messstellenbetrieb is a taxable service at the
-        //   regular rate — §13b UStG does not reach it — so an MSB invoice
-        //   carrying only a net figure leaves its recipient without the
-        //   Vorsteuerabzug that is the recipient's own money.
-        //
-        // The same PID 31009 already ran both through
-        // [`check_esa_rechnung`](Self::check_esa_rechnung), so which door the
-        // invoice came through decided whether its tax block was looked at.
-        //
-        // `check_steuer` distinguishes an absent tax block from a zero one
-        // carrying a `RCV` ground, so a §13b invoice is not disputed for
-        // stating 0,00 EUR.
-        if config.max_zahlungsziel_days > 0 {
-            Self::check_zahlungsziel(rechnung, config, &mut findings);
-        }
-        Self::check_steuer(rechnung, config, &mut findings);
+        // Stages 1–7, identical to the standard pipeline — the 31003 send
+        // window, the Zahlungsziel (`SG8 DTM+265`, Muss on 31003/31009) and the
+        // Umsatzsteuer block (`TAX` 00058, Muss; § 14 Abs. 4 Nr. 8 UStG) among
+        // them. Messstellenbetrieb is a taxable service at the regular rate, so
+        // nothing about an MSB invoice exempts it from any of them.
+        let computed_total = Self::document_stages(pid, rechnung, config, &mut findings);
 
         // Stage 8, against `PreisblattMessung.preispositionen`.
         let billing_date: time::Date = rechnung
@@ -1837,7 +1819,7 @@ impl InvoicCheckEngine {
 /// Extract a stable (line_number, malo_id) pair for error messages.
 fn pos_ident(pos: &Rechnungsposition) -> (u32, &str) {
     let line_no = pos.positionsnummer.unwrap_or(0) as u32;
-    // `lokations_id` was removed in BO4E v202607; fall back to positionstext.
+    // BO4E v202607 has no `lokations_id`; fall back to positionstext.
     let malo = pos.positionstext.as_deref().unwrap_or("-");
     (line_no, malo)
 }
@@ -2848,6 +2830,56 @@ mod tests {
         );
         assert_eq!(row.pid, Some(31_003));
         assert_eq!(row.pid_gas, Some(31_003), "beide Sparten");
+    }
+
+    /// `invoicd` checks an inbound 31003 on the `PreisblattMessung` path,
+    /// so the send window has to be measured there — the standard pipeline is
+    /// not the door a 31003 comes through.
+    #[test]
+    fn a_31003_on_the_messung_path_is_measured_for_its_send_window() {
+        let late = wim_dienstleistung("2026-06-30", "2027-01-15");
+        let report = InvoicCheckEngine::check_msb_rechnung_with_aufabschlaege(
+            31_003,
+            "9900000000001",
+            &late,
+            None,
+            &[],
+            &CheckConfig::default(),
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::RechnungZuSpaet),
+            "a late 31003 passed the Messung path unmeasured: {:#?}",
+            report.findings
+        );
+    }
+
+    /// A Stornorechnung without its reference is disputed whichever door the
+    /// invoice comes through — the Messung path runs the same document stages
+    /// as the standard one.
+    #[test]
+    fn the_messung_path_runs_the_storno_reference_stage() {
+        let mut r = wim_dienstleistung("2026-06-30", "2026-07-01");
+        r.ist_storno = Some(true);
+        r.original_rechnungsnummer = None;
+        let report = InvoicCheckEngine::check_msb_rechnung_with_aufabschlaege(
+            31_009,
+            "9900000000001",
+            &r,
+            None,
+            &[],
+            &CheckConfig::default(),
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::StorniertWithoutReference),
+            "{:#?}",
+            report.findings
+        );
     }
 
     /// No other invoice family carries this window.

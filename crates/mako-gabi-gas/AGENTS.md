@@ -5,14 +5,15 @@
 
 - Governed by **BK7-24-01-008** (GaBi Gas 2.1, Bundesnetzagentur).
 - Scope: `GaBiGasModule` registers five workflows — `gabi-gas-invoic`
-  (INVOIC **31010** Kapazitätsrechnung FNB/VNB → BKV, **31007**/**31008**
+  (INVOIC **31010** Kapazitätsrechnung NB → KN — INVOIC AHB 1.0b Kap. 3.1.4, **31007**/**31008**
   aggregierte MMM-Rechnung Gas NB → MGV, REMADV **33001** Zahlungsavis and
   COMDIS **29001** Ablehnung REMADV), `gabi-gas-mmma` (MSCONS **13013**,
   marktlokationsscharfe Allokationsliste Gas NB → LF), and the three DVGW
   carriers `gabi-gas-allocation` (ALOCAT, PIDs 70001–70023),
   `gabi-gas-nomination` (NOMINT/NOMRES, 70030–70039) and
-  `gabi-gas-mehr-mindermengen` (SSQNOT, 70095–70096). `workflow_names()` in
-  `src/lib.rs` is the list; the module docs carry the per-PID routing.
+  `gabi-gas-mehr-mindermengen` (SSQNOT, 70095–70096). `drivers()` in
+  `src/lib.rs` is the list (`gabi-gas-mmma` as a routing-only driver: its MSCONS
+  resumes the `gpke-allokationsliste` process); the module docs carry the per-PID routing.
 - ORDERS **17110** / ORDRSP **19110** (Anfrage und Ablehnung der Allokationsliste
   Gas) open the exchange MSCONS 13013 answers, but are **routed by `mako-gpke`**
   under `gpke-allokationsliste`, which carries the Strom pair beside them. Named
@@ -34,6 +35,9 @@
   carries `dvgw-edi` instead; `mako-redispatch` and `mako-emob` carry neither.
 - Shared decision and state-machine crates may be depended on: `mako-fristen`,
   `mako-pruefung`, `mako-invoic`. Sibling **workflow** crates may not.
+- A workflow lists every deadline label it registers in `DEADLINE_LABELS`;
+  `on_deadline` and the `TimeoutExpired` arm ask one `window_open` guard. See
+  `crates/mako-engine/AGENTS.md`.
 
 The authoritative PID-ownership and APERAK-Fristen tables are in the
 root `AGENTS.md` under *Domain Rules*.

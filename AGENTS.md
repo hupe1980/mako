@@ -9,10 +9,15 @@ neither is restated here. This file is what an agent needs before touching code.
 
 ## Ground rules
 
-- **Breaking changes are fine.** The project is unreleased: hard cuts, no
-  backward compatibility, SQL schema edited in place with no migration.
+- **Breaking changes are fine.** The project is unreleased (pre-1.0): hard
+  cuts, no backward-compatibility shims, SQL schema edited in place with no
+  migration. The crates under `crates/` are published to crates.io, so a
+  release whose version does not admit an API break fails `just semver` in the
+  release workflow — the bump is made when the release is cut, not per change.
 - **Docs and comments state current truth only** — no changelogs, no "used to",
-  no backlog pointers. Open work lives in one backlog, nowhere else.
+  no backlog pointers. Open work is planned outside the tracked tree — a
+  roadmap for the direction and order, a feature specification per milestone
+  for the detail — and a tracked file never points into it.
 
   The rule bites hardest on a regression test, where narrating the incident is
   the natural way to justify the test — and it is the wrong way, because a reader
@@ -32,40 +37,52 @@ neither is restated here. This file is what an agent needs before touching code.
   plausible one is the most expensive mistake available here; see the
   known-wrong citations in *Domain Rules* below.
 - **A defect class becomes a guard.** When something is found, the deliverable is
-  the check that makes it unrepresentable — which is why `just ci` carries 35 of
-  them and the list grows with the defect list, not the feature list. (36 exist:
-  `check-sql` needs a database and runs in `just test-db`.)
+  the check that makes it unrepresentable — which is why `just ci` runs 46
+  `cargo xtask` guards (49 guard recipes in all) and the list grows with the
+  defect list, not the feature list. `check-sql` needs a database and runs in
+  `just test-db`.
 
 ## Build and test
 
 `just ci` is the gate. It is the whole suite plus every guard, and nothing is
-"done" until it passes.
+"done" until it passes. `CONTRIBUTING.md` is the newcomer's version of this
+section.
 
 ```bash
-just check      # cargo check --all-targets --all-features — the minimum
-just ci         # the gate: test, doctests, clippy, deny, 35 xtask guards, site-free
+just check      # cargo check --workspace --all-targets --all-features — the minimum
+just ci         # the gate: test, doctests, clippy, deny, machete, each feature alone, 46 xtask guards
+just dev <svc>  # one service with dev/config/<svc>.toml against the dev PostgreSQL (Docker)
 just check-site # mermaid + link + zola checks; NOT part of `just ci`
 just test-db    # schema-per-test suites against real PostgreSQL (needs Docker)
 ```
+
+A bare `cargo build`/`cargo test` at the root covers `default-members`, which
+leaves out `makotest` (PyO3); the `just` recipes pass `--workspace`. `just test`
+runs under `cargo nextest` when it is installed. A crate's integration tests are
+one binary, `tests/it/main.rs`, one module per file: select a suite with
+`cargo test -p <crate> --test it -- <module>::`.
+`clippy.toml` bans what clippy can see at the call site (bare `Pool::connect`,
+`Handle::try_current`, float-to-`Decimal`, `chrono`).
 
 Four traps, each of which has produced a false "green" or a stalled run:
 
 - **Never pipe `just ci` through `tail`/`grep` for the verdict** — the pipe masks
   the exit code. Run `just ci > log 2>&1; echo EXIT:$?`, then grep the log for
   `test result: FAILED` and `recipe .* failed`.
-- **`cargo check` is not clippy.** `just ci` runs `clippy --all-targets
-  --all-features -- -D warnings`, which denies lints a per-crate `cargo check`
-  says nothing about. Run clippy over what you touched before reporting.
+- **`cargo check` is not clippy.** `just ci` runs `clippy --workspace
+  --all-targets --all-features -- -D warnings`, which denies lints a per-crate
+  `cargo check` says nothing about. Run clippy over what you touched before
+  reporting.
 - **Set `CARGO_TARGET_DIR` when a `Cargo.toml` has just changed.** rust-analyzer
   rebuilds the workspace into the default `target/` and will race a CI run into
   a fingerprint write failure that looks like a build error.
-- **`cargo clean` between long sessions.** `target/` reaches ~85 GB and a full
-  disk fails as `No space left on device` inside a compile — which reads like a
-  build error and is not one. Never clean while a run is in flight; it deletes
-  the artifacts underneath it.
+- **`cargo clean` between long sessions.** `target/` grows past 200 GB, most of
+  it `target/debug/incremental`, and a full disk fails as `No space left on
+  device` inside a compile — which reads like a build error and is not one.
+  Never clean while a run is in flight; it deletes the artifacts underneath it.
 
-`cargo test --all-targets` **excludes doctests**; `just test-doc` is the recipe
-that runs them.
+`cargo test --all-targets` and `cargo nextest` **exclude doctests**;
+`just test-doc` is the recipe that runs them.
 
 ## Non-negotiables
 
@@ -145,9 +162,11 @@ release was published.
   release applying 01.10. publishes 01.04., one applying 01.04. publishes 01.10.
   That is the schedule `publikationsdatum` is **expected** to follow, not a
   definition of it.
-- A release may be given a different Umsetzungszeitraum. BNetzA Mitteilung
-  Nr. 57 (31.07.2026) proposes „zwölf Monate anstelle der ansonsten üblichen
-  sechs" for FV 2027-04 — publishing 01.10.2026, binding 01.10.2027.
+- A release may be given a different Umsetzungszeitraum, and a cycle may
+  change no EDIFACT format at all: BNetzA Mitteilung Nr. 58 (01.10.2026)
+  publishes no EDIFACT and no API-Webdienste document for 01.04.2027 — only
+  ActivationDocument AWT 1.1g and the Regelungen zum Übertragungsweg 1.11 bind
+  then — and keeps UTILTS.
 - `validate-profiles` therefore admits a date off the timetable **only when the
   entry names the Mitteilung that published it** (`publikation_quelle`), refuses
   an unsourced deviation — indistinguishable from a typo — and refuses any
@@ -188,7 +207,7 @@ a cutover.
   Document `tenant` as: `"Tenant identifier — data-isolation key written to every database row.
   Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid."`.
 - Market participant identifiers use `MarktpartnerId` from `rubo4e::identifiers` — **not** `String` and
-  **not** the removed `Gln` type alias. In BO4E the correct term is `MarktpartnerId` (= `rollencodenummer`
+  a `Gln` alias (there is none). In BO4E the correct term is `MarktpartnerId` (= `rollencodenummer`
   in `Marktteilnehmer`). Only GS1-issued 13-digit codes are true GLNs (NAD DE3055 = `9`);
   BDEW-Codenummern (`99…`, NAD `293`) and DVGW-Codenummern (`98…`, NAD `332`) are not GLNs.
   Use `mako_markt::domain::nad_agency_code()` to derive the coding authority.
@@ -211,7 +230,14 @@ a cutover.
 - `Workflow::handle` and `Workflow::apply` must be **pure functions**: no I/O,
   no clock access, no global state mutation.
 - All parsing, validation, and external calls happen before the command is
-  constructed, at the transport boundary.
+  constructed, at the transport boundary; an instant is a command field
+  (`check-workflow-purity`).
+- A business deadline carries a label listed in `Workflow::DEADLINE_LABELS`;
+  the engine refuses to persist any other, and `Process::run_timeout` calls
+  `on_deadline` only for a listed one. Deadlines are never cancelled, so each
+  workflow's `window_open(label, state)` decides whether the window is still
+  open when it fires. A lapse with no sourced outcome is `FristAbgelaufen`,
+  never a guessed answer.
 
 ### Feature flags
 - `slatedb` — opt in at the binary level only; never enable in library crate defaults.
@@ -228,8 +254,8 @@ Every daemon builds on the `mako-service` SDK. Do **not** hand-roll the lifecycl
   migrations, `/health/*`, infra routes, graceful shutdown, and `--check`. **Never** add health routes,
   bind a listener, or call `serve` inside `build`.
 - **Config shape.** Embed a `[database]` block (`pub database: DatabaseConfig`) and implement
-  `ServiceConfig` (`database() -> Option<&DatabaseConfig>`, `bind_addr()`). A flat
-  `database_url: String` is obsolete. A stateless daemon returns `database() -> None`.
+  `ServiceConfig` (`database() -> Option<&DatabaseConfig>`, `bind_addr()`), never a
+  flat `database_url: String`. A stateless daemon returns `database() -> None`.
 - **Pool.** Obtain the pool only from the runner (`ctx.pool()`), which comes from
   `DatabaseConfig::connect(url, NAME)` (tuned sizing + `application_name`). Never call bare
   `PgPool::connect` / `PgPoolOptions` in a service.
@@ -241,7 +267,7 @@ Every daemon builds on the `mako-service` SDK. Do **not** hand-roll the lifecycl
 - **Transactional outbox.** Durable emitters persist-before-dispatch: `outbox::enqueue(&mut tx, &ce)`
   inside the same transaction as the business write, drained by a background `OutboxWorker`. This is
   the Postgres `event_outbox` mechanism for **service→ERP/webhook** events — distinct from the
-  mako-engine `AtomicAppend::append_with_outbox` slatedb outbox for **protocol APERAK/CONTRL** (below).
+  mako-engine `AtomicAppend::append` slatedb outbox for **protocol APERAK/CONTRL** (below).
   **Nothing to call after the commit**: an `AFTER INSERT` trigger raises the `NOTIFY` the worker
   listens for, and Postgres holds it until the transaction commits. Never add an in-process wake-up
   beside an enqueue — inside the transaction it is spent on a snapshot without the row
@@ -288,7 +314,7 @@ Every daemon builds on the `mako-service` SDK. Do **not** hand-roll the lifecycl
 | 17134–17135 | `mako-gpke` (ORDERS Konfiguration, GPKE Teil 3) | BK6-22-024 |
 | 19001–19002 | `mako-wim` (ORDRSP Geräteübernahme, WiM Strom) **and** `mako-gpke` (ORDRSP Konfiguration, NB role) — multi-domain: both "WiM Gas" and "WiM Strom Teil 1" per BDEW PID 3.3/4.0 xlsx | BK6-24-174 |
 | 23001, 23003, 23004, 23005, 23008, 23009, 23011, 23012 | `mako-wim` `wim-insrpt` — one workflow, beide Sparten; die Frist folgt Messtechnik (Strom) bzw. ist flach (Gas). Not a span: 23002, 23006, 23007 and 23010 are unassigned | BK6-24-174 Anlage 2b / AWH WiM Gas 2.0 Kap. 4.3 |
-| 23005, 23009 | `mako-wim` `wim-insrpt` — Gas-only Informationsmeldungen an den NB | AWH WiM Gas 2.0 Kap. 4.3 |
+| 23005, 23009 | `mako-wim` `wim-insrpt` — both Sparten: Strom MSB (Messlokation) → MSB (Marktlokation), WiM Strom Teil 2; Gas MSB → NB, AWH WiM Gas 2.0. Not Gas-only | PID-Übersicht 4.0 (Lfd. Nr. 31350/31400 Strom, 39730/39760 Gas) |
 
 **PIDs that do NOT exist — never register:**
 - 56001–56010: these PIDs were never assigned in any BDEW AHB document (confirmed absent from PID 3.3, 3.3 KL, PID 4.0, and all UTILMD AHB PDFs)
@@ -316,12 +342,12 @@ Every daemon builds on the `mako-service` SDK. Do **not** hand-roll the lifecycl
 ### GeLi Gas 3.0
 GeLi Gas is governed by **BK7-24-01-009** (Beschluss 12.09.2025), superseding BK7-19-001 and BK7-06-067. WiM Gas has no Festlegung — it is the industry **AWH WiM Gas 2.0**.
 Scope: UTILMD G (PIDs 44001–44021) + UTILMD G PIDs 44022–44024 (role-conditional: `geli-gas-stornierung` for Nb, `geli-gas-stornierung-lf` for Lf) + ORDERS Sperrung Gas (17115–17117) + PARTIN Gas Kommunikationsdaten (37008–37014) + INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas, NB → LF).
-PID 31010 (Kapazitätsrechnung, NB → BKV) is a GaBi Gas (BK7-24-01-008) billing process and belongs to `mako-gabi-gas`.
+PID 31010 (Kapazitätsrechnung, NB → KN; INVOIC AHB 1.0b Kap. 3.1.4, PID-Übersicht 4.0) is a GaBi Gas (BK7-24-01-008) billing process and belongs to `mako-gabi-gas`; the AHB says it is not an invoice under the UStG.
 PID 31011 (Rechnung sonstige Leistung, NB → LF) is billed by the GNB/VNB to the LFN/LFA for performing AWH (abrechnungswürdige Handlungen) during the Sperrprozess — it is a GeLi Gas (BK7-24-01-009) billing, NOT GaBi Gas.
 
 ### MABIS vs Messwesen
-MaBiS (`mako-mabis`) covers MSCONS **13003** + **13010–13012** (Bilanzkreisabrechnung
-Strom, BKV↔ÜNB/BIKO, `mabis-billing`), the UTILMD Clearinglisten
+MaBiS (`mako-mabis`) covers MSCONS **13003** (Bilanzkreisabrechnung Strom,
+BKV↔ÜNB/BIKO, `mabis-billing`) and **13010–13012** (`mabis-profile`), the UTILMD Clearinglisten
 **55067/55069/55070/55073** (`mabis-clearingliste`), the ZP lifecycle
 **55062–55064 / 55071–55072 / 55197–55200 / 55203–55214** (`mabis-zp-lifecycle`),
 the ORDERS Anforderungen **17201–17208** (`mabis-anforderung`), and the
@@ -356,7 +382,7 @@ Source: BDEW-AWH Rollenmodell V2.2 (08.01.2026). Only roles with
 | `MGV` | Marktgebietsverantwortlicher | Gas | No engine deployment role |
 | `KN` | Kapazitätsnutzer | Gas | GaBi Gas capacity booking; no engine deployment role yet |
 | `DP` | Data Provider | Strom | UTILTS metering data distribution; no engine deployment role yet |
-| `EIV` | Einsatzverantwortlicher | Strom | Redispatch 2.0 (`mako-redispatch` engine; EIV party integration pending) |
+| `EIV` | Einsatzverantwortlicher | Strom | Redispatch 2.0 (`mako-redispatch`) |
 | `ESA` | Energieserviceanbieter des Anschlussnutzers | Strom | iMS / smart meter context |
 | `RB` | Registerbetreiber | Gas + Strom | MaStR data registry; sparte-neutral |
 
@@ -422,7 +448,7 @@ Source: Allgemeine Festlegungen V6.1d §3.
 ### APERAK Fristen — never mix these up
 
 #### APERAK *sending* deadline (how quickly the receiver must send the APERAK)
-Per **APERAK AHB 1.1** (FV2026-04-01):
+Per **APERAK AHB 1.1** (FV2026-10-01; AHB 1.0 carries the same chapters for FV2025-10-01):
 
 | Sparte | Message type | Deadline | Source |
 |---|---|---|---|
@@ -432,8 +458,7 @@ Per **APERAK AHB 1.1** (FV2026-04-01):
 | **Gas** | Folgeprozesse | **nächster Werktag 12 Uhr** | APERAK AHB 1.1 §2.3.1 |
 | **Gas** | Initialprozesse | **3 Werktage**, to the **end** of the third | APERAK AHB 1.1 §2.3.1 |
 
-Two readings the document does not support, both of which have been in this
-table: the 45 minutes carries **no Montag–Freitag qualifier** — §2.4.1 states it
+Two readings the document does not support: the 45 minutes carries **no Montag–Freitag qualifier** — §2.4.1 states it
 unconditionally and carves out **Samstag** alone, so Sunday is not a special
 case; and the Gas Initialprozess window names **no clock time**, so it runs to
 the end of the third Werktag and not to 12 Uhr on it. The „12 Uhr" belongs to
@@ -441,7 +466,7 @@ the Folgeprozess sentence in the paragraph above it.
 
 Gas APERAKs are always **Verarbeitbarkeitsfehlermeldungen** (BGM+313) only — no Anerkennungsmeldung.
 Strom APERAKs include **both** Anerkennungsmeldung (BGM+312, accepted) and Verarbeitbarkeitsfehlermeldung (BGM+313, rejected).
-Gas CONTRL rule: "Auf eine APERAK ist immer eine CONTRL zu senden." (APERAK AHB 1.0 §2.3, CONTRL AHB 1.0 §2.3.1)
+Gas CONTRL rule: "Auf eine APERAK ist immer eine CONTRL zu senden." (APERAK AHB 1.1 §2.3, CONTRL AHB 1.0 §2.3.1)
 
 #### Process *response* deadline (how long the business process can take overall)
 These are NOT APERAK deadlines. Never use these as the APERAK-sending window.
@@ -457,7 +482,7 @@ there — a literal beside a call site is how the two come to disagree.
 | WiM, beide Sparten | **3 / 5 / 7 / 1 Werktage je PID** (55039/55042/55051/55168 resp. 44039/44042/44051/44168) | BK6-24-174 Anlage 2a Kap. 2.2.2–2.5.2 · AWH WiM Gas 2.0 |
 | MaBiS (Prüfmitteilung) | **keine** — Kap. 9.8.2 Nr. 1 trägt Frist „–" und der NB *kann* antworten. Was eine Prüfmitteilung begrenzt, ist das **Clearingfenster** der Tabelle 2, ein auf das Monatsende verankerter Datumsbereich und kein Countdown ab Eingang. Die beiden echten **1-WT**-Fristen sind Pflichten des **BIKO** (Weiterleitung Kap. 9.8.2 Nr. 3, Datenstatus Kap. 9.9.2 Nr. 1) | BK6-24-174 Anlage 3 Kap. 3.10 / 9.8.2 / 9.9.2 |
 
-**Saturday is not a Werktag.** GPKE Teil 1 Kap. 1.7: „alle Tage …, die kein
+**Saturday is not a Werktag.** GPKE Teil 1 Kap. 7 (Fristenberechnung; the same definition in Kap. 2): „alle Tage …, die kein
 Samstag, Sonntag oder gesetzlicher Feiertag sind". A holiday observed in any
 single Bundesland counts nationwide; 24.12. and 31.12. count as holidays. All
 deadline arithmetic runs in **gesetzlicher deutscher Zeit** (CET/CEST), not UTC.
@@ -473,17 +498,17 @@ covered by an adapter anyway. `makod::startup::validate_adapter_coverage`
 refuses to boot on a registry that leaves one uncovered.
 
 ### Dual-write atomicity
-Events and outbox entries must be written in a single `WriteBatch` via
-`AtomicAppend::append_with_outbox`. Never write events first and outbox second —
-a crash between the two produces a lost APERAK with no recovery path.
+Events, outbox entries, deadlines and correlation keys are written in a single
+`WriteBatch` via `AtomicAppend::append(AppendBatch)`, which `Process::run` calls.
+Never write events first and the rest second — a crash between the two produces
+a lost APERAK, a Frist that never fires, or a process nobody can find.
 
 ---
 
 ### Known-wrong legal claims — treat any recurrence as High
 
-Every row is a statutory near-miss this codebase actually shipped or nearly
-shipped. They are here rather than in a review checklist because a plausible `§`
-is the most expensive output available in this domain: it is indistinguishable
+Every row is a plausible claim that is wrong, next to the verified reading.
+They are here rather than in a review checklist because a plausible `§` is the most expensive output available in this domain: it is indistinguishable
 from a real one to any reader who does not hold the statute, and in a settlement
 engine it silently becomes money.
 
@@ -495,7 +520,7 @@ engine it silently becomes money.
 | "§29 MsbG mandatory iMSys 7–100 kW band" | Current §29 Abs. 1 Nr. 2b has only a **> 7 kW** lower bound; no 100 kW cap exists |
 | "§42c Energy Sharing reduces Netzentgelte" | No reduction exists in current law — full Netzentgelte apply (BK6 Mitteilung Nr. 73, BK6-06-009) |
 | "2022 heating-gas Energiesteuer = 0 (Energiesteuersenkungsgesetz)" | The 2022 cut (BGBl. I 2022 S. 810, Jun–Aug) hit **motor fuels** only; §2 Abs. 3 Nr. 4 heating gas stayed 0.55 ct/kWh. The real gas reliefs: EWSG Dezemberhilfe + **7 % USt 01.10.2022–31.03.2024** (§28 Abs. 5/6 UStG) |
-| Any "§… MessZV" citation | The **MessZV was repealed** by Art. 12 G. v. 29.08.2016 (folded into the MsbG). Living anchors: Ersatzwertbildung/Plausibilisierung **§ 60 Abs. 1 MsbG** — Abs. 2 is a *Soll*-rule about **where** the Aufbereitung runs and obliges nobody to form an Ersatzwert; Messwert-Audit/Löschfrist **§ 60 Abs. 6 MsbG**; RLM/Spitzenleistung and MMM were **§ 12 / § 13 StromNZV bis 31.12.2025** and are **§ 20 Abs. 3 EnWG über BK6-24-174** ab 01.01.2026, because **StromNZV und GasNZV mit Ablauf des 31.12.2025 außer Kraft getreten sind**; business-record retention **§ 147 AO / GoBD**. ~500 dead citations were swept in 07/2026 — treat any reappearance as High |
+| Any "§… MessZV" citation | The **MessZV was repealed** by Art. 12 G. v. 29.08.2016 (folded into the MsbG). Living anchors: Ersatzwertbildung/Plausibilisierung **§ 60 Abs. 1 MsbG** — Abs. 2 is a *Soll*-rule about **where** the Aufbereitung runs and obliges nobody to form an Ersatzwert; Messwert-Audit/Löschfrist **§ 60 Abs. 6 MsbG**; RLM/Spitzenleistung and MMM were **§ 12 / § 13 StromNZV bis 31.12.2025** and are **§ 20 Abs. 3 EnWG über BK6-24-174** ab 01.01.2026, because **StromNZV und GasNZV mit Ablauf des 31.12.2025 außer Kraft getreten sind**; business-record retention **§ 147 AO / GoBD**. Treat any MessZV citation as High (`check-citations` refuses it) |
 | "§40a EnWG = Abschlagszahlungen" | §40a is **Verbrauchsermittlung**. Abschlag rules: §13 StromGVV/GasGVV (via §41 EnWG for Sonderverträge). Deadlines + 2-week due-date rule: **§40c** (3 weeks for monthly billing) |
 | "invoice content (Kilowattstundenpreis, Verbrauchshistorie, Zählerstände) = §40a / §41 EnWG" | Invoice **content** is **§40 EnWG**: all-inclusive kWh-price = §40; Zählerstände = §40 Abs. 2 Nr. 6; Vorjahresvergleich = Nr. 7; Vergleichsgruppe = Nr. 8. §40a = Verbrauchsermittlung (estimation); §41 = supply-**contract** content, not the invoice |
 | "dynamic-tariff iMSys requirement = §41b EnWG" | §41b is Haushaltskunden-Lieferverträge außerhalb der Grundversorgung. The iMSys precondition for §41a dynamic tariffs is **§41a Abs. 1 EnWG** (+ MsbG rollout) |
@@ -503,28 +528,33 @@ engine it silently becomes money.
 | "§53c EEG = structural-oversupply reduction, not yet operational" | §53c is **Verringerung des Zahlungsanspruchs bei einer Stromsteuerbefreiung**: the AW drops by the per-kWh exemption granted for grid-transited electricity exempt under the **StromStG** (§3 full rate 20,50 EUR/MWh = 2,05 ct/kWh), *not* the EnergieStG. Operative law; disabling it under-deducts and overpays |
 | "§54 EEG = generic BNetzA Ausschreibungsreduzierung (§36d deadlines, §37a iMSys)" | §54 is **Ausschreibungen für Solaranlagen des ersten Segments** only, with four Absätze: −0,3 ct late Zahlungsberechtigung (>18 Kalendermonate), −0,3 ct Flurstück mismatch, −2,5 ct missing Agri-PV Nutzungsnachweis, AW → 0 for a §37c Abs. 2 Landesverordnung breach |
 | "§24 EEG Anlagenzusammenfassung requires operator identity" | Satz 1 opens "**unabhängig von den Eigentumsverhältnissen**". The four cumulative tests are site, gleichartige Energien, size-dependent claim, and a twelve-calendar-month window; Sätze 2–5 then carve out biogas from one Biogaserzeugungsanlage, Freifläche vs. building solar, differing Netzverknüpfungspunkte, and small Steckersolargeräte. Keying on the operator under-fuses, which overpays |
-| "A §-based reduction can be subtracted from the settled euro amount" | §§53, 53b, 53c and 54 all reduce the **anzulegender Wert**. The gleitende Marktprämie is `max(0, AW + Managementprämie − Marktwert)`, so a deduction taken after the floor drives the settlement negative — charging the operator for feeding in. Only §52 Pflichtzahlungen are a euro-level offset (Abs. 6) |
+| "A §-based reduction can be subtracted from the settled euro amount" | For EEG 2023 periods, §§53, 53b, 53c and 54 all reduce the **anzulegender Wert**. The gleitende Marktprämie is `max(0, AW − MW)` (EEG 2023 Anlage 1 Nr. 3.1.2; no Managementprämie term), so a deduction taken after the floor drives the settlement negative — charging the operator for feeding in. Only §52 Pflichtzahlungen are a euro-level offset (Abs. 6) |
 | "Zuschlag-Erlöschen = §35a EEG (or §33, or §55 Pönalen)" | Expiry for want of timely commissioning is **technology-specific**: §36e Wind an Land, §37e Solaranlagen des ersten Segments, §39e Biomasseanlagen. §35a is **Entwertung von Zuschlägen** (a BNetzA act); §33 is **Ausschluss von Geboten** (before any award exists); §55 Pönalen are a bidder↔ÜNB obligation outside settlement entirely |
 | "A `None` from a period-rate helper can fall back to a default rate" | Those helpers return `None` to say **no single rate is correct for the period**. Answering it with `.unwrap_or(default)` bills part of the period wrong and reads exactly like a correct invoice downstream — a silent customer overcharge. Refuse the period and name the Stichtage (`steuer_stichtage_im_zeitraum`) |
 | "§40c EnWG's three-week deadline follows from a short billing period" | The three weeks attach to **§40b Abs. 1 monthly billing** — the agreed cadence — not to the period's length. A Schlussrechnung always has six weeks, measured from the end of the **Lieferverhältnis**, however short the final period is |
 | "§14a EnWG Modul 2 = zeitvariable/HT-NT Netzentgelte; Modul 3 = Spotpreis or Steuerungsentschädigung" | Numbered by **BK8-22/010-A** (NSAVER, 23.11.2023), not BK6-22-300 (the companion Festlegung for the netzorientierte Steuerung). **Modul 1** pauschale Netzentgelt-Reduzierung (default, no extra metering); **Modul 2** prozentuale Arbeitspreis-Reduzierung on the device's *separately metered* energy; **Modul 3** zeitvariable Netzentgelte, **three** Tarifstufen HT/ST/NT, from 01.04.2025, iMSys required. **1 and 2 are the two forms the base module takes and the Anschlussnutzer holds one**, so they do not combine (`MODUL1_AND_MODUL2`); **2 and 3 are mutually exclusive** because both re-price the Arbeitspreis (`MODUL2_AND_MODUL3`); **Modul 1 + Modul 3 is the only pair**. All three are rate reductions — a Steuerungsentschädigung is not a module |
 | "the Modul-2 percentage is the Netzbetreiber's to publish" | **BK8-22/010-A Tenor 2. b) fixes it**: „Der reduzierte Arbeitspreis entspricht **40%** des Arbeitspreises für die Entnahme ohne Leistungsmessung des Netzbetreibers in der Niederspannung.“ Tenor 2. c) makes Modul 2 verpflichtend ab 01.01.2024 and Tenor 2. d) forbids a Grundpreis on such a Marktlokation. Only the *reference* Arbeitspreis is the operator's; the percentage is not |
-| "The ESA Werteanfrage shares REQOTE 35002 with the Preisanfrage, because no ESA-specific REQOTE PID exists" | It is **35003**. REQOTE AHB 1.1 §4.3 gives the Kommunikation as *ESA an MSB* and labels `SG1 RFF+Z13` "35003 Anfrage von Werten für ESA"; §4.2 **35002** is "Anfrage zur Rechnungsabwicklung des Messstellenbetriebs über den LF", **LF → MSB**, WiM Teil 1. Corroboration: `PIA` is *mandatory* on 35003 — exactly the segment the old heuristic sniffed for. REQOTE↔QUOTES pair 3500n → 1500n |
-| "WiM MSB-Wechsel responses are 5 Werktage" | **Per PID, four separate Use-Cases** (WiM Teil 1): Kündigung 55039 **3 WT** (Kap. 2.2.2 Nr. 2), Beginn 55042 **5 WT** (2.3.2 Nr. 2), Ende 55051 **7 WT** (2.4.2 Nr. 2), Verpflichtungsanfrage 55168 **1 WT** (**2.5**.2 Nr. 4 — not 2.4). A flat window escalates the Abmeldung two days early and hides a missed Verpflichtungsanfrage for four. Not the **APERAK** window either: that is 45 minutes for Strom UTILMD (§2.4.1), never Werktage |
+| "The ESA Werteanfrage shares REQOTE 35002 with the Preisanfrage, because no ESA-specific REQOTE PID exists" | It is **35003**. REQOTE AHB 1.1 §4.3 gives the Kommunikation as *ESA an MSB* and labels `SG1 RFF+Z13` "35003 Anfrage von Werten für ESA"; §4.2 **35002** is "Anfrage zur Rechnungsabwicklung des Messstellenbetriebs über den LF", **LF → MSB**, WiM Teil 1. Corroboration: `PIA` is *mandatory* on 35003. REQOTE↔QUOTES pair 3500n → 1500n |
+| "WiM MSB-Wechsel responses are 5 Werktage" | **Per PID, four separate Use-Cases** (WiM Teil 1): Kündigung 55039 **3 WT** (Kap. 2.2.2 Nr. 2), Beginn 55042 **5 WT** (2.3.2 Nr. 2), Ende 55051 **7 WT** (2.4.2 Nr. 2), Verpflichtungsanfrage 55168 **1 WT** (2.4.2 Nr. 4, „Antwort auf Verpflichtungsanfrage“ inside SD Ende Messstellenbetrieb — not the separate Use-Case 2.5 „Verpflichtung gMSB“). A flat window escalates the Abmeldung two days early and hides a missed Verpflichtungsanfrage for four. Not the **APERAK** window either: that is 45 minutes for Strom UTILMD (§2.4.1), never Werktage |
 | "INVOIC 31009 (MSB-Rechnung) is NB → MSB" | It is **MSB → NB / LF / ESA** — the MSB is the invoicer in all **seven** Anwendungsfälle of the PID overview 4.0 (GPKE Teil 3 ×2, WiM Teil 1 ×2, WiM Teil 2 ×1, AWH Änderung Technik ×2), Strom only. Modelling it inverted names the party owed money as the one billing for it. The recipient's role varies, so it cannot be a bare `nb_mp_id` |
-| "A MIG defines where a data element sits in a segment" | A MIG lists which elements a profile **uses**; the **position** is fixed by the UN/EDIFACT directory and is what the counterparty writes. Generating positions from the MIG's list order shifts everything after an omitted element — REQOTE's `FTX.C108` landed at 2 instead of 4 and mako **rejected valid inbound** `FTX+ACB+++text`. A missing element is a different defect: fix the profile against the MIG PDF, not the builder |
+| "A MIG defines where a data element sits in a segment" | A MIG lists which elements a profile **uses**; the **position** is fixed by the UN/EDIFACT directory and is what the counterparty writes. Generating positions from the MIG's list order shifts everything after an omitted element — it puts REQOTE's `FTX.C108` at 2 instead of 4 and **rejects valid inbound** `FTX+ACB+++text`. A missing element is a different defect: fix the profile against the MIG PDF, not the builder |
 | "Blindmehrarbeit rests on StromNEV §18" | §18 StromNEV is the **Entgelt für dezentrale Erzeugung** (the crate's own `sect18.rs` says so). Reactive-energy excess is charged from the Netzbetreiber's **Preisblatt**, formed under StromNEV §17. §19 is Sonderformen der Netznutzung. The free share (cos φ 0,9 → tan φ ≈ 0,4843, often rounded to 50 %) is a price-sheet term and must be an input, not a constant |
 | "Parse-don't-validate applies uniformly to inbound and outbound" | It does not. A value the system **produces** should be a validating newtype (`MabisZaehlpunktId`) so a malformed one is unconstructible. A value it **receives** must stay representable — requiring the type on an inbound command leaves the workflow unable to record what arrived and therefore unable to reject it properly. Type the outbound side; keep the inbound side raw and refuse explicitly |
 | "A DB `CHECK` is enough to protect an identifier that reaches the wire" | A `CHECK` only guards rows written to *that* table. A payload assembled from a fixture, a replay, or a caller passing a value straight through never meets it. MSCONS SG6's `LOC+172`/`107`/`237` are free text at the MIG level, so a swapped pair parses, validates and is **accepted by the BIKO** — the guard has to live in the pure crate as well (`Summenzeitreihe::validate_identifiers`) |
-| "`asx-rs` accepts a sign-only override, so only our own floor rejects it" | **It rejects it.** The declared `security_floor` is `SecurityPolicy::SIGN_AND_ENCRYPT`, so an overlay keeping signing and dropping encryption fails as `SecurityFloorViolation`. `NoCriticalSecurityInvariant` — the „neither" code — is the *fallback* for a floor somebody deliberately lowered, not the only check. This crate's own `a_partner_overlay_cannot_turn_off_encryption` has always asserted the rejection, so the claim was refutable from inside the repo; it was nonetheless sent upstream, where a regression test already existed *named after the previous report of it*. What remains true is the part worth keeping: `validate()` is only a control where something calls it, which is why `check-as4-controls` pins the preflight call site |
+| "`asx-rs` accepts a sign-only override, so only our own floor rejects it" | **It rejects it.** The declared `security_floor` is `SecurityPolicy::SIGN_AND_ENCRYPT`, so an overlay keeping signing and dropping encryption fails as `SecurityFloorViolation`. `NoCriticalSecurityInvariant` — the „neither" code — is the *fallback* for a floor somebody deliberately lowered, not the only check. `mako-as4`'s `a_partner_overlay_cannot_turn_off_encryption` asserts the rejection: run the repository's own tests before reporting an upstream defect. `validate()` is only a control where something calls it, which is why `check-as4-controls` pins the preflight call site |
 | "§13a Abs. 2 EnWG compensation uses one Ausfallarbeit basis" | The counterfactual differs by redispatch case: **Duldungsfall** derives it from the measured Lastgang (the NB steered, so nothing was transmitted), **Aufforderungsfall** from the schedule transmitted to the EIV (that schedule *is* the counterfactual). Resolving both from the Lastgang settles an Aufforderungsfall against what happened rather than what was instructed — a money error nothing downstream detects. `AusfallarbeitBasis` is a required input, carried into the result and trace |
-| "Gas NNE Grundpreis / Arbeitspreis rests on §14 GasNEV" | **§14 GasNEV is *Teilnetze*** — cost allocation when a Betreiber has formed Teilnetze under §6 Abs. 5 GasNZV. Netzentgelte are **§15 GasNEV** (*Ermittlung der Netzentgelte*), and the Verrechnungspreis specifically **§15 Abs. 7**: „Für leistungsgemessene Ausspeisepunkte sind … ein Entgelt für den Messstellenbetrieb, ein Entgelt … für die Messung und ein Entgelt für die Abrechnung festzulegen." The wrong § rode into the audit trace of every gas NNE invoice |
+| "Gas NNE Grundpreis / Arbeitspreis rests on §14 GasNEV" | **§14 GasNEV is *Teilnetze*** — cost allocation when a Betreiber has formed Teilnetze under §6 Abs. 5 GasNZV. Netzentgelte are **§15 GasNEV** (*Ermittlung der Netzentgelte*), and the Verrechnungspreis specifically **§15 Abs. 7**: „Für leistungsgemessene Ausspeisepunkte sind … ein Entgelt für den Messstellenbetrieb, ein Entgelt … für die Messung und ein Entgelt für die Abrechnung festzulegen." A wrong § here lands in the audit trace of every gas NNE invoice |
 | "Gemeinschaftliche Gebäudeversorgung is §42b **EEG 2023**" | There is no §42b EEG 2023. GGV is **§42b EnWG**. §42a EnWG is Mieterstrom, §42c Energy Sharing; the Mieterstromzuschlag is §21 Abs. 3 EEG 2023 |
-| "The Strom UTILMD/ORDERS APERAK window is 45 Minuten *on weekdays (Mo–Fr)*" | APERAK AHB 1.1 §2.4.1 states the 45 minutes **unqualified** and carves out **Samstag** alone („Wird an Samstagen eine UTILMD oder ORDERS übertragen … bis zum Sonntag, 12 Uhr"). There is no Montag–Freitag restriction in the document, so Sunday is not a special case. The invented qualifier was carried by an equally invented *verbatim quotation* — never attribute words to an AHB without grepping the PDF |
+| "The Strom UTILMD/ORDERS APERAK window is 45 Minuten *on weekdays (Mo–Fr)*" | APERAK AHB 1.1 §2.4.1 states the 45 minutes **unqualified** and carves out **Samstag** alone („Wird an Samstagen eine UTILMD oder ORDERS übertragen … bis zum Sonntag, 12 Uhr"). There is no Montag–Freitag restriction in the document, so Sunday is not a special case. Never attribute words to an AHB without grepping the PDF |
 | "The Gas APERAK Initialprozess window is 3 Werktage **at 12 Uhr**" | §2.3.1 says „spätestens **3 Werktage nach Eingang**" and names no clock time; the „12 Uhr" belongs to the Folgeprozess sentence above it. Truncating to noon removes twelve hours in the tightening direction — a breach the counterparty is not in |
-| "A Werktage-Antwortfrist expires at a 17:00 Europe/Berlin ‚MaKo cut-off'" | No BDEW or BNetzA document in this domain states one. „**Ablauf des** n. WT" (WiM, GeLi Gas) and „spätester **ÜT** ist der n. WT" (GPKE) are **one** Frist shape, not two, and both name a **day** — so it runs to the end of that day. 17:00 expired 42 obligations seven hours early, escalating counterparties still inside their Frist |
+| "A Werktage-Antwortfrist expires at a 17:00 Europe/Berlin ‚MaKo cut-off'" | No BDEW or BNetzA document in this domain states one. „**Ablauf des** n. WT" (WiM, GeLi Gas) and „spätester **ÜT** ist der n. WT" (GPKE) are **one** Frist shape, not two, and both name a **day** — so it runs to the end of that day. A 17:00 cut-off expires every such Frist seven hours early and escalates counterparties still inside it |
 | "13025 is not a real PID" | **13025 is published** (Lastgang Marktlokation/Tranche, MSB → LF, GPKE Teil 4) and is registered by `mako-gpke` `gpke-messwerte`. **13024** is the one absent from the PID overview. Likewise 13020 and 13023 are MaBiS Summenzeitreihen routed to `mabis-billing` — only 13021/13022 are `mako-redispatch` |
 | "§12 Abs. 3 UStG 0 % applies to PV electricity / feed-in ≤ 30 kWp" | §12 Abs. 3 zero-rates the **supply of the PV system** (modules/storage/installation), NOT electricity or feed-in remuneration. A retail **consumption** supply is always standard-rated even for a prosumer. A small operator's **feed-in Gutschrift** is 0 % only via the **Kleinunternehmerregelung §19 UStG** — an election (`kleinunternehmer_19_ustg`), not a function of plant size |
+| "GPKE Teil 1 Kap. 1.7 defines the Werktag" | GPKE Teil 1 (BK6-24-174 Anlage 1a) defines „WT" in **Kap. 2** (Abkürzungen und Definitionen) and applies it in **Kap. 7 „Fristenberechnung"** (S. 27). Kap. 1.7 is **WiM Teil 1**'s „Fristenberechnung", which says only „Siehe entsprechendes Kapitel in … GPKE Teil 1" |
+| "§20 Abs. 2 + Anlage 1 EEG 2023 = the Jahresmarktwert" | § 20 EEG 2023 (Marktprämie) has **Sätze, no Absätze**. Anlage 1 **Nr. 2** decides when the Jahresmarktwert applies (Inbetriebnahme or Zuschlag from 01.01.2023, or a § 19 Abs. 3b/3c option) and **Nr. 4** computes it, Nr. 4.3.1 the energieträgerspezifischen categories |
+| "§6b EnWG = an integrated NB+LF deployment" | § 6b EnWG is **Rechnungslegung und Buchführung** — the accounts a vertikal integriertes Unternehmen keeps. It does not make a deployment integrated, and an integrated utility still identifies each role by its own MP-ID: „Für jede Sparte (Gas bzw. Strom) und jede Rolle hat ein Marktteilnehmer genau eine MP-ID" (Identifikatoren AWH V1.2 §2.1) |
+| "APERAK AHB 1.0 states the current APERAK rule" | `profiles/sources.json`: **APERAK AHB 1.1** binds from FV2026-10-01; AHB 1.0 is the FV2025-10-01 edition. Chapters 2.1–2.5 carry the same numbers in both. Cite 1.0 only for what that edition itself states about a message processed under it |
+| "API-Webdienste 2.0.0 applies from 01.10.2027 and retires UTILTS" (or „Nr. 57 proposes …" as the plan for FV 2027-04) | **BNetzA Mitteilung Nr. 58** (01.10.2026) is what was published: no EDIFACT and no API-Webdienste document for 01.04.2027 — only ActivationDocument AWT 1.1g and the Regelungen zum Übertragungsweg 1.11 bind then — and UTILTS stays. Nr. 57 was a proposal |
 
 ## Licenses
 

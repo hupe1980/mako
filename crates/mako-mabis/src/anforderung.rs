@@ -389,6 +389,15 @@ pub enum AnforderungState {
     },
 }
 
+impl mako_engine::workflow::OccupiesBusinessKey for AnforderungState {
+    /// An Anforderung this side sent stays open for the ORDRSP 19204 refusal
+    /// that may answer it; a received, refused or invalid one is settled, and
+    /// the next Anforderung for the key is its own process.
+    fn occupies_business_key(&self) -> bool {
+        matches!(self, Self::Gesendet { .. })
+    }
+}
+
 impl AnforderungState {
     /// Stable string label for the current variant.
     #[must_use]

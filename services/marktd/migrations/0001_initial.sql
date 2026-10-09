@@ -1385,7 +1385,7 @@ CREATE INDEX mmm_strom_month ON mmm_preise_strom (price_month DESC);
 -- ── marktd migration 0003 — ZaehlzeitRegister + ZaehlzeitSaison ─────────────
 --
 -- Provides the PostgreSQL persistence for iMSys Time-of-Use (TOU) register
--- definitions.  Required for §14a Modul 2 accurate HT/NT window classification
+-- definitions.  Required for §14a Modul 3 (zeitvariable Netzentgelte) HT/ST/NT window classification
 -- from smart meter data.
 --
 -- Sources:

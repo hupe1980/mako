@@ -72,8 +72,6 @@
 //! )?;
 //! # Ok::<(), energy_api::Error>(())
 //! ```
-//!
-//! Feature gate: `crypto`.
 
 use base64ct::{Base64, Encoding};
 use p256::ecdsa::signature::hazmat::{PrehashSigner, PrehashVerifier};

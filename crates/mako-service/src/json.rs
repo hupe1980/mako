@@ -158,7 +158,10 @@ mod tests {
     use tower::ServiceExt as _;
 
     #[derive(Deserialize)]
-    #[allow(dead_code)] // the extractor's rejection is the subject, not the value
+    #[expect(
+        dead_code,
+        reason = "the extractor's rejection is the subject, not the value"
+    )]
     struct Body1 {
         n: u8,
         #[serde(default)]

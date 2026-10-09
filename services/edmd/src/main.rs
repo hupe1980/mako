@@ -141,3 +141,45 @@ impl Daemon for Edmd {
 async fn main() -> anyhow::Result<()> {
     mako_service::run::<Edmd>().await
 }
+
+/// The router builds the way `mako_service::run` mounts it.
+///
+/// `build` runs with the shipped demo configuration and the runner's infra
+/// routes are merged in exactly as at boot — so a route axum refuses, a merge
+/// collision with the runner's `/metrics` or `/health/*`, or a `build` that
+/// panics fails a test instead of the container start. This daemon's `build`
+/// connects a store of its own from `[database] url`, so it starts against a
+/// real PostgreSQL (`just test-edmd-db`).
+#[cfg(test)]
+mod startup_test {
+    #[tokio::test]
+    #[ignore = "requires Docker (testcontainers PostgreSQL)"]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test connects straight to its throwaway container; pool sizing is a deployment concern"
+    )]
+    async fn the_router_builds_as_the_runner_mounts_it() {
+        use testcontainers::{ImageExt as _, runners::AsyncRunner as _};
+        let Ok(pg) = testcontainers_modules::postgres::Postgres::default()
+            .with_tag("17-alpine")
+            .start()
+            .await
+        else {
+            return;
+        };
+        let port = pg.get_host_port_ipv4(5432).await.expect("port");
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+        let pool = sqlx::PgPool::connect(&url).await.expect("connect");
+
+        let mut cfg: toml::Value =
+            toml::from_str(include_str!("../../../demos/eeg-billing/edmd.toml"))
+                .expect("the demo configuration parses");
+        cfg["database"]["url"] = toml::Value::String(url);
+        let cfg = cfg
+            .try_into()
+            .expect("the demo configuration is a edmd one");
+        let _app = mako_service::build_for_test_on::<super::Edmd>(cfg, pool)
+            .await
+            .expect("the router builds");
+    }
+}

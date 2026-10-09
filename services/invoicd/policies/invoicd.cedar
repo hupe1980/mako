@@ -9,7 +9,7 @@
 //
 // Cedar is deny-by-default, so an action a handler names and this file does not
 // permit is a permanent 403 that no configuration can lift, and the response
-// says only "forbidden". `tests/cedar_actions.rs` pins the two lists together.
+// says only "forbidden". `tests/it/cedar_actions.rs` pins the two lists together.
 
 // ── Read ──────────────────────────────────────────────────────────────────────
 //

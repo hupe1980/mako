@@ -1,0 +1,37 @@
+# billingd.toml — local development: `just dev billingd` starts billingd with this file against
+# the PostgreSQL of dev/docker-compose.yml (`just infra-up`). Authentication is
+# off and the secrets are fixed strings. DO NOT use in production.
+#
+# Every key can be overridden by an environment variable — `BILLINGD_<KEY>`, nested
+# keys joined with `__`. `billingd --help` lists the conventions.
+
+allow_insecure_no_auth = true
+
+port   = 9280
+tenant = "9900357000004"
+
+productd_url    = "http://127.0.0.1:9080"
+marktd_url      = "http://127.0.0.1:8180"
+edmd_url        = "http://127.0.0.1:8380"
+vertragd_url    = "http://127.0.0.1:9780"
+outputd_url     = "http://127.0.0.1:9880"
+accountingd_url = "http://127.0.0.1:9380"
+erp_webhook_url = "http://127.0.0.1:9380/webhook"
+
+seller_name   = "Dev Energie GmbH"
+seller_vat_id = "DE123456789"
+
+[database]
+url = "postgres://dev:dev@localhost:5432/billingd"
+
+[billing_runs]
+enabled = false
+
+[seller]
+street       = "Musterstr. 1"
+post_code    = "10115"
+city         = "Berlin"
+country      = "DE"
+contact_name = "Kundenservice"
+phone        = "+49 30 123456"
+email        = "rechnung@dev-energie.example"

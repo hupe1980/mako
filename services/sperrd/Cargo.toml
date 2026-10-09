@@ -1,6 +1,6 @@
 [package]
 name        = "sperrd"
-description = "Sperrung execution tracking daemon — IFTSTA 21039 auto-dispatch on field-service confirmation"
+description = "Sperrung execution daemon (NB): the disconnection order queue and IFTSTA 21039 on field-service confirmation"
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
@@ -32,13 +32,16 @@ serde_json   = { workspace = true }
 time         = { workspace = true }
 uuid         = { workspace = true, features = ["v4", "serde"] }
 tracing      = "0.1"
-tower-http   = { version = "0.6" }
 tokio-util   = { workspace = true }
 anyhow       = "1"
 secrecy      = { version = "0.10", features = ["serde"] }
 
 [dev-dependencies]
+mako-service = { workspace = true, features = ["testing"] }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "migrate", "macros"] }
 tokio = { version = "1", features = ["full", "test-util"] }
+
+[lints]
+workspace = true

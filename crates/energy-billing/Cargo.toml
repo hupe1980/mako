@@ -1,6 +1,8 @@
 [package]
 name         = "energy-billing"
-description  = "Pure multi-product retail utility billing for German markets — Strom, Gas, Wärme, Wasser and the § 14a tariffs. Zero I/O, no float money."
+description  = "Retail utility billing for German suppliers: 13 product categories, § 41a dynamic tariffs, § 14a modules and EN 16931 mapping. No I/O, no float money"
+categories   = ["finance"]
+keywords     = ["billing", "energy", "invoice", "en16931", "bo4e"]
 version.workspace      = true
 authors.workspace      = true
 edition.workspace      = true
@@ -13,6 +15,7 @@ rust-version.workspace = true
 # BO4E bridge (feature `bo4e`): typed Rechnung/Steuerbetrag construction.
 rubo4e = { workspace = true, optional = true }
 billing             = { workspace = true }
+grid-billing        = { workspace = true }
 # EN 16931 semantic model bridge (feature `en16931`): `Invoice::to_en16931()`.
 en16931             = { workspace = true, optional = true }
 eeg-billing         = { workspace = true, features = ["serde"], optional = true }
@@ -21,7 +24,6 @@ serde               = { workspace = true, features = ["derive"] }
 thiserror           = { workspace = true }
 serde_json          = { workspace = true }
 time                = { workspace = true }
-time-tz             = { version = "2", features = ["db"] }
 tracing             = { version = "0.1", default-features = false }
 
 [features]
@@ -36,8 +38,6 @@ bo4e = ["dep:rubo4e"]
 ## the semantic model that `en16931-formats` renders to XRechnung/CII/UBL/ZUGFeRD.
 ## The mapping is at this layer (full per-position fidelity) rather than via BO4E.
 en16931 = ["dep:en16931"]
-## Enable all optional features.
-full = ["eeg", "bo4e", "en16931"]
 
 [dev-dependencies]
 time = { workspace = true, features = ["macros"] }
@@ -47,21 +47,5 @@ proptest   = "1"
 # this is path-only rather than `workspace = true`).
 mako-markt = { path = "../mako-markt" }
 
-[[test]]
-name = "calculator_tests"
-path = "tests/calculator_tests.rs"
-required-features = ["bo4e"]
-
-[[test]]
-name = "proptest_invoice"
-path = "tests/proptest_invoice.rs"
-
-[[test]]
-name = "golden_scenarios"
-path = "tests/golden_scenarios.rs"
-required-features = ["bo4e"]
-
-[[test]]
-name = "en16931_conformance"
-path = "tests/en16931_conformance.rs"
-required-features = ["en16931"]
+[lints]
+workspace = true

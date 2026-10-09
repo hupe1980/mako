@@ -22,13 +22,14 @@
 //!
 //! Results are written to `target/criterion/workers/`.
 
+use mako_engine::event_store::{AppendBatch, AtomicAppend};
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use mako_engine::{
     deadline::{Deadline, DeadlineStore as _, InMemoryDeadlineStore},
     envelope::{EventEnvelope, NewEvent},
-    event_store::{EventStore, ExpectedVersion, InMemoryEventStore},
+    event_store::{ExpectedVersion, InMemoryEventStore},
     ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId},
     outbox::{InMemoryOutboxStore, OutboxMessage, OutboxStore as _},
     projection::{GlobalProjectionCheckpoint, Projection, ProjectionRunner},
@@ -129,7 +130,11 @@ fn seeded_events(rt: &Runtime, n: usize) -> (InMemoryEventStore, StreamId) {
     let events: Vec<NewEvent> = (0..n).map(|_| make_event()).collect();
     rt.block_on(async {
         store
-            .append(&stream, ExpectedVersion::NoStream, &events)
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::NoStream,
+                &events,
+            ))
             .await
             .expect("seeded append");
     });

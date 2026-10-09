@@ -70,28 +70,11 @@ deny = [
 # Each entry documents WHY the duplicate exists and what would resolve it.
 # Review and tighten on every annual dependency update pass.
 
-# ── AWS SDK, behind agentd's optional `bedrock` feature ──────────────────────
-# The Bedrock Converse driver is off by default (`--features bedrock`), but this
-# graph resolves every feature, so the AWS SDK is present here. `aws-smithy-*`
-# and every `aws-sdk-*` crate still build on `http` 0.2 while the workspace
-# (axum 0.8, reqwest, hyper 1) is on 1.x. Nothing crosses the boundary: the SDK
-# builds its own requests and mako never hands it a `http::Request`.
-# Resolve when the AWS SDK migrates to http 1.
-[[bans.skip]]
-name    = "http"
-version = "0.2"
-reason  = "aws-smithy-runtime / aws-sdk-* pin http 0.2; the workspace is on http 1. Only reachable with agentd's optional `bedrock` feature."
-
-[[bans.skip]]
-name    = "http-body"
-version = "0.4"
-reason  = "companion of http 0.2 on the AWS SDK chain; hyper 1 uses http-body 1."
-
 # ── Typst document renderer ──────────────────────────────────────────────────
 # `outputd` compiles operator document templates with Typst. Its syntax
 # highlighter (`syntect` → `two-face`) is a NON-optional dependency of
-# `typst-library` — there is no feature that trims it — so these four duplicates
-# arrive with the renderer and cannot be resolved by configuration. An invoice
+# `typst-library` — there is no feature that trims it — so these duplicates
+# arrive with the renderer, as do the hayro image-decoder pairs below, and cannot be resolved by configuration. An invoice
 # template contains no code blocks, so the highlighting path is never entered.
 [[bans.skip]]
 name    = "fancy-regex"
@@ -105,6 +88,16 @@ reason  = "duplicate major pulled by the typst syntax-highlighting chain; build-
 [[bans.skip]]
 name    = "roxmltree"
 reason  = "typst parses SVG with a different roxmltree major than en16931-formats uses for CII/UBL. Both parse trusted input (bundled assets / our own rendered XML)."
+
+[[bans.skip]]
+name    = "fearless_simd"
+version = "0.4"
+reason  = "hayro-syntax (typst-svg → hayro, PDF image decoding) pulls fearless_simd 0.4 through hayro-jpeg2000 and 1.x through hayro-jbig2; both inside the typst image stack."
+
+[[bans.skip]]
+name    = "hayro-ccitt"
+version = "0.3"
+reason  = "hayro-syntax depends on hayro-ccitt 0.3 while its own hayro-jbig2 depends on 0.4; both inside the typst image stack."
 
 [[bans.skip]]
 name    = "weezl"
@@ -420,6 +413,10 @@ version = "0.48"
 reason  = "windows_x86_64_msvc 0.48 legacy path alongside newer version."
 
 [advisories]
+# Every ID below carries one statement in `release/vex.json` (OpenVEX), the
+# machine-readable form of the reason beside it; `cargo xtask check-vex` holds
+# the two lists equal and refuses a statement naming another crate than the
+# advisory does.
 ignore = [
     # RUSTSEC-2025-0141: bincode 1.x unmaintained.
     # Pulled transitively by slatedb → foyer. The crate is functionally complete
@@ -433,10 +430,10 @@ ignore = [
     { id = "RUSTSEC-2024-0436", reason = "paste macro pulled by slatedb; no CVE, compile-time only, no runtime security surface" },
     # RUSTSEC-2026-0192: ttf-parser unmaintained (harfbuzz team migrating to skrifa).
     # No CVE, no security vulnerability — maintenance announcement only.
-    # Pulled transitively by xtask → pdf-extract → lopdf → ttf-parser.
-    # Impact: xtask dev tooling only; no production or library code path.
-    # Resolution: bump pdf-extract when a release depending on skrifa is available.
-    { id = "RUSTSEC-2026-0192", reason = "ttf-parser maintenance announcement only (no CVE); reachable only via xtask pdf tooling, not production code" },
+    # Pulled by outputd → typst: Typst's font reader. The fonts it reads are the
+    # bundled typst-assets set; no template or request can supply one.
+    # Resolution: drops out when typst moves to skrifa.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser maintenance announcement only (no CVE); Typst's font reader in outputd, fed only the bundled typst-assets fonts" },
     # RUSTSEC-2026-0194 / RUSTSEC-2026-0195: quick-xml O(N²) attribute-dedup scan
     # and unbounded namespace-declaration allocation, both patched in 0.41.
     # Every path that parses XML from a counterparty is on 0.41: mako's own crates,
@@ -448,11 +445,11 @@ ignore = [
     # Resolution: drops out when opendal and hayagriva reach quick-xml ≥ 0.41.
     { id = "RUSTSEC-2026-0194", reason = "quick-xml O(N²) DoS, patched in 0.41 — every counterparty-facing parser here is on 0.41; the affected versions remain only under opendal (authenticated cloud APIs) and typst (bundled assets)" },
     { id = "RUSTSEC-2026-0195", reason = "quick-xml NsReader memory-exhaustion DoS; same version constraint and same usage analysis as RUSTSEC-2026-0194." },
-    # RUSTSEC-2025-0111: rustls-pemfile 1.x unmaintained.
-    # Pulled transitively by testcontainers → bollard. Dev-only dependency (integration
-    # tests only); not present in any production binary. Resolved when testcontainers
-    # upgrades to rustls-pemfile 2.x.
-    { id = "RUSTSEC-2025-0111", reason = "rustls-pemfile 1.x unmaintained; dev-only dep via testcontainers — not in production binaries" },
+    # RUSTSEC-2025-0134: rustls-pemfile unmaintained (every version; the PEM
+    # parser lives on in rustls-pki-types). Pulled by testcontainers → bollard.
+    # Dev-only dependency (integration tests only); not present in any production
+    # binary. Resolve when bollard moves to rustls-pki-types.
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile unmaintained; dev-only dep via testcontainers/bollard — not in production binaries" },
     # RUSTSEC-2024-0320: yaml-rust unmaintained — syntect loads syntax
     # definitions with it. Unreachable from an invoice render (no code blocks),
     # and non-optional in typst-library.
@@ -465,20 +462,19 @@ ignore = [
     # model plus the operator's template literals — never a counterparty's.
     # Revisit if operator-supplied font files are ever accepted.
     { id = "RUSTSEC-2026-0206", reason = "rustybuzz unmaintained (no CVE); Typst's text shaper, on the render path but fed only bundled fonts, mako's own invoice model and the operator's own template — no counterparty-controlled input" },
-    # RUSTSEC-2025-0134: tokio-tar PAX header smuggling vulnerability.
-    # Pulled transitively by testcontainers → bollard. Dev-only dependency (integration
-    # tests only); not present in any production binary. tokio-tar is used to download
-    # Docker images in tests, not to extract user-supplied archives.
-    # Resolve when testcontainers releases with a patched bollard.
-    { id = "RUSTSEC-2025-0134", reason = "tokio-tar PAX smuggling; dev-only dep via testcontainers/bollard — not in production binaries, no user-supplied archive input" },
+    # RUSTSEC-2025-0111 (CVE-2025-62518): tokio-tar PAX header smuggling.
+    # Pulled by testcontainers. Dev-only dependency (integration tests only); not
+    # present in any production binary, and it never reads a user-supplied archive.
+    # Resolve when testcontainers moves off tokio-tar.
+    { id = "RUSTSEC-2025-0111", reason = "tokio-tar PAX smuggling; dev-only dep via testcontainers — not in production binaries, no user-supplied archive input" },
     # RUSTSEC-2023-0071: rsa Marvin Attack timing side-channel.
-    # rsa is pulled transitively by mako-as4 → asx-rs → WS-Security XML crypto.
-    # The rsa crate is used for PKCS#1 signature verification of AS4 messages from
-    # trusted BDEW counterparties — not for key decryption in adversarial settings.
-    # The Marvin Attack requires an attacker to observe RSA decryption timing to recover
-    # a private key; this usage only verifies signatures (public-key operation).
-    # Resolve when asx-rs updates to a mitigated rsa version.
-    { id = "RUSTSEC-2023-0071", reason = "rsa Marvin timing attack; only used for signature verification (public-key operation) via asx-rs WS-Security — not for key decryption" },
+    # rsa is pulled by mako-service → jsonwebtoken (`rust_crypto`), which verifies
+    # RS256/384/512 OIDC tokens against the identity provider's public JWKS. The
+    # Marvin Attack recovers a private key from the timing of private-key
+    # operations; no release binary holds an RSA private key (only tests sign).
+    # AS4 cryptography runs on OpenSSL through asx-rs, not on this crate.
+    # Resolve when jsonwebtoken or rsa ships a constant-time implementation.
+    { id = "RUSTSEC-2023-0071", reason = "rsa Marvin timing attack; reached via jsonwebtoken for public-key JWT verification only — no private-key operation in a release binary" },
 ]
 
 # ── Bans: duplicate-version skip entries ──────────────────────────────────────

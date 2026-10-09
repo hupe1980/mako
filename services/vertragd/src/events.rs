@@ -150,13 +150,12 @@ mod tests {
     /// and the handlers. A missing row is therefore an event nobody outside the
     /// code knows exists.
     ///
-    /// `de.vertrag.abgeschlossen` was missing that way: `workers::ablauf` has
-    /// emitted it on every closed supply since the phase-0 close was added, and
-    /// the table stopped at ten rows. It is the event a Schlussrechnung hangs
-    /// off, so the one consumer that most needed to know had no way to.
+    /// `de.vertrag.abgeschlossen`, emitted by `workers::ablauf` on every closed
+    /// supply, is the event a Schlussrechnung hangs off — a missing row would
+    /// hide it from the one consumer that most needs it.
     ///
     /// Read off the sources rather than from a second hand-kept list: a list
-    /// would drift from the emitters exactly the way the table did.
+    /// drifts from the emitters exactly the way the table can.
     #[test]
     fn the_emitted_event_table_lists_every_type_vertragd_emits() {
         /// `MODULE_DOC` is this file; every other `.rs` under `src/` is scanned

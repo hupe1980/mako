@@ -4,11 +4,11 @@
 //!
 //! A batch can fail two independent ways: the **Hampel scorer** flags a session
 //! as grade C/F, and the **V-rule engine** annotates individual intervals
-//! (V03 negative energy, V04 impossible spike, V09 non-billable quality). Only
-//! the first used to raise the event, and only on the RLM direct-push door — so
-//! a `FAULTY` reading with an unremarkable statistical profile, or any reading
-//! arriving over IoT push, bulk import or Kafka, was annotated in
-//! `quality_warnings` and then went quiet.
+//! (V03 negative energy, V04 impossible spike, V09 non-billable quality).
+//! Either must raise the event, on every ingest door — otherwise a `FAULTY`
+//! reading with an unremarkable statistical profile, or any reading arriving
+//! over IoT push, bulk import or Kafka, is annotated in `quality_warnings` and
+//! then goes quiet.
 //!
 //! Quiet is the problem. The event is what starts `agentd`'s `meter-data-agent`
 //! (grade-F investigation) and `replacement-value-agent` (§ 60 Abs. 1 MsbG

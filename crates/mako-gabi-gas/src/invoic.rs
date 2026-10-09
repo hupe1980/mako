@@ -7,9 +7,13 @@
 //!
 //! | PID   | Process                                                          | Direction   |
 //! |-------|------------------------------------------------------------------|-------------|
-//! | 31010 | Kapazitätsrechnung                                                | FNB/VNB → BKV |
+//! | 31010 | Kapazitätsrechnung                                                | NB → KN     |
 //! | 31007 | Aggreg. MMM-Rechnung Gas                                          | NB → MGV    |
 //! | 31008 | Aggreg. MMM-Rechnung Gas, selbst ausgestellt                      | NB → MGV    |
+//!
+//! 31010 is the Kapazitätsabrechnung an Ausspeisepunkten zu Letztverbrauchern:
+//! „Kommunikation von NB an KN“ (INVOIC AHB 1.0b Kap. 3.1.4; Anwendungsübersicht
+//! der Prüfidentifikatoren 4.0 — Sender NB, Empfänger KN, the Kapazitätsnutzer).
 //!
 //! PIDs 31007/31008 belong here and not to `mako-gpke`: the MGV
 //! (Marktgebietsverantwortlicher) is a Gas-only market role with no Strom
@@ -17,7 +21,7 @@
 //!
 //! # This family receives invoices; it does not issue them
 //!
-//! All three PIDs arrive *at* the role this platform plays — the BKV receives
+//! All three PIDs arrive *at* the role this platform plays — the KN receives
 //! the Kapazitätsrechnung, the MGV the aggregated MMM-Rechnung — and nothing
 //! here renders one. [`mako_invoic::InvoicFamily::SENDS_INVOIC`] is therefore
 //! `false`, so `SendInvoic` and `ReceiveRemadv` are refused: after *receiving*
@@ -38,7 +42,7 @@ use mako_invoic::{InvoicFamily, InvoicWorkflow};
 
 /// GaBi Gas billing Prüfidentifikatoren.
 pub const GABI_GAS_INVOIC_PIDS: &[u32] = &[
-    31010, // Kapazitätsrechnung (FNB/VNB → BKV)
+    31010, // Kapazitätsrechnung (NB → KN)
     31007, // Aggreg. MMM-Rechnung Gas (NB → MGV)
     31008, // Aggreg. MMM-Rechnung Gas, selbst ausgestellt (NB → MGV)
 ];

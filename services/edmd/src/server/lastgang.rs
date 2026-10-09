@@ -1,6 +1,9 @@
 //! Lastgang / Zeitreihe / Summenzeitreihe read endpoints (incl. Arrow IPC and ESA Typ-2).
 
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "used only in some feature or target combinations"
+)]
 use super::*;
 
 // ── Lastgang ──────────────────────────────────────────────────────────────────
@@ -305,7 +308,10 @@ pub(crate) async fn get_energy_series(
         .map(|iv| (iv.to - iv.from).whole_seconds().max(0))
         .sum();
     let window = (to - from).whole_seconds().max(1);
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a count or ratio reported as a float, never a money amount"
+    )]
     let coverage_pct = (covered as f64 / window as f64 * 100.0).clamp(0.0, 100.0);
     let resolution_min = metering::classification::detect_interval_length(&selected)
         .map(|r| r.nominal_seconds() / 60);

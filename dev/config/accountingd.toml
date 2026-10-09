@@ -1,0 +1,14 @@
+# accountingd.toml — local development: `just dev accountingd` starts accountingd with this file against
+# the PostgreSQL of dev/docker-compose.yml (`just infra-up`). Authentication is
+# off and the secrets are fixed strings. DO NOT use in production.
+#
+# Every key can be overridden by an environment variable — `ACCOUNTINGD_<KEY>`, nested
+# keys joined with `__`. `accountingd --help` lists the conventions.
+
+allow_insecure_no_auth = true
+
+port   = 9380
+tenant = "9900357000004"
+
+[database]
+url = "postgres://dev:dev@localhost:5432/accountingd"

@@ -1,7 +1,7 @@
 [package]
 name         = "mako-as4"
 version.workspace     = true
-description  = "BDEW MaKo AS4 profile — AS4/ebMS3 transport for German energy market communication"
+description  = "BDEW AS4 profile for German energy market communication: ebMS3 sign, encrypt and signed receipts"
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true
@@ -23,3 +23,6 @@ server = ["asx-rs/server"]
 ## and `MockAs4Endpoint`. Delegates to `asx-rs/testing` — no additional deps.
 ## Never enable in production binaries.
 testing = ["asx-rs/testing", "server"]
+
+[lints]
+workspace = true

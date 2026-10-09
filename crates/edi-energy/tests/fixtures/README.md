@@ -1,6 +1,6 @@
 # BDEW EDIFACT Test Fixtures
 
-EDIFACT messages the conformance suite (`tests/conformance.rs`) reads.
+EDIFACT messages the conformance suite (`tests/it/conformance.rs`) reads.
 
 ## Directory Layout
 
@@ -16,30 +16,24 @@ fixtures/
 | `valid/` | `conformance.rs` | mako reads this Anwendungsfall and finds nothing wrong |
 | `invalid/` | `conformance.rs` + `.expected.json` | mako refuses it, for the stated reason |
 
-The corpus is curated, not exhaustive: **every** Anwendungsfall of every profile
-is witnessed by `tests/skeletons.rs`, which generates the minimal message of
-each column from the Prüfschablone and validates it against that column. A
-fixture here is an example a reader can copy — a Beispielnachricht with
-realistic (synthetic) MP-IDs, Lokations-IDs and dates — or a defect that must
-be refused.
+The corpus is curated: every Anwendungsfall of every profile is already
+witnessed by `tests/it/skeletons.rs`. A fixture here is either an example a
+reader can copy — a Beispielnachricht with synthetic MP-IDs, Lokations-IDs and
+dates — or a defect that must be refused.
 
 ## Corpus-wide invariants
 
 `validation_snapshot.txt` records each fixture's verdict, rule id by rule id,
-and fails when one moves. Two things it cannot express are asserted separately:
+and fails when one moves. Alongside it:
 
 - **`validation_snapshot.rs::every_fixture_parses_and_is_judged`** — no fixture
   may fail to parse or to validate.
 - **`demo_fixtures.rs`** — the fixtures under `demos/` are outside this corpus
   and are validated there instead.
-- **`party_agency_code.rs`** — every party field names the office its MP-ID
-  range implies, on **both** code lists, because `UNB` DE 0007 and `NAD`
-  DE 3055 spell the same office differently: `99…` is `500`/`293` (BDEW),
-  `98…` is `502`/`332` (DVGW), a GLN is `14`/`9`. Gas columns admit only
-  GS1/DVGW on a party `NAD`, so a Gas fixture carries `98…` ids throughout.
-  Both directions read the checked-in `.edi` files, `demos/` included — the
-  demo fixtures are what an evaluator copies, and the AHB validation
-  `demo_fixtures.rs` runs says nothing about which office issued a code.
+- **`party_agency_code.rs`** — every party field, here and under `demos/`,
+  names the office its MP-ID range implies on both code lists: `99…` is
+  `500`/`293` (BDEW), `98…` is `502`/`332` (DVGW), a GLN is `14`/`9`
+  (`UNB` DE 0007 / `NAD` DE 3055). A Gas fixture carries `98…` ids throughout.
 
 ## Naming
 
@@ -62,11 +56,10 @@ cargo run -p edi-energy --all-features --example 07_resolve -- --skeleton UTILMD
 cargo run -p edi-energy --all-features --example 07_resolve -- tests/fixtures/utilmd/valid/beispiel_55001_lieferbeginn.edi
 ```
 
-The second command shows where every segment landed in the Nachrichtenstruktur
-and every finding, so a fixture is never edited blind. The interchange parties
-(`UNB`) must be the `NAD+MS`/`NAD+MR` of the message (Allgemeine Festlegungen
-§2.13); the Prüfidentifikator travels where the AHB puts it — `SG6 RFF+Z13` in
-UTILMD, `SG1 RFF+Z13` in most other types — and `BGM` DE 1004 is the
+The second command shows where every segment landed and every finding. The
+`UNB` parties must be the message's `NAD+MS`/`NAD+MR` (Allgemeine Festlegungen
+§ 2.13); the Prüfidentifikator travels where the AHB puts it (`SG6 RFF+Z13` in
+UTILMD, `SG1 RFF+Z13` in most other types), and `BGM` DE 1004 is the
 Dokumentennummer.
 
 ## Which format version a fixture carries

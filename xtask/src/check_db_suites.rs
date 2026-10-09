@@ -119,8 +119,8 @@ pub fn run(workspace_root: &Path) -> bool {
             .display();
         if f.unnamed {
             eprintln!(
-                "  {rel}\n      run by no recipe — add `--test {}` to its `test-*-db` recipe \
-                 (and to `test-db`)",
+                "  {rel}\n      run by no recipe — select it in its `test-*-db` recipe \
+                 (`--test it -- {}::`, or `--test` for a crate without a `tests/it` binary)",
                 f.path.file_stem().unwrap_or_default().to_string_lossy()
             );
         }
@@ -140,18 +140,56 @@ pub fn run(workspace_root: &Path) -> bool {
     false
 }
 
-/// Suite names any `--test <name>` in the justfile passes to `cargo test`.
+/// Suite names the justfile's `cargo test` commands run.
+///
+/// A suite is named either as its own test target (`--test <name>`) or, in a
+/// crate whose integration tests are one `tests/it/` binary, as a module filter
+/// after `--` on a command selecting that binary (`--test it -- <name>::`).
 fn recipe_suites(justfile: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    let mut rest = justfile;
-    while let Some(i) = rest.find("--test ") {
-        rest = &rest[i + "--test ".len()..];
-        let name: String = rest
-            .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .collect();
-        if !name.is_empty() {
-            out.insert(name);
+    // Join `\`-continued lines so one command is one string.
+    let joined = justfile.replace("\\\n", " ");
+    let is_name = |n: &str| !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || c == '_');
+    for line in joined.lines() {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        // The justfile's private `suite <crate> <name>` recipe selects one suite
+        // in either layout; position 0 is the recipe's own definition line.
+        if let Some(at) = words
+            .iter()
+            .position(|w| *w == "suite")
+            .filter(|at| *at > 0)
+        {
+            if let Some(name) = words.get(at + 2).filter(|n| is_name(n)) {
+                out.insert((*name).to_owned());
+            }
+            continue;
+        }
+        if !line.contains("cargo test") {
+            continue;
+        }
+        let mut selects_it = false;
+        let mut after_separator = false;
+        for pair in words.windows(2) {
+            if pair[0] == "--test" {
+                let name: String = pair[1]
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if name == "it" {
+                    selects_it = true;
+                } else if is_name(&name) {
+                    out.insert(name);
+                }
+            }
+        }
+        for word in &words {
+            if *word == "--" {
+                after_separator = true;
+            } else if after_separator && selects_it {
+                if let Some(module) = word.strip_suffix("::").filter(|m| is_name(m)) {
+                    out.insert(module.to_owned());
+                }
+            }
         }
     }
     out
@@ -232,11 +270,17 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
             continue;
         }
         // Only integration suites: a `#[cfg(test)]` module inside `src/` is a
-        // unit test compiled with the crate, not a separate binary a recipe can
-        // name with `--test`.
-        let is_integration = path
-            .parent()
-            .is_some_and(|p| p.file_name().is_some_and(|n| n == "tests"));
+        // unit test compiled with the crate, not something a recipe can select.
+        // A suite is `tests/<name>.rs` (its own binary) or `tests/it/<name>.rs`
+        // (a module of the crate's one test binary, whose `main.rs` is not a
+        // suite).
+        let named = |p: &Path, n: &str| p.file_name().is_some_and(|f| f == n);
+        let is_integration = path.parent().is_some_and(|p| {
+            named(p, "tests")
+                || (named(p, "it")
+                    && p.parent().is_some_and(|g| named(g, "tests"))
+                    && !named(&path, "main.rs"))
+        });
         if !is_integration || path.extension().and_then(|e| e.to_str()) != Some("rs") {
             continue;
         }
@@ -277,6 +321,31 @@ mod tests {
         let got = recipe_suites(jf);
         assert!(got.contains("a_one"), "{got:?}");
         assert!(got.contains("b_two"), "{got:?}");
+    }
+
+    /// In a crate with one `tests/it` binary, the module filter after `--` is
+    /// what names the suite.
+    #[test]
+    fn recipe_suites_reads_module_filters_of_the_it_binary() {
+        let jf = "test-edmd-db:\n    cargo test -p edmd --test it \\\n        -- meterstore_integration:: --include-ignored --test-threads=1\n";
+        let got = recipe_suites(jf);
+        assert!(got.contains("meterstore_integration"), "{got:?}");
+        assert!(!got.contains("it"), "the binary is not a suite: {got:?}");
+    }
+
+    /// The `suite` helper recipe names the suite whichever layout its crate has.
+    #[test]
+    fn recipe_suites_reads_the_suite_helper() {
+        let jf = "test-einsd-db:\n    {{ just_executable() }} suite einsd settlement_integration --include-ignored\n";
+        assert!(recipe_suites(jf).contains("settlement_integration"));
+    }
+
+    /// A `::` word on a command that does not select the `it` binary names
+    /// nothing — it is a test filter on some other target.
+    #[test]
+    fn a_module_filter_without_the_it_binary_names_nothing() {
+        let got = recipe_suites("x:\n    cargo test -p a --lib -- some_mod:: --include-ignored\n");
+        assert!(got.is_empty(), "{got:?}");
     }
 
     /// The scan is over a tree; an empty one certifies nothing.

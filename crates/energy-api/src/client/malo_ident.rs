@@ -19,9 +19,8 @@
 //!
 //! ## Content-layer security (TR-03116-3)
 //!
-//! Enable automatic `DIGEST` + `SIGNATURE` signing via [`MaloIdentClient::with_signing`]
-//! (requires feature `crypto`).  The digest covers the RFC 8785 canonical JSON
-//! body for all three endpoints.
+//! Enable automatic `DIGEST` + `SIGNATURE` signing via [`MaloIdentClient::with_signing`].
+//! The digest covers the RFC 8785 canonical JSON body for all three endpoints.
 
 use reqwest::{Client, StatusCode};
 use url::Url;

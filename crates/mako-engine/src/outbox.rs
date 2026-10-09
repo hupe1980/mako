@@ -71,7 +71,7 @@ use crate::{
 ///
 /// The engine fills in the store-assigned fields after the event append
 /// succeeds, converting `PendingOutbox` into a fully materialised
-/// [`OutboxMessage`] inside [`SlateDbStore::append_with_outbox`].
+/// [`OutboxMessage`] inside [`AtomicAppend::append`].
 ///
 /// # Example
 ///
@@ -85,7 +85,7 @@ use crate::{
 /// ```
 ///
 /// [`Workflow::handle`]: crate::workflow::Workflow::handle
-/// [`SlateDbStore::append_with_outbox`]: crate::event_store::AtomicAppend::append_with_outbox
+/// [`AtomicAppend::append`]: crate::event_store::AtomicAppend::append
 #[derive(Debug, Clone)]
 pub struct PendingOutbox {
     /// EDIFACT or XML message type (e.g. `"APERAK"`, `"CONTRL"`, `"REMADV"`).
@@ -162,40 +162,36 @@ impl PendingOutbox {
         self
     }
 
-    /// Attach a BO4E JSON Schema URL to the payload.
+    /// An entry carrying a typed payload, under the message type the payload
+    /// declares ([`OutboundPayload::MESSAGE_TYPE`]).
     ///
-    /// Use this when the payload is a BO4E-typed object so the ERP adapter
-    /// can deserialise it into the correct type without inspecting the JSON.
+    /// [`OutboundPayload::MESSAGE_TYPE`]: crate::payload::OutboundPayload::MESSAGE_TYPE
+    ///
+    /// # Panics
+    ///
+    /// Never for the payload structs in [`crate::payload`]: they hold strings,
+    /// numbers and booleans only, which `serde_json` always serialises.
     #[must_use]
-    pub fn with_schema(mut self, schema_url: &'static str) -> Self {
-        self.payload_schema = Some(schema_url.into());
-        self
+    pub fn typed<P: crate::payload::OutboundPayload>(recipient: &str, payload: &P) -> Self {
+        Self::new(
+            P::MESSAGE_TYPE,
+            recipient,
+            serde_json::to_value(payload).expect("an outbound payload serialises to JSON"),
+        )
     }
 
     /// APERAK **29002 Anerkennungsmeldung** (`BGM+312`) for a message that
     /// parsed and was accepted for processing.
     ///
     /// `from` is this deployment's MP-ID, `to` the Marktpartner that sent the
-    /// acknowledged message, and `orig_message_ref` its `UNH` DE 0062.
-    ///
-    /// The reference is a parameter rather than an option because `SG2
-    /// RFF+ACE`/`DTM+171`/`RFF+AGO` are **Muss** in both APERAK
-    /// Anwendungsfälle: an acknowledgement that does not say what it
-    /// acknowledges is refused by the receiving Marktpartner, and there is no
-    /// second field it could be recovered from. The two Anwendungsfälle also
-    /// take different `BGM` codes — 29001 admits only `313`, 29002 only `312`
-    /// — so the pairing lives here rather than in each workflow.
+    /// acknowledged message, and `orig_message_ref` its `UNH` DE 0062 — Muss
+    /// in both APERAK Anwendungsfälle (`SG2 RFF+ACE`). See
+    /// [`AperakPayload`](crate::payload::AperakPayload).
     #[must_use]
     pub fn aperak_anerkennung(from: &str, to: &str, orig_message_ref: &str) -> Self {
-        Self::new(
-            "APERAK",
+        Self::typed(
             to,
-            serde_json::json!({
-                "sender":           from,
-                "receiver":         to,
-                "pid":              APERAK_PID_ANERKENNUNG,
-                "orig_message_ref": orig_message_ref,
-            }),
+            &crate::payload::AperakPayload::anerkennung(from, to, orig_message_ref),
         )
     }
 
@@ -214,27 +210,14 @@ impl PendingOutbox {
         error_code: &str,
         reason: impl Into<String>,
     ) -> Self {
-        Self::new(
-            "APERAK",
+        Self::typed(
             to,
-            serde_json::json!({
-                "sender":           from,
-                "receiver":         to,
-                "pid":              APERAK_PID_FEHLER,
-                "orig_message_ref": orig_message_ref,
-                "error_code":       error_code,
-                "reason":           reason.into(),
-            }),
+            &crate::payload::AperakPayload::fehler(from, to, orig_message_ref, error_code, reason),
         )
     }
 }
 
-/// APERAK Anwendungsfall **29001 Fehlermeldung** — `BGM+313`, `SG4`
-/// Fehlerbeschreibung present.
-pub const APERAK_PID_FEHLER: u32 = 29001;
-
-/// APERAK Anwendungsfall **29002 Anerkennungsmeldung** — `BGM+312`, no `SG4`.
-pub const APERAK_PID_ANERKENNUNG: u32 = 29002;
+pub use crate::payload::{APERAK_PID_ANERKENNUNG, APERAK_PID_FEHLER};
 
 // ── OutboxMessage ─────────────────────────────────────────────────────────────
 
@@ -283,8 +266,8 @@ pub struct OutboxMessage {
 
     /// BO4E JSON Schema URL that validates `payload`, if present.
     ///
-    /// `None` for raw EDIFACT or untyped payloads. Set by domain workflows
-    /// via [`PendingOutbox::with_schema`] when the payload is a BO4E object.
+    /// `None` for raw EDIFACT or untyped payloads; carried over from
+    /// [`PendingOutbox::payload_schema`] when the entry is enqueued.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload_schema: Option<Box<str>>,
 
@@ -322,6 +305,44 @@ pub struct OutboxMessage {
     pub trace_context: Option<Box<str>>,
 }
 
+/// Materialise `pending` into the [`OutboxMessage`] a store enqueues, from the
+/// stamped event it names.
+///
+/// `caused_by_event_index` is clamped to the last envelope. The caller ensures
+/// `envelopes` is non-empty ([`AppendBatch::validate`]).
+///
+/// [`AppendBatch::validate`]: crate::event_store::AppendBatch::validate
+#[cfg(any(test, feature = "testing", feature = "slatedb"))]
+pub(crate) fn materialise(
+    pending: &PendingOutbox,
+    stream_id: &StreamId,
+    envelopes: &[crate::envelope::EventEnvelope],
+    now: OffsetDateTime,
+) -> OutboxMessage {
+    let idx = pending
+        .caused_by_event_index
+        .min(envelopes.len().saturating_sub(1));
+    let env = &envelopes[idx];
+    OutboxMessage {
+        message_id: OutboxMessageId::new(),
+        stream_id: stream_id.clone(),
+        process_id: env.process_id,
+        tenant_id: env.tenant_id,
+        correlation_id: env.correlation_id,
+        conversation_id: env.conversation_id,
+        causation_event_id: env.event_id,
+        message_type: pending.message_type.clone(),
+        recipient: pending.recipient.clone(),
+        trace_context: crate::trace_ctx::current().map(Into::into),
+        payload: pending.payload.clone(),
+        payload_schema: pending.payload_schema.clone(),
+        created_at: now,
+        deliver_after: pending.deliver_after,
+        attempt_count: 0,
+        workflow_name: env.workflow_id.name.clone(),
+    }
+}
+
 impl OutboxMessage {
     /// Construct a new outbox message.
     ///
@@ -330,7 +351,10 @@ impl OutboxMessage {
     ///
     /// Call [`OutboxMessage::with_deliver_after`] to schedule deferred
     /// delivery.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
     #[must_use]
     pub fn new(
         stream_id: StreamId,
@@ -380,10 +404,10 @@ impl OutboxMessage {
 ///
 /// ## Atomicity requirement
 ///
-/// In production deployments, calls to [`OutboxStore::enqueue`] MUST be
-/// atomic with the corresponding [`EventStore::append`] — both writes MUST
-/// succeed or both MUST fail. Implement this by sharing the same database
-/// transaction across both operations.
+/// A workflow's outbox entries are never enqueued through this trait: they
+/// travel in the [`AtomicAppend::append`] batch of the events that caused
+/// them. [`OutboxStore::enqueue`] is for messages no event stream owns (an
+/// interchange-level acknowledgement).
 ///
 /// ## Delivery worker contract
 ///
@@ -400,8 +424,11 @@ impl OutboxMessage {
 /// share a store across a delivery worker and command handlers without
 /// additional wrapper types.
 ///
-/// [`EventStore::append`]: crate::event_store::EventStore::append
-#[allow(async_fn_in_trait)]
+/// [`AtomicAppend::append`]: crate::event_store::AtomicAppend::append
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait OutboxStore: Send + Sync {
     /// Persist `messages` durably, ready for delivery.
     ///

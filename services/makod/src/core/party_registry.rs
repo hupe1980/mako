@@ -9,100 +9,37 @@
 //! > Branchen tätig, so muss er je Energieart und Marktrolle verschiedene
 //! > MP-ID nutzen."
 //!
-//! Operationally this means:
+//! So every `[[party]]` entry covers exactly **one Sparte** — mixing Strom roles
+//! (`NB`, `LF`, `MSB`, …) with Gas roles (`GNB`, `LFG`, `GMSB`, …) is refused at
+//! startup — and a company acting as both `NB` and `MSB` has two entries with
+//! different MP-IDs. The Sparte-neutral `RB` may sit beside either.
 //!
-//! - Every `[[party]]` entry must cover exactly **one Sparte** (Strom *or* Gas).
-//!   Mixing Strom roles (`NB`, `LF`, `MSB`, …) with Gas roles (`GNB`, `LFG`,
-//!   `GMSB`, …) in a single `[[party]]` entry is rejected at startup.
-//! - BDEW issues **separate codes per Marktrolle**: a company acting as both
-//!   `NB` and `MSB` has two different BDEW-Codenummern and therefore two
-//!   separate `[[party]]` entries with different MP-IDs.
-//! - Sparte-neutral roles (`RB` — Registerbetreiber) may coexist with either
-//!   Strom or Gas roles in a single entry without triggering the §2.13 check.
+//! ## NAD agency code
 //!
-//! ## MP-ID formats and NAD agency codes
-//!
-//! | ID type | Prefix | Digits | NAD DE3055 | UNB DE0007 | Registry |
-//! |---|---|---|---|---|---|
-//! | BDEW-Codenummer (Strom) | `99` | 13 | `293` | `500` | bdew-codes.de |
-//! | DVGW-Codenummer (Gas)   | `98` | 13 | `332` | `502` | codevergabe.dvgw-sc.de |
-//! | GLN (GS1)               | varies | 13 | `9` | `14` | GS1 |
-//! | EIC                     | — | 16 | `ZEW` | — | ENTSO-E |
-//!
-//! Source: BDEW-AWH Identifikatoren V1.2 §2.2; Allgemeine Festlegungen V6.1d
-//! §2.13; UTILMD AHB Gas 1.2 NAD+MS/MR tables.
-//!
-//! The `agency` field in `[[party]]` overrides the auto-derived code.
-//! When omitted, the NAD DE3055 code is derived from the MP-ID prefix (see above).
-//!
-//! ## Configuration
-//!
-//! Every `makod` deployment requires at least one `[[party]]` entry:
-//!
-//! ```toml
-//! # Strom NB:
-//! [[party]]
-//! mp_id   = "9900001000001"   # BDEW-Codenummer (99…) → agency "293" auto-derived
-//! roles   = ["NB"]
-//! primary = true              # storage partition key + default sender
-//!
-//! # Strom LF — separate BDEW code per role (§2.13):
-//! [[party]]
-//! mp_id = "9900001000002"
-//! roles = ["LF"]
-//!
-//! # Strom MSB — separate BDEW code (BDEW issues one code per Marktrolle):
-//! [[party]]
-//! mp_id = "9900001000003"
-//! roles = ["MSB"]
-//!
-//! # Gas GNB — MUST have a different code from all Strom entries (§2.13):
-//! [[party]]
-//! mp_id = "9800001000001"     # DVGW-Codenummer (98…) → agency "332" auto-derived
-//! roles = ["GNB"]
-//!
-//! # Gas LFG — separate DVGW code per role:
-//! [[party]]
-//! mp_id = "9800001000002"
-//! roles = ["LFG"]
-//!
-//! # GS1 GLN — agency auto-derived to "9"; override only if the prefix is ambiguous:
-//! [[party]]
-//! mp_id = "4012345000023"     # GS1 GLN (non-98/99 prefix) → agency "9"
-//! roles = ["RB"]              # Registerbetreiber — sparte-neutral
-//! ```
+//! Derived from the MP-ID unless `agency` overrides it: `99…` → `293` (BDEW),
+//! `98…` → `332` (DVGW), any other 13 digits → `9` (GS1), 16 characters →
+//! `ZEW` (EIC). Source: BDEW-AWH Identifikatoren V1.2 §2.2; Allgemeine
+//! Festlegungen V6.1d §2.13; UTILMD AHB Gas 1.2 NAD+MS/MR tables.
 //!
 //! A role may be declared by its BDEW sub-qualifier (`ANB`, `VNB` for a
 //! Netzbetreiber Strom; `GNB`, `LFG`, `GMSB`, `FNB` for Gas). Lookups resolve
 //! through the canonical role **within the same Sparte**, so a party declared
 //! `VNB` answers a request for `NB` while a Gas `GNB` never does.
 //!
-//! ## Roles without engine deployment routing
-//!
-//! The following roles are valid in `[[party]]` but have no PID routing in the
-//! current engine version.  They are accepted at startup and stored in the
-//! registry but never appear in [`MpIdRegistry::deployment_role_strings`]:
-//!
-//! | Role | Reason |
-//! |---|---|
-//! | `MGV` | Marktgebietsverantwortlicher — GaBi Gas PIDs are registered unconditionally |
-//! | `DP`  | Data Provider Strom — UTILTS metering distribution, placeholder |
-//! | `EIV` | Einsatzverantwortlicher Strom — Redispatch 2.0, placeholder crate |
-//! | `KN`  | Kapazitätsnutzer Gas — GaBi Gas capacity booking, placeholder |
-//! | `RB`  | Registerbetreiber — MaStR data registry, placeholder |
+//! `MGV`, `DP`, `EIV`, `KN` and `RB` are accepted and stored but have no PID
+//! routing, so they never appear in [`MpIdRegistry::deployment_role_strings`].
+//! Configuration examples: `site/content/docs/services/makod.md`.
 //!
 //! ## Key properties
 //!
 //! - **AS4 loopback detection** — [`is_own_mp_id`] returns `true` for any MP-ID
 //!   that belongs to this operator, enabling in-process delivery for combined-role
 //!   workflows (NB→MSB, GNB→gMSB) regardless of which MP-ID each role uses.
-//!
 //! - **EDIFACT sender selection** — [`sender_mp_id_for_orders_pid`] returns the
-//!   correct sender MP-ID for ORDERS messages using a static PID → role table.
-//!
+//!   sender MP-ID for ORDERS messages from a static PID → role table.
 //! - **Deployment role derivation** — [`deployment_role_strings`] normalises the
-//!   `[[party]]` roles into the strings accepted by `parse_deployment_roles`,
-//!   enabling auto-derivation of `--deployment-roles` and `--marktrollen`.
+//!   `[[party]]` roles into the strings `parse_deployment_roles` accepts, so
+//!   `--deployment-roles` and `--marktrollen` can be derived.
 //!
 //! [`is_own_mp_id`]: MpIdRegistry::is_own_mp_id
 //! [`sender_mp_id_for_orders_pid`]: MpIdRegistry::sender_mp_id_for_orders_pid
@@ -793,8 +730,7 @@ impl MpIdRegistry {
                 // primary is trivially right; in the VIU configuration §2.13
                 // mandates — one MP-ID per Marktrolle per Sparte — it is a
                 // wrong `NAD+MS` on the wire, and that is the defect this
-                // table exists to prevent. Fourteen routed ORDERS PIDs used to
-                // land here without a word.
+                // table exists to prevent, so it is logged.
                 tracing::warn!(
                     pid,
                     "no sending Marktrolle is known for this ORDERS PID; falling back \

@@ -36,6 +36,7 @@
 //! `dispatch` here instead of transmitting over AS4.  This enables zero-latency
 //! in-process delivery for Stadtwerke deployments (NB+LF, GNB+gMSB).
 
+use mako_engine::process::RunOptions;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -85,7 +86,10 @@ use crate::adapters;
 
 /// Outcome of a successful ingest dispatch attempt.
 #[derive(Debug)]
-#[allow(dead_code)] // fields are read via Debug formatting in tracing events
+#[allow(
+    dead_code,
+    reason = "fields are read via Debug formatting in tracing events"
+)]
 pub enum IngestOutcome {
     /// A new process was spawned and the initiating command executed.
     Spawned {
@@ -154,13 +158,25 @@ impl IngestOutcome {
 /// [`mako_engine::workflow::OccupiesBusinessKey::occupies_business_key`].
 ///
 /// A parameter rather than a `W::State: OccupiesBusinessKey` bound because only
-/// 15 of the 63 workflow names dispatched here supply a verdict at all — 7
+/// 24 of the 63 workflow names dispatched here supply a verdict at all — 16
 /// through that trait, 8 through an inherent terminal-state closure — and the
-/// verdict is domain knowledge that belongs in the workflow's own crate
-/// — makod only *consumes* what a crate has already published (that trait, or an
-/// inherent `is_terminal()`). Families that publish neither pass `None` and keep
-/// the presence-based behaviour.
+/// verdict is domain knowledge that belongs in the workflow's own crate — makod
+/// only *consumes* what a crate has already published (that trait, or an
+/// inherent `is_terminal()`). The four INVOIC families pass
+/// [`occupied_by_own_reference`]. An arm without a verdict decides on index
+/// presence alone; `cargo xtask check-occupancy` counts those arms and refuses
+/// an increase.
 type Occupancy<W> = fn(&<W as Workflow>::State) -> bool;
+
+/// The verdict for a family keyed on the message's own reference — an INVOIC
+/// on its `UNH` DE 0062.
+///
+/// Every process on such a key *is* that message, so a second arrival with the
+/// same reference is a duplicate of it: it resumes the existing process, which
+/// refuses it, and never opens a second settlement of one invoice.
+fn occupied_by_own_reference<S>(_: &S) -> bool {
+    true
+}
 
 // ── Dispatcher ────────────────────────────────────────────────────────────────
 
@@ -225,7 +241,7 @@ pub struct EdifactIngestDispatcher {
 /// across instances. A distributed deployment needs the same external lock for
 /// both.
 #[derive(Default)]
-struct BusinessKeyLocks {
+pub(crate) struct BusinessKeyLocks {
     inner: std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
@@ -234,7 +250,7 @@ impl BusinessKeyLocks {
     ///
     /// Entries for keys nobody is holding are dropped on each acquisition, so
     /// the map tracks in-flight spawns rather than every key ever seen.
-    async fn acquire(&self, key: &str) -> tokio::sync::OwnedMutexGuard<()> {
+    pub(crate) async fn acquire(&self, key: &str) -> tokio::sync::OwnedMutexGuard<()> {
         let lock = {
             let mut map = self
                 .inner
@@ -248,6 +264,17 @@ impl BusinessKeyLocks {
         };
         lock.lock_owned().await
     }
+}
+
+/// The process's one [`BusinessKeyLocks`], shared by every door that spawns.
+///
+/// A spawn on the ingest path and one on the ERP command door check the same
+/// correlation index for the same business key, so they have to serialise on
+/// the same lock: two maps would each let one spawn through, and the business
+/// key would end up with two processes.
+pub(crate) fn business_key_locks() -> Arc<BusinessKeyLocks> {
+    static LOCKS: std::sync::OnceLock<Arc<BusinessKeyLocks>> = std::sync::OnceLock::new();
+    Arc::clone(LOCKS.get_or_init(|| Arc::new(BusinessKeyLocks::default())))
 }
 
 impl EdifactIngestDispatcher {
@@ -584,7 +611,7 @@ impl EdifactIngestDispatcher {
             snapshot_interval,
             tenant_id,
             marktd_client: None,
-            key_locks: Arc::new(BusinessKeyLocks::default()),
+            key_locks: business_key_locks(),
             mp_id_registry: None,
         }
     }
@@ -814,12 +841,12 @@ impl EdifactIngestDispatcher {
     ///
     /// `spawn_deadlines`: zero or more `(label, due_at)` pairs to register
     /// atomically with the events in a single `WriteBatch` via
-    /// [`Process::execute_and_enqueue_with_deadlines`].  Pass `&[]` for
+    /// [`Process::run`] with [`RunOptions::deadlines`].  Pass `&[]` for
     /// workflows that have no deadlines (e.g. pure continuation handlers).
     /// Deadlines are only registered for freshly-spawned processes — resuming
     /// an existing process must not re-register (deadlines were set at spawn).
     ///
-    /// To satisfy APERAK AHB 1.0 §2.4.1 for Strom UTILMD/ORDERS, callers
+    /// To satisfy APERAK AHB 1.1 §2.4.1 for Strom UTILMD/ORDERS, callers
     /// should pass **two** deadlines: the process-response window and the
     /// 45-minute APERAK sending window (`fristen::APERAK_STROM_WINDOW_LABEL`).
     async fn spawn_or_resume<W>(
@@ -885,7 +912,10 @@ impl EdifactIngestDispatcher {
     /// [`spawn_or_resume`](Self::spawn_or_resume) that also indexes the process
     /// under `extra_keys` (e.g. an inbound ORDERS' Belegnummer) so a later
     /// LOC-less ORDRSP/ORDCHG can resume it by the echoed order reference.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
     async fn spawn_or_resume_keyed<W>(
         &self,
         key: &str,
@@ -900,7 +930,7 @@ impl EdifactIngestDispatcher {
         W: Workflow + 'static,
         W::Command: CommandPayload + Clone,
         W::State: serde::Serialize,
-        // `execute_and_enqueue_with_deadlines` requires `AtomicAppend`:
+        // `Process::run` requires `AtomicAppend`:
         Arc<SlateDbStore>: mako_engine::event_store::AtomicAppend,
     {
         if key.is_empty() {
@@ -938,24 +968,22 @@ impl EdifactIngestDispatcher {
         };
 
         if let Some(identity) = resume {
-            // Existing process — idempotent continuation.
-            let extra_identity = identity.clone();
+            // Existing process — idempotent continuation. Any further key (the
+            // Belegnummer of this inbound ORDERS) lands in the same write as the
+            // events, so a later LOC-less message can resume this process by
+            // reference whenever the continuation itself is durable.
             let process =
                 Process::<W, Arc<SlateDbStore>>::from_identity(Arc::clone(&self.store), identity);
             let process_id = process.process_id();
+            let keys = correlation_entries(self.tenant_id, &process, extra_keys.iter().copied());
             process
-                .execute_and_enqueue_with_snapshot_and_retry(
+                .run(
                     cmd,
-                    3,
-                    &self.snap_store,
-                    self.snapshot_interval,
+                    RunOptions::new()
+                        .correlations(&keys)
+                        .snapshot(&self.snap_store, self.snapshot_interval),
                 )
                 .await?;
-            // Register any additional correlation keys (e.g. the Belegnummer of
-            // this inbound ORDERS) so a later LOC-less message can resume this
-            // process by reference.
-            self.register_extra_keys(&registry, process_id, extra_identity, extra_keys)
-                .await;
             return Ok(IngestOutcome::Dispatched {
                 workflow_name: workflow_name_static,
                 process_id,
@@ -977,17 +1005,11 @@ impl EdifactIngestDispatcher {
         // is not registered cannot be found by the counterparty's reply — every
         // reply resolves to `Skipped(process_not_found)` and the Frist expires
         // as a false timeout, while the key stays blocked against a fresh spawn.
-        let identity = process.identity();
-        let correlations: Vec<CorrelationEntry> = std::iter::once(key)
-            .chain(extra_keys.iter().copied())
-            .filter(|k| !k.is_empty())
-            .map(|k| CorrelationEntry {
-                tenant_id: self.tenant_id,
-                tag: k.to_owned(),
-                process_id,
-                identity: identity.clone(),
-            })
-            .collect();
+        let correlations = correlation_entries(
+            self.tenant_id,
+            &process,
+            std::iter::once(key).chain(extra_keys.iter().copied()),
+        );
 
         let deadlines: Vec<Deadline> = spawn_deadlines
             .iter()
@@ -1003,7 +1025,12 @@ impl EdifactIngestDispatcher {
             })
             .collect();
         process
-            .execute_and_enqueue_with_deadlines_and_correlations(cmd, &deadlines, &correlations)
+            .run(
+                cmd,
+                RunOptions::new()
+                    .deadlines(&deadlines)
+                    .correlations(&correlations),
+            )
             .await?;
 
         // Snapshot separately: it is a read-path accelerator, not part of the
@@ -1077,33 +1104,6 @@ impl EdifactIngestDispatcher {
         Ok(None)
     }
 
-    /// Register a process under additional correlation keys (best-effort).
-    ///
-    /// Used to index a Wertebestellung process by the Belegnummer of an inbound
-    /// ORDERS so a later ORDRSP/ORDCHG — which carry no LOC — can resume it by
-    /// the echoed order reference.
-    async fn register_extra_keys<R: mako_engine::registry::ProcessRegistry>(
-        &self,
-        registry: &R,
-        process_id: ProcessId,
-        identity: ProcessIdentity,
-        extra_keys: &[&str],
-    ) {
-        for key in extra_keys.iter().filter(|k| !k.is_empty()) {
-            if let Err(e) = registry
-                .register_correlated(self.tenant_id, key, process_id, identity.clone())
-                .await
-            {
-                tracing::warn!(
-                    process_id = %process_id,
-                    key        = %key,
-                    error      = %e,
-                    "ingest dispatcher: order-reference registry failed (non-fatal)",
-                );
-            }
-        }
-    }
-
     /// Look up an existing process by business key and execute the continuation
     /// command.
     ///
@@ -1167,11 +1167,9 @@ impl EdifactIngestDispatcher {
             Process::<W, Arc<SlateDbStore>>::from_identity(Arc::clone(&self.store), identity);
         let process_id = process.process_id();
         process
-            .execute_and_enqueue_with_snapshot_and_retry(
+            .run(
                 cmd,
-                3,
-                &self.snap_store,
-                self.snapshot_interval,
+                RunOptions::new().snapshot(&self.snap_store, self.snapshot_interval),
             )
             .await?;
 
@@ -1251,31 +1249,13 @@ impl EdifactIngestDispatcher {
                 )
             })
             .collect();
+        let keys = correlation_entries(self.tenant_id, &process, extra_keys.iter().copied());
         process
-            .execute_and_enqueue_with_deadlines(cmd, &pending)
+            .run(
+                cmd,
+                RunOptions::new().deadlines(&pending).correlations(&keys),
+            )
             .await?;
-
-        let identity = process.identity();
-        // Best-effort per key — one failure must not stop the others, and the
-        // process is already running — but never silent: `register_extra_keys`
-        // a few lines up logs the same failure, and an index this path drops is
-        // an answer that later reports `process_not_found`.
-        for k in extra_keys.iter().filter(|k| !k.is_empty()) {
-            if let Err(e) = self
-                .store
-                .as_process_registry()
-                .register_correlated(self.tenant_id, k, process_id, identity.clone())
-                .await
-            {
-                tracing::warn!(
-                    %process_id,
-                    key = %k,
-                    error = %e,
-                    "ingest dispatcher: correlation-key registration failed — a later message \
-                     quoting this reference cannot be correlated back to the process",
-                );
-            }
-        }
 
         Ok(IngestOutcome::Dispatched {
             workflow_name: workflow_name_static,
@@ -1839,6 +1819,26 @@ mod gpke;
 mod mabis;
 mod redispatch;
 mod wim;
+
+/// The correlation-index entries that make `process` findable under `keys`,
+/// skipping empty ones. Passed to [`RunOptions::correlations`] so a key lands
+/// in the same write as the events that justify it.
+fn correlation_entries<'k, W: Workflow>(
+    tenant_id: TenantId,
+    process: &Process<W, Arc<SlateDbStore>>,
+    keys: impl IntoIterator<Item = &'k str>,
+) -> Vec<CorrelationEntry> {
+    let identity = process.identity();
+    keys.into_iter()
+        .filter(|k| !k.is_empty())
+        .map(|k| CorrelationEntry {
+            tenant_id,
+            tag: k.to_owned(),
+            process_id: process.process_id(),
+            identity: identity.clone(),
+        })
+        .collect()
+}
 
 #[cfg(test)]
 mod faelligkeitsdatum_tests {

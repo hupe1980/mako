@@ -1,6 +1,6 @@
 [package]
 name        = "billingd"
-description = "Multi-product billing engine (LF role) — Strom, Gas, Wärme, Telco und Bundles als BO4E-Rechnung, inkl. § 41a und § 14a"
+description = "Retail billing daemon (LF): invoices as BO4E Rechnung and EN 16931, Abschlagspläne, § 41a dynamic tariffs and § 14a modules"
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
@@ -21,7 +21,6 @@ path = "src/main.rs"
 mako-fristen = { workspace = true }
 mako-events = { workspace = true }
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel", "metrics"] }
-billing      = { workspace = true }
 energy-billing = { workspace = true, features = ["eeg", "bo4e", "en16931"] }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
@@ -40,8 +39,6 @@ uuid         = { workspace = true, features = ["v4", "serde"] }
 rust_decimal = { workspace = true }
 reqwest      = { workspace = true }
 tracing      = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tower-http   = { version = "0.6" }
 anyhow       = "1"
 secrecy      = { version = "0.10" }
 tokio-util   = { workspace = true }
@@ -50,7 +47,11 @@ en16931-formats = { workspace = true }
 
 
 [dev-dependencies]
+mako-service = { workspace = true, features = ["testing"] }
 toml       = "0.8"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 time = { workspace = true }
+
+[lints]
+workspace = true

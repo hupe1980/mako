@@ -49,7 +49,7 @@
 //! its tariff data to independent comparison instruments, and an obligation
 //! discharged only behind a bearer token is not discharged. Those two serve
 //! `product_status = 'PUBLISHED'` rows of the `FEED_CATEGORIES` allowlist and
-//! nothing else, which `tests/authorization_guard.rs` pins.
+//! nothing else, which `tests/it/authorization_guard.rs` pins.
 //!
 //! Reading the catalogue and the market price series needs only a token of the
 //! tenant; writing a Tarifpreisblatt, importing an EPEX day or working an
@@ -280,4 +280,22 @@ impl Daemon for Productd {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     mako_service::run::<Productd>().await
+}
+
+/// The router builds the way `mako_service::run` mounts it.
+///
+/// `build` runs with the shipped demo configuration and a lazy pool, and the
+/// runner's infra routes are merged in exactly as at boot — so a route axum
+/// refuses, a merge collision with the runner's `/metrics` or `/health/*`, or
+/// a `build` that panics fails `cargo test` instead of the container start.
+#[cfg(test)]
+mod startup_test {
+    #[tokio::test]
+    async fn the_router_builds_as_the_runner_mounts_it() {
+        let cfg = toml::from_str(include_str!("../../../demos/o2c/productd.toml"))
+            .expect("the demo configuration parses");
+        let _app = mako_service::build_for_test::<super::Productd>(cfg)
+            .await
+            .expect("the router builds");
+    }
 }

@@ -91,9 +91,15 @@ pub struct SummarizeBillingMonthParams {
 #[derive(Clone)]
 pub struct InvoicdMcpHandler {
     state: Arc<InvoicdMcpState>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     tool_router: ToolRouter<InvoicdMcpHandler>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     prompt_router: PromptRouter<InvoicdMcpHandler>,
 }
 

@@ -66,7 +66,10 @@ pub struct EegConfig {
     pub bank_api_key: Option<String>,
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "reached only in some feature or target combinations"
+)]
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountingdConfig {
@@ -159,7 +162,6 @@ pub struct AccountingdConfig {
     /// IBAN of the LF's bank account used as SEPA creditor.
     /// **Required** for pain.008 generation — the service will refuse to generate
     /// pain.008 XML when this is absent or contains an invalid IBAN.
-    /// A missing creditor_iban is now a hard error (not a silent placeholder).
     pub creditor_iban: Option<String>,
 
     /// Display name of the LF as it appears in pain.008 XML (`<Cdtr><Nm>`).

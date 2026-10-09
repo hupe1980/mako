@@ -118,9 +118,15 @@ pub struct ListByFamilyParams {
 #[derive(Clone)]
 pub struct ObsdMcpHandler {
     state: Arc<ObsdMcpState>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     tool_router: ToolRouter<ObsdMcpHandler>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     prompt_router: PromptRouter<ObsdMcpHandler>,
 }
 
@@ -421,7 +427,10 @@ impl ObsdMcpHandler {
         let n = |name: &str| -> i64 { row.try_get(name).unwrap_or(0) };
         let (completed, rejected, failed) = (n("completed"), n("rejected"), n("failed"));
         let ended = completed + rejected + failed;
-        #[allow(clippy::cast_precision_loss)]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a count or ratio reported as a float, never a money amount"
+        )]
         // Null, not 0.0: a window in which nothing ended has no rate, and a zero
         // reads as "everything failed".
         let stp_rate =
@@ -575,7 +584,7 @@ fn month_bounds(period: Option<&str>) -> Result<(time::Date, time::Date), McpErr
 impl ObsdMcpHandler {
     #[prompt(
         name = "audit-kpi",
-        description = "Step-by-step: run BNetzA KPI audit for a reporting period"
+        description = "Step-by-step: read a PID's KPIs for a reporting period"
     )]
     async fn audit_kpi_prompt(&self) -> Vec<PromptMessage> {
         vec![
@@ -583,14 +592,7 @@ impl ObsdMcpHandler {
                 Role::User,
                 "How do I generate BNetzA KPI data for regulatory reporting?",
             ),
-            PromptMessage::new_text(
-                Role::Assistant,
-                "1. Use `get_kpi_report` with from/to dates for the reporting period.\n\
-                 2. Key KPIs: prozesse_total, completion_rate, aperak_violations, avg_lead_time_hours.\n\
-                 3. BNetzA targets: completion_rate >= 99%, aperak_violations <= 0.1%.\n\
-                 4. Drill into violations: use `list_overdue_processes` for individual cases.\n\
-                 5. Export the JSON response for inclusion in Qualitätsbericht (§35 EnWG).",
-            ),
+            PromptMessage::new_text(Role::Assistant, audit_kpi_prompt_text()),
         ]
     }
 
@@ -604,15 +606,7 @@ impl ObsdMcpHandler {
                 Role::User,
                 "A process shows an APERAK deadline violation. How do I investigate?",
             ),
-            PromptMessage::new_text(
-                Role::Assistant,
-                "1. Use `get_process` with the process_id to see the full projection.\n\
-                 2. Key timing: initiated_at, aperak_deadline_at (initiated + 45 min for UTILMD/ORDERS weekday),\n\
-                    aperak_sent_at.\n\
-                 3. If aperak_sent_at > aperak_deadline_at: BNetzA violation — document root cause.\n\
-                 4. APERAK AHB 1.0: Strom UTILMD/ORDERS weekday -> 45 Minuten;\n\
-                    Gas Initialprozesse -> 3 Werktage; Gas Folgeprozesse -> nächster Werktag 12 Uhr.",
-            ),
+            PromptMessage::new_text(Role::Assistant, aperak_prompt_text()),
         ]
     }
 }
@@ -628,18 +622,131 @@ impl ServerHandler for ObsdMcpHandler {
                 .build(),
         )
         .with_server_info(Implementation::new("obsd", env!("CARGO_PKG_VERSION")))
-        .with_instructions(
-            "# obsd — Process Observability\n\
+        .with_instructions(instructions())
+    }
+}
+
+/// The APERAK windows as `mako_fristen` computes them, read back off the
+/// `aperak_*` functions for a fixed arrival so the sentence cannot state a
+/// window the engine does not apply.
+struct AperakWindows {
+    /// Minutes for a Strom UTILMD or ORDERS.
+    strom_minutes: i64,
+    /// Berlin hour on the Sunday after a Saturday arrival.
+    strom_saturday_hour: u8,
+    /// Berlin hour on the next Werktag for every other Strom message.
+    strom_allgemein_hour: u8,
+    /// Berlin hour on the next Werktag for a Gas Folgeprozess.
+    gas_folge_hour: u8,
+    /// Werktage for a Gas Initialprozess, to the end of the last.
+    gas_initial_werktage: u32,
+}
+
+impl AperakWindows {
+    fn from_mako_fristen() -> Self {
+        use mako_fristen::HolidayCalendar;
+        // Monday 2025-01-06 09:00 Berlin, and Saturday 2025-01-04 11:00 Berlin:
+        // no holiday near either, so the arithmetic is the rule alone.
+        let monday = time::macros::datetime!(2025-01-06 08:00 UTC);
+        let saturday = time::macros::datetime!(2025-01-04 10:00 UTC);
+        let berlin_hour = |due: time::OffsetDateTime| -> u8 {
+            let day = mako_fristen::berlin_date(due);
+            (0..24u8)
+                .find(|h| {
+                    mako_fristen::berlin_at(
+                        day,
+                        time::Time::from_hms(*h, 0, 0).unwrap_or(time::Time::MIDNIGHT),
+                    ) == due
+                })
+                .unwrap_or(24)
+        };
+        let initial = mako_fristen::aperak_gas_initialprozess_due_at(monday);
+        let start = mako_fristen::berlin_date(monday);
+        let gas_initial_werktage = (1..=10u32)
+            .find(|n| {
+                mako_fristen::end_of_day_berlin(mako_fristen::add_werktage(
+                    start,
+                    *n,
+                    HolidayCalendar::BdewMaKo,
+                )) == initial
+            })
+            .unwrap_or(0);
+        Self {
+            strom_minutes: (mako_fristen::aperak_strom_due_at(monday) - monday).whole_minutes(),
+            strom_saturday_hour: berlin_hour(mako_fristen::aperak_strom_due_at(saturday)),
+            strom_allgemein_hour: berlin_hour(mako_fristen::aperak_strom_allgemein_due_at(monday)),
+            gas_folge_hour: berlin_hour(mako_fristen::aperak_gas_folgeprozess_due_at(monday)),
+            gas_initial_werktage,
+        }
+    }
+}
+
+/// The APERAK Frist in one sentence, rendered from [`AperakWindows`].
+fn aperak_frist_sentence() -> String {
+    let w = AperakWindows::from_mako_fristen();
+    format!(
+        "Strom UTILMD/ORDERS {} min after arrival (a Saturday arrival: Sunday {}:00), \
+         every other Strom message the next Werktag {}:00; Gas the next Werktag {}:00 \
+         for a Folgeprozess, the end of the {}. Werktag for an Initialprozess \
+         (APERAK AHB 1.1 § 2.3.1 / § 2.4.1)",
+        w.strom_minutes,
+        w.strom_saturday_hour,
+        w.strom_allgemein_hour,
+        w.gas_folge_hour,
+        w.gas_initial_werktage
+    )
+}
+
+/// Representative Antwortfristen — GPKE Anmeldung, Gas Anmeldung, the four
+/// WiM Strom PIDs — rendered from `mako_fristen::antwort`.
+fn antwort_examples() -> String {
+    [55_001, 44_001, 55_039, 55_042, 55_051, 55_168]
+        .into_iter()
+        .filter_map(mako_fristen::antwort::antwort_obligation)
+        .map(|o| format!("{} {} → {}", o.trigger_pid, o.name, o.frist.beschreibung()))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// The `audit-kpi` prompt's answer.
+fn audit_kpi_prompt_text() -> String {
+    String::from(
+        "1. Use `get_kpi_report` with a PID and a `YYYY-MM` period.\n\
+         2. Read `total_initiated`, `total_completed`, `total_rejected`, `total_failed`, \
+         `aperak_timeout`, `frist_breached`, `frist_compliance_rate` and \
+         `avg_cycle_time_hours`. `aperak_timeout` is the technical acknowledgement clock, \
+         `frist_breached` the business Antwortfrist — never report one under the other's \
+         name.\n\
+         3. No BNetzA threshold exists for these rates. Any target is the operator's own; \
+         say whose it is.\n\
+         4. Drill into breaches with `list_overdue_processes` for individual cases.",
+    )
+}
+
+/// The `investigate-aperak-violation` prompt's answer.
+fn aperak_prompt_text() -> String {
+    format!(
+        "1. Use `get_process` with the process_id to see the full projection.\n\
+         2. Compare `aperak_deadline_at` with when the APERAK was sent.\n\
+         3. The APERAK Frist: {}.\n\
+         4. A lapse is the acknowledgement clock, not the business Antwortfrist — \
+         document the root cause under that name.",
+        aperak_frist_sentence()
+    )
+}
+
+/// The server instructions an MCP client reads on `initialize`.
+fn instructions() -> String {
+    format!(
+        "# obsd — Process Observability\n\
              \n\
              CQRS read model over every `de.mako.*` event. Antwortfrist monitoring and \
              process KPIs.\n\
              \n\
              ## Two deadline clocks, never one number\n\
-             - **APERAK Frist** — the technical acknowledgement: 45 min Strom weekday; Gas \
-             next Werktag 12:00 (Folgeprozess) or 3 Werktage (Initialprozess). A lapse \
+             - **APERAK Frist** — the technical acknowledgement: {aperak}. A lapse \
              arrives as its own event and shows as `state = aperak_timeout`.\n\
-             - **Antwortfrist** — the business answer: 11:00 of the 1. Werktag for a GPKE \
-             Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom. Stored as \
+             - **Antwortfrist** — the business answer, per inbound PID: {antwort}. Stored as \
              `deadline_at`, with `deadline_source` naming the Festlegung.\n\
              \n\
              They differ by orders of magnitude and fail for different reasons. Never report \
@@ -655,8 +762,8 @@ impl ServerHandler for ObsdMcpHandler {
              - `list_processes_by_family(family, state, limit)`\n\
              \n\
              ## Prompts (2)\n\
-             - `process-kpis` — read a period's KPIs without confusing the two clocks\n\
-             - `investigate-overdue-process` — root-cause a missed Antwortfrist\n\
+             - `audit-kpi` — read a period's KPIs without confusing the two clocks\n\
+             - `investigate-aperak-violation` — root-cause a missed APERAK Frist\n\
              \n\
              ## Reading the answers honestly\n\
              - A **null** rate means nothing measurable in the bucket. It is not 0 and not \
@@ -671,8 +778,9 @@ impl ServerHandler for ObsdMcpHandler {
              ## Process states\n\
              `initiated` → `running` → `completed` | `rejected` | `failed`; `aperak_timeout` \
              is not terminal — a counterparty that missed the acknowledgement can still answer.",
-        )
-    }
+        aperak = aperak_frist_sentence(),
+        antwort = antwort_examples(),
+    )
 }
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
@@ -708,4 +816,68 @@ pub fn router(state: Arc<ObsdMcpState>, shutdown: CancellationToken) -> Router {
             state.clone(),
             mcp_auth_middleware,
         ))
+}
+
+#[cfg(test)]
+mod instruction_tests {
+    use super::*;
+
+    /// The prompts the instructions list are the ones registered.
+    #[test]
+    fn the_listed_prompts_are_the_registered_ones() {
+        let registered: std::collections::BTreeSet<String> = ObsdMcpHandler::prompt_router()
+            .list_all()
+            .into_iter()
+            .map(|p| p.name.to_string())
+            .collect();
+        let text = instructions();
+        let section = text
+            .split("## Prompts")
+            .nth(1)
+            .and_then(|s| s.split("\n## ").next())
+            .expect("a Prompts section");
+        let listed: std::collections::BTreeSet<String> = section
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("- `"))
+            .filter_map(|l| l.split('`').next())
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(listed, registered);
+    }
+
+    /// Every APERAK sentence the surface states is rendered from `mako_fristen`.
+    #[test]
+    fn the_aperak_sentences_follow_mako_fristen() {
+        let sentence = aperak_frist_sentence();
+        let w = AperakWindows::from_mako_fristen();
+        assert_eq!(
+            w.strom_minutes,
+            mako_fristen::APERAK_STROM_UTILMD_ORDERS_MINUTES
+        );
+        assert_eq!(w.strom_saturday_hour, 12);
+        assert_eq!(w.strom_allgemein_hour, 12);
+        assert_eq!(w.gas_folge_hour, 12);
+        assert_eq!(w.gas_initial_werktage, 3);
+        assert!(sentence.contains(&format!("{} min", w.strom_minutes)));
+        let prompt = aperak_prompt_text();
+        for text in [instructions(), prompt] {
+            assert!(
+                text.contains(&sentence),
+                "the APERAK sentence is the rendered one"
+            );
+            // The superseded edition, spelled so it is not itself a citation.
+            let superseded = concat!("APERAK AHB 1", ".0");
+            for wrong in ["weekday", "Mo–Fr", superseded, "3 Werktage, 12"] {
+                assert!(!text.contains(wrong), "`{wrong}` in: {text}");
+            }
+        }
+    }
+
+    /// The audit prompt states no unsourced target and no mislabelled §.
+    #[test]
+    fn the_audit_prompt_carries_no_unsourced_target() {
+        let text = audit_kpi_prompt_text();
+        assert!(!text.contains("BNetzA targets"), "{text}");
+        assert!(!text.contains("Qualitätsbericht"), "{text}");
+    }
 }

@@ -14,7 +14,7 @@
 //!
 //! ## What it checks
 //!
-//! Every fenced block in `site/content/`, `concepts/` and `demos/` that parses
+//! Every fenced block in `site/content/`, `concepts/`, `specs/` and `demos/` that parses
 //! as JSON and carries a `_typ`, at any depth. Each such object is decoded into its BO4E
 //! type and run through
 //! [`Bo4eExtensions::extension_paths`](rubo4e::json::Bo4eExtensions::extension_paths).
@@ -63,7 +63,7 @@ pub fn run(workspace_root: &Path) -> bool {
     // in fact: a demo payload is what gets copied into a ticket as "this is
     // what a request looks like", and `demos/o2c` shipped a customer payload
     // whose fields the API did not have at all.
-    for dir in ["site/content", "concepts", "demos"] {
+    for dir in ["site/content", "concepts", "specs", "demos"] {
         let root = workspace_root.join(dir);
         if !root.is_dir() {
             // A checkout without this directory is normal — say so, rather than
@@ -109,7 +109,7 @@ pub fn run(workspace_root: &Path) -> bool {
     if checked == 0 {
         eprintln!(
             "check-bo4e-examples: the scan found no documented BO4E object in \
-             site/content/, concepts/ or demos/ — the layout has probably changed"
+             site/content/, concepts/, specs/ or demos/ — the layout has probably changed"
         );
         return false;
     }

@@ -433,13 +433,13 @@ pub(super) async fn dispatch_lf_anmeldung(
     // goes through. See `find_occupying_process` for why presence in the
     // correlation index is not the question, and `LfAnmeldungState`'s
     // `OccupiesBusinessKey` impl for the per-state decision.
-    if let Some(dup_id) = find_occupying_process::<GpkeLfAnmeldungWorkflow>(
+    let occupancy = find_occupying_process::<GpkeLfAnmeldungWorkflow>(
         state,
         malo_id.as_str(),
         mako_gpke::lf_anmeldung::WORKFLOW_NAME,
     )
-    .await?
-    {
+    .await?;
+    if let Some(dup_id) = occupancy.process {
         tracing::warn!(
             malo_id    = %malo_id,
             process_id = %dup_id,
@@ -451,25 +451,13 @@ pub(super) async fn dispatch_lf_anmeldung(
         });
     }
 
-    // ── Spawn process and execute command ─────────────────────────────────────
+    // ── Spawn: events, the UTILMD outbox entry, the Frist and the MaLo key ────
     //
-    // `Process::new` generates a fresh ProcessId + StreamId.
-    // `execute_and_enqueue_with_snapshot_and_retry` atomically appends the
-    // `Initiated` event AND enqueues the outbound UTILMD outbox entry in a
-    // single SlateDB WriteBatch (dual-write atomicity — no lost APERAKs on
-    // crash).  Retries up to 3 times on VersionConflict and takes a snapshot
-    // every 100 events so future replay is bounded to at most 100 tail events.
+    // One atomic write (`spawn_process`): the MaLo key is how the duplicate
+    // guard above and the Phase-3 answers (`gpke.lieferbeginn.bestaetigen`,
+    // `…ablehnen`, `…aktivieren`) find this process, so it lands with the
+    // UTILMD or not at all.
     let workflow_id = current_workflow_id();
-    let process = mako_engine::process::Process::<
-        GpkeLfAnmeldungWorkflow,
-        Arc<mako_engine::store_slatedb::SlateDbStore>,
-    >::new(
-        Arc::clone(&state.store),
-        state.tenant_id,
-        workflow_id.clone(),
-    );
-
-    let process_id = process.process_id();
 
     // ── Build the NB-response deadline before the atomic write ───────────────
     //
@@ -482,9 +470,7 @@ pub(super) async fn dispatch_lf_anmeldung(
     // reports a Tuesday-morning Frist as still running until Tuesday night.
     //
     // The instant is taken from `now_utc()` here so the window starts when the
-    // ERP request is received, not when the store write completes, and is
-    // passed to `execute_and_enqueue_with_deadlines` so events, outbox entries
-    // and the deadline land in a single SSI transaction (F-009).
+    // ERP request is received, not when the store write completes.
     //
     // The label must be the one `GpkeLfAnmeldungWorkflow::on_deadline` matches;
     // a label it does not know produces a deadline that fires into `_ => None`
@@ -499,44 +485,18 @@ pub(super) async fn dispatch_lf_anmeldung(
              operating convention, not a regulatory deadline",
         );
     }
-    let deadline = Deadline::new(
-        process.stream_id().clone(),
-        process_id,
+    let process_id = spawn_process::<GpkeLfAnmeldungWorkflow>(
+        &state.store,
         state.tenant_id,
-        workflow_id.clone(),
-        mako_gpke::lf_anmeldung::NB_RESPONSE_WINDOW_LABEL,
-        window.deadline,
-    );
-    process
-        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
-        .await?;
-
-    // ── Register process under MaLo business key ──────────────────────────────
-    //
-    // This enables Phase 3 response commands (`gpke.lieferbeginn.bestaetigen`,
-    // `gpke.lieferbeginn.aktivieren`, etc.) to look up the active process by
-    // `malo_id` without an exhaustive scan of all process streams.
-    //
-    // Registration is non-fatal: if it fails (e.g. transient storage error)
-    // the process has already been spawned and the Anmeldung is underway.
-    // The ERP must re-issue the command to trigger retry — the 202 is not sent
-    // here so the ERP is not misled, but we log prominently for ops.
-    let identity = process.identity();
-    if let Err(e) = state
-        .store
-        .as_process_registry()
-        .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
-        .await
-    {
-        tracing::warn!(
-            process_id = %process_id,
-            malo_id    = %malo_id,
-            error      = %e,
-            "ERP dispatch: business-key registration failed (non-fatal — Anmeldung was spawned); \
-             response commands (bestaetigen/ablehnen/aktivieren) will return process_not_found \
-             until the next successful anmelden call re-registers the process",
-        );
-    }
+        workflow_id,
+        domain_cmd,
+        &[(
+            mako_gpke::lf_anmeldung::NB_RESPONSE_WINDOW_LABEL,
+            window.deadline,
+        )],
+        &[malo_id.as_str()],
+    )
+    .await?;
 
     Ok(DispatchOutcome::Spawned { process_id })
 }
@@ -807,7 +767,7 @@ pub(super) async fn dispatch_kuendigung_antwort(
 ///
 /// The LF receives PID 55007 Ankündigung via AS4 (auto-spawned by the ingest
 /// dispatcher). After review, the ERP operator calls this command to send the
-/// formal response. The APERAK is its own 45-minute clock (APERAK AHB 1.0
+/// formal response. The APERAK is its own 45-minute clock (APERAK AHB 1.1
 /// §2.4.1); the business answer is due inside 55007's published Antwortfrist.
 ///
 /// ## Required payload fields
@@ -876,7 +836,7 @@ pub(super) async fn dispatch_gpke_beendigung_zuordnung_antwort(
 /// Frist is **15:00 Uhr am ÜT** (GPKE Teil 2 § 2.4.2.2 Nr. 2) — and missing it
 /// is not a lapsed obligation: Prozessschritt 3 has the NB assign the LFN to the
 /// Marktlokation anyway, using whichever Bilanzkreis the LFN last communicated.
-/// The separate APERAK clock is 45 minutes (APERAK AHB 1.0 § 2.4.1).
+/// The separate APERAK clock is 45 minutes (APERAK AHB 1.1 § 2.4.1).
 ///
 /// ## Payload fields
 ///
@@ -1235,13 +1195,13 @@ pub(super) async fn dispatch_gpke_sperrung_lf_beauftragen(
     // Duplicate guard — only a Sperrung still awaiting the NB blocks. An
     // executed one (`Ausgefuehrt`) is terminal, so the Entsperrung that follows
     // — which reuses this workflow — goes through. See `find_occupying_process`.
-    if let Some(dup_id) = find_occupying_process::<GpkeSperrungLfWorkflow>(
+    let occupancy = find_occupying_process::<GpkeSperrungLfWorkflow>(
         state,
         malo_id.as_str(),
         SPERRUNG_LF_WORKFLOW_NAME,
     )
-    .await?
-    {
+    .await?;
+    if let Some(dup_id) = occupancy.process {
         tracing::warn!(
             malo_id = %malo_id,
             process_id = %dup_id,
@@ -1255,15 +1215,6 @@ pub(super) async fn dispatch_gpke_sperrung_lf_beauftragen(
     }
 
     let workflow_id = WorkflowId::new(SPERRUNG_LF_WORKFLOW_NAME, latest_format_version());
-    let process = mako_engine::process::Process::<
-        GpkeSperrungLfWorkflow,
-        Arc<mako_engine::store_slatedb::SlateDbStore>,
-    >::new(
-        Arc::clone(&state.store),
-        state.tenant_id,
-        workflow_id.clone(),
-    );
-    let process_id = process.process_id();
 
     // The NB's ORDRSP window is a Werktag deadline, not 24 wall-clock hours:
     // „Unverzüglich, jedoch spätester ÜT ist der 1. WT nach dem ÜT" (GPKE Teil 2
@@ -1280,42 +1231,15 @@ pub(super) async fn dispatch_gpke_sperrung_lf_beauftragen(
              an operating convention, not a regulatory deadline",
         );
     }
-    let deadline = Deadline::new(
-        process.stream_id().clone(),
-        process_id,
+    let process_id = spawn_process::<GpkeSperrungLfWorkflow>(
+        &state.store,
         state.tenant_id,
         workflow_id,
-        SPERRUNG_LF_ANTWORT_WINDOW_LABEL,
-        window.deadline,
-    );
-    process
-        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
-        .await?;
-
-    let identity = process.identity();
-    // The correlation index is how an inbound answer finds this
-    // process; it is append-only and nothing rebuilds it. Discarding a
-    // failure here left a live process that no ORDRSP/UTILMD answer
-    // could ever be routed to — the answer is dropped as
-    // `process_not_found` and the Frist expires against a process that
-    // was doing everything right. Not propagated: the process is spawned
-    // and its message already enqueued, so failing the caller now would
-    // have it re-issue the command and start a second one. Logged with
-    // the key and process id, which is what a repair needs.
-    if let Err(e) = state
-        .store
-        .as_process_registry()
-        .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
-        .await
-    {
-        tracing::error!(
-            process_id = %process_id,
-            malo_id    = %malo_id,
-            error      = %e,
-            "gpke.sperrung: business-key registration failed — the LF's answer to this \
-             Sperrauftrag cannot be correlated back to it",
-        );
-    }
+        domain_cmd,
+        &[(SPERRUNG_LF_ANTWORT_WINDOW_LABEL, window.deadline)],
+        &[malo_id.as_str()],
+    )
+    .await?;
 
     Ok(DispatchOutcome::Spawned { process_id })
 }
@@ -1439,13 +1363,13 @@ pub(super) async fn dispatch_gpke_eog_anmelden(
     // Only a still-running EoG process for this MaLo blocks; a concurrent
     // Lieferbeginn or Sperrung on the same MaLo is legitimate, and an EoG that
     // was rejected or ended is terminal. See `find_occupying_process`.
-    if let Some(dup_id) = find_occupying_process::<GpkeEogWorkflow>(
+    let occupancy = find_occupying_process::<GpkeEogWorkflow>(
         state,
         malo_id.as_str(),
         mako_gpke::EOG_WORKFLOW_NAME,
     )
-    .await?
-    {
+    .await?;
+    if let Some(dup_id) = occupancy.process {
         tracing::warn!(
             malo_id    = %malo_id,
             process_id = %dup_id,
@@ -1459,54 +1383,26 @@ pub(super) async fn dispatch_gpke_eog_anmelden(
 
     // ── Spawn process ─────────────────────────────────────────────────────────
     let workflow_id = WorkflowId::new(mako_gpke::EOG_WORKFLOW_NAME, latest_format_version());
-    let process = mako_engine::process::Process::<
-        mako_gpke::GpkeEogWorkflow,
-        Arc<mako_engine::store_slatedb::SlateDbStore>,
-    >::new(
-        Arc::clone(&state.store),
-        state.tenant_id,
-        workflow_id.clone(),
-    );
-    let process_id = process.process_id();
-
     // The E/G's published answer window (GPKE Teil 2 § 2.3.2.2 Nr. 2): 15:00 Uhr
     // am ÜT, the tighter of the two the Festlegung states. On expiry the NB
     // assigns anyway with the pre-deposited default Bilanzkreis (Nr. 3) — which
     // is a reason to answer in time, not to track a looser clock.
-    let deadlines: Vec<Deadline> = mako_gpke::eog_antwort_due_at(
+    let deadlines: Vec<(&'static str, time::OffsetDateTime)> = mako_gpke::eog_antwort_due_at(
         mako_gpke::EOG_ANMELDUNG_PID,
         time::OffsetDateTime::now_utc(),
     )
-    .map(|due_at| {
-        Deadline::new(
-            process.stream_id().clone(),
-            process_id,
-            state.tenant_id,
-            workflow_id,
-            mako_gpke::EOG_RESPONSE_WINDOW_LABEL,
-            due_at,
-        )
-    })
+    .map(|due_at| (mako_gpke::EOG_RESPONSE_WINDOW_LABEL, due_at))
     .into_iter()
     .collect();
-    process
-        .execute_and_enqueue_with_deadlines(domain_cmd, &deadlines)
-        .await?;
-
-    let identity = process.identity();
-    if let Err(e) = state
-        .store
-        .as_process_registry()
-        .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
-        .await
-    {
-        tracing::warn!(
-            process_id = %process_id,
-            malo_id    = %malo_id,
-            error      = %e,
-            "gpke.eog.anmelden: business-key registration failed (non-fatal)",
-        );
-    }
+    let process_id = spawn_process::<mako_gpke::GpkeEogWorkflow>(
+        &state.store,
+        state.tenant_id,
+        workflow_id,
+        domain_cmd,
+        &deadlines,
+        &[malo_id.as_str()],
+    )
+    .await?;
 
     Ok(DispatchOutcome::Spawned { process_id })
 }
@@ -1759,54 +1655,25 @@ async fn dispatch_gpke_beendigung_zuordnung_anfragen(
         mako_gpke::BEENDIGUNG_ZUORDNUNG_WORKFLOW_NAME,
         latest_format_version(),
     );
-    let process = mako_engine::process::Process::<
-        GpkeBeendigungZuordnungWorkflow,
-        Arc<mako_engine::store_slatedb::SlateDbStore>,
-    >::new(
-        Arc::clone(&state.store),
-        state.tenant_id,
-        workflow_id.clone(),
-    );
-    let process_id = process.process_id();
-    let identity = process.identity();
-
     // 09:00 Uhr des 1. WT nach dem ÜT der Anmeldung — `mako_fristen::antwort`
     // resolves it from the trigger PID, the same table `makod` sizes every
     // other process window from.
-    let deadlines: Vec<Deadline> = mako_fristen::antwort::antwort_deadline(
-        mako_gpke::beendigung_zuordnung::ANFRAGE_PID,
-        time::OffsetDateTime::now_utc(),
-    )
-    .map(|due_at| {
-        Deadline::new(
-            process.stream_id().clone(),
-            process_id,
-            state.tenant_id,
-            workflow_id,
-            mako_gpke::NB_ANFRAGE_WINDOW_LABEL,
-            due_at,
+    let deadlines: Vec<(&'static str, time::OffsetDateTime)> =
+        mako_fristen::antwort::antwort_deadline(
+            mako_gpke::beendigung_zuordnung::ANFRAGE_PID,
+            time::OffsetDateTime::now_utc(),
         )
-    })
-    .into_iter()
-    .collect();
-
-    process
-        .execute_and_enqueue_with_deadlines(domain_cmd, &deadlines)
-        .await?;
-
-    if let Err(e) = state
-        .store
-        .as_process_registry()
-        .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
-        .await
-    {
-        tracing::warn!(
-            %process_id,
-            malo_id = %malo_id,
-            error = %e,
-            "gpke.beendigung-zuordnung.anfragen: business-key registration failed — the LFA's \
-             answer cannot be correlated back, so the 09:00 window will decide the Anmeldung",
-        );
-    }
+        .map(|due_at| (mako_gpke::NB_ANFRAGE_WINDOW_LABEL, due_at))
+        .into_iter()
+        .collect();
+    let process_id = spawn_process::<GpkeBeendigungZuordnungWorkflow>(
+        &state.store,
+        state.tenant_id,
+        workflow_id,
+        domain_cmd,
+        &deadlines,
+        &[malo_id.as_str()],
+    )
+    .await?;
     Ok(DispatchOutcome::Spawned { process_id })
 }

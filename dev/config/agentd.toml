@@ -1,0 +1,48 @@
+# agentd.toml — local development: `just dev agentd` starts agentd with this file against
+# the PostgreSQL of dev/docker-compose.yml (`just infra-up`). Authentication is
+# off and the secrets are fixed strings. DO NOT use in production.
+#
+# Every key can be overridden by an environment variable — `AGENTD_<KEY>`, nested
+# keys joined with `__`. `agentd --help` lists the conventions.
+
+allow_insecure_no_auth = true
+
+port   = 9580
+tenant = "9900357000004"
+
+mcp_api_key = "dev-mcp-key"
+
+# One specialist, so the plane has an agent to admit. Its manifest names the
+# provider `anthropic`; here that name is backed by an OpenAI-compatible server
+# on localhost (the Ollama default), which nothing calls until an event wakes
+# the agent. A hosted provider takes its key as `api_key = "env:…"`.
+[bundled_agents]
+enable = ["deadline-alert-agent"]
+
+[providers.anthropic]
+backend  = "chat-completions"
+api_base = "http://127.0.0.1:11434/v1"
+
+[journal]
+backend = "postgres"
+url     = "postgres://dev:dev@localhost:5432/agentd"
+
+# Every MCP server a bundled specialist's manifest grants, at the dev port of
+# `just dev <service>`. agentd handshakes each one at startup, so it starts
+# only once those services are running — `just smoke-dev` boots it last.
+[mcp_servers]
+makod       = "http://127.0.0.1:8080/mcp"
+marktd      = "http://127.0.0.1:8180/mcp"
+invoicd     = "http://127.0.0.1:8280/mcp"
+edmd        = "http://127.0.0.1:8380/mcp"
+obsd        = "http://127.0.0.1:8480/mcp"
+processd    = "http://127.0.0.1:8580/mcp"
+netzbilanzd = "http://127.0.0.1:8680/mcp"
+sperrd      = "http://127.0.0.1:8780/mcp"
+mabis_syncd = "http://127.0.0.1:8880/mcp"
+productd    = "http://127.0.0.1:9080/mcp"
+einsd       = "http://127.0.0.1:9180/mcp"
+billingd    = "http://127.0.0.1:9280/mcp"
+accountingd = "http://127.0.0.1:9380/mcp"
+portald     = "http://127.0.0.1:9480/mcp"
+vertragd    = "http://127.0.0.1:9780/mcp"

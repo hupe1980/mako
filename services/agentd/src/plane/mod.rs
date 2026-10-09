@@ -48,7 +48,7 @@ use agentplane::manifest::Manifest;
 /// **02.12.2026**. Whether an operator worklist is a system „interacting
 /// directly with natural persons" is genuinely arguable — and arguing it is the
 /// expensive answer. Saying so on the row is one line, and it holds whichever
-/// way the classification falls. [`AIFIRST.md`] carries the position.
+/// way the classification falls.
 ///
 /// **The machine-readable half already exists.** agentplane opens a triage task
 /// under the kind `agent.triage/<rule>`, so anything reading the worklist can
@@ -64,7 +64,6 @@ use agentplane::manifest::Manifest;
 /// a false statement in the direction that is worse, because it is the
 /// direction that teaches an operator to ignore the marking.
 ///
-/// [`AIFIRST.md`]: ../../../../concepts/AIFIRST.md
 pub const MACHINE_GENERATED: &str = "AI-generated. ";
 
 /// Every specialist manifest, embedded at compile time and keyed by the name the
@@ -456,9 +455,9 @@ mod tests {
     /// changes.
     #[test]
     fn specialists_grant_the_knowledge_their_service_publishes() {
-        // Coded specialists have no model to read a prompt. Billingd currently
-        // publishes no VPP-specific prompt; importing its EEG prompt is worse
-        // than keeping the VPP procedure explicit and was removed by audit.
+        // Coded specialists have no model to read a prompt. Billingd publishes
+        // no VPP-specific prompt, and importing its EEG prompt is worse than
+        // keeping the VPP procedure explicit.
         const NO_PROMPT_NEEDED: &[&str] = &[
             "deadline-alert-agent",
             "gabi-gas-agent",

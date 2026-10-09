@@ -129,6 +129,32 @@ impl VerzeichnisdienstLookup {
         }
 
         // 2. Query the Verzeichnisdienst.
+        self.fetch_from_directory(mp_id, &mp_id_code).await
+    }
+
+    /// Re-resolve `mp_id` from the Verzeichnisdienst, bypassing the partner
+    /// store, and store what it answers.
+    ///
+    /// The refresh path: the on-demand lookup answers from the store, so only
+    /// this notices that a partner republished its endpoint.
+    ///
+    /// # Errors
+    ///
+    /// As [`lookup_malo_ident_url`](Self::lookup_malo_ident_url).
+    pub async fn refresh_malo_ident_url(
+        &self,
+        mp_id: &str,
+    ) -> Result<Option<Url>, mako_engine::error::EngineError> {
+        self.fetch_from_directory(mp_id, &MarktpartnerCode::new(mp_id))
+            .await
+    }
+
+    /// Ask the Verzeichnisdienst and persist its answer to the partner store.
+    async fn fetch_from_directory(
+        &self,
+        mp_id: &str,
+        mp_id_code: &MarktpartnerCode,
+    ) -> Result<Option<Url>, mako_engine::error::EngineError> {
         match self
             .client
             .get_record(mp_id, MALO_IDENT_API_ID, MALO_IDENT_MAJOR_VERSION)
@@ -143,7 +169,7 @@ impl VerzeichnisdienstLookup {
                 );
 
                 // 3. Persist to partner store so future lookups are instant.
-                self.persist_api_webdienste_url(mp_id, &mp_id_code, api_url.as_str())
+                self.persist_api_webdienste_url(mp_id, mp_id_code, api_url.as_str())
                     .await;
 
                 Ok(Some(api_url))
@@ -161,12 +187,8 @@ impl VerzeichnisdienstLookup {
                 match Url::parse(url.as_ref()) {
                     Ok(redirected_url) => {
                         // Store the redirect target URL as the partner's API-Webdienste endpoint.
-                        self.persist_api_webdienste_url(
-                            mp_id,
-                            &mp_id_code,
-                            redirected_url.as_str(),
-                        )
-                        .await;
+                        self.persist_api_webdienste_url(mp_id, mp_id_code, redirected_url.as_str())
+                            .await;
                         Ok(Some(redirected_url))
                     }
                     Err(e) => {
@@ -255,8 +277,8 @@ impl VerzeichnisdienstLookup {
 /// Periodic background refresh task.
 ///
 /// Iterates all partner MP-IDs registered in the store and re-fetches their
-/// Verzeichnisdienst entries on a configurable interval. This keeps the cache
-/// warm even if the on-demand path has not been exercised for a while.
+/// Verzeichnisdienst entries on a configurable interval, past the cache, so an
+/// endpoint a partner republishes replaces the stored one.
 ///
 /// Spawn with [`tokio::spawn`]:
 ///
@@ -285,29 +307,38 @@ pub async fn verzeichnisdienst_refresh_task(
             }
         }
 
-        let partners = match lookup.partner_store.list(lookup.tenant_id).await {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(error = %e, "Verzeichnisdienst refresh: failed to list partners");
-                continue;
-            }
-        };
-
-        let count = partners.len();
-        debug!(
-            count,
-            "Verzeichnisdienst refresh: refreshing {} partner(s)", count
-        );
-
-        for partner in partners {
-            let mp_id = partner.mp_id.as_str().to_owned();
-            if let Err(e) = lookup.lookup_malo_ident_url(&mp_id).await {
-                warn!(mp_id, error = %e, "Verzeichnisdienst refresh: lookup error");
-            }
-        }
-
-        debug!("Verzeichnisdienst refresh: cycle complete");
+        refresh_cycle(&lookup).await;
     }
+}
+
+/// One refresh cycle over every partner in the store.
+///
+/// Each partner is re-resolved from the directory rather than through the
+/// on-demand lookup's cache, so a republished endpoint is in use within one
+/// cycle; the directory is asked once per partner per cycle, not per request.
+async fn refresh_cycle(lookup: &VerzeichnisdienstLookup) {
+    let partners = match lookup.partner_store.list(lookup.tenant_id).await {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(error = %e, "Verzeichnisdienst refresh: failed to list partners");
+            return;
+        }
+    };
+
+    let count = partners.len();
+    debug!(
+        count,
+        "Verzeichnisdienst refresh: refreshing {} partner(s)", count
+    );
+
+    for partner in partners {
+        let mp_id = partner.mp_id.as_str().to_owned();
+        if let Err(e) = lookup.refresh_malo_ident_url(&mp_id).await {
+            warn!(mp_id, error = %e, "Verzeichnisdienst refresh: lookup error");
+        }
+    }
+
+    debug!("Verzeichnisdienst refresh: cycle complete");
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -351,5 +382,87 @@ mod endpoint_scheme_tests {
     fn a_non_http_scheme_is_refused() {
         assert!(!ok("file:///etc/passwd"));
         assert!(!ok("ftp://lf.example/maloId/"));
+    }
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    //! A republished partner URL is picked up by the next refresh cycle.
+    //!
+    //! The on-demand lookup answers from the partner store first, which is
+    //! what makes it cheap; the refresh exists to notice that the directory's
+    //! answer changed. A refresh that went through the same cache would only
+    //! ever re-read what it stored, and `makod` would keep calling the URL a
+    //! partner abandoned until an operator noticed.
+
+    use super::*;
+
+    const MP_ID: &str = "9900001000001";
+
+    /// A Verzeichnisdienst answering every record lookup with `url`.
+    async fn directory(url: &'static str) -> Url {
+        let record = serde_json::json!({
+            "providerId": MP_ID,
+            "apiId": MALO_IDENT_API_ID,
+            "majorVersion": MALO_IDENT_MAJOR_VERSION,
+            "url": url,
+            "lastUpdated": "2026-10-01T00:00:00Z",
+            "revision": 2,
+            "status": "Online",
+        });
+        let app = axum::Router::new().fallback(move || {
+            let record = record.clone();
+            async move { axum::Json(record) }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        Url::parse(&format!("http://{addr}/")).expect("url")
+    }
+
+    #[tokio::test]
+    async fn a_refresh_cycle_replaces_a_republished_url() {
+        let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
+            .await
+            .expect("store");
+        let partners = store.as_partner_store();
+        let tenant = TenantId::from_party_id("9900357000004");
+        partners
+            .upsert(
+                tenant,
+                &PartnerRecord {
+                    mp_id: MarktpartnerCode::new(MP_ID),
+                    display_name: None,
+                    channels: vec![CommunicationChannel::api_webdienste(
+                        "https://old.partner.example/maloId/",
+                    )],
+                    roles: Vec::new(),
+                    valid_from: None,
+                    contacts: Vec::new(),
+                    country_code: None,
+                    updated_at: time::OffsetDateTime::now_utc(),
+                },
+            )
+            .await
+            .expect("seed");
+
+        let base = directory("https://new.partner.example/maloId/").await;
+        let client = DirectoryServiceClient::new(base, reqwest::Client::new());
+        let lookup = VerzeichnisdienstLookup::new(client, partners.clone(), tenant);
+
+        refresh_cycle(&lookup).await;
+
+        let stored = partners
+            .get(tenant, &MarktpartnerCode::new(MP_ID))
+            .await
+            .expect("read")
+            .expect("record");
+        assert_eq!(
+            stored.api_webdienste_endpoint(),
+            Some("https://new.partner.example/maloId/"),
+            "one refresh cycle must replace the URL the directory no longer publishes"
+        );
     }
 }

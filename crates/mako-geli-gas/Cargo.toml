@@ -1,7 +1,7 @@
 [package]
 name         = "mako-geli-gas"
 version.workspace     = true
-description  = "GeLi Gas process engine for German gas market communication (Geschäftsprozesse Lieferantenwechsel Gas)"
+description  = "GeLi Gas workflows for German gas supplier switching, master-data changes and Sperrprozesse (BK7-24-01-009)"
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true
@@ -17,7 +17,6 @@ mako-engine = { workspace = true }
 mako-invoic  = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
-thiserror   = { workspace = true }
 time        = { workspace = true }
 
 [dev-dependencies]
@@ -30,3 +29,6 @@ mako-engine = { workspace = true, features = ["testing"] }
 serde_json  = { workspace = true }
 time        = { workspace = true }
 tokio       = { version = "1", features = ["full"] }
+
+[lints]
+workspace = true

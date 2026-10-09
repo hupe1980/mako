@@ -8,14 +8,11 @@ weight = 11
   PID 3.3 (FV2025-10-01, Fehlerkorrektur 27.03.2026) · PID 4.0 (FV2026-10-01, published 01.04.2026)
 - DVGW EDI-DVGW — Prüfidentifikatoren 70000–79999 for GaBi Gas transport
 
-A Prüfidentifikator (PID) identifies a specific EDIFACT message use case within a
-business process. If the vocabulary here is new, the
-[reference vocabulary](@/docs/reference/_index.md#vocabulary) defines it, and the
-[process catalogue](@/docs/reference/processes.md) groups these PIDs into the
-end-to-end processes they belong to. Each PID is bound to one EDIFACT format (UTILMD, MSCONS, INVOIC, …)
-and one business context (GPKE, WiM, GeLi Gas, …). The routing layer
-(`mako_engine::pid_router::PidRouter`) dispatches inbound messages to the correct
-workflow by PID.
+A Prüfidentifikator (PID) names one EDIFACT use case within a business process
+([vocabulary](@/docs/reference/_index.md#vocabulary)); the
+[process catalogue](@/docs/reference/processes.md) groups them into end-to-end
+processes. `mako_engine::pid_router::PidRouter` dispatches inbound messages to
+a workflow by PID.
 
 **Legend — columns**
 
@@ -24,7 +21,7 @@ workflow by PID.
 | **Von → An** | Communication direction from BDEW xlsx. Multi-occurrence PIDs (same PID, different process contexts) show all unique role pairs separated by ` · `. |
 | **Reaktion** | PID that this message _reacts to_ (i.e. is a response/follow-up to). `—` if the column is empty in the source xlsx. |
 | **⚡ / 🔥** | Sparte: ✅ = covered; — = not applicable. |
-| **3.3 / 4.0** | ✅ = present in BDEW PID overview for that format version; ⚠️ = absent (sunset or not-yet-added). |
+| **3.3 / 4.0** | ✅ = present in the BDEW PID overview for that format version; ⚠️ = absent. |
 | **Crate / Workflow** | The `mako-*` crate and `workflow-name` that registers this PID in `PidRouter` — see below |
 
 Reading the **Crate / Workflow** column: `—` means no workflow registers the PID,
@@ -34,25 +31,19 @@ registered independently in more than one crate, which is safe because those
 crates are commodity-isolated: each is loaded only in the Strom or the Gas
 deployment, never both.
 
-A guard parses this column
-(`services/makod/tests/pid_reference_guard.rs`): a PID credited to a workflow
-must be one the compiled modules actually route, and the named workflow must be
-the one the router resolves. A message carrying an unrouted PID is dead-lettered
-as `UnknownPid`, so a row that promises handling it does not have is a
-documented lie the test refuses.
+`services/makod/tests/it/pid_reference_guard.rs` parses this column: a PID
+credited to a workflow must be routed by the compiled modules, to the named
+workflow, or be listed in the test's `NOT_ROUTED_BY_DESIGN` with a reason.
 
-**Commodity isolation is per *process family*, not per Sparte.** The Lieferanten­
-wechsel is genuinely two different Festlegungen — GPKE (`mako-gpke`) against GeLi
-Gas (`mako-geli-gas`) — and those crates stay independent. **WiM is not.** AWH WiM
-Gas 2.0 restates WiM Strom Teil 1 use-case for use-case with the same Fristen, so
-`mako-wim` runs both Sparten and `wim_sparte(pid)` reads which off the
-Prüfidentifikator. What differs is recorded rather than duplicated: the
-Antwort-Codeliste (`S_00xx` against `G_00xx`), the APERAK regime, and the
-Zuordnungszeitpunkt (00:00 against **06:00 Uhr**, the Gastag boundary).
+**Commodity isolation is per process family.** The Lieferantenwechsel is two
+Festlegungen — GPKE (`mako-gpke`) and GeLi Gas (`mako-geli-gas`). WiM is one:
+AWH WiM Gas 2.0 restates WiM Strom Teil 1 with the same Fristen, so `mako-wim`
+runs both Sparten and `wim_sparte(pid)` reads which off the PID. The
+differences are the Antwort-Codeliste (`S_00xx` / `G_00xx`), the APERAK regime
+and the Zuordnungszeitpunkt (00:00 / **06:00 Uhr**).
 
 **Multi-commodity PIDs:** several AHBs are Sparte-neutral, so the same PID carries
-both — INSRPT 23001/23003/23004/23008 (23005/23009 are Gas-only, 23011/23012
-Strom-only), the WiM ORDERS 17001/17002/17009 and their ORDRSP answers,
+both — INSRPT 23001/23003/23004/23005/23008/23009 (23011/23012 Strom-only), the WiM ORDERS 17001/17002/17009 and their ORDRSP answers,
 REQOTE 35001 / QUOTES 15001, the IFTSTA Statusmeldungen, and INVOIC 31003. The Sparte is
 not in the message body: it is the Sparte of the **interchange recipient's MP-ID**
 (BDEW Allgemeine Festlegungen §2.13), which the ingest layer resolves and passes
@@ -146,39 +137,27 @@ NOMRES 4.7 §4. See [DVGW EDI](@/docs/reference/dvgw.md) for the parsing archite
 
 ## Reading the “Crate / Workflow” column
 
-The column names the crate and workflow that owns a Prüfidentifikator. It does
-**not** by itself mean an inbound message with that PID is routed — a handful of
-PIDs are ones mako *generates* as responses, and a further group is credited to
-a workflow whose registered band does not yet include them.
+A named crate and workflow owns the PID; two groups of credited PIDs are not
+routed inbound:
 
 | Situation | PIDs |
 |---|---|
-| **Outbound-only** — generated or dispatched by mako, never received | 17134, 17135 (ORDERS dispatched via the outbox by `GpkeKonfigurationWorkflow`) |
+| **Outbound-only** — generated or dispatched by mako, never received | 17134, 17135 (ORDERS sent by `GpkeKonfigurationWorkflow`); 19003, 19004 (the MSBA's answer to ORDERS 17002) |
 | **Role-conditional** — registered only under an explicit `NMSB` role build | 19001, 19002 (ORDRSP Bestellbestätigung/Ablehnung, answering ORDERS 17001) — GPKE Konfiguration claims the same two on an NB instance |
-| **Named but not routed** — constants exist or the band is narrower than the credit implies | 55035, 55060, 55095, 55173, 55175, 55177, 55180, 55194, 55225, 55227, 55230, 55232, 55553, 55559 |
+| **Named but not routed** — outside the band the named workflow registers | 55035, 55060, 55095, 55173, 55175, 55177, 55180, 55194, 55225, 55227, 55553 |
 
 An inbound message carrying one of the last group is dead-lettered as
-`UnknownPid` — audited under § 147 AO, logged, and counted by
-`makod_dead_letter_recorded_total{reason="unknown_pid:N"}`. It is observable, not
-silent, but it is not handled.
+`UnknownPid` and counted by
+`makod_dead_letter_recorded_total{reason="unknown_pid:N"}`.
 
 ### Meldepflichten — obligations nothing waits for
 
-Seven PIDs are a category of their own: **55036 / 55037 / 55038** and their Gas
-twins **44036 / 44037 / 44038** around a Lieferbeginn, plus **55611**, which the
-SD „Lieferende von NB an LF" owes the MSB / MSBZ. All are one-way — no
-Bestätigung in either direction — so a missing one produces no timeout and no
-dead letter, and surfaces months later as a counterparty holding a stale view of
-who serves the Marktlokation.
-
-They route to `gpke-zuordnungsmeldung` and `geli-gas-zuordnungsmeldung`. Because
-no alert can cover them, the guard is a test: `mako_fristen::meldung` catalogues
-the windows and Fundstellen and `meldepflicht_coverage.rs` cross-checks it
-against the `PidRouter`.
-
-The split is enforced: `pid_reference_guard` cross-checks this table against the
-`PidRouter` on every CI run, so a row added here without a matching registration
-(or an entry in the test's `NOT_ROUTED_BY_DESIGN` list) fails the build.
+**55036 / 55037 / 55038**, their Gas twins **44036 / 44037 / 44038**, and
+**55611** (owed by the SD „Lieferende von NB an LF" to the MSB / MSBZ) are
+one-way: no Bestätigung, so a missing one raises no timeout and no dead letter.
+They route to `gpke-zuordnungsmeldung` and `geli-gas-zuordnungsmeldung`;
+`mako_fristen::meldung` catalogues their windows and Fundstellen, and
+`meldepflicht_coverage.rs` cross-checks it against the `PidRouter`.
 
 **Not listed in the BDEW tables above:** the DVGW Prüfidentifikatoren
 (70001–70039). They are published by DVGW rather than BDEW and have their own
@@ -187,6 +166,13 @@ section on this page.
 ---
 
 ## UTILMD AHB Strom
+
+> **Stammdatenänderung family (GPKE Teil 4).** The full band **55615–55694,
+> 55109/55110** (Änderung + Rückmeldung per master-data object × direction, one
+> abstract use-case) routes to `gpke-stammdatenaenderung`. Strom is quality
+> feedback (A01 übernommen / A02 mit Korrektur), never a hard reject; the
+> receiver applies the change regardless and a missing Rückmeldung is tacit
+> acceptance (Frist: 2. Werktag).
 
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
@@ -205,15 +191,6 @@ section on this page.
 | 55013 | Anmeldung / Zuordnung EOG | GPKE Teil 2 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-eog` |
 | 55014 | Bestätigung EOG Anmeldung | GPKE Teil 2 | LF → NB | 55013 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-eog` |
 | 55015 | Ablehnung EOG Anmeldung | GPKE Teil 2 | LF → NB | 55013 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-eog` |
-
-> **Stammdatenänderung family (GPKE Teil 4).** The full band **55615–55694,
-> 55109/55110** (Änderung + Rückmeldung per master-data object × direction, one
-> abstract use-case) routes to `gpke-stammdatenaenderung`. Strom is quality
-> feedback (A01 übernommen / A02 mit Korrektur), never a hard reject; the
-> receiver applies the change regardless and a missing Rückmeldung is tacit
-> acceptance (Frist: 2. Werktag). The rows above are the highest-volume MaLo
-> examples; 55557/55559 (MSB-Abr.-Daten) stay on `gpke-supplier-change` and
-> 21047 (Bearbeitungsstand) on the IFTSTA route.
 | 55016 | Kündigung | GPKE Teil 2 | LFN → LFA | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-kuendigung` |
 | 55017 | Bestätigung Kündigung | GPKE Teil 2 | LFA → LFN | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
 | 55018 | Ablehnung Kündigung | GPKE Teil 2 | LFA → LFN | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
@@ -746,9 +723,9 @@ section on this page.
 | 23001 | Störungsmeldung | WiM Gas / WiM Strom Teil 2 | LF → MSB · NB → MSB · Melder → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` (beide Sparten) |
 | 23003 | Ablehnung | WiM Gas / WiM Strom Teil 2 | MSB → LF · MSB → NB · MSB → Melder | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` (beide Sparten) |
 | 23004 | Bestätigung | WiM Gas / WiM Strom Teil 2 | MSB → LF · MSB → NB · MSB → Melder | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` (beide Sparten) |
-| 23005 | Ablehnung Gas-Variante | WiM Gas | MSB → NB · MSB → MSB | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` |
+| 23005 | Informationsmeldung | WiM Strom Teil 2 · WiM Gas | MSB → MSB (Strom) · MSB → NB (Gas) | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` (beide Sparten) |
 | 23008 | Ergebnisbericht | WiM Gas / WiM Strom Teil 2 | MSB → LF · MSB → NB · MSB → Melder | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` (beide Sparten) |
-| 23009 | Ergebnisbericht Gas-Variante | WiM Gas | MSB → NB · MSB → MSB | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` |
+| 23009 | Informationsmeldung | WiM Strom Teil 2 · WiM Gas | MSB → MSB (Strom) · MSB → NB (Gas) | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` (beide Sparten) |
 | 23011 | Informationsmeldung | WiM Strom Teil 2 | MSB → NB · MSB → LF · MSB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-insrpt` |
 | 23012 | Informationsmeldung | WiM Strom Teil 2 | MSB → NB · MSB → LF · MSB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-insrpt` |
 

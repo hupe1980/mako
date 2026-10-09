@@ -64,9 +64,6 @@ use std::path::PathBuf;
 
 use serde::de::DeserializeOwned;
 
-/// Configuration loading error — wraps [`figment::Error`].
-pub type ConfigError = figment::Error;
-
 // ── Shared config structs ─────────────────────────────────────────────────────
 
 /// Standard `PostgreSQL` database configuration block.
@@ -180,34 +177,482 @@ pub struct HttpConfig {
 }
 
 // ── Loader ────────────────────────────────────────────────────────────────────
+
+/// Where the loader looked for the TOML file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigFile {
+    /// The path `<PREFIX>_CONFIG` names.
+    FromEnv {
+        /// The variable that named it, e.g. `MARKTD_CONFIG`.
+        var: String,
+        /// The path it holds.
+        path: PathBuf,
+    },
+    /// The default `./<name>.toml`, read when `<PREFIX>_CONFIG` is unset.
+    Default(PathBuf),
+    /// A path the caller passed to [`load_config_file`].
+    Explicit(PathBuf),
+}
+
+impl ConfigFile {
+    /// The path read.
+    #[must_use]
+    pub fn path(&self) -> &std::path::Path {
+        match self {
+            Self::FromEnv { path, .. } | Self::Default(path) | Self::Explicit(path) => path,
+        }
+    }
+}
+
+/// One thing wrong with a config, named by its dotted key path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigProblem {
+    /// A required key is in neither the file nor the environment.
+    Missing(String),
+    /// A key the config type does not declare (reported for types that deny
+    /// unknown fields).
+    Unknown(String),
+    /// A key whose value does not deserialize.
+    Invalid {
+        /// Dotted key path.
+        path: String,
+        /// What is wrong with it.
+        message: String,
+    },
+    /// The file `<PREFIX>_CONFIG` (or the caller) named does not exist.
+    FileNotFound(PathBuf),
+    /// A layer could not be read at all: TOML syntax, an unset `env:` reference,
+    /// an unreadable `_FILE`.
+    Unreadable(String),
+    /// The checker stopped at a key it could not fill in to look further; more
+    /// problems may sit behind the ones listed.
+    Incomplete,
+}
+
+impl std::fmt::Display for ConfigProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing(p) => write!(f, "missing field `{p}`"),
+            Self::Unknown(p) => write!(f, "unknown field `{p}`"),
+            Self::Invalid { path, message } => write!(f, "invalid value at `{path}`: {message}"),
+            Self::FileNotFound(p) => write!(f, "config file {} does not exist", p.display()),
+            Self::Unreadable(m) => write!(f, "{m}"),
+            Self::Incomplete => f.write_str(
+                "further problems may be hidden behind the ones above; fix them and re-run",
+            ),
+        }
+    }
+}
+
+/// A config that did not load — every problem found, with the file the loader
+/// read and the environment prefix it merged.
+///
+/// One error names all of it, because a service whose config is discovered one
+/// missing field per restart costs a newcomer as many restarts as there are
+/// fields.
+#[derive(Debug, Clone)]
+pub struct ConfigError(Box<ConfigErrorInner>);
+
+#[derive(Debug, Clone)]
+struct ConfigErrorInner {
+    service: String,
+    file: ConfigFile,
+    file_exists: bool,
+    env_prefix: String,
+    problems: Vec<ConfigProblem>,
+}
+
+impl ConfigError {
+    fn new(
+        service: &str,
+        file: &ConfigFile,
+        env_prefix: &str,
+        problems: Vec<ConfigProblem>,
+    ) -> Self {
+        Self(Box::new(ConfigErrorInner {
+            service: service.to_owned(),
+            file: file.clone(),
+            file_exists: file.path().is_file(),
+            env_prefix: env_prefix.to_owned(),
+            problems,
+        }))
+    }
+
+    /// Every problem found, in the order found.
+    #[must_use]
+    pub fn problems(&self) -> &[ConfigProblem] {
+        &self.0.problems
+    }
+
+    /// Where the loader looked for the file.
+    #[must_use]
+    pub fn file(&self) -> &ConfigFile {
+        &self.0.file
+    }
+
+    /// The environment-variable prefix merged over the file, e.g. `MARKTD_`.
+    #[must_use]
+    pub fn env_prefix(&self) -> &str {
+        &self.0.env_prefix
+    }
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let this = &self.0;
+        let n = this.problems.len();
+        writeln!(
+            f,
+            "{} config is invalid ({n} problem{})",
+            this.service,
+            if n == 1 { "" } else { "s" }
+        )?;
+        let path = this.file.path().display();
+        let state = if this.file_exists {
+            "read"
+        } else {
+            "not found"
+        };
+        match &this.file {
+            ConfigFile::FromEnv { var, .. } => {
+                writeln!(f, "  file:       {path} ({state}; named by {var})")?;
+            }
+            ConfigFile::Default(_) => {
+                writeln!(
+                    f,
+                    "  file:       {path} ({state}; the default — set {}CONFIG to read another)",
+                    this.env_prefix
+                )?;
+            }
+            ConfigFile::Explicit(_) => writeln!(f, "  file:       {path} ({state})")?,
+        }
+        writeln!(
+            f,
+            "  env prefix: {p} (nested keys join with `__`, e.g. {p}DATABASE__URL; \
+             a `_FILE` suffix reads the value from a file)",
+            p = this.env_prefix
+        )?;
+        for p in &this.problems {
+            writeln!(f, "  - {p}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+/// The environment-variable prefix for service `name`: upper-cased, `-` → `_`,
+/// trailing `_` — `mabis-syncd` reads `MABIS_SYNCD_*`.
+#[must_use]
+pub fn env_prefix(name: &str) -> String {
+    format!("{}_", name.to_uppercase().replace('-', "_"))
+}
+
+/// Load a service's configuration from TOML + environment variables.
 ///
 /// See [module docs](self) for file-discovery rules and override conventions.
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the TOML contains invalid syntax, a required
-/// field is missing from both the file and env, or the values cannot be
-/// deserialized into `C`.
-#[allow(clippy::result_large_err)] // figment::Error is inherently large; loaded once at startup
+/// Returns a [`ConfigError`] naming the file read (or where it looked), the
+/// env prefix, and **every** missing, unknown or invalid key it finds.
 pub fn load_config<C: DeserializeOwned>(name: &str) -> Result<C, ConfigError> {
+    load(name, config_file(name))
+}
+
+/// [`load_config`] with the file given by the caller instead of discovered.
+///
+/// The environment layer still applies. A path that does not exist is a
+/// problem, unlike the default `./<name>.toml`, whose absence means "env only".
+///
+/// # Errors
+///
+/// As [`load_config`].
+pub fn load_config_file<C: DeserializeOwned>(
+    name: &str,
+    path: &std::path::Path,
+) -> Result<C, ConfigError> {
+    load(name, ConfigFile::Explicit(path.to_path_buf()))
+}
+
+fn load<C: DeserializeOwned>(name: &str, file: ConfigFile) -> Result<C, ConfigError> {
+    let prefix = env_prefix(name);
+    let fail = |problems| ConfigError::new(name, &file, &prefix, problems);
+    if !file.path().is_file() && !matches!(file, ConfigFile::Default(_)) {
+        return Err(fail(vec![ConfigProblem::FileNotFound(
+            file.path().to_path_buf(),
+        )]));
+    }
+    let figment = layered(file.path(), &prefix, true);
+    match figment.extract::<C>() {
+        Ok(cfg) => Ok(cfg),
+        Err(first) => Err(fail(diagnose::<C>(&figment, &first))),
+    }
+}
+
+/// The file layer under the env layer, with `_FILE` reads and — when
+/// `resolve` — `env:` indirections resolved.
+fn layered(path: &std::path::Path, prefix: &str, resolve: bool) -> figment::Figment {
     use figment::{
         Figment,
         providers::{Env, Format, Toml},
     };
     use figment_file_provider_adapter::FileAdapter;
-    let path = config_path(name);
-    let prefix = format!("{}_", name.to_uppercase().replace('-', "_"));
-    Figment::new()
-        .merge(EnvRefAdapter(FileAdapter::wrap(Toml::file(path))))
-        // `<PREFIX>_CONFIG` names the config-file path (read by `config_path`), not
-        // a config key — ignore it so a struct with `#[serde(deny_unknown_fields)]`
-        // does not fail startup on a stray `config` field.
-        .merge(EnvRefAdapter(FileAdapter::wrap(
-            Env::prefixed(&prefix)
-                .split("__")
-                .ignore(&["CONFIG", "LOG_FORMAT", "LOG_LEVEL"]),
-        )))
-        .extract()
+    let toml = FileAdapter::wrap(Toml::file(path));
+    // `<PREFIX>_CONFIG` names the config-file path (read by `config_file`), not
+    // a config key — ignore it so a struct with `#[serde(deny_unknown_fields)]`
+    // does not fail startup on a stray `config` field.
+    let env = FileAdapter::wrap(Env::prefixed(prefix).split("__").ignore(&[
+        "CONFIG",
+        "LOG_FORMAT",
+        "LOG_LEVEL",
+    ]));
+    if resolve {
+        Figment::new()
+            .merge(EnvRefAdapter(toml))
+            .merge(EnvRefAdapter(env))
+    } else {
+        Figment::new().merge(toml).merge(env)
+    }
+}
+
+/// Cap on repair-and-retry rounds; a config type has far fewer keys.
+const MAX_DIAGNOSE_ROUNDS: usize = 512;
+
+/// Every problem in the merged data, not only the first.
+///
+/// `serde` stops at the first error, so this repairs and retries: a missing key
+/// gets a placeholder (a table first, so a missing section's own required keys
+/// are named too), an unknown key is removed, a wrong value is replaced — and
+/// the type is deserialized again until it loads or nothing more can be filled.
+fn diagnose<C: DeserializeOwned>(
+    figment: &figment::Figment,
+    first: &figment::Error,
+) -> Vec<ConfigProblem> {
+    use figment::error::Kind;
+    use figment::value::Dict;
+
+    let Ok(original) = figment.extract::<Dict>() else {
+        // A layer failed before deserialization: syntax, `env:`, `_FILE`.
+        return first
+            .clone()
+            .into_iter()
+            .map(|e| ConfigProblem::Unreadable(e.to_string()))
+            .collect();
+    };
+    let mut data = original.clone();
+    let mut problems = Vec::new();
+    for _ in 0..MAX_DIAGNOSE_ROUNDS {
+        let Err(err) = try_extract::<C>(&data) else {
+            return problems;
+        };
+        match &err.kind {
+            Kind::MissingField(field) => {
+                let mut path = err.path.clone();
+                path.push(field.to_string());
+                problems.push(ConfigProblem::Missing(path.join(".")));
+                if !fill::<C>(&mut data, &path) {
+                    problems.push(ConfigProblem::Incomplete);
+                    return problems;
+                }
+            }
+            Kind::UnknownField(field, _) => {
+                // figment's path for an unknown key already ends in the key.
+                let mut path = err.path.clone();
+                if path.last() != Some(field) {
+                    path.push(field.clone());
+                }
+                problems.push(ConfigProblem::Unknown(path.join(".")));
+                if remove(&mut data, &path).is_none() {
+                    problems.push(ConfigProblem::Incomplete);
+                    return problems;
+                }
+            }
+            kind => {
+                // Only a value the operator supplied is theirs to fix; an error
+                // inside a placeholder this loop inserted is an artefact of it.
+                if err.path.is_empty() || lookup(&original, &err.path).is_none() {
+                    if problems.is_empty() {
+                        problems.push(ConfigProblem::Unreadable(err.to_string()));
+                    } else {
+                        problems.push(ConfigProblem::Incomplete);
+                    }
+                    return problems;
+                }
+                problems.push(ConfigProblem::Invalid {
+                    path: err.path.join("."),
+                    message: kind.to_string(),
+                });
+                if !fill::<C>(&mut data, &err.path) {
+                    problems.push(ConfigProblem::Incomplete);
+                    return problems;
+                }
+            }
+        }
+    }
+    problems.push(ConfigProblem::Incomplete);
+    problems
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "figment's own error, built only while diagnosing a config that already failed to load"
+)]
+fn try_extract<C: DeserializeOwned>(data: &figment::value::Dict) -> Result<C, figment::Error> {
+    figment::Figment::from(figment::providers::Serialized::defaults(data)).extract::<C>()
+}
+
+/// Set a placeholder at `path` that `C` accepts there, trying a table, a
+/// string, a number, a boolean and an array in turn.
+fn fill<C: DeserializeOwned>(data: &mut figment::value::Dict, path: &[String]) -> bool {
+    use figment::value::{Dict, Value};
+    let candidates = [
+        Value::from(Dict::new()),
+        Value::from(String::new()),
+        Value::from(0u32),
+        Value::from(false),
+        Value::from(Vec::<Value>::new()),
+    ];
+    for candidate in candidates {
+        let mut trial = data.clone();
+        if !insert(&mut trial, path, candidate) {
+            return false;
+        }
+        let rejected = match try_extract::<C>(&trial) {
+            Ok(_) => false,
+            Err(e) => {
+                e.path == path
+                    && !matches!(
+                        e.kind,
+                        figment::error::Kind::MissingField(_)
+                            | figment::error::Kind::UnknownField(..)
+                    )
+            }
+        };
+        if !rejected {
+            *data = trial;
+            return true;
+        }
+    }
+    false
+}
+
+fn lookup<'a>(
+    data: &'a figment::value::Dict,
+    path: &[String],
+) -> Option<&'a figment::value::Value> {
+    let (last, parents) = path.split_last()?;
+    let mut dict = data;
+    for key in parents {
+        dict = dict.get(key)?.as_dict()?;
+    }
+    dict.get(last)
+}
+
+fn insert(data: &mut figment::value::Dict, path: &[String], value: figment::value::Value) -> bool {
+    use figment::value::{Dict, Value};
+    let Some((last, parents)) = path.split_last() else {
+        return false;
+    };
+    let mut dict = data;
+    for key in parents {
+        let entry = dict
+            .entry(key.clone())
+            .or_insert_with(|| Value::from(Dict::new()));
+        let Value::Dict(_, inner) = entry else {
+            return false;
+        };
+        dict = inner;
+    }
+    dict.insert(last.clone(), value);
+    true
+}
+
+fn remove(data: &mut figment::value::Dict, path: &[String]) -> Option<figment::value::Value> {
+    use figment::value::Value;
+    let (last, parents) = path.split_last()?;
+    let mut dict = data;
+    for key in parents {
+        let Value::Dict(_, inner) = dict.get_mut(key)? else {
+            return None;
+        };
+        dict = inner;
+    }
+    dict.remove(last)
+}
+
+/// The merged file and environment layers for service `name`, as TOML, with
+/// secrets redacted — what `--print-config` prints.
+///
+/// `env:` references are shown as written (a variable name is not a secret);
+/// a literal under a secret-looking key (`*key`, `*secret*`, `*password*`,
+/// `*token*`, `*credential*`) prints as `***`, and so does the password of a
+/// URL. Keys the config type defaults are not shown, because they are in
+/// neither layer.
+///
+/// `path` overrides discovery as [`load_config_file`] does.
+///
+/// # Errors
+///
+/// Returns the [`ConfigError`] of a layer that cannot be read.
+pub fn render_config(name: &str, path: Option<&std::path::Path>) -> Result<String, ConfigError> {
+    let file = path.map_or_else(
+        || config_file(name),
+        |p| ConfigFile::Explicit(p.to_path_buf()),
+    );
+    let prefix = env_prefix(name);
+    let unreadable =
+        |msg: String| ConfigError::new(name, &file, &prefix, vec![ConfigProblem::Unreadable(msg)]);
+    let mut dict = layered(file.path(), &prefix, false)
+        .extract::<figment::value::Dict>()
+        .map_err(|e| unreadable(e.to_string()))?;
+    redact_dict(&mut dict);
+    toml::to_string_pretty(&dict).map_err(|e| unreadable(e.to_string()))
+}
+
+const REDACTED: &str = "***";
+
+fn is_secret_key(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    k.ends_with("key")
+        || ["secret", "password", "passwd", "token", "credential"]
+            .iter()
+            .any(|s| k.contains(s))
+}
+
+fn redact_dict(dict: &mut figment::value::Dict) {
+    use figment::value::Value;
+    for (key, value) in dict.iter_mut() {
+        match value {
+            Value::Dict(_, inner) => redact_dict(inner),
+            Value::String(_, s) if s.starts_with("env:") => {}
+            Value::String(_, s) if is_secret_key(key) => REDACTED.clone_into(s),
+            Value::String(_, s) => *s = redact_url_password(s),
+            Value::Array(_, items) if is_secret_key(key) => {
+                for item in items {
+                    *item = Value::from(REDACTED);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `scheme://user:password@host` → `scheme://user:***@host`; anything else
+/// unchanged.
+fn redact_url_password(s: &str) -> String {
+    let Some((scheme, rest)) = s.split_once("://") else {
+        return s.to_owned();
+    };
+    let authority_end = rest.find('/').unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(authority_end);
+    let Some((userinfo, host)) = authority.rsplit_once('@') else {
+        return s.to_owned();
+    };
+    let Some((user, _password)) = userinfo.split_once(':') else {
+        return s.to_owned();
+    };
+    format!("{scheme}://{user}:{REDACTED}@{host}{tail}")
 }
 
 /// Resolves every `env:VAR` indirection in a provider's data, at load time.
@@ -274,12 +719,15 @@ fn resolve_value(value: &mut figment::value::Value) -> Result<(), EnvRefError> {
 
 // ── Internals ─────────────────────────────────────────────────────────────────
 
-fn config_path(name: &str) -> PathBuf {
-    let env_key = format!("{}_CONFIG", name.to_uppercase().replace('-', "_"));
-    if let Ok(p) = std::env::var(&env_key) {
-        return PathBuf::from(p);
+fn config_file(name: &str) -> ConfigFile {
+    let var = format!("{}CONFIG", env_prefix(name));
+    match std::env::var(&var) {
+        Ok(p) => ConfigFile::FromEnv {
+            var,
+            path: PathBuf::from(p),
+        },
+        Err(_) => ConfigFile::Default(PathBuf::from(format!("{name}.toml"))),
     }
-    PathBuf::from(format!("{name}.toml"))
 }
 
 #[cfg(test)]
@@ -288,15 +736,16 @@ mod tests {
 
     #[test]
     fn config_path_default() {
-        let p = config_path("myservice");
-        assert_eq!(p, PathBuf::from("myservice.toml"));
+        let p = config_file("myservice");
+        assert_eq!(p.path(), std::path::Path::new("myservice.toml"));
     }
 
     #[test]
     fn config_path_hyphen_service() {
         // "mabis-syncd" -> MABIS_SYNCD_CONFIG (hyphens become underscores in env key).
-        let p = config_path("mabis-syncd");
-        assert_eq!(p, PathBuf::from("mabis-syncd.toml"));
+        let p = config_file("mabis-syncd");
+        assert_eq!(p.path(), std::path::Path::new("mabis-syncd.toml"));
+        assert_eq!(env_prefix("mabis-syncd"), "MABIS_SYNCD_");
     }
 }
 
@@ -423,5 +872,173 @@ mod env_indirection_tests {
         // Only a `env:` *prefix* indirects; a secret containing the substring
         // must survive verbatim.
         assert_eq!(resolve_env("prod-env:key").unwrap(), "prod-env:key");
+    }
+}
+
+#[cfg(test)]
+mod loader_diagnostics_tests {
+    use super::*;
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[expect(dead_code, reason = "fields exist to be deserialised, never read")]
+    struct Fixture {
+        database: DatabaseConfig,
+        http_addr: String,
+        markt: Markt,
+        #[serde(default)]
+        optional: Option<u32>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[expect(dead_code, reason = "fields exist to be deserialised, never read")]
+    struct Markt {
+        tenant: String,
+        retries: u32,
+        enabled: bool,
+    }
+
+    fn write(name: &str, body: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "mako-service-config-{}-{}",
+            std::process::id(),
+            name
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fixture.toml");
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    /// An empty file names every missing field in one error, with the file it
+    /// read and the env prefix it would have read.
+    #[test]
+    fn an_empty_file_names_every_missing_field_at_once() {
+        let path = write("empty", "");
+        let err = load_config_file::<Fixture>("fixturesvc", &path)
+            .expect_err("an empty file cannot satisfy the fixture");
+        let msg = err.to_string();
+        for field in [
+            "database",
+            "database.url",
+            "http_addr",
+            "markt",
+            "markt.tenant",
+            "markt.retries",
+            "markt.enabled",
+        ] {
+            assert!(
+                err.problems()
+                    .iter()
+                    .any(|p| matches!(p, ConfigProblem::Missing(f) if f == field)),
+                "missing field `{field}` must be named, got:\n{msg}"
+            );
+        }
+        assert!(
+            msg.contains(&path.display().to_string()),
+            "names the file:\n{msg}"
+        );
+        assert!(msg.contains("FIXTURESVC_"), "names the env prefix:\n{msg}");
+        assert!(
+            !err.problems()
+                .iter()
+                .any(|p| matches!(p, ConfigProblem::Missing(f) if f == "optional")),
+            "an Option field is not missing:\n{msg}"
+        );
+    }
+
+    /// Unknown keys are reported beside the missing ones, not instead of them.
+    #[test]
+    fn unknown_and_missing_fields_are_reported_together() {
+        let path = write(
+            "unknown",
+            "http_addr = \"0.0.0.0:1\"\ntypo = 1\n[markt]\ntenant = \"t\"\nretires = 3\n",
+        );
+        let err = load_config_file::<Fixture>("fixturesvc", &path).expect_err("invalid");
+        let msg = err.to_string();
+        let has = |want: &ConfigProblem| err.problems().contains(want);
+        assert!(has(&ConfigProblem::Unknown("typo".into())), "{msg}");
+        assert!(
+            has(&ConfigProblem::Unknown("markt.retires".into())),
+            "{msg}"
+        );
+        assert!(
+            has(&ConfigProblem::Missing("markt.retries".into())),
+            "{msg}"
+        );
+        assert!(
+            has(&ConfigProblem::Missing("markt.enabled".into())),
+            "{msg}"
+        );
+        assert!(has(&ConfigProblem::Missing("database".into())), "{msg}");
+    }
+
+    /// A value of the wrong type is named with its path, and the rest of the
+    /// file is still checked.
+    #[test]
+    fn a_wrong_type_is_named_and_does_not_hide_the_rest() {
+        let path = write(
+            "badtype",
+            "http_addr = \"x\"\n[markt]\ntenant = \"t\"\nretries = \"three\"\nenabled = true\n",
+        );
+        let err = load_config_file::<Fixture>("fixturesvc", &path).expect_err("invalid");
+        let msg = err.to_string();
+        assert!(
+            err.problems().iter().any(
+                |p| matches!(p, ConfigProblem::Invalid { path, .. } if path == "markt.retries")
+            ),
+            "{msg}"
+        );
+        assert!(
+            err.problems()
+                .contains(&ConfigProblem::Missing("database".into())),
+            "{msg}"
+        );
+    }
+
+    /// A file the `<PREFIX>_CONFIG`-style path names but that does not exist is
+    /// a problem; the default path being absent is not.
+    #[test]
+    fn a_named_file_that_does_not_exist_is_refused() {
+        let missing = std::env::temp_dir().join("mako-service-config-definitely-absent.toml");
+        let err = load_config_file::<Fixture>("fixturesvc", &missing).expect_err("absent");
+        assert!(
+            err.problems()
+                .iter()
+                .any(|p| matches!(p, ConfigProblem::FileNotFound(_))),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_valid_file_loads() {
+        let path = write(
+            "valid",
+            "http_addr = \"0.0.0.0:1\"\n[database]\nurl = \"postgres://x\"\n\
+             [markt]\ntenant = \"t\"\nretries = 3\nenabled = true\n",
+        );
+        let cfg = load_config_file::<Fixture>("fixturesvc", &path).expect("valid");
+        assert_eq!(cfg.markt.retries, 3);
+    }
+
+    #[test]
+    fn print_config_redacts_secrets_and_url_passwords() {
+        let path = write(
+            "print",
+            "api_key = \"hunter2\"\nplaceholder = \"env:SOME_SECRET\"\n\
+             [database]\nurl = \"postgres://dev:topsecret@localhost/db\"\n\
+             [webhook]\nhmac_secret = \"s3cr3t\"\nendpoint = \"http://example.invalid\"\n",
+        );
+        let out = render_config("fixturesvc", Some(&path)).expect("renders");
+        assert!(!out.contains("hunter2"), "{out}");
+        assert!(!out.contains("topsecret"), "{out}");
+        assert!(!out.contains("s3cr3t"), "{out}");
+        assert!(
+            out.contains("env:SOME_SECRET"),
+            "an env: reference is not a secret:\n{out}"
+        );
+        assert!(out.contains("http://example.invalid"), "{out}");
+        assert!(out.contains("postgres://dev:***@localhost/db"), "{out}");
     }
 }

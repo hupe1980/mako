@@ -406,7 +406,12 @@ async fn bill_one(
         .last()
         .expect("dispatch_invoice_multi rejected an empty period");
     let rates = cfg
-        .try_regulatory_rates_for_period(last_leg.tariff.category_str(), last_leg.from, last_leg.to)
+        .try_regulatory_rates_for_period(
+            last_leg.tariff.category_str(),
+            last_leg.from,
+            last_leg.to,
+            None,
+        )
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     let assessment =
         handlers::assess_risk(pool, cfg, &cand.malo_id, &invoice, &rates, from, to).await;
@@ -453,7 +458,7 @@ async fn bill_one(
             .await
             .map_err(|e| anyhow::anyhow!("issue: {e}"))?;
     }
-    crate::einvoice::store(&mut *tx, record_id, &invoice, cfg, &cand.malo_id).await?;
+    crate::einvoice::store(&mut tx, record_id, &invoice, cfg, &cand.malo_id).await?;
     handlers::persist_risk(&mut *tx, record_id, assessment.as_ref()).await?;
     tx.commit().await?;
 
@@ -469,7 +474,7 @@ async fn bill_one(
     // A held invoice is never sent: the risk gate withheld its issuance, so no
     // receivable stands behind it.
     if cfg.billing_runs.versand && !held {
-        match handlers::record_with_model(pool, &cfg.tenant, record_id).await {
+        match handlers::record_with_model(pool, cfg, record_id).await {
             Ok((row, model)) => {
                 if let Err(e) =
                     handlers::issue_and_deliver(pool, deps, record_id, &row, &model).await

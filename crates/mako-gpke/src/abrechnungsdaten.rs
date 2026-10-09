@@ -155,6 +155,19 @@ pub enum AbrechnungsdatenState {
         /// Why.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// GPKE Teil 2 § 3.1 gives the NB until the 2. WT nach dem ÜT to send the Bearbeitungsstandsmeldung, and no consequence of missing it. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<AbrechnungsdatenState>,
+    },
 }
 
 impl AbrechnungsdatenState {
@@ -166,6 +179,16 @@ impl AbrechnungsdatenState {
             Self::Eingegangen(_) => "Eingegangen",
             Self::Beantwortet { .. } => "Beantwortet",
             Self::Abgebrochen { .. } => "Abgebrochen",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -233,23 +256,26 @@ impl CommandPayload for AbrechnungsdatenCommand {}
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GpkeAbrechnungsdatenWorkflow;
 
+/// The one guard a fired deadline passes: the Bearbeitungsstand window is open
+/// while the answer is owed (`Eingegangen`). `makod` registers the APERAK
+/// 45-minute delivery window on the same stream; it is not this workflow's to
+/// decide, and a late technical acknowledgement does not fail the process.
+fn window_open(label: &str, state: &AbrechnungsdatenState) -> bool {
+    label == BEARBEITUNGSSTAND_WINDOW_LABEL
+        && matches!(state, AbrechnungsdatenState::Eingegangen(_))
+}
+
 impl Workflow for GpkeAbrechnungsdatenWorkflow {
     type State = AbrechnungsdatenState;
     type Command = AbrechnungsdatenCommand;
     type Event = AbrechnungsdatenEvent;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[BEARBEITUNGSSTAND_WINDOW_LABEL];
+
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        // Only the **business** window ends this process. `makod` registers a
-        // second deadline on the same stream — the APERAK 45-minute *delivery*
-        // window — which the outbox worker discharges the moment the APERAK
-        // goes out. Accepting any label made a late technical acknowledgement
-        // fail the Abrechnungsdaten process, which is neither what the Frist
-        // means nor what GPKE Teil 2 §§ 3.1.1.2 / 3.1.2.2 / 3.1.3.2 sanction.
-        (deadline.label() == BEARBEITUNGSSTAND_WINDOW_LABEL && !state.is_terminal()).then(|| {
-            AbrechnungsdatenCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            }
+        window_open(deadline.label(), state).then(|| AbrechnungsdatenCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
         })
     }
 
@@ -257,6 +283,10 @@ impl Workflow for GpkeAbrechnungsdatenWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             AbrechnungsdatenCommand::ReceiveRueckmeldung {
                 pid,
@@ -326,7 +356,7 @@ impl Workflow for GpkeAbrechnungsdatenWorkflow {
             }
 
             AbrechnungsdatenCommand::TimeoutExpired { deadline_id, label } => {
-                if state.is_terminal() {
+                if !window_open(&label, lapsed) {
                     // A deadline is never cancelled, so it fires for settled
                     // processes too. Nothing went wrong.
                     return Ok(Vec::new().into());
@@ -337,6 +367,12 @@ impl Workflow for GpkeAbrechnungsdatenWorkflow {
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            AbrechnungsdatenState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             AbrechnungsdatenEvent::RueckmeldungErhalten {
                 pruefidentifikator,
@@ -373,18 +409,13 @@ impl Workflow for GpkeAbrechnungsdatenWorkflow {
             AbrechnungsdatenEvent::Abgebrochen { reason } => AbrechnungsdatenState::Abgebrochen {
                 reason: reason.clone(),
             },
-            AbrechnungsdatenEvent::DeadlineExpired { label, .. } => {
-                if state.is_terminal() {
-                    state
-                } else {
-                    AbrechnungsdatenState::Abgebrochen {
-                        reason: format!(
-                            "{label} expired without a Bearbeitungsstandsmeldung — GPKE Teil 2 \
-                             § 3.1 gives the NB until the 2. WT nach dem ÜT"
-                        ),
-                    }
-                }
-            }
+            AbrechnungsdatenEvent::DeadlineExpired { label, .. } => match state {
+                AbrechnungsdatenState::Eingegangen(_) => AbrechnungsdatenState::FristAbgelaufen {
+                    label: label.to_string(),
+                    offen: Box::new(state),
+                },
+                other => other,
+            },
         }
     }
 }
@@ -530,10 +561,10 @@ mod tests {
         assert!(out.events.is_empty());
     }
 
-    /// An unanswered window closes the process, so the operator sees a missed
-    /// Frist rather than an open one.
+    /// An unanswered window is a missed Frist the operator sees — and the
+    /// answer it still owes can still go out.
     #[test]
-    fn an_expired_window_closes_the_process() {
+    fn an_expired_window_leaves_the_answer_owed() {
         let out = GpkeAbrechnungsdatenWorkflow::handle(
             &eingegangen(55_156),
             AbrechnungsdatenCommand::TimeoutExpired {
@@ -546,6 +577,23 @@ mod tests {
             .events
             .iter()
             .fold(eingegangen(55_156), GpkeAbrechnungsdatenWorkflow::apply);
-        assert!(matches!(state, AbrechnungsdatenState::Abgebrochen { .. }));
+        assert!(matches!(
+            state,
+            AbrechnungsdatenState::FristAbgelaufen { .. }
+        ));
+        let late = GpkeAbrechnungsdatenWorkflow::handle(
+            &state,
+            AbrechnungsdatenCommand::SendBearbeitungsstand {
+                antwort_code: "A01".to_owned(),
+                sendet_stammdatenaenderung: false,
+                bemerkung: None,
+            },
+        )
+        .expect("a late answer still goes out");
+        let state = late
+            .events
+            .iter()
+            .fold(state, GpkeAbrechnungsdatenWorkflow::apply);
+        assert!(matches!(state, AbrechnungsdatenState::Beantwortet { .. }));
     }
 }

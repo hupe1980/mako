@@ -73,7 +73,6 @@ impl<T> Bo4e<T> {
     }
 
     /// The typed BO, owned.
-    #[allow(clippy::missing_const_for_fn)] // `T` may need dropping.
     pub fn into_inner(self) -> T {
         self.0
     }

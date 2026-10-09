@@ -59,6 +59,7 @@
 
 use std::collections::HashMap;
 
+use mako_engine::payload::AperakPayload;
 use mako_engine::{
     envelope::EventEnvelope,
     error::WorkflowError,
@@ -324,10 +325,23 @@ pub enum GeraeteubernahmeState {
     Beantwortet(GeraeteubernahmeData),
     /// Device transfer completed.
     Abgeschlossen(GeraeteubernahmeData),
-    /// Refused — AHB validation, an Ablehnungscode, or a lapsed deadline.
+    /// Refused — AHB validation or an Ablehnungscode.
     Abgelehnt {
         /// Human-readable rejection reason.
         reason: String,
+    },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// WiM Teil 1 Kap. 3.1.2 / 3.2.2 give the MSBA its ORDRSP windows and no consequence of missing them. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<GeraeteubernahmeState>,
     },
 }
 
@@ -348,6 +362,16 @@ impl GeraeteubernahmeState {
             Self::Beantwortet(_) => "Beantwortet",
             Self::Abgeschlossen(_) => "Abgeschlossen",
             Self::Abgelehnt { .. } => "Abgelehnt",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 }
@@ -426,36 +450,55 @@ impl CommandPayload for GeraeteubernahmeCommand {}
 /// WiM Geräteübernahme / Gerätewechsel workflow — the **MSBA side**.
 pub struct WimGeraeteubernahmeWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// Both ORDRSP windows are open while the MSBA still owes its answer
+/// (`OrdersEmpfangen`, `ValidationPassed`).
+fn window_open(label: &str, state: &GeraeteubernahmeState) -> bool {
+    matches!(
+        label,
+        ORDRSP_DEADLINE_LABEL | GERAETEWECHSELABSICHT_DEADLINE_LABEL
+    ) && matches!(
+        state,
+        GeraeteubernahmeState::OrdersEmpfangen(_) | GeraeteubernahmeState::ValidationPassed(_)
+    )
+}
+
 impl Workflow for WimGeraeteubernahmeWorkflow {
     type State = GeraeteubernahmeState;
     type Event = GeraeteubernahmeEvent;
     type Command = GeraeteubernahmeCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] =
+        &[ORDRSP_DEADLINE_LABEL, GERAETEWECHSELABSICHT_DEADLINE_LABEL];
+
     /// Deadline compensation for the two ORDRSP answer windows.
     ///
-    /// | Label | State guard | Frist |
+    /// | Label | Open while | Frist |
     /// |---|---|---|
-    /// | [`ORDRSP_DEADLINE_LABEL`] | any non-terminal | 2 WT nach dem ÜT der Bestellung |
-    /// | [`GERAETEWECHSELABSICHT_DEADLINE_LABEL`] | any non-terminal | 2 WT vor dem Gerätewechseltermin |
+    /// | [`ORDRSP_DEADLINE_LABEL`] | `OrdersEmpfangen` / `ValidationPassed` | 2 WT nach dem ÜT der Bestellung |
+    /// | [`GERAETEWECHSELABSICHT_DEADLINE_LABEL`] | `OrdersEmpfangen` / `ValidationPassed` | 2 WT vor dem Gerätewechseltermin |
+    ///
+    /// Once the ORDRSP is out the window is closed: a `Beantwortet` process
+    /// waits for the physical work, not for an answer.
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        let ours = matches!(
-            deadline.label(),
-            ORDRSP_DEADLINE_LABEL | GERAETEWECHSELABSICHT_DEADLINE_LABEL
-        );
-        if ours && !state.is_terminal() {
-            Some(GeraeteubernahmeCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            })
-        } else {
-            None
-        }
+        window_open(deadline.label(), state).then(|| GeraeteubernahmeCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            GeraeteubernahmeState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             GeraeteubernahmeEvent::OrdersEmpfangen {
                 pid,
@@ -512,15 +555,16 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
             GeraeteubernahmeEvent::Abgelehnt { reason } => GeraeteubernahmeState::Abgelehnt {
                 reason: reason.clone(),
             },
-            GeraeteubernahmeEvent::DeadlineExpired { label, .. } => {
-                if state.is_terminal() {
-                    state
-                } else {
-                    GeraeteubernahmeState::Abgelehnt {
-                        reason: format!("deadline expired: {label}"),
+            GeraeteubernahmeEvent::DeadlineExpired { label, .. } => match state {
+                GeraeteubernahmeState::OrdersEmpfangen(_)
+                | GeraeteubernahmeState::ValidationPassed(_) => {
+                    GeraeteubernahmeState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
                     }
                 }
-            }
+                other => other,
+            },
         }
     }
 
@@ -528,6 +572,10 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             GeraeteubernahmeCommand::ReceiveOrders {
                 pid,
@@ -552,9 +600,11 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
                         pid.as_u32(),
                     )));
                 }
-                // Clones for the APERAK, which travels back the other way.
+                // Clones for the APERAK, which travels back the other way and
+                // names the ORDERS it acknowledges (`SG2 RFF+ACE`, Muss).
                 let absender = sender.clone();
                 let empfaenger = receiver.clone();
+                let orders_ref = message_ref.as_str().to_owned();
 
                 let mut events = vec![GeraeteubernahmeEvent::OrdersEmpfangen {
                     pid,
@@ -575,7 +625,13 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
                     });
                     return Ok(WorkflowOutput::with_outbox_and_deadlines(
                         events,
-                        vec![aperak(&empfaenger, &absender, sparte, Some(&reason))],
+                        vec![aperak(
+                            &empfaenger,
+                            &absender,
+                            &orders_ref,
+                            sparte,
+                            Some(&reason),
+                        )],
                         vec![aperak_deadline(sparte, pid.as_u32(), received_at)],
                     ));
                 }
@@ -610,7 +666,13 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
                     });
                     return Ok(WorkflowOutput::with_outbox_and_deadlines(
                         events,
-                        vec![aperak(&empfaenger, &absender, sparte, Some(&reason))],
+                        vec![aperak(
+                            &empfaenger,
+                            &absender,
+                            &orders_ref,
+                            sparte,
+                            Some(&reason),
+                        )],
                         vec![aperak_deadline(sparte, pid.as_u32(), received_at)],
                     ));
                 }
@@ -618,10 +680,14 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
                 events.push(GeraeteubernahmeEvent::ValidationPassed { message_ref });
 
                 // Two clocks. The APERAK says the ORDERS could be processed —
-                // 45 minutes in Strom, and in Gas only if it could *not*. The
-                // business answer is the ORDRSP, and its window depends on
-                // which Use-Case the PID opens.
-                let mut deadlines = vec![aperak_deadline(sparte, pid.as_u32(), received_at)];
+                // 45 minutes in Strom, and in Gas only if it could *not*, so a
+                // processable Gas ORDERS puts no APERAK on the wire and arms no
+                // window for one. The business answer is the ORDRSP, and its
+                // window depends on which Use-Case the PID opens.
+                let mut deadlines = match sparte {
+                    Sparte::Strom => vec![aperak_deadline(sparte, pid.as_u32(), received_at)],
+                    Sparte::Gas => vec![],
+                };
                 deadlines.push(antwort_deadline(
                     pid.as_u32(),
                     termin.as_deref(),
@@ -630,7 +696,7 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
 
                 Ok(WorkflowOutput::with_outbox_and_deadlines(
                     events,
-                    vec![aperak(&empfaenger, &absender, sparte, None)],
+                    vec![aperak(&empfaenger, &absender, &orders_ref, sparte, None)],
                     deadlines,
                 ))
             }
@@ -717,7 +783,7 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
             }
 
             GeraeteubernahmeCommand::TimeoutExpired { deadline_id, label } => {
-                if state.is_terminal() {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![GeraeteubernahmeEvent::DeadlineExpired { deadline_id, label }].into())
@@ -728,33 +794,33 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
 
 /// The APERAK the receiver owes on an inbound ORDERS.
 ///
-/// `reason` present → Verarbeitbarkeitsfehlermeldung `BGM+313`; absent →
-/// Anerkennungsmeldung `BGM+312`, which Gas suppresses.
+/// `reason` present → Verarbeitbarkeitsfehlermeldung (29001, `BGM+313`);
+/// absent → Anerkennungsmeldung (29002, `BGM+312`), which Gas keeps off the
+/// wire. `orders_ref` is the acknowledged ORDERS' `UNH` DE 0062.
 fn aperak(
     from: &MarktpartnerCode,
     to: &MarktpartnerCode,
+    orders_ref: &str,
     sparte: Sparte,
     reason: Option<&str>,
 ) -> PendingOutbox {
-    let positive = reason.is_none();
-    let mut payload = serde_json::json!({
-        "sender":   from.as_str(),
-        "receiver": to.as_str(),
-        "pid":      29001_u32,
-        "positive": positive,
-        "sparte":   sparte,
-    });
-    // Gas has no Anerkennungsmeldung: a processable message is acknowledged by
-    // the Frist lapsing in silence (APERAK AHB 1.1 §2.3). The decision is still
-    // recorded for the ERP; `suppress_wire` keeps it off the wire.
-    if positive && !mako_fristen::aperak_hat_anerkennungsmeldung(sparte == Sparte::Gas) {
-        payload["suppress_wire"] = serde_json::Value::Bool(true);
-    }
-    if let Some(r) = reason {
-        payload["error_code"] = serde_json::Value::String(mako_engine::erc::codes::Z29.to_owned());
-        payload["reason"] = serde_json::Value::String(r.to_owned());
-    }
-    PendingOutbox::new("APERAK", to.as_str(), payload).caused_by(0)
+    let payload = match reason {
+        Some(r) => AperakPayload::fehler(
+            from.as_str(),
+            to.as_str(),
+            orders_ref,
+            mako_engine::erc::codes::Z29,
+            r,
+        ),
+        // Gas has no Anerkennungsmeldung: a processable message is acknowledged
+        // by the Frist lapsing in silence (APERAK AHB 1.1 §2.3). The decision is
+        // still recorded for the ERP; it never reaches the wire.
+        None if !mako_fristen::aperak_hat_anerkennungsmeldung(sparte == Sparte::Gas) => {
+            AperakPayload::anerkennung(from.as_str(), to.as_str(), orders_ref).off_the_wire()
+        }
+        None => AperakPayload::anerkennung(from.as_str(), to.as_str(), orders_ref),
+    };
+    PendingOutbox::typed(to.as_str(), &payload).caused_by(0)
 }
 
 /// The APERAK *sending* deadline, per Sparte — 45 minutes in Strom, and in Gas
@@ -816,7 +882,7 @@ fn antwort_deadline(
             let Some(datum) = termin.and_then(parse_yyyymmdd) else {
                 return Err(WorkflowError::rejected(
                     "eine Anzeige der Gerätewechselabsicht muss den Gerätewechseltermin nennen — \
-                     die Antwortfrist ist der 2. WT davor (WiM Teil 1 Kap. 3.1.2 Nr. 2)"
+                     die Antwortfrist wird von ihm aus zurückgerechnet (WiM Teil 1 Kap. 3.1.2 Nr. 2)"
                         .to_owned(),
                 ));
             };
@@ -830,10 +896,7 @@ fn antwort_deadline(
             let due = mako_fristen::sub_werktage(datum, wt, HolidayCalendar::BdewMaKo);
             Ok(PendingDeadline::new(
                 GERAETEWECHSELABSICHT_DEADLINE_LABEL,
-                mako_fristen::berlin_at(
-                    due,
-                    time::Time::from_hms(17, 0, 0).expect("17:00 is a valid time"),
-                ),
+                mako_fristen::end_of_day_berlin(due),
             ))
         }
         other => Err(WorkflowError::rejected(format!(
@@ -1028,10 +1091,14 @@ impl Projection for GeraeteubernahmeProjection {
                     *d = device_id;
                 }
             }
-            GeraeteubernahmeEvent::Abgelehnt { .. }
-            | GeraeteubernahmeEvent::DeadlineExpired { .. } => {
+            GeraeteubernahmeEvent::Abgelehnt { .. } => {
                 if let GeraeteubernahmeRecord::Active { status, .. } = record {
                     *status = "Abgelehnt";
+                }
+            }
+            GeraeteubernahmeEvent::DeadlineExpired { .. } => {
+                if let GeraeteubernahmeRecord::Active { status, .. } = record {
+                    *status = "FristAbgelaufen";
                 }
             }
         }
@@ -1214,6 +1281,12 @@ mod tests {
             .expect("the Gerätewechselabsicht window");
         // 2026-04-01 is a Wednesday; two Werktage before is Monday 2026-03-30.
         assert_eq!(dl.due_at.date(), time::macros::date!(2026 - 03 - 30));
+        // The Frist names a day, so it runs to the end of it, not to an hour
+        // inside it.
+        assert_eq!(
+            dl.due_at,
+            mako_fristen::end_of_day_berlin(time::macros::date!(2026 - 03 - 30))
+        );
         // …and it is nowhere near „2 Werktage after arrival" on 2026-03-02.
         assert!(dl.due_at > time::macros::datetime!(2026-03-04 00:00 UTC));
     }
@@ -1236,20 +1309,27 @@ mod tests {
     /// decision is still recorded; `suppress_wire` keeps it off the wire.
     #[test]
     fn gas_suppresses_the_positive_aperak() {
+        use mako_engine::payload::OutboundPayload as _;
         let strom = WimGeraeteubernahmeWorkflow::handle(
             &GeraeteubernahmeState::default(),
             orders(17001, Sparte::Strom, Some("20260401")),
         )
         .expect("valid");
-        assert_eq!(strom.outbox[0].payload["positive"], true);
-        assert!(strom.outbox[0].payload.get("suppress_wire").is_none());
+        let strom = AperakPayload::from_payload(&strom.outbox[0].payload).expect("an APERAK");
+        assert_eq!(strom.pid, mako_engine::payload::APERAK_PID_ANERKENNUNG);
+        assert_eq!(strom.orig_message_ref, "ORD-1");
+        assert!(!strom.suppress_wire);
 
         let gas = WimGeraeteubernahmeWorkflow::handle(
             &GeraeteubernahmeState::default(),
             orders(17001, Sparte::Gas, Some("20260401")),
         )
         .expect("valid");
-        assert_eq!(gas.outbox[0].payload["suppress_wire"], true);
+        assert!(
+            AperakPayload::from_payload(&gas.outbox[0].payload)
+                .expect("an APERAK")
+                .suppress_wire
+        );
     }
 
     /// A code from another tree never reaches the wire. `ZB4` is `E_0204`, not

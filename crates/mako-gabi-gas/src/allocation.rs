@@ -67,8 +67,9 @@ pub const WORKFLOW_NAME: &str = "gabi-gas-allocation";
 
 /// Deadline label for the §47 Ziffer 1 KoV XV final-allocation window.
 ///
-/// The binding final allocation is due by the end of month M+2 at 12:00 CET;
-/// register a [`mako_engine::deadline::Deadline`] with this label using
+/// The binding final allocation is due on D-1, 12:00 Uhr for an SLP series and
+/// at the end of the 14th Werktag after the delivery month (M+14 WT) for an RLM,
+/// Entry Biogas, Entry Wasserstoff, Entryso or Exitso series; register a [`mako_engine::deadline::Deadline`] with this label using
 /// [`GasDay::finale_allokation_deadline_utc`] when the first ALOCAT for a gas day is
 /// recorded. If it fires with no [`AllocationVersion::Final`] on file, the
 /// FNB/MGV has missed a binding obligation.
@@ -120,6 +121,8 @@ impl AllocationType {
 /// delivery. The `AllocationVersion` tracks which sequence this is:
 /// - `Initial` = first allocation for a gas day
 /// - `Correction(n)` = nth correction (n ≥ 1)
+/// - `Endgueltig` = the `X5G` Endgültige Allokation; `X6G`/`X7G` corrections
+///   may still follow it
 /// - `Final` = confirmed final allocation (no further corrections expected)
 ///
 /// Source: Kooperationsvereinbarung Gas XV §§ 46, 47.
@@ -130,6 +133,13 @@ pub enum AllocationVersion {
     Initial,
     /// Corrected allocation. `n` = correction sequence number (1-based).
     Correction(u32),
+    /// The `X5G` Endgültige Allokation (Bilanzierungsbrennwert).
+    ///
+    /// It discharges the final-allocation obligation the
+    /// [`FINAL_ALOCAT_DEADLINE_LABEL`] window watches, but it does not close the
+    /// stream: DVGW publishes the `X6G`/`X7G` Korrigierte Allokation as
+    /// messages that follow it, so a correction after it is admitted.
+    Endgueltig,
     /// Final confirmed allocation — no further corrections expected.
     Final,
 }
@@ -171,6 +181,11 @@ pub struct AllocationData {
     pub clearing_number: Option<String>,
     /// ALOCAT document message reference (from UNH).
     pub message_ref: MessageRef,
+    /// `true` once an [`AllocationVersion::Endgueltig`] is on file for this
+    /// stream — on this message or an earlier one. A later correction keeps
+    /// it: the endgültige Allokation arrived, whatever corrects it afterwards.
+    #[serde(default)]
+    pub endgueltige_allokation_erhalten: bool,
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -230,7 +245,8 @@ impl EventPayload for AllocationEvent {
 ///
 /// ```text
 /// New
-///  └─ AllocationReceived    (terminal — no response required)
+///  └─ Recorded ──(correction / endgültige / final ALOCAT)──→ Recorded
+///       └─ FinalOverdue   [window closed with no endgültige or final on file]
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
@@ -275,6 +291,20 @@ impl AllocationState {
             self.latest().map(|d| d.version),
             Some(AllocationVersion::Final)
         )
+    }
+
+    /// `true` once the final-allocation obligation is discharged: an `X5G`
+    /// Endgültige Allokation is on file, or the binding final one.
+    ///
+    /// This is what the [`FINAL_ALOCAT_DEADLINE_LABEL`] window watches. It is
+    /// deliberately not [`Self::is_settled`]: an `X5G` admits later
+    /// corrections, the binding final does not.
+    #[must_use]
+    pub fn final_allocation_received(&self) -> bool {
+        self.is_settled()
+            || self
+                .latest()
+                .is_some_and(|d| d.endgueltige_allokation_erhalten)
     }
 }
 
@@ -330,26 +360,29 @@ impl CommandPayload for AllocationCommand {}
 /// No response is required — this is a receive-and-record workflow.
 pub struct GaBiGasAllocationWorkflow;
 
+/// The one guard a fired deadline passes: the final-allocation window is open
+/// while the gas day has no binding final on file and is not already overdue.
+fn window_open(label: &str, state: &AllocationState) -> bool {
+    label == FINAL_ALOCAT_DEADLINE_LABEL
+        && matches!(state, AllocationState::New | AllocationState::Recorded(_))
+        && !state.final_allocation_received()
+}
+
 impl Workflow for GaBiGasAllocationWorkflow {
     type State = AllocationState;
     type Event = AllocationEvent;
     type Command = AllocationCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[FINAL_ALOCAT_DEADLINE_LABEL];
+
     /// Fire the timeout only while a final allocation is still outstanding.
-    /// A settled or already-overdue stream must not re-raise it.
+    /// A stream with its `X5G` or its binding final on file, or one already
+    /// overdue, must not raise it.
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (FINAL_ALOCAT_DEADLINE_LABEL, AllocationState::New)
-            | (FINAL_ALOCAT_DEADLINE_LABEL, AllocationState::Recorded(_))
-                if !state.is_settled() =>
-            {
-                Some(AllocationCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| AllocationCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
@@ -368,17 +401,24 @@ impl Workflow for GaBiGasAllocationWorkflow {
                 allocated_quantity,
                 clearing_number,
                 message_ref,
-            } => AllocationState::Recorded(Box::new(AllocationData {
-                pruefidentifikator: *pruefidentifikator,
-                allocation_type: *allocation_type,
-                sender_eic: sender_eic.clone(),
-                receiver_eic: receiver_eic.clone(),
-                gas_day: *gas_day,
-                version: *version,
-                allocated_quantity: allocated_quantity.clone(),
-                clearing_number: clearing_number.clone(),
-                message_ref: message_ref.clone(),
-            })),
+            } => {
+                let endgueltige_allokation_erhalten = *version == AllocationVersion::Endgueltig
+                    || state
+                        .latest()
+                        .is_some_and(|d| d.endgueltige_allokation_erhalten);
+                AllocationState::Recorded(Box::new(AllocationData {
+                    pruefidentifikator: *pruefidentifikator,
+                    allocation_type: *allocation_type,
+                    sender_eic: sender_eic.clone(),
+                    receiver_eic: receiver_eic.clone(),
+                    gas_day: *gas_day,
+                    version: *version,
+                    allocated_quantity: allocated_quantity.clone(),
+                    clearing_number: clearing_number.clone(),
+                    message_ref: message_ref.clone(),
+                    endgueltige_allokation_erhalten,
+                }))
+            }
         }
     }
 
@@ -436,11 +476,12 @@ impl Workflow for GaBiGasAllocationWorkflow {
             }
 
             AllocationCommand::TimeoutExpired { deadline_id, label } => {
-                // Idempotent: a settled or already-overdue stream records nothing.
+                // Idempotent: a stream with its endgültige or final allocation
+                // on file, or one already overdue, records nothing.
                 let AllocationState::Recorded(data) = state else {
                     return Ok(WorkflowOutput::events(vec![]));
                 };
-                if state.is_settled() {
+                if !window_open(&label, state) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 // The missed obligation is the FNB's/MGV's, so nothing is sent

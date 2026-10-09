@@ -542,7 +542,10 @@ impl Workflow for GeliGasZuordnungsmeldungWorkflow {
 }
 
 /// The renderer payload for one Gas Informationsmeldung.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 fn meldung_payload(
     meldung: Zuordnungsmeldung,
     sender: &MarktpartnerCode,

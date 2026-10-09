@@ -433,7 +433,7 @@ fi
 #
 # makod atomically enqueues:
 #   a) APERAK BGM+312 (Anerkennungsmeldung) — delivered via EDIFACT outbox to LFN.
-#      Regulatory basis: APERAK AHB 1.0 §2.4.1 — Strom UTILMD weekday: 45 Minuten.
+#      Regulatory basis: APERAK AHB 1.1 §2.4.1 — Strom UTILMD: 45 Minuten (Samstag → Sonntag 12 Uhr).
 #      This is a TECHNICAL acknowledgement; it does NOT imply business acceptance.
 #
 #   b) ProcessInitiated CloudEvent — delivered to ERP endpoint (= marktd when configured).

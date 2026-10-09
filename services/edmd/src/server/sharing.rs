@@ -1,6 +1,9 @@
 //! §42c EnWG energy sharing: VZW allocation and readiness report.
 
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "used only in some feature or target combinations"
+)]
 use super::*;
 
 // ── F-13: §42c Energy Sharing VZW allocation ──────────────────────────────────
@@ -386,7 +389,10 @@ pub(crate) async fn get_sharing_readiness(
     // every legitimately hourly series as 25 % covered; counting them across all
     // of a measuring point's registers ran a prosumer past 100 %, where the clamp
     // hid it and no multi-register point could ever fall below the threshold.
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a count or ratio reported as a float, never a money amount"
+    )]
     let window_secs = (to - from).whole_seconds().max(1) as f64;
 
     let explicit: Option<Vec<String>> = params.malo_ids.as_deref().map(|s| {
@@ -509,7 +515,10 @@ pub(crate) async fn get_sharing_readiness(
         // question §42c asks is whether the point delivers quarter-hour values at
         // all; a point whose Lastgang is complete delivers them even if a
         // secondary register reports monthly.
-        #[allow(clippy::cast_precision_loss)]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a count or ratio reported as a float, never a money amount"
+        )]
         let coverage_pct = groups
             .iter()
             .map(|g| {

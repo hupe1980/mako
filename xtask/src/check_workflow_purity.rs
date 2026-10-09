@@ -1,9 +1,8 @@
 //! Guard: `Workflow::handle` and `Workflow::apply` are pure.
 //!
-//! `concepts/PLATFORM.md` §2 and §10 and `AGENTS.md` („Workflow determinism")
-//! state the contract: a workflow is a pure function of `(state, command)` —
+//! `AGENTS.md` („Workflow determinism") states the contract: a workflow is a pure function of `(state, command)` —
 //! no I/O, no clock access, no global state mutation. The engine relies on it
-//! twice over. `Process::execute_with_retry` re-runs `handle` after a
+//! twice over. `Process::run` re-runs `handle` after a
 //! `VersionConflict`, so an impure handler can emit a *different message* on the
 //! second attempt than the first attempt put on the wire; and every state is
 //! reconstructed by folding the event log, so a replay of an impure workflow
@@ -147,9 +146,9 @@ pub fn run(workspace_root: &Path) -> bool {
     }
     eprintln!(
         "\n`Workflow::handle` and `Workflow::apply` are pure functions of (state, command): \
-         no I/O, no clock access, no global state mutation (concepts/PLATFORM.md §2/§10, \
-         AGENTS.md „Workflow determinism\").\n\
-         `Process::execute_with_retry` re-runs `handle` after a version conflict and every \
+         no I/O, no clock access, no global state mutation (AGENTS.md „Workflow \
+         determinism\").\n\
+         `Process::run` re-runs `handle` after a version conflict and every \
          state is re-folded from the event log, so a value taken from the environment here \
          makes a retry emit a different message than the one already sent, and a replay \
          render bytes that never went on the wire.\n\
@@ -175,7 +174,7 @@ fn collect_sources(tree: &Path, out: &mut Vec<std::path::PathBuf>) {
 }
 
 /// Recursively collect `.rs` files under `dir`.
-fn walk_rs(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+pub(crate) fn walk_rs(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -304,12 +303,17 @@ fn split_on_for(s: &str) -> Option<&str> {
 }
 
 /// The next occurrence of `needle` at or after `from` that is real code.
-fn next_code_byte(bytes: &[u8], mask: &[bool], from: usize, needle: u8) -> Option<usize> {
+pub(crate) fn next_code_byte(
+    bytes: &[u8],
+    mask: &[bool],
+    from: usize,
+    needle: u8,
+) -> Option<usize> {
     (from..bytes.len()).find(|&i| bytes[i] == needle && mask[i])
 }
 
 /// The `}` closing the `{` at `open`, counting only unmasked braces.
-fn match_brace(bytes: &[u8], mask: &[bool], open: usize) -> Option<usize> {
+pub(crate) fn match_brace(bytes: &[u8], mask: &[bool], open: usize) -> Option<usize> {
     let mut depth = 0usize;
     for i in open..bytes.len() {
         if !mask[i] {
@@ -334,7 +338,7 @@ fn match_brace(bytes: &[u8], mask: &[bool], open: usize) -> Option<usize> {
 /// A test workflow may read the clock to build a fixture; that is not the defect
 /// this guard is about. An attribute on a `use` or a non-braced item stops at
 /// its `;` so the following item is not swallowed with it.
-fn blank_cfg_test(src: &str, mask: &mut [bool]) {
+pub(crate) fn blank_cfg_test(src: &str, mask: &mut [bool]) {
     let bytes = src.as_bytes();
     for marker in ["#[cfg(test)]", "#![cfg(test)]"] {
         for (start, _) in src.match_indices(marker) {
@@ -360,7 +364,7 @@ fn blank_cfg_test(src: &str, mask: &mut [bool]) {
 
 /// A per-byte mask of what is real code: comments, string literals and char
 /// literals are `false`.
-fn code_mask(src: &str) -> Vec<bool> {
+pub(crate) fn code_mask(src: &str) -> Vec<bool> {
     let b = src.as_bytes();
     let mut mask = vec![true; b.len()];
     let mut i = 0usize;
@@ -508,17 +512,17 @@ fn is_char_literal(b: &[u8], i: usize) -> bool {
 }
 
 /// Whether `i` starts a word (no identifier byte immediately before).
-fn is_word_start(b: &[u8], i: usize) -> bool {
+pub(crate) fn is_word_start(b: &[u8], i: usize) -> bool {
     !is_ident_byte_before(b, i)
 }
 
 /// Whether `i` ends a word (no identifier byte at `i`).
-fn is_word_end(b: &[u8], i: usize) -> bool {
+pub(crate) fn is_word_end(b: &[u8], i: usize) -> bool {
     i >= b.len() || !(b[i].is_ascii_alphanumeric() || b[i] == b'_')
 }
 
 /// 1-based line number of byte offset `at`.
-fn line_of(src: &str, at: usize) -> usize {
+pub(crate) fn line_of(src: &str, at: usize) -> usize {
     src[..at].bytes().filter(|&c| c == b'\n').count() + 1
 }
 

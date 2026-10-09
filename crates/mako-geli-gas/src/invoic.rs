@@ -6,7 +6,7 @@
 //! (AWH = Abrechnungswürdige Handlungen from Sperrprozesse Gas).
 //!
 //! This is a GeLi Gas (BK7-24-01-009) billing process — **not** GaBi Gas.
-//! PID 31010 (Kapazitätsrechnung, VNB → BKV) is the GaBi Gas capacity invoice
+//! PID 31010 (Kapazitätsrechnung, NB → KN) is the Gas capacity invoice
 //! and belongs to `mako_gabi_gas`.
 //!
 //! The process lives in [`mako_invoic`]; this module declares the family.

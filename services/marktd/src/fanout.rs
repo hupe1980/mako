@@ -23,17 +23,13 @@
 //! # The attempt counter is advanced by the *claim*, not by the outcome
 //!
 //! `attempts` is incremented in the same statement that leases the row, and
-//! that statement is the only writer of the counter. Counting the attempt when
-//! it finishes instead made the whole retry budget conditional on the worker
-//! surviving long enough to record the outcome: a crash between the POST and
-//! the outcome write, or a database error on that write, left the counter where
-//! it was, so the row came back due after the lease with its budget intact and
-//! retried **forever** — and, because an undelivered row that never
-//! dead-letters keeps blocking its `ordering_key`, it took the rest of that
-//! Marktlokation's stream down with it. Leasing and counting together makes the
-//! budget hold whatever happens after the claim; the price is that a delivery
-//! that overruns its lease is counted twice, which is the honest reading of an
-//! at-least-once attempt anyway.
+//! that statement is the only writer of the counter. Counting on the outcome
+//! would make the budget depend on the worker surviving to record it: a crash
+//! or failed write after the POST would leave the budget intact, the row would
+//! retry **forever**, and — since an undelivered row keeps blocking its
+//! `ordering_key` — take that Marktlokation's stream down with it. The price is
+//! that a delivery overrunning its lease is counted twice, which is the honest
+//! reading of an at-least-once attempt.
 //!
 //! `Worker::sweep_exhausted` is the matching backstop: a row whose budget ran
 //! out but whose dead-letter write was lost is moved to the DLQ from the claim
@@ -46,12 +42,10 @@
 //! outstanding to the same subscriber. Events about different MaLos, and events
 //! tied to no MaLo, never wait for each other.
 //!
-//! One Marktlokation's supply lifecycle is the only sequence here whose order
-//! carries meaning, so that is the scope the guarantee covers. Per-endpoint FIFO
-//! would serialise the hub behind its slowest subscriber; unordered delivery
-//! would let a retried `versorgung.changed` arrive after the transition that
-//! superseded it. Head-of-line blocking is bounded — a dead-lettered row stops
-//! blocking its key.
+//! Per-endpoint FIFO would serialise the hub behind its slowest subscriber;
+//! unordered delivery would let a retried `versorgung.changed` arrive after the
+//! transition that superseded it. Head-of-line blocking is bounded — a
+//! dead-lettered row stops blocking its key.
 
 use std::time::Duration;
 

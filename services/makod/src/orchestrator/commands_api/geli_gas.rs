@@ -132,19 +132,38 @@ pub(super) fn cmd_geli_eog_anmelden<'a>(
 /// Dispatch `geli.datenabruf.anfragen` — LF requests Gas quality data from NB.
 ///
 /// Spawns a new [`GeliGasDatenabrufWorkflow`] and sends ORDERS 17103 outbound
-/// to the GNB requesting Abrechnungsbrennwert and Zustandszahl.
-/// 10-Werktage response deadline registered atomically (BK7-24-01-009).
+/// to the GNB requesting Abrechnungsbrennwert and Zustandszahl. The GNB's
+/// answer window is registered in the same write: ten Werktage after the
+/// Anfrage, but not before the 10. Werktag of the month after the Zeitspanne
+/// ends (GeLi Gas 3.0 Kap. 4.2).
 ///
 /// ## Required payload fields
 ///
 /// | Field     | Type   | Notes |
 /// |-----------|--------|-------|
 /// | `malo_id` | string | Gas Marktlokations-ID (11-digit EIC) |
+/// | `zeitspanne_bis` | string | Last day of the requested Zeitspanne, `YYYY-MM-DD` |
 pub(super) async fn dispatch_geli_gas_datenabruf_anfragen(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
     let malo_id = extract_malo_id(payload)?;
+    // The Zeitspanne's end sets the earliest day the GNB may answer, so the
+    // window cannot be computed without it — refused, not defaulted.
+    let zeitspanne_bis = payload
+        .get("zeitspanne_bis")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "zeitspanne_bis (YYYY-MM-DD) is required — the last day of the Zeitspanne \
+                 the Brennwert is asked for (GeLi Gas 3.0 Kap. 4.2)"
+                    .to_owned(),
+            )
+        })
+        .and_then(|s| {
+            time::Date::parse(s, time::macros::format_description!("[year]-[month]-[day]"))
+                .map_err(|e| DispatchError::InvalidPayload(format!("zeitspanne_bis {s:?}: {e}")))
+        })?;
 
     let malo_record = state
         .malo_cache
@@ -172,60 +191,25 @@ pub(super) async fn dispatch_geli_gas_datenabruf_anfragen(
         sender: MarktpartnerCode::new(state.sender_party_id.clone()),
         receiver: gnb_mp_id,
         message_ref,
+        zeitspanne_bis,
     };
 
     let workflow_id = WorkflowId::new(GELI_GAS_DATENABRUF_WORKFLOW_NAME, latest_format_version());
-    let process = mako_engine::process::Process::<
-        GeliGasDatenabrufWorkflow,
-        Arc<mako_engine::store_slatedb::SlateDbStore>,
-    >::new(
-        Arc::clone(&state.store),
-        state.tenant_id,
-        workflow_id.clone(),
-    );
-    let process_id = process.process_id();
 
-    let due_at = mako_fristen::deadline_at_werktage(
+    let due_at = mako_fristen::antwort::brennwert_zustandszahl_due(
         time::OffsetDateTime::now_utc(),
-        10,
+        zeitspanne_bis,
         mako_fristen::HolidayCalendar::BdewMaKo,
     );
-    let deadline = Deadline::new(
-        process.stream_id().clone(),
-        process_id,
+    let process_id = spawn_process::<GeliGasDatenabrufWorkflow>(
+        &state.store,
         state.tenant_id,
         workflow_id,
-        mako_geli_gas::datenabruf::ANTWORT_WINDOW_LABEL,
-        due_at,
-    );
-    process
-        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
-        .await?;
-
-    let identity = process.identity();
-    // The correlation index is how an inbound answer finds this
-    // process; it is append-only and nothing rebuilds it. Discarding a
-    // failure here left a live process that no ORDRSP/UTILMD answer
-    // could ever be routed to — the answer is dropped as
-    // `process_not_found` and the Frist expires against a process that
-    // was doing everything right. Not propagated: the process is spawned
-    // and its message already enqueued, so failing the caller now would
-    // have it re-issue the command and start a second one. Logged with
-    // the key and process id, which is what a repair needs.
-    if let Err(e) = state
-        .store
-        .as_process_registry()
-        .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
-        .await
-    {
-        tracing::error!(
-            process_id = %process_id,
-            malo_id    = %malo_id,
-            error      = %e,
-            "geli gas: business-key registration failed — the answer to this process cannot \
-             be correlated back to it",
-        );
-    }
+        domain_cmd,
+        &[(mako_geli_gas::datenabruf::ANTWORT_WINDOW_LABEL, due_at)],
+        &[malo_id.as_str()],
+    )
+    .await?;
 
     Ok(DispatchOutcome::Spawned { process_id })
 }
@@ -235,8 +219,13 @@ pub(super) async fn dispatch_geli_gas_datenabruf_anfragen(
 /// Lieferant. This is the Gas twin of `gpke.eog.anmelden` (Strom 55013).
 ///
 /// Spawns a [`GeliGasSupplierChangeWorkflow`] in its GNB-initiator role
-/// ([`GasSupplierChangeCommand::InitiateGnbProcess`]) and registers the
-/// 10-Werktage response window (BK7-24-01-009) atomically.
+/// ([`GasSupplierChangeCommand::InitiateGnbProcess`]) and registers the E/G's
+/// answer window atomically — „spätestens bis zum Ablauf des 2. Werktages"
+/// (GeLi Gas 3.0 Kap. 3.3), out of `mako_fristen::antwort`. The window matters
+/// beyond alerting: „Meldet sich der Ersatz-/ Grundversorger nicht
+/// fristgerecht, ordnet der Netzbetreiber die Marktlokation zu dem von ihm
+/// gemeldeten Termin dem Ersatz-/ Grundversorger zu", so its lapse completes
+/// the Zuordnung.
 ///
 /// ## Required payload fields
 ///
@@ -295,13 +284,13 @@ pub(super) async fn dispatch_geli_eog_anmelden(
     // running for this Gas-MaLo. A GNB rejection is terminal and must not retire
     // the MaLo — the corrected Anmeldung that follows is a normal GeLi Gas flow.
     // See `find_occupying_process`.
-    if let Some(dup_id) = find_occupying_process::<GeliGasSupplierChangeWorkflow>(
+    let occupancy = find_occupying_process::<GeliGasSupplierChangeWorkflow>(
         state,
         malo_id.as_str(),
         mako_geli_gas::WORKFLOW_NAME,
     )
-    .await?
-    {
+    .await?;
+    if let Some(dup_id) = occupancy.process {
         tracing::warn!(
             malo_id    = %malo_id,
             process_id = %dup_id,
@@ -314,47 +303,23 @@ pub(super) async fn dispatch_geli_eog_anmelden(
     }
 
     let workflow_id = WorkflowId::new(mako_geli_gas::WORKFLOW_NAME, latest_format_version());
-    let process = mako_engine::process::Process::<
-        GeliGasSupplierChangeWorkflow,
-        Arc<mako_engine::store_slatedb::SlateDbStore>,
-    >::new(
-        Arc::clone(&state.store),
-        state.tenant_id,
-        workflow_id.clone(),
-    );
-    let process_id = process.process_id();
 
-    let due_at = mako_fristen::deadline_at_werktage(
-        time::OffsetDateTime::now_utc(),
-        10,
-        mako_fristen::HolidayCalendar::BdewMaKo,
-    );
-    let deadline = Deadline::new(
-        process.stream_id().clone(),
-        process_id,
+    let due_at =
+        mako_fristen::antwort::antwort_deadline(EOG_GAS_PID, time::OffsetDateTime::now_utc())
+            .ok_or_else(|| {
+                DispatchError::InvalidPayload(format!(
+                    "PID {EOG_GAS_PID} has no published answer window in mako_fristen::antwort"
+                ))
+            })?;
+    let process_id = spawn_process::<GeliGasSupplierChangeWorkflow>(
+        &state.store,
         state.tenant_id,
         workflow_id,
-        mako_geli_gas::LIEFERBEGINN_RESPONSE_WINDOW_LABEL,
-        due_at,
-    );
-    process
-        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
-        .await?;
-
-    let identity = process.identity();
-    if let Err(e) = state
-        .store
-        .as_process_registry()
-        .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
-        .await
-    {
-        tracing::warn!(
-            process_id = %process_id,
-            malo_id    = %malo_id,
-            error      = %e,
-            "geli.eog.anmelden: business-key registration failed (non-fatal)",
-        );
-    }
+        domain_cmd,
+        &[(mako_geli_gas::LIEFERBEGINN_RESPONSE_WINDOW_LABEL, due_at)],
+        &[malo_id.as_str()],
+    )
+    .await?;
 
     Ok(DispatchOutcome::Spawned { process_id })
 }
@@ -369,8 +334,12 @@ pub(super) async fn dispatch_geli_eog_anmelden(
 /// | `malo_id`     | string | Gas Marktlokations-ID (11-digit EIC) |
 /// | `bgm_qualifier` | string (opt.) | `E01`=Kündigung (default), `E02`=Rücktritt, `E35`=Sperrung |
 ///
-/// Spawns a new [`GeliGasLfStornierungWorkflow`] keyed on `malo_id`.
-/// 10-Werktage response deadline (BK7-24-01-009) registered atomically.
+/// Spawns a new [`GeliGasLfStornierungWorkflow`] keyed on `malo_id`. The
+/// GNB's answer is due within the **original** message's Antwortfrist: a
+/// Stornierung is admissible only while that message is unanswered (GeLi Gas
+/// 3.0 Kap. 2.7), and no Festlegung gives the Stornierung a window of its own.
+/// The window is therefore the one the running Anmeldung, Abmeldung or
+/// Kündigung registered; with none running, the Stornierung is refused.
 pub(super) async fn dispatch_geli_gas_stornierung_initiieren(
     state: &CommandsApiState,
     payload: &serde_json::Value,
@@ -414,15 +383,19 @@ pub(super) async fn dispatch_geli_gas_stornierung_initiieren(
         bgm_qualifier,
     };
 
+    // The message being cancelled: the running LF process on this MaLo. Its
+    // answer window bounds the Stornierung's.
+    let original = original_antwortfrist(state, malo_id.as_str()).await?;
+
     // Duplicate guard — only a Stornierung still awaiting the GNB blocks a new
     // one. See `find_occupying_process`.
-    if let Some(dup_id) = find_occupying_process::<GeliGasLfStornierungWorkflow>(
+    let occupancy = find_occupying_process::<GeliGasLfStornierungWorkflow>(
         state,
         malo_id.as_str(),
         STORNIERUNG_LF_WORKFLOW_NAME,
     )
-    .await?
-    {
+    .await?;
+    if let Some(dup_id) = occupancy.process {
         tracing::warn!(
             malo_id = %malo_id,
             process_id = %dup_id,
@@ -435,57 +408,20 @@ pub(super) async fn dispatch_geli_gas_stornierung_initiieren(
     }
 
     let workflow_id = WorkflowId::new(STORNIERUNG_LF_WORKFLOW_NAME, latest_format_version());
-    let process = mako_engine::process::Process::<
-        GeliGasLfStornierungWorkflow,
-        Arc<mako_engine::store_slatedb::SlateDbStore>,
-    >::new(
-        Arc::clone(&state.store),
-        state.tenant_id,
-        workflow_id.clone(),
-    );
-    let process_id = process.process_id();
 
-    let due_at = mako_fristen::deadline_at_werktage(
-        time::OffsetDateTime::now_utc(),
-        10,
-        mako_fristen::HolidayCalendar::BdewMaKo,
-    );
-    let deadline = Deadline::new(
-        process.stream_id().clone(),
-        process_id,
+    let deadlines: Vec<(&'static str, time::OffsetDateTime)> = original
+        .map(|due_at| (mako_geli_gas::STORNIERUNG_LF_RESPONSE_WINDOW_LABEL, due_at))
+        .into_iter()
+        .collect();
+    let process_id = spawn_process::<GeliGasLfStornierungWorkflow>(
+        &state.store,
         state.tenant_id,
         workflow_id,
-        mako_geli_gas::STORNIERUNG_LF_RESPONSE_WINDOW_LABEL,
-        due_at,
-    );
-    process
-        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
-        .await?;
-
-    let identity = process.identity();
-    // The correlation index is how an inbound answer finds this
-    // process; it is append-only and nothing rebuilds it. Discarding a
-    // failure here left a live process that no ORDRSP/UTILMD answer
-    // could ever be routed to — the answer is dropped as
-    // `process_not_found` and the Frist expires against a process that
-    // was doing everything right. Not propagated: the process is spawned
-    // and its message already enqueued, so failing the caller now would
-    // have it re-issue the command and start a second one. Logged with
-    // the key and process id, which is what a repair needs.
-    if let Err(e) = state
-        .store
-        .as_process_registry()
-        .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
-        .await
-    {
-        tracing::error!(
-            process_id = %process_id,
-            malo_id    = %malo_id,
-            error      = %e,
-            "geli gas: business-key registration failed — the answer to this process cannot \
-             be correlated back to it",
-        );
-    }
+        domain_cmd,
+        &deadlines,
+        &[malo_id.as_str()],
+    )
+    .await?;
 
     Ok(DispatchOutcome::Spawned { process_id })
 }
@@ -588,13 +524,13 @@ pub(super) async fn dispatch_geli_lf_anmeldung(
 
     // Duplicate guard — a GNB rejection is terminal and must not retire the
     // Gas-MaLo. See `find_occupying_process`.
-    if let Some(dup_id) = find_occupying_process::<GeliGasLfAnmeldungWorkflow>(
+    let occupancy = find_occupying_process::<GeliGasLfAnmeldungWorkflow>(
         state,
         malo_id.as_str(),
         GELI_LF_ANMELDUNG_WF,
     )
-    .await?
-    {
+    .await?;
+    if let Some(dup_id) = occupancy.process {
         tracing::warn!(
             malo_id = %malo_id,
             process_id = %dup_id,
@@ -607,62 +543,24 @@ pub(super) async fn dispatch_geli_lf_anmeldung(
     }
 
     let workflow_id = WorkflowId::new(GELI_LF_ANMELDUNG_WF, latest_format_version());
-    let process = mako_engine::process::Process::<
-        GeliGasLfAnmeldungWorkflow,
-        Arc<mako_engine::store_slatedb::SlateDbStore>,
-    >::new(
-        Arc::clone(&state.store),
-        state.tenant_id,
-        workflow_id.clone(),
-    );
-    let process_id = process.process_id();
-
     // The counterparty's published answer window, from the one table four
     // services share. It is **not** 10 Werktage: that is the LFN's own
     // Vorlauffrist before Lieferbeginn, and sizing the answer queue by it
     // reports a lapsed Frist as still running for six Werktage.
-    let deadlines: Vec<Deadline> =
+    let deadlines: Vec<(&'static str, time::OffsetDateTime)> =
         mako_fristen::antwort::antwort_deadline(pid_code, time::OffsetDateTime::now_utc())
-            .map(|due_at| {
-                Deadline::new(
-                    process.stream_id().clone(),
-                    process_id,
-                    state.tenant_id,
-                    workflow_id,
-                    mako_geli_gas::LF_ANMELDUNG_RESPONSE_WINDOW_LABEL,
-                    due_at,
-                )
-            })
+            .map(|due_at| (mako_geli_gas::LF_ANMELDUNG_RESPONSE_WINDOW_LABEL, due_at))
             .into_iter()
             .collect();
-    process
-        .execute_and_enqueue_with_deadlines(domain_cmd, &deadlines)
-        .await?;
-
-    let identity = process.identity();
-    // The correlation index is how an inbound answer finds this
-    // process; it is append-only and nothing rebuilds it. Discarding a
-    // failure here left a live process that no ORDRSP/UTILMD answer
-    // could ever be routed to — the answer is dropped as
-    // `process_not_found` and the Frist expires against a process that
-    // was doing everything right. Not propagated: the process is spawned
-    // and its message already enqueued, so failing the caller now would
-    // have it re-issue the command and start a second one. Logged with
-    // the key and process id, which is what a repair needs.
-    if let Err(e) = state
-        .store
-        .as_process_registry()
-        .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
-        .await
-    {
-        tracing::error!(
-            process_id = %process_id,
-            malo_id    = %malo_id,
-            error      = %e,
-            "geli gas: business-key registration failed — the answer to this process cannot \
-             be correlated back to it",
-        );
-    }
+    let process_id = spawn_process::<GeliGasLfAnmeldungWorkflow>(
+        &state.store,
+        state.tenant_id,
+        workflow_id,
+        domain_cmd,
+        &deadlines,
+        &[malo_id.as_str()],
+    )
+    .await?;
 
     Ok(DispatchOutcome::Spawned { process_id })
 }
@@ -1165,4 +1063,41 @@ async fn dispatch_geli_zuordnungsmeldung(
         domain_cmd,
     )
     .await
+}
+
+/// The Antwortfrist of the message a Gas Stornierung cancels — the GNB answer
+/// window the running Anmeldung, Abmeldung or Kündigung on `malo_id`
+/// registered. `None` when that message's PID has no published window.
+///
+/// # Errors
+///
+/// [`DispatchError::InvalidPayload`] when no such message is running: a
+/// Stornierung of a message already answered is not possible (GeLi Gas 3.0
+/// Kap. 2.7), only a manual Rückabwicklung.
+async fn original_antwortfrist(
+    state: &CommandsApiState,
+    malo_id: &str,
+) -> Result<Option<time::OffsetDateTime>, DispatchError> {
+    use mako_engine::deadline::DeadlineStore as _;
+    use mako_geli_gas::{GeliGasLfAnmeldungWorkflow, lf_anmeldung::WORKFLOW_NAME};
+
+    let occupancy =
+        find_occupying_process::<GeliGasLfAnmeldungWorkflow>(state, malo_id, WORKFLOW_NAME).await?;
+    let Some(process_id) = occupancy.process else {
+        return Err(DispatchError::InvalidPayload(format!(
+            "für die Gas-MaLo {malo_id} läuft keine unbeantwortete Anmeldung, Abmeldung oder \
+             Kündigung — eine Stornierung ist nicht mehr möglich (GeLi Gas 3.0 Kap. 2.7)"
+        )));
+    };
+    let stream = mako_engine::ids::StreamId::for_process(state.tenant_id, &process_id);
+    let registered = state
+        .store
+        .as_deadline_store()
+        .for_stream(&stream)
+        .await
+        .map_err(DispatchError::Engine)?;
+    Ok(registered
+        .iter()
+        .find(|d| d.label() == mako_geli_gas::LF_ANMELDUNG_RESPONSE_WINDOW_LABEL)
+        .map(mako_engine::deadline::Deadline::due_at))
 }

@@ -16,6 +16,7 @@
 //! Abbestellung** at makod — GDPR Art. 7(3) obliges the ESA to stop, and the
 //! only way to stop is the Abbestellung.
 
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{
@@ -39,15 +40,6 @@ use uuid::Uuid;
 use mako_service::cedar::CedarEnforcer;
 
 use super::{Claims, IntoMdmResponse as _, Tenant};
-
-/// Deny response for the consent registry.
-///
-/// Both actions are gated on the MSB or ESA role: the registry records the
-/// relationship between exactly those two parties, and a revocation fires the
-/// ORDERS 17008 Abbestellung at makod. An LF has no lawful interest in it.
-fn forbidden(action: &'static str) -> axum::response::Response {
-    mako_markt::error::MdmError::Forbidden { reason: action }.into_response()
-}
 
 /// Injected `Arc<PgEinwilligungRepository>`.
 pub type EinwilligungRepoExt = Arc<crate::pg::PgEinwilligungRepository>;
@@ -95,7 +87,7 @@ pub async fn grant_einwilligung(
         .check(&claims.principal(), "write-einwilligung", &tenant)
         .is_err()
     {
-        return forbidden("write-einwilligung denied");
+        return ApiError::forbidden("write-einwilligung denied").into_response();
     }
     if body.location_ids.is_empty() {
         return (
@@ -160,7 +152,7 @@ pub async fn list_einwilligungen(
         .check(&claims.principal(), "read-einwilligung", &tenant)
         .is_err()
     {
-        return forbidden("read-einwilligung denied");
+        return ApiError::forbidden("read-einwilligung denied").into_response();
     }
     match repo.list_for_esa(&tenant, &q.esa_mp_id).await {
         Ok(rows) => Json(serde_json::json!({
@@ -185,7 +177,7 @@ pub async fn get_einwilligung(
         .check(&claims.principal(), "read-einwilligung", &tenant)
         .is_err()
     {
-        return forbidden("read-einwilligung denied");
+        return ApiError::forbidden("read-einwilligung denied").into_response();
     }
     match repo.get(&tenant, id).await {
         Ok(Some(rec)) => Json(rec).into_response(),
@@ -200,7 +192,6 @@ pub async fn get_einwilligung(
 /// at makod for the covered locations. The Abbestellung dispatch is best-effort
 /// (logged on failure) — the revocation itself always succeeds and is the
 /// durable signal a consumer can act on.
-#[allow(clippy::too_many_arguments)] // axum extractors, not a parameter list
 pub async fn revoke_einwilligung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -214,7 +205,7 @@ pub async fn revoke_einwilligung(
         .check(&claims.principal(), "write-einwilligung", &tenant)
         .is_err()
     {
-        return forbidden("write-einwilligung denied");
+        return ApiError::forbidden("write-einwilligung denied").into_response();
     }
     let revoked = match repo.revoke(&tenant, id).await {
         Ok(Some(rec)) => rec,
@@ -284,7 +275,7 @@ pub async fn consent_check(
         .check(&claims.principal(), "read-einwilligung", &tenant)
         .is_err()
     {
-        return forbidden("read-einwilligung denied");
+        return ApiError::forbidden("read-einwilligung denied").into_response();
     }
     match repo
         .consent_check(
@@ -325,7 +316,7 @@ pub async fn put_framework(
         .check(&claims.principal(), "write-einwilligung", &tenant)
         .is_err()
     {
-        return forbidden("write-einwilligung denied");
+        return ApiError::forbidden("write-einwilligung denied").into_response();
     }
     let rec = EsaFrameworkAgreement {
         tenant,
@@ -400,7 +391,7 @@ pub async fn put_esa_preise(
         .check(&claims.principal(), "write-einwilligung", &tenant)
         .is_err()
     {
-        return forbidden("write-einwilligung denied");
+        return ApiError::forbidden("write-einwilligung denied").into_response();
     }
     if body.preise.is_empty() {
         return (
@@ -455,7 +446,7 @@ pub async fn get_esa_preise(
         .check(&claims.principal(), "read-einwilligung", &tenant)
         .is_err()
     {
-        return forbidden("read-einwilligung denied");
+        return ApiError::forbidden("read-einwilligung denied").into_response();
     }
     let at = q.at.unwrap_or_else(mako_fristen::heute);
     match repo
@@ -513,7 +504,7 @@ pub async fn put_esa_messprodukt_katalog(
         .check(&claims.principal(), "write-einwilligung", &tenant)
         .is_err()
     {
-        return forbidden("write-einwilligung denied");
+        return ApiError::forbidden("write-einwilligung denied").into_response();
     }
     let mut eintraege = Vec::with_capacity(body.len());
     for e in body {
@@ -570,7 +561,7 @@ pub async fn get_esa_messprodukt_angebot(
         .check(&claims.principal(), "read-einwilligung", &tenant)
         .is_err()
     {
-        return forbidden("read-einwilligung denied");
+        return ApiError::forbidden("read-einwilligung denied").into_response();
     }
     let at = q.at.unwrap_or_else(mako_fristen::heute);
     let code = mako_wim::esa::normalize_code(&messprodukt);
@@ -628,7 +619,7 @@ pub async fn get_esa_subscription(
         .check(&claims.principal(), "read-einwilligung", &tenant)
         .is_err()
     {
-        return forbidden("read-einwilligung denied");
+        return ApiError::forbidden("read-einwilligung denied").into_response();
     }
     match repo
         .esa_messprodukt_of_bestellung(&tenant, &bestellung_ref)
@@ -664,7 +655,7 @@ pub async fn get_framework(
         .check(&claims.principal(), "read-einwilligung", &tenant)
         .is_err()
     {
-        return forbidden("read-einwilligung denied");
+        return ApiError::forbidden("read-einwilligung denied").into_response();
     }
     match repo.get_framework(&tenant, &msb_mp_id, &esa_mp_id).await {
         Ok(Some(rec)) => Json(rec).into_response(),

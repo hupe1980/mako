@@ -79,7 +79,6 @@ permit(
 // endpoint that cannot be reached is worse than one that is reachable by too
 // many. `released_by`/`released_at` record who released what in the meantime,
 // so the action is attributable even where it is not separately authorised.
-// Adding a function-role axis is tracked in ROADMAP.md.
 
 // ── Speaking MCP at all ───────────────────────────────────────────────────────
 // `use-mcp` is the blanket gate the shared MCP middleware applies to **every**

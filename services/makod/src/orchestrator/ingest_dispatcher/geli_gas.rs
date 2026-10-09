@@ -269,12 +269,13 @@ impl EdifactIngestDispatcher {
                         10,
                         HolidayCalendar::BdewMaKo,
                     );
-                    self.spawn_or_resume::<GeliGasSperrprozesseInvoicWorkflow>(
+                    self.spawn_or_resume_guarded::<GeliGasSperrprozesseInvoicWorkflow>(
                         malo_id.as_str(),
                         "geli-gas-sperrprozesse-invoic",
                         cmd,
                         &fv,
                         &[(mako_geli_gas::SPERRPROZESSE_INVOIC_SETTLEMENT_LABEL, due_at)],
+                        occupied_by_own_reference,
                     )
                     .await
                 }

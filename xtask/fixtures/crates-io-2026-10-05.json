@@ -1,0 +1,14 @@
+{
+  "recorded": "2026-10-05",
+  "source": "https://crates.io/api/v1/crates/<name>, field crate.max_stable_version",
+  "crates": {
+    "sepa": "0.8.0",
+    "metering": "0.24.0",
+    "meterstore": "0.14.0",
+    "agentplane": "0.45.0",
+    "sqlx": "0.9.0",
+    "slatedb": "0.17.0",
+    "serde": "1.0.228",
+    "time": "0.3.44"
+  }
+}

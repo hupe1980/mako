@@ -3,23 +3,30 @@ title = "Annual Release Workflow"
 description = "The engineering playbook for a new BDEW release: mirror the documents, import and validate the profiles, check PID coverage, roll out, migrate."
 weight = 12
 +++
-This document is the step-by-step engineering playbook for incorporating a new
-BDEW release into the `mako` workspace.  Follow the steps in order for every
-cutover.  Cutovers are staggered per message type — January 1, April 1 and
-October 1 all carry format versions — so this playbook runs several times a year,
-once per message type that moves.
+The steps for bringing a new BDEW release into the workspace, in order. Cutovers
+are staggered per message type — 1 January, 1 April and 1 October all carry
+format versions — so this runs once per message type that moves.
+
+A cutover starts from the BNetzA Mitteilung that publishes it, and a Mitteilung
+can publish nothing for EDIFACT. [Mitteilung Nr. 58](https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/835_mitteilungen_datenformate/Mitteilung_58/Mitteilung_Nr_58.html) (01.10.2026) is
+one: for **01.04.2027** „Zum 1. Oktober 2026 erfolgt keine Veröffentlichung
+neuer Dokumente. Damit ergibt sich zum 1. April 2027 kein Anpassungsbedarf" —
+for EDIFACT, the API-Webdienste and the EBD alike. That cycle binds only
+**ActivationDocument AWT 1.1g** (Redispatch XML, `redispatch-xml`) and
+**Regelungen zum Übertragungsweg 1.11** (certificate use for mTLS), neither of
+which is a profile under `crates/edi-energy/profiles`, so this playbook does not
+run for it. The same Mitteilung keeps **UTILTS** („Die UTILTS bleibt damit
+erhalten"), limits the API-Webdienste to MaLo-Ident and Steuern, and puts the
+MaBiS-Hub Anwendungsfälle in EDIFACT.
 
 ---
 
 ## Prerequisites
 
-- `cargo xtask` is the primary tool for every step.  Build it once before starting:
-  ```
-  cargo build -p xtask
-  ```
-- The BDEW PDFs live in a local document mirror that `cargo xtask sync-regulatories
-  --download` populates (Step 0), and it reports the directory it writes to. They are
-  third-party publications and are not part of the repository.
+- `cargo xtask` runs every step (`cargo build -p xtask` once).
+- The BDEW PDFs live in a local mirror that `cargo xtask sync-regulatories
+  --download` populates (Step 0); they are third-party publications and not in
+  the repository.
 
 ---
 
@@ -62,6 +69,12 @@ The directory name is the Anwendungszeitpunkt; the two documents are the file
 names `sync-regulatories` mirrored. Give the predecessor its `valid_until`
 (the day before).
 
+When the Mitteilung gives the release a publication date off the Allgemeine
+Festlegungen 6.1d § 2.5 timetable, add `"publikation_quelle"` naming it —
+`"BNetzA Mitteilung Nr. <n> (<Datum>)"` or the Mitteilung's
+bundesnetzagentur.de URL. `validate-profiles` refuses an off-timetable date
+without it, and a `publikation_quelle` that names no Mitteilung.
+
 ---
 
 ## Step 2 — Import it from the PDFs
@@ -83,18 +96,12 @@ cargo xtask pdf-grid path/to/UTILMD_AHB_Strom_2.3.pdf                   # the gr
 
 The fix belongs in `xtask/src/bdew/`, never in the JSON.
 
-A document defect the importer works around is printed as `warn`, and those
-lines are the places where the AHB and the profile differ. Two shapes exist
-today: an `SG27 MOA` row without any status in INVOIC AHB 1.0b gets its status
-from the MIG, and an operand cell printed without its operand letter (UTILTS
-AHB 1.1 `SG8 DTM` DE 2379 in two of its three columns) takes the letter the
-column that prints one uses for the same data element and code. Both are
-evidenced rather than defaulted; a defect with no such evidence fails the
-import instead.
-
-Every Bedingung a status expression or an operand cites must have its text; a
-citation the reader cannot resolve fails the import, because the evaluator
-would otherwise read the place as unconditioned.
+A document defect the importer works around is printed as `warn` — the places
+where AHB and profile differ. Two are evidenced and handled: an `SG27 MOA` row
+without a status in INVOIC AHB 1.0b takes it from the MIG, and an operand cell
+without its letter (UTILTS AHB 1.1 `SG8 DTM` DE 2379) takes the letter its
+sibling column prints. Any other defect, and any Bedingung cited without its
+text, fails the import.
 
 Then read the delta against the predecessor:
 
@@ -103,13 +110,11 @@ cargo xtask profile-diff utilmd fv20261001 fv20271001
 cargo xtask profile-diff utilmd fv20261001 fv20271001 --pid 55001
 ```
 
-It lists which Prüfidentifikatoren appeared or were withdrawn and, per
-Prüfidentifikator, the places whose status changed, the codes that gained or
-lost an operand, and the Bedingungen and Pakete that were rewritten. Places are
-named by where they sit and what the MIG calls them — `SG4
-Vorgangs-Identifikation / STS Transaktionsgrund` — because the MIG renumbers
-its segments between Nachrichtentypversionen, and an `Nr`-keyed listing would
-report every segment of every column as changed. Put it in the PR summary.
+It lists Prüfidentifikatoren that appeared or were withdrawn and, per PID, the
+places whose status changed, codes that gained or lost an operand, and rewritten
+Bedingungen and Pakete. Places are named by position and MIG name (`SG4
+Vorgangs-Identifikation / STS Transaktionsgrund`), since the MIG renumbers its
+segments between versions. Put it in the PR summary.
 
 ---
 
@@ -119,7 +124,7 @@ report every segment of every column as changed. Put it in the PR summary.
 cargo test -p edi-energy --all-features
 ```
 
-`tests/skeletons.rs` generates the minimal message of every column and
+`tests/it/skeletons.rs` generates the minimal message of every column and
 validates it against that column: an extraction gap (a lost row, a mis-assigned
 status) or a validator gap shows up as a failing Anwendungsfall, with its
 skeleton and findings. The fixture snapshot names every verdict that moved.
@@ -134,15 +139,10 @@ cargo xtask check-pid-coverage           # the shipped columns against the Anwen
 cargo xtask check-release-coverage --date 2027-10-01
 ```
 
-`validate-profiles` also counts the status expressions the extraction cut in
-half. That count is **zero**, pinned in
-`xtask/profile-expression-defects.json`, and may only shrink — so a new
-publication whose typesetting the reader does not yet handle fails the import
-rather than shipping a place the validator would judge unconditioned. What it
-cannot see is an expression that lost an *operator* rather than a citation: two
-citations side by side read as a conjunction, so `(…) ⊻ ([177] ∧ [178])`
-printed with the `⊻` on a line of its own becomes `(…) ([177] ∧ [178])` — a
-rule that parses, and demands both branches of an exclusive choice. Read the
+`validate-profiles` also counts status expressions the extraction cut in half;
+the count is **zero**, pinned in `xtask/profile-expression-defects.json`, and
+may only shrink. It cannot see a lost *operator*: `(…) ⊻ ([177] ∧ [178])` with
+the `⊻` on its own line reads as `(…) ([177] ∧ [178])`, a conjunction. Read the
 `profile-diff` output for operators that appear or vanish, and check a
 suspicious column against `pdf-grid`.
 
@@ -181,26 +181,25 @@ missing.
 
 ---
 
-## Step 7 — Deploy new binary with both FVs active (zero-downtime rollout)
+## Step 7 — Deploy the new binary
 
-Deploy the new binary so that **both** format versions are registered in the
-adapter registry simultaneously. The new binary can accept both old-FV and new-FV
-inbound messages; in-flight processes continue under their originating FV.
+A binary carries every profile `sources.json` names, and every known format
+version must be covered by an adapter —
+`makod::startup::validate_adapter_coverage` refuses to boot otherwise. There is
+no per-FV switch: in-flight processes keep the FV on their `WorkflowId`, and the
+inbound message's own FV picks the adapter.
 
 ```bash
-# Kubernetes example — rolling restart with the new image:
-kubectl set image deployment/makod makod=registry.example/makod:FV2026-10-01
+kubectl set image deployment/makod makod=registry.example/makod:<version>
 kubectl rollout status deployment/makod
 ```
 
-Do **not** remove the old FV from the adapter config yet.
-
 ### Watch for format-version substitution
 
-`makod` derives the format version from each inbound message's release. When it
-cannot — an unknown message type, an unparseable release, or a release with **no
-registered profile for today's date** — it falls back to the newest known FV and
-logs at `WARN`:
+When `makod` cannot derive the format version from an inbound message — an
+unknown message type, an unparseable release, or a release with **no registered
+profile for today's date** — it falls back to the newest known FV and logs at
+`WARN`:
 
 ```
 format version could not be derived from the message — validating against the
@@ -210,36 +209,19 @@ the release the message claims
   substituted_fv="FV2026-10-01"
 ```
 
-Falling back rather than rejecting is deliberate: during a cutover a counterparty
-may send a release this binary predates, and refusing the message outright is
-worse than dispatching it under the closest registered version.
-
-The substitution does **not** change which AHB rules apply — validation derives
-its profile from the message's own release. What the FV selects is the
-`MessageAdapter` and the `WorkflowId` name, and since adapters accept every
-registered FV the substitution is usually invisible in behaviour. Two things make
-it worth watching anyway: it means mako could not read the release the
-counterparty stated, and the spawned process carries a `WorkflowId` naming a
-release the message never claimed.
-
-Treat a burst during the transition window as a signal that a profile is missing
-from the deployed binary — not as noise.
-
-Alert on `reason="no profile registered for this release on today's date"`
-specifically; the other reasons indicate a malformed message rather than a
-deployment gap.
+Validation still derives its profile from the message's own release; the
+substituted FV selects the `MessageAdapter` and the spawned process's
+`WorkflowId`. Alert on `reason="no profile registered for this release on
+today's date"`: a burst during a cutover means a profile is missing from the
+deployed binary. The other reasons indicate a malformed message.
 
 ---
 
 ## Step 8 — Run in-flight process migration (online, no downtime)
 
-While the daemon is running, call the migration endpoint to advance all
-in-flight processes from the old FV snapshot to the new FV.
-
-> **Why online?**  `makod` holds an exclusive lock on its data directory via
-> SlateDB. A separate `makod migrate` binary cannot open the same path while
-> the daemon is live. The HTTP endpoint runs migration in-process using the
-> daemon's own open store handles, avoiding the lock entirely.
+The migration endpoint repoints in-flight processes' snapshots from the old FV
+to the new one, inside the running daemon — `makod` holds an exclusive lock on
+its data directory, so no second process could open the store.
 
 ```bash
 # Replace FV dates as appropriate for the current release cycle.
@@ -260,49 +242,27 @@ Expected response (success):
   "skipped": 18234,
   "errors": [],
   "runners_executed": 57,
-  "workflows": ["esa-wertebestellung", "gabi-gas-allocation", "…"],
-  "workflows_not_migrated": [
-    ["gpke-messwerte", "records inbound MSCONS Messwerte and completes"],
-    ["gabi-gas-mmma", "delegates delivery to gpke-allokationsliste"]
-  ]
+  "workflows": ["esa-wertebestellung", "gabi-gas-allocation", "…"]
 }
 ```
 
-**Assert `errors == []` before proceeding.** Non-empty `errors` means some
-process streams could not be migrated (deserialization failure, missing state
-data, etc.) — investigate each failure before retiring the old FV.
-
-`workflows` names every family the run covered. It is reported rather than
-merely counted because a count alone reads as complete whatever the migration
-happens to include, with nothing to say which families were missing. A
-build-time guard requires every dispatchable workflow to have either a
-migration arm or a recorded reason it needs none, and `workflows_not_migrated`
-reports those reasons so the sign-off covers them too. They are pure receive-and-record families:
-they record an inbound message and finish, so no process survives a cutover for
-a migration to repoint.
+**Assert `errors == []`** (the endpoint answers `207` otherwise); investigate
+each failed stream. A pair outside `KNOWN_FV_TRANSITIONS` is `422`.
+`workflows` names every workflow the run covered — each registered
+`WorkflowDriver`.
 
 If a workflow's state schema changed between FVs, add a bespoke `StateMigration`
 implementation in the domain crate (see
 [`mako_engine::migration::StateMigration`](https://github.com/hupe1980/mako/blob/main/crates/mako-engine/src/migration.rs))
-and update `services/makod/src/api/migration_api.rs` to use it.
+and run it for that workflow in `services/makod/src/api/migration_api.rs`.
 
 ---
 
-## Step 9 — Retire old FV from adapter registry and redeploy
+## Step 9 — Retire a profile
 
-After a successful migration (Step 8, `errors == []`), remove the old FV from
-the adapter config and do a final rolling restart:
-
-```bash
-# Remove old FV profile registration from makod.toml or deployment config,
-# then redeploy:
-kubectl set image deployment/makod makod=registry.example/makod:FV2026-10-01-final
-kubectl rollout status deployment/makod
-```
-
-Inbound messages for a process are parsed and validated against the format
-version active for that process; new events are written under the corresponding
-`workflow_id`.
+A profile stays in `sources.json` — and compiled in — while any deployment can
+still receive its format; it is removed from `sources.json` and its directory
+deleted when none can.
 
 ---
 
@@ -330,19 +290,7 @@ version active for that process; new events are written under the corresponding
 
 ## Appendix B — the cutover has no Übergangsfrist
 
-Allgemeine Festlegungen 6.1 §2.5 gives the EDIFACT formats a single
-*Anwendungszeitpunkt*: before it the old format applies, from it the new one.
-There is no window in which both are normatively acceptable, so a cutover is a
-step, not a fade.
-
-The 15-Werktage Übergangszeitraum in §8.5 belongs to the **XML** formats. It
-starts at the Anwendungszeitpunkt, counts Werktage, and selects the version by
-the *Erfüllungsdatum* stated in the message — none of which transfers to EDIFACT.
-
-An operator who wants to keep accepting a late-arriving message in the old
-format sets `ReleaseRegistry::with_receive_tolerance_days(n)`, which extends the
-trailing edge only. That is a local receiving policy and defaults to zero. See
-[Release Lifecycle](@/docs/compliance/release-lifecycle.md).
+See [Transition Window Handling](@/docs/compliance/release-lifecycle.md#transition-window-handling).
 
 ---
 
@@ -357,11 +305,10 @@ changeover mirrors it — published 01.10., applies 01.04. of the next year. The
 six months between are the *Umsetzungsphase*, and throughout them the previous
 format is the binding one.
 
-Every EDI@Energy document prints its `Publikationsdatum` on the title page. It
-goes in the profile's `publikationsdatum` field; `valid_from` and the directory
-name carry the Anwendungszeitpunkt six months later. `validate-profiles` refuses two
-profiles claiming the same day, a gap between consecutive profiles of a track,
-and a chain whose newest profile is not open-ended.
+The document's `Publikationsdatum` goes in `publikationsdatum`; `valid_from`
+and the directory name carry the Anwendungszeitpunkt. `validate-profiles`
+refuses two profiles on the same day, a gap within a track, and a chain whose
+newest profile is not open-ended.
 
 Corrections issued in between ("Konsolidierte Lesefassung mit Fehlerkorrektur")
 take effect without a further BNetzA Mitteilung and do not move the
@@ -377,12 +324,14 @@ cargo xtask validate-profiles          # prints gaps and overlaps
 ```
 
 The six-month gap is § 2.5's own timetable, so `publikationsdatum` is entailed
-by `valid_from` rather than looked up, and `validate-profiles` refuses a profile
-that states neither or states one that disagrees. The exception is by regulation
-rather than cycle: `contrl`/`insrpt` run on the ausserordentliche
-Veröffentlichung of 11.12.2025 (applies 2026-01-01), which neither § 2.5.1 nor
-§ 2.5.2 covers, so those profiles state no `publikationsdatum` — a stated one
-there would be a guess.
+by `valid_from` rather than looked up, and `validate-profiles` refuses a regular
+Anwendungszeitpunkt whose profile states no date or one that disagrees. A date
+off the timetable is admitted only with a `publikation_quelle` that names the
+BNetzA Mitteilung — „Mitteilung Nr. <n>“ or its bundesnetzagentur.de page — and
+no publication may fall on or after its own `valid_from`. `contrl`/`insrpt` run
+on an ausserordentliche Veröffentlichung (applies 2026-01-01), which neither
+§ 2.5.1 nor § 2.5.2 covers; those profiles state no `publikationsdatum`, which
+the rule admits off the timetable.
 
 ### Date or wire code?
 
@@ -393,27 +342,13 @@ both carry wire release `1.3c`, so only the date distinguishes them.
 supplied by the caller — `makod` states `mako_fristen::heute()`, the German
 calendar date, because a Formatversion takes effect at German midnight.
 
-Running processes continue under the FV they were spawned with — it is on their
-`WorkflowId` — while the inbound message's own FV picks the adapter, so a
-partial cutover needs no coordination.
-
-EDIFACT has no overlap at the changeover: before the Anwendungszeitpunkt the old
-format applies, from it the new one.
-`ReleaseRegistry::with_receive_tolerance_days` widens only the trailing edge, as
-a local inbound policy for a late-arriving message.
+Running processes continue under the FV on their `WorkflowId`, while the
+inbound message's own FV picks the adapter.
 
 ### xtask coverage check
 
-After adding a new FV profile, verify that the `check-release-coverage` gate
-covers the new effective date:
-
-```bash
-cargo xtask check-release-coverage --date 2026-04-01
-cargo xtask check-release-coverage --date 2026-10-01
-```
-
-Both commands must exit 0 for the workspace to be considered FV2026-ready.
-
+After adding a profile, `cargo xtask check-release-coverage --date <valid_from>`
+must exit 0.
 
 
 ## Appendix D — Release naming conventions
@@ -424,5 +359,4 @@ Both commands must exit 0 for the workspace to be considered FV2026-ready.
 | `fv20271001_gas` | e.g. `G1.3` | UTILMD Gas |
 | `fv20271001` | e.g. `2.5b` | MSCONS |
 
-The wire release code comes from UNH segment, data element 0057 (association-
-assigned code).  It must match the `release` field in `mig.json` exactly.
+The wire release code is `UNH` DE 0057 and must match `release` in `mig.json`.

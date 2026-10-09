@@ -80,8 +80,8 @@ docker build --target processd-runtime -t processd:dev  .
 > both the NB `mako-pruefung` and the LF answer modules).
 
 These three come from a builder stage carrying only their dependencies — no
-Iceberg/DataFusion, no LanceDB — so a cold build is a few minutes and a warm one
-under a minute.
+Iceberg/DataFusion — so a cold build is a few minutes and a warm one under a
+minute.
 
 ---
 
@@ -154,7 +154,7 @@ curl -s -X PUT "http://localhost:8180/api/v1/malos/$MALO_ID" \
   -w "\nHTTP %{http_code}\n"
 # → HTTP 201
 
-# MaLo grid record (`mako-pruefung` check 1)
+# MaLo grid record — without it the Anmeldung escalates instead of being answered
 curl -s -X PUT "http://localhost:8180/api/v1/malos/$MALO_ID/grid" \
   -H "Content-Type: application/json" \
   -d '{"nb_mp_id":"9900357000004","bilanzierungsgebiet":"11YN0------0STXG","netzgebiet":"DEMO-NZ-001","sparte":"STROM","source":"manual"}' \
@@ -162,7 +162,7 @@ curl -s -X PUT "http://localhost:8180/api/v1/malos/$MALO_ID/grid" \
 # → HTTP 204
 ```
 
-### 4c — LF trading partner (`mako-pruefung` check 5)
+### 4c — LF trading partner (E_0622 Prüfschritt 60)
 
 ```bash
 # Register in marktd partner directory
@@ -218,8 +218,9 @@ Expected response:
 
 ## Step 6 — Automatic NB decision
 
-Within ~200 ms, `processd` receives the `de.mako.process.initiated` event from
-`marktd`'s fan-out and runs all 6 `mako-pruefung` validation checks synchronously.
+`processd` receives the `de.mako.process.initiated` event from `marktd`'s
+fan-out and walks the E_0622 Entscheidungsbaum (`mako-pruefung`) against the
+master data seeded in Step 4.
 
 ```bash
 # Check the decision log
@@ -229,7 +230,7 @@ curl -s http://localhost:8580/api/v1/decisions | jq '.[] | {
 # → {"malo_id":"51238696012","decision":"Accept","antwortcode":"A51","decided_at":"..."}
 ```
 
-With `NB_AUTO_ACCEPT=true` (set in the demo compose file), `Accept` automatically
+With `[nb] auto_accept = true` (set in the demo's `processd.toml`), `Accept` automatically
 dispatches `gpke.lieferbeginn.bestaetigen` to `makod`, which enqueues the outbound
 **UTILMD 55002** (Bestätigung Anmeldung verb. MaLo):
 
@@ -244,8 +245,7 @@ curl -s http://localhost:8000/events | jq '[.[] |
 
 ## Step 7 — Run the automated smoke test
 
-The demo ships `smoke.sh` which runs all of the above automatically and asserts
-every step passes, including the auto-accept timing:
+`smoke.sh` runs all of the above and asserts every step:
 
 ```bash
 bash smoke.sh
@@ -265,10 +265,9 @@ All smoke tests passed.
   Flow: UTILMD 55001 → makod → marktd ingest → validate → bestaetigen → UTILMD 55002
 ```
 
-The `HTTP 409` confirms the **workflow state guard** — `processd` already advanced
-the workflow to `AntwortGesendet`, so the later manual command is correctly rejected
-with `invalid_state: expected ValidationPassed, found AntwortGesendet`. This is not
-idempotency: it is the state machine rejecting an out-of-order command.
+The `HTTP 409` is the **workflow state guard**, not idempotency: `processd`
+already moved the workflow to `AntwortGesendet`, so a second `bestaetigen` is an
+out-of-order command and is rejected as `invalid_state`.
 
 ---
 
@@ -321,7 +320,7 @@ bash smoke.sh
 The recipe rebuilds `marktd` too, which is a cache hit after the first demo.
 `edmd` and `einsd` are the expensive half of this page: both copy from the full
 `builder` stage, which compiles every service in the workspace in one
-`cargo build` — Iceberg/DataFusion and LanceDB included. Budget **20–45 minutes**
+`cargo build` — Iceberg/DataFusion included. Budget **20–45 minutes**
 cold, a few minutes on a warm BuildKit cache.
 
 It registers the Anlagenbetreiber and a 9.8 kWp rooftop plant behind it, pushes a
@@ -371,23 +370,52 @@ month against that tariff, records the document in `outputd` for the § 147 AO
 eight years, watches the invoice land in `accountingd` as an Offener Posten, and
 closes it with a payment import.
 
-The customer is a BO4E document rather than a flat bag of `vorname` / `strasse`
-/ `plz`, and the demo asserts why: § 14 Abs. 4 Nr. 1 UStG makes the
-Leistungsempfänger's full name and address part of what an invoice has to state,
-so step 3 reads the recipient back off **both** the BO4E `Rechnung` and the
-EN 16931 model. A flat shape posted to an endpoint that has none of those fields
-is a `422` naming the field, not a `201` and a nameless customer.
+§ 14 Abs. 4 Nr. 1 UStG makes the Leistungsempfänger's full name and address
+part of the invoice, so step 3 reads the recipient back off **both** the BO4E
+`Rechnung` and the EN 16931 model. A flat `vorname`/`strasse`/`plz` body is a
+`422` naming the field.
 
-A demo payload is copied into tickets as *"this is what a request looks like"*,
-so both halves are held to the real types — `just test-demo-payloads` for every
-request body, `just test-demo-configs` for every `*.toml` the stacks start with.
-No Docker, no running stack, seconds.
+`just test-demo-payloads` deserialises every request body the demos post into
+the real request type, and `just test-demo-configs` loads every `*.toml` the
+stacks start with — no Docker, seconds.
 
-The expected amount is computed by the smoke test itself — `20 ct/Tag × 31
-Tage`, `32 ct/kWh × 250 kWh` and the § 3 StromStG Stromsteuer at `2.05 ct/kWh`
-come to `91.325` netto and `108.675` gross at 19 % USt — so a run that priced
-from the wrong tariff version, or rounded the tax the other way, fails at the
-assertion rather than reporting a green invoice for a different amount.
+The smoke test computes the expected amount itself: `20 ct/Tag × 31 Tage`,
+`32 ct/kWh × 250 kWh`, the § 3 StromStG Stromsteuer at `2.05 ct/kWh` and an
+`8.00 ct/kWh` Netznutzungsentgelt from the `grid` override, each line rounded to
+the cent — `111.33` netto, `132.48` gross at 19 % USt. A wrong tariff version or
+the other rounding direction fails the assertion.
+
+---
+
+## From source — one service, no images
+
+The demos run built images. To work on a service, run it from the checkout
+instead; this needs Rust (installed from `rust-toolchain.toml` by `rustup`),
+[`just`](https://github.com/casey/just) and Docker for PostgreSQL:
+
+```bash
+just dev marktd
+curl -s http://localhost:8180/health/ready
+```
+
+`just dev` starts PostgreSQL from `dev/docker-compose.yml` when it is not
+running and starts the service with `dev/config/marktd.toml`; every one of the
+seventeen services has such a file, on its port from the [services index](@/docs/services/_index.md). `makod`
+needs no database — its dev event store is in memory — and `agentd` starts last,
+because it connects to every other service's MCP endpoint at startup.
+
+A config problem is reported in one go — the file read, the environment prefix
+(`MARKTD_`, nested keys joined with `__`) and every missing, unknown or invalid
+key. Two flags help before a first start:
+
+```bash
+cargo run -p marktd -- --help          # usage and config conventions, reads no config
+cargo run -p marktd -- --print-config  # the merged file + environment, secrets redacted
+```
+
+`just smoke-dev` boots every service this way and waits for `/health/ready`.
+[CONTRIBUTING.md](https://github.com/hupe1980/mako/blob/main/CONTRIBUTING.md)
+covers building, testing one crate and running the gate.
 
 ---
 

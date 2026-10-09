@@ -247,7 +247,7 @@ impl Profile {
     }
 
     /// Group nesting for `edifact_rs::group_segments_indexed`, used by the
-    /// semantic and custom rule packs.
+    /// semantic rule packs.
     #[must_use]
     pub fn group_schema(&self) -> &'static [GroupDef<'static>] {
         self.group_schema

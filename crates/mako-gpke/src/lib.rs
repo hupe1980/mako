@@ -177,21 +177,36 @@
 //!                         .map(|i| format!("{i}")).collect(),
 //! };
 //!
-//! process.execute(cmd).await?;
+//! process.run(cmd, RunOptions::new()).await?;
 //! ```
 
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::pedantic, clippy::must_use_candidate)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::doc_markdown)] // German MaKo terms and BDEW acronyms produce many false positives
-#![allow(clippy::too_many_lines)] // process handle() functions are necessarily verbose
-#![allow(clippy::match_same_arms)] // sometimes intentional for process-family readability
-#![allow(clippy::manual_let_else)] // existing code style; rewrite in follow-up
-#![allow(clippy::redundant_closure_for_method_calls)]
-#![allow(clippy::unnested_or_patterns)]
-#![allow(clippy::map_unwrap_or)]
-#![allow(clippy::items_after_statements)]
+#![expect(
+    clippy::module_name_repetitions,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
+#![expect(
+    clippy::doc_markdown,
+    reason = "German MaKo terms and BDEW acronyms produce many false positives"
+)]
+#![expect(
+    clippy::too_many_lines,
+    reason = "process handle() functions are necessarily verbose"
+)]
+#![expect(
+    clippy::match_same_arms,
+    reason = "sometimes intentional for process-family readability"
+)]
+#![expect(
+    clippy::manual_let_else,
+    reason = "existing code style; rewrite in follow-up"
+)]
+#![expect(
+    clippy::redundant_closure_for_method_calls,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 
 pub mod abrechnung;
 pub mod abrechnungsdaten;
@@ -413,34 +428,59 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         "gpke"
     }
 
-    fn workflow_names(&self) -> &'static [&'static str] {
-        // Every entry is the owning module's own constant. A literal here can
-        // disagree with the name `register_pids` routes to, and the two are
-        // checked against each other only at `EngineBuilder::build`.
-        &[
-            wechselprozesse::WORKFLOW_NAME,
-            eog::WORKFLOW_NAME,
-            kuendigung::WORKFLOW_NAME,
-            beendigung_zuordnung::WORKFLOW_NAME,
-            stammdatenaenderung::WORKFLOW_NAME,
-            lf_anmeldung::WORKFLOW_NAME,
-            sperrung::WORKFLOW_NAME,
-            sperrung_lf::WORKFLOW_NAME,
-            anfrage_bestellung::WORKFLOW_NAME,
-            abrechnung::WORKFLOW_NAME,
-            konfiguration::WORKFLOW_NAME,
-            neuanlage::WORKFLOW_NAME,
-            lf_abmeldung::WORKFLOW_NAME,
-            ankuendigung_zuordnung_lf::WORKFLOW_NAME,
-            stornierung::WORKFLOW_NAME,
-            messwerte::WORKFLOW_NAME,
-            partin::WORKFLOW_NAME,
-            utilts::WORKFLOW_NAME,
-            konfiguration_aenderung::WORKFLOW_NAME,
-            datenabruf::WORKFLOW_NAME,
-            allokationsliste::WORKFLOW_NAME,
-            abrechnungsdaten::WORKFLOW_NAME,
-            zuordnungsmeldung::WORKFLOW_NAME,
+    fn drivers(&self) -> Vec<mako_engine::driver::WorkflowDriver> {
+        use mako_engine::driver::WorkflowDriver;
+        // Each workflow by type, under its module's own name constant.
+        vec![
+            WorkflowDriver::of::<wechselprozesse::GpkeSupplierChangeWorkflow>(
+                wechselprozesse::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<eog::GpkeEogWorkflow>(eog::WORKFLOW_NAME),
+            WorkflowDriver::of::<kuendigung::GpkeKuendigungWorkflow>(kuendigung::WORKFLOW_NAME),
+            WorkflowDriver::of::<beendigung_zuordnung::GpkeBeendigungZuordnungWorkflow>(
+                beendigung_zuordnung::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<stammdatenaenderung::GpkeStammdatenaenderungWorkflow>(
+                stammdatenaenderung::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<lf_anmeldung::GpkeLfAnmeldungWorkflow>(
+                lf_anmeldung::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<sperrung::GpkeSperrungWorkflow>(sperrung::WORKFLOW_NAME),
+            WorkflowDriver::of::<sperrung_lf::GpkeSperrungLfWorkflow>(sperrung_lf::WORKFLOW_NAME),
+            WorkflowDriver::of::<anfrage_bestellung::GpkeAnfrageBestellungWorkflow>(
+                anfrage_bestellung::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<abrechnung::GpkeAbrechnungWorkflow>(abrechnung::WORKFLOW_NAME),
+            WorkflowDriver::of::<konfiguration::GpkeKonfigurationWorkflow>(
+                konfiguration::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<neuanlage::GpkeNeuanlageWorkflow>(neuanlage::WORKFLOW_NAME),
+            WorkflowDriver::of::<lf_abmeldung::GpkeLfAbmeldungWorkflow>(
+                lf_abmeldung::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<ankuendigung_zuordnung_lf::GpkeAnkuendigungZuordnungLfWorkflow>(
+                ankuendigung_zuordnung_lf::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<stornierung::GpkeStornierungWorkflow>(stornierung::WORKFLOW_NAME),
+            WorkflowDriver::of::<messwerte::GpkeMesswerteLieferungWorkflow>(
+                messwerte::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<partin::GpkePartinWorkflow>(partin::WORKFLOW_NAME),
+            WorkflowDriver::of::<utilts::GpkeUtiltsWorkflow>(utilts::WORKFLOW_NAME),
+            WorkflowDriver::of::<konfiguration_aenderung::GpkeKonfigurationAenderungWorkflow>(
+                konfiguration_aenderung::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<datenabruf::GpkeDatenabrufWorkflow>(datenabruf::WORKFLOW_NAME),
+            WorkflowDriver::of::<allokationsliste::GpkeAllokationslisteWorkflow>(
+                allokationsliste::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<abrechnungsdaten::GpkeAbrechnungsdatenWorkflow>(
+                abrechnungsdaten::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<zuordnungsmeldung::GpkeZuordnungsmeldungWorkflow>(
+                zuordnungsmeldung::WORKFLOW_NAME,
+            ),
         ]
     }
 
@@ -625,7 +665,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // IFTSTA GPKE Vollzugsmeldungen (PIDs 21024–21028, 21033).
         //
         // PIDs 21024–21028 are "GPKE / Vollzugsmeldung" per the IFTSTA AHB.
-        // PID 21033 is "GPKE / Statusmeldung Kündigung" (Ablehnung GPKE Teil 3).
+        // PID 21033 is „Ablehnung der Anfrage" (GPKE Teil 3, Bestellung einer Konfiguration).
         // PID 21039 (Auftragsstatus Sperren) is registered to `gpke-sperrung-lf` above.
         for &pid in wechselprozesse::IFTSTA_PIDS {
             router.register(pid, "gpke-supplier-change");

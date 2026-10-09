@@ -140,6 +140,7 @@ pub(super) async fn dispatch_mabis_billing_einleiten(
         bilanzierungsmonat: BillingPeriod::new(bilanzierungsmonat_str.clone()),
         version,
         im_erstaufschlag: phase.ist_erstaufschlag(),
+        clearing_ende: monat.clearing_ende(zeitreihe, mako_mabis::fristen::Abrechnungslauf::Bka),
         absender: MarktpartnerCode::new(absender_str),
         biko_id: BikoId::new(biko_id_str),
         message_ref: MessageRef::new(message_ref_str),
@@ -171,39 +172,23 @@ pub(super) async fn dispatch_mabis_billing_einleiten(
 
     // ── Spawn the settlement ─────────────────────────────────────────────────
     let workflow_id = WorkflowId::new("mabis-billing", latest_format_version());
-    let process = mako_engine::process::Process::<
-        MabisBillingWorkflow,
-        Arc<mako_engine::store_slatedb::SlateDbStore>,
-    >::new(
-        Arc::clone(&state.store),
+    let process_id = spawn_process::<MabisBillingWorkflow>(
+        &state.store,
         state.tenant_id,
-        workflow_id.clone(),
-    );
-    let process_id = process.process_id();
-    process.execute_and_enqueue(domain_cmd).await.map_err(|e| {
+        workflow_id,
+        domain_cmd,
+        &[],
+        &[business_key.as_str()],
+    )
+    .await
+    .map_err(|e| {
         tracing::error!(
-            process_id = %process_id,
-            error      = %e,
+            business_key = %business_key,
+            error        = %e,
             "MaBiS billing: spawn failed",
         );
         DispatchError::Engine(e)
     })?;
-
-    let identity = process.identity();
-    if let Err(e) = state
-        .store
-        .as_process_registry()
-        .register_correlated(state.tenant_id, &business_key, process_id, identity)
-        .await
-    {
-        tracing::error!(
-            process_id   = %process_id,
-            business_key = %business_key,
-            error        = %e,
-            "MaBiS billing: process registry registration failed — \
-             follow-up commands may not route correctly",
-        );
-    }
 
     Ok(DispatchOutcome::Spawned { process_id })
 }
@@ -220,6 +205,23 @@ fn parse_bilanzierungsmonat(s: &str) -> Result<mako_mabis::Bilanzierungsmonat, D
     let letzter = time::util::days_in_month(month, year);
     let ende = time::Date::from_calendar_date(year, month, letzter).map_err(|_| invalid())?;
     Ok(mako_mabis::Bilanzierungsmonat::new(ende))
+}
+
+/// The `UNH` DE 0062 reference a Summenzeitreihe filed under `process_id` goes
+/// out with.
+fn summenzeitreihe_message_ref(process_id: ProcessId) -> String {
+    crate::orchestrator::edifact_renderer::msg_ref_from_uuid(&process_id.to_string())
+}
+
+/// The reference of the message `command` filed under `process_id`, when that
+/// is fixed at acceptance.
+///
+/// `mabis-syncd` records it on the acked series: the BIKO's Datenstatus and
+/// Prüfmitteilung name the Summenzeitreihe they answer by it, so a series acked
+/// without it cannot be matched to its answer.
+pub(super) fn filed_message_ref(command: &str, process_id: ProcessId) -> Option<String> {
+    (command == mako_markt::commands::MABIS_SUMMENZEITREIHE_UEBERMITTELN)
+        .then(|| summenzeitreihe_message_ref(process_id))
 }
 
 /// Dispatch `mabis.summenzeitreihe.uebermitteln` — NB/ÜNB sends a BG-SZR to the
@@ -316,12 +318,13 @@ pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
     }
 
     let causation = EventId::new();
+    let process_id = ProcessId::new();
     let message = OutboxMessage {
         message_id: OutboxMessageId::new(),
         stream_id: StreamId::new(format!(
             "mabis-szr|{bilanzierungsgebiet_id}|{balancing_period}"
         )),
-        process_id: ProcessId::new(),
+        process_id,
         tenant_id: state.tenant_id,
         correlation_id: CorrelationId::new(),
         conversation_id: ConversationId::new(),
@@ -337,6 +340,9 @@ pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
             "balancing_period": balancing_period,
             "version": version,
             "intervals": intervals,
+            // Fixed here rather than left to the renderer, so the 202 can name
+            // what is filed — see `filed_message_ref`.
+            "message_ref": summenzeitreihe_message_ref(process_id),
         }),
         payload_schema: None,
         created_at: time::OffsetDateTime::now_utc(),
@@ -345,8 +351,6 @@ pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
         workflow_name: "".into(),
         trace_context: mako_engine::trace_ctx::current().map(Into::into),
     };
-    let process_id = message.process_id;
-
     state
         .store
         .enqueue(std::slice::from_ref(&message))
@@ -673,4 +677,75 @@ pub(super) async fn dispatch_mabis_liste_ablehnen(
         },
     )
     .await
+}
+
+#[cfg(test)]
+mod summenzeitreihe_reference_tests {
+    use std::sync::Arc;
+
+    use mako_engine::ids::TenantId;
+    use mako_engine::outbox::OutboxStore as _;
+
+    use super::*;
+
+    const NB_MP_ID: &str = "9900357000004";
+
+    async fn state() -> CommandsApiState {
+        let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
+            .await
+            .expect("open in-memory SlateDB");
+        CommandsApiState {
+            tenant_id: TenantId::from_party_id(NB_MP_ID),
+            sender_party_id: NB_MP_ID.to_owned(),
+            configured_marktrollen: vec!["NB".to_owned()],
+            max_body_bytes: 1_048_576,
+            snapshot_interval: 100,
+            cedar: Arc::new(CedarAuthorizer::unauthenticated().expect("infallible")),
+            snapshot_store: store.as_snapshot_store(),
+            malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
+            maloid_result_cache: MaloIdentResultCache::new(store.clone()),
+            store: Arc::new(store),
+            marktd_client: None,
+        }
+    }
+
+    /// The reference the `202` names is the one the MSCONS goes out with.
+    ///
+    /// `mabis-syncd` records it on the acked series, and the BIKO's answer
+    /// names the Summenzeitreihe by it; a `202` naming nothing left the filer
+    /// recording a placeholder that matches no answer.
+    #[tokio::test]
+    async fn the_accepted_reference_is_the_filed_one() {
+        let state = state().await;
+        let payload = serde_json::json!({
+            "mabis_zp_id": "DE0001112223334445556667778889990",
+            "bilanzierungsgebiet_id": "11YR00000000000U",
+            "balancing_period": "202601",
+            "version": "20260205120000+00",
+            "receiver_mp_id": "9900000000002",
+            "pruefidentifikator": 13003,
+            "intervals": [{ "from": "202512312300+00", "to": "202512312315+00", "quantity_kwh": "1.5" }],
+        });
+        let DispatchOutcome::Spawned { process_id } =
+            dispatch_mabis_summenzeitreihe_uebermitteln(&state, &payload)
+                .await
+                .expect("dispatched")
+        else {
+            panic!("a Summenzeitreihe spawns its filing");
+        };
+        let named = filed_message_ref(
+            mako_markt::commands::MABIS_SUMMENZEITREIHE_UEBERMITTELN,
+            process_id,
+        )
+        .expect("the 202 names the filed reference");
+        let pending = state.store.pending_now(10).await.expect("read outbox");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].payload["message_ref"], named.as_str());
+        // …and it is the reference the renderer writes into `UNH` DE 0062.
+        assert_eq!(
+            crate::orchestrator::edifact_renderer::msg_ref_from_uuid(&named),
+            named
+        );
+        assert!(filed_message_ref("gpke.lieferbeginn.anmelden", process_id).is_none());
+    }
 }

@@ -1,7 +1,10 @@
 //! Annual consumption projection (§ 40a Abs. 2 EnWG Verbrauchsschätzung) and
 //! §22 EnWG Netzverlust.
 
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "used only in some feature or target combinations"
+)]
 use super::*;
 
 /// What an annual projection is for, and under which provision.

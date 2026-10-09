@@ -141,7 +141,10 @@ pub async fn open_initial(
 ///
 /// Refuses a change behind a later slice, and a replay that flips the initiator
 /// of a slice whose notice is still owed; otherwise propagates storage errors.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn tarifwechsel(
     conn: &mut sqlx::PgConnection,
     tenant: &str,

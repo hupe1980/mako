@@ -259,7 +259,10 @@ pub struct SlotResolutionError {
 impl SummenzeitreiheBuilder {
     /// Create a new builder for a Bilanzierungsgebiet settlement period.
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
     pub fn new(
         bilanzierungsgebiet_id: BilanzierungsgebietId,
         mabis_zp_id: MabisZaehlpunktId,
@@ -626,7 +629,7 @@ mod tests {
 }
 
 // ── Identifier integrity ──────────────────────────────────────────────────────
-// The identifier confusion this module exists to prevent is now
+// The identifier confusion this module exists to prevent is
 // **unrepresentable**, not merely checked.
 //
 // MSCONS SG6 carries three `LOC` qualifiers as free text — `172` the

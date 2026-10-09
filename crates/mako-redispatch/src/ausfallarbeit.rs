@@ -285,6 +285,7 @@ mod rfc3339_vec {
 /// Supplied by the caller from the TR's own series; this module decides only
 /// which four of them Kap. 3.2.2.1 admits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VergleichsViertelstunde {
     /// Start of the quarter-hour. Candidates are read in this order and must be
     /// strictly ascending; a gap of more than a quarter-hour breaks contiguity.
@@ -677,6 +678,7 @@ pub fn solar_pauschal(
 /// messung; this module decides only which of them Kap. 3.2.4.1 admits and which
 /// calendar day they add up to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VergleichstagViertelstunde {
     /// Start of the quarter-hour. Its calendar date is the day it belongs to.
     #[serde(with = "time::serde::rfc3339")]
@@ -865,6 +867,7 @@ pub fn nichtfluktuierend_pauschal(
 
 /// One TR's contribution to the Überbauung check of a Netzlokation.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UeberbauungTr {
     /// Ausfallarbeit `W_A,i,k` of the TR per Kap. 3.2/3.3 in kWh.
     pub w_a_kwh: Decimal,
@@ -953,11 +956,12 @@ pub fn ueberbauung_kuerzung(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal::prelude::FromPrimitive;
     use time::macros::{date, datetime, time};
 
+    /// A test literal, read from its shortest decimal rendering — `0.1` is
+    /// `0.1`, not the binary expansion of the nearest `f64`.
     fn dec(v: f64) -> Decimal {
-        Decimal::from_f64(v).expect("finite")
+        v.to_string().parse().expect("finite")
     }
 
     // ── Kap. 3.2.2.1 Vergleichszeitraum ──────────────────────────────────

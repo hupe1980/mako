@@ -143,7 +143,10 @@ impl CbInner {
 
     /// Look up a fresh cache entry. `None` means "no usable entry — fetch";
     /// `Some(None)` is a cached 404 miss served without hitting `marktd`.
-    #[allow(clippy::option_option)] // outer = cache hit/miss, inner = cached 404
+    #[expect(
+        clippy::option_option,
+        reason = "outer = cache hit/miss, inner = cached 404"
+    )]
     fn cache_lookup<T: Clone>(
         map: &HashMap<(String, time::Date), CacheEntry<T>>,
         mp_id: &str,
@@ -1915,7 +1918,10 @@ impl MarktdClient {
     ///
     /// Returns `None` when no Energiemix has been published for this NB yet.
     /// When `year` is `None`, returns the most recent available year.
-    #[allow(clippy::doc_markdown)]
+    #[expect(
+        clippy::doc_markdown,
+        reason = "German domain terms in the docs (Marktlokation, Prüfidentifikator) are words, not code identifiers"
+    )]
     pub async fn get_nb_energiemix(
         &self,
         nb_mp_id: &str,

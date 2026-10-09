@@ -21,9 +21,6 @@
 
 #![deny(unsafe_code)]
 #![warn(clippy::pedantic)]
-// Curated allows: these categories are pervasive across the pre-existing auth /
-// cedar / oidc modules or are subjective; pedantic stays on to catch everything
-// else in new code.
 #![allow(
     clippy::missing_errors_doc,
     clippy::missing_panics_doc,
@@ -33,12 +30,14 @@
     clippy::items_after_statements,
     clippy::module_name_repetitions,
     clippy::must_use_candidate,
-    clippy::doc_markdown
+    clippy::doc_markdown,
+    reason = "pedantic categories this crate does not adopt; pedantic stays on for everything else"
 )]
 
 pub mod builder;
 pub mod cloudevent;
 pub mod config;
+pub mod dates;
 pub mod error;
 pub mod headers;
 pub mod health;
@@ -78,10 +77,15 @@ pub mod rate_limit;
 
 pub use builder::ServiceBuilder;
 pub use cloudevent::{CloudEvent, PublishError, post_ce_with_retry, source};
-pub use config::{ConfigError, DatabaseConfig, HttpConfig, load_config};
+pub use config::{
+    ConfigError, ConfigFile, ConfigProblem, DatabaseConfig, HttpConfig, load_config,
+    load_config_file,
+};
 pub use error::{ApiError, ApiResult};
 pub use json::{DETAIL_SENTINEL, Json};
 pub use service::{Daemon, ServiceConfig, ServiceContext, run};
+#[cfg(feature = "testing")]
+pub use service::{build_for_test, build_for_test_on};
 pub use telemetry::{
     ExtraLayer, LogFormat, OtelConfig, OtelGuard, init_tracing, init_tracing_from_env,
     init_tracing_from_env_with, init_tracing_with,

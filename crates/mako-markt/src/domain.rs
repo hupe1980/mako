@@ -1,4 +1,7 @@
-#![allow(clippy::doc_markdown)]
+#![expect(
+    clippy::doc_markdown,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 //! Domain identifier types and shared enums.
 //!
 //! Identifier types (`MaloId`, `MeloId`, `MarktpartnerId`) are

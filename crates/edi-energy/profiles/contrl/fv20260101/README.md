@@ -1,18 +1,10 @@
-# CONTRL AHB `fv20260101` — Ausserordentliche Veröffentlichung
+# CONTRL `fv20260101` — ausserordentliche Veröffentlichung
 
-This directory contains the CONTRL AHB **2.0b** profile, which became effective
-**2026-01-01** as an out-of-cycle (ausserordentliche) publication by BDEW.
+The CONTRL profile binding since **2026-01-01**: MIG **2.0b** and AHB **1.0**,
+both from the ausserordentliche Veröffentlichung, Stand 11.12.2025. Profiles are
+dated by Anwendungszeitpunkt, and an out-of-cycle release gets its own
+directory, so CONTRL's sits at `fv20260101` rather than at a semi-annual date.
+It stays binding until a release changes CONTRL.
 
-## Why this directory is named `fv20260101` and not `fv20261001`
-
-All other annual FV2026-10-01 profiles are stored under `fv20261001/` (e.g.
-`aperak/fv20261001`, `utilmd/fv20261001`). CONTRL is the exception because its
-relevant update was published effective **2026-01-01**, not at the annual
-2026-10-01 cutover.
-
-When the BDEW publishes a CONTRL AHB revision for 2026-10-01, create
-`contrl/fv20261001/` alongside this directory.
-
-## Source
-
-CONTRL AHB 2.0b vom 01.01.2026 (ausserordentliche Veröffentlichung, BNetzA)
+`profiles/sources.json` names the source PDFs; CONTRL carries no
+Prüfidentifikator (`pid_exempt`).

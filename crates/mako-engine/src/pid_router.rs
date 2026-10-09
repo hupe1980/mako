@@ -71,28 +71,20 @@ use crate::types::Sparte;
 ///
 /// # Mutability contract
 ///
-/// `PidRouter` exposes a `&mut self` API for registrations (`register`). In
-/// the engine this mutability is exercised **only** during
-/// [`EngineBuilder::build`] — after that the router is owned by
-/// [`EngineContext`] and only shared references are available at runtime.
-/// There is no way to mutate the router from an async dispatch handler.
+/// Registration (`&mut self`) happens **only** during [`EngineBuilder::build`];
+/// afterwards [`EngineContext`] owns the router and dispatch sees `&self`.
 ///
 /// [`register`] replaces a duplicate silently — the last call wins — while
 /// [`register_with_module`] panics at build time when two modules claim one PID
-/// for different workflows.
+/// for different workflows; use it when a second claim would be a bug.
 ///
-/// **Most registrations go through [`register`], so within one router the last
-/// module pushed wins a contested PID.** That is why the guards that need a
-/// complete picture build **one router per module** and merge afterwards rather
-/// than sharing one: a PID two families both legitimately carry (COMDIS 29001
-/// is answered by the GPKE, WiM and GaBi-Gas invoice workflows alike) would
-/// otherwise be reported under whichever module the daemon happens to push
-/// last. Where that ambiguity has to be resolved at runtime it is resolved on
-/// the message, not on the table: [`register_with_sparte`] /
-/// [`route_with_sparte`] discriminate by Sparte, and the ingest dispatcher
-/// re-resolves an answer to the family holding the open process it refers to.
-/// Reach for [`register_with_module`] when a PID genuinely belongs to one
-/// family and a second claim would be a bug.
+/// A PID several families legitimately carry (COMDIS 29001 is answered by the
+/// GPKE, WiM and GaBi-Gas invoice workflows alike) therefore goes to whichever
+/// module registers last, so guards needing the full picture build **one
+/// router per module** and merge. At runtime the ambiguity is resolved on the
+/// message: [`register_with_sparte`] / [`route_with_sparte`] discriminate by
+/// Sparte, and the ingest dispatcher re-resolves an answer to the family
+/// holding the open process it refers to.
 ///
 /// [`register_with_sparte`]: PidRouter::register_with_sparte
 /// [`route_with_sparte`]: PidRouter::route_with_sparte

@@ -220,7 +220,6 @@ pub struct StatusBody {
         (status = 412, description = "expected_version does not match the stored version"),
     )
 )]
-#[allow(clippy::too_many_arguments)]
 pub async fn set_antrag_status(
     claims: Claims,
     Extension(repo): Extension<NetzzugangRepoExt>,

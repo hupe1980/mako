@@ -28,7 +28,6 @@ impl PgSteuerbareRessourceRepository {
 }
 
 impl SteuerbareRessourceRepository for PgSteuerbareRessourceRepository {
-    #[allow(clippy::too_many_arguments)]
     async fn upsert_sr(
         &self,
         sr_id: &str,
@@ -182,7 +181,6 @@ impl PgDeviceRepository {
 }
 
 impl DeviceRepository for PgDeviceRepository {
-    #[allow(clippy::too_many_arguments)]
     async fn upsert_zaehler(
         &self,
         zaehler_id: &str,
@@ -428,7 +426,6 @@ impl PgTechnischeRessourceRepository {
 }
 
 impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
-    #[allow(clippy::too_many_arguments)]
     async fn upsert_tr(
         &self,
         tr_id: &str,

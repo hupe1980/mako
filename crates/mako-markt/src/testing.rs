@@ -1,5 +1,7 @@
-#![allow(clippy::doc_markdown)]
-#![allow(clippy::collapsible_if)]
+#![expect(
+    clippy::doc_markdown,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 //! In-memory test doubles for the two `mako-markt` repository traits whose
 //! *regulatory* semantics are worth asserting without a database.
 //!
@@ -15,7 +17,7 @@
 //! `services/marktd/tests/*_integration.rs` (testcontainers), which is the only
 //! place a SQL contract can actually be checked.
 //!
-//! The two kept here back `tests/regulatory_scenarios.rs`, which asserts
+//! The two kept here back `tests/it/regulatory_scenarios.rs`, which asserts
 //! statutory state machines — the §36/§38 EnWG supply-status transitions and the
 //! §42 EnWG Energiemix disclosure — where the interesting logic is in the
 //! transition rules, not in the SQL. Their SQL counterparts are covered by
@@ -420,7 +422,10 @@ use crate::repository::{NbEnergiemixRecord, NbEnergiemixRepository};
 /// Key: `(tenant, nb_mp_id, gueltig_fuer)`.
 #[derive(Clone, Default)]
 pub struct InMemoryNbEnergiemixRepository {
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "the type is spelled once, where it is used"
+    )]
     store: Arc<RwLock<HashMap<(String, String, i16), NbEnergiemixRecord>>>,
 }
 

@@ -54,7 +54,7 @@ use mako_engine::{
     ids::DeadlineId,
     outbox::PendingOutbox,
     types::{MaLo, MarktpartnerCode, MessageRef},
-    workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
+    workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
 
 // ── PID set ───────────────────────────────────────────────────────────────────
@@ -208,10 +208,18 @@ pub enum GasSperrungLfState {
     StornoBestaetigt(GasSperrungAuftragData),
     /// GNB rejected the Stornierung (ORDRSP 19129, terminal — must proceed with Sperrung).
     StornoAbgelehnt(GasSperrungAuftragData),
-    /// A deadline expired before the GNB responded (terminal).
-    DeadlineExpired {
-        /// Label of the expired deadline.
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// No Festlegung states a consequence of the GNB leaving the Gas-Sperrauftrag unanswered. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
         label: String,
+        /// The state the process was waiting in.
+        offen: Box<GasSperrungLfState>,
     },
 }
 
@@ -227,7 +235,16 @@ impl GasSperrungLfState {
             Self::StornierungGesendet(_) => "StornierungGesendet",
             Self::StornoBestaetigt(_) => "StornoBestaetigt",
             Self::StornoAbgelehnt(_) => "StornoAbgelehnt",
-            Self::DeadlineExpired { .. } => "DeadlineExpired",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -240,7 +257,6 @@ impl GasSperrungLfState {
                 | Self::OrdrspAbgelehnt { .. }
                 | Self::StornoBestaetigt(_)
                 | Self::StornoAbgelehnt(_)
-                | Self::DeadlineExpired { .. }
         )
     }
 
@@ -253,7 +269,8 @@ impl GasSperrungLfState {
             | Self::StornierungGesendet(d)
             | Self::StornoBestaetigt(d)
             | Self::StornoAbgelehnt(d) => Some(d),
-            Self::New | Self::OrdrspAbgelehnt { .. } | Self::DeadlineExpired { .. } => None,
+            Self::FristAbgelaufen { offen, .. } => offen.auftrag_data(),
+            Self::New | Self::OrdrspAbgelehnt { .. } => None,
         }
     }
 }
@@ -275,6 +292,9 @@ pub enum GasSperrungLfCommand {
         location_id: MaLo,
         /// EDIFACT message reference of the outbound ORDERS.
         message_ref: MessageRef,
+        /// When the ORDERS leaves — the Übertragungstag the counterparty's
+        /// Antwortfrist counts from ([`mako_fristen::antwort::antwort_deadline`]).
+        gesendet_am: time::OffsetDateTime,
     },
     /// Inbound ORDRSP 19116/19117 from GNB received by the AS4 layer.
     ReceiveOrdrsp {
@@ -330,25 +350,39 @@ impl CommandPayload for GasSperrungLfCommand {}
 /// `mako_fristen::add_werktage(date, 10, BdewMaKo)`.
 pub struct GeliGasSperrungLfWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The GNB's answer window is open while the Gas-Sperrauftrag waits for the
+/// ORDRSP (`AuftragGesendet`).
+fn window_open(label: &str, state: &GasSperrungLfState) -> bool {
+    label == ANTWORT_WINDOW_LABEL && matches!(state, GasSperrungLfState::AuftragGesendet(_))
+}
+
 impl Workflow for GeliGasSperrungLfWorkflow {
     type State = GasSperrungLfState;
     type Event = GasSperrungLfEvent;
     type Command = GasSperrungLfCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANTWORT_WINDOW_LABEL];
+
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        if deadline.label() == ANTWORT_WINDOW_LABEL && !state.is_terminal() {
-            return Some(GasSperrungLfCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            });
-        }
-        None
+        window_open(deadline.label(), state).then(|| GasSperrungLfCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            GasSperrungLfState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             GasSperrungLfEvent::AuftragInitiiert {
                 location_id,
@@ -403,15 +437,13 @@ impl Workflow for GeliGasSperrungLfWorkflow {
                 other => other,
             },
 
-            GasSperrungLfEvent::DeadlineExpired { label, .. } => {
-                if state.is_terminal() {
-                    state
-                } else {
-                    GasSperrungLfState::DeadlineExpired {
-                        label: label.to_string(),
-                    }
-                }
-            }
+            GasSperrungLfEvent::DeadlineExpired { label, .. } => match state {
+                GasSperrungLfState::AuftragGesendet(_) => GasSperrungLfState::FristAbgelaufen {
+                    label: label.to_string(),
+                    offen: Box::new(state),
+                },
+                other => other,
+            },
         }
     }
 
@@ -419,12 +451,17 @@ impl Workflow for GeliGasSperrungLfWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             GasSperrungLfCommand::InitiateSperrung {
                 pid,
                 gnb_gln,
                 location_id,
                 message_ref,
+                gesendet_am,
             } => {
                 if !matches!(state, GasSperrungLfState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -454,7 +491,18 @@ impl Workflow for GeliGasSperrungLfWorkflow {
                     pruefidentifikator: pid,
                     message_ref,
                 };
-                Ok(WorkflowOutput::with_outbox(vec![event], vec![outbox]))
+                // The counterparty's Antwortfrist, from the published row for
+                // this ORDERS; a PID no Festlegung quantifies registers nothing.
+                let frist: Vec<PendingDeadline> =
+                    mako_fristen::antwort::antwort_deadline(pid.as_u32(), gesendet_am)
+                        .map(|due| PendingDeadline::new(ANTWORT_WINDOW_LABEL, due))
+                        .into_iter()
+                        .collect();
+                Ok(WorkflowOutput::with_outbox_and_deadlines(
+                    vec![event],
+                    vec![outbox],
+                    frist,
+                ))
             }
 
             GasSperrungLfCommand::ReceiveOrdrsp {
@@ -529,7 +577,7 @@ impl Workflow for GeliGasSperrungLfWorkflow {
             }
 
             GasSperrungLfCommand::TimeoutExpired { deadline_id, label } => {
-                if state.is_terminal() {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(WorkflowOutput::events(vec![
@@ -579,6 +627,30 @@ mod tests {
         Pruefidentifikator::new(19117).expect("valid PID")
     }
 
+    /// The Auftrag starts the GNB's answer window — the Sparte-neutral 1-WT row
+    /// for 17115 — under the label the workflow decides.
+    #[test]
+    fn an_auftrag_registers_the_gnb_answer_window() {
+        let sent = time::macros::datetime!(2026-10-07 10:00 UTC);
+        let out = GeliGasSperrungLfWorkflow::handle(
+            &GasSperrungLfState::default(),
+            GasSperrungLfCommand::InitiateSperrung {
+                pid: pid_sperrauftrag(),
+                gnb_gln: gnb(),
+                location_id: malo(),
+                message_ref: mref("MSG-001"),
+                gesendet_am: sent,
+            },
+        )
+        .unwrap();
+        assert_eq!(out.deadlines.len(), 1);
+        assert_eq!(out.deadlines[0].label, ANTWORT_WINDOW_LABEL);
+        assert_eq!(
+            Some(out.deadlines[0].due_at),
+            mako_fristen::antwort::antwort_deadline(17_115, sent)
+        );
+    }
+
     #[test]
     fn initiate_sperrauftrag_emits_event_and_outbox() {
         let state = GasSperrungLfState::default();
@@ -587,6 +659,7 @@ mod tests {
             gnb_gln: gnb(),
             location_id: malo(),
             message_ref: mref("MSG-001"),
+            gesendet_am: time::OffsetDateTime::UNIX_EPOCH,
         };
         let out = GeliGasSperrungLfWorkflow::handle(&state, cmd).unwrap();
         assert_eq!(out.events.len(), 1);
@@ -605,6 +678,7 @@ mod tests {
             gnb_gln: gnb(),
             location_id: malo(),
             message_ref: mref("MSG-002"),
+            gesendet_am: time::OffsetDateTime::UNIX_EPOCH,
         };
         let out = GeliGasSperrungLfWorkflow::handle(&state, cmd).unwrap();
         assert_eq!(out.events.len(), 1);
@@ -619,6 +693,7 @@ mod tests {
             gnb_gln: gnb(),
             location_id: malo(),
             message_ref: mref("MSG-003"),
+            gesendet_am: time::OffsetDateTime::UNIX_EPOCH,
         };
         assert!(GeliGasSperrungLfWorkflow::handle(&state, cmd).is_err());
     }
@@ -735,8 +810,9 @@ mod tests {
         assert!(final_state.is_terminal());
     }
 
+    /// The GNB's silence is a Frist breach that leaves the Auftrag waiting.
     #[test]
-    fn timeout_terminates_non_terminal_process() {
+    fn timeout_marks_the_waiting_process_lapsed() {
         let data = GasSperrungAuftragData {
             location_id: malo(),
             gnb_gln: gnb(),
@@ -751,7 +827,11 @@ mod tests {
         let out = GeliGasSperrungLfWorkflow::handle(&state, cmd).unwrap();
         assert_eq!(out.events.len(), 1);
         let final_state = GeliGasSperrungLfWorkflow::apply(state, &out.events[0]);
-        assert!(final_state.is_terminal());
+        assert!(matches!(
+            final_state,
+            GasSperrungLfState::FristAbgelaufen { .. }
+        ));
+        assert!(!final_state.is_terminal());
     }
 
     #[test]
@@ -849,6 +929,7 @@ mod tests {
             gnb_gln: gnb(),
             location_id: malo(),
             message_ref: mref("MSG-013"),
+            gesendet_am: time::OffsetDateTime::UNIX_EPOCH,
         };
         assert!(
             GeliGasSperrungLfWorkflow::handle(&state, cmd).is_err(),

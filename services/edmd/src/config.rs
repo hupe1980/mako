@@ -339,11 +339,10 @@ fn kafka_default_poll_ms() -> u64 {
 
 /// `edmd` is a [`mako_service::Daemon`], so the runner owns the lifecycle:
 /// tracing, the tuned pool with `application_name = edmd`, migrations, a real
-/// DB-ping readiness probe, the `/metrics` and `/health/*` routes, and — the
-/// one edmd previously lacked — graceful shutdown on **`SIGTERM`** as well as
-/// `SIGINT`. A hand-rolled `main` that only watched Ctrl-C never shut down
-/// cleanly under Kubernetes or systemd, which send `SIGTERM`: in-flight ingest
-/// requests were cut off at the end of the termination grace period.
+/// DB-ping readiness probe, the `/metrics` and `/health/*` routes, and graceful
+/// shutdown on **`SIGTERM`** as well as `SIGINT` — Kubernetes and systemd send
+/// `SIGTERM`, and a process watching only Ctrl-C cuts in-flight ingest requests
+/// off at the end of the termination grace period.
 impl mako_service::ServiceConfig for Config {
     fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
         Some(&self.database)

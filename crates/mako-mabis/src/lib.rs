@@ -68,15 +68,26 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::pedantic, clippy::must_use_candidate)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::doc_markdown)] // German MaKo terms and BDEW acronyms produce many false positives
-#![allow(clippy::too_many_lines)] // process handle() functions are necessarily verbose
-#![allow(clippy::match_same_arms)] // sometimes intentional for process-family readability
-#![allow(clippy::manual_let_else)] // a `match` on a MaBiS wire code reads better than a let-else
-#![allow(clippy::redundant_closure_for_method_calls)]
-#![allow(clippy::unnested_or_patterns)]
-#![allow(clippy::map_unwrap_or)]
-#![allow(clippy::items_after_statements)]
+#![expect(
+    clippy::module_name_repetitions,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
+#![expect(
+    clippy::doc_markdown,
+    reason = "German MaKo terms and BDEW acronyms produce many false positives"
+)]
+#![expect(
+    clippy::too_many_lines,
+    reason = "process handle() functions are necessarily verbose"
+)]
+#![expect(
+    clippy::match_same_arms,
+    reason = "sometimes intentional for process-family readability"
+)]
+#![expect(
+    clippy::redundant_closure_for_method_calls,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 
 pub mod anforderung;
 pub mod bilanzkreisabrechnung;
@@ -165,17 +176,24 @@ impl mako_engine::builder::EngineModule for MabisModule {
         "mabis"
     }
 
-    fn workflow_names(&self) -> &'static [&'static str] {
-        // Every entry is the owning module's own constant. A literal here can
-        // disagree with the name `register_pids` routes to, and the two are
-        // checked against each other only at `EngineBuilder::build`.
-        &[
-            bilanzkreisabrechnung::WORKFLOW_NAME,
-            profile::WORKFLOW_NAME,
-            clearingliste::WORKFLOW_NAME,
-            zp_lifecycle::WORKFLOW_NAME,
-            anforderung::WORKFLOW_NAME,
-            listenabgleich::WORKFLOW_NAME,
+    fn drivers(&self) -> Vec<mako_engine::driver::WorkflowDriver> {
+        use mako_engine::driver::WorkflowDriver;
+        // Each workflow by type, under its module's own name constant.
+        vec![
+            WorkflowDriver::of::<bilanzkreisabrechnung::MabisBillingWorkflow>(
+                bilanzkreisabrechnung::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<profile::MabisProfilWorkflow>(profile::WORKFLOW_NAME),
+            WorkflowDriver::of::<clearingliste::MabisClearinglisteWorkflow>(
+                clearingliste::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<zp_lifecycle::MabisZpLifecycleWorkflow>(
+                zp_lifecycle::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<anforderung::MabisAnforderungWorkflow>(anforderung::WORKFLOW_NAME),
+            WorkflowDriver::of::<listenabgleich::MabisListenabgleichWorkflow>(
+                listenabgleich::WORKFLOW_NAME,
+            ),
         ]
     }
 
@@ -372,7 +390,11 @@ mod module_tests {
 
     #[test]
     fn every_workflow_name_is_prefixed() {
-        for name in MabisModule.workflow_names() {
+        for name in MabisModule
+            .drivers()
+            .iter()
+            .map(mako_engine::driver::WorkflowDriver::name)
+        {
             assert!(name.starts_with("mabis-"), "{name}");
         }
     }

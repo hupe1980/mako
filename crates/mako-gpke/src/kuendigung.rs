@@ -23,7 +23,7 @@
 //! - **BK6-24-174 GPKE Teil 2 § 1.2** — UC/SD Kündigung; the LFA answers by the
 //!   **Ablauf des 1. Werktags nach dem ÜT**
 //! - **EBD 4.3 Kap. 6.2.1** — `E_0614` „Kündigung Vertrag prüfen"
-//! - **APERAK AHB 1.0 § 2.4.1** — the separate 45-minute technical window
+//! - **APERAK AHB 1.1 § 2.4.1** — the separate 45-minute technical window
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -54,7 +54,7 @@ pub const KUENDIGUNG_PIDS: &[u32] = &[55016];
 /// ÜT (GPKE Teil 2 SD Kündigung Prozessschritt 2), resolved by
 /// `mako_fristen::antwort`.
 ///
-/// Not the APERAK clock: that is 45 Minuten for a UTILMD (APERAK AHB 1.0
+/// Not the APERAK clock: that is 45 Minuten for a UTILMD (APERAK AHB 1.1
 /// § 2.4.1) and rides `mako_fristen::APERAK_STROM_WINDOW_LABEL`.
 pub const KUENDIGUNG_ANTWORT_WINDOW_LABEL: &str = "gpke-kuendigung-antwortfrist";
 
@@ -101,15 +101,6 @@ pub enum KuendigungEvent {
     },
     /// Zuordnung ended per the NB Anfrage.
     Beendet,
-    /// APERAK 29001 dispatched for technical failure.
-    AperakFehlerDispatched {
-        /// APERAK PID.
-        aperak_pid: Pruefidentifikator,
-        /// Error reason.
-        reason: String,
-        /// Outbound APERAK message reference.
-        outbound_ref: MessageRef,
-    },
     /// Process rejected due to validation failure or deadline expiry.
     Rejected {
         /// Human-readable reason.
@@ -131,7 +122,6 @@ impl EventPayload for KuendigungEvent {
             Self::ValidationPassed { .. } => "KuendigungValidationPassed",
             Self::AntwortGesendet { .. } => "KuendigungAntwortGesendet",
             Self::Beendet => "KuendigungBeendet",
-            Self::AperakFehlerDispatched { .. } => "KuendigungAperakFehlerDispatched",
             Self::Rejected { .. } => "KuendigungRejected",
             Self::DeadlineExpired { .. } => "KuendigungDeadlineExpired",
         }
@@ -196,6 +186,19 @@ pub enum KuendigungState {
         /// Human-readable reason.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// GPKE Teil 1 Kap. 1.2.2 gives the LFA its answer window on a Kündigung and no consequence of missing it. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<KuendigungState>,
+    },
 }
 
 impl KuendigungState {
@@ -209,6 +212,16 @@ impl KuendigungState {
             Self::AntwortGesendet { .. } => "AntwortGesendet",
             Self::Beendet(_) => "Beendet",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -216,6 +229,7 @@ impl KuendigungState {
     #[must_use]
     pub fn data(&self) -> Option<&KuendigungData> {
         match self {
+            Self::FristAbgelaufen { offen, .. } => offen.data(),
             Self::Eingegangen(d) | Self::ValidationPassed(d) | Self::Beendet(d) => Some(d),
             Self::AntwortGesendet { data, .. } => Some(data),
             Self::New | Self::Rejected { .. } => None,
@@ -265,13 +279,6 @@ pub enum KuendigungCommand {
     },
     /// Record that the Zuordnung has ended.
     BeendenBestaetigen,
-    /// Dispatch APERAK 29001 for technical processing failure.
-    DispatchAperakFehler {
-        /// Error reason.
-        reason: String,
-        /// Outbound APERAK message reference.
-        outbound_ref: MessageRef,
-    },
     /// A registered deadline fired; close the process.
     TimeoutExpired {
         /// Unique deadline ID.
@@ -289,25 +296,40 @@ impl CommandPayload for KuendigungCommand {}
 /// outbound).
 pub struct GpkeKuendigungWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the LFA still owes its answer
+/// (`Eingegangen`, `ValidationPassed`).
+fn window_open(label: &str, state: &KuendigungState) -> bool {
+    label == KUENDIGUNG_ANTWORT_WINDOW_LABEL
+        && matches!(
+            state,
+            KuendigungState::Eingegangen(_) | KuendigungState::ValidationPassed(_)
+        )
+}
+
 impl Workflow for GpkeKuendigungWorkflow {
     type State = KuendigungState;
     type Event = KuendigungEvent;
     type Command = KuendigungCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[KUENDIGUNG_ANTWORT_WINDOW_LABEL];
+
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (
-                KUENDIGUNG_ANTWORT_WINDOW_LABEL,
-                KuendigungState::Eingegangen(_) | KuendigungState::ValidationPassed(_),
-            ) => Some(KuendigungCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            }),
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| KuendigungCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            KuendigungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             KuendigungEvent::KuendigungErhalten {
                 location_id,
@@ -356,17 +378,17 @@ impl Workflow for GpkeKuendigungWorkflow {
                 KuendigungState::AntwortGesendet { data, .. } => KuendigungState::Beendet(data),
                 other => other,
             },
-            KuendigungEvent::AperakFehlerDispatched { reason, .. } => KuendigungState::Rejected {
-                reason: format!("APERAK 29001: {reason}"),
-            },
             KuendigungEvent::Rejected { reason } => KuendigungState::Rejected {
                 reason: reason.clone(),
             },
             KuendigungEvent::DeadlineExpired { label, .. } => match state {
-                KuendigungState::Beendet(_) | KuendigungState::Rejected { .. } => state,
-                _ => KuendigungState::Rejected {
-                    reason: format!("deadline expired: {label}"),
-                },
+                KuendigungState::Eingegangen(_) | KuendigungState::ValidationPassed(_) => {
+                    KuendigungState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
+                }
+                other => other,
             },
         }
     }
@@ -375,6 +397,10 @@ impl Workflow for GpkeKuendigungWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             KuendigungCommand::ReceiveKuendigung {
                 pid,
@@ -415,7 +441,7 @@ impl Workflow for GpkeKuendigungWorkflow {
                     events.push(KuendigungEvent::ValidationPassed {
                         message_ref: message_ref.clone(),
                     });
-                    // F-038: APERAK BGM+312 (Anerkennungsmeldung) — APERAK AHB 1.0 §2.4.
+                    // APERAK BGM+312 (Anerkennungsmeldung) — APERAK AHB 1.1 §2.4.
                     let outbox = vec![
                         // The business notification. `processd`'s LF module
                         // decides this process, and it only ever sees a message
@@ -444,7 +470,7 @@ impl Workflow for GpkeKuendigungWorkflow {
                     events.push(KuendigungEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // F-035: APERAK BGM+313 — APERAK AHB 1.0 §2.1.1.
+                    // APERAK BGM+313 — APERAK AHB 1.1 §2.1.1.
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
                             receiver_gln.as_str(),
@@ -512,33 +538,12 @@ impl Workflow for GpkeKuendigungWorkflow {
                 Ok(vec![KuendigungEvent::Beendet].into())
             }
 
-            KuendigungCommand::DispatchAperakFehler {
-                reason,
-                outbound_ref,
-            } => {
-                match state {
-                    KuendigungState::Eingegangen(_) | KuendigungState::ValidationPassed(_) => {}
-                    _ => {
-                        return Err(WorkflowError::invalid_state(
-                            "Eingegangen or ValidationPassed",
-                            state.label(),
-                        ));
-                    }
+            KuendigungCommand::TimeoutExpired { deadline_id, label } => {
+                if !window_open(&label, lapsed) {
+                    return Ok(vec![].into());
                 }
-                let aperak_pid = Pruefidentifikator::new(29_001)
-                    .map_err(|e| WorkflowError::rejected(e.clone()))?;
-                Ok(vec![KuendigungEvent::AperakFehlerDispatched {
-                    aperak_pid,
-                    reason,
-                    outbound_ref,
-                }]
-                .into())
+                Ok(vec![KuendigungEvent::DeadlineExpired { deadline_id, label }].into())
             }
-
-            KuendigungCommand::TimeoutExpired { deadline_id, label } => match state {
-                KuendigungState::Beendet(_) | KuendigungState::Rejected { .. } => Ok(vec![].into()),
-                _ => Ok(vec![KuendigungEvent::DeadlineExpired { deadline_id, label }].into()),
-            },
         }
     }
 }

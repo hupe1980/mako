@@ -38,7 +38,7 @@
 //! - the fonts — bundled in the binary, never read from the host.
 //!
 //! Re-rendering an issued invoice therefore reproduces it byte-for-byte, which
-//! `tests/zugferd_carrier.rs` asserts on the finished ZUGFeRD file, stamping
+//! `tests/it/zugferd_carrier.rs` asserts on the finished ZUGFeRD file, stamping
 //! included.
 
 pub mod facturx;

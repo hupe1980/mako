@@ -48,6 +48,12 @@ CREATE TABLE approval_queue (
     -- the ones that were true when the decision was taken.
     followup_command TEXT,
     followup_payload JSONB,
+    -- The bodies the two commands are dispatched with, frozen at enqueue. A
+    -- held Accept carries exactly what the automatic path would have sent; an
+    -- escalated decision leaves the Antwortcode to the operator, who states it
+    -- on approve or reject. `makod` refuses an answer command without one.
+    answer_payload JSONB,
+    reject_payload JSONB,
     expires_at  TIMESTAMPTZ NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     decided_at  TIMESTAMPTZ,

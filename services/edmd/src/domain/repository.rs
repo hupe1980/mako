@@ -1,4 +1,7 @@
-#![allow(async_fn_in_trait)]
+#![expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 
 use crate::domain::validation::ValidatedReads;
 use rust_decimal::Decimal;
@@ -15,7 +18,7 @@ use crate::domain::{
 /// (PostgreSQL for the recent window, Apache Iceberg for the settled history) for
 /// the readings, plus edmd's own `PgPool` for the business tables. Tests exercise
 /// the same backend against real PostgreSQL and a filesystem Iceberg warehouse via
-/// testcontainers (see `services/edmd/tests/meterstore_integration.rs`).
+/// testcontainers (see `services/edmd/tests/it/meterstore_integration.rs`).
 ///
 /// [`MeterStoreTimeSeriesRepository`]: crate::store::MeterStoreTimeSeriesRepository
 pub trait TimeSeriesRepository: Send + Sync + 'static {
@@ -83,7 +86,7 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
     /// Returns `None` when no reads exist for the period.
     ///
     /// Consumed by `invoicd` for RLM plausibility checks (M16) and by
-    /// `netzbilanzd` for INVOIC generation (N4).
+    /// `netzbilanzd` for INVOIC generation.
     async fn billing_period(
         &self,
         q: &BillingPeriodQuery,

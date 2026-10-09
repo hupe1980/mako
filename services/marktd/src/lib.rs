@@ -13,3 +13,4 @@ pub mod openapi;
 pub mod outbox;
 pub mod pg;
 pub mod retention;
+pub mod state;

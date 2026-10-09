@@ -163,9 +163,15 @@ pub struct ExplainPositionParams {
 #[derive(Clone)]
 pub struct BillingdMcpHandler {
     state: Arc<BillingdMcpState>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     tool_router: ToolRouter<BillingdMcpHandler>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     prompt_router: PromptRouter<BillingdMcpHandler>,
 }
 
@@ -770,7 +776,7 @@ impl BillingdMcpHandler {
                 "The O2C cycle in mako has 6 phases:\n\n                 **1. Customer Onboarding (GPKE)**\n                 POST processd /api/v1/start-supply { malo_id, lieferbeginn_datum }\n                 → makod dispatches UTILMD 55001 to NB\n                 → NB responds UTILMD 55003 (Bestätigung) within 24h\n                 → VersorgungsStatus in marktd → Beliefert\n
                  **2. Tariff Assignment**\n                 POST vertragd /api/v1/vertraege/{id}/tarifwechsel { komp_id, new_product_code, wirksamkeit, initiator }\n                 → a valid-time slice; which product a MaLo is on is a contract fact, not a catalogue one\n                 `initiator` is required and names the act: `\"LIEFERANT\"` where the supplier exercises a\n                 reserved right to change the price — § 41 Abs. 5 Satz 1 EnWG notice, Satz 4\n                 Sonderkündigungsrecht, and `preise[]` must state the Umfang for a future date where\n                 vertragd renders the notice itself (the lines are the document's content); where the\n                 CloudEvent *is* the notice the ERP composes from its own price sheets and they are optional;\n                 `\"KUNDE\"` where the customer asked for the tariff, which is an agreed change,\n                 confirmed rather than announced.\n
                  **3. Meter Data (edmd)**\n                 MSCONS readings arrive via makod EDIFACT pipeline automatically.\n                 Verify: edmd GET /api/v1/billing-period/{malo_id}\n
-                 **4. Invoice Generation (billingd)**\n                 POST /api/v1/billing/{malo_id}/calculate { lf_mp_id, nb_mp_id, period_from, period_to }\n                 → productd → edmd → marktd (NNE) → §14a discount → EEG credit\n                 → Rechnung BO4E persisted; CloudEvent de.billing.rechnung.erstellt\n                 Use `list_billing_records` to verify; `get_xrechnung` for B2G XML.\n
+                 **4. Invoice Generation (billingd)**\n                 POST /api/v1/billing/{malo_id}/calculate { lf_mp_id, nb_mp_id, period_from, period_to }\n                 → productd → edmd → grid (NNE, from the request) → §14a discount → EEG credit\n                 → Rechnung BO4E persisted; CloudEvent de.billing.rechnung.erstellt\n                 Use `list_billing_records` to verify; `get_xrechnung` for B2G XML.\n
                  **5. Account Posting (accountingd)**\n                 de.billing.rechnung.erstellt → accountingd debit entry (Rechnungsbetrag)\n                 Check balance: accountingd `get_balance`\n                 Monthly SEPA: accountingd `run_sepa_collection` → pain.008 XML\n                 Payment receipt: accountingd `import_payments` (CAMT.054)\n
                  **6. Dunning & Collections (if overdue)**\n                 `list_overdue` → Mahnstufe 1 (reminder) → 2 (fee) → 3 (Sperrauftrag)\n                 Mahnstufe 3 → de.accounting.sperrauftrag → sperrd → IFTSTA 21039 to NB\n
                  **Annual Jahresabschluss:**\n                 billingd annual settlement → accountingd `trigger_jahresabschluss` → `update_abschlag` with new rate.\n                 ⚠ EEG note: EEG Gutschrift in Rechnung is already netted in the debit amount. \n                 Do NOT separately book de.eeg.verguetung.berechnet credits for the same period.\n\n                 **Monthly Abschlagslauf (automated advance payment cycle):**\n                 accountingd `run_abschlag_cycle` on each billing_day → raises the Abschlagsforderungen (debits).\n                 Then `run_sepa_collection` N-5 bank days before due date → generates pain.008 XML.\n                 Import bank statement: `import_payments` (CAMT.054) to match SEPA returns.\n\n                 **Bilanzielle Abgrenzung (HGB §250 — period-end accruals):**\n                 At Monats-/Jahresabschluss: use accountingd `compute_bilanzielle_abgrenzung`.\n                 pRAP (passive): advance payments collected > energy billed → book as liability.\n                 aRAP (active): unbilled energy → edmd GET /billing-period/{malo_id} × tariff.\n                 ERP journals: Dr. Umsatzerlöse / Cr. pRAP 0990; Dr. FLL 1400 / Cr. Erlöse."
@@ -792,8 +798,8 @@ impl BillingdMcpHandler {
                 Role::Assistant,
                 "To preview a billing invoice, use POST /api/v1/billing/{malo_id}/preview.\n\
                  Required: lf_mp_id, period_from, period_to.\n\
-                 Optional: nb_mp_id (resolved from marktd when absent), tariff (override from \
-productd), meter (override from edmd), grid (override from marktd).\n\n\
+                 Optional: nb_mp_id, tariff (override from productd), meter (override from \
+edmd), grid (the Netzentgelt pass-through; nothing fetches it from marktd).\n\n\
                  The preview runs the same pipeline as /calculate and stores nothing: no record, \
 no CloudEvent, and no number consumed from the §14 UStG series. The response carries every \
 Rechnungsposition, the netto/brutto totals and the engine warnings.",
@@ -959,19 +965,20 @@ unpriced intervals would silently under-bill.",
                 (regulatory audit trail, DVGW G 260), and an unrecognised value is\n\
                 dropped rather than annotated.\n\
                 To auto-fetch gasqualitaet: billingd fetches from marktd if not supplied.\n\n\
-                **Regulatory rates (configure in billingd.toml `[rates]`):**\n\
-                | Rate | Default | Legal basis |\n\
+                **Statutory rates (dated series; a year outside one is refused):**\n\
+                | Rate | 2026 | Legal basis |\n\
                 |---|---|---|\n\
-                | Energiesteuer | 0.55 ct/kWh_Hs | §2 Abs. 3 Nr. 4 EnergieStG |\n\
-                | BEHG CO₂ | 1.08836784 ct/kWh_Hs | 60 EUR/t CO₂ × 0.18139464 kg/kWh_Hs (2026 default, \
-                 § 4 Abs. 1 Nr. 2 CO2KostAufG Mittelwert); \
-                since 07/2026 the price is EEX-auctioned inside the §10 Abs. 2 BEHG corridor, so \
-                billingd prefers productd's `nehs_prices` series over this table |\n\
+                | Energiesteuer | 0.55 ct/kWh_Hs | §2 Abs. 3 Satz 1 Nr. 4 EnergieStG, series 2006–2026 |\n\
+                | BEHG CO₂ | 1.08836784 ct/kWh_Hs | 60 EUR/t CO₂ × 0.18139464 kg/kWh_Hs \
+                 (§ 4 Abs. 1 Nr. 2 CO2KostAufG Mittelwert); productd's `nehs_prices` series prices \
+                 a period from a point set in its own year. 2027 has no statutory price: it is \
+                 refused until a series point or a `[rates] behg_eur_per_t` row supplies one, \
+                 checked against `[rates] behg_regime` (`rvo_bezugspreis` or `korridor` 55–65 EUR/t) |\n\
                 | MwSt | 19% | Gas and Fernwärme are standard-rated. The 7% window was \
                 §28 Abs. 5/6 UStG (01.10.2022–31.03.2024) and has expired; billingd resolves \
                 it automatically for periods inside it and refuses periods that straddle the \
                 Stichtag |\n\n\
-                **Grid pass-through (from marktd PreisblattNetznutzung):**\n\
+                **Grid pass-through (the NB's PreisblattNetznutzung, supplied by the caller):**\n\
                 Supply via `grid` override: `gas_nne_grundpreis_eur_per_year`, \n\
                 `gas_nne_arbeitspreis_ct_per_kwh`, `gas_ka_ct_per_kwh`,\n\
                 `gas_bilanzierungsumlage_ct_per_kwh` (GaBi Gas 2.1 (BK7-24-01-008) Bilanzierungsumlagekonten).\n\n\

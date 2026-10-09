@@ -103,18 +103,18 @@ pub const IFTSTA_PIDS: &[u32] = &[21_037, 21_038];
 /// sheet *Prüf-ID Prozessschritt*, rows whose Prozessbeschreibung is
 /// „Kommunikationsprozesse Redispatch".
 ///
-/// ## What was removed and why
+/// ## Neighbouring PIDs this workflow does not route
 ///
-/// | PID | Belongs to | Was routed here |
-/// |----:|------------|-----------------|
-/// | 13020 | `mabis-billing` — Ausfallarbeitsüberführungszeitreihe | ✗ |
-/// | 13023 | `mabis-billing` — Lieferantenausfallarbeitssummenzeitreihe | ✗ |
-/// | 13026 | „Geschäftsprozesse für EEG-Überführungszeitreihen" | ✗ |
+/// | PID | Belongs to |
+/// |----:|------------|
+/// | 13020 | `mabis-billing` — Ausfallarbeitsüberführungszeitreihe |
+/// | 13023 | `mabis-billing` — Lieferantenausfallarbeitssummenzeitreihe |
+/// | 13026 | „Geschäftsprozesse für EEG-Überführungszeitreihen" |
 ///
 /// 13020 and 13023 are `MaBiS` Summenzeitreihen with a full Prüfmitteilung/
-/// Datenstatus cycle (IFTSTA 21000, 21002–21005). Routing them to the
-/// Aktivierung workflow gave them no settlement stream to live in, so the
-/// Prüfmitteilung obligation they carry had nowhere to be recorded. 13026
+/// Datenstatus cycle (IFTSTA 21000, 21002–21005). The Aktivierung workflow has
+/// no settlement stream for them, so the Prüfmitteilung obligation they carry
+/// would have nowhere to be recorded. 13026
 /// belongs to a third process family entirely.
 ///
 /// ## Relationship to `edmd::domain::REDISPATCH_MSCONS_PIDS`
@@ -144,7 +144,7 @@ pub const MSCONS_PIDS: &[u32] = &[13_021, 13_022];
 /// The ANB answers it with MSCONS **13022** (Prozessschritt 2), not with an
 /// ORDRSP — which is why this family has no ORDRSP codes at all.
 ///
-/// ## What was removed and why
+/// ## Neighbouring PIDs this workflow does not route
 ///
 /// | PID | Belongs to |
 /// |----:|------------|
@@ -417,10 +417,18 @@ pub enum AktivierungState {
     },
     /// VNB aggregated ANB responses and forwarded upstream.
     Done(AcoData),
-    /// Activation deadline expired without a response.
-    DeadlineExpired {
-        /// Human-readable reason.
-        reason: String,
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// Neither the ACR/AAR response window nor the 3-minute `AcknowledgementDocument` window has an outcome of its own in the Redispatch documents; a late acknowledgement must not fail the activation it answers. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<AktivierungState>,
     },
 }
 
@@ -435,7 +443,16 @@ impl AktivierungState {
             Self::Confirmed { .. } => "Confirmed",
             Self::PartialRejection { .. } => "PartialRejection",
             Self::Done(_) => "Done",
-            Self::DeadlineExpired { .. } => "DeadlineExpired",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 }
@@ -583,40 +600,49 @@ impl CommandPayload for AktivierungCommand {}
 /// ```
 pub struct AktivierungWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// | Label | Open while |
+/// |---|---|
+/// | [`ACTIVATION_RESPONSE_WINDOW_LABEL`] | the ACR/AAR is owed (`ActivationOrdered`, `DispatchedToAnb`) — in the Aufforderungsfall only: in the Duldungsfall the NB steers the resource itself and awaits no response |
+/// | [`ACK_WINDOW_LABEL`] | our sent ACR/AAR awaits its `AcknowledgementDocument` (`Confirmed`, `PartialRejection`) |
+fn window_open(label: &str, state: &AktivierungState) -> bool {
+    match (label, state) {
+        (
+            ACTIVATION_RESPONSE_WINDOW_LABEL,
+            AktivierungState::ActivationOrdered(data) | AktivierungState::DispatchedToAnb(data),
+        ) => data.abwicklung.response_window_applies(),
+        (
+            ACK_WINDOW_LABEL,
+            AktivierungState::Confirmed { .. } | AktivierungState::PartialRejection { .. },
+        ) => true,
+        _ => false,
+    }
+}
+
 impl Workflow for AktivierungWorkflow {
     type State = AktivierungState;
     type Event = AktivierungEvent;
     type Command = AktivierungCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] =
+        &[ACTIVATION_RESPONSE_WINDOW_LABEL, ACK_WINDOW_LABEL];
+
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            // ACR/AAR response window: only meaningful in the
-            // Aufforderungsfall — in the Duldungsfall the NB steers the
-            // resource itself and awaits no counterparty response, so a
-            // mistakenly scheduled window is ignored here.
-            (
-                ACTIVATION_RESPONSE_WINDOW_LABEL,
-                AktivierungState::ActivationOrdered(data) | AktivierungState::DispatchedToAnb(data),
-            ) if data.abwicklung.response_window_applies() => {
-                Some(AktivierungCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            // 3-minute AcknowledgementDocument window: our sent
-            // ACR/AAR was never technically acknowledged — escalate.
-            (
-                ACK_WINDOW_LABEL,
-                AktivierungState::Confirmed { .. } | AktivierungState::PartialRejection { .. },
-            ) => Some(AktivierungCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            }),
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| AktivierungCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            AktivierungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             AktivierungEvent::AcoReceived {
                 mrid,
@@ -678,40 +704,31 @@ impl Workflow for AktivierungWorkflow {
             | AktivierungEvent::AckReceived { .. }
             | AktivierungEvent::MarketMessageReceived { .. } => state,
 
-            AktivierungEvent::DeadlineExpired { label, .. } => {
-                let is_ack_window = &**label == ACK_WINDOW_LABEL;
-                match state {
-                    // ACK window: an unacknowledged ACR/AAR is a terminal
-                    // error even from Confirmed/PartialRejection.
-                    AktivierungState::Confirmed { .. }
-                    | AktivierungState::PartialRejection { .. }
-                        if is_ack_window =>
-                    {
-                        AktivierungState::DeadlineExpired {
-                            reason: format!(
-                                "AcknowledgementDocument not received within the 3-minute window ({label})"
-                            ),
-                        }
-                    }
-                    AktivierungState::Confirmed { .. }
-                    | AktivierungState::PartialRejection { .. }
-                    | AktivierungState::Done(_)
-                    | AktivierungState::DeadlineExpired { .. } => state,
-                    _ => AktivierungState::DeadlineExpired {
-                        reason: format!("deadline expired: {label}"),
-                    },
-                }
-            }
+            // `handle` records a lapse only while its window was open.
+            AktivierungEvent::DeadlineExpired { label, .. } => match state {
+                AktivierungState::New | AktivierungState::Done(_) => state,
+                other => AktivierungState::FristAbgelaufen {
+                    label: label.to_string(),
+                    offen: Box::new(other),
+                },
+            },
         }
     }
 
     // Workflow state machines legitimately require large match expressions.
     // Each arm is a single documented state-transition rule.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one linear procedure; splitting it would scatter its steps across helpers used once"
+    )]
     fn handle(
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             AktivierungCommand::ReceiveAco {
                 mrid,
@@ -871,22 +888,10 @@ impl Workflow for AktivierungWorkflow {
             .into()),
 
             AktivierungCommand::TimeoutExpired { deadline_id, label } => {
-                match (state, &*label) {
-                    // ACK escalation is valid from a sent-response state.
-                    (
-                        AktivierungState::Confirmed { .. }
-                        | AktivierungState::PartialRejection { .. },
-                        ACK_WINDOW_LABEL,
-                    ) => Ok(vec![AktivierungEvent::DeadlineExpired { deadline_id, label }].into()),
-                    (
-                        AktivierungState::Confirmed { .. }
-                        | AktivierungState::PartialRejection { .. }
-                        | AktivierungState::Done(_)
-                        | AktivierungState::DeadlineExpired { .. },
-                        _,
-                    ) => Ok(vec![].into()),
-                    _ => Ok(vec![AktivierungEvent::DeadlineExpired { deadline_id, label }].into()),
+                if !window_open(&label, lapsed) {
+                    return Ok(vec![].into());
                 }
+                Ok(vec![AktivierungEvent::DeadlineExpired { deadline_id, label }].into())
             }
         }
     }
@@ -1074,6 +1079,8 @@ mod tests {
         assert!(AktivierungWorkflow::on_deadline(&deadline, &state2).is_some());
     }
 
+    /// An unacknowledged ACR/AAR is a Frist breach the operator sees; it does
+    /// not undo the activation the response confirmed.
     #[test]
     fn unacknowledged_response_escalates_after_the_ack_window() {
         let state = AktivierungState::Confirmed {
@@ -1086,7 +1093,12 @@ mod tests {
         let out = AktivierungWorkflow::handle(&state, cmd).expect("timeout handled");
         let next = out.events.iter().fold(state, AktivierungWorkflow::apply);
         assert!(
-            matches!(&next, AktivierungState::DeadlineExpired { reason } if reason.contains("Acknowledgement")),
+            matches!(
+                &next,
+                AktivierungState::FristAbgelaufen { label, offen }
+                    if label == ACK_WINDOW_LABEL
+                        && matches!(**offen, AktivierungState::Confirmed { .. })
+            ),
             "got {next:?}"
         );
     }

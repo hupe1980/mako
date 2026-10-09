@@ -288,7 +288,10 @@ pub async fn draft_positions(
 ///
 /// The two writes are one transaction step: an invoice that deducts an Anzahlung
 /// without the record of having done so lets the next invoice deduct it again.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 async fn store(
     conn: &mut sqlx::PgConnection,
     cfg: &NetzbilanzConfig,

@@ -163,7 +163,7 @@ impl MetricVec {
 /// [`aperak_missed`]: EngineMetrics::aperak_missed
 pub struct EngineMetrics {
     /// `makod_process_initiated_total{family}` — incremented when a new
-    /// process is spawned via `Process::execute(InitiateXxx)`.
+    /// process is spawned via `Process::run(InitiateXxx, …)`.
     process_initiated: MetricVec,
 
     /// `makod_process_completed_total{family,result}` — incremented when a
@@ -198,7 +198,7 @@ pub struct EngineMetrics {
     ///
     /// The outbox worker discharges the window as soon as the APERAK is
     /// delivered, so a window that survives to its due time was never answered.
-    /// A non-zero value is a regulatory violation under APERAK AHB 1.0 §2.4.1
+    /// A non-zero value is a regulatory violation under APERAK AHB 1.1 §2.4.1
     /// (Strom) / §2.3.1 (Gas). Alert on `makod_aperak_missed_total > 0`.
     ///
     /// The discharge is what gives this counter meaning. Firing *after* the due
@@ -440,7 +440,7 @@ impl MetricsSnapshot {
             &mut out,
             "makod_aperak_missed_total",
             "Total number of APERAK deadlines fired after their due-at time — a regulatory \
-             violation under APERAK AHB 1.0 §2.4.1 (Strom) / §2.3.1 (Gas). \
+             violation under APERAK AHB 1.1 §2.4.1 (Strom) / §2.3.1 (Gas). \
              Alert when this counter is non-zero.",
             &["label"],
             &self.aperak_missed,

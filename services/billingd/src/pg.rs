@@ -1,5 +1,8 @@
 //! PostgreSQL persistence for `billingd`.
-#![allow(clippy::too_many_arguments)]
+#![expect(
+    clippy::too_many_arguments,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 
 use anyhow::Context as _;
 use energy_billing::RoundMoney;
@@ -30,6 +33,10 @@ pub struct BillingRecordRow {
     /// Why this record has no EN 16931 model, when the reason is the invoice
     /// itself rather than a missing step. `None` on every ordinary record.
     pub en16931_blocked: Option<String>,
+    /// Whether the Leistungsempfänger is a Unternehmer receiving for his
+    /// Unternehmen (§ 14 Abs. 2 Satz 2 Nr. 1 UStG), as the contract said when
+    /// the invoice was billed. `None` = not recorded.
+    pub empfaenger_unternehmer: Option<bool>,
     pub total_netto_eur: Decimal,
     pub total_brutto_eur: Decimal,
     pub outcome: String,
@@ -390,6 +397,24 @@ pub async fn attach_en16931(
     .execute(executor)
     .await
     .context("attach_en16931")?;
+    Ok(())
+}
+
+/// Record whether the invoice's Leistungsempfänger is a Unternehmer receiving
+/// for his Unternehmen (§ 14 Abs. 2 Satz 2 Nr. 1 UStG).
+pub async fn attach_empfaenger_unternehmer(
+    executor: impl sqlx::PgExecutor<'_>,
+    id: Uuid,
+    unternehmer: Option<bool>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE billing_records SET empfaenger_unternehmer = $2, updated_at = now() WHERE id = $1",
+    )
+    .bind(id)
+    .bind(unternehmer)
+    .execute(executor)
+    .await
+    .context("attach_empfaenger_unternehmer")?;
     Ok(())
 }
 

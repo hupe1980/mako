@@ -19,8 +19,8 @@ use axum::{
     Extension, Router,
     routing::{delete, get, patch, post, put},
 };
-use mako_markt::repository::AppState;
 use mako_service::{Daemon, ServiceContext, cedar::CedarEnforcer};
+use marktd::state::AppState;
 use sqlx::PgPool;
 use tracing::info;
 
@@ -229,10 +229,7 @@ impl Daemon for Marktd {
             .merge(esa_routes())
             .merge(subscription_routes())
             .merge(admin_routes())
-            .route(
-                &cfg.webhook.inbound_path,
-                post(ingest_event::<_, _, _, _, _>),
-            )
+            .route(&cfg.webhook.inbound_path, post(ingest_event))
             .merge(swagger_ui())
             .with_state(state)
             .layer(Extension(mako_service::oidc::ExpectedTenant(
@@ -269,28 +266,14 @@ async fn main() -> anyhow::Result<()> {
 // sub-resource hangs off the collection member, so a caller never has to
 // memorise the pluralisation per endpoint.
 
-type S = Arc<
-    AppState<
-        pg::PgMaloRepository,
-        pg::PgMeloRepository,
-        pg::PgSubscriptionRepository,
-        pg::PgCorrelationIndex,
-        pg::PgPartnerRepository,
-    >,
->;
+type S = Arc<AppState>;
 
 fn malo_routes() -> Router<S> {
     Router::new()
-        .route("/api/v1/malos", get(list_malo::<_, _, _, _, _>))
-        .route(
-            "/api/v1/malos/{id}",
-            get(get_malo::<_, _, _, _, _>).put(put_malo::<_, _, _, _, _>),
-        )
+        .route("/api/v1/malos", get(list_malo))
+        .route("/api/v1/malos/{id}", get(get_malo).put(put_malo))
         // SLP profile for the NNE tariff zone and billingd.
-        .route(
-            "/api/v1/malos/{id}/lastprofil",
-            get(get_malo_lastprofil::<_, _, _, _, _>),
-        )
+        .route("/api/v1/malos/{id}/lastprofil", get(get_malo_lastprofil))
         // NB grid topology (read by the processd NB module for Anmeldung STP).
         .route(
             "/api/v1/malos/{id}/grid",
@@ -314,24 +297,21 @@ fn malo_routes() -> Router<S> {
         // VersorgungsStatus per MaLo, with point-in-time and full history.
         .route(
             "/api/v1/versorgung/{malo_id}",
-            get(get_versorgungsstatus::<_, _, _, _, _, pg::PgVersorgungsStatusRepository>)
+            get(get_versorgungsstatus::<pg::PgVersorgungsStatusRepository>)
                 .put(put_versorgungsstatus),
         )
         .route(
             "/api/v1/versorgung/{malo_id}/history",
-            get(get_versorgungsstatus_history::<_, _, _, _, _, pg::PgVersorgungsStatusRepository>),
+            get(get_versorgungsstatus_history::<pg::PgVersorgungsStatusRepository>),
         )
 }
 
 fn melo_routes() -> Router<S> {
     Router::new()
-        .route(
-            "/api/v1/melos/{id}",
-            get(get_melo::<_, _, _, _, _>).put(put_melo::<_, _, _, _, _>),
-        )
+        .route("/api/v1/melos/{id}", get(get_melo).put(put_melo))
         .route(
             "/api/v1/melos/{id}/standorteigenschaften",
-            get(get_melo_standorteigenschaften::<_, _, _, _, _>),
+            get(get_melo_standorteigenschaften),
         )
         // Per-MeLo dated MSB timeline (WiM Teil 2 UC 4.1.1).
         .route(
@@ -410,18 +390,15 @@ fn device_routes() -> Router<S> {
 
 fn partner_routes() -> Router<S> {
     Router::new()
-        .route("/api/v1/partners", get(list_partners::<_, _, _, _, _>))
+        .route("/api/v1/partners", get(list_partners))
         .route(
             "/api/v1/partners/{mp_id}",
-            get(get_partner::<_, _, _, _, _>).put(put_partner::<_, _, _, _, _>),
+            get(get_partner).put(put_partner),
         )
-        .route(
-            "/api/v1/partners/{mp_id}/as4-address",
-            get(get_as4_address::<_, _, _, _, _>),
-        )
+        .route("/api/v1/partners/{mp_id}/as4-address", get(get_as4_address))
         .route(
             "/api/v1/partners/{mp_id}/marktteilnehmer",
-            get(get_partner_marktteilnehmer::<_, _, _, _, _>),
+            get(get_partner_marktteilnehmer),
         )
 }
 
@@ -526,14 +503,8 @@ fn registry_routes() -> Router<S> {
             put(upsert_msb_rv_gas).get(list_msb_rv_gas),
         )
         .route("/api/v1/msb-rahmenvertraege-gas/{id}", get(get_msb_rv_gas))
-        .route(
-            "/api/v1/correlations",
-            get(list_correlations::<_, _, _, _, _>),
-        )
-        .route(
-            "/api/v1/correlations/{id}",
-            get(get_correlation::<_, _, _, _, _>),
-        )
+        .route("/api/v1/correlations", get(list_correlations))
+        .route("/api/v1/correlations/{id}", get(get_correlation))
 }
 
 fn esa_routes() -> Router<S> {
@@ -582,20 +553,14 @@ fn esa_routes() -> Router<S> {
 
 fn subscription_routes() -> Router<S> {
     Router::new()
-        .route(
-            "/api/v1/subscriptions",
-            get(list_subscriptions::<_, _, _, _, _>),
-        )
+        .route("/api/v1/subscriptions", get(list_subscriptions))
         .route(
             "/api/v1/subscriptions/{id}",
-            get(get_subscription::<_, _, _, _, _>)
-                .put(put_subscription::<_, _, _, _, _>)
-                .delete(delete_subscription::<_, _, _, _, _>),
+            get(get_subscription)
+                .put(put_subscription)
+                .delete(delete_subscription),
         )
-        .route(
-            "/api/v1/subscriptions/{id}/test",
-            post(test_subscription::<_, _, _, _, _>),
-        )
+        .route("/api/v1/subscriptions/{id}/test", post(test_subscription))
 }
 
 fn admin_routes() -> Router<S> {
@@ -662,7 +627,6 @@ fn repository_layers(app: Router, pool: &PgPool) -> Router {
 
 /// Start the durable fan-out worker, the MMMA/MMM price import worker, the
 /// ESA consent-expiry sweep, and the `processed_events` retention sweep.
-#[allow(clippy::too_many_arguments)] // one argument per worker's dependencies
 fn spawn_workers(
     cfg: &Arc<Config>,
     pool: &PgPool,
@@ -707,4 +671,22 @@ fn spawn_workers(
 
     marktd::retention::spawn_processed_events_sweep(pool.clone(), shutdown.clone());
     marktd::metrics::spawn_sampler(pool.clone(), shutdown.clone());
+}
+
+/// The router builds the way `mako_service::run` mounts it.
+///
+/// `build` runs with the shipped demo configuration and a lazy pool, and the
+/// runner's infra routes are merged in exactly as at boot — so a route axum
+/// refuses, a merge collision with the runner's `/metrics` or `/health/*`, or
+/// a `build` that panics fails `cargo test` instead of the container start.
+#[cfg(test)]
+mod startup_test {
+    #[tokio::test]
+    async fn the_router_builds_as_the_runner_mounts_it() {
+        let cfg = toml::from_str(include_str!("../../../demos/eeg-billing/marktd.toml"))
+            .expect("the demo configuration parses");
+        let _app = mako_service::build_for_test::<super::Marktd>(cfg)
+            .await
+            .expect("the router builds");
+    }
 }

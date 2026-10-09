@@ -7,21 +7,23 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace     = true
 rust-version.workspace = true
-description  = "Rust client and server implementation for German energy market API-Webdienste (MaKo)"
-keywords     = ["edifact", "edi-energy", "bdew", "api", "ims"]
-categories   = ["encoding"]
+description  = "BDEW API-Webdienste Strom: typed REST and WebSocket clients and an Axum server for the German energy market"
+keywords     = ["bdew", "energy", "api", "ims", "mako"]
+categories   = ["web-programming", "api-bindings"]
 
 # ── Feature flags ────────────────────────────────────────────────────────────
 #
-#  client    — HTTP client for all APIs (reqwest + rustls)
+#  client    — MaLo-Ident and directory HTTP clients (reqwest + rustls)
 #  server    — Axum-based server router factories
 #  websocket — WebSocket subscription client (tokio-tungstenite)
-#  crypto    — JWS ECDSA-SHA256 sign/verify for directory entries (p256)
+#
+#  The ECDSA P-256 content signing (`transport::content_security`) and the
+#  directory JWS (`transport::jws`) are always compiled: they are not optional.
 #
 [features]
 default   = []
 client    = ["dep:reqwest"]
-server    = ["dep:axum", "dep:tower", "dep:http"]
+server    = ["dep:axum"]
 websocket = ["dep:tokio-tungstenite", "dep:futures-util", "dep:tokio"]
 
 [dependencies]
@@ -42,15 +44,13 @@ reqwest = { version = "0.13", features = ["json", "rustls", "query"], default-fe
 
 # ── server feature ───────────────────────────────────────────────────────────
 axum  = { version = "0.8", optional = true }
-tower = { version = "0.5", features = ["util"], optional = true }
-http  = { version = "1", optional = true }
 
 # ── websocket feature ────────────────────────────────────────────────────────
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"], optional = true }
 futures-util      = { version = "0.3", optional = true }
 tokio             = { version = "1", features = ["rt", "sync"], optional = true }
 
-# ── crypto feature ───────────────────────────────────────────────────────────
+# ── Content signing and directory JWS (always compiled) ──────────────────────
 p256      = { version = "0.13", features = ["ecdsa", "pem"] }
 sha2      = { version = "0.10" }
 base64ct  = { version = "1", features = ["alloc"] }
@@ -59,3 +59,6 @@ serde_jcs = { version = "0.1" }
 [dev-dependencies]
 serde_json = { workspace = true }
 tokio      = { version = "1", features = ["full"] }
+
+[lints]
+workspace = true

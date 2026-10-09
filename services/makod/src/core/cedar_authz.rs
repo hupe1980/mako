@@ -1,7 +1,5 @@
 //! Cedar-based authentication and authorization for all `makod` HTTP endpoints.
 //!
-//! ## Architecture
-//!
 //! ```text
 //! HTTP request
 //!   → authenticate(headers) → CallerIdentity   (bearer token → named principal)
@@ -11,140 +9,49 @@
 //!
 //! The reusable mechanics — named-key registry, JWT/API-key bearer routing,
 //! schema parsing, strict policy validation, and request evaluation — live in
-//! [`mako_service::cedar_schema`].  This module contributes the **MaKo domain
+//! [`mako_service::cedar_schema`]. This module contributes the **MaKo domain
 //! layer**: the `MaKo::` Cedar namespace (embedded schema + default policy),
 //! the typed [`MakoAction`] enum, the resource descriptors, and the
 //! `authorize_*` methods that build the domain entities.
 //!
-//! The [`CedarAuthorizer`] is constructed once at startup and shared via
-//! `Arc` across all API states.  It holds:
-//!
-//! - A **named-key registry** — maps `Authorization: Bearer <token>` to a
-//!   Cedar principal (`MaKo::Principal::"<name>"`).
-//! - A compiled policy set — operator-supplied policies from
-//!   `--cedar-policy-dir`, over the embedded default policy unless
-//!   it is installed only by `--cedar-permit-all`.
-//! - The compiled **schema** for validation.
-//!
-//! ## Identity model
-//!
-//! Each API key is named (e.g. `"erp-sap-prod"`, `"ci-pipeline"`).  The name
-//! is the Cedar entity ID and appears verbatim in every audit log entry,
-//! making it trivially identifiable which system issued each request.
-//!
-//! Keys are configured with `--auth-key NAME=TOKEN` (repeatable).
+//! [`CedarAuthorizer`] is built once at startup and shared via `Arc`. It holds
+//! the named-key registry (`--auth-key NAME=TOKEN`, repeatable; the name is the
+//! Cedar entity ID and appears in every audit log entry), the compiled policy
+//! set from `--cedar-policy-dir`, and the compiled schema.
 //!
 //! ## Default policy
 //!
-//! The embedded default policy (`cedar/default.cedar`) permits any
-//! authenticated principal to perform any action.
+//! The embedded `cedar/default.cedar` permits any authenticated principal any
+//! action. A Cedar request is allowed when **any** `permit` matches and no
+//! `forbid` does, so while that baseline is in the set an operator `permit`
+//! grants nothing new — only `forbid` narrows it. Under the default
+//! ([`DefaultPolicy::Deny`]) the baseline is omitted and `--cedar-policy-dir`
+//! is the only source of access; installing it takes `--cedar-permit-all`.
+//! Deny is the mode `cedar/conservative.cedar` and § 6a EnWG role separation
+//! require.
 //!
-//! A Cedar request is allowed when **any** `permit` matches and no `forbid`
-//! does, so while that baseline is in the policy set an operator `permit`
-//! grants nothing that is not already granted — only `forbid` narrows it. To
-//! build up from nothing instead, start `makod` with
-//! the default ([`DefaultPolicy::Deny`]); the baseline is then
-//! omitted and `--cedar-policy-dir` becomes the only source of access. That is
-//! the mode `cedar/conservative.cedar` and § 6a EnWG role separation require.
-//!
-//! ## Operator ABAC policies
-//!
-//! Drop `.cedar` files into the directory named by `--cedar-policy-dir` to
-//! add or restrict permissions per principal, tenant, Marktrolle, or PID.
-//!
-//! ```cedar
-//! // Restrict "ci-readonly" to read-only MaLo access only.
-//! forbid(
-//!   principal == MaKo::Principal::"ci-readonly",
-//!   action in [
-//!     MaKo::Action::"AdminMaloWrite",
-//!     MaKo::Action::"AdminMaloDelete",
-//!     MaKo::Action::"SubmitCommand",
-//!     MaKo::Action::"IngestEdifact"
-//!   ],
-//!   resource
-//! );
-//!
-//! // Restrict "erp-gas" to gas supplier commands only.
-//! forbid(
-//!   principal == MaKo::Principal::"erp-gas",
-//!   action    == MaKo::Action::"SubmitCommand",
-//!   resource  is MaKo::Command
-//! )
-//! unless {
-//!   resource.marktrolle == "LFG" || resource.marktrolle == "GNB"
-//! };
-//!
-//! // Scope "erp-tenant-a" to its own tenant only.
-//! forbid(
-//!   principal == MaKo::Principal::"erp-tenant-a",
-//!   action,
-//!   resource
-//! )
-//! unless {
-//!   resource has tenant && resource.tenant == "9900357000001"
-//! };
-//! ```
-//!
-//! ## Cedar entity model
+//! ## Entity model
 //!
 //! ```text
-//! MaKo::Principal  — caller identity (name from key registry)
-//! MaKo::Command    — ERP command (name, marktrolle, pid, tenant)
-//! MaKo::EdifactIngest   — EDIFACT ingest endpoint (tenant)
-//! MaKo::AdminMaloRecord   — MaLo admin resource (tenant, malo_id?)
+//! MaKo::Principal          — caller identity (name from key registry or JWT `sub`)
+//! MaKo::Command            — ERP command (name, marktrolle, pid, tenant)
+//! MaKo::EdifactIngest      — EDIFACT ingest endpoint (tenant)
+//! MaKo::AdminMaloRecord    — MaLo admin resource (tenant, malo_id?)
 //! MaKo::AdminPartnerRecord — partner admin resource (tenant, gln?)
 //! ```
 //!
-//! ## Action groups
+//! The action groups `AdminMalo` and `AdminPartner` collect the admin actions.
 //!
-//! The schema defines two action groups usable in Cedar policies:
+//! ## OIDC / JWT
 //!
-//! | Group | Members |
-//! |---|---|
-//! | `AdminMalo` | `AdminMaloRead`, `AdminMaloWrite`, `AdminMaloDelete`, `AdminMaloStats` |
-//! | `AdminPartner` | `AdminPartnerRead`, `AdminPartnerWrite`, `AdminPartnerDelete`, `AdminPartnerImport` |
+//! With an [`OidcVerifier`], a JWT-shaped bearer token is validated against the
+//! issuer's cached JWKS and its `sub` becomes the principal entity ID, so
+//! policies work unchanged across both methods. `makod` authorizes on `sub`
+//! alone and needs no `mako_tenant` claim. API keys and OIDC coexist on one
+//! port; the token shape selects the path.
 //!
-//! ```cedar
-//! // Grant a monitoring principal read-only access to both admin sections.
-//! permit(
-//!   principal == MaKo::Principal::"grafana-ro",
-//!   action in [MaKo::Action::"AdminMalo", MaKo::Action::"AdminPartner"],
-//!   resource
-//! ) when { action == MaKo::Action::"AdminMaloStats"
-//!       || action == MaKo::Action::"AdminPartnerRead" };
-//! ```
-//!
-//! ## OIDC / JWT authentication
-//!
-//! When an [`OidcVerifier`] is supplied to [`CedarAuthorizer::new`], bearer
-//! tokens shaped like JWTs (three dot-separated Base64url parts) are validated
-//! against the issuer's cached JWKS.  The JWT `sub` claim becomes the Cedar
-//! principal entity ID — identical to how API-key names are used — so all
-//! Cedar policies work unchanged regardless of the authentication method.
-//! Tokens do **not** need the `mako_tenant` custom claim other mako services
-//! require: `makod` authorizes on `sub` alone via Cedar.
-//!
-//! API-key authentication and OIDC coexist on the same port: the token shape
-//! (JWT vs opaque hex) determines which path is taken.  This allows gradual
-//! migration: add `--oidc-issuer` without removing existing `--auth-key` entries.
-//!
-//! ```cedar
-//! // Restrict an Azure Managed Identity (identified by its `sub`) to read-only.
-//! forbid(
-//!   principal == MaKo::Principal::"<azure-managed-identity-object-id>",
-//!   action in [
-//!     MaKo::Action::"AdminMaloWrite",
-//!     MaKo::Action::"AdminMaloDelete",
-//!     MaKo::Action::"SubmitCommand",
-//!     MaKo::Action::"IngestEdifact"
-//!   ],
-//!   resource
-//! );
-//! ```
-//!
-//! (The principal ID above would be whatever `sub` the IdP puts in the JWT —
-//! typically a UUID for Azure, or a stable identifier for Kubernetes.)
+//! Policy examples and the operator guide: `site/content/docs/services/makod.md`
+//! („Authorization").
 //!
 //! [`OidcVerifier`]: mako_service::oidc::OidcVerifier
 
@@ -1184,12 +1091,12 @@ unless {
     /// A least-privilege policy set is only least-privilege when the built-in
     /// catch-all is gone.
     ///
-    /// This is the trap `conservative.cedar` used to fall into: it grants four
-    /// named principals a narrow set of actions, but the baseline
-    /// `permit(principal is MaKo::Principal, action, resource)` was compiled in
-    /// unconditionally, and a Cedar request allows on *any* matching permit. So
-    /// every named grant was redundant and every unlisted principal kept full
-    /// access — the file documented a restriction it could not impose.
+    /// `conservative.cedar` grants four named principals a narrow set of
+    /// actions. A Cedar request allows on *any* matching permit, so if the
+    /// baseline `permit(principal is MaKo::Principal, action, resource)` were
+    /// compiled in unconditionally, every named grant would be redundant and
+    /// every unlisted principal would keep full access — the file would
+    /// document a restriction it cannot impose.
     #[test]
     fn permit_all_baseline_swallows_a_least_privilege_policy_set() {
         // "erp-operator" may submit commands; nothing grants "stray" anything.

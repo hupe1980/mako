@@ -189,6 +189,10 @@ pub enum Filed {
 // ── SyncEngine ────────────────────────────────────────────────────────────────
 
 /// Core aggregation and submission engine.
+/// The most MaLos one discovery asks `edmd` for — `edmd`'s own hard cap. A
+/// grid area with more is refused rather than filed short.
+const DISCOVERY_LIMIT: usize = 5_000;
+
 pub struct SyncEngine {
     pool: sqlx::PgPool,
     edmd: Upstream,
@@ -766,6 +770,7 @@ impl SyncEngine {
             ("from", from.to_string()),
             ("to", to.to_string()),
             ("tenant", cfg.identity.tenant.clone()),
+            ("limit", DISCOVERY_LIMIT.to_string()),
         ]);
         let data: serde_json::Value = self
             .edmd
@@ -783,6 +788,21 @@ impl SyncEngine {
                 data.as_object().map(|o| o.keys().collect::<Vec<_>>())
             );
         };
+        // A capped list reads as „that is all of them", and a Summenzeitreihe
+        // filed from it is short by every MaLo past the cap — a figure the BIKO
+        // accepts and nobody detects. `truncated` is how edmd says so; an
+        // absent flag is not „complete".
+        match data["truncated"].as_bool() {
+            Some(false) => {}
+            Some(true) => anyhow::bail!(
+                "edmd truncated the MaLo discovery at {DISCOVERY_LIMIT} — refusing to file a \
+                 Summenzeitreihe that omits the rest of the grid area"
+            ),
+            None => anyhow::bail!(
+                "edmd billing-periods response does not say whether it is complete \
+                 (no `truncated` flag) — refusing to file a Summenzeitreihe from it"
+            ),
+        }
 
         // MaBiS is a **Strom** process. The Bilanzkreisabrechnung it feeds
         // exists only for electricity — gas balances through GaBi Gas, on the
@@ -1127,15 +1147,7 @@ impl SyncEngine {
             .await
             .context("makod command submission")?
             .context("makod accepted the command without a response body")?;
-        let message_ref = result["message_ref"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_owned();
-        let process_id = result["process_id"]
-            .as_str()
-            .and_then(|s| Uuid::parse_str(s).ok());
-
-        Ok((message_ref, process_id))
+        accepted_reference(&result)
     }
 
     /// Mark a run failed and announce it, in one transaction.
@@ -1224,10 +1236,126 @@ pub fn previous_month_period(today: Date) -> (Date, Date) {
     (first, last)
 }
 
+/// What `makod`'s `202` says was filed: the message reference and the process.
+fn accepted_reference(body: &serde_json::Value) -> Result<(String, Option<Uuid>)> {
+    // No placeholder: a series is recorded as acked only under the reference
+    // makod filed it as, because that is what the BIKO's answer will name.
+    let Some(message_ref) = body["message_ref"].as_str().filter(|r| !r.is_empty()) else {
+        anyhow::bail!(
+            "makod accepted the Summenzeitreihe without naming the message reference it \
+             filed — the series cannot be recorded as acked: {body}"
+        );
+    };
+    let message_ref = message_ref.to_owned();
+    let process_id = body["process_id"]
+        .as_str()
+        .and_then(|s| Uuid::parse_str(s).ok());
+    Ok((message_ref, process_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use time::macros::date;
+
+    /// A `202` that names no message reference is not an acknowledgement of a
+    /// filing: recording a placeholder satisfies „an acked series names what
+    /// was filed" with a name that names nothing.
+    #[test]
+    fn an_ack_without_a_message_reference_is_refused() {
+        let body = serde_json::json!({
+            "status": "accepted",
+            "process_id": "3181967a-02d1-4d0e-9105-0cc46f3b25c9",
+        });
+        assert!(accepted_reference(&body).is_err());
+
+        let body = serde_json::json!({
+            "status": "accepted",
+            "process_id": "3181967a-02d1-4d0e-9105-0cc46f3b25c9",
+            "message_ref": "3181967a02d14d",
+        });
+        let (message_ref, process_id) = accepted_reference(&body).expect("names what was filed");
+        assert_eq!(message_ref, "3181967a02d14d");
+        assert!(process_id.is_some());
+    }
+
+    /// An `edmd` stand-in serving `n` Strom MaLos through
+    /// `GET /api/v1/billing-periods`, capped at the caller's `limit` (default
+    /// 1000, as `edmd` defaults it) and saying when it truncated.
+    async fn edmd_with(n: usize) -> std::sync::Arc<Config> {
+        use axum::{Json, extract::Query, routing::get};
+        use std::collections::HashMap;
+        let app = axum::Router::new().route(
+            "/api/v1/billing-periods",
+            get(move |Query(q): Query<HashMap<String, String>>| async move {
+                let limit: usize = q.get("limit").map_or(1000, |l| l.parse().unwrap());
+                let rows: Vec<_> = (0..n.min(limit))
+                    .map(
+                        |i| serde_json::json!({ "malo_id": format!("M{i:05}"), "sparte": "STROM" }),
+                    )
+                    .collect();
+                Json(serde_json::json!({
+                    "billing_periods": rows,
+                    "count": rows.len(),
+                    "truncated": n > limit,
+                    "limit": limit,
+                }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let url = format!("http://{addr}");
+        std::sync::Arc::new(
+            serde_json::from_value(serde_json::json!({
+                "http": {},
+                "database": { "url": "postgres://unused@127.0.0.1:9/none" },
+                "identity": {
+                    "tenant": "t", "sender_mp_id": "9900000000001",
+                    "receiver_mp_id": "9900000000002",
+                    "bilanzierungsgebiet_id": "11YR00000000000U"
+                },
+                "edmd": { "url": url, "api_key": "k" },
+                "marktd": { "url": "http://127.0.0.1:9", "api_key": "k" },
+                "makod": { "url": "http://127.0.0.1:9", "api_key": "k" },
+            }))
+            .expect("config"),
+        )
+    }
+
+    fn engine(cfg: std::sync::Arc<Config>) -> SyncEngine {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused@127.0.0.1:9/none")
+            .expect("lazy pool");
+        SyncEngine::new(pool, cfg)
+    }
+
+    /// More than 1000 MaLos are discovered in full: a capped list reads as
+    /// „that is all of them", and the Summenzeitreihe filed from it is short
+    /// by every MaLo past the cap — accepted by the BIKO, detected by nobody.
+    #[tokio::test]
+    async fn more_than_a_thousand_malos_are_discovered_in_full() {
+        let e = engine(edmd_with(1_001).await);
+        let malos = e
+            .discover_malos(date!(2026 - 01 - 01), date!(2026 - 01 - 31))
+            .await
+            .expect("discovers");
+        assert_eq!(malos.len(), 1_001);
+    }
+
+    /// A discovery `edmd` reports as truncated is refused, never filed short.
+    #[tokio::test]
+    async fn a_truncated_discovery_is_refused() {
+        let e = engine(edmd_with(DISCOVERY_LIMIT + 1).await);
+        assert!(
+            e.discover_malos(date!(2026 - 01 - 01), date!(2026 - 01 - 31))
+                .await
+                .is_err(),
+            "a truncated MaLo list must not become a Summenzeitreihe"
+        );
+    }
 
     /// The filer states the Prüfidentifikator it is filing under, and it is the
     /// one MSCONS AHB 3.2 §8.3.1 defines for a Summenzeitreihe.

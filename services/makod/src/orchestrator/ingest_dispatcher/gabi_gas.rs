@@ -38,12 +38,13 @@ impl EdifactIngestDispatcher {
                         10,
                         HolidayCalendar::BdewMaKo,
                     );
-                    self.spawn_or_resume::<GaBiGasInvoicWorkflow>(
+                    self.spawn_or_resume_guarded::<GaBiGasInvoicWorkflow>(
                         &invoice_ref,
                         "gabi-gas-invoic",
                         cmd,
                         &fv,
                         &[(mako_gabi_gas::INVOIC_SETTLEMENT_WINDOW_LABEL, due_at)],
+                        occupied_by_own_reference,
                     )
                     .await
                 }
@@ -223,13 +224,14 @@ impl EdifactIngestDispatcher {
             }
             // ── Allocation — ALOCAT 70001–70023 ──────────────────────────────
             //
-            // One-way from the NB/MGV, so there is nothing to answer — but KoV
-            // §6.4 binds the *sender*: corrections may follow, and a binding
-            // final allocation is due by the end of month M+2 at 12:00 CET.
-            // That window is registered on spawn from the message's own gas
-            // day, so a gas day that never receives its final allocation
-            // becomes a recorded fact rather than a silently unsettled
-            // imbalance.
+            // One-way from the NB/MGV, so there is nothing to answer — but
+            // § 47 Ziffer 1 KoV XV binds the *sender*: corrections may follow,
+            // and the final allocation has a deadline. That window is
+            // registered on spawn from the message's own gas day and is never
+            // cancelled; the workflow's `on_deadline` stays silent once the
+            // `X5G` Endgültige Allokation is on file, so only a gas day that
+            // never receives it becomes a recorded fact rather than a silently
+            // unsettled imbalance.
             "gabi-gas-allocation" => {
                 if !mako_gabi_gas::allocation::ALLOCATION_PIDS.contains(&pid) {
                     return Ok(IngestOutcome::Skipped {

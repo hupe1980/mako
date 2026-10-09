@@ -75,7 +75,7 @@ pub async fn post_sammelrechnung(
     // is electricity in the overwhelming majority of cases; a mixed portfolio
     // keeps each site on its own commodity rates below, and `build_aggregate_invoice`
     // groups the combined base by each position's effective rate anyway.
-    let doc_rates = cfg.try_regulatory_rates_for_period("STROM", period_from, period_to)?;
+    let doc_rates = cfg.try_regulatory_rates_for_period("STROM", period_from, period_to, None)?;
 
     // ── Phase 1: price every site, touching no transaction ────────────────────
     let mut priced: Vec<SitePriced> = Vec::with_capacity(sites.malos.len());
@@ -194,10 +194,24 @@ pub async fn post_sammelrechnung(
             ),
             zusatz_attribut("mako:billing_run_id", serde_json::json!(run_id)),
         ],
-        sites
-            .rechnungsempfaenger
-            .as_ref()
-            .map(crate::clients::Rechnungsempfaenger::as_context_party),
+        sites.rechnungsempfaenger.as_ref().map(|r| {
+            // The holder of the Rahmenvertrag is an Unternehmer where every
+            // site is a B2B segment, not one where every site is B2C, and
+            // unknown otherwise.
+            let segmente: Vec<Option<bool>> = sites
+                .malos
+                .iter()
+                .map(|m| crate::clients::unternehmer_aus_kundentyp(m.kundentyp.as_deref()))
+                .collect();
+            let unternehmer = match segmente.first() {
+                Some(first) if segmente.iter().all(|s| s == first) => *first,
+                _ => None,
+            };
+            energy_billing::Rechnungsempfaenger {
+                unternehmer,
+                ..r.as_context_party()
+            }
+        }),
     )?;
     let (total_netto, total_brutto) = (sammel_invoice.netto_eur, sammel_invoice.brutto_eur);
 
@@ -244,7 +258,7 @@ pub async fn post_sammelrechnung(
             Ok(id) => id,
             Err(e) => return Err(period_conflict(&pool, &cfg.tenant, e).await),
         };
-        crate::einvoice::store(&mut *tx, record_id, &site.invoice, &cfg, &site.malo_id).await?;
+        crate::einvoice::store(&mut tx, record_id, &site.invoice, &cfg, &site.malo_id).await?;
         per_malo_ids.push(record_id);
     }
 
@@ -279,14 +293,7 @@ pub async fn post_sammelrechnung(
         issue_record(&mut tx, &cfg, sammel_id, &ce).await?;
     }
     persist_risk(&mut *tx, sammel_id, assessment.as_ref()).await?;
-    crate::einvoice::store(
-        &mut *tx,
-        sammel_id,
-        &sammel_invoice,
-        &cfg,
-        &rahmenvertrag_id,
-    )
-    .await?;
+    crate::einvoice::store(&mut tx, sammel_id, &sammel_invoice, &cfg, &rahmenvertrag_id).await?;
     // Inside the transaction: the risk baseline and the record listings treat
     // the per-MaLo rows as the bundle's children, and a child that committed
     // unlinked is counted alongside the bundle that already contains it.

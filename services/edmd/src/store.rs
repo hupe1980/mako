@@ -699,6 +699,10 @@ impl MeterStoreTimeSeriesRepository {
         // arrived reports 100 %. `metering::aggregate` owns the arithmetic
         // (a duration ratio, so it is right at every resolution and on both DST
         // days); edmd only decides what window it is measured against.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a coverage percentage, not money: metering computes it as an f64 duration ratio, and it is rounded to two places right here"
+        )]
         let coverage_pct = {
             let agg = metering::aggregation::aggregate(
                 &intervals,
@@ -2256,10 +2260,10 @@ pub(crate) fn quality_to_str(q: QualityFlag) -> &'static str {
 ///
 /// `metering`'s `FromStr` refuses unknown input deliberately: an unrecognised
 /// status is not `Unknown` — which is a statement about the *measurement* — but
-/// a parse failure, which is a statement about the *storage*. The lenient
-/// version this replaced mapped a corrupted or newly-added code onto `Unknown`,
-/// and `Unknown` is non-billable, so a cache row that failed to decode silently
-/// removed a period's Arbeitsmenge from every bill.
+/// a parse failure, which is a statement about the *storage*. Mapping a
+/// corrupted or newly-added code onto `Unknown` — which is non-billable — would
+/// let a cache row that fails to decode silently remove a period's Arbeitsmenge
+/// from every bill.
 fn str_to_quality(s: &str) -> Option<QualityFlag> {
     s.parse().ok()
 }

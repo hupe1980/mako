@@ -22,8 +22,6 @@ use axum::{
 use mako_markt::repository::MeloMsbRepository;
 use mako_service::Json;
 use serde::Deserialize;
-use time::Date;
-use time::format_description::well_known::Iso8601;
 use tracing::info;
 
 use mako_service::cedar::CedarEnforcer;
@@ -49,10 +47,6 @@ pub struct PutMeloMsbBody {
     pub valid_from: String,
 }
 
-fn parse_iso_date(s: &str) -> Result<Date, String> {
-    Date::parse(s, &Iso8601::DEFAULT).map_err(|e| format!("invalid date {s:?}: {e}"))
-}
-
 /// `GET /api/v1/melos/{melo_id}/msb?at=YYYY-MM-DD` — the MSB responsible on a date.
 pub async fn get_melo_msb_at(
     claims: Claims,
@@ -70,15 +64,9 @@ pub async fn get_melo_msb_at(
             .into_response();
     }
     let at = match q.at.as_deref() {
-        Some(s) => match parse_iso_date(s) {
+        Some(s) => match mako_service::dates::parse_iso_date("at", s) {
             Ok(d) => d,
-            Err(reason) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": reason })),
-                )
-                    .into_response();
-            }
+            Err(e) => return mako_service::ApiError::from(e).into_response(),
         },
         None => mako_fristen::heute(),
     };
@@ -141,15 +129,9 @@ pub async fn put_melo_msb(
         )
             .into_response();
     }
-    let valid_from = match parse_iso_date(&body.valid_from) {
+    let valid_from = match mako_service::dates::parse_iso_date("valid_from", &body.valid_from) {
         Ok(d) => d,
-        Err(reason) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": reason })),
-            )
-                .into_response();
-        }
+        Err(e) => return mako_service::ApiError::from(e).into_response(),
     };
     info!(%melo_id, msb_mp_id = %body.msb_mp_id, %valid_from, "marktd: assigning MSB to MeLo");
     match repo

@@ -231,16 +231,31 @@ pub enum LfAnmeldungState {
     Pending(LfAnmeldungData),
     /// NB or LFA accepted the Anmeldung; supply active (Lieferbeginn only).
     Active(LfAnmeldungData),
-    /// NB rejected or deadline expired.
+    /// NB rejected.
     Rejected {
         /// Human-readable rejection reason.
         reason: String,
+    },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// GPKE Teil 2 Kap. 2.1.2 gives the NB its answer window on the Anmeldung and no consequence of the NB missing it. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<LfAnmeldungState>,
     },
 }
 
 impl mako_engine::workflow::OccupiesBusinessKey for LfAnmeldungState {
     fn occupies_business_key(&self) -> bool {
         match self {
+            // A lapsed window leaves the Vorgang open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
             // Awaiting the NB's answer, or supply is running — a second
             // Anmeldung for the same MaLo would put two live processes on one
             // supply point.
@@ -260,6 +275,16 @@ impl LfAnmeldungState {
             Self::Pending(_) => "Pending",
             Self::Active(_) => "Active",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 }
@@ -360,10 +385,21 @@ impl CommandPayload for LfAnmeldungCommand {}
 /// ```
 pub struct GpkeLfAnmeldungWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The NB's answer window is open while the Anmeldung waits for it
+/// (`Pending`).
+fn window_open(label: &str, state: &LfAnmeldungState) -> bool {
+    label == NB_RESPONSE_WINDOW_LABEL && matches!(state, LfAnmeldungState::Pending(_))
+}
+
 impl Workflow for GpkeLfAnmeldungWorkflow {
     type State = LfAnmeldungState;
     type Event = LfAnmeldungEvent;
     type Command = LfAnmeldungCommand;
+
+    const DEADLINE_LABELS: &'static [&'static str] = &[NB_RESPONSE_WINDOW_LABEL];
 
     /// Deadline compensation for the NB/LFA answer window.
     ///
@@ -374,24 +410,25 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
     /// The label must be exactly this constant. `makod` registered
     /// `nb-response-window-24h` here, which fell through to `_ => None`: the
     /// deadline fired, nothing happened, and the process sat in `Pending`
-    /// forever. `services/makod/tests/deadline_labels.rs` pins the two ends
+    /// forever. `services/makod/tests/it/deadline_labels.rs` pins the two ends
     /// together.
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (NB_RESPONSE_WINDOW_LABEL, LfAnmeldungState::Pending(_)) => {
-                Some(LfAnmeldungCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| LfAnmeldungCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            LfAnmeldungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             LfAnmeldungEvent::Initiated {
                 pruefidentifikator,
@@ -425,10 +462,11 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                 other => other,
             },
             LfAnmeldungEvent::DeadlineExpired { label, .. } => match state {
-                LfAnmeldungState::Active(_) | LfAnmeldungState::Rejected { .. } => state,
-                _ => LfAnmeldungState::Rejected {
-                    reason: format!("deadline expired: {label}"),
+                LfAnmeldungState::Pending(_) => LfAnmeldungState::FristAbgelaufen {
+                    label: label.to_string(),
+                    offen: Box::new(state),
                 },
+                other => other,
             },
         }
     }
@@ -437,6 +475,10 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             LfAnmeldungCommand::InitiateAnmeldung {
                 pid,
@@ -522,27 +564,36 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                 // transport layer.
                 // `document_date` and `message_ref` are intentionally omitted:
                 // the renderer derives them at dispatch time (today / causation_event_id).
-                let outbox = PendingOutbox::new(
-                    "UTILMD",
+                // The Tranchengröße arrives as the ERP stated it; a shape the
+                // Codeliste does not name is refused here, before the wire.
+                let tranchengroesse = tranchengroesse
+                    .map(serde_json::from_value::<mako_engine::payload::Tranchengroesse>)
+                    .transpose()
+                    .map_err(|e| {
+                        WorkflowError::validation(format!(
+                            "tranchengroesse: a string (prozentuale Aufteilung) or \
+                             {{art, wert}} — {e}"
+                        ))
+                    })?;
+                let outbox = PendingOutbox::typed(
                     receiver.as_str(),
-                    serde_json::json!({
-                        "direction":         "outbound",
-                        "pid":               pid.as_u32(),
-                        "sender":            sender.as_str(),
-                        "receiver":          receiver.as_str(),
-                        "malo":              location_id.as_str(),
-                        "process_date":      process_date,
-                        // SG4 STS Transaktionsgrund (E01 Ein-/Auszug, E03
-                        // Wechsel) — rendered as the outbound STS segment.
-                        "transaktionsgrund": transaktionsgrund,
+                    &mako_engine::payload::UtilmdPayload {
+                        pid: pid.as_u32(),
+                        sender: sender.as_str().to_owned(),
+                        receiver: Some(receiver.as_str().to_owned()),
+                        malo: Some(location_id.as_str().to_owned()),
+                        process_date: Some(process_date),
+                        // SG4 STS Transaktionsgrund (E01 Ein-/Auszug, E03 Wechsel).
+                        transaktionsgrund,
                         // `SG8 SEQ+Z79` / `SG10 CAV+ZV4` — the Bilanzkreis.
-                        "bilanzkreis":       bilanzkreis,
-                        // `SG4 STS+7` DE 9013 element 3 — the Geschäftsvorfall
-                        // on the erzeugende Anmeldung, `ZW4` elsewhere.
-                        "transaktionsgrund_ergaenzung": transaktionsgrund_ergaenzung,
+                        bilanzkreis,
+                        // `SG4 STS+7` DE 9013 element 3 — the Geschäftsvorfall on
+                        // the erzeugende Anmeldung, `ZW4` elsewhere.
+                        transaktionsgrund_ergaenzung,
                         // `SG8 SEQ+Z79` Produkt 9991000002090 — Muss on ZW2.
-                        "tranchengroesse":   tranchengroesse,
-                    }),
+                        tranchengroesse,
+                        ..Default::default()
+                    },
                 );
 
                 Ok(WorkflowOutput::with_outbox(vec![event], vec![outbox]))
@@ -616,10 +667,7 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
             }
 
             LfAnmeldungCommand::TimeoutExpired { deadline_id, label } => {
-                if matches!(
-                    state,
-                    LfAnmeldungState::Active(_) | LfAnmeldungState::Rejected { .. }
-                ) {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![LfAnmeldungEvent::DeadlineExpired { deadline_id, label }].into())
@@ -861,8 +909,10 @@ mod tests {
         assert!(err.is_err());
     }
 
+    /// The NB's silence is a Frist breach the LF sees, not a rejection: no
+    /// Festlegung gives it an outcome, and the NB's late answer still lands.
     #[test]
-    fn timeout_on_pending_transitions_to_rejected() {
+    fn timeout_on_pending_is_a_frist_breach() {
         use mako_engine::ids::DeadlineId;
         let initiated_event = LfAnmeldungEvent::Initiated {
             pruefidentifikator: Pruefidentifikator::new(55001).unwrap(),
@@ -875,11 +925,18 @@ mod tests {
 
         let cmd = LfAnmeldungCommand::TimeoutExpired {
             deadline_id: DeadlineId::new(),
-            label: "nb-response-window".into(),
+            label: NB_RESPONSE_WINDOW_LABEL.into(),
         };
         let out = GpkeLfAnmeldungWorkflow::handle(&state, cmd).unwrap();
         let final_state = GpkeLfAnmeldungWorkflow::apply(state, &out.events[0]);
-        assert!(matches!(final_state, LfAnmeldungState::Rejected { .. }));
+        assert!(matches!(
+            final_state,
+            LfAnmeldungState::FristAbgelaufen { .. }
+        ));
+        assert!(
+            mako_engine::workflow::OccupiesBusinessKey::occupies_business_key(&final_state),
+            "a lapsed Anmeldung still holds its MaLo"
+        );
     }
 
     #[test]
@@ -904,7 +961,7 @@ mod tests {
 
         let cmd = LfAnmeldungCommand::TimeoutExpired {
             deadline_id: DeadlineId::new(),
-            label: "nb-response-window".into(),
+            label: NB_RESPONSE_WINDOW_LABEL.into(),
         };
         let out = GpkeLfAnmeldungWorkflow::handle(&state, cmd).unwrap();
         assert_eq!(out.events.len(), 0, "timeout is no-op on Active");

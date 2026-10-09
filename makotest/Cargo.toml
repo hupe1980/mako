@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
 authors.workspace      = true
-description = "PyO3 bindings backing the `makotest` Python toolkit: BDEW identifier check digits, Werktag/Fristen arithmetic, and AHB-validated EDIFACT."
+description = "PyO3 bindings behind the makotest Python toolkit: BDEW check digits, Werktag and Frist arithmetic, and AHB-validated EDIFACT"
 publish     = false
 
 [lib]
@@ -45,3 +45,6 @@ time         = { workspace = true }
 # --all-features` enable it too, and the test harness would then fail to link
 # against libpython.
 pyo3 = { version = "0.29", features = ["abi3-py311"] }
+
+[lints]
+workspace = true

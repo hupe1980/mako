@@ -31,7 +31,7 @@
 //!
 //! - **BNetzA BK6-24-174 Anlage 1b** — GPKE Teil 2 §2.2 Neuanlage
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format
-//! - **APERAK AHB 1.0 § 2.4.1** — technical acknowledgement, **45 Minuten** on a
+//! - **APERAK AHB 1.1 § 2.4.1** — technical acknowledgement, **45 Minuten** on a
 //!   weekday for a UTILMD. A separate clock from the business answer window,
 //!   which GPKE Teil 2 states as a wall-clock instant on the 1. Werktag nach
 //!   dem ÜT.
@@ -67,7 +67,7 @@ pub const NEUANLAGE_PIDS: &[u32] = &[55600, 55601];
 /// `mako_fristen::antwort`: `E_0608` Prüfschritte 110/590 make identifying a
 /// newly commissioned Marktlokation a daily re-check for up to 60 Werktage.
 ///
-/// Not the APERAK clock: that is 45 Minuten for a UTILMD (APERAK AHB 1.0
+/// Not the APERAK clock: that is 45 Minuten for a UTILMD (APERAK AHB 1.1
 /// § 2.4.1) and rides `mako_fristen::APERAK_STROM_WINDOW_LABEL`.
 ///
 /// Register immediately after `ValidationPassed`:
@@ -149,15 +149,6 @@ pub enum NeuanlageEvent {
     },
     /// Neuanlage completed — MaLo is active in the grid.
     Aktiviert,
-    /// APERAK 29001 dispatched for technical processing failure.
-    AperakFehlerDispatched {
-        /// APERAK PID sent.
-        aperak_pid: Pruefidentifikator,
-        /// Error reason included in the APERAK.
-        reason: String,
-        /// Reference ID of the outbound APERAK message.
-        outbound_ref: MessageRef,
-    },
     /// Process closed due to validation failure, rejection, or deadline expiry.
     Rejected {
         /// Human-readable reason.
@@ -179,7 +170,6 @@ impl EventPayload for NeuanlageEvent {
             Self::ValidationPassed { .. } => "NeuanlageValidationPassed",
             Self::AntwortGesendet { .. } => "NeuanlageAntwortGesendet",
             Self::Aktiviert => "NeuanlageAktiviert",
-            Self::AperakFehlerDispatched { .. } => "NeuanlageAperakFehlerDispatched",
             Self::Rejected { .. } => "NeuanlageRejected",
             Self::DeadlineExpired { .. } => "NeuanlageDeadlineExpired",
         }
@@ -239,6 +229,19 @@ pub enum NeuanlageState {
         /// Human-readable reason.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// GPKE Teil 2 Kap. 2.2.2 gives the NB its answer window on the Anmeldung einer Neuanlage and no consequence of missing it. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<NeuanlageState>,
+    },
 }
 
 impl NeuanlageState {
@@ -252,6 +255,16 @@ impl NeuanlageState {
             Self::AntwortGesendet { .. } => "AntwortGesendet",
             Self::Aktiviert(_) => "Aktiviert",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -259,6 +272,7 @@ impl NeuanlageState {
     #[must_use]
     pub fn data(&self) -> Option<&NeuanlageData> {
         match self {
+            Self::FristAbgelaufen { offen, .. } => offen.data(),
             Self::Eingegangen(d) | Self::ValidationPassed(d) | Self::Aktiviert(d) => Some(d),
             Self::AntwortGesendet { data, .. } => Some(data),
             Self::New | Self::Rejected { .. } => None,
@@ -289,7 +303,7 @@ pub enum NeuanlageCommand {
         message_ref: MessageRef,
         /// UTC timestamp at which the inbound UTILMD was received at the transport layer.
         ///
-        /// Used to compute the APERAK 45-minute sending deadline per APERAK AHB 1.0 §2.4.1.
+        /// Used to compute the APERAK 45-minute sending deadline per APERAK AHB 1.1 §2.4.1.
         received_at: time::OffsetDateTime,
         /// `true` if validation returned no errors.
         validation_passed: bool,
@@ -317,13 +331,6 @@ pub enum NeuanlageCommand {
     },
     /// Mark the new Marktlokation as active in the grid.
     Aktivieren,
-    /// Dispatch APERAK 29001 for technical processing failure.
-    DispatchAperakFehler {
-        /// Error reason in the APERAK.
-        reason: String,
-        /// Message reference of the outbound APERAK.
-        outbound_ref: MessageRef,
-    },
     /// A registered deadline fired; record expiry and close the process.
     TimeoutExpired {
         /// Unique ID of the expired deadline.
@@ -348,25 +355,40 @@ impl CommandPayload for NeuanlageCommand {}
 /// ```
 pub struct GpkeNeuanlageWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the NB still owes its answer
+/// (`Eingegangen`, `ValidationPassed`).
+fn window_open(label: &str, state: &NeuanlageState) -> bool {
+    label == NEUANLAGE_ANTWORT_WINDOW_LABEL
+        && matches!(
+            state,
+            NeuanlageState::Eingegangen(_) | NeuanlageState::ValidationPassed(_)
+        )
+}
+
 impl Workflow for GpkeNeuanlageWorkflow {
     type State = NeuanlageState;
     type Event = NeuanlageEvent;
     type Command = NeuanlageCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[NEUANLAGE_ANTWORT_WINDOW_LABEL];
+
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (NEUANLAGE_ANTWORT_WINDOW_LABEL, NeuanlageState::Eingegangen(_))
-            | (NEUANLAGE_ANTWORT_WINDOW_LABEL, NeuanlageState::ValidationPassed(_)) => {
-                Some(NeuanlageCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| NeuanlageCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            NeuanlageState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             NeuanlageEvent::AnmeldungErhalten {
                 location_id,
@@ -411,17 +433,17 @@ impl Workflow for GpkeNeuanlageWorkflow {
                 NeuanlageState::AntwortGesendet { data, .. } => NeuanlageState::Aktiviert(data),
                 other => other,
             },
-            NeuanlageEvent::AperakFehlerDispatched { reason, .. } => NeuanlageState::Rejected {
-                reason: format!("APERAK 29001: {reason}"),
-            },
             NeuanlageEvent::Rejected { reason } => NeuanlageState::Rejected {
                 reason: reason.clone(),
             },
             NeuanlageEvent::DeadlineExpired { label, .. } => match state {
-                NeuanlageState::Aktiviert(_) | NeuanlageState::Rejected { .. } => state,
-                _ => NeuanlageState::Rejected {
-                    reason: format!("deadline expired: {label}"),
-                },
+                NeuanlageState::Eingegangen(_) | NeuanlageState::ValidationPassed(_) => {
+                    NeuanlageState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
+                }
+                other => other,
             },
         }
     }
@@ -430,6 +452,10 @@ impl Workflow for GpkeNeuanlageWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             NeuanlageCommand::ReceiveAnmeldung {
                 pid,
@@ -468,8 +494,8 @@ impl Workflow for GpkeNeuanlageWorkflow {
                     events.push(NeuanlageEvent::ValidationPassed {
                         message_ref: message_ref.clone(),
                     });
-                    // F-038: APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.0 §2.4.
-                    // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
+                    // APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.1 §2.4.
+                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
                     let outbox = vec![
                         PendingOutbox::aperak_anerkennung(
                             receiver_gln.as_str(),
@@ -490,8 +516,8 @@ impl Workflow for GpkeNeuanlageWorkflow {
                     events.push(NeuanlageEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
-                    // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
+                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
                             receiver_gln.as_str(),
@@ -568,37 +594,11 @@ impl Workflow for GpkeNeuanlageWorkflow {
                 Ok(vec![NeuanlageEvent::Aktiviert].into())
             }
 
-            NeuanlageCommand::DispatchAperakFehler {
-                reason,
-                outbound_ref,
-            } => {
-                match state {
-                    NeuanlageState::Eingegangen(_) | NeuanlageState::ValidationPassed(_) => {}
-                    _ => {
-                        return Err(WorkflowError::invalid_state(
-                            "Eingegangen or ValidationPassed",
-                            state.label(),
-                        ));
-                    }
-                }
-                let aperak_pid = Pruefidentifikator::new(29_001)
-                    .map_err(|e| WorkflowError::rejected(e.clone()))?;
-                Ok(vec![NeuanlageEvent::AperakFehlerDispatched {
-                    aperak_pid,
-                    reason,
-                    outbound_ref,
-                }]
-                .into())
-            }
-
             NeuanlageCommand::TimeoutExpired { deadline_id, label } => {
-                // Idempotent: no-op in terminal states.
-                match state {
-                    NeuanlageState::Aktiviert(_) | NeuanlageState::Rejected { .. } => {
-                        Ok(vec![].into())
-                    }
-                    _ => Ok(vec![NeuanlageEvent::DeadlineExpired { deadline_id, label }].into()),
+                if !window_open(&label, lapsed) {
+                    return Ok(vec![].into());
                 }
+                Ok(vec![NeuanlageEvent::DeadlineExpired { deadline_id, label }].into())
             }
         }
     }

@@ -185,7 +185,7 @@ impl EdifactIngestDispatcher {
                 55007 => {
                     let cmd = adapters::gpke_lf_abmeldung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // APERAK AHB 1.0 §2.4.1: Strom UTILMD — 45 min on weekdays.
+                    // APERAK AHB 1.1 §2.4.1: Strom UTILMD — 45 min; Sonntag 12:00 on a Saturday.
                     let received = OffsetDateTime::now_utc();
                     // 05:00 Uhr des 1. WT nach dem ÜT (GPKE Teil 2, SD
                     // Lieferende von NB an LF Prozessschritt 2).
@@ -342,12 +342,13 @@ impl EdifactIngestDispatcher {
                 55013 => {
                     let cmd = adapters::gpke_eog_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.spawn_or_resume::<mako_gpke::GpkeEogWorkflow>(
+                    self.spawn_or_resume_guarded::<mako_gpke::GpkeEogWorkflow>(
                         malo_id.as_str(),
                         "gpke-eog",
                         cmd,
                         &fv,
                         &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }
@@ -489,12 +490,13 @@ impl EdifactIngestDispatcher {
                             HolidayCalendar::BdewMaKo,
                         )
                     });
-                    self.spawn_or_resume::<GpkeAbrechnungWorkflow>(
+                    self.spawn_or_resume_guarded::<GpkeAbrechnungWorkflow>(
                         &invoice_ref,
                         "gpke-abrechnung",
                         cmd,
                         &fv,
                         &[(mako_gpke::ABRECHNUNG_WINDOW_LABEL, due_at)],
+                        occupied_by_own_reference,
                     )
                     .await
                 }
@@ -611,7 +613,7 @@ impl EdifactIngestDispatcher {
                     // (GPKE Teil 2 § 2.4.2.2 Nr. 2). Missing it is not a lapsed
                     // obligation — Prozessschritt 3 has the NB assign the LFN
                     // without an answer.
-                    // APERAK AHB 1.0 §2.4.1: Strom UTILMD — 45 min on weekdays.
+                    // APERAK AHB 1.1 §2.4.1: Strom UTILMD — 45 min; Sonntag 12:00 on a Saturday.
                     let received = OffsetDateTime::now_utc();
                     let process_due_at = antwort_due_at(pid, received);
                     let aperak_due_at = fristen::aperak_strom_due_at(received);

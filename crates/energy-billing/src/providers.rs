@@ -581,7 +581,7 @@ impl BillingProvider for ElectricityProvider {
         positions.extend(stromsteuer_positions(
             product.stromsteuer_tarif,
             kwh,
-            rates.effective_stromsteuer(product.stromsteuer_ct_per_kwh_override),
+            rates.effective_stromsteuer(product.stromsteuer_ct_per_kwh_override)?,
             &["strom"],
         ));
         // A Steuerentlastung leaves the levy where it is and tells the customer
@@ -733,7 +733,7 @@ impl ElectricityProvider {
             }
             // Stromsteuer on grid consumption only (§ 9 Abs. 1 Nr. 3 StromStG:
             // self-consumption exempt)
-            let st_rate = rates.effective_stromsteuer(product.stromsteuer_ct_per_kwh_override);
+            let st_rate = rates.effective_stromsteuer(product.stromsteuer_ct_per_kwh_override)?;
             if st_rate > Decimal::ZERO {
                 positions.push(
                     levy_position(
@@ -1590,11 +1590,11 @@ impl BillingProvider for GasProvider {
             positions.extend(energiesteuer_positions(
                 product.energiesteuer_tarif,
                 kwh_hs,
-                rates.effective_energiesteuer_gas(product.energiesteuer_gas_ct_per_kwh_override),
+                rates.effective_energiesteuer_gas(product.energiesteuer_gas_ct_per_kwh_override)?,
             ));
 
             // ── BEHG CO₂ ───────────────────────────────────────────────────────
-            let behg_rate = rates.effective_behg_gas(product.behg_gas_ct_per_kwh_override);
+            let behg_rate = rates.effective_behg_gas(product.behg_gas_ct_per_kwh_override)?;
             if behg_rate > Decimal::ZERO {
                 positions.push(
                     levy_position(
@@ -1605,6 +1605,9 @@ impl BillingProvider for GasProvider {
                         "BEHG",
                         "behg",
                     )
+                    // The provision the price was set under — for 2027 the
+                    // configured regime, so the trace says which law priced it.
+                    .with_legal_basis(rates.behg_rechtsgrundlage.clone())
                     .with_tag("gas"),
                 );
                 // The levy line is § 3 Abs. 1 Nr. 2. The statute asks for five
@@ -2355,7 +2358,7 @@ impl BillingProvider for SolarProvider {
                 positions.extend(stromsteuer_positions(
                     product.stromsteuer_tarif,
                     pv_kwh,
-                    ctx.regulatory_rates.effective_stromsteuer(None),
+                    ctx.regulatory_rates.effective_stromsteuer(None)?,
                     &["solar", "ggv_pv"],
                 ));
             }
@@ -2383,7 +2386,7 @@ impl BillingProvider for SolarProvider {
                     );
                 }
                 // Stromsteuer on grid portion
-                let st_rate = ctx.regulatory_rates.effective_stromsteuer(None);
+                let st_rate = ctx.regulatory_rates.effective_stromsteuer(None)?;
                 if st_rate > Decimal::ZERO {
                     positions.push(
                         levy_position(
@@ -2495,7 +2498,7 @@ impl BillingProvider for SolarProvider {
         positions.extend(stromsteuer_positions(
             product.stromsteuer_tarif,
             kwh,
-            ctx.regulatory_rates.effective_stromsteuer(None),
+            ctx.regulatory_rates.effective_stromsteuer(None)?,
             &["solar"],
         ));
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
@@ -3573,7 +3576,7 @@ impl BillingProvider for DynamicElectricityProvider {
             positions.extend(stromsteuer_positions(
                 product.stromsteuer_tarif,
                 total_kwh,
-                rates.effective_stromsteuer(product.stromsteuer_ct_per_kwh_override),
+                rates.effective_stromsteuer(product.stromsteuer_ct_per_kwh_override)?,
                 &["strom"],
             ));
         }
@@ -3722,7 +3725,10 @@ impl BillingProvider for MwStProvider {
             let entry = rate_buckets
                 .entry(key)
                 .or_insert((effective_rate, Decimal::ZERO));
-            entry.1 += p.net_eur;
+            // The rounded line, as `Invoice::from_positions` states it: the tax
+            // is the base printed beside it × rate, never a base no line adds
+            // up to.
+            entry.1 += p.net_eur.round_kfm(2);
         }
 
         if rate_buckets.is_empty() {

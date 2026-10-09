@@ -30,14 +30,15 @@
 //! # Regulatory basis
 //!
 //! - **BDEW GPKE Teil 3** — Geschäftsprozesse Konfiguration (BK6-24-174 Anlage 1c)
-//! - Response window: 5 Werktage for NB/MSB to respond (GPKE AWH Teil 3)
+//! - Response window: per Use-Case (GPKE Teil 3 Kap. 1.2–1.3); the one this
+//!   workflow resolves is the Mitteilung on a 17120, 1 WT (see `antwortfrist`)
 
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
     outbox::PendingOutbox,
     types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator},
-    workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
+    workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
 
 // ── PID sets ──────────────────────────────────────────────────────────────────
@@ -119,7 +120,7 @@ pub const ORDRSP_PIDS: &[u32] = &[
 /// (`esa-wertebestellung`), not GPKE — it is not registered here.
 pub const IFTSTA_PIDS: &[u32] = &[21_043, 21_044];
 
-/// Deadline label for the NB/MSB response window (5 Werktage, GPKE AWH Teil 3).
+/// Deadline label for the NB/MSB response window on an outbound ORDERS.
 pub const ANTWORT_WINDOW_LABEL: &str = "gpke-konfiguration-aenderung-antwort";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -224,10 +225,18 @@ pub enum KonfigurationAenderungState {
         /// Whether the response was positive.
         accepted: bool,
     },
-    /// Deadline expired without a final response.
-    DeadlineExpired {
-        /// Original request data.
-        anfrage: AnfrageData,
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// No Festlegung states a consequence of the Konfigurationsänderung going unanswered. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<KonfigurationAenderungState>,
     },
 }
 
@@ -239,17 +248,22 @@ impl KonfigurationAenderungState {
             Self::New => "New",
             Self::AnfrageGesendet(_) => "AnfrageGesendet",
             Self::Beantwortet { .. } => "Beantwortet",
-            Self::DeadlineExpired { .. } => "DeadlineExpired",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
     /// Whether the process has reached a terminal state.
     #[must_use]
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
-            Self::Beantwortet { .. } | Self::DeadlineExpired { .. }
-        )
+        matches!(self, Self::Beantwortet { .. })
     }
 }
 
@@ -272,6 +286,9 @@ pub enum KonfigurationAenderungCommand {
         message_ref: MessageRef,
         /// Optional structured payload for the ORDERS body.
         payload: serde_json::Value,
+        /// When the ORDERS leaves — the Übertragungstag the counterparty's
+        /// Antwortfrist counts from ([`mako_fristen::antwort::antwort_deadline`]).
+        gesendet_am: time::OffsetDateTime,
     },
     /// Inbound ORDRSP received from NB or MSB.
     ReceiveOrdrsp {
@@ -305,11 +322,42 @@ pub enum KonfigurationAenderungCommand {
 
 impl CommandPayload for KonfigurationAenderungCommand {}
 
+/// The counterparty's Antwortfrist on an outbound Konfigurationsänderung ORDERS.
+///
+/// Only the Bestellung Änderung Prognosegrundlage (17120) is resolved: it is
+/// ordered through the Use-Case „Bestellung einer Konfiguration vom LF an NB"
+/// (GPKE Teil 3 Kap. 1.1.2), whose Mitteilung is due „spätester ÜT ist
+/// der 1. WT nach dem ÜT von Nr. 1" (Kap. 1.3.2.2 Nr. 2,
+/// [`mako_fristen::antwort::KONFIGURATION_MITTEILUNG_WERKTAGE`]). The other
+/// Bestellungen and Reklamationen of Teil 3 carry Fristen of their own that
+/// this workflow does not resolve, and register no window.
+fn antwortfrist(
+    orders_pid: u32,
+    gesendet_am: time::OffsetDateTime,
+) -> Option<time::OffsetDateTime> {
+    (orders_pid == 17_120).then(|| {
+        mako_fristen::antwort::FristShape::EndOfWerktag(
+            mako_fristen::antwort::KONFIGURATION_MITTEILUNG_WERKTAGE,
+        )
+        .due_at(gesendet_am, mako_fristen::HolidayCalendar::BdewMaKo)
+    })
+}
+
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
 /// GPKE Konfigurationsänderung workflow — LF-initiated config change requests
 /// (GPKE Teil 3, BK6-24-174 Anlage 1c).
 pub struct GpkeKonfigurationAenderungWorkflow;
+
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the Anfrage waits for its ORDRSP
+/// (`AnfrageGesendet`).
+fn window_open(label: &str, state: &KonfigurationAenderungState) -> bool {
+    label == ANTWORT_WINDOW_LABEL
+        && matches!(state, KonfigurationAenderungState::AnfrageGesendet(_))
+}
 
 /// Rejection ORDRSP PIDs (NB/MSB rejects LF's request).
 const REJECTION_PIDS: &[u32] = &[19123, 19130];
@@ -322,22 +370,27 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
     type Event = KonfigurationAenderungEvent;
     type Command = KonfigurationAenderungCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANTWORT_WINDOW_LABEL];
+
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (ANTWORT_WINDOW_LABEL, KonfigurationAenderungState::AnfrageGesendet(_)) => {
-                Some(KonfigurationAenderungCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
+        window_open(deadline.label(), state).then(|| {
+            KonfigurationAenderungCommand::TimeoutExpired {
+                deadline_id: deadline.deadline_id(),
+                label: deadline.label().into(),
             }
-            _ => None,
-        }
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            KonfigurationAenderungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             KonfigurationAenderungEvent::AnfrageGesendet {
                 orders_pid,
@@ -366,9 +419,12 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
                 }
                 other => other,
             },
-            KonfigurationAenderungEvent::DeadlineExpired { .. } => match state {
-                KonfigurationAenderungState::AnfrageGesendet(anfrage) => {
-                    KonfigurationAenderungState::DeadlineExpired { anfrage }
+            KonfigurationAenderungEvent::DeadlineExpired { label, .. } => match state {
+                KonfigurationAenderungState::AnfrageGesendet(_) => {
+                    KonfigurationAenderungState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
                 }
                 other => other,
             },
@@ -379,6 +435,10 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             KonfigurationAenderungCommand::SendAnfrage {
                 orders_pid,
@@ -386,6 +446,7 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
                 malo,
                 message_ref,
                 payload,
+                gesendet_am,
             } => {
                 if !matches!(state, KonfigurationAenderungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -411,7 +472,17 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
                         "payload":    payload,
                     }),
                 )];
-                Ok(WorkflowOutput::with_outbox(vec![event], outbox))
+                // The counterparty's Antwortfrist, from the published row for
+                // this ORDERS; a PID no Festlegung quantifies registers nothing.
+                let frist: Vec<PendingDeadline> = antwortfrist(orders_pid.as_u32(), gesendet_am)
+                    .map(|due| PendingDeadline::new(ANTWORT_WINDOW_LABEL, due))
+                    .into_iter()
+                    .collect();
+                Ok(WorkflowOutput::with_outbox_and_deadlines(
+                    vec![event],
+                    outbox,
+                    frist,
+                ))
             }
 
             KonfigurationAenderungCommand::ReceiveIftsta { pid, message_ref } => {
@@ -463,7 +534,7 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
             }
 
             KonfigurationAenderungCommand::TimeoutExpired { deadline_id, label } => {
-                if state.is_terminal() {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(
@@ -478,9 +549,47 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
 #[cfg(test)]
 mod tests {
     use super::{
+        ANTWORT_WINDOW_LABEL, GpkeKonfigurationAenderungWorkflow, KonfigurationAenderungCommand,
+        KonfigurationAenderungState, MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator,
+        Workflow as _,
+    };
+    use super::{
         ORDERS_ANFRAGE_MSB_PIDS, ORDERS_ANFRAGE_NB_PIDS, ORDERS_ANFRAGE_PIDS, ORDERS_NB_MSB_PIDS,
         ORDRSP_MSB_LF_PIDS, ORDRSP_NB_LF_PIDS, ORDRSP_PIDS,
     };
+
+    /// A Bestellung Änderung Prognosegrundlage starts the NB's 1-WT Mitteilung
+    /// window (GPKE Teil 3 Kap. 1.3.2.2 Nr. 2); a Reklamation einer Definition
+    /// starts none here.
+    #[test]
+    fn a_17120_registers_the_mitteilung_window() {
+        let sent = time::macros::datetime!(2026-10-07 10:00 UTC);
+        let anfrage = |pid: u32| KonfigurationAenderungCommand::SendAnfrage {
+            orders_pid: Pruefidentifikator::new(pid).expect("valid PID"),
+            recipient: MarktpartnerCode::new("9900000000003"),
+            malo: MaLo::new("51238696012"),
+            message_ref: MessageRef::new("ORDERS-1"),
+            payload: serde_json::json!({}),
+            gesendet_am: sent,
+        };
+        let out = GpkeKonfigurationAenderungWorkflow::handle(
+            &KonfigurationAenderungState::default(),
+            anfrage(17_120),
+        )
+        .expect("accepted");
+        assert_eq!(out.deadlines.len(), 1);
+        assert_eq!(out.deadlines[0].label, ANTWORT_WINDOW_LABEL);
+        assert_eq!(
+            out.deadlines[0].due_at,
+            mako_fristen::end_of_day_berlin(time::macros::date!(2026 - 10 - 08))
+        );
+        let out = GpkeKonfigurationAenderungWorkflow::handle(
+            &KonfigurationAenderungState::default(),
+            anfrage(17_122),
+        )
+        .expect("accepted");
+        assert!(out.deadlines.is_empty());
+    }
 
     /// The registration lists are the union of the per-direction ones.
     ///

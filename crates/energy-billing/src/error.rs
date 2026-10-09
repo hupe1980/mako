@@ -116,6 +116,14 @@ pub enum EngineError {
         reason: String,
     },
 
+    /// A statutory rate the period needs has no source for that period — a
+    /// year past the end of a tax series, or a year no law has priced CO₂ for.
+    ///
+    /// Raised by the provider that bills the tax, so only an invoice that
+    /// carries the tax is refused. Never answered with another year's rate.
+    #[error("Satz nicht verfügbar: {0}")]
+    RateRefused(crate::rates::RateRefusal),
+
     /// An arithmetic or document error from the `billing` core —
     /// monetary overflow, invalid schedule, tax-layer failure.
     #[error(transparent)]
@@ -135,6 +143,7 @@ impl EngineError {
             Self::NutzungsplanSharesInvalid { .. } => "NUTZUNGSPLAN_SHARES_INVALID",
             Self::Unrepresentable { .. } => "UNREPRESENTABLE",
             Self::ReconciliationFailed { .. } => "RECONCILIATION_FAILED",
+            Self::RateRefused(_) => "RATE_REFUSED",
             Self::Arithmetic(_) => "ARITHMETIC",
         }
     }

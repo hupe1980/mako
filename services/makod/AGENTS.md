@@ -12,6 +12,33 @@
 - HTTP server(s) and health check endpoints
 - Graceful shutdown handling
 
+## Running a command
+
+Every door — ingest, ERP command, API-Webdienste, deadline — reaches a process
+through `Process::run(cmd, RunOptions)`, or `Process::run_timeout(&deadline,
+RunOptions)` for a fired deadline. A spawn passes its Frist and its business keys
+as `RunOptions::deadlines` / `RunOptions::correlations`; a resume that indexes the
+process under a further key (a Belegnummer) passes it the same way. Never call
+`register_correlated` beside a run — `cargo xtask check-atomic-spawn` refuses it.
+
+A workflow reaches the deadline scheduler and `POST /admin/migrations` through
+its `WorkflowDriver`, registered once in its crate's `EngineModule::drivers()`.
+`orchestrator/deadline_dispatch.rs` builds its name→driver map from
+`production_modules()`; do not add a second name→type table — look the driver up
+by name.
+
+## Deadlines
+
+A fired deadline takes one path: `deadline_dispatch` → `Process::run_timeout` →
+the workflow's `on_deadline`. Each workflow owns its labels in
+`Workflow::DEADLINE_LABELS`; the engine refuses to persist any other label
+except a delivery window (`mako_fristen::is_delivery_window`), which the outbox
+worker retires on delivery and the dispatcher only alerts on. Deadlines are never
+cancelled, so every one fires on the healthy path too — `on_deadline` and the
+`TimeoutExpired` arm both ask the same `window_open` guard. A lapse with no
+sourced default outcome ends in `FristAbgelaufen`, not an invented answer.
+`tests/it/deadline_labels.rs` pins all of this.
+
 ## Feature Flags
 
 The `slatedb` feature is enabled at the `makod` level via its dependency on
@@ -56,7 +83,7 @@ for a flag `apply_config_file` never reads.
 
 ## Health Checks
 
-`GET /health` is mounted on every enabled server port. It must return `200 OK` before the process is considered ready. Do not add business-logic checks to the health endpoint — keep it shallow (process alive + stores reachable).
+`/health/live`, `/health/ready` and `/health` (alias of ready) are mounted on every enabled port by `src/core/health.rs`. Keep them shallow: liveness is "process responds", readiness is "store reachable and no worker heartbeat stale". No business-logic checks.
 
 ## Error Handling
 
@@ -70,8 +97,11 @@ for a flag `apply_config_file` never reads.
 
 ## Integration Tests
 
-`services/makod/tests/` contains integration tests that build and run the daemon binary. These require the `testing` feature and use `InMemoryEventStore`. Run:
+Every integration test is a module of the single binary `tests/it/` (`main.rs`
+declares them). They run against `InMemoryEventStore` through the `testing`
+feature, which the dev-dependencies enable:
 
 ```bash
-cargo test -p makod --all-features
+cargo test -p makod --test it                 # the whole suite
+cargo test -p makod --test it -- deadline_labels published_counts
 ```

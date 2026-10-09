@@ -3,14 +3,10 @@ title = "ERP Integration"
 description = "Integrate your ERP with mako over CloudEvents 1.0 webhooks, the Command API and typed BO4E market data — HMAC signatures, idempotency keys, topology."
 weight = 10
 +++
-`makod` is a protocol processor, not a business system. It handles EDIFACT
-parsing, BDEW process rules, AS4 delivery, and regulatory deadlines. All
-contract data, billing logic, and master data live in your ERP.
-
-The integration contract between the two is **BO4E** — not raw EDIFACT. Your
-ERP never sees EDIFACT format versions or segment codes. When BDEW releases a
-new format version (`FV2026-10-01`), the BO4E payload your ERP receives is
-unchanged.
+`makod` handles EDIFACT, BDEW process rules, AS4 delivery and regulatory
+deadlines; contract data, billing logic and master data live in the ERP. The
+contract between them is **BO4E** — the ERP never sees EDIFACT format versions
+or segment codes, so a new BDEW format version leaves its payloads unchanged.
 
 ```
 ERP  ←─────────── BO4E JSON ───────────→  makod
@@ -19,25 +15,19 @@ ERP  ←─────────── BO4E JSON ─────────�
               EDIFACT / AS4 / BDEW network
 ```
 
-> **Master data management via `marktd`** — if you deploy the companion
-> [`marktd`](@/docs/services/marktd.md) service, configure `makod` to push process lifecycle
-> events to `marktd`'s ingest endpoint (`POST /api/v1/events`). `marktd` then
-> fans out to your registered ERP subscribers, eliminating the need to
-> configure a webhook endpoint directly in `makod`.
-
-Outbound webhook events are delivered as **[CloudEvents 1.0](https://cloudevents.io)**
-structured-mode JSON. CloudEvents is a CNCF-graduated vendor-neutral standard
-for event metadata. It is natively supported by SAP BTP, AWS EventBridge, Azure
-Event Grid, Google Eventarc, and Knative — making makod events directly
-routeable by any cloud event bus without custom glue code.
+Outbound events are **[CloudEvents 1.0](https://cloudevents.io)**
+structured-mode JSON, which SAP BTP, AWS EventBridge, Azure Event Grid, Google
+Eventarc and Knative route natively. With [`marktd`](@/docs/services/marktd.md)
+deployed, `makod` pushes its process events to `marktd`
+(`POST /api/v1/events`) and `marktd` fans them out to registered ERP
+subscribers, so no webhook needs configuring in `makod` itself.
 
 ---
 
 ## Quick-start: wire the ERP webhook in 5 minutes
 
-This is the minimum configuration to get outbound ERP notifications working.
-`makod` will POST a JSON event to your ERP endpoint every time a MaKo process
-reaches a significant state (APERAK received, process completed, etc.).
+`makod` POSTs an event to the ERP whenever a process reaches a significant
+state (APERAK received, process completed, …).
 
 **Step 1 — Generate a shared secret**
 
@@ -105,18 +95,14 @@ Body (CloudEvents 1.0 structured-mode JSON):
 }
 ```
 
-`webhook-id`, `X-Idempotency-Key` and the CloudEvent's own `id` are the same
-value — one identity, not three headers that can disagree. `webhook-id` is what
-the signature covers; `X-Idempotency-Key` is what a signature-less deployment
-deduplicates on, and is sent unconditionally.
+`webhook-id`, `X-Idempotency-Key` and the CloudEvent `id` are the same value.
+`webhook-id` is what the signature covers; `X-Idempotency-Key` is sent
+unconditionally, for a deployment without a secret.
 
 **Step 4 — Verify the signature**
 
-mako signs with [Standard Webhooks]. **Use a library** — there is one for every
-language an ERP is written in, and it will get the parts below right. The manual
-implementation is here so you can see what it does, not as a recommendation.
-
-Three things must all hold:
+mako signs with [Standard Webhooks]. **Use a library**; the code below shows
+what one checks. All three must hold:
 
 1. The signature matches `base64(HMAC-SHA256(secret, "{id}.{timestamp}.{body}"))`.
    Note it covers the id and the timestamp, **not the body alone**.
@@ -170,24 +156,18 @@ function verifyMakoWebhook(body: Buffer, secret: string, headers: Record<string,
 }
 ```
 
-> CloudEvents deliberately excludes signing from its specification — signing
-> semantics vary by use case. [Standard Webhooks] is the security layer mako
-> puts on top of it.
-
-> **Key rotation.** `webhook-signature` is a space-separated list. mako's own
-> senders currently emit a single `v1` entry, but its *verifier*
-> (`mako_service::webhook::verify_signature`) accepts any matching entry and
-> skips entries of another version — so implement your receiver the same way and
-> a secret can later be rotated without a flag-day across every integration.
+> **Key rotation.** `webhook-signature` is a space-separated list. mako emits
+> one `v1` entry; its own verifier (`mako_service::webhook::verify_request`)
+> accepts any matching entry and skips other versions. Implement the receiver
+> the same way so a secret can be rotated without a flag-day.
 
 [Standard Webhooks]: https://www.standardwebhooks.com/
 
 **Step 5 — Return `HTTP 200` for duplicates**
 
-`makod` retries on any non-2xx response. Your endpoint **must** persist
-`idempotency_key` and return `200 OK` for duplicate deliveries without
-re-processing. Any `4xx` except `429` is treated as a permanent error and the
-message is dead-lettered.
+`makod` retries on `429`, `5xx` and network errors; any other `4xx` is
+permanent and dead-letters the message. Persist the id and answer a duplicate
+with `200 OK` without re-processing.
 
 ---
 
@@ -199,7 +179,6 @@ message is dead-lettered.
 | ERP → makod | `POST /api/v1/commands` | Initiate a MaKo process (Lieferbeginn, Gerätewechsel, …) |
 | ERP → makod | `PUT /admin/malo/{malo_id}` | Push MaLo master data to the local cache |
 | ERP → makod | `PUT /admin/partners/{mp_id}` | Register or update a trading-partner endpoint |
-| ERP → makod | `ErpCommandSource` trait | Fully event-driven inbound (Kafka, SFTP, CDC, …) |
 | marktd → invoicd | `POST /webhook` CloudEvents | GPKE/WiM billing notifications for automatic plausibility check |
 | invoicd → makod | `POST /api/v1/commands` | the answering PID's accept/reject command (`gpke.abrechnung.*`, `wim.*`, `gabi.*`, `geli.*`, `invoic.*`) |
 | invoicd → ERP | `de.invoic.receipt.settled/disputed` CloudEvents | Durable at-least-once payment notifications |
@@ -214,10 +193,8 @@ message is dead-lettered.
 
 ### ERP-facing integration topology
 
-The services below are the ones an ERP integration touches directly. They are a
-selection, not the whole platform — see [Architecture — Service
-topology](@/docs/architecture/_index.md#service-topology) for all 17 services and
-how they relate.
+The services an ERP integration touches directly; the full mesh is in
+[Service topology](@/docs/architecture/_index.md#service-topology).
 
 ```mermaid
 graph TB
@@ -255,11 +232,9 @@ graph TB
     ERP -.->|"GET /open-items<br/>GET /trial-balance"| accountingd
 ```
 
-Every `de.mako.*` event from `makod` flows through `marktd`'s durable fan-out,
-which is persist-before-fan-out: the event lands in the durable `event_log`
-outbox before any delivery, and each per-subscriber delivery is tracked (retried,
-then dead-lettered) in `event_delivery` so no regulatory notification is lost —
-even across a crash.
+`marktd`'s fan-out is persist-before-fan-out: an event lands in `event_log`
+before any delivery, and each per-subscriber delivery is tracked, retried and
+dead-lettered in `event_delivery`.
 
 ### Delivery pipeline
 
@@ -276,42 +251,27 @@ graph TB
     AS4 --> CP["BDEW counterparty"]
 ```
 
-Events and outbox entries are written atomically. If `makod` crashes between
-the two writes, the event is replayed on restart and the outbox entry is
-re-enqueued — no lost APERAK.
-
-The two workers are independent on purpose: an ERP that is down cannot delay an
-APERAK to a market partner, and a counterparty that is unreachable cannot stall
-the ERP feed.
+Events and outbox entries land in one `WriteBatch`, so there is no state with
+one and not the other. The two workers are independent: an ERP that is down
+cannot delay an APERAK, and an unreachable counterparty cannot stall the ERP
+feed.
 
 #### The payload-key seam
 
-An outbox entry is a **bare string plus untyped JSON**. A domain workflow writes
-`PendingOutbox::new("GabiFinalAllocationOverdue", recipient, json!({…}))`, and
-`map_message_type_to_erp_event` in `makod/src/core/erp_adapter.rs` reads that
-string back to pick an `ErpEventType`. Nothing in the type system links the two:
-renaming the constant on either side compiles cleanly and turns the notification
-into an unrecognised type the worker silently skips.
+An EDIFACT outbox entry carries a typed payload from `mako_engine::payload`
+(`AperakPayload`, `UtilmdPayload`, …), so producer and renderer share one
+struct. An **ERP notification** entry is still a `message_type` string plus
+JSON: a workflow writes
+`PendingOutbox::new("GabiFinalAllocationOverdue", recipient, json!({…}))` and
+`map_message_type_to_erp_event` (`services/makod/src/core/erp_adapter.rs`) reads
+the string back to pick an `ErpEventType`. Keys inside `data` — `gas_day`,
+`tx_id`, `zustimmung` — are a convention between writer and consumer.
 
-The same holds one level down, for the `data` payload. Keys such as `gas_day`,
-`tx_id` or `zustimmung` are agreed by convention between the crate that writes
-them and the consumer that reads them — `billingd`'s
-`POST /api/v1/webhooks/vpp-dispatch` for the VPP payload, `processd` for the
-Abmeldeanfrage one. A `serde` struct on the reading side does not fail on a
-renamed key; it reads `None`.
-
-Two tests hold the seam where it has broken before:
-`every_enqueued_message_type_maps_to_a_cloud_event` enumerates every
-`message_type` a workflow enqueues and asserts each resolves, and
-`the_gabi_overdue_notification_carries_the_alocat_missing_type` pins the one
-mapping an agent subscribes to by name. **When you add an outbox message type,
-add it to that list** — a type absent from both is delivered to nobody and
-reports nothing.
-
-### Event types
-
-See the event type table in the [CloudEvents envelope schema](#cloudevents-envelope-schema)
-section below.
+`every_enqueued_message_type_maps_to_a_cloud_event` asserts that every
+`message_type` a workflow enqueues resolves, and
+`the_gabi_overdue_notification_carries_the_alocat_missing_type` pins the mapping
+an agent subscribes to by name. **When you add an ERP message type, add it to
+that list** — an unmapped type is delivered to nobody.
 
 ### PID → event mapping
 
@@ -332,9 +292,8 @@ section below.
 
 ### `invoicd` payment CloudEvents
 
-After each validated INVOIC, `invoicd` emits **payment CloudEvents** directly to
-your ERP webhook when `[erp] webhook_url` is configured in `invoicd.toml`.
-These events enable **accounts-payable automation** without polling the REST API.
+After each checked INVOIC, `invoicd` posts payment CloudEvents to the ERP when
+`[erp] webhook_url` is set in `invoicd.toml`.
 
 | Type | Trigger | Use case |
 |---|---|---|
@@ -342,40 +301,21 @@ These events enable **accounts-payable automation** without polling the REST API
 | `de.invoic.receipt.disputed` | Invoice rejected | Flag for manual review |
 | `de.invoic.receipt.dispatched` | Self-issued 31006 sent | Track self-issued invoice |
 
-Every checked invoice is announced, accepted or disputed. The `dispatched` field
-says whether the market answer actually went out — a settled invoice whose
-REMADV never left is not one to pay against.
+The `dispatched` field says whether the market answer went out — do not pay
+against a settled invoice whose REMADV never left.
 
 Payment events use `source: "urn:mako:invoicd:tenant:{tenant}"` and `subject: "{process_id}"`.
 
-**Delivery guarantee — durable at-least-once:**
-The first attempt runs inline after the market answer is dispatched. On any
-failure (transport error, HTTP 5xx), the outbox worker retries with backoff
-(30 s → 5 min → 30 min → 2 h → dead-letter after 5 attempts). HTTP 4xx is
-dead-lettered immediately — the ERP rejected these exact bytes. Batches are
-claimed with a lease, so replicas do not double-deliver. Track delivery via
-`invoic_receipts.erp_notified_at` and the `invoicd_erp_dead_lettered_total`
-gauge.
+**Durable at-least-once.** The first attempt runs inline after the market
+answer is dispatched; a transport error or `5xx` is retried (30 s → 5 min →
+30 min → 2 h, dead-lettered after 5 attempts); a `4xx` dead-letters at once.
+Batches are claimed with a lease. Track `invoic_receipts.erp_notified_at` and
+the `invoicd_erp_dead_lettered_total` gauge.
 
 **Request signing:** when `[erp] hmac_secret` is configured, every POST includes
 [Standard Webhooks] headers computed over `{webhook-id}.{webhook-timestamp}.{body}`.
 
-### Request format
-
-```
-POST <erp_webhook_url>
-Content-Type: application/cloudevents+json
-webhook-id:        <event.id>                     ← dedup key; always sent
-webhook-timestamp: <unix seconds>                 ← only when a secret is set
-webhook-signature: v1,<base64>                    ← only when a secret is set
-```
-
-Body is a **CloudEvents 1.0 structured-mode JSON** object (see below).
-
 ### CloudEvents envelope schema
-
-All outbound webhook events are **[CloudEvents 1.0](https://cloudevents.io)
-structured-mode JSON** with `Content-Type: application/cloudevents+json`.
 
 **Required CloudEvents attributes:**
 
@@ -406,8 +346,7 @@ structured-mode JSON** with `Content-Type: application/cloudevents+json`.
 
 **`data` field:**
 
-BO4E-typed JSON object. Deserialise using the ERP's own BO4E library.
-`null` when no primary BO4E object applies (e.g. `de.mako.contrl.received`).
+A BO4E object, or `null` where none applies (e.g. `de.mako.contrl.received`).
 
 **Event type → CloudEvents `type` mapping:**
 
@@ -421,43 +360,16 @@ BO4E-typed JSON object. Deserialise using the ERP's own BO4E library.
 | `de.mako.process.completed` | Lieferbeginn/Lieferende confirmed | `Marktlokation` + `Vertrag` |
 | `de.mako.process.failed` | Fatal error / regulatory deadline exceeded | `Marktlokation` |
 | `de.mako.malo.identified` | MaLo-ID lookup resolved | `Marktlokation` |
-| `de.mako.abmeldeanfrage.beantwortet` | The LFA answered the NB's Anfrage zur Beendigung der Zuordnung (55010/55011/55012) — **or its 09:00 window lapsed**, which GPKE Teil 2 § 2.1.2 Nr. 4 reads as a Zustimmung. `processd` resumes the *Anmeldung* decision on it (`E_0623` Prüfschritte 30–50) | `{pid, malo_id, grid_operator, lfa_mp_id, anmeldung_process_id, zustimmung, fristablauf}` plus `antwortcode`, `grund` and `zuordnungsende` when the LFA named them |
-| `de.vpp.dispatch.confirmed` | WiM Steuerungsauftrag (PID 55168) positively confirmed by MSB — triggers VPP auto-billing in `billingd`. Only for `Konfiguration` (load-reduction) commands, never for `InitialZustand` resets | `{tx_id, location_id, location_type, max_power_kw, execution_time_from, execution_time_until, command_type, sender_mp_id, produkt_code}` |
-| `de.gabi.alocat.missing` | § 47 Ziffer 1 KoV XV final-allocation window (M+14 Werktage) closed with no binding final ALOCAT — the gas day's imbalance cannot be settled; open a Clearingfall with the FNB/MGV | `{gas_day, deadline_label, sender_eic, receiver_eic, pruefidentifikator}` |
-| `de.gabi.nomination.curtailed` | The FNB/MGV confirmed less than was nominated — NOMRES states no status, so the shortfall shows up only as a reduced quantity; the portfolio is short until the BKV re-nominates or buys the gap | `{gas_day, nominated_kwh, confirmed_kwh, curtailed_kwh, sender_eic, receiver_eic, pruefidentifikator, nomination_ref}` |
+| `de.mako.abmeldeanfrage.beantwortet` | The LFA answered the NB's Anfrage zur Beendigung der Zuordnung (55010/55011/55012), or its 09:00 window lapsed — a Zustimmung per GPKE Teil 2 § 2.1.2 Nr. 4. `processd` resumes the Anmeldung decision on it | `{pid, malo_id, grid_operator, lfa_mp_id, anmeldung_process_id, zustimmung, fristablauf}` plus `antwortcode`, `grund` and `zuordnungsende` when the LFA named them |
+| `de.vpp.dispatch.confirmed` | MSB positively confirmed a WiM Steuerungsauftrag (PID 55168) of type `Konfiguration` — triggers VPP auto-billing in `billingd` | `{tx_id, location_id, location_type, max_power_kw, execution_time_from, execution_time_until, command_type, sender_mp_id, produkt_code}` |
+| `de.gabi.alocat.missing` | The § 47 Ziffer 1 KoV XV final-allocation window (M+14 Werktage) closed with no final ALOCAT on file; open a Clearingfall with the FNB/MGV | `{gas_day, deadline_label, sender_eic, receiver_eic, pruefidentifikator}` |
+| `de.gabi.nomination.curtailed` | The FNB/MGV confirmed less than was nominated; the portfolio is short until the BKV re-nominates or buys the gap | `{gas_day, nominated_kwh, confirmed_kwh, curtailed_kwh, sender_eic, receiver_eic, pruefidentifikator, nomination_ref}` |
 | `de.gabi.nomination.rejected` | The FNB/MGV refused the nomination; nothing flows on it | `{gas_day, reason, nominated_kwh, sender_eic, receiver_eic, pruefidentifikator, nomination_ref}` |
 | `de.gabi.nomres.missing` | The KoV NOMRES window closed unanswered, so the nomination's status is unknown at gas-day start | `{gas_day, deadline_label, sender_eic, receiver_eic, pruefidentifikator, nomination_ref}` |
 
-**Full example:**
-
-```json
-{
-  "specversion": "1.0",
-  "id": "01932a4f-7b3e-4c5d-8f6a-9e0b1c2d3e4f",
-  "source": "urn:mako:makod:tenant:9900357000004",
-  "type": "de.mako.aperak.accepted",
-  "time": "2026-10-01T10:15:00+02:00",
-  "subject": "018f3a2b-...",
-  "dataschema": "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.1.0/src/bo4e_schemas/bo/Marktlokation.json",
-  "datacontenttype": "application/json",
-  "makoconvid": "...",
-  "makocausationid": "...",
-  "makopid": 55001,
-  "data": {
-    "_typ": "MARKTLOKATION",
-    "_version": "202501",
-    "marktlokationsId": "51238696799",
-    "sparte": "STROM",
-    "bilanzierungsmethode": "SLP",
-    "energierichtung": "VERBRAUCH",
-    "netzbetreibercodenr": "9900357000004"
-  }
-}
-```
-
 ### Retry and back-off
 
-`makod` retries failed webhook deliveries with **exponential back-off**:
+`OutboxErpWorker` retries with exponential back-off:
 
 | Attempt | Delay |
 |---|---|
@@ -478,35 +390,16 @@ HTTP response codes:
 | `5xx` | Transient — rescheduled with back-off |
 | Network timeout / error | Transient — rescheduled with back-off |
 
-### Signature verification
-
-When `--erp-webhook-secret` is set, every POST includes:
-
-```
-webhook-signature: v1,<base64 HMAC-SHA256 of {id}.{timestamp}.{raw body}>
-```
-
-The header is a space-separated list — accept if any entry matches, which is what
-makes key rotation possible. The key is the UTF-8 encoding of the
-shared secret. **Always use a constant-time comparison** (e.g. `hmac.compare_digest`
-in Python, `crypto.timingSafeEqual` in Node.js) to prevent timing attacks.
-
 ### No-secret mode
 
-If `--erp-webhook-secret` is omitted, all three Standard Webhooks headers are
-omitted — `webhook-id` included, because the id, the timestamp and the signature
-are produced together by `mako_service::webhook::headers` and only make sense as
-a set. `X-Idempotency-Key` carries the same value unconditionally, so dedup on
-that and your receiver works either way.
-
-**Do not use no-secret mode in production.** Use it only in local development
-with loopback-only ERP endpoints.
+Without `--erp-webhook-secret` all three Standard Webhooks headers are omitted
+(`mako_service::webhook::headers` produces them as a set); dedup on
+`X-Idempotency-Key`. Use this only in local development.
 
 ### `LogErpAdapter` (development / logging only)
 
-When `--erp-webhook-url` is not set, `makod` falls back to `LogErpAdapter`
-which emits every event at `INFO` level. Useful for verifying event flow
-during development without a running ERP.
+Without `--erp-webhook-url`, `makod` uses `LogErpAdapter`, which logs every
+event at `INFO`:
 
 ```
 INFO mako::erp: ErpAdapter: event logged (no delivery configured)
@@ -517,9 +410,8 @@ INFO mako::erp: ErpAdapter: event logged (no delivery configured)
     pid=55001
 ```
 
-> `event_type` in the log line is `ErpEventType::label()` — a short snake_case
-> key intended for log filters and metric labels. The CloudEvents wire `type`
-> (`de.mako.aperak.accepted`) is only set when delivering via `WebhookErpAdapter`.
+`event_type` is `ErpEventType::label()`, the snake_case key for logs and
+metrics; the wire `type` is set only by `WebhookErpAdapter`.
 
 ---
 
@@ -527,13 +419,10 @@ INFO mako::erp: ErpAdapter: event logged (no delivery configured)
 
 ### REST (`POST /api/v1/commands`)
 
-Submit a **command envelope** to trigger a MaKo process: the dotted command
-name, the Marktrolle issuing it, and a command-specific `payload`. `makod`
-resolves the PID from the command and the process context.
-
-The envelope is *not* a bare BO4E object. Most GPKE/GeLi commands need only the
-MaLo-ID and the process date — the engine resolves the NB, the MSB and the MeLo
-data from its own master-data cache, so an ERP does not repeat them:
+A **command envelope** carries the dotted command name, the issuing
+Marktrolle and a command-specific `payload`; `makod` resolves the PID. Most
+GPKE/GeLi commands need only the MaLo-ID and the process date — NB, MSB and
+MeLo come from the master-data cache:
 
 ```http
 POST /api/v1/commands
@@ -557,9 +446,7 @@ single-role command it is inferred from the name. Never include
 `sender_party_id`, `receiver_party_id`, `pruefidentifikator` or `message_ref` —
 those are engine-owned.
 
-A **billing** command carries a BO4E object in `payload` instead, because there
-the invoice *is* the master data and there is no cache entry to resolve it
-from:
+A **billing** command carries a BO4E object in `payload`:
 
 ```json
 {
@@ -576,10 +463,8 @@ from:
 }
 ```
 
-`_version` is the wire spelling — `202607.1.0`, with no `v`. mako reads the
-**series** (`202607`), so a producer one BO4E patch ahead is accepted rather
-than refused; it is not required in the payload at all, because mako parses with
-its own generated types regardless of what a request claims.
+`_version` is optional and spelt without a `v` (`202607.1.0`); mako reads the
+series (`202607`), so a producer one patch ahead is accepted.
 
 **Response** — `202 Accepted`:
 
@@ -595,41 +480,24 @@ its own generated types regardless of what a request claims.
 
 #### What `Idempotency-Key` does
 
-The header is **required** — a request without one is rejected with `422
-missing_idempotency_key`. Use one stable value per business request (your ERP
-order or correlation ID), not one per attempt and not one per session.
-
-`makod` stores the accepted response under the key for **24 hours** and replays
-it verbatim on a retry: the same `202`, the same `process_id`, and no second
-dispatch. A client that lost the reply to a timeout can simply send the request
-again.
-
-The key is bound to the request it was first used with. Sending the same key
-with a *different* command or payload is refused with `422
-idempotency_key_reuse` rather than answered with the first request's
-`process_id` — which is what catches an ERP that generates one key per session
-instead of one per order.
+The header is **required** (`422 missing_idempotency_key` without it). Use one
+stable value per business request — your ERP order or correlation ID. `makod`
+stores the accepted response for **24 hours** and replays it verbatim on a
+retry, with no second dispatch. The same key with a *different* command or
+payload is `422 idempotency_key_reuse`.
 
 ```json
 // 422 — the key already belongs to a different request.
 { "error": "idempotency_key_reuse", "detail": "…" }
 ```
 
-A storage failure on the lookup answers `503 idempotency_unavailable`: "I could
-not tell whether this already ran" is not a licence to run it again. Retry.
+A storage failure on the lookup is `503 idempotency_unavailable` — retry.
 
-The record covers **exact retries**. The stronger guard is the business-level
-one underneath it, which no idempotency scheme can replace: a second `anmelden`
-while a process is still active for the same business key is refused with `409
-duplicate_process` even under a *fresh* key, and that response carries the
-existing `process_id`.
-
-The practical consequence for a client: **treat `409 duplicate_process` as
-success.** It means your earlier attempt took effect and names the process it
-created — adopt the `process_id` and carry on. Distinguish it from the other
-409, `invalid_state`, which means the command is not legal in the process's
-current state and carries no `process_id`; that one is a real error and
-retrying it will fail identically.
+Beneath the key sits the business-level guard: a second `anmelden` while a
+process is active for the same business key is `409 duplicate_process` even
+under a fresh key, carrying the existing `process_id`. **Treat it as success**
+and adopt the `process_id`. The other 409, `invalid_state`, is a real error and
+carries none.
 
 ```json
 // 409 — your retry already succeeded. Adopt the process_id.
@@ -639,25 +507,11 @@ retrying it will fail identically.
 { "error": "invalid_state", "detail": "cannot bestaetigen a process in state Abgeschlossen" }
 ```
 
-The guard is scoped to a process that is still **running**, and to one process
-family. A GPKE Lieferbeginn the NB rejected is finished, so the corrected
-Anmeldung that follows is accepted as a new process — a rejection never retires
-the MaLo. The same holds across the other families: an executed Sperrung does
-not block the Entsperrung that follows, a completed Gerätewechsel does not block
-the next meter change, and a delivered or cancelled ESA Wertebestellung does not
-block a new order. A concurrent process of a *different* family on the same MaLo
-was always allowed and still is.
-
-Whether a given state still holds the MaLo is declared per workflow, so the two
-answers a client can get — `202` or `409 duplicate_process` — follow from the
-process's replayed state rather than from bookkeeping.
-
-Keys are per-command-instance, not per-lifetime: derive them from the business
-event (MaLo *and* the process date), not from the MaLo alone, so that a genuine
-second Lieferbeginn is not mistaken for a replay of the first.
-
-The separate `InboxStore` dedup window applies to inbound **AS4** messages, not
-to this API.
+The guard covers a **running** process of the same family only, decided from
+the process's replayed state: a rejected Anmeldung does not block the corrected
+one, an executed Sperrung does not block the Entsperrung, and a process of a
+different family on the same MaLo is allowed. Derive keys from the business
+event (MaLo *and* process date), not the MaLo alone.
 
 **BO4E `_typ` → PID mapping:**
 
@@ -669,35 +523,13 @@ to this API.
 | `ZAEHLER` (Geräteübernahme) | `MSB` | WiM ORDERS 17001/17002 |
 | `RECHNUNG` | `BKV` | MABIS 13003 |
 
-### Event-driven inbound (`ErpCommandSource`)
-
-For ERP systems with a message bus, implement `ErpCommandSource` to feed BO4E
-business objects into the engine without polling:
-
-```rust
-pub trait ErpCommandSource: Send + Sync + 'static {
-    async fn next(&self) -> Result<Option<InboundErpCommand>, ErpAdapterError>;
-    async fn ack(&self, id: &str) -> Result<(), ErpAdapterError>;
-    async fn nack(&self, id: &str, reason: &str) -> Result<(), ErpAdapterError>;
-}
-```
-
-Register at startup:
-
-```rust
-EngineBuilder::new()
-    .with_erp_command_source(Arc::new(MyKafkaSource::new(&config)))
-    .build()
-```
-
 ---
 
 ## MaLo master data cache
 
 `makod` answers `POST /maloId/request/v1` (BDEW API-Webdienste Strom) from a
-local cache. The ERP is the authoritative master — keep the cache current.
-
-### Upsert a MaLo
+local cache; the ERP is the authoritative master. The body wraps a BDEW
+`MaloIdentResultPositive` (the `energy-api` model):
 
 ```http
 PUT /admin/malo/51238696799
@@ -705,20 +537,15 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "malo_id": "51238696799",
-  "metering_point_operator": "9904357000003",
-  "grid_operator": "9900357000004",
-  "network_area": "DE-NET-001",
-  "address": {
-    "street": "Musterstraße", "house_number": "42",
-    "postal_code": "10115", "city": "Berlin", "country_code": "DE"
-  }
+  "result": { "dataMarketLocation": { "maloId": "51238696799", … }, … },
+  "valid_from": "2026-10-01",
+  "source": "erp-sync"
 }
 ```
 
-Trigger this from the ERP on contract activation, address change, and contract
-end. Call on every grid assignment change — wrong grid-operator routing is a
-common source of APERAK rejections.
+Push it on contract activation, address change, contract end and every grid
+assignment change — a wrong grid operator is a common cause of APERAK
+rejections.
 
 ### Cache admin
 
@@ -737,7 +564,7 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "gln": "9900000000001",
+  "mp_id": "9900000000001",
   "display_name": "Stadtwerke Beispiel GmbH",
   "channels": [
     { "qualifier": "AK", "address": "https://partner.example/as4/inbox" }
@@ -759,9 +586,6 @@ Content-Type: text/plain; charset=utf-8
 ---
 
 ## Receiving CloudEvents — ERP implementation guide
-
-This section shows how to implement the receiver side of the webhook in common
-languages. The same pattern works regardless of your ERP stack.
 
 ### Checklist
 
@@ -891,11 +715,8 @@ Gateway Lambda authorizer.
 
 ## Idempotency implementation notes
 
-`makod` guarantees **at-least-once delivery**: the same event may be delivered
-more than once (e.g. after a crash before the delivery was acknowledged, or
-during back-off retry). Your receiver must be idempotent.
-
-**Recommended dedup table schema (PostgreSQL):**
+Delivery is **at-least-once**, so the receiver must be idempotent. A dedup
+table (PostgreSQL):
 
 ```sql
 CREATE TABLE mako_webhook_dedup (
@@ -922,8 +743,7 @@ RETURNING id;
 
 ## Writing a custom `ErpAdapter`
 
-If the built-in `WebhookErpAdapter` does not fit (e.g. you need mTLS, a
-message-bus sink, or a proprietary ERP SDK), implement the trait directly:
+For mTLS, a message-bus sink or an ERP SDK, implement the trait:
 
 ```rust
 use mako_engine::erp::{ErpAdapter, ErpAdapterError, ErpEvent};
@@ -951,8 +771,7 @@ impl ErpAdapter for MySapAdapter {
 }
 ```
 
-Wire it in `makod/src/core/erp_adapter.rs` alongside `WebhookErpAdapter`, or inject
-it into a custom `makod` binary.
+Wire it in `services/makod/src/core/erp_adapter.rs` beside `WebhookErpAdapter`.
 
 ### Error classification contract
 
@@ -966,8 +785,6 @@ it into a custom `makod` binary.
 ---
 
 ## Configuration reference
-
-All options can be set via CLI flag, environment variable, or `makod.toml`.
 
 | CLI flag | Env var | TOML key | Default | Description |
 |---|---|---|---|---|
@@ -986,71 +803,20 @@ webhook_secret = "env:ERP_WEBHOOK_SECRET"   # read from environment at startup
 
 ## Testing
 
-`mako-engine` ships test helpers gated behind `feature = "testing"`:
-
-```toml
-[dev-dependencies]
-mako-engine = { path = "...", features = ["testing"] }
-```
-
-Available types:
-
-| Type | Purpose |
-|---|---|
-| `NoopErpAdapter` | Succeeds without delivering; use in unit tests |
-| `LogErpAdapter` | Logs at INFO; use when you want to see events in test output |
-| `NoopErpCommandSource` | Always idle; no inbound commands |
-
-Integration test pattern:
-
-```rust
-use mako_engine::erp::NoopErpAdapter;
-
-#[tokio::test]
-async fn aperak_accepted_triggers_erp_notification() {
-    let store     = InMemoryEventStore::new();
-    let outbox    = InMemoryOutboxStore::new();
-    let erp       = NoopErpAdapter;
-
-    // Build engine under test.
-    let ctx = EngineBuilder::new()
-        .with_event_store(store.clone())
-        .with_outbox_store(outbox.clone())
-        .build();
-
-    // Execute workflow step.
-    ctx.execute(tenant, workflow_id, receive_aperak_cmd()).await.unwrap();
-
-    // Assert outbox contains an ERP-targeted message.
-    let pending = outbox.pending_now(10).await.unwrap();
-    let erp_msg = pending.iter().find(|m| m.payload_schema.is_some()).unwrap();
-    assert_eq!(erp_msg.message_type, "AperakAccepted");
-}
-```
+`mako-engine`'s `testing` feature provides `NoopErpAdapter` (succeeds without
+delivering) and `LogErpAdapter` (logs at `INFO`). After a `Process::run`,
+assert on `InMemoryOutboxStore::pending_now` for the ERP-targeted entry.
 
 ---
 
 ## Why BO4E (not EDIFACT)
 
-BO4E (*Business Objects for Energy*, [bo4e.de](https://www.bo4e.de/)) is the
-open standard for energy market data models in Germany. Implementations exist
-for Python, C#, Go, Kotlin, TypeScript, and PHP — all MIT-licensed.
-
-Without BO4E an ERP adapter must understand `D_7143` segment positions,
-maintain identity translation tables, re-implement status code mappings per
-vendor, and update on every BDEW format release.
-
-With BO4E:
-- `makod` absorbs EDIFACT format changes internally.
-- The ERP receives `Marktlokation.marktlokationsId` — already the canonical
-  German MaLo ID; no translation table needed.
-- CloudEvents `type` carries reverse-DNS semantic identifiers
-  (`de.mako.aperak.accepted`, `de.mako.process.completed`) — not raw EDIFACT codes.
-- `ErpEventType::label()` provides short snake_case labels (`aperak_accepted`)
-  for structured logging and metric dimensions.
-- BO4E versioning is independent of BDEW format versions. The schema **tag**
-  is `v202607.1.0`; the `_version` a payload carries is `202607.1.0`, without the
-  `v`, and dispatch keys on the series `202607` alone.
+[BO4E](https://www.bo4e.de/) is the open German standard for energy-market
+data models, with MIT-licensed implementations for Python, C#, Go, Kotlin,
+TypeScript and PHP. `makod` absorbs EDIFACT format changes; the ERP receives
+`Marktlokation.marktlokationsId` directly and dispatches on reverse-DNS
+CloudEvents types. The BO4E schema tag is `v202607.1.0`; a payload's
+`_version` is `202607.1.0` and dispatch keys on the series `202607`.
 
 ---
 
@@ -1060,7 +826,6 @@ With BO4E:
 |---|---|---|
 | `ErpAdapter` / `ErpEvent` traits | `mako-engine/src/erp.rs` | Outbound event contract |
 | `ErpEventType` (14 variants) | `mako-engine/src/erp.rs` | `cloud_event_type()` resolves each to a `mako-events` constant; `label()` gives the snake_case log/metric key |
-| `ErpCommandSource` trait | `mako-engine/src/erp.rs` | Inbound command contract |
 | `WebhookErpAdapter` (HMAC-SHA256 signed) | `makod/src/core/erp_adapter.rs` | Delivers CloudEvents to the ERP webhook |
 | `OutboxErpWorker` (exponential back-off) | `makod/src/core/erp_adapter.rs` | At-least-once delivery with retry + dead-letter |
 | `POST /api/v1/commands` | `makod/src/orchestrator/commands_api/` | ERP-initiated process commands |
@@ -1086,18 +851,13 @@ With BO4E:
 
 ## Automated Billing Settlement
 
-A received INVOIC requires a plausibility check before settlement. `invoicd`
-covers **ten** inbound PIDs across four answer-command families — the GPKE
-Netznutzungs- and Mehr-/Mindermengen set (31001, 31002, 31005, 31006), the WiM
-pair (31003, 31009), GaBi Gas MMM (31007, 31008), and the two Sparte-neutral
-ones (31004 Storno, 31011 sonstige Leistung); the full table is in the
-[`invoicd` section of the architecture page](@/docs/architecture/_index.md#invoicd-automated-billing-settlement-8280).
-Rather than routing every
-invoice through the ERP, deploy [`invoicd`](@/docs/services/invoicd.md) as
-an autonomous sidecar. It subscribes to `de.mako.process.initiated` events from
-`marktd`, runs the `invoic-checker` pipeline, **persists every receipt to PostgreSQL**
-(a received INVOIC is a Buchungsbeleg — 8-year retention under § 147 Abs. 3 AO / § 14b UStG), and
-issues the settlement command — all without any ERP involvement.
+[`invoicd`](@/docs/services/invoicd.md) checks every received INVOIC — ten
+PIDs across four answer-command families: GPKE (31001, 31002, 31005, 31006),
+WiM (31003, 31009), GaBi Gas (31007, 31008), and the Sparte-neutral 31004
+Storno and 31011 sonstige Leistung. It subscribes to
+`de.mako.process.initiated` from `marktd`, runs `invoic-checker`, persists the
+receipt (a Buchungsbeleg — § 147 Abs. 3 AO / § 14b UStG) and issues the
+settlement command without ERP involvement.
 
 ### Full billing flow
 
@@ -1136,23 +896,18 @@ invoicd :8280
 ```
 
 **Settlement is „ganz oder gar nicht".** REMADV AHB 1.0a § 3 admits no
-Teilzahlung, so of the four REMADV Prüfidentifikatoren only **33001** confirms
-and 33002/33003/33004 are all Abweisungen: 33002 is the plain refusal that
-answers with one code (§ 3.1.1), while § 3.1.2's 33003 („Abweisung Kopf und
-Summe") and 33004 („Abweisung Position") carry a *set* of codes, one per
-disputed position. `RemadvAntwort::remadv_pid` picks between them from the shape
-of the decision tree's answer.
+Teilzahlung: only **33001** confirms; 33002 refuses with one code (§ 3.1.1),
+33003 („Abweisung Kopf und Summe") and 33004 („Abweisung Position") carry one
+code per disputed position (§ 3.1.2). `RemadvAntwort::remadv_pid` picks from the
+shape of the decision tree's answer.
 
-COMDIS **29001** is the other direction and is not part of this flow: it is the
-*invoicer's* refusal of a payer's REMADV — e.g. because the stated payment amount
-is wrong (COMDIS AHB 1.0). The same number is also the APERAK PID for a technical
-processing failure, which is a different message on a different clock.
+COMDIS **29001** is the invoicer's refusal of a payer's REMADV (COMDIS AHB 1.0)
+and not part of this flow; APERAK uses the same number for a different message.
 
 ### The plausibility pipeline
 
-`InvoicCheckEngine::check` runs eight stages in a fixed order, plus one that
-runs for a single PID, each appending to one `Vec<Finding>`. Where the order is
-load-bearing, the row says so.
+`InvoicCheckEngine::check` runs eight stages in a fixed order, plus one for a
+single PID, each appending to one `Vec<Finding>`:
 
 | # | Stage | What it verifies |
 |---|---|---|
@@ -1160,53 +915,36 @@ load-bearing, the row says so.
 | 2 | Period validity | `rechnungsperiode.startdatum` ≤ `enddatum`; line-item periods via `lieferungszeitraum` |
 | 3 | Zahlungsziel | `faelligkeitsdatum` is not before `rechnungsdatum` (dispute) and does not exceed `max_zahlungsziel_days` — 30 days by default (warn). Source: §7 Allgemeine Festlegungen V6.1d |
 | 3a | WiM 31003 send window | A Dienstleistungsrechnung dated more than 20 Werktage after the period it bills. Source: WiM Teil 1 Kap. 3.7.2 Nr. 1. Only PID 31003, and a `Warn` that does not escalate on the invoice's value |
-| 4 | Currency agreement | Runs **before** the arithmetic, which would otherwise read a CHF `Betrag` as EUR and find every later comparison consistent |
+| 4 | Currency agreement | Runs **before** the arithmetic, so a CHF `Betrag` is not compared as EUR |
 | 5 | Position arithmetic | `position.positions_menge × einzelpreis` ≈ `gesamtpreis` (within `arithmetic_tolerance`) |
 | 6 | Document total | Sum of `rechnungspositionen[*].gesamtpreis` ≈ `gesamtnetto` (within `total_tolerance`) |
 | 7 | Umsatzsteuer | The per-rate `steuerbetraege` breakdown sums to `gesamtsteuer` — the figure the recipient's Vorsteuerabzug is computed from |
 | 8 | Tariff match | Each position's unit price falls within the registered tariff band ± `tariff_tolerance`; a missing tariff entry for the MaLo + period is a finding whose severity follows `require_tariff` |
 
-**Stage 3 compares calendar dates, not timestamps.** BO4E types both fields
-`date-time` and senders pin the timestamp to midnight in their own offset, so
-subtracting two `OffsetDateTime`s measures the offsets as well as the days —
-a 30-day Zahlungsziel reads as 29 or as 30-plus-two-hours depending on who sent
-it. `rechnungsdatum_date()` and `faelligkeitsdatum_date()` take the date in the
-offset the payload carries.
-
-**Stage 8 is skipped for a Stornorechnung.** A Storno carries the negated
-original amounts, not tariff positions, so comparing them would raise a
-`TariffDeviation` dispute on every correct correction.
-
-Two checks sit beside the pipeline, entered through their own functions rather
-than by `check`: `check_mmm_settlement` (MMM invoices — PIDs 31005, 31006,
-31007, 31008 — whose `mehr_preis` / `minder_preis` positions must match the
-MMMA reference prices held in `marktd`, within tolerance) and
-`check_msb_rechnung` / `check_esa_rechnung`, which price a WiM or ESA invoice
-against a `PreisblattMessung` or the accepted Angebot.
-
-> **BO4E field names:** `Rechnungsposition` carries the line total in `gesamtpreis`
-> and the delivery period in `lieferungszeitraum`. Convenience methods
-> `.gesamtpreis_decimal()`, `.lieferung_von_date()` and `.lieferung_bis_date()`
-> bridge the structural access.
+Stage 3 compares **calendar dates** in the offset the payload carries
+(`rechnungsdatum_date()`, `faelligkeitsdatum_date()`), not timestamps. Stage 8
+is skipped for a Stornorechnung, which carries negated amounts rather than
+tariff positions. Beside the pipeline, `check_mmm_settlement` prices MMM
+invoices (31005–31008) against the MMMA reference prices in `marktd`, and
+`check_msb_rechnung` / `check_esa_rechnung` price a WiM or ESA invoice against
+a `PreisblattMessung` or the accepted Angebot.
 
 ### Payment deadline tracking (`pay_by`)
 
 `invoicd` extracts the `faelligkeitsdatum` from each `Rechnung` and stores it as
 `pay_by TIMESTAMPTZ` in `invoic_receipts`.
 
-**Approaching REMADV deadline** (`GET /api/v1/overdue-remadv`) — receipts where
-`pay_by < now() + 3 days` and the REMADV has not yet been dispatched. Poll this
-from your ERP for a rolling Zahlungsziel alert:
+**Approaching REMADV deadline** — `GET /api/v1/overdue-remadv` lists receipts
+with `pay_by < now() + 3 days` and no REMADV dispatched:
 
 ```http
 GET http://invoicd:8280/api/v1/overdue-remadv
 Authorization: Bearer ${TOKEN}
 ```
 
-**Overdue payment** (`de.invoic.payment.overdue` CloudEvent) — after REMADV is
-dispatched, the `payment_overdue` background worker (runs every 6 h) emits a
-CloudEvent to the ERP webhook when `pay_by` passes without ERP payment confirmation.
-Subscribe to trigger your accounts-payable dunning flow automatically:
+**Overdue payment** — the `payment_overdue` worker (every 6 h) emits
+`de.invoic.payment.overdue` when `pay_by` passes without a payment
+confirmation:
 
 ```json
 {
@@ -1224,8 +962,7 @@ POST http://invoicd:8280/api/v1/receipts/{id}/confirm-payment
 
 ### Tariff seeding
 
-Price sheets (`PreisblattNetznutzung`) are managed in `marktd`, not in `invoicd`.
-Upload a price sheet to make it available for the plausibility check:
+Price sheets (`PreisblattNetznutzung`) live in `marktd`:
 
 ```bash
 curl -X PUT http://marktd:8180/api/v1/preisblaetter/9904234560001 \
@@ -1234,19 +971,7 @@ curl -X PUT http://marktd:8180/api/v1/preisblaetter/9904234560001 \
   -d @preisblatt_netznutzung.json   # rubo4e::current::PreisblattNetznutzung (BO4E v202607)
 ```
 
-`invoicd` fetches the price sheet from `marktd` at check time (1-hour TTL cache,
-circuit breaker: 3 failures → 30 s open). No static tariff file or in-process
-store is needed.
-
-### ERP involvement
-
-With `invoicd` deployed, the ERP's billing integration is narrowed to:
-
-1. Uploading the price sheet to `marktd` when rates change — `invoicd` fetches it
-   from there at check time.
-2. Receiving `de.mako.process.completed` (settlement confirmed) or
-   `de.mako.process.failed` (manual review required) events from `marktd`
-   to update the ERP's payment status.
-
-No ERP webhook response is required for the settlement decision itself — that is
-handled end-to-end between `invoicd`, `makod`, and the counterparty AS4 channel.
+`invoicd` fetches it at check time (1-hour TTL cache, circuit breaker: 3
+failures → 30 s open). The ERP's part is uploading price sheets when rates
+change and consuming `de.mako.process.completed` / `de.mako.process.failed`;
+the settlement decision needs no ERP response.

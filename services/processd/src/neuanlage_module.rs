@@ -431,9 +431,9 @@ mod tests {
 
     /// A Veräußerungsform outside the published four opens the case anyway.
     ///
-    /// It used to reach the INSERT verbatim, and `veraeusserungsform` is a
-    /// `CHECK`-constrained column — so Postgres refused the whole statement and
-    /// the LF's Anmeldung was never answered. Silence on a regulated process is
+    /// `veraeusserungsform` is a `CHECK`-constrained column, so passing the
+    /// value to the INSERT verbatim would make Postgres refuse the whole
+    /// statement and leave the LF's Anmeldung unanswered. Silence on a regulated process is
     /// worse than a case missing one field.
     #[test]
     fn an_unknown_veraeusserungsform_does_not_sink_the_case() {

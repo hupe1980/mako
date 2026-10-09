@@ -179,22 +179,37 @@ pub enum GeliGasLfAnmeldungState {
     Pending(GeliGasLfAnmeldungData),
     /// GNB accepted — supply confirmed (Bestätigung received).
     Active(GeliGasLfAnmeldungData),
-    /// GNB rejected or deadline expired.
+    /// GNB rejected.
     Rejected {
         /// Human-readable rejection reason.
         reason: String,
     },
     /// Supply activated (end state for 44001 Lieferbeginn).
     Completed(GeliGasLfAnmeldungData),
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// GeLi Gas 3.0 Kap. 3.2.3 gives the GNB its answer window on the Anmeldung and no consequence of the GNB missing it. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<GeliGasLfAnmeldungState>,
+    },
 }
 
 impl mako_engine::workflow::OccupiesBusinessKey for GeliGasLfAnmeldungState {
     fn occupies_business_key(&self) -> bool {
         match self {
+            // A lapsed window leaves the Vorgang open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
             // Awaiting the counterparty inside its published window, or supply
             // confirmed and running.
             Self::Pending(_) | Self::Active(_) => true,
-            // `Rejected` (GNB refusal or deadline) and `Completed` are terminal;
+            // `Rejected` (GNB refusal) and `Completed` are terminal;
             // a corrected Gas Anmeldung after a rejection is a normal flow.
             Self::New | Self::Rejected { .. } | Self::Completed(_) => false,
         }
@@ -209,6 +224,16 @@ impl GeliGasLfAnmeldungState {
             Self::Active(_) => "Active",
             Self::Rejected { .. } => "Rejected",
             Self::Completed(_) => "Completed",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -298,27 +323,39 @@ impl CommandPayload for GeliGasLfAnmeldungCommand {}
 /// *Vorlauffrist*, not the GNB's answer window.
 pub struct GeliGasLfAnmeldungWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The GNB's answer window is open while the Anmeldung waits for it
+/// (`Pending`).
+fn window_open(label: &str, state: &GeliGasLfAnmeldungState) -> bool {
+    label == GNB_RESPONSE_WINDOW_LABEL && matches!(state, GeliGasLfAnmeldungState::Pending(_))
+}
+
 impl Workflow for GeliGasLfAnmeldungWorkflow {
     type State = GeliGasLfAnmeldungState;
     type Event = GeliGasLfAnmeldungEvent;
     type Command = GeliGasLfAnmeldungCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[GNB_RESPONSE_WINDOW_LABEL];
+
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (GNB_RESPONSE_WINDOW_LABEL, GeliGasLfAnmeldungState::Pending(_)) => {
-                Some(GeliGasLfAnmeldungCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| GeliGasLfAnmeldungCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            GeliGasLfAnmeldungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             GeliGasLfAnmeldungEvent::Initiated {
                 pruefidentifikator,
@@ -356,12 +393,11 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
                 other => other,
             },
             GeliGasLfAnmeldungEvent::DeadlineExpired { label, .. } => match state {
-                GeliGasLfAnmeldungState::Active(_)
-                | GeliGasLfAnmeldungState::Rejected { .. }
-                | GeliGasLfAnmeldungState::Completed(_) => state,
-                _ => GeliGasLfAnmeldungState::Rejected {
-                    reason: format!("GNB response deadline expired: {label}"),
+                GeliGasLfAnmeldungState::Pending(_) => GeliGasLfAnmeldungState::FristAbgelaufen {
+                    label: label.to_string(),
+                    offen: Box::new(state),
                 },
+                other => other,
             },
         }
     }
@@ -370,6 +406,10 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             GeliGasLfAnmeldungCommand::InitiateAnmeldung {
                 pid,
@@ -505,8 +545,8 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
             }
 
             GeliGasLfAnmeldungCommand::TimeoutExpired { deadline_id, label } => {
-                if !matches!(state, GeliGasLfAnmeldungState::Pending(_)) {
-                    return Err(WorkflowError::invalid_state("Pending", state.label()));
+                if !window_open(&label, lapsed) {
+                    return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(WorkflowOutput::events(vec![
                     GeliGasLfAnmeldungEvent::DeadlineExpired { deadline_id, label },

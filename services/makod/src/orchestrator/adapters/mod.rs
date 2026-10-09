@@ -971,7 +971,7 @@ fn build_position(group: &[&OwnedSegment]) -> bo4e::Rechnungsposition {
         .and_then(|s| s.component_str(0, 0))
         .and_then(|s| s.parse::<i64>().ok());
 
-    // `lokations_id` was removed in BO4E v202607; store it as positionstext.
+    // BO4E v202607 has no `lokations_id`; store it as positionstext.
     let positionstext = group
         .iter()
         .find(|s| s.tag == "LOC" && s.component_str(0, 0) == Some("172"))

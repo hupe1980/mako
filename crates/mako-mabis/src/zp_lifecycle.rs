@@ -4,11 +4,9 @@
 //!
 //! # Process overview
 //!
-//! Every process in this family has the same shape: one party sends an
-//! **Anfrage** that activates or deactivates a MaBiS-Zählpunkt for a given
-//! series, and — depending on the family — the counterparty returns an
-//! **Antwort**, after which the receiving party may forward a
-//! **Weiterleitung** to a third party.
+//! An **Anfrage** activates or deactivates a MaBiS-Zählpunkt for one series;
+//! depending on the family the counterparty returns an **Antwort** and may
+//! forward a **Weiterleitung** to a third party.
 //!
 //! ```text
 //! Anfrage ──→ (Antwort) ──→ (Weiterleitung)
@@ -51,11 +49,9 @@
 //! Vorlauffrist „1 WT **vor** dem Versand" — a different clock in the opposite
 //! direction.
 //!
-//! Only three of the six families carry an Antwort PID, and only two carry a
-//! Weiterleitung. A family without an Antwort is **record-only**: the message
-//! is validated and stored, and the process is terminal on arrival. Modelling
-//! those as request/response would manufacture a deadline the AHB never
-//! defines.
+//! A family without an Antwort is **record-only**: the message is validated
+//! and stored, and the process is terminal on arrival — request/response
+//! would manufacture a deadline the AHB never defines.
 //!
 //! # Prüfidentifikatoren
 //!
@@ -66,10 +62,8 @@
 //!
 //! ## 55062 / 55063 / 55064 are generic codes, not one process
 //!
-//! This is the trap the family table exists to close. **55062 „Aktivierung von
-//! ZP" and 55063 „Deaktivierung von ZP" are used for eleven different
-//! Summenzeitreihen.** Six of the eleven owe a 55064 „Antwort" and five are
-//! record-only, and the six are answered out of **twelve different
+//! **55062 „Aktivierung von ZP" and 55063 „Deaktivierung von ZP" are used for
+//! eleven different Summenzeitreihen**, answered out of **twelve different
 //! Entscheidungsbäumen** — a series with two directions gets one tree per
 //! direction:
 //!
@@ -87,17 +81,14 @@
 //! | tägliche Bilanzierungsgebietssummenzeitreihe | ÜNB → NB | — | — | — |
 //! | tägliche Bilanzkreissummenzeitreihe | ÜNB → BKV | — | — | — |
 //!
-//! Three consequences follow, and none of them is derivable from the PID:
+//! None of the following is derivable from the PID:
 //!
-//! - **Whether an Antwort is owed at all** varies by series. Six of the eleven
-//!   owe a 55064 and five are record-only. A model that answers "55062 → 55064"
-//!   invents five obligations; one that never answers drops six real ones.
-//! - **Which Codeliste the answer comes from** varies by series *and*
-//!   direction. A code read against the wrong tree means something else there —
-//!   the same trap `A02` sets across the GPKE trees.
-//! - **The Weiterleitung re-uses the request code.** For the four series that
-//!   have one, Prozessschritt 4 is another 55062/55063 addressed to the
-//!   downstream party, not a distinct PID.
+//! - **Whether an Antwort is owed** — six series owe a 55064, five are
+//!   record-only. Answering "55062 → 55064" invents five obligations; never
+//!   answering drops six.
+//! - **Which Codeliste the answer comes from** — per series *and* direction.
+//! - **The Weiterleitung** — Prozessschritt 4 re-uses 55062/55063, addressed to
+//!   the downstream party.
 //!
 //! [`ZpSerie`] therefore carries the series *and* its axis, and it is an
 //! explicit input: the MaBiS-Zählpunkt is created **for** one Summenzeitreihe,
@@ -921,6 +912,18 @@ pub enum ZpLifecycleState {
         /// Validation error summary.
         reason: String,
     },
+}
+
+impl mako_engine::workflow::OccupiesBusinessKey for ZpLifecycleState {
+    /// Occupied while an Antwort is owed in either direction, and while a
+    /// confirmed Anfrage may still be forwarded; settled once confirmed to the
+    /// requester, recorded, refused, forwarded or invalid.
+    fn occupies_business_key(&self) -> bool {
+        matches!(
+            self,
+            Self::AnfrageErhalten(_) | Self::AnfrageGesendet(_) | Self::Bestaetigt(_)
+        )
+    }
 }
 
 impl ZpLifecycleState {

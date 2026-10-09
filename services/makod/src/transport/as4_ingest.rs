@@ -227,7 +227,7 @@ pub struct BdewAs4IngestHandler {
     receipt_credentials: Option<As4ReceiptCredentials>,
     /// CONTRL emitter — Empfangsbestätigung and Syntaxfehlermeldung.
     ///
-    /// Per CONTRL AHB 1.0 §2.3.1 and APERAK AHB 1.0 §2.3 (Gas rules), a CONTRL
+    /// Per CONTRL AHB 1.0 §2.3.1 and APERAK AHB 1.1 §2.3 (Gas rules), a CONTRL
     /// Empfangsbestätigung is owed for every inbound Gas interchange except
     /// CONTRL-on-CONTRL. The Syntaxfehlermeldung is owed in **both** Sparten
     /// (§2.4: in Strom the CONTRL has no other use), which is why `startup`
@@ -458,33 +458,6 @@ impl As4AxumHandler for BdewAs4IngestHandler {
     }
 }
 
-// ── Dispatch failure dead-letter ──────────────────────────────────────────────
-
-/// Record a Phase-2 dispatch failure as a dead letter (§ 147 AO / GoBD).
-///
-/// A failed dispatch is the message's last chance: the AS4 dedup entry is
-/// already durable, so the sender's 72-hour retries come back as duplicates,
-/// and the synchronous receipt tells it the message arrived. Without this entry
-/// the message would simply be gone — the same reason the parse-error and
-/// unknown-PID paths dead-letter.
-fn dead_letter_dispatch_failure(
-    sink: &dyn mako_engine::dead_letter::DeadLetterSink,
-    as4_message_id: &str,
-    message_type: Option<&str>,
-    pid: mako_engine::ids::Pid,
-    workflow: &str,
-    error: &mako_engine::error::EngineError,
-) {
-    use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
-    sink.reject(&DeadLetterReason::ProcessingError {
-        message: format!("dispatch_failed: workflow {workflow}: {error}"),
-        context: AuditContext::now()
-            .with_message_type(message_type.unwrap_or(""))
-            .with_pid(pid)
-            .with_message_ref(as4_message_id),
-    });
-}
-
 // ── Router builder ────────────────────────────────────────────────────────────
 
 /// Build the Axum sub-router that mounts the BDEW AS4 inbound endpoint.
@@ -695,15 +668,12 @@ fn too_many_requests_status(status: axum::http::StatusCode) -> axum::response::R
 
 /// Per-peer-IP GCRA rate limiter for the operator-facing ports.
 ///
-/// **Deliberately not [`AS4_RATE_LIMITER`].** The REST API and the
-/// API-Webdienste port used to share the AS4 bucket, on the reasoning that a
-/// rate limit is a property of the peer rather than of the endpoint. That holds
-/// for a direct connection and breaks behind a proxy, which is the documented
-/// deployment: every client of every port arrives from the ingress address, so
-/// all three collapsed into one 100 req/s bucket. An ERP batch on `:8080` could
-/// then `429` a trading partner's AS4 delivery — and that partner's retry
-/// schedule is the thing standing between us and a missed Frist. The AS4 budget
-/// is now reserved for counterparties.
+/// **Deliberately not [`AS4_RATE_LIMITER`].** Behind a proxy — the documented
+/// deployment — every client of every port arrives from the ingress address,
+/// so a shared bucket collapses all three ports into one 100 req/s budget, and
+/// an ERP batch on `:8080` could `429` a trading partner's AS4 delivery, whose
+/// retry schedule is what stands between us and a missed Frist. The AS4 budget
+/// is reserved for counterparties.
 static OPERATOR_RATE_LIMITER: std::sync::LazyLock<
     governor::RateLimiter<
         std::net::IpAddr,
@@ -800,7 +770,7 @@ mod dispatch_failure_tests {
 
     use mako_engine::dead_letter::{DeadLetterReason, DeadLetterSink};
 
-    use super::dead_letter_dispatch_failure;
+    use crate::edifact_api::dead_letter_dispatch_failure;
 
     #[derive(Default)]
     struct CapturingSink(Mutex<Vec<(String, String)>>);
@@ -826,9 +796,10 @@ mod dispatch_failure_tests {
         let sink = CapturingSink::default();
         dead_letter_dispatch_failure(
             &sink,
-            "as4-msg-1",
-            Some("UTILMD"),
-            mako_engine::ids::Pid::new(55001),
+            mako_engine::dead_letter::AuditContext::now()
+                .with_message_type("UTILMD")
+                .with_pid(mako_engine::ids::Pid::new(55001))
+                .with_message_ref("as4-msg-1"),
             "gpke-supplier-change",
             &mako_engine::error::EngineError::Registry {
                 message: "store unavailable".to_owned(),
@@ -1227,6 +1198,34 @@ impl BdewAs4IngestHandler {
             } else {
                 (msg_id.clone(), String::new())
             };
+        // ── Syntax check of the whole Übertragungsdatei first ─────────
+        //
+        // CONTRL AHB 1.0 Kap. 1.3: one CONTRL per Übertragungsdatei, which
+        // „entweder … bestätigt oder die gesamte Übertragungsdatei
+        // zurückgewiesen" — and Kap. 1.2: on a syntax error „alle in der
+        // Übertragungsdatei enthaltenen Geschäftsvorfälle [werden] vom
+        // Empfänger nicht verarbeitet". So the file is parsed in full before
+        // any message is dispatched, and a file with a broken message beside
+        // readable ones dispatches none of them.
+        let results: Vec<Result<AnyMessage, edi_energy::Error>> = self
+            .ingest
+            .platform
+            .parse_interchange(std::io::Cursor::new(&edifact[..]))
+            .collect();
+        let broken = results.iter().filter(|r| r.is_err()).count();
+        if broken > 0 && broken < results.len() {
+            crate::edifact_api::reject_broken_interchange(
+                self.ingest.as_ref(),
+                self.contrl_ack.as_deref(),
+                &edifact,
+                &results,
+                &msg_id,
+            )
+            .await;
+            // The file arrived; the CONTRL, not the transport, says it is
+            // rejected.
+            return send_receipt();
+        }
         let mut accepted = 0usize;
         let mut rejected = 0usize;
         let mut parsed_msgs: Vec<edi_energy::AnyMessage> = Vec::new();
@@ -1236,11 +1235,7 @@ impl BdewAs4IngestHandler {
         // a fault, and an interchange-level UCI has no lower level here).
         let mut first_syntax_error = crate::contrl_ack::SyntaxFehler::UngueltigerWert;
         let mut saw_syntax_error = false;
-        for result in self
-            .ingest
-            .platform
-            .parse_interchange(std::io::Cursor::new(&edifact[..]))
-        {
+        for result in results {
             match result {
                 Err(e) => {
                     rejected += 1;
@@ -1368,11 +1363,12 @@ impl BdewAs4IngestHandler {
                                 );
                             }
                             Err(e) => {
-                                dead_letter_dispatch_failure(
+                                crate::edifact_api::dead_letter_dispatch_failure(
                                     self.ingest.dl_sink.as_ref(),
-                                    &msg_id,
-                                    message_type.as_deref(),
-                                    pid_val,
+                                    mako_engine::dead_letter::AuditContext::now()
+                                        .with_message_type(message_type.as_deref().unwrap_or(""))
+                                        .with_pid(pid_val)
+                                        .with_message_ref(&msg_id),
                                     wf_name,
                                     &e,
                                 );

@@ -22,6 +22,24 @@ pub(crate) mod core;
 ///
 /// The `sem = expr` expression is evaluated on **every validate call** —
 /// keep it cheap (function-pointer construction, not data loading).
+#[cfg(any(
+    feature = "aperak",
+    feature = "comdis",
+    feature = "iftsta",
+    feature = "insrpt",
+    feature = "invoic",
+    feature = "mscons",
+    feature = "ordchg",
+    feature = "orders",
+    feature = "ordrsp",
+    feature = "partin",
+    feature = "pricat",
+    feature = "quotes",
+    feature = "remadv",
+    feature = "reqote",
+    feature = "utilmd",
+    feature = "utilts",
+))]
 macro_rules! impl_edi_energy_message {
     // ── no semantic pack ───────────────────────────────────────────────────
     ($ty:ty) => {
@@ -47,12 +65,6 @@ macro_rules! impl_edi_energy_message {
                 release: &crate::Release,
             ) -> Result<crate::EdiEnergyReport, crate::Error> {
                 self.core.validate_against_with_semantic(release, None)
-            }
-            fn validate_with_pack(
-                &self,
-                extra: crate::CustomRulePack,
-            ) -> Result<crate::EdiEnergyReport, crate::Error> {
-                self.core.validate_with_extra_pack(None, extra.into_inner())
             }
             fn validate_on_date(
                 &self,
@@ -102,13 +114,6 @@ macro_rules! impl_edi_energy_message {
             ) -> Result<crate::EdiEnergyReport, crate::Error> {
                 self.core
                     .validate_against_with_semantic(release, Some($pack))
-            }
-            fn validate_with_pack(
-                &self,
-                extra: crate::CustomRulePack,
-            ) -> Result<crate::EdiEnergyReport, crate::Error> {
-                self.core
-                    .validate_with_extra_pack(Some($pack), extra.into_inner())
             }
             fn validate_on_date(
                 &self,
@@ -217,6 +222,7 @@ pub(super) mod common {
     /// not a checksum test, so that a transposed digit still parses and can be
     /// rejected by the domain layer with a precise error.
     #[inline]
+    #[cfg(any(feature = "mscons", feature = "utilmd",))]
     pub(super) fn is_valid_malo_id(id: &str) -> bool {
         id.len() == 11
             && id
@@ -228,6 +234,7 @@ pub(super) mod common {
     /// 33 characters, opening with a two-letter ISO 3166-1 country code and
     /// continuing with ASCII alphanumerics.
     #[inline]
+    #[cfg(any(feature = "mscons", feature = "utilmd",))]
     pub(super) fn is_valid_melo_id(id: &str) -> bool {
         id.len() == 33
             && id.bytes().take(2).all(|b| b.is_ascii_uppercase())
@@ -243,6 +250,7 @@ pub(super) mod common {
     /// scheme, so both the 11-character `MaLo` and the 33-character `MeLo` form
     /// are legal and must be accepted.
     #[inline]
+    #[cfg(any(feature = "mscons", feature = "utilmd",))]
     pub(super) fn is_valid_location_id(id: &str) -> bool {
         is_valid_malo_id(id) || is_valid_melo_id(id)
     }

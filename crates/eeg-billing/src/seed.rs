@@ -31,7 +31,7 @@
 //! - Plants commissioned **before 2023**, whose values come from their own EEG
 //!   version and are imported per plant.
 
-use crate::rounding::RoundMoney;
+use grid_billing::RoundMoney;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 use time::{Date, Month};

@@ -94,8 +94,7 @@ pub mod mako {
     // rides in `data.workflow`, and `vertragd` matches outcome *suffixes*
     // (`.bestaetigt`/`.abgelehnt`/`.completed`/…) so a future fine-grained
     // emitter would be consumed without code changes. Minting per-process
-    // constants here without an emitter would institutionalize fiction (an
-    // earlier draft carried four such test-fixture types; they were removed).
+    // constants here without an emitter would institutionalize fiction.
     /// §20 NZV Netzzugang: aggregated Übermittlungsbedarf toward the NB.
     pub const NETZZUGANG_UEBERMITTLUNGSBEDARF: &str = "de.mako.netzzugang.uebermittlungsbedarf";
 }
@@ -201,8 +200,8 @@ pub mod invoic {
 ///
 /// `agentd` additionally subscribes to the globs `de.eeg.*`,
 /// `de.eeg.anlage.*`, `de.eeg.verguetung.*`, `de.eeg.marktpraemie.*` and
-/// `de.eeg.compliance.*` (no concrete `de.eeg.compliance.*` type exists
-/// yet). There is deliberately no `de.eeg.*` catch-all subscription.
+/// `de.eeg.compliance.*` (no concrete `de.eeg.compliance.*` type exists).
+/// There is deliberately no `de.eeg.*` catch-all subscription.
 ///
 /// There is also deliberately **no generic `de.eeg.settlement.berechnet`**. A
 /// settlement announces itself as exactly one of [`eeg::VERGUETUNG_BERECHNET`] or
@@ -519,13 +518,13 @@ pub mod agent {
 /// absence of an imbalance pattern. So an emitter for any of the ten has to
 /// arrive with a subscriber, or it swaps one silence for another.
 pub mod gabi {
-    /// ⚠ phantom: no emitter yet.
+    /// ⚠ phantom: no emitter.
     pub const MEASUREMENT_RECEIVED: &str = "de.gabi.measurement.received";
-    /// ⚠ phantom: no emitter yet.
+    /// ⚠ phantom: no emitter.
     pub const ALLOCATION_COMPLETED: &str = "de.gabi.allocation.completed";
-    /// ⚠ phantom: no emitter yet.
+    /// ⚠ phantom: no emitter.
     pub const NOMINATION_CREATED: &str = "de.gabi.nomination.created";
-    /// ⚠ phantom: no emitter yet.
+    /// ⚠ phantom: no emitter.
     pub const NOMINATION_CONFIRMED: &str = "de.gabi.nomination.confirmed";
     /// The FNB/MGV confirmed **less** than was nominated.
     ///
@@ -547,13 +546,13 @@ pub mod gabi {
     /// nomination's status is unknown at gas-day start, which is an operator
     /// call rather than something to assume either way.
     pub const NOMRES_MISSING: &str = "de.gabi.nomres.missing";
-    /// ⚠ phantom: no emitter yet.
+    /// ⚠ phantom: no emitter.
     pub const IMBALANCE_CALCULATED: &str = "de.gabi.imbalance.calculated";
-    /// ⚠ phantom: no emitter yet.
+    /// ⚠ phantom: no emitter.
     pub const CORRECTION_CREATED: &str = "de.gabi.correction.created";
-    /// ⚠ phantom: no emitter yet.
+    /// ⚠ phantom: no emitter.
     pub const INVOIC_MMM_RECEIVED: &str = "de.gabi.invoic.mmm.received";
-    /// ⚠ phantom: no emitter yet.
+    /// ⚠ phantom: no emitter.
     pub const INVOIC_KAPAZITAET_RECEIVED: &str = "de.gabi.invoic.kapazitaet.received";
     /// The § 47 Ziffer 1 KoV XV final-allocation window closed with no binding final
     /// ALOCAT on file, so the gas day's imbalance cannot be settled.
@@ -565,9 +564,9 @@ pub mod gabi {
     /// (`mako_gabi_gas::allocation`). The operator's action is to open a
     /// Clearingfall with the FNB/MGV.
     pub const ALOCAT_MISSING: &str = "de.gabi.alocat.missing";
-    /// ⚠ phantom: no emitter yet.
+    /// ⚠ phantom: no emitter.
     pub const GAS_QUALITY_VIOLATION: &str = "de.gabi.quality.violation";
-    /// ⚠ phantom: no emitter yet.
+    /// ⚠ phantom: no emitter.
     pub const FINAL_ALOCAT_DEADLINE: &str = "de.gabi.alocat.final.deadline";
 }
 
@@ -899,44 +898,6 @@ mod tests {
         }
     }
 
-    /// Segments are dot-separated; multi-word segments join with `-`, never `_`.
-    ///
-    /// The catalog is a published contract, so a drifting separator means two
-    /// spellings of the same concept reach subscribers. Hyphen is the single
-    /// convention; namespaces whose domain vocabulary is German keep German
-    /// participles.
-    ///
-    /// `de.vertrag.*` is the clearest case: every event is a contract-lifecycle
-    /// fact named in the language the contract itself uses — `gekuendigt`,
-    /// `kuendigung-widerrufen`, `tarifwechsel-geplant`, `abgelaufen`. One event
-    /// used an English participle on a German noun
-    /// (`de.vertrag.preisgarantie-updated`), so a subscriber reading the
-    /// namespace had to know which of two languages each fact was named in.
-    ///
-    /// This is deliberately narrow. It is **not** a rule that every event must
-    /// be German: `de.mako.*` (EDIFACT transport), `de.gabi.*` and
-    /// `de.accounting.*` are technical or English-domain namespaces and stay
-    /// English. Nor does it merge `.updated` into `.geaendert` elsewhere —
-    /// in `de.markt.*` those are different facts (`malo.updated` is any
-    /// master-data write; `malo.stammdaten-geaendert` is a regulated GPKE
-    /// Stammdatenänderung carrying the applied patch for audit), and collapsing
-    /// them would lose a distinction the ERP relies on.
-    /// A constant nothing references must say so.
-    ///
-    /// `⚠ phantom:` marks a type the catalog declares but no service emits. A
-    /// marker only helps if it is true, and prose about which constants those
-    /// are rots faster than the constants do.
-    ///
-    /// So the annotation is checked rather than trusted: any constant not named
-    /// anywhere outside this crate must carry the marker.
-    ///
-    /// The reverse does not hold, and must not: being *named* outside this crate
-    /// is not being emitted. `de.eeg.compliance.*` is subscribed by two agentd
-    /// specialists with no emitter behind it, and several `de.gabi.*` phantoms
-    /// are named only by their own crate's unit tests. A constant may therefore
-    /// carry the marker while this test would not have demanded it — the
-    /// marker's claim is about emission, the test only catches the loudest way
-    /// to violate it.
     /// **Every declared type is in the catalogue.**
     ///
     /// `all()` is what a subscriber is checked against, what an inventory
@@ -945,12 +906,8 @@ mod tests {
     /// subscription guard refuses a pattern that matches no catalogue entry, so
     /// a specialist that should watch it *cannot be wired* — and the refusal
     /// names the pattern, which reads like a typo rather than like a gap here.
-    ///
-    /// Three of accountingd's own emitted types were in that state:
-    /// `sepa.collection-rejected`, `sepa.reversal-issued` and
-    /// `payee.verification-mismatch`. All three passed the phantom check, which
-    /// asks the opposite question — *is this referenced anywhere* — and cannot
-    /// see a constant that is emitted and uncatalogued.
+    /// The phantom check asks the opposite question — *is this referenced
+    /// anywhere* — and cannot see a constant that is emitted and uncatalogued.
     #[test]
     fn every_declared_constant_is_in_the_catalogue() {
         let src = include_str!("lib.rs");
@@ -980,6 +937,13 @@ mod tests {
         );
     }
 
+    /// A constant nothing references must say so.
+    ///
+    /// `⚠ phantom:` marks a type the catalog declares but no service emits, so
+    /// any constant not named anywhere outside this crate must carry it. The
+    /// reverse does not hold: being *named* outside this crate is not being
+    /// emitted (`de.eeg.compliance.*` is subscribed by agentd with no emitter),
+    /// so a marked constant this test would not demand is legitimate.
     #[test]
     fn unreferenced_constants_are_marked_phantom() {
         let src = include_str!("lib.rs");
@@ -1116,6 +1080,13 @@ mod tests {
         }
     }
 
+    /// Namespaces whose domain vocabulary is German keep German participles.
+    ///
+    /// `de.vertrag.*` names every contract-lifecycle fact in the contract's own
+    /// language (`gekuendigt`, `kuendigung-widerrufen`), so an English
+    /// participle on a German noun makes a subscriber guess which language each
+    /// fact uses. Technical or English-domain namespaces (`de.mako.*`,
+    /// `de.gabi.*`, `de.accounting.*`) stay English.
     #[test]
     fn german_namespaces_use_german_participles() {
         /// Namespaces whose events are named in German.

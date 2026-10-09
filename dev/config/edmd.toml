@@ -1,0 +1,35 @@
+# edmd.toml — local development: `just dev edmd` starts edmd with this file against
+# the PostgreSQL of dev/docker-compose.yml (`just infra-up`). Authentication is
+# off and the secrets are fixed strings. DO NOT use in production.
+#
+# Every key can be overridden by an environment variable — `EDMD_<KEY>`, nested
+# keys joined with `__`. `edmd --help` lists the conventions.
+
+allow_insecure_no_auth = true
+
+[http]
+addr = "127.0.0.1:8380"
+
+[database]
+url = "postgres://dev:dev@localhost:5432/edmd"
+
+[identity]
+tenant = "9900357000004"
+
+[marktd]
+url     = "http://127.0.0.1:8180"
+api_key = "dev-marktd-key"
+
+[subscription]
+webhook_url   = "http://127.0.0.1:8380/webhook"
+subscriber_id = "edmd-dev"
+
+[webhook]
+
+# A filesystem warehouse for the cold tier. Its Iceberg catalog lives in the
+# edmd database, which outlives a restart, so the warehouse must too — the
+# in-memory default leaves the catalog pointing at files that are gone. The
+# URI must be absolute, so dev/env.sh sets EDMD_ARCHIVE__STORAGE_URI to
+# dev/.data/edmd-warehouse under the checkout.
+[archive]
+enabled = true

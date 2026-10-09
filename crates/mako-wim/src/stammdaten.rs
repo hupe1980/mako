@@ -211,10 +211,23 @@ pub enum StammdatenState {
         /// ORDERS PID of the transmitted response.
         response_pid: Pruefidentifikator,
     },
-    /// Request rejected (validation failure, data unavailable, or deadline).
+    /// Request rejected (validation failure or data unavailable).
     Abgelehnt {
         /// Human-readable rejection reason.
         reason: String,
+    },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// WiM Teil 1 gives the answer window on the Stammdaten-Anforderung and no consequence of missing it. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<StammdatenState>,
     },
 }
 
@@ -234,6 +247,16 @@ impl StammdatenState {
             Self::ValidationPassed(_) => "ValidationPassed",
             Self::Uebermittelt { .. } => "Uebermittelt",
             Self::Abgelehnt { .. } => "Abgelehnt",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 }
@@ -308,10 +331,25 @@ impl CommandPayload for StammdatenCommand {}
 /// from the **requesting party's perspective** (NB receiving MSB's response).
 pub struct WimStammdatenWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the Stammdaten are still owed
+/// (`AnforderungReceived`, `ValidationPassed`).
+fn window_open(label: &str, state: &StammdatenState) -> bool {
+    label == STAMMDATEN_DEADLINE_LABEL
+        && matches!(
+            state,
+            StammdatenState::AnforderungReceived(_) | StammdatenState::ValidationPassed(_)
+        )
+}
+
 impl Workflow for WimStammdatenWorkflow {
     type State = StammdatenState;
     type Event = StammdatenEvent;
     type Command = StammdatenCommand;
+
+    const DEADLINE_LABELS: &'static [&'static str] = &[STAMMDATEN_DEADLINE_LABEL];
 
     /// Deadline compensation for the WiM Stammdaten 5-Werktage response window.
     ///
@@ -322,19 +360,19 @@ impl Workflow for WimStammdatenWorkflow {
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (
-                STAMMDATEN_DEADLINE_LABEL,
-                StammdatenState::AnforderungReceived(_) | StammdatenState::ValidationPassed(_),
-            ) => Some(StammdatenCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            }),
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| StammdatenCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            StammdatenState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             StammdatenEvent::AnforderungReceived {
                 pid,
@@ -371,10 +409,13 @@ impl Workflow for WimStammdatenWorkflow {
                 reason: reason.clone(),
             },
             StammdatenEvent::DeadlineExpired { label, .. } => match state {
-                s if s.is_terminal() => s,
-                _ => StammdatenState::Abgelehnt {
-                    reason: format!("deadline expired: {label}"),
-                },
+                StammdatenState::AnforderungReceived(_) | StammdatenState::ValidationPassed(_) => {
+                    StammdatenState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
+                }
+                other => other,
             },
         }
     }
@@ -383,6 +424,10 @@ impl Workflow for WimStammdatenWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             StammdatenCommand::ReceiveAnforderung {
                 pid,
@@ -488,7 +533,7 @@ impl Workflow for WimStammdatenWorkflow {
             }
 
             StammdatenCommand::TimeoutExpired { deadline_id, label } => {
-                if state.is_terminal() {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![StammdatenEvent::DeadlineExpired { deadline_id, label }].into())
@@ -640,9 +685,14 @@ impl Projection for StammdatenProjection {
                     *rp = Some(response_pid);
                 }
             }
-            StammdatenEvent::Abgelehnt { .. } | StammdatenEvent::DeadlineExpired { .. } => {
+            StammdatenEvent::Abgelehnt { .. } => {
                 if let StammdatenRecord::Active { status, .. } = record {
                     *status = "Abgelehnt";
+                }
+            }
+            StammdatenEvent::DeadlineExpired { .. } => {
+                if let StammdatenRecord::Active { status, .. } = record {
+                    *status = "FristAbgelaufen";
                 }
             }
         }
@@ -711,8 +761,9 @@ mod tests {
         );
     }
 
+    /// The MSB's own answer window lapsing is a Frist breach, not a rejection.
     #[test]
-    fn deadline_on_active_rejects() {
+    fn deadline_on_active_is_a_frist_breach() {
         let state = StammdatenState::default();
         let events = WimStammdatenWorkflow::handle(&state, anforderung_cmd(17132, true)).unwrap();
         let state = events.iter().fold(state, WimStammdatenWorkflow::apply);
@@ -720,12 +771,12 @@ mod tests {
             &state,
             StammdatenCommand::TimeoutExpired {
                 deadline_id: DeadlineId::new(),
-                label: "wim-stammdaten-deadline".into(),
+                label: STAMMDATEN_DEADLINE_LABEL.into(),
             },
         )
         .unwrap();
         let state = events.iter().fold(state, WimStammdatenWorkflow::apply);
-        assert!(matches!(state, StammdatenState::Abgelehnt { .. }));
+        assert!(matches!(state, StammdatenState::FristAbgelaufen { .. }));
     }
 
     #[test]

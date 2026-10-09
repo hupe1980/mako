@@ -1,89 +1,16 @@
 # mako-as4
 
-**BDEW MaKo AS4 profile — sign + encrypt with BrainpoolP256r1.**
+[![Crates.io](https://img.shields.io/crates/v/mako-as4?label=mako-as4&color=f59e0b&logo=rust)](https://crates.io/crates/mako-as4)
 
-Encodes the **BDEW AS4-Profil v1.2** requirements on top of
-[`asx-rs`](https://crates.io/crates/asx-rs), providing pre-configured
-P-Modes, security policy constants, a bilateral partner directory, and
-test helpers for the German electricity and gas AS4 network.
+The BDEW AS4-Profil v1.2 on top of [`asx-rs`](https://crates.io/crates/asx-rs):
+pre-configured P-Modes, the sign-and-encrypt security policy with
+BrainpoolP256r1, a bilateral partner directory and test PKI helpers for German
+Strom and Gas market communication.
 
----
-
-## Security policy — stricter than the AS4 baseline
-
-`bdew_mako_profile_stack()` sets `require_signature: true` and
-`require_encryption: true` per **BDEW AS4-Profil v1.2 §2.2.6.2.2**.
-
-It also declares that pair as the stack's **security floor**, which `asx-rs`
-enforces across the base and every override layer during `validate()`. A layer
-that relaxes it is rejected with `ProfileValidationCode::SecurityFloorViolation`.
-
-The floor is what makes this strict enough. The generic AS4 invariant rejects a
-layer only when it disables signing *and* encryption — a sensible baseline, but
-weaker than §2.2.6.2.2, which mandates both. Since `ProfileStack::overrides` and
-`partner_overrides` are public fields, a single partner overlay that keeps
-signing and turns encryption off is reachable by configuration, and without a
-declared floor it would validate cleanly while every message to that partner
-went out in the clear.
-
-Validation runs at startup, so a downgraded profile never serves traffic.
-
-## BDEW AS4-Profil v1.2 requirements
-
-| Requirement | Value | Spec |
-|---|---|---|
-| Transport | HTTPS + mTLS (TLS 1.2 minimum) | §2.2.1 |
-| SOAP version | 1.2 | §2.2.3 |
-| MEP | One-Way/Push (mandatory) | §2.2.5 |
-| **Signing algorithm** | **ECDSA-SHA256 + BrainpoolP256r1** | §2.2.6.2.1 / BSI TR-03116-3 §9.1 |
-| **Signing token type** | **`BinarySecurityToken` / X509PKIPathv1** | §2.2.6.2.1 |
-| **Encryption** | **ECDH-ES + ConcatKDF + AES-128-GCM — mandatory** | §2.2.6.2.2 / BSI TR-03116-3 §9.2 |
-| **Key reference** | **X509SKI** | §2.2.6.2.2 |
-| Payload | gzip-compressed, carried as `application/octet-stream` in its own MIME part; the SOAP Body stays empty | §2.2.3.2 |
-| Party ID | 13-digit GLN, ISO 6523 ICD 0088 | §2.2.4 |
-| Retry window | 72 hours, up to 5 attempts | §2.2.7 |
-| Deduplication | Required (persistent dedup store) | §4.2 |
-| Synchronous receipt | Mandatory | §4.6.3 |
-
-> **All algorithms are auto-detected** — supply an EC (BrainpoolP256r1) signing key
-> and asx-rs automatically uses ECDSA-SHA256. Supply an EC encryption certificate
-> and asx-rs automatically uses ECDH-ES + ConcatKDF + AES-128-GCM.
-
-AS4 became mandatory for electricity on **1 April 2024** (BK6-22-024) and
-for gas on **1 April 2025** (BK7-22-023).
-
----
-
-## Certificate triplet
-
-BDEW requires **three separate X.509 keypairs**, all using BrainpoolP256r1:
-
-```
-mTLS certificate         WS-Security signing cert    XML Encryption cert
-KeyUsage: digitalSig     KeyUsage: digitalSignature  KeyUsage: keyAgreement
-        ↕ mTLS                  ↕ sign payload              ↕ ECDH-ES
-   HTTPS transport          outbound messages           recipient's pubkey
-```
-
----
-
-## API overview
-
-| Module | Contents |
-|---|---|
-| `constants` | BDEW-specific service URIs, algorithm identifiers (`SIG_ALGO_ECDSA_SHA256`, `ENC_KEY_AGREEMENT_ECDH_ES`, …) |
-| `pmode` | `BdewAction` enum + `bdew_pmode()` / `bdew_pmode_sign_only()` factory functions; `WsSecOutboundKeyInfoProfile` |
-| `profile` | `BdewAs4Profile` entry point + `bdew_mako_profile_stack()` + `bdew_push_policy()` |
-| `partner_directory` | `PartnerDirectory` — GLN-to-endpoint resolution |
-| `server` *(feature)* | Axum AS4 inbound router + `bdew_router_config()` |
-| `testing` *(feature)* | `BdewTestPki`, `generate_self_signed_bdew_keypair()`, `MockAs4Endpoint` |
-
----
-
-## Quick start
+## Example
 
 ```rust
-use mako_as4::{BdewAs4Profile, BdewAction, bdew_pmode, constants};
+use mako_as4::BdewAs4Profile;
 
 // 1. Register bilateral P-Modes for each trading partner.
 let mut profile = BdewAs4Profile::new();
@@ -106,132 +33,47 @@ let push_policy = mako_as4::bdew_push_policy(Some(own_decrypt_key_pem));
 // push_policy.require_encrypted_inbound == true (rejects unencrypted inbound)
 ```
 
----
+`bdew_mako_profile_stack()` declares sign **and** encrypt as the stack's
+security floor (§ 2.2.6.2.2), and `asx-rs` refuses any override layer — a
+partner overlay included — that relaxes it (`SecurityFloorViolation`).
+`validate()` runs at startup, so a downgraded profile never serves traffic.
 
-## Testing without WIRK certificates
+## Profile requirements
 
-Enable the `testing` feature to generate BrainpoolP256r1 test keypairs in memory.
-The test helpers build on the `asx-rs` testing API:
-
-```bash
-cargo add mako-as4 --dev --features testing
-```
-
-### Full sign+encrypt round-trip test
-
-```rust
-use mako_as4::testing::{BdewTestPki, MockAs4Endpoint};
-use asx_rs::core::SessionContextBuilder;
-use asx_rs::observability::EventBus;
-use asx_rs::transport::As4HttpTransport;
-
-#[tokio::test]
-async fn test_as4_sign_encrypt_round_trip() {
-    let sender_pki = BdewTestPki::generate("Test NB 9900357000004");
-    let receiver_pki = BdewTestPki::generate("Test LF 9900357000005");
-
-    // Build a mock endpoint configured to decrypt ECDH-ES messages.
-    let mock = MockAs4Endpoint::builder()
-        .with_decryption_key_pem(receiver_pki.encryption.key_pem.clone())
-        .bind("127.0.0.1:0")
-        .await
-        .unwrap();
-
-    // Build sender session — with_signing_material() atomically sets cert + key
-    // and auto-derives key_id = "cert:{partner_id}" (no manual CertHandle needed).
-    let session = std::sync::Arc::new(
-        SessionContextBuilder::new("sess-test", "9900357000004")
-            .with_signing_material(
-                sender_pki.signing.cert_pem_str(),
-                sender_pki.signing.key_pem_str(),
-            )
-            .with_trust_anchor_pem(sender_pki.signing.cert_pem_str())
-            .build()
-            .unwrap(),
-    );
-
-    // EventBus::new_for_testing() — BestEffort mode, no durable audit sink needed.
-    let event_bus = std::sync::Arc::new(EventBus::new_for_testing());
-
-    // ... send a sign+encrypt message using As4SendRequest ...
-
-    // As4HttpTransport::new_for_localhost_testing() — SSRF guard disabled for tests.
-    // Use send_to_localhost() instead of send() to bypass the URL validator.
-    let transport = As4HttpTransport::new_for_localhost_testing().unwrap();
-    // transport.send_to_localhost(&mock.local_url(), &output).await.unwrap();
-
-    // Mock delivers the decrypted payload via next_received().
-    // let received = mock.next_received().await.unwrap();
-    // assert!(received.payload.starts_with(b"UNB"));
-}
-```
-
-### BdewTestPki — three-keypair bundle
-
-```rust
-use mako_as4::testing::BdewTestPki;
-
-// All three keypairs (TLS, signing, encryption) on BrainpoolP256r1.
-let pki = BdewTestPki::generate("Test NB 9900357000004");
-
-println!("Signing cert (PEM): {}", pki.signing.cert_pem_str());
-println!("Encryption key (PEM): {}", pki.encryption.key_pem_str());
-// pki.tls, pki.signing, pki.encryption — each has cert_pem + key_pem
-```
-
----
-
-## Feature flags
-
-| Flag | Enables | Extra deps |
+| Requirement | Value | Spec |
 |---|---|---|
-| `server` | Axum AS4 inbound router (`bdew_router_config`) | `axum` |
-| `testing` | `BdewTestPki`, `MockAs4Endpoint`, `generate_self_signed_bdew_keypair` | none (uses asx-rs testing) |
+| Transport | HTTPS + mTLS (TLS 1.2 minimum) | §2.2.1 |
+| SOAP version | 1.2 | §2.2.3 |
+| MEP | One-Way/Push (mandatory) | §2.2.5 |
+| **Signing algorithm** | **ECDSA-SHA256 + BrainpoolP256r1** | §2.2.6.2.1 / BSI TR-03116-3 §9.1 |
+| **Signing token type** | **`BinarySecurityToken` / X509PKIPathv1** | §2.2.6.2.1 |
+| **Encryption** | **ECDH-ES + ConcatKDF + AES-128-GCM — mandatory** | §2.2.6.2.2 / BSI TR-03116-3 §9.2 |
+| **Key reference** | **X509SKI** | §2.2.6.2.2 |
+| Payload | gzip-compressed, carried as `application/octet-stream` in its own MIME part; the SOAP Body stays empty | §2.2.3.2 |
+| Party ID | 13-digit GLN, ISO 6523 ICD 0088 | §2.2.4 |
+| Retry window | 72 hours, up to 5 attempts | §2.2.7 |
+| Deduplication | Required (persistent dedup store) | §4.2 |
+| Synchronous receipt | Mandatory | §4.6.3 |
 
----
+BDEW requires three separate BrainpoolP256r1 keypairs: mTLS, WS-Security
+signing and XML encryption.
 
-## Security test coverage in makod
+## API
 
-`services/makod/tests/as4_security.rs` verifies BDEW AS4 compliance:
-
-| Test | Verifies |
+| Module | Contents |
 |---|---|
-| `sign_encrypt_pmode_defaults` | `bdew_pmode()` defaults to `sign=true, encrypt=true` per §2.2.6.2.2 |
-| `sign_only_pmode_disables_encryption` | `bdew_pmode_sign_only()` disables encryption (dev/test only) |
-| `policy_with_key_requires_encryption` | `bdew_push_policy(Some(key))` enforces `require_encrypted_inbound` |
-| `policy_without_key_no_encryption_required` | Dev-mode without decryption key does not block onboarding |
-| `fragment_scope_is_strict_default` | strict default kept; fragment scope consulted for fragmented messages only |
-| `sign_encrypt_policy_is_bdew_compliant` | SOAP policy constants satisfy §2.2.6.2.1 + §2.2.6.2.2 |
-| `replay_dedup_blocks_duplicate_message_id` | 72-hour dedup window (§4.2) |
-| `tampered_signature_is_rejected` | Real `As4WsSecVerifier` rejects payload tampering |
-| `inbound_encryption_enforced_when_decryption_key_set` | `require_encrypted_inbound` rejects unencrypted messages |
-| `sign_encrypt_round_trip_via_mock_endpoint` | Full sign+encrypt→transport→decrypt round-trip |
-| `sign_only_round_trip_envelope_contains_wssec_signature` | Sign-only round-trip preserves WS-Security elements |
-| `sync_receipt_is_verified_and_correlated` | Synchronous `eb:Receipt` is parsed and correlated to the sent `message_id` (§4.6.3 NRR) |
+| `constants` | BDEW-specific service URIs, algorithm identifiers (`SIG_ALGO_ECDSA_SHA256`, `ENC_KEY_AGREEMENT_ECDH_ES`, …) |
+| `pmode` | `BdewAction` enum + `bdew_pmode()` / `bdew_pmode_sign_only()` factory functions; `WsSecOutboundKeyInfoProfile` |
+| `profile` | `BdewAs4Profile` entry point + `bdew_mako_profile_stack()` + `bdew_push_policy()` |
+| `partner_directory` | `PartnerDirectory` — GLN-to-endpoint resolution |
+| `server` *(feature)* | Axum AS4 inbound router + `bdew_router_config()` |
+| `testing` *(feature)* | `BdewTestPki`, `generate_self_signed_bdew_keypair()`, `MockAs4Endpoint` |
 
----
-
-## Regulatory references
-
-| Document | Scope |
+| Feature | Enables |
 |---|---|
-| **BDEW AS4-Profil v1.2** (01.04.2026) | Complete AS4 transport specification |
-| **BSI TR-03116-3** | Cryptographic algorithms (ECDSA §9.1, ECDH-ES §9.2) |
-| **BNetzA BK6-22-024** | Mandatory AS4 for Strom (2024-04-01) |
-| **BNetzA BK7-22-023** | Mandatory AS4 for Gas (2025-04-01) |
-| **RFC 6090** | EC cryptography interoperability (referenced by BDEW §2.2.6.2.1/2) |
+| `server` | the Axum AS4 inbound router (`bdew_router_config`) |
+| `testing` | `BdewTestPki` (all three keypairs in memory), `MockAs4Endpoint`, `generate_self_signed_bdew_keypair` |
 
----
-
-## Related crates
-
-| Crate | Role |
-|---|---|
-| [`mako-as4`](https://docs.rs/mako-as4) ← **this crate** | BDEW AS4 profile — P-Modes, constants, security policy, test PKI |
-| [`asx-rs`](https://docs.rs/asx-rs) | The AS4/ebMS3 transport engine this crate profiles (ECDSA signing, ECDH-ES encryption, signed-receipt NRR, dedup) |
-| [`edi-energy`](https://docs.rs/edi-energy) | The EDIFACT payloads an AS4 interchange carries |
-| [`energy-api`](https://docs.rs/energy-api) | The parallel REST/WebSocket channel |
-| [`makod`](https://hupe1980.github.io/mako/docs/services/makod/) | Production daemon — assembles AS4 ingest, sender, and every BDEW workflow |
-
-Part of **mako**, an open-source Rust platform for German energy market
-communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>
+`services/makod/tests/it/as4_security.rs` holds the end-to-end compliance tests.
+API documentation: <https://docs.rs/mako-as4>; operator reference:
+[AS4 (BDEW)](https://hupe1980.github.io/mako/docs/reference/as4-bdew/).

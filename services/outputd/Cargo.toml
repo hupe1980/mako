@@ -1,6 +1,6 @@
 [package]
 name        = "outputd"
-description = "Customer-communications daemon — Typst-Templates, der ZUGFeRD-PDF/A-3-Träger, der Belegspeicher und die Zustellnachweise je Kanal"
+description = "Customer documents daemon: Typst templates, the ZUGFeRD PDF/A-3 carrier, the issued-document store and per-channel delivery evidence"
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
@@ -62,7 +62,11 @@ typst-assets = { version = "0.15", features = ["fonts"] }
 lopdf        = { version = "0.44", default-features = false }
 
 [dev-dependencies]
+mako-service = { workspace = true, features = ["testing"] }
 toml       = "0.8"
 roxmltree = "0.21"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+
+[lints]
+workspace = true

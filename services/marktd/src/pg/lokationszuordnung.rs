@@ -66,7 +66,6 @@ fn map_edge(
 }
 
 impl LokationszuordnungRepository for PgLokationszuordnungRepository {
-    #[allow(clippy::too_many_arguments)]
     async fn upsert_edge(
         &self,
         tenant: &str,

@@ -290,7 +290,10 @@ impl<S, R> MsconsBuilder<S, R> {
 }
 
 impl<S, R> MsconsBuilder<S, R> {
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one linear procedure; splitting it would scatter its steps across helpers used once"
+    )]
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let pid_str = self
             .inner

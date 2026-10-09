@@ -26,7 +26,10 @@ impl PgPriCatRepository {
 
     /// Snapshot a PRICAT version on the caller's transaction, so the price sheet
     /// write, this snapshot and the `pricat.published` outbox row commit together.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
     pub async fn upsert_version_tx(
         conn: &mut sqlx::PgConnection,
         nb_mp_id: &str,
@@ -132,7 +135,6 @@ fn state_str(state: &PriCatDispatchState) -> &'static str {
 // ── PriCatRepository impl ────────────────────────────────────────────────────
 
 impl PriCatRepository for PgPriCatRepository {
-    #[allow(clippy::too_many_arguments)]
     async fn upsert_version(
         &self,
         nb_mp_id: &str,

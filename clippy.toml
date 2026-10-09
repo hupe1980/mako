@@ -1,0 +1,33 @@
+# Workspace clippy configuration: the platform's non-negotiables that clippy can
+# see at the call site. `just ci` runs clippy with `-D warnings`, so each entry
+# is a build failure. `cargo xtask check-clippy-bans` proves every entry fires on
+# a planted fixture.
+#
+# What clippy cannot express stays an xtask guard:
+#   - `now_utc().date()` for a business date is a call *chain*, and `.date()`
+#     alone is right after `to_offset(berlin)` — `check-business-dates`.
+#   - `rubo4e::v202607::` is a module path, and these lists name items —
+#     `no-version-alias`.
+#   - `f64` itself is everywhere legitimately (a ratio, a metric); what reaches
+#     money is the conversion into `Decimal`, which is banned here.
+
+disallowed-methods = [
+    { path = "sqlx::Pool::connect", reason = "a service pool comes from `DatabaseConfig::connect`, which applies the pool sizing, lifetimes and `application_name` a bare connect ignores" },
+    { path = "sqlx::Pool::connect_with", reason = "a service pool comes from `DatabaseConfig::connect`, which applies the pool sizing, lifetimes and `application_name` a bare connect ignores" },
+    { path = "tokio::runtime::Handle::try_current", reason = "runtime detection is a backdoor around an explicit async boundary; take the runtime as a parameter or make the function async" },
+    { path = "rust_decimal::Decimal::from_f64_retain", reason = "an f64 cannot represent 0.1, so a Decimal read through one carries binary rounding into money; parse the decimal string instead" },
+    { path = "rust_decimal::Decimal::from_f32_retain", reason = "an f32 cannot represent 0.1, so a Decimal read through one carries binary rounding into money; parse the decimal string instead" },
+    { path = "num_traits::cast::FromPrimitive::from_f64", reason = "an f64 cannot represent 0.1, so a Decimal read through one carries binary rounding into money; parse the decimal string instead" },
+    { path = "num_traits::cast::FromPrimitive::from_f32", reason = "an f32 cannot represent 0.1, so a Decimal read through one carries binary rounding into money; parse the decimal string instead" },
+]
+
+# `allow-invalid`: chrono is absent from most crates' dependency graphs, where its
+# paths cannot resolve. `check-clippy-bans` proves each one resolves in a graph
+# that has it.
+disallowed-types = [
+    { path = "chrono::DateTime", allow-invalid = true, reason = "timestamps are `time::OffsetDateTime`" },
+    { path = "chrono::NaiveDate", allow-invalid = true, reason = "dates are `time::Date`" },
+    { path = "chrono::NaiveDateTime", allow-invalid = true, reason = "timestamps are `time::OffsetDateTime`" },
+    { path = "chrono::Utc", allow-invalid = true, reason = "timestamps are `time::OffsetDateTime`" },
+    { path = "chrono::Local", allow-invalid = true, reason = "business dates are Europe/Berlin through `mako_fristen`, never the host's zone" },
+]

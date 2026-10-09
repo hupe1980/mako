@@ -101,7 +101,10 @@ pub enum Identifikation {
 /// the mapping from field to Prüfschritt — the thing an auditor checks — a
 /// lookup instead of a name.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent switch, not a state machine"
+)]
 pub struct NeuanlageBefund {
     /// Prüfschritt 40 / 520. „Nicht teilnehmend" is stillgelegt or
     /// Modell-2-zugeordnet.

@@ -26,7 +26,7 @@
 //!   17117 at all, and the Gas twins are governed by the BDEW AWH
 //!   „Unterbrechung / Wiederherstellung der Anschlussnutzung" (EBD `E_1000` /
 //!   `E_1004`, against Strom's `E_0470` / `E_0497`).
-//! - **APERAK AHB 1.0 § 2.4.1** — 45 Minuten on a weekday for an ORDERS. A
+//! - **APERAK AHB 1.1 § 2.4.1** — 45 Minuten for an ORDERS (Sonntag 12:00 on a Saturday). A
 //!   separate clock from the business answer below.
 //! - **IFTSTA 21039** — Auftragsstatus dispatched by NB after execution (outbound)
 
@@ -213,6 +213,19 @@ pub enum SperrungState {
         /// Human-readable rejection reason.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// GPKE Teil 2 Kap. 3.5 gives the NB its answer window on the Sperrauftrag and no consequence of missing it. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<SperrungState>,
+    },
 }
 
 impl SperrungState {
@@ -226,6 +239,16 @@ impl SperrungState {
             Self::Ausgefuehrt(_) => "Ausgefuehrt",
             Self::Storniert(_) => "Storniert",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -242,6 +265,7 @@ impl SperrungState {
     #[must_use]
     pub fn sperrung_data(&self) -> Option<&SperrungData> {
         match self {
+            Self::FristAbgelaufen { offen, .. } => offen.sperrung_data(),
             Self::AnweisungErhalten(d)
             | Self::ValidationPassed(d)
             | Self::Ausgefuehrt(d)
@@ -332,10 +356,25 @@ impl CommandPayload for SperrungCommand {}
 /// ```
 pub struct GpkeSperrungWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the NB still owes its answer to the
+/// Sperrauftrag (`AnweisungErhalten`, `ValidationPassed`).
+fn window_open(label: &str, state: &SperrungState) -> bool {
+    label == SPERRUNG_WINDOW_LABEL
+        && matches!(
+            state,
+            SperrungState::AnweisungErhalten(_) | SperrungState::ValidationPassed(_)
+        )
+}
+
 impl Workflow for GpkeSperrungWorkflow {
     type State = SperrungState;
     type Event = SperrungEvent;
     type Command = SperrungCommand;
+
+    const DEADLINE_LABELS: &'static [&'static str] = &[SPERRUNG_WINDOW_LABEL];
 
     /// Deadline compensation for the GPKE Sperrung answer window.
     ///
@@ -346,19 +385,19 @@ impl Workflow for GpkeSperrungWorkflow {
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (
-                SPERRUNG_WINDOW_LABEL,
-                SperrungState::AnweisungErhalten(_) | SperrungState::ValidationPassed(_),
-            ) => Some(SperrungCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            }),
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| SperrungCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            SperrungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             SperrungEvent::AnweisungErhalten {
                 location_id,
@@ -410,12 +449,13 @@ impl Workflow for GpkeSperrungWorkflow {
                 state
             }
             SperrungEvent::DeadlineExpired { label, .. } => match state {
-                SperrungState::Ausgefuehrt(_)
-                | SperrungState::Storniert(_)
-                | SperrungState::Rejected { .. } => state,
-                _ => SperrungState::Rejected {
-                    reason: format!("deadline expired: {label}"),
-                },
+                SperrungState::AnweisungErhalten(_) | SperrungState::ValidationPassed(_) => {
+                    SperrungState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
+                }
+                other => other,
             },
         }
     }
@@ -424,6 +464,10 @@ impl Workflow for GpkeSperrungWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             SperrungCommand::ReceiveSperrung {
                 pid,
@@ -458,8 +502,8 @@ impl Workflow for GpkeSperrungWorkflow {
                     events.push(SperrungEvent::ValidationPassed {
                         message_ref: message_ref.clone(),
                     });
-                    // F-038: APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.0 §2.4.
-                    // Strom ORDERS (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
+                    // APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.1 §2.4.
+                    // Strom ORDERS: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
                     let outbox = vec![
                         PendingOutbox::aperak_anerkennung(
                             receiver_gln.as_str(),
@@ -474,8 +518,8 @@ impl Workflow for GpkeSperrungWorkflow {
                     events.push(SperrungEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
-                    // Strom ORDERS (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
+                    // Strom ORDERS: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
                             receiver_gln.as_str(),
@@ -508,7 +552,7 @@ impl Workflow for GpkeSperrungWorkflow {
             }
 
             SperrungCommand::TimeoutExpired { deadline_id, label } => {
-                if state.is_terminal() {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![SperrungEvent::DeadlineExpired { deadline_id, label }].into())

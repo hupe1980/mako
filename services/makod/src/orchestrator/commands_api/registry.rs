@@ -9,8 +9,8 @@ use super::*;
 // Registry of all supported ERP commands.
 //
 // Each entry binds a command name to its permitted Marktrollen, primary PID,
-// and a typed dispatch function.  This single source of truth prevents the
-// three parallel data structures that existed before F-022 from drifting apart:
+// and a typed dispatch function.  This single source of truth replaces three
+// parallel data structures that would otherwise drift apart:
 // - a `(&str, &[&str])` role table
 // - a `dispatch_command` match arm
 // - a `command_primary_pid` match arm
@@ -665,7 +665,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         dispatch: cmd_wim_geraetewechsel_ablehnen,
     },
     // The **technical** acknowledgement, on its own command because it is on
-    // its own clock: 45 minutes for Strom UTILMD (APERAK AHB 1.0 §2.4.1),
+    // its own clock: 45 minutes for Strom UTILMD (APERAK AHB 1.1 §2.4.1),
     // against 3 / 5 / 7 / 1 Werktage for the business answer above.
     CommandDescriptor {
         name: "wim.geraetewechsel.aperak",

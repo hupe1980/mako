@@ -1,11 +1,11 @@
-# mako demo
+# NB STP demo
 
-End-to-end smoke test for the **NB STP auto-responder** — the core flow of German
-energy market communication: a UTILMD 55001 Anmeldung arrives at `makod`,
-`processd` evaluates it automatically via `mako-pruefung`, and a UTILMD 55002
-Bestätigung is delivered to the ERP webhook within seconds.
+End-to-end run of the Netzbetreiber's straight-through processing: a UTILMD
+**55001** Anmeldung arrives at `makod`, `processd` walks `E_0622` → `E_0623`
+through `mako-pruefung` to `A51`, and the UTILMD **55002** Bestätigung reaches
+the ERP webhook within seconds — no operator involved.
 
-## What runs in this demo
+## What runs
 
 | Service | Port | Purpose |
 |---|---|---|
@@ -14,24 +14,6 @@ Bestätigung is delivered to the ERP webhook within seconds.
 | `marktd` | `:8180` | Market Data Hub — MaLo/MeLo/NeLo/TR, VersorgungsStatus, EventBus fan-out |
 | `processd` | `:8580` | NB STP auto-responder — `mako-pruefung` Anmeldung (`E_0622` → `E_0623`) and Abmeldung (`E_0607`); LF answers 55007/55010 inside their per-PID Frist |
 | `makod` | `:8080` | EDIFACT process engine — GPKE/WiM/GeLi Gas, in-memory |
-
-The full platform has [17 production services](https://hupe1980.github.io/mako/docs/services/) — `invoicd`,
-`netzbilanzd`, `edmd`, `einsd`, `billingd`, `accountingd`, `vertragd`, `portald`,
-`agentd`, and more. Run them individually as needed following their operator guides.
-
-## End-to-end flow
-
-```
-ERP        → PUT MaLo + preisblatt into marktd        (master data pre-load)
-ERP        → POST UTILMD 55001 to makod                (Anmeldung Lieferbeginn)
-makod      → de.mako.process.initiated to marktd        (ERP webhook, HMAC-signed)
-marktd     → fans out to processd via subscription
-processd   → GET /versorgung, GET /malo/grid, GET /partners  (mako-pruefung data fetch)
-processd   → mako-pruefung walks E_0622 → Accept (A51 from E_0623)
-processd   → GET /malos/<malo>/buendel, GET /melos/<melo>/msb  (what the answer must state)
-processd   → gpke.lieferbeginn.bestaetigen to makod
-makod      → UTILMD 55002 Bestätigung to webhook        (ERP confirmation)
-```
 
 ```mermaid
 sequenceDiagram
@@ -56,188 +38,31 @@ sequenceDiagram
     makod-->>webhook: UTILMD 55002 Bestätigung Anmeldung
 ```
 
-## Prerequisites
 
-| Tool | Purpose |
-|---|---|
-| Docker 24+ (with Compose v2) | Run the stack |
-| `curl` | HTTP smoke tests |
-| `jq` | Parse JSON responses |
-
-## Build images
-
-Build the three demo images from the repo root:
+## Run it
 
 ```bash
-docker build --target runtime          -t makod:dev     .
-docker build --target marktd-runtime   -t marktd:dev    .
-docker build --target processd-runtime -t processd:dev  .
-```
-
-Or with the `just` recipe, which is the same three builds:
-
-```bash
-just build-demo
-```
-
-> Not `docker buildx bake` — that file is the CI push path (`push-by-digest`),
-> so it fails on the default docker driver and never loads a local `:dev` tag.
-
-> The `processd-runtime` target compiles with `--features integrated`
-> (NB `mako-pruefung` + LF answer automation in one binary).
-
-## Quick start
-
-```bash
+just build-demo            # from the workspace root: makod, marktd, processd images
 cd demos/nb-stp
 docker compose up -d
-docker compose ps   # wait until all containers are Up
-```
-
-Expected:
-
-```
-NAME                 IMAGE              STATUS         PORTS
-nb-stp-postgres-1    postgres:17-alpine Up (healthy)   5432/tcp
-nb-stp-webhook-1     python:3.12-alpine Up             0.0.0.0:8000->8000/tcp
-nb-stp-marktd-1      marktd:dev         Up             0.0.0.0:8180->8180/tcp
-nb-stp-processd-1    processd:dev       Up             0.0.0.0:8580->8580/tcp
-nb-stp-makod-1       makod:dev          Up             0.0.0.0:8080->8080/tcp
-```
-
-`processd` self-registers its EventBus subscription with `marktd` on startup —
-no manual subscription step required. Both `marktd` and `processd` run SQLx
-migrations automatically on first boot.
-
-Watch events arrive in real time:
-
-```bash
-docker compose logs webhook -f
-```
-
-## Automated smoke test
-
-The smoke test seeds all required master data, submits a UTILMD 55001, and
-confirms that `processd` dispatches bestaetigen automatically:
-
-```bash
-cd demos/nb-stp
 bash smoke.sh
 ```
 
-`MARKTD_URL` and `WEBHOOK_URL` default to what `docker-compose.yml` publishes,
-so the outbox assertions — the APERAK and the 55002 Bestätigung — always run.
-To exercise `makod` alone, opt out explicitly:
+`smoke.sh` seeds the master data (partner, MaLo, grid record, Messlokation and
+its MSB, price sheet), posts the 55001 and asserts on the outcome: the APERAK
+`BGM+312`, the fan-out through `marktd`, `processd`'s `Accept` decision, and the
+55002 on the webhook.
 
-```bash
-MARKTD_URL= WEBHOOK_URL= bash smoke.sh
-```
+A manual `gpke.lieferbeginn.bestaetigen` afterwards is refused with `409`
+(`expected ValidationPassed, found AntwortGesendet`) — the state-machine proof.
+Each run generates a fresh check-digit-valid MaLo, so it repeats against a warm
+stack; `MARKTD_URL= WEBHOOK_URL= bash smoke.sh` exercises `makod` alone.
 
-Expected output:
-
-```
-✓ makod is ready
-✓ marktd is ready
-✓ webhook receiver is ready
-✓ PUT /api/v1/preisblaetter/9900357000004 → 204 (FV2026 preisblatt stored)
-✓ PUT /api/v1/partners/4012345000023 → 200 (partner ready for mako-pruefung)
-✓ PUT /api/v1/malos/<malo> → 201  (version=1, makod cache push triggered)
-✓ PUT /api/v1/malos/<malo>/grid → 204  (grid record ready for mako-pruefung)
-✓ PUT /api/v1/melos/<melo> → 201
-✓ PUT /api/v1/lokationszuordnungen → 200  (MaLo → MeLo edge)
-✓ PUT /api/v1/melos/<melo>/msb → 204  (gMSB 9903456000009)
-✓ PUT /api/v1/subscriptions/smoke-test-sub → 200
-✓ GET /health → ok  (instance: ...)
-✓ GET /api/v1/openapi.json → makod — MaKo process engine
-✓ PUT /admin/partners/4012345000023 → 200
-✓ GET /admin/partners → 1 partner(s) registered
-✓ POST /edifact → HTTP 200  accepted=1  rejected=0  status=routed  pid=55001
-✓ APERAK BGM+312 (Anerkennungsmeldung) delivered to LFN — automatic (no ERP action)
-✓ ProcessInitiated delivered via marktd fan-out (source: urn:mako:marktd:tenant:9900357000004)
-✓ processd NB auto-responder dispatched bestaetigen → UTILMD 55002 already arrived
-✓ processd decision → Accept (mako-pruefung: all 6 checks passed)
-✓ POST /api/v1/commands → HTTP 409 (duplicate bestaetigen correctly rejected — AntwortGesendet guard confirmed)
-✓ UTILMD 55002 was already verified in step 6c (auto-responder path)
-✓ DELETE /admin/partners/4012345000023 → 200
-✓ GET http://localhost:8180/health → ok
-✓ GET /api/v1/malos/<malo> → sparte=STROM  NB=9900357000004  (BO4E payload intact)
-✓ GET /api/v1/preisblaetter/9900357000004 → source=api  bezeichnung=Demo Netznutzungspreise FV2026 …  preis=0.0412
-✓ Operator-override protection confirmed (source=api; api > mako enforced by SQL)
-✓ GET /api/v1/correlations?malo_id=<malo> → 0 correlations (process may have completed)
-All smoke tests passed.
-  Wechselprozess auto-responder: ENABLED
-  Flow: UTILMD 55001 → makod → marktd ingest → validate → bestaetigen → UTILMD 55002
-```
-
-The round trip is milliseconds. `marktd`'s fan-out worker polls every 30 s and
-is woken early by a Postgres `NOTIFY` from an `AFTER INSERT` trigger on
-`event_log`, so the 55002 reaches the webhook before the first poll. A run where
-each step takes a poll interval means that wake-up is not arriving
-(`cargo xtask check-outbox-notify`).
-
-The `HTTP 409` at the manual dispatch step is the **state-machine proof**, not
-idempotency: `processd` already advanced the process to `AntwortGesendet`, so the
-later manual ERP command is refused as out of order, and the body says so
-(`expected ValidationPassed, found AntwortGesendet`).
-
-The 55002 that goes back to the LFN (message reference, timestamp, MaLo and
-Messlokation are generated per run):
-
-```
-UNB+UNOC:3+9900357000004:500+4012345000023:14+260701:0904+E8D66066D8E24B'
-UNH+5c9a7b9b2c084e+UTILMD:D:11A:UN:S2.1'
-BGM+E01+5c9a7b9b2c084e'
-DTM+137:202607010904?+00:303'
-NAD+MS+9900357000004::293'
-NAD+MR+4012345000023::9'
-IDE+24+5c9a7b9b2c084e'
-DTM+92:202610010000?+00:303'   ← the Lieferbeginn, echoed from the Anmeldung
-STS+7++E01+ZW7'                ← the NB's own classification: gemessene MaLo
-STS+E01++A51:E_0623'           ← „Zustimmung (Prüfschritt 60)", with its EBD
-LOC+Z16+17899174293'
-LOC+Z17+DE0005626680000000000000789917429'   ← the Messlokation behind it
-RFF+Z13:55002'                 ← the Prüfidentifikator, in SG6 of the Vorgang
-RFF+TN:VORGANG0001'            ← the Anmeldung's Vorgangsnummer being answered
-RFF+Z60:1'                     ← the Produktpaket-ID the NB will implement
-SEQ+Z98'                       ← Daten der Marktlokation …
-CCI+++ZB3'
-CAV+Z91:9903456000009::Z39:Z19'  ← … its Messstellenbetreiber (gMSB, Vertrag)
-SEQ+ZF3'                       ← Daten der Messlokation …
-RFF+Z19:DE0005626680000000000000789917429'
-CCI+++ZB3'
-CAV+Z91:9903456000009::Z39:Z19'
-CAV+ZF0:9903456000009'         ← … and the gMSB standing behind it
-UNT+23+5c9a7b9b2c084e'
-UNZ+1+E8D66066D8E24B'
-```
-
-A Bestätigung is not a short message, and none of the above is decoration —
-every line is Muss in the 55002 Prüfschablone. Three of them say something the
-LFN has no other source for: `ZW7` is the NB's classification of the
-Marktlokation (the Anmeldung's own `ZW4` is *not* admitted here), `RFF+Z60`
-names which of the offered Produktpakete the NB will actually implement, and
-the two `SG8` blocks name the Messstellenbetreiber of the Marktlokation and of
-its Messlokation. `services/makod/tests/e2e_gpke_antwort_conformance.rs`
-renders each of the six GPKE Antwort-PIDs and holds it against the AHB, so this
-listing cannot drift from what the demo sends.
-
-`A51` is resolved from `E_0623`, not fixed: an Anmeldung that fails a check
-comes back as a 55003 Ablehnung carrying the code for the step that refused it.
-
-## Service URLs
-
-| Service | URL | Purpose |
-|---|---|---|
-| makod REST API | http://localhost:8080 | EDIFACT ingest, process commands |
-| makod Swagger UI | http://localhost:8080/api/v1/docs/ | Interactive API docs |
-| makod MCP server | http://localhost:8080/mcp | LLM tooling (Claude Desktop, VS Code) |
-| marktd REST API | http://localhost:8180 | Master data (MaLo/MeLo, typed BO4E, VersorgungsStatus) |
-| marktd Swagger UI | http://localhost:8180/swagger-ui/ | Interactive API docs |
-| marktd DLQ admin | http://localhost:8180/admin/fanout/dlq | Inspect failed CloudEvent deliveries |
-| marktd metrics | http://localhost:8180/metrics | Prometheus metrics |
-| processd decisions | http://localhost:8580/api/v1/decisions | NB STP audit log |
-| processd queue | http://localhost:8580/api/v1/queue | LF approval queue |
-| ERP webhook receiver | http://localhost:8000/events | View delivered CloudEvents |
+Every line of the 55002 is Muss in its Prüfschablone — the NB's
+classification `ZW7`, the chosen Produktpaket `RFF+Z60`, the Messlokation and
+both MSB blocks; `services/makod/tests/it/e2e_gpke_antwort_conformance.rs` holds
+the rendering to the AHB. Without the Messlokation the answer says `ZW6`
+„Pauschale Marktlokation" instead.
 
 ## Fixtures
 
@@ -248,55 +73,28 @@ comes back as a 55003 Ablehnung carrying the code for the step that refused it.
 | `fixtures/preisblatt-nb.json` | `PreisblattNetznutzung` for NB `9900357000004` (FV2026-10-01) |
 | `fixtures/malo-nb.json` | `MARKTLOKATION` for NB `9900357000004` (demo MaLo) |
 
-The MaLo, the Messlokation behind it and that Messlokation's MSB are generated
-per run (a fresh BDEW-checksummed MaLo-ID and a 33-character Zählpunkt\
-bezeichnung), so the demo can be re-run without `docker compose down -v`.
+`fixtures/utilmd-55001.edi` carries release S2.1 and the Bilanzkreis
+Produktpaket (`SG8 SEQ+Z79`) an Anmeldung must state;
+`crates/edi-energy/tests/it/demo_fixtures.rs` validates it against its AHB, and
+`cargo run -p edi-energy --example 07_resolve --all-features -- demos/nb-stp/fixtures/utilmd-55001.edi`
+shows where each segment sits.
 
-### What the 55001 carries
+## Endpoints
 
-`smoke.sh` substitutes its own MaLo for `51238696012`; everything else goes on
-the wire as written. Segment by segment:
-
-```
-UNB+UNOC:3+4012345000023:14+9900357000004:500+260701:0800+DEMO-2026-001'
-                          ↑ DE 0007 also follows the id, on its own code list:
-                            14 GS1, 500 BDEW, 502 DVGW — not the NAD values
-UNH+MSG-001+UTILMD:D:11A:UN:S2.1'       ← S2.1 is the release in force until 2026-10-01
-BGM+E01+00055001'                       ← E01 Anmeldung; DE 1004 is the Dokumentennummer
-DTM+137:202607010800?+00:303'           ← Dokumentendatum, DE 2379 = 303 CCYYMMDDHHMMZZZ
-NAD+MS+4012345000023::9'                ← sender must equal the UNB sender
-NAD+MR+9900357000004::293'              ← DE 3055 follows the id: 9 GS1, 293 BDEW, 332 DVGW
-IDE+24+VORGANG0001'                     ← DE 7402 is the Vorgangsnummer, not the MaLo
-DTM+92:202610010000?+00:303'            ← „Beginn zum" — the Lieferbeginn
-STS+7++E01+ZW4'                         ← Transaktionsgrund E01 Ein-/Auszug, verbrauchende MaLo (ZW4)
-LOC+Z16+51238696012'                    ← the Marktlokation lives here
-RFF+Z13:55001'                          ← the Prüfidentifikator, in SG6 of the Vorgang
-SEQ+Z79+1'                              ← Produktpaket …
-PIA+5+9991000002082:Z11'
-CCI+Z66'
-CAV+ZV4:::11XBK-STD-----9'              ← … with the Bilanzkreis the NB assigns the MaLo to
-SEQ+ZH0+1'                              ← its Priorisierung
-CCI+Z65+++Z01'
-SEQ+Z01'                                ← Daten der Marktlokation
-CCI+++Z15'
-SEQ+Z75'                                ← Daten des Kunden des LF
-CCI+Z61++ZF9'
-CAV+ZU5'
-NAD+Z09+++Mustermann:::::Z01'           ← Kunde des LF
-NAD+Z04+++Mustermann:::::Z01+Musterstr. 1+Berlin+++DE'  ← Korrespondenzanschrift des Kunden
-UNT+24+MSG-001'
-UNZ+1+DEMO-2026-001'
-```
-
-`SG8` is Muss on an Anmeldung (UTILMD AHB Strom §5.3): without a Bilanzkreis the
-NB cannot assign the LF to the Marktlokation. `crates/edi-energy/tests/demo_fixtures.rs`
-validates this file against the AHB on every `cargo test`.
+| Service | URL | Purpose |
+|---|---|---|
+| makod REST API | http://localhost:8080 | EDIFACT ingest, process commands |
+| makod Swagger UI | http://localhost:8080/api/v1/docs/ | Interactive API docs |
+| makod MCP server | http://localhost:8080/mcp | LLM tooling (Claude Desktop, VS Code) |
+| marktd REST API | http://localhost:8180 | Master data (MaLo/MeLo, typed BO4E, VersorgungsStatus) |
+| marktd Swagger UI | http://localhost:8180/api/v1/docs/ | Interactive API docs |
+| marktd DLQ admin | http://localhost:8180/admin/fanout/dlq | Inspect failed CloudEvent deliveries |
+| marktd metrics | http://localhost:8180/metrics | Prometheus metrics |
+| processd decisions | http://localhost:8580/api/v1/decisions | NB STP audit log |
+| processd queue | http://localhost:8580/api/v1/queue | LF approval queue |
+| ERP webhook receiver | http://localhost:8000/events | View delivered CloudEvents |
 
 ## Demo configuration
-
-The demo runs as **Netzbetreiber (NB)** with Marktpartner-ID `9900357000004`.
-All services run with authentication **disabled** — do not deploy this configuration
-in production.
 
 | Service | Parameter | Value |
 |---|---|---|
@@ -307,104 +105,11 @@ in production.
 | processd | marktd API key | `demo-processd-key` |
 | All services | Authentication | OIDC disabled (dev mode only) |
 
-## Manual curl examples
-
-### Health checks
-
-```bash
-curl http://localhost:8080/health | jq .
-# → {"status":"ok","instance_id":"..."}
-
-curl http://localhost:8180/health | jq .
-# → {"status":"ok"}
-```
-
-### Seed master data
-
-`mako-pruefung` needs these before the UTILMD arrives — plus the price sheet below:
+Authentication is disabled — do not deploy this configuration. The
+[getting-started guide](https://hupe1980.github.io/mako/docs/guide/getting-started/)
+covers OIDC.
 
 ```bash
-# LF partner directory (check 6)
-curl -X PUT http://localhost:8180/api/v1/partners/4012345000023 \
-  -H "Content-Type: application/json" \
-  -d '{"display_name":"Demo LF","marktrolle":"LF","sparte":"STROM","makoadresse":[]}'
-
-# MaLo with NB rollenzuordnung
-curl -X PUT http://localhost:8180/api/v1/malos/51238696012 \
-  -H "Content-Type: application/json" --data-binary "@fixtures/malo-nb.json"
-
-# MaLo grid record (check 1)
-curl -X PUT http://localhost:8180/api/v1/malos/51238696012/grid \
-  -H "Content-Type: application/json" \
-  -d '{"nb_mp_id":"9900357000004","bilanzierungsgebiet":"11YN0------0STXG","netzgebiet":"DEMO-NZ-001","sparte":"STROM","source":"manual"}'
-
-# The Messlokation behind the MaLo, and its Messstellenbetreiber. Not a
-# `mako-pruefung` input — this is what the **Bestätigung has to state**:
-# `SG5 LOC+Z17` and the two `SG8` Datenblöcke are Muss on 55002, and the LFN
-# has no other source for who meters the point it is about to supply.
-curl -X PUT http://localhost:8180/api/v1/lokationszuordnungen \
-  -H "Content-Type: application/json" \
-  -d '{"von_id":"51238696012","von_typ":"MALO",
-       "nach_id":"DE0005626680000000000000000000001","nach_typ":"MELO",
-       "valid_from":"2020-01-01","data":{}}'
-
-curl -X PUT http://localhost:8180/api/v1/melos/DE0005626680000000000000000000001/msb \
-  -H "Content-Type: application/json" \
-  -d '{"msb_mp_id":"9903456000009","valid_from":"2020-01-01"}'
+docker compose down       # keep the PostgreSQL volume
+docker compose down -v    # full reset
 ```
-
-Without the last two the Anmeldung is still confirmed, and the Bestätigung says
-`ZW6` „Pauschale Marktlokation" instead of `ZW7` „Gemessene" — which is what a
-Marktlokation with no Messlokation behind it is.
-
-Submit once per MaLo — a repeat Anmeldung is rejected with **A06** „Andere
-Anmeldung in Bearbeitung". Use `docker compose down -v` to re-run.
-
-### Submit EDIFACT
-
-```bash
-curl -X POST http://localhost:8080/edifact \
-  -H "Authorization: Bearer demo-secret-change-me" \
-  -H "Content-Type: text/plain; charset=utf-8" \
-  --data-binary "@fixtures/utilmd-55001.edi" | jq .
-```
-
-### Trigger NB bestaetigen manually
-
-```bash
-curl -X POST http://localhost:8080/api/v1/commands \
-  -H "Authorization: Bearer demo-secret-change-me" \
-  -H "Content-Type: application/json" \
-  -d '{"command":"gpke.lieferbeginn.bestaetigen","payload":{"malo_id":"<malo_id>"}}' | jq .
-```
-
-### Inspect marktd master data
-
-```bash
-# View VersorgungsStatus for a MaLo
-curl http://localhost:8180/api/v1/versorgung/<malo_id> | jq .
-
-# View incoming CloudEvents from makod
-curl http://localhost:8000/events | jq '.[].body | {type, subject}'
-```
-
-### Upload a NB price sheet
-
-```bash
-curl -X PUT http://localhost:8180/api/v1/preisblaetter/9900357000004 \
-  -H "Content-Type: application/json" \
-  --data-binary "@fixtures/preisblatt-nb.json" \
-  -w "\nHTTP %{http_code}\n"
-# → HTTP 204
-```
-
-## Stop and clean up
-
-```bash
-docker compose down       # keep PostgreSQL volume
-docker compose down -v    # wipe all data (full reset)
-```
-
-Authentication is disabled in this demo — suitable for local development only.
-See the [production guide](https://hupe1980.github.io/mako/docs/guide/getting-started/) for OIDC setup, and
-[the services guide](https://hupe1980.github.io/mako/docs/services/) for the full 17-service platform.

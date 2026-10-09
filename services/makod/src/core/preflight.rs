@@ -87,6 +87,8 @@ pub struct PreflightInput<'a> {
     pub webdienste_client_identity: bool,
     /// `--allow-unauthenticated-webdienste-client`.
     pub allow_unauthenticated_webdienste_client: bool,
+    /// Whether `--webdienste-signing-key-pem` is configured.
+    pub webdienste_signing_key: bool,
     /// `--as4-partner MP-ID=HTTPS-URL` pairs.
     pub as4_partner: &'a [String],
     /// `--as4-partner-cert MP-ID=<PEM>` pairs.
@@ -441,6 +443,32 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
         );
     }
 
+    // ── API-Webdienste: every interaction is signed ──────────────────────────
+    //
+    // Regelungen zum Übertragungsweg für API-Webdienste 1.2, Kap. 3.3: „Jede
+    // API-Interaktion und der übertragene Payload wird signiert" (MUST). The
+    // MaLo-ID callbacks this daemon sends — answering the `:8090` port, or
+    // calling a configured partner — carry that signature only when a key is
+    // configured, so a missing key is refused here rather than discovered as
+    // unsigned traffic. The declared dev/test escape covers it as it covers
+    // the missing mTLS identity.
+    if (input.webdienste_enabled
+        || !input.maloid_partner.is_empty()
+        || input.verzeichnisdienst_url.is_some())
+        && !input.webdienste_signing_key
+        && !input.allow_unauthenticated_webdienste_client
+    {
+        anyhow::bail!(
+            "an API-Webdienst is configured (--api-webdienste-addr / --maloid-partner / \
+             --verzeichnisdienst-url) but no content signing key is: every API-Webdienste \
+             interaction is signed (Regelungen zum Übertragungsweg für API-Webdienste 1.2, \
+             Kap. 3.3), and a request without the signature is one the counterparty may refuse.\n\
+             Set --webdienste-signing-key-pem (or webdienste.signing_key_pem_file in \
+             makod.toml) to the EMT.API key, or pass --allow-unauthenticated-webdienste-client \
+             for dev/test."
+        );
+    }
+
     // ── AS4 inbound: who each message is allowed to claim to be ──────────────
     //
     // The trust anchor answers „is the signer a BDEW/DVGW market participant?",
@@ -489,8 +517,9 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
 
     // The assembled profile has to satisfy the BDEW security floor before it
     // carries traffic. BDEW AS4-Profil v1.2 §2.2.6.2.2 requires signing **and**
-    // encryption; `asx-rs` refuses a policy layer only when it disables both, so
-    // a sign-only override is valid AS4 and would send in the clear.
+    // encryption. `asx-rs` refuses an overlay below its declared security floor
+    // (`SIGN_AND_ENCRYPT`) as `SecurityFloorViolation`, so a sign-only override
+    // does not validate there either.
     // `BdewAs4Profile::validate` is the check that asserts the mandate over the
     // base stack and every override on top of it, and it is only a control if it
     // runs on the path that builds the profile an operator actually deploys.
@@ -664,6 +693,19 @@ pub fn warn_on_degraded_config(input: &PreflightInput<'_>, durable_store: bool) 
              transport. Set --as4-addr and provide signing key/cert PEM for production."
         );
     }
+    // Reachable only under `--allow-unauthenticated-webdienste-client`.
+    if (input.webdienste_enabled
+        || !input.maloid_partner.is_empty()
+        || input.verzeichnisdienst_url.is_some())
+        && !input.webdienste_signing_key
+    {
+        tracing::warn!(
+            "--allow-unauthenticated-webdienste-client: no --webdienste-signing-key-pem, so \
+             API-Webdienste requests leave UNSIGNED (Regelungen zum Übertragungsweg für \
+             API-Webdienste 1.2, Kap. 3.3 requires a signature on every interaction). \
+             Dev/test only."
+        );
+    }
 }
 
 #[cfg(test)]
@@ -691,6 +733,7 @@ mod tests {
             as4_partner_signing_cert: &[],
             webdienste_client_identity: false,
             allow_unauthenticated_webdienste_client: true,
+            webdienste_signing_key: false,
             as4_signing_key_pem: None,
             as4_signing_cert_pem: None,
             as4_trust_anchor_pem: None,
@@ -822,6 +865,7 @@ mod tests {
             verzeichnisdienst_url: Some("https://vz.example/api"),
             webdienste_client_identity: true,
             allow_unauthenticated_webdienste_client: false,
+            webdienste_signing_key: true,
             ..base()
         };
         preflight(&with_identity).expect("a configured identity is startable");
@@ -834,6 +878,47 @@ mod tests {
             ..base()
         };
         preflight(&declared).expect("the declared dev escape is startable");
+    }
+
+    /// Every API-Webdienste request is signed (Regelungen zum Übertragungsweg
+    /// für API-Webdienste 1.2, Kap. 3.3, MUST). A daemon that would send one
+    /// with no signing key is refused here rather than sending it unsigned.
+    #[test]
+    fn an_api_webdienst_without_a_signing_key_is_rejected() {
+        let keys = vec!["erp=token".to_owned()];
+        let partners = vec!["9900001000001=https://nb.example/maloId".to_owned()];
+        for input in [
+            PreflightInput {
+                auth_keys: &keys,
+                webdienste_enabled: true,
+                webdienste_client_identity: true,
+                allow_unauthenticated_webdienste_client: false,
+                webdienste_signing_key: false,
+                ..base()
+            },
+            PreflightInput {
+                auth_keys: &keys,
+                maloid_partner: &partners,
+                webdienste_client_identity: true,
+                allow_unauthenticated_webdienste_client: false,
+                webdienste_signing_key: false,
+                ..base()
+            },
+        ] {
+            let err = rejection(&input);
+            assert!(err.contains("signing key"), "{err}");
+            assert!(err.contains("--webdienste-signing-key-pem"), "{err}");
+        }
+
+        let signed = PreflightInput {
+            auth_keys: &keys,
+            maloid_partner: &partners,
+            webdienste_client_identity: true,
+            allow_unauthenticated_webdienste_client: false,
+            webdienste_signing_key: true,
+            ..base()
+        };
+        preflight(&signed).expect("a configured signing key is startable");
     }
 
     #[test]

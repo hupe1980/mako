@@ -5,6 +5,7 @@
 //!   GET    /api/v1/malos/:id
 //!   GET    /api/v1/malos           (list / query)
 
+use crate::state::AppState;
 use std::sync::Arc;
 
 use axum::{
@@ -17,10 +18,7 @@ use mako_markt::{
     cloudevents::{EventExtensions, MarktEvent},
     domain::{MaloId, Sparte},
     error::MdmError,
-    repository::{
-        AppState, CorrelationIndex, MaloFilter, MaloRepository, MeloRepository, PageResult,
-        PartnerRepository, Rollenzuordnung, SubscriptionRepository,
-    },
+    repository::{MaloFilter, MaloRepository, PageResult, Rollenzuordnung},
 };
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
@@ -191,22 +189,15 @@ fn default_size() -> u32 {
         (status = 422, description = "Validation error"),
     )
 )]
-pub async fn put_malo<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn put_malo(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<sqlx::PgPool>,
     headers: HeaderMap,
     claims: Claims,
     Path(id): Path<String>,
     Json(req): Json<MaloUpsertRequest>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "write-malo", &state.tenant)
         .is_err()
@@ -354,10 +345,10 @@ where
     // `version == 1` *is* "this PUT created it" — decided atomically by the
     // upsert that returned it.
     //
-    // The probe this replaces asked `find(...).ok().flatten().is_some()`, which
-    // reported "does not exist" for a row that does exist but no longer
-    // deserialises (the schema-drift path this module already logs) — and it
-    // raced two concurrent PUTs into both answering 201.
+    // A prior `find(...).ok().flatten().is_some()` probe would report "does not
+    // exist" for a row that does exist but no longer deserialises (the
+    // schema-drift path this module logs), and would race two concurrent PUTs
+    // into both answering 201.
     let status = if version == 1 {
         StatusCode::CREATED
     } else {
@@ -382,19 +373,12 @@ where
         (status = 404, description = "Not found"),
     )
 )]
-pub async fn get_malo<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn get_malo(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(id): Path<String>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "read-malo", &state.tenant)
         .is_err()
@@ -463,19 +447,12 @@ where
         (status = 200, description = "List of Marktlokationen", body = Vec<MaloResponse>),
     )
 )]
-pub async fn list_malo<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn list_malo(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Query(q): Query<ListQuery>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "read-malo", &state.tenant)
         .is_err()
@@ -580,19 +557,12 @@ pub(crate) use mako_fristen::heute as today_berlin;
         (status = 404, description = "MaLo not found or RLM/IMS meter (no SLP profile)"),
     )
 )]
-pub async fn get_malo_lastprofil<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn get_malo_lastprofil(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(id): Path<String>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "read-malo", &state.tenant)
         .is_err()

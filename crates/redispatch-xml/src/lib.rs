@@ -41,10 +41,8 @@
 //! The BDEW XSDs are third-party copyrighted publications and are not
 //! redistributable, so embedding them here would put someone else's material in
 //! every copy of this crate and make a clean build depend on a file that is not
-//! part of it. A `bundled-schemas` Cargo feature once promised a
-//! `schema_bytes(DocumentType)` accessor for exactly that; it was declared
-//! empty, exported nothing, and has been removed — a feature flag that does
-//! nothing reads as a supported configuration.
+//! part of it, so the crate has no `bundled-schemas` feature: a feature flag
+//! that does nothing reads as a supported configuration.
 //!
 //! What replaces it is [`validation`]: the structural checks assert the
 //! cardinalities and required elements the XSDs express, and the semantic

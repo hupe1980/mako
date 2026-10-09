@@ -1,507 +1,204 @@
-//! Deadline scheduler dispatch table.
+//! Deadline scheduler dispatch.
 //!
-//! Maps workflow names to their `TimeoutExpired` command dispatch logic.
-//! Adding a new workflow family requires adding one entry to the `match` in
-//! [`dispatch_deadline`] — there is no other location to update.
+//! A fired deadline names its workflow; the workflow's [`WorkflowDriver`] —
+//! registered once, by type, in its domain crate's `EngineModule::drivers` —
+//! decides it. There is no table here to keep beside the modules.
 //!
-//! ## Compensation and atomicity
+//! ## One guard
 //!
-//! All deadline commands are dispatched via
-//! [`Process::execute_and_enqueue_with_retry`], which atomically persists
-//! both events *and* any outbox entries (e.g. APERAK Ablehnung) produced by
-//! the `TimeoutExpired` handler in a single `WriteBatch`.  This ensures
-//! there is no window where the `DeadlineExpired` event is stored but the
-//! outbound APERAK message is lost.
+//! Deadlines are registered when a message arrives and are never cancelled when
+//! the process moves on, so every one of them fires — on the healthy path as
+//! much as on the failing one. What a firing does is decided in exactly one
+//! place:
 //!
-//! Alternatively, [`Process::execute_timeout_with_retry`] may be used to
-//! delegate the dispatch to `Workflow::on_deadline`, but this path is
-//! equivalent when every workflow registers a `TimeoutExpired` command in its
-//! `on_deadline` hook.
+//! 1. A **delivery window** ([`mako_fristen::is_delivery_window`]) is a
+//!    regulatory alert about a message that was not delivered in time. The
+//!    outbox worker retires it on delivery, so one that fires is a real miss —
+//!    and it is never a step of the business process it rode beside, so no
+//!    workflow sees it.
+//! 2. A label the workflow does not own ([`Workflow::DEADLINE_LABELS`]) is
+//!    logged and dropped: nothing decides it. The engine refuses to register
+//!    such a deadline in the first place.
+//! 3. Every other label goes through [`Process::run_timeout`], which asks the
+//!    workflow's own `on_deadline` whether the window the label names is still
+//!    open in the current state, and runs the command it returns — atomically
+//!    with its outbox entries — or nothing.
 //!
-//! ## Coverage check
-//!
-//! [`build_scheduler`] panics at startup if any workflow name registered by
-//! an [`EngineModule`] via [`workflow_names`] is absent from the dispatch
-//! table below.  This converts the silent regulatory miss (deadline fires,
-//! drops into `unknown` branch, emits WARN) into an immediate startup failure
-//! that blocks deployment.
-//!
-//! [`workflow_names`]: mako_engine::builder::EngineModule::workflow_names
-//! [`EngineModule`]: mako_engine::builder::EngineModule
+//! [`WorkflowDriver`]: mako_engine::driver::WorkflowDriver
+//! [`Workflow::DEADLINE_LABELS`]: mako_engine::workflow::Workflow::DEADLINE_LABELS
+//! [`Process::run_timeout`]: mako_engine::process::Process::run_timeout
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use mako_emob::modellwechsel::ModellwechselCommand;
 use mako_engine::{
     builder::DeadlineScheduler,
     deadline::{Deadline, DeadlineStore},
+    driver::WorkflowDriver,
     error::EngineError,
-    ids::ProcessIdentity,
-    process::Process,
-};
-use mako_gabi_gas::{
-    GaBiGasAllocationWorkflow, GaBiGasInvoicWorkflow, GaBiGasNominationWorkflow, NominationCommand,
-};
-use mako_geli_gas::{
-    GasSperrungLfCommand, GasSperrungNbCommand, GasSupplierChangeCommand, GeliGasDatenabrufCommand,
-    GeliGasDatenabrufWorkflow, GeliGasLfAnmeldungCommand, GeliGasLfAnmeldungWorkflow,
-    GeliGasLfStornierungWorkflow, GeliGasSperrprozesseInvoicWorkflow, GeliGasSperrungLfWorkflow,
-    GeliGasSperrungNbWorkflow, GeliGasStornierungCommand, GeliGasStornierungWorkflow,
-    GeliGasSupplierChangeWorkflow, LfStornierungCommand,
-};
-use mako_gpke::{
-    AbrechnungsdatenCommand as GpkeAbrechnungsdatenCommand, AllokationslisteCommand,
-    AnfrageBestellungCommand, AnkuendigungZuordnungLfCommand, DatenabrufCommand,
-    GpkeAbrechnungWorkflow, GpkeAbrechnungsdatenWorkflow, GpkeAllokationslisteWorkflow,
-    GpkeAnfrageBestellungWorkflow, GpkeAnkuendigungZuordnungLfWorkflow,
-    GpkeBeendigungZuordnungWorkflow, GpkeDatenabrufWorkflow, GpkeKonfigurationAenderungWorkflow,
-    GpkeKonfigurationWorkflow, GpkeKuendigungWorkflow, GpkeLfAbmeldungWorkflow,
-    GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow,
-    GpkeStornierungCommand, GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow,
-    KonfigurationAenderungCommand, KonfigurationCommand, LfAbmeldungCommand, LfAnmeldungCommand,
-    NeuanlageCommand, SperrungCommand, SperrungLfCommand, SupplierChangeCommand,
-    anfrage_bestellung::WORKFLOW_NAME as ANFRAGE_BESTELLUNG_WORKFLOW,
-    ankuendigung_zuordnung_lf::WORKFLOW_NAME as ANKUENDIGUNG_ZUORDNUNG_LF_WORKFLOW,
-    lf_anmeldung::WORKFLOW_NAME as LF_ANMELDUNG_WORKFLOW,
-    sperrung_lf::WORKFLOW_NAME as SPERRUNG_LF_WORKFLOW,
-};
-use mako_invoic::InvoicCommand;
-use mako_mabis::MabisBillingWorkflow;
-use mako_redispatch::{
-    ack_forward::{
-        AckForwardCommand, KaskadeWorkflow, KostenblattWorkflow, NetzengpassWorkflow,
-        PlanungsdatenWorkflow, StatusanfrageWorkflow, VerfuegbarkeitWorkflow,
-        kaskade::WORKFLOW_NAME as KASKADE, kostenblatt::WORKFLOW_NAME as KOSTENBLATT,
-        netzengpass::WORKFLOW_NAME as NETZENGPASS, planungsdaten::WORKFLOW_NAME as PLANUNGSDATEN,
-        statusanfrage::WORKFLOW_NAME as STATUSANFRAGE,
-        verfuegbarkeit::WORKFLOW_NAME as VERFUEGBARKEIT,
-    },
-    aktivierung::{AktivierungCommand, AktivierungWorkflow, WORKFLOW_NAME as AKTIVIERUNG_WORKFLOW},
-    stammdaten::{
-        StammdatenCommand as RedispatchStammdatenCommand,
-        StammdatenWorkflow as RedispatchStammdatenWorkflow, WORKFLOW_NAME as STAMMDATEN_WORKFLOW,
-    },
-};
-use mako_wim::ersteinbau::{
-    ErsteinbauCommand, WORKFLOW_NAME as WIM_ERSTEINBAU_WORKFLOW, WimErsteinbauWorkflow,
-};
-use mako_wim::{
-    DeviceChangeCommand, GeraeteubernahmeCommand, INSRPT_WORKFLOW_NAME as WIM_INSRPT_WORKFLOW,
-    PreisanfrageCommand, PreislisteCommand, StammdatenCommand, SteuerungsauftragCommand,
-    StoerungsmeldungCommand, TechnikAenderungCommand, WeiterverpflichtungCommand,
-    WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicWorkflow,
-    WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
-    WimSteuerungsauftragWorkflow, WimTechnikAenderungWorkflow, WimWeiterverpflichtungWorkflow,
 };
 
 use mako_engine::metrics::EngineMetrics;
 use mako_engine::store_slatedb::{SlateDbSnapshotStore, SlateDbStore};
 
-// Command enums referenced by the dispatch table below. The table names each
-// as `Enum::Variant` with bare identifiers so the generated struct-variant
-// literal parses; these bring the module-qualified ones into scope.
-use mako_geli_gas::GasStammdatenCommand;
-use mako_gpke::{
-    BeendigungZuordnungCommand, EogCommand, KuendigungCommand as GpkeKuendigungCommand,
-    StammdatenCommand as GpkeStammdatenCommand,
-};
-use mako_wim::RechnungsabwicklungCommand;
-use mako_wim::esa_wertebestellung::EsaWertebestellungCommand;
-use mako_wim::wertebestellung::WertebestellungCommand;
+/// What a fired deadline came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fired {
+    /// A delivery window: an alert, no workflow consulted.
+    DeliveryWindow,
+    /// The workflow does not own the label; nothing decides it.
+    Unowned,
+    /// The workflow's `on_deadline` found the window already closed.
+    Closed,
+    /// The workflow's `on_deadline` acted and its events were persisted.
+    Acted,
+}
 
-/// Generate the deadline dispatch table and its `match` arms from one list.
+/// The driver of every workflow this binary registers, by name.
 ///
-/// Every entry names a workflow, its `Workflow` type, and the command variant
-/// that carries an expired deadline. The macro emits both
-/// [`DISPATCH_TABLE`] — which `assert_dispatch_coverage` checks at startup —
-/// and the arms that actually run, so the two cannot disagree.
-///
-/// That was a real hazard: the table and the arms were maintained separately,
-/// and a name present in the table but missing an arm passed startup validation
-/// while its deadlines fell through to the catch-all, were logged, and were then
-/// cancelled by the scheduler. A regulatory Frist would have expired with
-/// nothing but a log line, on a service that reported full coverage.
-///
-/// Three groups, because "this workflow has no arm" needs to be a statement
-/// rather than an omission:
-///
-/// - `timeout` — the standard shape: load the process, execute the command,
-///   snapshot.
-/// - `no_deadline` — workflows that register no deadline at all (pure
-///   receive-and-record). Listed so their absence from the arms is deliberate.
-/// - `custom` — handled by hand below, because their command carries extra
-///   fields or the arm consults state before alerting.
-macro_rules! deadline_dispatch {
-    (
-        timeout: { $( $name:expr => $Workflow:ty : $Enum:ident :: $Variant:ident ),+ $(,)? }
-        no_deadline: [ $( $recv:expr ),* $(,)? ]
-        custom: [ $( $custom:expr ),* $(,)? ]
-    ) => {
-        /// Every workflow name the deadline dispatcher handles.
-        ///
-        /// Generated from the `deadline_dispatch!` invocation, so it lists
-        /// exactly the workflows that have an arm.
-        /// [`assert_dispatch_coverage`] checks every registered workflow
-        /// against it at startup.
-        pub const DISPATCH_TABLE: &[&str] = &[ $( $name, )+ $( $recv, )* $( $custom, )* ];
+/// Built once from [`crate::startup::production_modules`] — the same list the
+/// engine is built from, so a role build sees exactly its own workflows.
+#[must_use]
+pub fn production_drivers() -> &'static HashMap<&'static str, WorkflowDriver> {
+    static DRIVERS: OnceLock<HashMap<&'static str, WorkflowDriver>> = OnceLock::new();
+    DRIVERS.get_or_init(|| {
+        crate::startup::production_modules()
+            .iter()
+            .flat_map(|m| m.drivers())
+            .map(|d| (d.name(), d))
+            .collect()
+    })
+}
 
-        /// Run the standard timeout arm for `wf_name`, if it has one.
-        ///
-        /// `None` means the name is not in the `timeout` group; the caller then
-        /// tries the `no_deadline` and `custom` groups.
-        async fn dispatch_timeout(
-            wf_name: &str,
-            identity: ProcessIdentity,
-            event_store: &Arc<SlateDbStore>,
-            snap_store: &SlateDbSnapshotStore,
-            snapshot_interval: u64,
-            deadline_id: mako_engine::ids::DeadlineId,
-            label: Box<str>,
-        ) -> Option<Result<(), EngineError>> {
-            $(
-                if wf_name == $name {
-                    let p = Process::<$Workflow, _>::from_identity(
-                        Arc::clone(event_store),
-                        identity,
-                    );
-                    return Some(async move {
-                        p.execute_and_enqueue_with_retry(
-                            $Enum::$Variant { deadline_id, label },
-                            3,
-                        )
-                        .await?;
-                        p.take_snapshot(snap_store, snapshot_interval).await.map(|_| ())
-                    }.await);
-                }
-            )+
-            let _ = (identity, event_store, snap_store, snapshot_interval, deadline_id, label);
-            None
-        }
+/// The labels each registered workflow owns, for every workflow that owns one.
+///
+/// Read by the `deadline_labels` guard, which holds every label a production
+/// site registers against the table of the workflow it registers it for.
+#[must_use]
+pub fn owned_labels() -> Vec<(&'static str, &'static [&'static str])> {
+    let mut out: Vec<(&'static str, &'static [&'static str])> = production_drivers()
+        .values()
+        .filter(|d| !d.deadline_labels().is_empty())
+        .map(|d| (d.name(), d.deadline_labels()))
+        .collect();
+    out.sort_unstable_by_key(|(name, _)| *name);
+    out
+}
 
-        /// `true` when `wf_name` registers no deadline and therefore needs no arm.
-        fn is_receipt_only(wf_name: &str) -> bool {
-            [ $( $recv, )* ].contains(&wf_name)
-        }
+/// Raise the regulatory alert for a delivery window that fired.
+///
+/// Reaching it means the window was still registered when it came due:
+/// `OutboxWorker::discharge_delivery_window` retires it the moment its message
+/// is delivered, so an undischarged window is an undelivered message.
+fn alert_delivery_window(deadline: &Deadline) {
+    let label = deadline.label();
+    let what = if label == mako_fristen::CONTRL_FRIST_LABEL {
+        "the CONTRL was not delivered within its window (CONTRL AHB 1.0 §2.3.1)"
+    } else if label == mako_fristen::APERAK_STROM_WINDOW_LABEL {
+        "the Strom APERAK was not delivered within 45 minutes of receipt, or by \
+         Sunday 12:00 on a Saturday (APERAK AHB 1.1 §2.4.1)"
+    } else {
+        "the Gas Verarbeitbarkeitsfehlermeldung was not delivered within its \
+         window (APERAK AHB 1.1 §2.3.1)"
     };
+    tracing::error!(
+        deadline_id = %deadline.deadline_id(),
+        workflow    = %deadline.workflow_id().name,
+        label       = %label,
+        "REGULATORY ALERT: delivery window expired — {what}. Inspect the outbox \
+         for stuck messages and the AS4 transport.",
+    );
 }
 
-deadline_dispatch! {
-    timeout: {
-    "gpke-supplier-change" => GpkeSupplierChangeWorkflow : SupplierChangeCommand::TimeoutExpired,
-    "gpke-sperrung" => GpkeSperrungWorkflow : SperrungCommand::TimeoutExpired,
-    "gpke-stornierung" => GpkeStornierungWorkflow : GpkeStornierungCommand::TimeoutExpired,
-    LF_ANMELDUNG_WORKFLOW => GpkeLfAnmeldungWorkflow : LfAnmeldungCommand::TimeoutExpired,
-    "gpke-konfiguration" => GpkeKonfigurationWorkflow : KonfigurationCommand::TimeoutExpired,
-    "gpke-abrechnung" => GpkeAbrechnungWorkflow : InvoicCommand::TimeoutExpired,
-    "wim-device-change" => WimDeviceChangeWorkflow : DeviceChangeCommand::TimeoutExpired,
-    "wim-geraeteubernahme" => WimGeraeteubernahmeWorkflow : GeraeteubernahmeCommand::TimeoutExpired,
-    "wim-stammdaten" => WimStammdatenWorkflow : StammdatenCommand::TimeoutExpired,
-    mako_wim::wertebestellung::WORKFLOW_NAME => mako_wim::wertebestellung::WimWertebestellungWorkflow : WertebestellungCommand::TimeoutExpired,
-    mako_wim::esa_wertebestellung::WORKFLOW_NAME => mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow : EsaWertebestellungCommand::TimeoutExpired,
-    "wim-steuerungsauftrag" => WimSteuerungsauftragWorkflow : SteuerungsauftragCommand::TimeoutExpired,
-    "geli-gas-supplier-change" => GeliGasSupplierChangeWorkflow : GasSupplierChangeCommand::TimeoutExpired,
-    "geli-gas-stornierung" => GeliGasStornierungWorkflow : GeliGasStornierungCommand::TimeoutExpired,
-    "geli-gas-stornierung-lf" => GeliGasLfStornierungWorkflow : LfStornierungCommand::TimeoutExpired,
-    // The LFN's own Anmeldung awaits the GNB's answer within the window the
-    // outbound Prüfidentifikator publishes — 4 Werktage for a 44001 (GeLi Gas
-    // 3.0 Kap. 3.2.3), not the LFN's 10-Werktage Vorlauffrist. Without this arm
-    // the window fires into the scheduler's `unknown` branch and the Vorgang
-    // stays `Pending` with its Frist already lapsed.
-    mako_geli_gas::LF_ANMELDUNG_WORKFLOW_NAME
-        => GeliGasLfAnmeldungWorkflow : GeliGasLfAnmeldungCommand::TimeoutExpired,
-    "geli-gas-datenabruf" => GeliGasDatenabrufWorkflow : GeliGasDatenabrufCommand::TimeoutExpired,
-    "geli-gas-sperrung-lf" => GeliGasSperrungLfWorkflow : GasSperrungLfCommand::TimeoutExpired,
-    "geli-gas-sperrung-nb" => GeliGasSperrungNbWorkflow : GasSperrungNbCommand::TimeoutExpired,
-    // `mabis-billing` has no timeout arm: BK6-24-174 Anlage 3 defines no
-    // response Frist for a Prüfmitteilung (Kap. 9.8.2 Nr. 1 leaves the cell
-    // empty). Its only deadline is the close of the clearing window, which is
-    // not a response window — nothing is owed when it fires, the settlement
-    // simply stops accepting versions — and the workflow answers it through its
-    // own `on_deadline` with `CloseClearing`.
-    "gpke-neuanlage" => GpkeNeuanlageWorkflow : NeuanlageCommand::TimeoutExpired,
-    "gpke-abrechnungsdaten" => GpkeAbrechnungsdatenWorkflow : GpkeAbrechnungsdatenCommand::TimeoutExpired,
-    "gpke-lf-abmeldung" => GpkeLfAbmeldungWorkflow : LfAbmeldungCommand::TimeoutExpired,
-    "gpke-beendigung-zuordnung" => GpkeBeendigungZuordnungWorkflow : BeendigungZuordnungCommand::TimeoutExpired,
-    "gpke-kuendigung" => GpkeKuendigungWorkflow : GpkeKuendigungCommand::TimeoutExpired,
-    "gpke-eog" => mako_gpke::GpkeEogWorkflow : EogCommand::TimeoutExpired,
-    "gpke-stammdatenaenderung" => mako_gpke::GpkeStammdatenaenderungWorkflow : GpkeStammdatenCommand::TimeoutExpired,
-    "geli-gas-stammdatenaenderung" => mako_geli_gas::GeliGasStammdatenaenderungWorkflow : GasStammdatenCommand::TimeoutExpired,
-    ANKUENDIGUNG_ZUORDNUNG_LF_WORKFLOW => GpkeAnkuendigungZuordnungLfWorkflow : AnkuendigungZuordnungLfCommand::TimeoutExpired,
-    ANFRAGE_BESTELLUNG_WORKFLOW => GpkeAnfrageBestellungWorkflow : AnfrageBestellungCommand::TimeoutExpired,
-    "wim-rechnungsabwicklung" => mako_wim::WimRechnungsabwicklungWorkflow : RechnungsabwicklungCommand::TimeoutExpired,
-    "wim-preisanfrage" => WimPreisanfrageWorkflow : PreisanfrageCommand::TimeoutExpired,
-    "wim-preisliste" => WimPreislisteWorkflow : PreislisteCommand::TimeoutExpired,
-    "wim-invoic" => WimInvoicWorkflow : InvoicCommand::TimeoutExpired,
-    "gabi-gas-invoic" => GaBiGasInvoicWorkflow : InvoicCommand::TimeoutExpired,
-    "geli-gas-sperrprozesse-invoic" => GeliGasSperrprozesseInvoicWorkflow : InvoicCommand::TimeoutExpired,
-    STAMMDATEN_WORKFLOW => RedispatchStammdatenWorkflow : RedispatchStammdatenCommand::TimeoutExpired,
-    AKTIVIERUNG_WORKFLOW => AktivierungWorkflow : AktivierungCommand::TimeoutExpired,
-    VERFUEGBARKEIT => VerfuegbarkeitWorkflow : AckForwardCommand::TimeoutExpired,
-    NETZENGPASS => NetzengpassWorkflow : AckForwardCommand::TimeoutExpired,
-    KASKADE => KaskadeWorkflow : AckForwardCommand::TimeoutExpired,
-    PLANUNGSDATEN => PlanungsdatenWorkflow : AckForwardCommand::TimeoutExpired,
-    STATUSANFRAGE => StatusanfrageWorkflow : AckForwardCommand::TimeoutExpired,
-    KOSTENBLATT => KostenblattWorkflow : AckForwardCommand::TimeoutExpired,
-    SPERRUNG_LF_WORKFLOW => GpkeSperrungLfWorkflow : SperrungLfCommand::TimeoutExpired,
-    WIM_INSRPT_WORKFLOW => WimInsrptWorkflow : StoerungsmeldungCommand::TimeoutExpired,
-    "gpke-konfiguration-aenderung" => GpkeKonfigurationAenderungWorkflow : KonfigurationAenderungCommand::TimeoutExpired,
-    "gpke-datenabruf" => GpkeDatenabrufWorkflow : DatenabrufCommand::TimeoutExpired,
-    "gpke-allokationsliste" => GpkeAllokationslisteWorkflow : AllokationslisteCommand::TimeoutExpired,
-    "wim-technik-aenderung" => WimTechnikAenderungWorkflow : TechnikAenderungCommand::TimeoutExpired,
-    "wim-weiterverpflichtung" => WimWeiterverpflichtungWorkflow : WeiterverpflichtungCommand::TimeoutExpired,
-    // An unanswered Vorabinformation is not a missing status line: without the
-    // wMSB's `A03` the gMSB may not fit the iMS, so the timer moves the Vorgang
-    // to `Abgelehnt` rather than letting it sit open (WiM Teil 1 Kap. 3.5.2).
-    WIM_ERSTEINBAU_WORKFLOW => WimErsteinbauWorkflow : ErsteinbauCommand::TimeoutExpired,
-    // NZR-EMob / Modell 2. Unlike the GPKE Beendigung der Zuordnung, **silence
-    // is not consent**: neither Anlage 6 nor the AWH gives an unanswered leg a
-    // default outcome, so the timer escalates rather than confirming — moving
-    // a Marktlokation between Bilanzierungsgebieten on no one's say-so is the
-    // one thing the model must not do.
-    mako_emob::EmobAnmeldungWorkflow::WORKFLOW_NAME
-        => mako_emob::EmobAnmeldungWorkflow : ModellwechselCommand::TimeoutExpired,
-    mako_emob::EmobZuordnungsendeWorkflow::WORKFLOW_NAME
-        => mako_emob::EmobZuordnungsendeWorkflow : ModellwechselCommand::TimeoutExpired,
-    mako_emob::EmobAbmeldungWorkflow::WORKFLOW_NAME
-        => mako_emob::EmobAbmeldungWorkflow : ModellwechselCommand::TimeoutExpired,
+/// Ask the workflow behind `driver` about one fired deadline — the one path a
+/// timeout takes.
+async fn decide(
+    driver: &WorkflowDriver,
+    deadline: &Deadline,
+    event_store: &Arc<SlateDbStore>,
+    snap_store: &SlateDbSnapshotStore,
+    snapshot_interval: u64,
+) -> Result<Fired, EngineError> {
+    if !driver.deadline_labels().contains(&deadline.label()) {
+        tracing::error!(
+            deadline_id = %deadline.deadline_id(),
+            workflow    = %deadline.workflow_id().name,
+            label       = %deadline.label(),
+            "deadline fired under a label its workflow does not own — nothing decides it. \
+             List the label in the workflow's DEADLINE_LABELS and decide it in on_deadline.",
+        );
+        return Ok(Fired::Unowned);
     }
-    no_deadline: [
-        // Pure receive-and-record workflows: they record an inbound message and
-        // register no Frist, so there is nothing for a timer to do.
-        "geli-gas-partin",
-        "mabis-clearingliste",
-        "mabis-listenabgleich",
-        "mabis-anforderung",
-        "mabis-zp-lifecycle",
-        // The two profile delivery Fristen (Kap. 6.5.3) are the **NB's**
-        // obligations toward the LF; this workflow models the receiving side.
-        "mabis-profile",
-        // MMMA delegates delivery to gpke-allokationsliste.
-        "gabi-gas-mmma",
-        // A SSQNOT is one-way NB → MGV; SSQNOT 5.7 publishes no answer and no
-        // Frist binds the receiver.
-        "gabi-gas-mehr-mindermengen",
-        // The Zuordnungs-Meldungen (55036/55037/55038, 44036/44037/44038) are
-        // Meldepflichten: no Antwortnachricht exists, so nothing on the
-        // receiving side can be late. The Frist they carry is the *sender's*,
-        // and it has already closed by the time the process is created — on the
-        // NB side by the command that dispatched the message, on the LF side by
-        // the arrival. The APERAK is enqueued in the same write as the event,
-        // so a timer for it could only fire on a discharged obligation.
-        mako_gpke::ZUORDNUNGSMELDUNG_WORKFLOW_NAME,
-        mako_geli_gas::GAS_ZUORDNUNGSMELDUNG_WORKFLOW_NAME,
-        // Registered by an EngineModule but carrying no deadline of their own.
-        mako_geli_gas::GAS_MSCONS_WORKFLOW_NAME,
-        mako_gpke::messwerte::WORKFLOW_NAME,
-        mako_gpke::partin::WORKFLOW_NAME,
-        mako_gpke::utilts::WORKFLOW_NAME,
-    ]
-    custom: [
-        // Commands with extra fields, or arms that consult state before
-        // alerting. Written out in `dispatch_deadline` below.
-        "mabis-billing",
-        "gabi-gas-nomination",
-        "gabi-gas-allocation",
-        // Delivery-window markers: no workflow, only a regulatory alert.
-        "contrl-ack-obligation",
-    ]
+    let acted = driver
+        .run_timeout(event_store, snap_store, snapshot_interval, deadline)
+        .await?;
+    Ok(if acted.is_some_and(|ran| !ran.is_empty()) {
+        Fired::Acted
+    } else {
+        Fired::Closed
+    })
 }
 
-/// Dispatch a fired `deadline` to the correct workflow's `TimeoutExpired` command.
+/// Dispatch a fired `deadline` to the workflow that decides it, looked up by
+/// name in `drivers` — the engine's own, as [`build_scheduler`] passes them,
+/// or [`production_drivers`].
 ///
-/// After a successful execute, takes a snapshot if the stream has accumulated
-/// a multiple of `snapshot_interval` events (auto-snapshot.
+/// After a successful decision, takes a snapshot if the stream has accumulated
+/// a multiple of `snapshot_interval` events.
 ///
-/// Returns `Ok(())` on success or non-conflict failure (the scheduler will
-/// cancel the deadline after this call). Returns `Err(EngineError::VersionConflict)`
-/// if the process was concurrently modified; the scheduler retries.
+/// Returns what the firing came to on success or non-conflict failure (the
+/// scheduler cancels the deadline after this call).
+///
+/// # Errors
+///
+/// `EngineError::VersionConflict` if the process was concurrently modified on
+/// every attempt — the scheduler retries — and storage errors.
 pub async fn dispatch_deadline(
+    drivers: &HashMap<&'static str, WorkflowDriver>,
     deadline: Deadline,
     event_store: Arc<SlateDbStore>,
     snap_store: SlateDbSnapshotStore,
     snapshot_interval: u64,
-) -> Result<(), EngineError> {
+) -> Result<Fired, EngineError> {
     let wf_name = deadline.workflow_id().name.as_ref();
-    let identity = ProcessIdentity::new(
-        deadline.process_id(),
-        deadline.tenant_id(),
-        deadline.workflow_id().clone(),
-    );
-    let deadline_id = deadline.deadline_id();
-    let label: Box<str> = deadline.label().into();
 
     // The `family` metric label, from the one table that owns it — a local
     // `split('-')` here reads `geli-gas-…` as `geli` and stops joining the
     // command counters.
     let family = crate::orchestrator::process_family::from_workflow(wf_name);
 
-    // ── APERAK Strom 45-minute sending-window obligation (APERAK AHB 1.0 §2.4.1) ──
-    //
-    // Reaching this point means the window was still registered when it came
-    // due: `OutboxWorker::discharge_delivery_window` retires it the moment the
-    // APERAK is delivered, so an undischarged window is an undelivered APERAK.
-    // That is a BNetzA regulatory compliance violation.
-    //
-    // The alert is unconditional *because* of that discharge — without it the
-    // window would outlive every obligation it monitors and fire on every Strom
-    // process, answered or not.
-    //
-    // This label is purely a monitoring marker: it does NOT carry a workflow
-    // command.  Log the alert and return early — do NOT dispatch TimeoutExpired
-    // to the process (the process is waiting for an AS4 delivery, not a timer).
-    if label.as_ref() == mako_fristen::APERAK_STROM_WINDOW_LABEL {
-        tracing::error!(
-            deadline_id = %deadline_id,
-            workflow    = %wf_name,
-            "REGULATORY ALERT: APERAK 45-minute Strom sending-window expired \
-             (APERAK AHB 1.0 §2.4.1). The outbound APERAK was not delivered \
-             within 45 minutes of receipt (or by Sunday 12:00 on Saturday). \
-             Check the OutboxWorker health and AS4 transport immediately.",
-        );
-        return Ok(());
-    }
-
-    // Standard timeout arms come from the `deadline_dispatch!` table above.
-    let result = if let Some(r) = dispatch_timeout(
-        wf_name,
-        identity,
-        &event_store,
-        &snap_store,
-        snapshot_interval,
-        deadline_id,
-        label.clone(),
-    )
-    .await
-    {
-        r
-    } else if is_receipt_only(wf_name) {
-        // Declared in the `no_deadline` group: the workflow records inbound
-        // messages and registers no Frist, so a fired deadline here can only be
-        // a leftover from an earlier registration. Nothing to do.
-        tracing::debug!(
-            deadline_id = %deadline_id,
-            workflow    = %wf_name,
-            "deadline fired for a receipt-only workflow — no action",
-        );
-        Ok(())
+    let result = if mako_fristen::is_delivery_window(deadline.label()) {
+        alert_delivery_window(&deadline);
+        Ok(Fired::DeliveryWindow)
+    } else if let Some(driver) = drivers.get(wf_name) {
+        decide(
+            driver,
+            &deadline,
+            &event_store,
+            &snap_store,
+            snapshot_interval,
+        )
+        .await
     } else {
-        // The `custom` group: commands carrying extra fields, and arms that
-        // consult process state before raising a regulatory alert.
-        let identity = ProcessIdentity::new(
-            deadline.process_id(),
-            deadline.tenant_id(),
-            deadline.workflow_id().clone(),
+        tracing::error!(
+            deadline_id  = %deadline.deadline_id(),
+            workflow     = %wf_name,
+            label        = %deadline.label(),
+            "deadline fired for a workflow this binary registers no driver for — \
+             nothing decides it",
         );
-        match wf_name {
-            "mabis-billing" => {
-                // The close of the clearing window (Kap. 3.10 Tabelle 2), not a
-                // response window: nothing is owed by this participant when it
-                // fires, the settlement simply stops accepting versions.
-                //
-                // It is `custom` because the command carries the Abrechnungslauf
-                // rather than a deadline id, and because there is deliberately
-                // **no** Prüfmitteilung timeout to sit alongside it — Kap. 9.8.2
-                // Nr. 1 gives the Prüfmitteilung an empty Frist cell.
-                let p = Process::<MabisBillingWorkflow, _>::from_identity(
-                    Arc::clone(&event_store),
-                    identity,
-                );
-                let lauf = if label.as_ref() == mako_mabis::CLEARING_ENDE_LABEL {
-                    mako_mabis::Abrechnungslauf::Bka
-                } else {
-                    mako_mabis::Abrechnungslauf::Kbka
-                };
-                p.execute_and_enqueue_with_retry(
-                    mako_mabis::BillingCommand::CloseClearing { lauf },
-                    3,
-                )
-                .await?;
-                p.take_snapshot(&snap_store, snapshot_interval)
-                    .await
-                    .map(|_| ())
-            }
-            "gabi-gas-nomination" => {
-                // NOMRES response deadline — no response from FNB/MGV before D-1 15:00.
-                let p = Process::<GaBiGasNominationWorkflow, _>::from_identity(
-                    Arc::clone(&event_store),
-                    identity,
-                );
-                p.execute_and_enqueue_with_retry(
-                    NominationCommand::NomresDeadlineExpired {
-                        deadline_id,
-                        label: label.into(),
-                    },
-                    3,
-                )
-                .await?;
-                p.take_snapshot(&snap_store, snapshot_interval)
-                    .await
-                    .map(|_| ())
-            }
-            "gabi-gas-allocation" => {
-                // § 47 Ziffer 1 KoV XV final-allocation window (M+14 Werktage,
-                // 12:00 — the RLM figure, which is the only one an inbound
-                // ALOCAT can still be watched against; SLP is final on D-1).
-                //
-                // The window is registered when the *first* ALOCAT for a gas day
-                // arrives and is never cancelled, so this deadline fires for every
-                // gas day — including the ones that settled normally. Whether the
-                // obligation was actually missed is a question only the state can
-                // answer, so go through `execute_timeout_with_retry`: it consults
-                // `on_deadline`, which returns `None` for a settled or
-                // already-overdue stream. Alerting before that check would page the
-                // operator on the healthiest path there is.
-                let p = Process::<GaBiGasAllocationWorkflow, _>::from_identity(
-                    Arc::clone(&event_store),
-                    identity,
-                );
-                let fired = p.execute_timeout_with_retry(&deadline, 3).await?;
-                if fired.is_some_and(|events| !events.is_empty()) {
-                    tracing::error!(
-                        deadline_id = %deadline_id,
-                        label       = %label,
-                        "REGULATORY ALERT: GaBi Gas final-allocation window expired \
-                         (§ 47 Ziffer 1 KoV XV) — no binding final ALOCAT was received \
-                         for this gas day within M+14 Werktage. The imbalance cannot be \
-                         settled; raise a Clearingfall with the FNB/MGV.",
-                    );
-                } else {
-                    tracing::debug!(
-                        deadline_id = %deadline_id,
-                        "gabi-gas-allocation: final-allocation window closed on a \
-                         settled gas day — no action",
-                    );
-                }
-                p.take_snapshot(&snap_store, snapshot_interval)
-                    .await
-                    .map(|_| ())
-            }
-            "contrl-ack-obligation" => {
-                tracing::error!(
-                    deadline_id = %deadline_id,
-                    label       = %label,
-                    "REGULATORY ALERT: CONTRL 6h delivery window expired \
-                     (CONTRL AHB 1.0 §2.3.1) — the Gas CONTRL Empfangsbestätigung \
-                     was NOT delivered within 6 hours of receipt. \
-                     Inspect the outbox for stuck messages and trigger manual re-delivery.",
-                );
-                Ok(())
-            }
-            unknown => {
-                tracing::error!(
-                    deadline_id  = %deadline_id,
-                    workflow     = %unknown,
-                    label        = %label,
-                    "deadline scheduler: no dispatch arm for this workflow — \
-                     deadline dropped. Add it to the deadline_dispatch! table.",
-                );
-                Ok(())
-            }
-        }
+        Ok(Fired::Unowned)
     };
 
-    // Increment the per-family deadline-fired counter on successful dispatch.
+    if let Ok(Fired::Acted) = result {
+        tracing::warn!(
+            deadline_id = %deadline.deadline_id(),
+            workflow    = %wf_name,
+            label       = %deadline.label(),
+            "Frist lapsed with its window still open — the workflow recorded the lapse",
+        );
+    }
     if result.is_ok() {
         EngineMetrics::global().deadline_fired(family);
     }
@@ -509,34 +206,7 @@ pub async fn dispatch_deadline(
     result
 }
 
-/// Assert that every workflow in `registered` has a dispatch-table entry.
-///
-/// # Panics
-///
-/// Panics with an actionable message when a workflow name declared by an
-/// `EngineModule` is absent from [`DISPATCH_TABLE`].  Call this at startup
-/// before spawning the scheduler so missing entries are caught immediately.
-pub fn assert_dispatch_coverage(registered: &[&str]) {
-    for &wf in registered {
-        if !DISPATCH_TABLE.contains(&wf) {
-            panic!(
-                "deadline_dispatch: workflow '{wf}' is registered by an EngineModule but has \
-                 no entry in the dispatch table (deadline_dispatch::DISPATCH_TABLE). \
-                 Add a match arm to dispatch_deadline() and add the name to DISPATCH_TABLE.",
-            );
-        }
-    }
-}
-
-/// Build the deadline scheduler and verify dispatch coverage at startup.
-///
-/// # Panics
-///
-/// Panics when a workflow name declared by a registered `EngineModule` via
-/// [`workflow_names`] is not covered by [`dispatch_deadline`]. This converts
-/// a silent regulatory miss into an immediate startup failure.
-///
-/// [`workflow_names`]: mako_engine::builder::EngineModule::workflow_names
+/// Build the deadline scheduler.
 pub fn build_scheduler<SS, OS, DS, PR>(
     ctx: &mako_engine::builder::EngineContext<SlateDbStore, SS, OS, DS, PR>,
     event_store: Arc<SlateDbStore>,
@@ -549,13 +219,24 @@ where
     OS: mako_engine::outbox::OutboxStore,
     PR: mako_engine::registry::ProcessRegistry,
 {
-    assert_dispatch_coverage(ctx.registered_workflows());
-
+    tracing::info!(
+        workflows = ctx.drivers().len(),
+        workflows_with_frist = owned_labels().len(),
+        "deadline scheduler: every registered workflow decides its own deadlines",
+    );
+    // The engine's own drivers: the workflows this context was built with.
+    let drivers: Arc<HashMap<&'static str, WorkflowDriver>> =
+        Arc::new(ctx.drivers().iter().map(|d| (d.name(), *d)).collect());
     ctx.run_deadline_scheduler(
         move |deadline| {
             let es = Arc::clone(&event_store);
             let ss = event_store.as_snapshot_store();
-            Box::pin(async move { dispatch_deadline(deadline, es, ss, snapshot_interval).await })
+            let drivers = Arc::clone(&drivers);
+            Box::pin(async move {
+                dispatch_deadline(&drivers, deadline, es, ss, snapshot_interval)
+                    .await
+                    .map(|_| ())
+            })
         },
         100,
         poll_interval,
@@ -563,98 +244,39 @@ where
 }
 
 #[cfg(test)]
-mod dispatch_table_tests {
-    /// A workflow may appear in exactly one group of the `deadline_dispatch!`
-    /// invocation.
-    ///
-    /// The three groups are tried in order — `timeout`, then `no_deadline`,
-    /// then `custom` — so a name listed twice silently takes the earlier
-    /// behaviour. A workflow that grows a real Frist but keeps its old
-    /// `no_deadline` entry would look dispatched and do nothing.
+mod driver_tests {
+    /// A workflow that publishes an answer window owns its label, so a fired
+    /// deadline reaches its `on_deadline` rather than being dropped as unowned.
     #[test]
-    fn no_workflow_appears_in_two_groups() {
-        let mut seen = std::collections::HashSet::new();
-        let dupes: Vec<&str> = super::DISPATCH_TABLE
-            .iter()
-            .filter(|n| !seen.insert(**n))
-            .copied()
-            .collect();
-        assert!(
-            dupes.is_empty(),
-            "these workflows are listed in more than one deadline_dispatch! group: {dupes:?}"
-        );
-    }
-
-    /// Every name `is_receipt_only` accepts must be in the table, and every
-    /// name it rejects must be handled elsewhere.
-    ///
-    /// `is_receipt_only` is generated from the `no_deadline` group while the
-    /// table is generated from all three, so a name drifting out of the group
-    /// without leaving the table would silently move from "no action" to the
-    /// `custom` catch-all, which logs a regulatory alert. The classification is
-    /// what decides between those, so it is asserted directly rather than
-    /// inferred from the table.
-    #[test]
-    fn the_receipt_only_group_is_a_subset_of_the_table() {
-        let receipt_only: Vec<&str> = super::DISPATCH_TABLE
-            .iter()
-            .copied()
-            .filter(|n| super::is_receipt_only(n))
-            .collect();
-        assert!(
-            !receipt_only.is_empty(),
-            "the no_deadline group is non-empty, so is_receipt_only must accept \
-             at least one table entry — an always-false predicate would send \
-             every receive-and-record workflow to the custom catch-all",
-        );
-        for name in receipt_only {
-            assert!(
-                super::DISPATCH_TABLE.contains(&name),
-                "{name} is classified receipt-only but is absent from DISPATCH_TABLE, \
-                 so assert_dispatch_coverage would not catch its removal",
-            );
-        }
-    }
-
-    /// Every workflow that publishes an answer window must have a *timeout*
-    /// arm, not a `no_deadline` one.
-    ///
-    /// `assert_dispatch_coverage` only asks whether a name is in the table at
-    /// all, and the `no_deadline` group is in the table — so classifying a
-    /// workflow that does register a Frist as receipt-only passes the coverage
-    /// check while doing nothing when the Frist fires. These are the families
-    /// whose deadline is a counterparty's published answer window, which is the
-    /// case where firing into nothing means a lapsed regulatory obligation on a
-    /// process that still looks healthy.
-    #[test]
-    fn a_workflow_with_an_answer_window_is_not_classified_receipt_only() {
+    fn a_workflow_with_an_answer_window_owns_its_label() {
+        let owned = super::owned_labels();
         for name in [
             mako_geli_gas::LF_ANMELDUNG_WORKFLOW_NAME,
-            super::LF_ANMELDUNG_WORKFLOW,
-            super::WIM_ERSTEINBAU_WORKFLOW,
+            mako_gpke::lf_anmeldung::WORKFLOW_NAME,
+            mako_wim::ersteinbau::WORKFLOW_NAME,
             "gpke-beendigung-zuordnung",
             "gpke-kuendigung",
         ] {
             assert!(
-                super::DISPATCH_TABLE.contains(&name),
-                "{name} registers a published answer window and must be in DISPATCH_TABLE",
-            );
-            assert!(
-                !super::is_receipt_only(name),
-                "{name} registers a published answer window, so a receipt-only \
-                 classification would let the Frist fire into nothing while \
-                 assert_dispatch_coverage still passes",
+                owned
+                    .iter()
+                    .any(|(n, labels)| *n == name && !labels.is_empty()),
+                "{name} registers a published answer window and must own its label",
             );
         }
     }
 
-    /// A name in no group at all must not be silently accepted.
+    /// No workflow lists a delivery window: it is the outbox's, not the
+    /// workflow's.
     #[test]
-    fn an_unknown_workflow_is_not_receipt_only() {
-        assert!(
-            !super::is_receipt_only("definitely-not-a-workflow"),
-            "is_receipt_only must reject unknown names; accepting them would turn \
-             a missing dispatch arm into a silent no-op instead of an alert",
-        );
+    fn no_workflow_owns_a_delivery_window() {
+        for (name, labels) in super::owned_labels() {
+            for label in labels {
+                assert!(
+                    !mako_fristen::is_delivery_window(label),
+                    "{name} lists the delivery window {label}; it is the outbox's, not the workflow's"
+                );
+            }
+        }
     }
 }

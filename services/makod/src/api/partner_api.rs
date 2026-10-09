@@ -36,6 +36,7 @@
 //! Until full PARTIN segment extraction is implemented the endpoint returns
 //! `501 Not Implemented`.
 
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{
@@ -147,10 +148,6 @@ fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
 }
 
-fn forbidden() -> Response {
-    (StatusCode::FORBIDDEN, "Forbidden").into_response()
-}
-
 fn internal_error(e: impl std::fmt::Display) -> Response {
     tracing::error!(error = %e, "partner admin API error");
     (
@@ -191,7 +188,7 @@ pub(crate) async fn handle_list(
             mp_id: None,
         },
     ) {
-        return forbidden();
+        return ApiError::Forbidden.into_response();
     }
     match state.store.list(state.tenant_id).await {
         Ok(partners) => {
@@ -232,7 +229,7 @@ pub(crate) async fn handle_get(
             mp_id: Some(&mp_id_str),
         },
     ) {
-        return forbidden();
+        return ApiError::Forbidden.into_response();
     }
     let mp_id = MarktpartnerCode::from(mp_id_str.as_str());
     match state.store.get(state.tenant_id, &mp_id).await {
@@ -302,7 +299,7 @@ pub(crate) async fn handle_put(
             mp_id: Some(&mp_id_str),
         },
     ) {
-        return forbidden();
+        return ApiError::Forbidden.into_response();
     }
     let path_gln = MarktpartnerCode::from(mp_id_str.as_str());
     if record.mp_id != path_gln {
@@ -375,7 +372,7 @@ pub(crate) async fn handle_delete(
             mp_id: Some(&mp_id_str),
         },
     ) {
-        return forbidden();
+        return ApiError::Forbidden.into_response();
     }
     let mp_id = MarktpartnerCode::from(mp_id_str.as_str());
     match state.store.remove(state.tenant_id, &mp_id).await {
@@ -434,7 +431,7 @@ pub(crate) async fn handle_import(
             mp_id: None,
         },
     ) {
-        return forbidden();
+        return ApiError::Forbidden.into_response();
     }
     if body.is_empty() {
         return (

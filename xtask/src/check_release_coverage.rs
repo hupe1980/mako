@@ -215,7 +215,7 @@ pub fn check_release_coverage() {
 /// The landing page and the site footer name the Formatversionen mako ships
 /// (`site/config.toml`, `extra.format_versions`). Importing a new one moves the
 /// span and leaves the claim understating what the platform reads — the same
-/// drift `services/makod/tests/published_counts.rs` stops for the PID count.
+/// drift `services/makod/tests/it/published_counts.rs` stops for the PID count.
 ///
 /// The claim is a **span**, not a list: mako keeps every imported Formatversion
 /// resolvable so a process started under an older one runs to completion under

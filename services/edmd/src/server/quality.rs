@@ -1,6 +1,9 @@
 //! Quality scoring: assessments, per-batch reports and retroactive rescoring.
 
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "used only in some feature or target combinations"
+)]
 use super::*;
 
 // ── Quality assessments ─────────────────────────────────────────────────
@@ -82,9 +85,7 @@ pub(crate) async fn list_quality_assessments(
 /// The window and threshold are `metering`\'s, per commodity
 /// ([`metering::QualityConfig::for_sparte`]), and are reported in
 /// [`Self::algorithm`] rather than named in prose — a hardcoded label drifts
-/// from the numbers actually used. The response used to advertise
-/// `hampel_k3_t3` while the crate ran a 12-interval half-window at 6 robust
-/// sigma.
+/// from the numbers actually used.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct QualityReport {
     pub intervals_accepted: usize,

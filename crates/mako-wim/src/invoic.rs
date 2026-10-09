@@ -24,7 +24,8 @@
 //! | Rechnung | Zahler | Spätester ÜT der Antwort | Fundstelle |
 //! |---|---|---|---|
 //! | MSB-Rechnung 31009 | NB | **4. WT vor** dem Zahlungsziel | WiM Teil 1 Kap. 6.2 Nr. 2 |
-//! | MSB-Rechnung 31009 | LF · ESA | zum Zahlungsziel | Kap. 3.6.3.8.2 Nr. 2/4 |
+//! | MSB-Rechnung 31009 | LF | zum Zahlungsziel | Kap. 3.6.3.8.2 Nr. 2/4 |
+//! | MSB-Rechnung 31009 | ESA | **4. WT vor** dem Zahlungsziel | WiM Teil 2 Kap. 4.5.2 Nr. 2 |
 //! | WiM-Rechnung 31003 | NB · MSBN | zum Zahlungsziel | Kap. 3.7.2 Nr. 2/4 |
 //!
 //! The MSB's Mitteilung that a refused invoice was correct after all (COMDIS

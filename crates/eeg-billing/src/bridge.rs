@@ -7,9 +7,8 @@
 //! # A `PricingModel` with no usage
 //!
 //! EEG settlement is a **scalar calculation** — the positions are already computed
-//! by [`crate::calculate_settlement`], with no usage input. `billing` 0.12 folded
-//! the old `ScalarTariff` into [`billing::PricingModel`] rather than keeping two
-//! traits, so that shape is now expressed as `type Usage = ()`;
+//! by [`crate::calculate_settlement`], with no usage input, so it is a
+//! [`billing::PricingModel`] with `type Usage = ()`;
 //! [`crate::tariff::EegSettleTariff`] implements it. The domain not-billable
 //! reasons (`NoData` / `PriceMissing`) live on
 //! [`crate::SettleOutput::status`], which is richer than a billing-layer reason and
@@ -39,7 +38,8 @@ use crate::model::{SettleOutput, SettlementStatus};
 
 /// Convert a settlement result into [`billing::LineItem`] positions.
 ///
-/// Returns an **empty** `Vec` for `NoData` and `PriceMissing` — nothing to bill yet.
+/// Returns an **empty** `Vec` for `NoData`, `PriceMissing` and
+/// `FassungNichtTabelliert` — nothing to bill yet.
 ///
 /// Every other status delegates to `SettlePosition::to_line_item` on the
 /// positions [`crate::calculate_settlement`] already computed. That includes
@@ -53,7 +53,9 @@ use crate::model::{SettleOutput, SettlementStatus};
 pub fn settlement_to_line_items(output: &SettleOutput) -> Vec<LineItem> {
     match output.status {
         // Nothing to bill — no document positions issued.
-        SettlementStatus::NoData | SettlementStatus::PriceMissing => vec![],
+        SettlementStatus::NoData
+        | SettlementStatus::PriceMissing
+        | SettlementStatus::FassungNichtTabelliert => vec![],
 
         SettlementStatus::Calculated
         | SettlementStatus::FoerderungBeendet

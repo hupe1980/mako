@@ -30,6 +30,9 @@
 //! | 31009 | WiM MSB-Rechnung | `PreisblattMessung` + AufAbschlag | `wim.rechnung.*` |
 //! | 31011 | Rechnung sonstige Leistung — **Sparte-neutral** (GPKE Teil 2 · AWH Sperrprozesse Gas) | NNE price sheet | `invoic.sonstige-leistung.*` |
 //!
+//! 31010 (Kapazitätsrechnung, NB an KN) is **refused** into `invoic_dlq` with
+//! [`KAPAZITAETSRECHNUNG_REFUSAL`]: no route, and no silent `204` either.
+//!
 //! Sources: BDEW INVOIC AHB (Anwendungsübersicht Prüfidentifikatoren 4.0),
 //! BK6-24-174; WiM Teil 1; GaBi Gas 2.1 (BK7-24-01-008); GeLi Gas 3.0
 //! (BK7-24-01-009).
@@ -68,7 +71,7 @@ pub enum CheckKind {
 }
 
 /// One PID's handling.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PidRoute {
     /// The Prüfidentifikator.
     pub pid: u32,
@@ -171,6 +174,48 @@ pub const ROUTES: &[PidRoute] = &[
     },
 ];
 
+/// What `invoicd` does with an inbound INVOIC of one Prüfidentifikator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Disposition {
+    /// Checked and answered through this route.
+    Check(&'static PidRoute),
+    /// Not checked, and recorded in `invoic_dlq` with this reason — so an
+    /// INVOIC this service cannot answer is visible to the operator instead of
+    /// acknowledged and forgotten.
+    Refuse(&'static str),
+    /// Not an INVOIC Prüfidentifikator; nothing to do.
+    NotInvoic,
+}
+
+/// Why an inbound Kapazitätsrechnung is refused rather than checked.
+pub const KAPAZITAETSRECHNUNG_REFUSAL: &str = "PID 31010 Kapazitätsrechnung is not checked: \
+     it is sent by the NB to the Kapazitätsnutzer (INVOIC AHB 1.0b Kap. 3.1.4 \
+     „Kommunikation von NB an KN“; Anwendungsübersicht der Prüfidentifikatoren 4.0), \
+     a role this deployment does not play and no answer command permits. The \
+     message is also no invoice under the UStG — `BGM` DE1004 names the PDF \
+     Kapazitätsrechnung, which is the document to check (INVOIC AHB 1.0b \
+     Änd-ID 26872). Check the PDF and settle it by hand.";
+
+/// INVOIC Prüfidentifikatoren this service receives and refuses, with the
+/// reason recorded beside each.
+pub const REFUSED: &[(u32, &str)] = &[(31010, KAPAZITAETSRECHNUNG_REFUSAL)];
+
+/// The INVOIC Prüfidentifikatoren the Anwendungsübersicht der
+/// Prüfidentifikatoren 4.0 publishes: every one is either routed or refused.
+pub const INVOIC_PIDS: std::ops::RangeInclusive<u32> = 31001..=31011;
+
+/// What to do with an inbound INVOIC of `pid`.
+#[must_use]
+pub fn disposition_for(pid: u32) -> Disposition {
+    if let Some(route) = route_for(pid) {
+        return Disposition::Check(route);
+    }
+    if let Some((_, reason)) = REFUSED.iter().find(|(p, _)| *p == pid) {
+        return Disposition::Refuse(reason);
+    }
+    Disposition::NotInvoic
+}
+
 /// The route for `pid`, or `None` when this service does not answer it.
 ///
 /// Returning `None` rather than a default route is deliberate: dispatching
@@ -224,11 +269,44 @@ mod tests {
         }
     }
 
+    /// Every published INVOIC Prüfidentifikator is routed or refused — none
+    /// is acknowledged with a `204` and dropped, which is what a PID without a
+    /// disposition gets.
+    #[test]
+    fn every_invoic_pid_is_routed_or_refused() {
+        for pid in INVOIC_PIDS {
+            assert_ne!(
+                disposition_for(pid),
+                Disposition::NotInvoic,
+                "INVOIC PID {pid} is neither checked nor refused"
+            );
+        }
+        assert_eq!(disposition_for(55001), Disposition::NotInvoic);
+    }
+
+    /// The Kapazitätsrechnung is refused with its direction and its source.
+    #[test]
+    fn the_kapazitaetsrechnung_is_refused_with_its_reason() {
+        let Disposition::Refuse(reason) = disposition_for(31010) else {
+            panic!("31010 must be refused, not checked or ignored");
+        };
+        assert!(reason.contains("NB an KN"), "{reason}");
+        assert!(reason.contains("Kap. 3.1.4"), "{reason}");
+    }
+
+    /// A refused PID is never also routed: one disposition per PID.
+    #[test]
+    fn no_pid_is_both_routed_and_refused() {
+        for (pid, _) in REFUSED {
+            assert!(route_for(*pid).is_none(), "PID {pid} is routed and refused");
+        }
+    }
+
     /// A PID this service does not answer must not fall through to a default.
     #[test]
     fn an_unknown_pid_has_no_route() {
         assert!(route_for(0).is_none());
-        assert!(route_for(31010).is_none(), "Gas Kapazität is not handled");
+        assert!(route_for(31010).is_none(), "31010 is refused, not routed");
         assert!(route_for(55001).is_none(), "a UTILMD PID is not an INVOIC");
     }
 

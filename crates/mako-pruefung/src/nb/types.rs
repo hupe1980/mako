@@ -364,7 +364,11 @@ pub(crate) mod date_opt {
     use time::Date;
     use time::format_description::well_known::Iso8601;
 
-    #[allow(clippy::ref_option, clippy::trivially_copy_pass_by_ref)]
+    #[expect(
+        clippy::ref_option,
+        clippy::trivially_copy_pass_by_ref,
+        reason = "serde's `serialize_with` fixes the signature to `&Option<T>`"
+    )]
     pub fn serialize<S: Serializer>(v: &Option<Date>, s: S) -> Result<S::Ok, S::Error> {
         match v {
             Some(d) => s.serialize_some(
@@ -486,7 +490,10 @@ impl TranchenLage {
 /// and two Zustimmungen that differ in what the NB does next (`A55` triggers
 /// „Herstellung einer 100 % LF-Zuordnung", `A56` does not).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent switch, not a state machine"
+)]
 pub struct TranchenZuordnung {
     /// Prüfschritt 500 — „Wurden Anfragen zur Beendigung der Zuordnung an die
     /// zugeordneten Lieferanten der Tranchen … gestellt?" `false` when the

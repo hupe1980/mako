@@ -97,6 +97,11 @@ CREATE TABLE billing_records (
     -- valid e-invoice of it, and the render endpoints say so instead of
     -- telling the operator to re-run a calculation that would refuse again.
     en16931_blocked     TEXT,
+    -- § 14 Abs. 2 Satz 2 Nr. 1 UStG: whether the Leistungsempfänger is a
+    -- Unternehmer receiving for his Unternehmen, as the contract's customer
+    -- segment said at billing. NULL = not recorded; the paper path refuses the
+    -- § 27 Abs. 38 UStG grace on it rather than assume either answer.
+    empfaenger_unternehmer BOOLEAN,
 
     -- Monetary summary for fast reporting (avoids JSONB parse).
     --

@@ -67,24 +67,29 @@ CUSTOMER_IBAN="DE02120300000000202051"
 # What the invoice must come to, computed here so the assertion is independent
 # of the service that produces it:
 #
-#   Grundpreis     20 ct/Tag  × 31 Tage          =  6.20 EUR
-#   Arbeitspreis   32 ct/kWh  × 250 kWh          = 80.00 EUR
-#   Stromsteuer    2.05 ct/kWh × 250 kWh         =  5.125 EUR  (§ 3 StromStG)
-#   Netto                                         = 91.325 EUR
-#   USt 19 %                                      = 17.35175 → 17.35 EUR
-#   Brutto                                        = 108.675 EUR
+#   Grundpreis      20 ct/Tag   × 31 Tage        =   6.20 EUR
+#   Arbeitspreis    32 ct/kWh   × 250 kWh        =  80.00 EUR
+#   Stromsteuer     2.05 ct/kWh × 250 kWh        =   5.125 → 5.13 EUR  (§ 3 StromStG)
+#   Netznutzung AP  8.00 ct/kWh × 250 kWh        =  20.00 EUR  (the `grid` override)
+#   Netto                                         = 111.33 EUR  (the sum of the rounded lines)
+#   USt 19 %                                      =  21.1527 → 21.15 EUR
+#   Brutto                                        = 132.48 EUR
+#
+# Each line is rounded to the cent once and the totals are the sum of the
+# printed lines, so the BO4E Rechnung and the EN 16931 model state one figure.
 #
 # The Stromsteuer is **not** a caller override: § 3 StromStG fixes it at
 # 2.05 ct/kWh and `billingd` applies it to every Strom supply whatever the
-# `grid` block says. A demo that expected 86.20 would be asserting that mako
+# `grid` block says. A demo that expected 106.20 would be asserting that mako
 # forgets a tax.
 VERBRAUCH_KWH="250"
-EXPECTED_NETTO="91.325"
-EXPECTED_BRUTTO="108.675"
+NNE_ARBEITSPREIS_CT="8.00"
+EXPECTED_NNE_EUR="20.00"
+EXPECTED_NETTO="111.33"
+EXPECTED_BRUTTO="132.48"
 # What the customer actually owes. A receivable is a payable amount, so the
-# ledger holds integer cents — 108.675 rounds kaufmännisch to 108.68, and the
-# payment is for that.
-EXPECTED_FORDERUNG="108.68"
+# ledger holds integer cents — the gross already is one.
+EXPECTED_FORDERUNG="132.48"
 
 # Decimal strings come back at whatever scale the service chose ("102.58" vs
 # "102.580"), so amounts are compared by value, never by spelling.
@@ -345,9 +350,12 @@ echo
 
 # ── 3. billingd — the invoice ────────────────────────────────────────────────
 #
-# `meter` and `grid` are the documented overrides: this demo runs no edmd, so
-# the reading is supplied here and the invoice is reproducible to the cent.
-# `demos/eeg-billing` is where a reading actually comes out of edmd.
+# `meter` and `grid` are the documented overrides: this demo runs no edmd and
+# no marktd, so the reading and the Netzentgelt are supplied here and the
+# invoice is reproducible to the cent. `demos/eeg-billing` is where a reading
+# actually comes out of edmd. `grid` names `GridInput`'s own fields — the type
+# refuses an unknown one, because every grid field is optional and a dropped
+# key would bill no Netzentgelt at all.
 info "[3] billingd — POST calculate for ${PERIOD_FROM}..${PERIOD_TO}"
 CALC_JSON=$(cat <<JSON
 {
@@ -356,9 +364,7 @@ CALC_JSON=$(cat <<JSON
   "period_from": "${PERIOD_FROM}",
   "period_to": "${PERIOD_TO}",
   "meter": { "arbeitsmenge_kwh": "${VERBRAUCH_KWH}" },
-  "grid": { "netzentgelt_eur": "0", "messentgelt_eur": "0",
-            "umlagen_eur": "0", "konzessionsabgabe_eur": "0",
-            "stromsteuer_eur": "0" }
+  "grid": { "nne_arbeitspreis_ct_per_kwh": "${NNE_ARBEITSPREIS_CT}" }
 }
 JSON
 )
@@ -372,6 +378,16 @@ BRUTTO=$(jq -r '.total_brutto_eur // .brutto_eur' <<<"$RECHNUNG")
 RECHNUNGSNUMMER=$(jq -r '.rechnungsnummer' <<<"$RECHNUNG")
 [ -n "$BILLING_ID" ] && [ "$BILLING_ID" != "null" ] || fail "no invoice id in $RECHNUNG"
 pass "POST /api/v1/billing/${MALO_ID}/calculate → $code  (id=$BILLING_ID)"
+
+# The grid override reaches the invoice as its Netznutzungsentgelt line. An
+# override the engine dropped would leave the totals short by exactly this
+# line, so it is asserted on its own rather than only through the sum.
+NNE_EUR=$(jq -r '[.rechnung.rechnungspositionen[]
+                  | select(.positionstext == "Netznutzungsentgelt Arbeitspreis")
+                  | .gesamtpreis.wert] | if length == 1 then .[0] else "missing" end' <<<"$RECHNUNG")
+numeric_eq "$NNE_EUR" "$EXPECTED_NNE_EUR" || \
+    fail "the Netznutzungsentgelt line is $NNE_EUR, expected $EXPECTED_NNE_EUR (${NNE_ARBEITSPREIS_CT} ct × ${VERBRAUCH_KWH} kWh)"
+pass "Netznutzungsentgelt Arbeitspreis → $NNE_EUR EUR  (${NNE_ARBEITSPREIS_CT} ct × ${VERBRAUCH_KWH} kWh, from the grid override)"
 
 # **Who the invoice is addressed to.** § 14 Abs. 4 Nr. 1 UStG makes the
 # Leistungsempfänger part of what an invoice has to state and EN 16931 makes
@@ -396,8 +412,8 @@ pass "en16931_json.buyer → the same party  (one field feeds both maps)"
 
 numeric_eq "$NETTO" "$EXPECTED_NETTO" || \
     fail "netto is $NETTO, expected $EXPECTED_NETTO (20 ct × 31 Tage + 32 ct × ${VERBRAUCH_KWH} kWh \
-+ 2.05 ct/kWh Stromsteuer)"
-pass "netto = $NETTO EUR  (Grundpreis 6.20 + Arbeitspreis 80.00 + Stromsteuer 5.125)"
++ 2.05 ct/kWh Stromsteuer + ${NNE_ARBEITSPREIS_CT} ct/kWh Netznutzung)"
+pass "netto = $NETTO EUR  (Grundpreis 6.20 + Arbeitspreis 80.00 + Stromsteuer 5.13 + Netznutzung 20.00)"
 numeric_eq "$BRUTTO" "$EXPECTED_BRUTTO" || \
     fail "brutto is $BRUTTO, expected $EXPECTED_BRUTTO (netto + 19 % USt)"
 pass "brutto = $BRUTTO EUR  (19 % USt, kaufmännisch gerundet)"

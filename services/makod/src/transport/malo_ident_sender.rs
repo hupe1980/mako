@@ -38,6 +38,7 @@ use mako_engine::builder::As4Sender;
 use mako_engine::error::EngineError;
 use mako_engine::ids::OutboxMessageId;
 use mako_engine::outbox::{OutboxMessage, OutboxStore as _};
+use mako_engine::payload::{MaloIdentifiedPayload, OutboundPayload};
 use mako_engine::store_slatedb::SlateDbStore;
 use reqwest::{Client, Url};
 use serde::Deserialize;
@@ -60,6 +61,45 @@ struct MaloIdentCallbackPayload {
     #[serde(default)]
     sender_market_partner_id: String,
     params: IdentificationParameter,
+}
+
+/// The identities of the `MaloIdentCallback` entry a notification follows.
+struct OriginOfCallback {
+    stream_id: mako_engine::ids::StreamId,
+    process_id: mako_engine::ids::ProcessId,
+    tenant_id: mako_engine::ids::TenantId,
+    correlation_id: mako_engine::ids::CorrelationId,
+    conversation_id: mako_engine::ids::ConversationId,
+    causation_event_id: mako_engine::ids::EventId,
+}
+
+/// The `MaloIdentified` ERP notification for a positive answer.
+///
+/// Typed ([`MaloIdentifiedPayload`]) and with no `payload_schema`: it names the
+/// transaction and the MaLo it resolved to, which is not a BO4E object, so the
+/// CloudEvent carries no `dataschema` an ERP would validate it against.
+fn malo_identified_entry(
+    payload: MaloIdentifiedPayload,
+    origin: OriginOfCallback,
+) -> OutboxMessage {
+    OutboxMessage {
+        message_id: OutboxMessageId::new(),
+        stream_id: origin.stream_id,
+        process_id: origin.process_id,
+        tenant_id: origin.tenant_id,
+        correlation_id: origin.correlation_id,
+        conversation_id: origin.conversation_id,
+        causation_event_id: origin.causation_event_id,
+        message_type: <MaloIdentifiedPayload as OutboundPayload>::MESSAGE_TYPE.into(),
+        recipient: payload.sender_market_partner_id.as_str().into(),
+        payload: serde_json::to_value(&payload).expect("a MaloIdentified payload serialises"),
+        payload_schema: None,
+        created_at: OffsetDateTime::now_utc(),
+        deliver_after: None,
+        attempt_count: 0,
+        workflow_name: "".into(),
+        trace_context: mako_engine::trace_ctx::current().map(Into::into),
+    }
 }
 
 // ── MaloIdentSender ───────────────────────────────────────────────────────────
@@ -307,34 +347,23 @@ impl As4Sender for MaloIdentSender {
 
                     // Write MaloIdentified ERP outbox entry so OutboxErpWorker
                     // delivers the resolved MaLo data to the ERP system.
-                    let erp_msg = OutboxMessage {
-                        message_id: OutboxMessageId::new(),
-                        stream_id: orig_stream_id,
-                        process_id: orig_process_id,
-                        tenant_id: orig_tenant_id,
-                        correlation_id: orig_correlation_id,
-                        conversation_id: orig_conversation_id,
-                        causation_event_id: orig_causation_id,
-                        message_type: "MaloIdentified".into(),
-                        recipient: cb.sender_market_partner_id.as_str().into(),
-                        payload: serde_json::json!({
-                            "tx_id":                    cb.tx_id,
-                            "malo_id":                  malo_id_str,
-                            "nb_mp_id":                   nb_mp_id_str,
-                            "sender_market_partner_id": cb.sender_market_partner_id,
-                            "tenant_id":                cb.tenant_id,
-                        }),
-                        payload_schema: Some(
-                            "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.1.0/\
-                             src/bo4e_schemas/bo/Marktlokation.json"
-                                .into(),
-                        ),
-                        created_at: OffsetDateTime::now_utc(),
-                        deliver_after: None,
-                        attempt_count: 0,
-                        workflow_name: "".into(),
-                        trace_context: mako_engine::trace_ctx::current().map(Into::into),
-                    };
+                    let erp_msg = malo_identified_entry(
+                        MaloIdentifiedPayload {
+                            tx_id: cb.tx_id.clone(),
+                            malo_id: malo_id_str.clone(),
+                            nb_mp_id: nb_mp_id_str.clone(),
+                            sender_market_partner_id: cb.sender_market_partner_id.clone(),
+                            tenant_id: cb.tenant_id.clone(),
+                        },
+                        OriginOfCallback {
+                            stream_id: orig_stream_id,
+                            process_id: orig_process_id,
+                            tenant_id: orig_tenant_id,
+                            correlation_id: orig_correlation_id,
+                            conversation_id: orig_conversation_id,
+                            causation_event_id: orig_causation_id,
+                        },
+                    );
                     if let Err(e) = outbox_store.enqueue(&[erp_msg]).await {
                         warn!(
                             tx_id = %cb.tx_id,
@@ -412,5 +441,38 @@ impl As4Sender for MaloIdentSender {
 
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The notification names the transaction and the MaLo, which is not a
+    /// BO4E `Marktlokation` — so it claims no schema, and it reads back as the
+    /// struct it was written from.
+    #[test]
+    fn the_malo_identified_notification_claims_no_bo4e_schema() {
+        let entry = malo_identified_entry(
+            MaloIdentifiedPayload {
+                tx_id: "tx-1".to_owned(),
+                malo_id: "51238696012".to_owned(),
+                nb_mp_id: "9900000000001".to_owned(),
+                sender_market_partner_id: "9900000000003".to_owned(),
+                tenant_id: "tenant".to_owned(),
+            },
+            OriginOfCallback {
+                stream_id: mako_engine::ids::StreamId::new("process/t/p"),
+                process_id: mako_engine::ids::ProcessId::new(),
+                tenant_id: mako_engine::ids::TenantId::new(),
+                correlation_id: mako_engine::ids::CorrelationId::new(),
+                conversation_id: mako_engine::ids::ConversationId::new(),
+                causation_event_id: mako_engine::ids::EventId::new(),
+            },
+        );
+        assert_eq!(entry.payload_schema, None);
+        let payload = MaloIdentifiedPayload::from_payload(&entry.payload).expect("typed");
+        assert_eq!(payload.malo_id, "51238696012");
+        assert_eq!(&*entry.message_type, "MaloIdentified");
     }
 }

@@ -18,8 +18,6 @@
 //!
 //! REST: `X-BDEW-CERT` / `X-BDEW-SIGNATURE` HTTP headers.  
 //! WebSocket: `SignedApiRecord::signing_cert` / `SignedApiRecord::signature` fields.
-//!
-//! Feature gate: `crypto`.
 
 use base64ct::{Base64UrlUnpadded, Encoding};
 use p256::ecdsa::signature::{Signer, Verifier};

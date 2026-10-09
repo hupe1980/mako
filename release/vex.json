@@ -1,0 +1,81 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/hupe1980/mako/blob/main/release/vex.json",
+  "author": "mako maintainers",
+  "role": "Document Creator",
+  "timestamp": "2026-10-05T00:00:00Z",
+  "version": 1,
+  "tooling": "hand-written from the [advisories] ignore list in deny.toml; `cargo xtask check-vex` holds the two equal",
+  "statements": [
+    {
+      "vulnerability": { "name": "RUSTSEC-2025-0141" },
+      "products": [{ "@id": "pkg:github/hupe1980/mako", "subcomponents": [{ "@id": "pkg:cargo/bincode@1.3.3" }] }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Informational advisory (unmaintained), no vulnerability. bincode 1.x is pulled by slatedb through foyer and serialises SlateDB's own cache structures, never input from outside the process."
+    },
+    {
+      "vulnerability": { "name": "RUSTSEC-2024-0436" },
+      "products": [{ "@id": "pkg:github/hupe1980/mako", "subcomponents": [{ "@id": "pkg:cargo/paste@1.0.15" }] }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Informational advisory (unmaintained), no vulnerability. paste is a proc-macro reached through slatedb, datafusion and typst's hayagriva; it runs at compile time and contributes no code to a binary."
+    },
+    {
+      "vulnerability": { "name": "RUSTSEC-2026-0192" },
+      "products": [{ "@id": "pkg:github/hupe1980/mako", "subcomponents": [{ "@id": "pkg:cargo/ttf-parser@0.25.1" }] }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Informational advisory (unmaintained), no vulnerability. ttf-parser is Typst's font reader in outputd; the fonts it reads are the bundled typst-assets set, and no template or request can supply one."
+    },
+    {
+      "vulnerability": { "name": "RUSTSEC-2026-0194" },
+      "products": [{ "@id": "pkg:github/hupe1980/mako", "subcomponents": [{ "@id": "pkg:cargo/quick-xml@0.38.4" }, { "@id": "pkg:cargo/quick-xml@0.39.4" }] }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
+      "impact_statement": "Quadratic duplicate-attribute scan, patched in 0.41. Every parser that reads XML from a counterparty is on quick-xml 0.41 (mako's own crates, asx-rs for AS4). 0.39.4 is reached only through opendal, which parses authenticated S3/GCS/Azure responses for edmd's cold tier; 0.38.4 only through typst's hayagriva/citationberg, which parses bundled assets while rendering mako's own templates."
+    },
+    {
+      "vulnerability": { "name": "RUSTSEC-2026-0195" },
+      "products": [{ "@id": "pkg:github/hupe1980/mako", "subcomponents": [{ "@id": "pkg:cargo/quick-xml@0.38.4" }, { "@id": "pkg:cargo/quick-xml@0.39.4" }] }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
+      "impact_statement": "Unbounded namespace-declaration allocation in NsReader, patched in 0.41. Same versions and same reachability as RUSTSEC-2026-0194: no counterparty-controlled XML reaches 0.38.4 or 0.39.4."
+    },
+    {
+      "vulnerability": { "name": "RUSTSEC-2025-0111", "aliases": ["CVE-2025-62518", "GHSA-j5gw-2vrg-8fgx"] },
+      "products": [{ "@id": "pkg:github/hupe1980/mako", "subcomponents": [{ "@id": "pkg:cargo/tokio-tar@0.3.1" }] }],
+      "status": "not_affected",
+      "justification": "component_not_present",
+      "impact_statement": "tokio-tar is a dev-dependency only, through testcontainers, and is linked into no release binary."
+    },
+    {
+      "vulnerability": { "name": "RUSTSEC-2024-0320" },
+      "products": [{ "@id": "pkg:github/hupe1980/mako", "subcomponents": [{ "@id": "pkg:cargo/yaml-rust@0.4.5" }] }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Informational advisory (unmaintained), no vulnerability. yaml-rust loads syntect's syntax definitions inside typst-library in outputd; an invoice template contains no code block, and the definitions are bundled."
+    },
+    {
+      "vulnerability": { "name": "RUSTSEC-2026-0206" },
+      "products": [{ "@id": "pkg:github/hupe1980/mako", "subcomponents": [{ "@id": "pkg:cargo/rustybuzz@0.20.1" }] }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Informational advisory (unmaintained), no vulnerability. rustybuzz is Typst's text shaper on outputd's render path, fed only the bundled fonts, mako's own invoice model and the operator's template."
+    },
+    {
+      "vulnerability": { "name": "RUSTSEC-2025-0134" },
+      "products": [{ "@id": "pkg:github/hupe1980/mako", "subcomponents": [{ "@id": "pkg:cargo/rustls-pemfile@2.2.0" }] }],
+      "status": "not_affected",
+      "justification": "component_not_present",
+      "impact_statement": "Informational advisory (unmaintained), no vulnerability. rustls-pemfile is a dev-dependency only, through testcontainers and bollard, and is linked into no release binary."
+    },
+    {
+      "vulnerability": { "name": "RUSTSEC-2023-0071", "aliases": ["CVE-2023-49092", "GHSA-c38w-74pg-36hr"] },
+      "products": [{ "@id": "pkg:github/hupe1980/mako", "subcomponents": [{ "@id": "pkg:cargo/rsa@0.9.10" }] }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The Marvin timing side channel leaks a private key through private-key operations. rsa is reached through jsonwebtoken in mako-service, which verifies RS256/RS384/RS512 OIDC tokens against the identity provider's public JWKS; no release binary holds an RSA private key or decrypts or signs with one. AS4 cryptography runs on OpenSSL through asx-rs, not on this crate."
+    }
+  ]
+}

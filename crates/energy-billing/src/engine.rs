@@ -69,7 +69,10 @@ impl BillingEngine {
     /// Providers run in registration order. Register tax providers (e.g.
     /// `MwStProvider`) **last** — they will automatically run in a second pass.
     #[must_use]
-    #[allow(clippy::should_implement_trait)] // `add` is idiomatic for builder APIs in Rust
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "`add` is idiomatic for builder APIs in Rust"
+    )]
     pub fn add<P: BillingProvider + 'static>(mut self, provider: P) -> Self {
         self.providers.push(Box::new(provider));
         self

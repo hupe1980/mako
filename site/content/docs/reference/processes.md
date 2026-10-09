@@ -3,43 +3,20 @@ title = "Process Catalog"
 description = "Every German market communication process mako implements — GPKE, WiM, MaBiS, GeLi Gas, GaBi Gas and PARTIN — with its roles, messages and deadlines."
 weight = 15
 +++
-New to German market communication? The recurring terms — Prüfidentifikator,
-AHB/MIG, EBD, Marktlokation, Bilanzkreis, Frist/Werktag, and the four market
-roles — are defined in the
+The business-level companion to the [PID Reference](@/docs/regulatory/pid-reference.md):
+related messages grouped into end-to-end processes, the unit of implementation
+in the `mako-*` domain crates. Terms are defined in the
 [reference vocabulary](@/docs/reference/_index.md#vocabulary).
 
-This page is the **business-level** companion to the [PID Reference](@/docs/regulatory/pid-reference.md).
-Where the PID Reference lists every individual EDIFACT message type, the Process
-Catalog groups related messages into **complete end-to-end processes** — the unit
-of work from the business perspective and the unit of implementation in the
-`mako-*` domain crates.
+> **Deployment scope.** A `makod` build loads the domain modules its Marktrolle
+> features enable (`makod::startup::production_modules`): a Strom deployment
+> runs `mako-gpke`, `mako-wim`, `mako-mabis`, `mako-emob` and
+> `mako-redispatch`; a Gas deployment `mako-geli-gas`, `mako-wim` and
+> `mako-gabi-gas`. `mako-wim` covers WiM in both Sparten. Separate instances per
+> Sparte and one combined instance are both supported.
 
-> **Role coverage.** All market roles are equally supported: Lieferant (LF/LFN/LFA),
-> Netzbetreiber (NB/GNB), Messstellenbetreiber (MSB/gMSB), Bilanzkreisverantwortlicher (BKV),
-> Übertragungsnetzbetreiber (ÜNB), and others. Each process table lists all participating
-> roles and marks which crate implements each side of the exchange.
-
-> **Commodity isolation.** Strom and Gas are fully independent deployment units.
-> A makod instance for Strom loads only `mako-gpke` + `mako-wim` + `mako-mabis`.
-> A makod instance for Gas loads `mako-geli-gas` + `mako-wim` + `mako-gabi-gas` — `mako-wim` covers WiM in both Sparten.
-> Running separate instances per commodity is explicitly supported and common in
-> production. A combined instance is equally valid. Each section in this catalog
-> is documented as **self-contained** — no cross-commodity knowledge required.
-
-**Format versions ship on a semi-annual cadence (April + October).** The workspace
-carries **per-message, fv-dated profiles** (`crates/edi-energy/profiles/<message>/fv<yyyymmdd>/`):
-a message type only gets a new fv directory when its format actually changes in a release.
-Multiple format versions coexist in the same engine instance simultaneously.
-
-| Release | Binding | Message types with changed formats |
-|---|---|---|
-| `fv20260401` | since 2026-04-01 | COMDIS, INVOIC, MSCONS, ORDERS, ORDRSP, PARTIN, REMADV, UTILMD Gas |
-| `fv20261001` | from 2026-10-01 | APERAK, IFTSTA, INVOIC, MSCONS, ORDCHG, ORDERS, ORDRSP, PARTIN, PRICAT, QUOTES, REQOTE, UTILMD (Strom 2.2 / Gas 1.2), UTILTS |
-
-The `fv` date is the **Anwendungszeitpunkt**, six months after the document's
-Publikationsdatum (Allgemeine Festlegungen 6.1d §2.5). Message types untouched by
-a release keep their previous profile — CONTRL and INSRPT last changed with
-`fv20260101`, and COMDIS and REMADV with `fv20260401`.
+Profiles are per message and fv-dated, and several format versions run in one
+instance — see [Release Lifecycle](@/docs/compliance/release-lifecycle.md).
 
 **Status legend:**
 
@@ -58,26 +35,20 @@ a release keep their previous profile — CONTRL and INSRPT last changed with
 | GeLi Gas | negative APERAK only: nächster Werktag 12:00 (Folgeprozess) / 3 Werktage (Initialprozess) |
 | WiM Gas | negative APERAK only: nächster Werktag 12:00 (Folgeprozess) / 3 Werktage (Initialprozess: 44039, 44042) |
 
-The APERAK Frist is the technical-acknowledgement clock only. It is distinct
-from the **business-answer window** (Antwortfrist): for the WiM Strom
-MSB-Wechsel the substantive Antwort is due within **3 / 5 / 7 / 1 Werktage,
-per PID** (55039 / 55042 / 55051 / 55168) — see the MSB-Wechsel section below.
-
-Saturdays, Sundays and public holidays are not Werktage; 24.12. and 31.12. count as holidays.
-Deadline arithmetic uses German local time (CET/CEST) — an off-by-one-hour error
-at DST transitions constitutes a regulatory deadline violation.
+The APERAK Frist is the technical acknowledgement only; the business
+**Antwortfrist** is a separate clock (WiM MSB-Wechsel: 3 / 5 / 7 / 1 Werktage
+per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
+31.12. count as holidays. Deadline arithmetic runs in German local time
+(CET/CEST).
 
 ---
 
 ## Process Overview
 
-Quick reference across all process families. Each row is a top-level domain.
-
 > **„nicht quantifiziert" heißt unbekannt, nicht unbefristet.**
 > `mako_fristen::antwort` liefert für eine solche PID `None`; `makod` registriert
 > dann eine Betriebskonvention, gekennzeichnet als `is_regulatory: false`. Die
-> **APERAK**-Frist ist eine eigene Uhr (45 Minuten an jedem Tag außer Samstag,
-> APERAK AHB § 2.4.1) und steht nicht in dieser Spalte.
+> **APERAK**-Frist steht nicht in dieser Spalte.
 
 | Domain | Sparte | Crate | Key PIDs | Antwortfrist des Geschäftsprozesses | Basis |
 |---|:---:|---|---|---|---|
@@ -110,7 +81,7 @@ Quick reference across all process families. Each row is a top-level domain.
 | **WiM Stammdaten** | ⚡🔥 | `mako-wim` `wim-stammdaten` | UTILMD Stammdaten beider Sparten | per PID, `mako_fristen::antwort` | BK6-24-174 · AWH WiM Gas 2.0 |
 | **WiM Weiterverpflichtung** | ⚡🔥 | `mako-wim` `wim-weiterverpflichtung` | ORDERS 17002 → ORDRSP 19003/19004 | **1 WT** (MSBA antwortet) | BK6-24-174 |
 | **WiM INSRPT Störungsbehebung** | ⚡ 🔥 | `mako-wim` `wim-insrpt` | INSRPT 23001 · 23003/23004 · 23005 · 23008 · 23009 · 23011/23012 | 3/1 WT je Messtechnik · Ergebnisbericht 7/4/2 WT · Weiterleitung 1 WT | BK6-24-174 Anlage 2b Kap. 1.2 |
-| **MaBiS Bilanzkreisabrechnung** | ⚡ | `mako-mabis` `mabis-billing` | MSCONS 13003; IFTSTA 21000–21005 | 1 WT (§13.8) | BK6-24-174 |
+| **MaBiS Bilanzkreisabrechnung** | ⚡ | `mako-mabis` `mabis-billing` | MSCONS 13003; IFTSTA 21000–21005 | keine veröffentlicht — das Clearingfenster der Kap. 3.10 Tabelle 2 begrenzt sie | BK6-24-174 Anlage 3 |
 | **MaBiS Clearingliste** | ⚡ | `mako-mabis` `mabis-clearingliste` | UTILMD 55065/55069/55070 | — | BK6-24-174 |
 | **MaBiS-ZP Lifecycle** | ⚡ | `mako-mabis` `mabis-zp-lifecycle` | UTILMD 55062–55064, 55071/55072, 55197–55200, 55203–55214 | — | BK6-24-174 |
 | **MaBiS Anforderungen** | ⚡ | `mako-mabis` `mabis-anforderung` | ORDERS 17201–17208 | — | BK6-24-174 |
@@ -129,7 +100,7 @@ Quick reference across all process families. Each row is a top-level domain.
 | **GeLi Gas Zuordnungs-Meldungen** | 🔥 | `mako-geli-gas` `geli-gas-zuordnungsmeldung` | UTILMD G 44036/44037/44038 | — Meldepflicht, **keine Antwortnachricht** | AWH GeLi Gas |
 | **PARTIN Gas Kommunikationsdaten** | 🔥 | `mako-geli-gas` `geli-gas-partin` | PARTIN 37008–37014 | — | PARTIN AHB 1.0f |
 | **WiM Gas MSB-Wechsel** | 🔥 | `mako-wim` `wim-device-change` | UTILMD G 44039–44044/44051–44053/44168/44169/44183 | 3 / 5 / 7 / 1 WT | AWH WiM Gas 2.0 |
-| **WiM Gas INSRPT** | 🔥 | `mako-wim` `wim-insrpt` | INSRPT 23005/23009 (Gas-only) | 3 WT Antwort · 7 WT Ergebnis | AWH WiM Gas 2.0 Kap. 4.3 |
+| **WiM Gas INSRPT** | 🔥 | `mako-wim` `wim-insrpt` | INSRPT 23001–23009 (23005/23009 beide Sparten; Gas an den NB) | 3 WT Antwort · 7 WT Ergebnis | AWH WiM Gas 2.0 Kap. 4.3 |
 | **WiM Gas Abrechnung** | 🔥 | `mako-wim` `wim-invoic` | INVOIC 31003/31004 | Zahlungsziel (DTM+265) | AWH WiM Gas 2.0 Kap. 4.7 |
 | **GaBi Gas Abrechnung** | 🔥 | `mako-gabi-gas` `gabi-gas-invoic` | INVOIC 31007/31008/31010 | — | BK7-24-01-008 |
 | **GaBi Gas Allokationsliste (MMMA)** | 🔥 | `mako-gabi-gas` `gabi-gas-mmma` | MSCONS 13013 (ORDERS 17110 / ORDRSP 19110 routed via `mako-gpke` `gpke-allokationsliste`) | — | BK7-24-01-008 |
@@ -137,16 +108,13 @@ Quick reference across all process families. Each row is a top-level domain.
 | **GaBi Gas NOMINT/NOMRES** | 🔥 | `mako-gabi-gas` `gabi-gas-nomination` | PIDs 70030–70039 | — | DVGW NOMINT 4.6 / NOMRES 4.7 |
 | **GaBi Gas SSQNOT** | 🔥 | `mako-gabi-gas` `gabi-gas-mehr-mindermengen` | PIDs 70095–70096 | — | DVGW SSQNOT 5.7 |
 | **NZR-EMob / Modell 2** | ⚡ | `mako-emob` `emob-anmeldung` · `emob-zuordnungsende` · `emob-abmeldung` | UTILMD 55238/55239 · 55240/55241 · 55242/55243 | Ablauf des **7. WT** (55238) · **3. WT** (55240/55242) | BK6-20-160 Anlage 6 · BK6-24-267 |
-| **Redispatch 2.0** | ⚡ | `mako-redispatch` | IFTSTA 21037/21038; XML documents | — | BK6-20-059/060/061 |
+| **Redispatch 2.0** | ⚡ | `mako-redispatch` | IFTSTA 21037/21038; XML documents | 3-min ACK; the rest operator-set | BK6-23-241 · BK6-20-059 TZ 2 |
 
-> **Zehn Werktage ist bei GeLi Gas fast immer die falsche Zahl.** „Mindestens
-> 10 Werktage vor Aufnahme der Belieferung" (GeLi Gas 3.0 Kap. 3.2.3) ist die
-> **Vorlauffrist des Lieferanten** — wie weit im Voraus er senden muss — und
-> nicht das Antwortfenster des Netzbetreibers, das 4 / 3 / 2 Werktage je nach
-> Geschäftsvorfall beträgt. Die beiden zu verwechseln meldet eine abgelaufene
-> Frist als noch laufend. `mako_fristen::antwort` hält die Unterscheidung in
-> `TEN_WERKTAGE_IS_THE_SUPPLIERS_VORLAUFFRIST` fest; der Datenabruf (AWH
-> § 5.12) ist der eine Fall, in dem die Zehn wirklich das Antwortfenster ist.
+> **Zehn Werktage ist bei GeLi Gas meist die Vorlauffrist des Lieferanten**
+> („Mindestens 10 Werktage vor Aufnahme der Belieferung", GeLi Gas 3.0 Kap.
+> 3.2.3), nicht das Antwortfenster des Netzbetreibers (4 / 3 / 2 WT). Echte
+> Zehn-WT-Antwortfenster sind der Datenabruf (AWH § 5.12) und die
+> Stammdatenänderung Gas (AWH § 4.3.2).
 
 ---
 
@@ -196,26 +164,19 @@ Quick reference across all process families. Each row is a top-level domain.
 06.06.2025) — GPKE Teil 1–3 = Anlagen 1a–1c; **BK6-22-024** (Beschluss
 21.03.2024) — LFW24 (§ 20a EnWG) and GPKE Teil 4 = Anlage 1d.
 
-**APERAK Frist:** **45 Minuten** für UTILMD und ORDERS an jedem Tag außer
-Samstag, Samstag → Sonntag 12:00, sonst nächster Werktag 12:00 (APERAK AHB 1.1
-§ 2.4.1) —
-a separate clock from the business Antwortfrist of the process itself.
+**APERAK Frist:** **45 Minuten** für UTILMD und ORDERS; Samstagseingang bis
+Sonntag 12:00; sonst nächster Werktag 12:00 (APERAK AHB 1.1 § 2.4.1).
 
 ---
 
 ### Lieferantenwechsel Strom
 
-The supplier-switch process (GPKE Teil 2) is the highest-volume process in the
-German electricity market. The incoming supplier (LFN) initiates the registration
-and separately cancels the outgoing supplier's (LFA) contract.
+The incoming supplier (LFN) registers with the NB and separately terminates
+the outgoing supplier's (LFA) contract (GPKE Teil 2).
 
-**Every answer window is a wall-clock instant on the first Werktag after the ÜT**
-— never a duration. LFW24 does require the *switch itself* to complete within 24
-hours (§ 20a EnWG), and GPKE meets that by chaining those instants; but GPKE
-Teil 1 Kap. 7 („Fristenberechnung") defines only WT, T, Zuordnungsbeginn, ÜT and
-ÜZ, and contains no 24-hour Frist. Reading the statutory duration as a message
-deadline expires a Friday-afternoon Anmeldung on Saturday and reports a
-Tuesday-11:00 Frist as healthy until Tuesday night.
+**Every answer window is a clock time on the first Werktag after the ÜT**, never
+a duration. The 24 hours of § 20a EnWG bind the switch as a whole; GPKE Teil 1
+Kap. 7 („Fristenberechnung") defines no 24-hour message Frist.
 
 **Der Sequenzablauf des Lieferbeginn (GPKE Teil 2 § 2.1.2):**
 
@@ -237,11 +198,9 @@ assigned at the Zuordnungsbeginn (Nr. 1 Prüfschritt 4), and Nr. 3 is „paralle
 Nr. 2" for that reason.
 
 **The NB's answer is two-phase whenever Nr. 3 fires.** `E_0622` („Prüfen, ob
-Anmeldung direkt ablehnbar") is a *Vorprüfung*: surviving it means only that the
-Anmeldung is not directly refusable. What the NB answers comes from `E_0623`,
-whose Prüfschritte 20–50 read the LFA's answer to the 55010 — so the Anfrage has
-to go out, and its 09:00 window has to close, before Nr. 5 or Nr. 6 can be
-decided. **Silence is a result:** „Verstreicht die Frist, ohne dass eine Antwort
+Anmeldung direkt ablehnbar") is a *Vorprüfung*; the answer comes from `E_0623`,
+whose Prüfschritte 20–50 read the LFA's answer to the 55010, so Nr. 5 or Nr. 6
+waits for that answer or its 09:00 window. **Silence is a result:** „Verstreicht die Frist, ohne dass eine Antwort
 beim NB eingeht, gilt dies als Bestätigung nach Fall a). Nach Ablauf der Frist
 eingehende Antworten sind für den Fortlauf dieses Prozesses unerheblich."
 
@@ -272,9 +231,8 @@ des LFA an", on the wire.
 
 #### Meldepflichten — obligations with no answer
 
-Three of the eight steps above carry no Bestätigung, so a missing one produces no
-timeout, no dead letter and no alert. It surfaces later as a counterparty holding
-a stale view of who supplies the Marktlokation.
+Three of the steps above carry no Bestätigung, so a missing one raises no
+timeout, dead letter or alert.
 
 | PID | Message | NB → | Substance |
 |---|---|---|---|
@@ -286,19 +244,10 @@ The Gas twins are 44036 / 44037 / 44038, on their own windows: the Information
 by the Ablauf des 4. WT nach Eingang, the other two „am selben Tag wie die
 Antwort" and only on a confirmation.
 
-`processd` issues the Information and the Beendigung as part of the Anmeldung
-decision. The Information goes out with the Anfrage of Nr. 3 — the two share a
-condition — so it reaches the LFN well inside its 07:00 window, which closes
-four hours before the 11:00 Bestätigung of the same message, and an Anmeldung
-the Vorprüfung refuses never names the LFA to the party it refuses. The
-Beendigung rides the Bestätigung, whether that is dispatched automatically or
-released by an operator. The Aufhebung is an
-operator command: it addresses a supplier whose future Zuordnung the Anmeldung
-displaces, and the supply projection holds one future supplier per
-Marktlokation, which the incoming Anmeldung has already claimed.
-
-Since no alert can cover a message nobody waits for, the guard is a test —
-`mako_fristen::meldung` against the PID router.
+`processd` sends the Information with the Anfrage of Nr. 3 (they share a
+condition), inside its 07:00 window, and the Beendigung with the Bestätigung.
+The Aufhebung is an operator command. `mako_fristen::meldung` is tested against
+the PID router.
 
 **Ersatz-/Grundversorgung (EoG, §36/§38 EnWG):** When a MaLo draws energy
 without an assignable supply contract (after Lieferende without successor,
@@ -324,11 +273,6 @@ the `processd` EoG module automates gap detection and the timer.
 | Rückmeldung/Bestellung Abrechnungsdaten | LF → NB | UTILMD **55156**/**55220**/**55673** | IFTSTA 21047 | IFTSTA 21047 | `mako-gpke` ✅ |
 | Stornierung Zuordnungsprozess | orig. → orig. | UTILMD **55022** | 55023 | 55024 | `mako-gpke` ✅ |
 
-> **Lieferbeginn = T.** Both UTILMD 55001 (LFN → NB) and 55016 (LFN → LFA) are sent
-> on the same day, referencing the same `Lieferbeginn`-date. The NB coordinates
-> the transition; the actual disconnection of LFA follows automatically when the
-> Lieferbeginn date is reached.
-
 **Message flow — Lieferantenwechsel Strom (LF-AN):**
 
 ```mermaid
@@ -337,31 +281,22 @@ sequenceDiagram
     participant NB  as Netzbetreiber (NB)
     participant LFA as Alter LF (LFA)
 
-    Note over LFN,LFA: T = Lieferbeginn-Datum
+    LFN->>LFA: UTILMD 55016 (Kündigung)
+    LFA-->>LFN: UTILMD 55017 (Bestätigung) oder 55018 (Ablehnung)
+
     LFN->>NB:  UTILMD 55001 (Anmeldung verb. MaLo)
-    LFN->>LFA: UTILMD 55016 (Kündigung Lieferbeginn)
-
-    alt Bestätigung
-        NB-->>LFN:  UTILMD 55002 (Bestätigung Anmeldung)
-        LFA-->>LFN: UTILMD 55017 (Bestätigung Kündigung)
-    else Ablehnung durch NB
-        NB-->>LFN:  UTILMD 55003 (Ablehnung Anmeldung)
-    else Ablehnung durch LFA
-        LFA-->>LFN: UTILMD 55018 (Ablehnung Kündigung)
+    opt MaLo zum Zuordnungsbeginn bereits zugeordnet
+        NB->>LFN:  UTILMD 55036 (Information über existierende Zuordnung)
+        NB->>LFA:  UTILMD 55010 (Anfrage zur Beendigung der Zuordnung)
+        LFA-->>NB: UTILMD 55011 / 55012 — bis 09:00 Uhr des 1. WT
     end
-
-    Note over LFN,LFA: Zum Lieferbeginn-Datum T
-    NB->>LFA: UTILMD 55007 (Abmeldung / Beendigung Zuordnung)
-    LFA-->>NB: UTILMD 55008 (Bestätigung) oder 55009 (Ablehnung)
-
-    Note over LFN,NB: Nach Lieferbeginn (separate Prozesse)
-    NB-->>LFN: MSCONS (Zählerstandsübermittlung — eigener Prozess)
-    NB-->>LFN: INVOIC 31001/31002 (Netznutzungsrechnung — eigener Prozess)
+    alt Bestätigung
+        NB-->>LFN: UTILMD 55002 (Bestätigung Anmeldung)
+        NB->>LFA:  UTILMD 55037 (Beendigung der Zuordnung)
+    else Ablehnung
+        NB-->>LFN: UTILMD 55003 (Ablehnung Anmeldung)
+    end
 ```
-
-> **Note:** MSCONS and INVOIC arrive after Lieferbeginn as independent processes with
-> their own process IDs and APERAK windows. They are shown here only to indicate the
-> downstream billing relationship.
 
 ---
 
@@ -415,10 +350,9 @@ sequenceDiagram
 
 ### INVOIC Strom Abrechnung
 
-Network billing messages from the NB to the LF. The LF is the passive receiver;
-the technical acknowledgement is an APERAK by the next Werktag 12:00 (APERAK AHB
-1.0 § 2.4.1 — an INVOIC is not a UTILMD, so the 45-minute window does not apply),
-and the business answer is the REMADV, due zum Zahlungsziel (`SG8 DTM+265`).
+Network billing from the NB to the LF. The APERAK is due by the next Werktag
+12:00 (APERAK AHB 1.1 § 2.4.1 — the 45 minutes are UTILMD/ORDERS only); the
+business answer is the REMADV, due zum Zahlungsziel (`SG8 DTM+265`).
 
 #### INVOIC — Netznutzungs- und Mehr-/Mindermengenabrechnung
 
@@ -430,7 +364,7 @@ and the business answer is the REMADV, due zum Zahlungsziel (`SG8 DTM+265`).
 | MMM Mehrmenge selbst ausgestellt | NB+LF same entity | INVOIC **31006** | Mehr-/Mindermenge als Lieferung, selbst ausgestellt | ⚡ | `netzbilanzd` ✅ |
 | WiM-Rechnung | MSBA → NB · MSBA → MSBN | INVOIC **31003** | Fortführung Messstellenbetrieb, Geräteübernahme, Zwischen-/Kontrollablesung | ⚡🔥 | `mako-wim` `wim-invoic` |
 | Stornorechnung (universal) | Rechnungssteller → Rechnungsempfänger | INVOIC **31004** | Sparte-neutral Storno of any INVOIC (INVOIC AHB §3.1.2); deadline = Zahlungsziel of the referenced invoice (DTM+265) | ⚡🔥 | `mako-wim` `wim-invoic` (checked by `invoic-checker` `check_storno`) |
-| MSB-Rechnung Strom | MSB → NB / LF / ESA | INVOIC **31009** | WiM Messstellenbetriebsabrechnung — generated by `netzbilanzd`, ingested via `mako-wim` `wim-invoic` | ⚡ | `mako-wim` ✅ |
+| MSB-Rechnung Strom | MSB → NB / LF / ESA | INVOIC **31009** | WiM Messstellenbetriebsabrechnung, routed to `mako-wim` `wim-invoic` | ⚡ | `mako-wim` ✅ |
 | MMM Gas aggregiert | NB → MGV | INVOIC **31007** | Aggreg. MMM-Rechnung Gas | 🔥 | `mako-gabi-gas` ✅ |
 | MMM Gas selbstausgestellt | MGV | INVOIC **31008** | Selbst ausgest. MMM-Rechnung Gas | 🔥 | `mako-gabi-gas` ✅ |
 | AWH Sperrprozesse Gas | GNB/VNB → LF | INVOIC **31011** | Sonstige Leistung Sperrung Gas | 🔥 | `mako-geli-gas` ✅ |
@@ -509,15 +443,12 @@ by the LF for UTILTS; the NB expects acknowledgement via CONTRL at transport lev
 | 25004 | Übermittlung Übersicht Zählzeitdefinitionen | NB/MSB → LF |
 | 25005–25010 | Weitere UTILTS-Varianten (Messwertparameter, etc.) | NB/MSB → LF |
 
-UTILTS is used by the NB to distribute tariff formula structures and meter-reading
-time-zone definitions to all connected suppliers. The LF stores these for billing
-calculation and pass-through to the ERP system.
+The NB distributes Berechnungsformeln and Zählzeitdefinitionen to the
+connected suppliers, who store them for billing and pass them to the ERP.
 
-**§42b EnWG Solarpaket I — GGV community solar allocation formulas (CCI+ZG6):**
-UTILTS PID 25001 is also used to transmit the community solar allocation fractions
-for Gemeinschaftliche Gebäudeversorgung (GGV) under §42b Abs. 5 EnWG (Solarpaket I,
-2024). The segment `CCI+ZG6` (Aufteilungsfaktor Energiemenge) carries the fraction
-parameter for each tenant MaLo. `edmd` evaluates these formulas via the
+**§42b EnWG — GGV allocation formulas (CCI+ZG6):** UTILTS 25001 also carries the
+Gemeinschaftliche Gebäudeversorgung allocation fractions (§42b Abs. 5 EnWG);
+`CCI+ZG6` (Aufteilungsfaktor Energiemenge) carries the fraction per tenant MaLo. `edmd` evaluates these formulas via the
 `metering::AggregationRule::GgvConstantAllocation` and
 `metering::AggregationRule::GgvProportionalAllocation` variants — see the
 [edmd operator guide](@/docs/services/edmd.md#virtual-meters-ss42b-enwg-ggv-solarpaket-i) for details
@@ -532,7 +463,7 @@ on the computation and the §42b Abs. 5 `Pos()` cap.
 MSCONS messages carry meter readings, load profiles, and interval metered values.
 The NB sends MSCONS to the LF at defined reporting intervals and at Lieferbeginn/
 Lieferende. The LF acknowledges with an APERAK by the next Werktag 12:00 (APERAK
-AHB 1.0 § 2.4.1); the 45-minute window is UTILMD/ORDERS only.
+AHB 1.1 § 2.4.1); the 45-minute window is UTILMD/ORDERS only.
 
 | Context | Sender → Empfänger | Trigger |
 |---|---|---|
@@ -545,11 +476,8 @@ AHB 1.0 § 2.4.1); the 45-minute window is UTILMD/ORDERS only.
 
 ### GPKE IFTSTA — Vollzugsmeldungen, Statusmeldungen, EnFG (GPKE Teil 2/3/4)
 
-IFTSTA messages in the GPKE family carry supplier-change execution confirmations
-(Vollzugsmeldungen), Konfigurationsänderung responses, and EnFG-related status
-notifications (privilege information and billing status under the
-Energiefinanzierungsgesetz, 2023). All are routed to the relevant `mako-gpke`
-workflow for correlation; no separate receipt-only workflow exists.
+Vollzugsmeldungen, Konfigurationsänderung responses and EnFG status
+notifications, routed to the `mako-gpke` workflow they correlate with.
 
 | IFTSTA PID | Description (IFTSTA AHB) | Sender → Empfänger | Crate |
 |---|---|---|---|
@@ -570,13 +498,9 @@ workflow for correlation; no separate receipt-only workflow exists.
 > message. It is the UC 4.4 „Beendigung durch MSB" notification, handled by
 > `mako-wim` (`esa-wertebestellung`), not `mako-gpke`.
 
-> **Why are 17134/17135/17121/17128–17131 NB→MSB PIDs in GPKE, not WiM?**
-> GPKE governs *what metering configuration is required* after a supplier change
-> and *who can authorize disconnection* (BK6-24-174). WiM governs *which company
-> provides the metering service* (BK6-24-174 Anlage 2a). These are orthogonal obligations:
-> GPKE Teil 3/4 obligates the NB to configure the MSB after confirming
-> `Lieferbeginn`; WiM Teil 1 governs the MSB-Wechsel process itself. A combined
-> Stadtwerke NB+MSB operator implements both crates simultaneously.
+> **17134/17135/17121/17128–17131 are GPKE, not WiM:** GPKE Teil 3/4 obliges
+> the NB to configure the MSB after a Lieferbeginn; WiM Teil 1 governs which
+> company runs the Messstellenbetrieb.
 
 ---
 
@@ -608,9 +532,9 @@ Gas kennt keine 44170: die Ablehnung der Verpflichtungsanfrage läuft über
 dieselbe 44169 wie die Bestätigung, unterschieden durch den Antwortcode.
 Zusätzlich meldet der Gas-NB das Ende des Messstellenbetriebs mit **44183**.
 
-The **Antwortfrist differs per process** (BK6-24-174 WiM Strom Teil 1 Kap. 2.2.2 /
-2.3.2 / 2.4.2 / 2.5.2; AWH WiM Gas 2.0 Kap. 4.1–4.4) and is distinct from the
-APERAK window. `mako_fristen::antwort` is the single source for these values.
+The **Antwortfrist differs per process** (BK6-24-174 WiM Strom Teil 1 Kap. 2.2.2
+Nr. 2 / 2.3.2 Nr. 2 / 2.4.2 Nr. 2 / 2.4.2 Nr. 4; AWH WiM Gas 2.0 Kap. 4.1–4.4);
+`mako_fristen::antwort` is the single source.
 
 The Kündigung (55039) runs on the **contract layer between the two MSB** and never
 reaches the NB. Per Kap. 2.1.3 it is explicitly *non-constitutive*: the switch is
@@ -630,7 +554,7 @@ on a 55040 Bestätigung.
 
 | Process | Sender → Empfänger | INVOIC PID | Content | Crate |
 |---|---|---|---|---|
-| MSB-Rechnung | MSB → NB / LF / ESA | INVOIC **31009** | Messstellenbetrieb — generated by `netzbilanzd`, ingested via `mako-wim` `wim-invoic` | `mako-wim` ✅ |
+| MSB-Rechnung | MSB → NB / LF / ESA | INVOIC **31009** | Messstellenbetrieb, routed to `mako-wim` `wim-invoic` | `mako-wim` ✅ |
 | WiM-Rechnung | MSB → NB / MSBN | INVOIC **31003** | Dienstleistungen im Messwesen (temporäre Fortführung, Geräteübernahme, Zwischen-/Kontrollablesung), beide Sparten | `mako-wim` ✅ |
 | Stornorechnung | wie die Ursprungsrechnung | INVOIC **31004** | Sparte-neutraler Storno | `mako-wim` ✅ |
 
@@ -938,8 +862,8 @@ decides them.
 | 23003 | Ablehnung Störungsmeldung | MSB → LF/NB/Melder | `mako-wim` `wim-insrpt` ✅ |
 | 23004 | Bestätigung Störungsmeldung | MSB → LF/NB/Melder | `mako-wim` `wim-insrpt` ✅ |
 | 23008 | Ergebnisbericht (gemeinsam) | MSB → LF/NB/Melder | `mako-wim` `wim-insrpt` ✅ |
-| 23005 | Informationsmeldung über die Störung an den NB (Gas) | MSB → NB | `mako-wim` `wim-insrpt` ✅ |
-| 23009 | Informationsmeldung über die Behebung an den NB (Gas) | MSB → NB | `mako-wim` `wim-insrpt` ✅ |
+| 23005 | Informationsmeldung über die Störung (beide Sparten) | MSB → MSB (Strom) · MSB → NB (Gas) | `mako-wim` `wim-insrpt` ✅ |
+| 23009 | Informationsmeldung über die Behebung (beide Sparten) | MSB → MSB (Strom) · MSB → NB (Gas) | `mako-wim` `wim-insrpt` ✅ |
 | 23011 | Information über die Störung an betroffener Marktlokation (Strom) | MSB → LF/NB | `mako-wim` `wim-insrpt` ✅ |
 | 23012 | Information über das Ergebnis an betroffener Marktlokation (Strom) | MSB → LF/NB | `mako-wim` `wim-insrpt` ✅ |
 
@@ -1017,11 +941,6 @@ carries a **Vorlauffrist** the Strom side does not. The grid operator is called
 | Neuanlage | keine Mindestvorlauffrist | Lieferbeginn = frühestmöglicher Termin |
 | Stornierung | solange die auslösende Meldung **noch nicht beantwortet** ist | Kap. 2.7; AWH Kap. 2.5.2 Nr. 2: „Eine Stornierung der Anmeldung kann bis zum Eingang der Antwortnachricht erfolgen" |
 
-> **Die „10 Werktage" sind die Vorlauffrist des Lieferanten, keine Antwortfrist.**
-> Sie sagen, wie weit im Voraus der LFN senden muss — nicht, wie lange der GNB
-> antworten darf. Wer damit eine Antwortqueue dimensioniert, meldet eine seit
-> sechs Werktagen abgelaufene Frist als noch laufend.
-
 **Wo bei Gas die 24 Stunden stehen.** Die AWH GeLi Gas nimmt seit V1.1 die
 Neuregelung zum **Lieferantenwechsel in 24 Stunden Gas (§ 20a EnWG)** auf: „Der
 Vorgang der Bestätigung einer Anmeldung zu einem LF ist nach erfolgreichem
@@ -1044,19 +963,14 @@ ersten Zweig aus; die PID-Tabelle veröffentlicht die Obergrenze, weil aus der
 Nachricht selbst nicht hervorgeht, welcher Zweig gilt.
 
 **Meldepflichten — Nachrichten ohne Antwort.** Wie bei GPKE trägt auch das Gas-SD
-Lieferbeginn drei einseitige Informationsmeldungen, die **mako nicht
-implementiert**: **44036** (Informationsmeldung über existierende Zuordnung,
+Lieferbeginn drei einseitige Informationsmeldungen, geroutet an
+`geli-gas-zuordnungsmeldung`: **44036** (Informationsmeldung über existierende Zuordnung,
 GNB → LFN, Ablauf des 4. WT — sie nennt dem LFN die **Identität des LFA**),
 **44037** (Beendigung der Zuordnung, GNB → LFA) und **44038** (Aufhebung einer
 zukünftigen Zuordnung, GNB → LFZ), die beiden letzten „am selben Tag wie
 Prozessschritt 5, wenn die Anmeldung bestätigt wurde" (AWH Kap. 2.5.2 Nr. 2 / 6 /
-7). Katalogisiert in `mako_fristen::meldung`, Lücke fixiert durch
-`services/makod/tests/meldepflicht_coverage.rs`.
-
-> **GNB-role note:** In the gas market the grid operator is always called **GNB**
-> (Gasnetzbetreiber). Messages are addressed to the GNB by EIC/GLN. The GNB
-> coordinates with the outgoing LF (LFA) after receiving the LFN's Anmeldung, by
-> sending the Abmeldeanfrage of Prozessschritt 3.
+7). Katalogisiert in `mako_fristen::meldung`, gegen den Router geprüft durch
+`services/makod/tests/it/meldepflicht_coverage.rs`.
 
 | Process | Initiator → Responder | UTILMD PID | Antwort OK | Antwort NG | Crate |
 |---|---|---|---|---|---|
@@ -1084,9 +998,8 @@ Prozessschritt 5, wenn die Anmeldung bestätigt wurde" (AWH Kap. 2.5.2 Nr. 2 / 6
 
 #### LF-seitige Einreichung (geli-gas-lf-anmeldung)
 
-When makod is deployed in the **LF role**, the LF initiates the Lieferbeginn Gas by sending
-UTILMD G 44001 outbound to the GNB. The response arrives inbound as 44002 (Bestätigung)
-or 44003 (Ablehnung). This mirrors the GPKE `gpke-lf-anmeldung` workflow for Strom.
+In the **LF role** the LF sends UTILMD G 44001 to the GNB and receives 44002
+(Bestätigung) or 44003 (Ablehnung) — the Gas twin of `gpke-lf-anmeldung`.
 
 **Workflow:** `geli-gas-lf-anmeldung` — the GNB's answer window on a 44001 is
 **Ablauf des 4. Werktags** (`mako_fristen::antwort`); the APERAK beside it is
@@ -1107,13 +1020,9 @@ nächster Werktag 12:00 / 3 Werktage.
 > „Der Altlieferant ist ferner verpflichtet, unmittelbar mit Bestätigung der
 > Kündigung gegenüber dem Neulieferanten auch das Lieferende gegenüber dem
 > Netzbetreiber einzuleiten."
->
-> Die Mindestvorlauffrist für den Lieferantenwechsel ist **10 Werktage** (Anmeldung)
-> bzw. **7 Werktage** (Abmeldung). GPKE Strom kennt seit LFW24 keine feste
-> Standardwechsel-Vorlauffrist mehr, sondern nur „spätester ÜT ist der Tag vor dem
-> letzten WT vor dem Zuordnungsbeginn". § 20a EnWG gilt in beiden Sparten — bei
-> Gas als 24-Stunden-Frist auf die **Ausführung der Zuordnung nach bestandener
-> Prüfung** (AWH Kap. 1.6), nicht als Antwortfrist.
+
+
+**Message flow — Lieferbeginn Gas:**
 
 ```mermaid
 sequenceDiagram
@@ -1121,51 +1030,21 @@ sequenceDiagram
     participant GNB as Gasnetzbetreiber (GNB)
     participant LFA as Alter LF (LFA)
 
-    Note over LFN,LFA: Keine taggleiche Kopplung vorgeschrieben
-    LFN->>GNB: UTILMD G 44001 (Anmeldung Lieferbeginn)
-    LFN->>LFA: UTILMD G 44016 (Kündigung beim alten LF)
+    LFN->>LFA: UTILMD G 44016 (Kündigung)
+    LFA-->>LFN: UTILMD G 44017 (Bestätigung) oder 44018 (Ablehnung)
 
-    Note over LFN,GNB: LF-Vorlauf 10 WT · GNB antwortet bis Ablauf des 4. WT
-
-    alt GNB bestätigt
-        GNB-->>LFN: UTILMD G 44002 (Bestätigung Anmeldung NN)
-        LFA-->>LFN: UTILMD G 44017 (Bestätigung Kündigung)
-    else GNB lehnt ab
-        GNB-->>LFN: UTILMD G 44003 (Ablehnung Anmeldung NN)
-    else LFA lehnt ab
-        LFA-->>LFN: UTILMD G 44018 (Ablehnung Kündigung)
+    LFN->>GNB: UTILMD G 44001 (Anmeldung, LF-Vorlauf 10 WT)
+    opt MaLo bereits zugeordnet
+        GNB->>LFN: UTILMD G 44036 (Information über existierende Zuordnung)
+        GNB->>LFA: UTILMD G 44010 (Abmeldeanfrage)
+        LFA-->>GNB: UTILMD G 44011 / 44012
     end
-
-    Note over LFN,LFA: Zum Lieferbeginn-Datum
-    GNB->>LFA: UTILMD G 44007 (Abmeldung NN)
-    LFA-->>GNB: UTILMD G 44008 (Bestätigung) oder 44009 (Ablehnung)
-```
-
----
-
-**Message flow — Lieferbeginn Gas (GNB-Sicht):**
-
-```mermaid
-sequenceDiagram
-    participant LFN as Neuer LF (LFN)
-    participant GNB as Gasnetzbetreiber (GNB)
-    participant LFA as Alter LF (LFA)
-
-    LFN->>GNB: UTILMD G 44001 (Anmeldung Lieferbeginn Gas)
-    LFN->>LFA: UTILMD G 44016 (Kündigung beim alten Lieferanten)
-
-    alt Bestätigung
+    alt Bestätigung — bis Ablauf des 4. WT
         GNB-->>LFN: UTILMD G 44002 (Bestätigung Anmeldung NN)
-        LFA-->>LFN: UTILMD G 44017 (Bestätigung Kündigung)
-    else Ablehnung durch GNB
+        GNB->>LFA:  UTILMD G 44037 (Beendigung der Zuordnung)
+    else Ablehnung
         GNB-->>LFN: UTILMD G 44003 (Ablehnung Anmeldung NN)
-    else Ablehnung durch LFA
-        LFA-->>LFN: UTILMD G 44018 (Ablehnung Kündigung)
     end
-
-    Note over LFN,LFA: Zum Lieferbeginn-Datum
-    GNB->>LFA: UTILMD G 44007 (Abmeldung NN)
-    LFA-->>GNB: UTILMD G 44008 (Bestätigung) oder 44009 (Ablehnung)
 ```
 
 ---
@@ -1199,10 +1078,9 @@ Entscheidungsbäume `E_1000` / `E_1004` against Strom's `E_0470` / `E_0497` —
 | Stornierung empfangen (GNB) | LF → GNB | ORDCHG **39000** | ORDRSP 19128 | ORDRSP 19129 | `mako-geli-gas` `geli-gas-sperrung-nb` ✅ |
 | Weiterleitung Stornierung (GNB → gMSB) | GNB → gMSB | ORDCHG **39001** | — | — | `mako-geli-gas` `geli-gas-sperrung-nb` ✅ |
 
-> **Same PIDs, different market.** ORDERS 17115 and 17117 are used for both
-> **Strom Sperrung** (routed to `mako-gpke`) and **Gas Sperrung** (routed to
-> `mako-geli-gas`). The routing is determined at dispatch time by the commodity
-> field in the ORDERS message header and the deployment role of the receiving party.
+> **Same PIDs, different market.** ORDERS 17115 and 17117 route to `mako-gpke`
+> for Strom and `mako-geli-gas` for Gas, by the Sparte of the interchange
+> recipient's MP-ID and the deployment role.
 
 **Message flow — Gas-Sperrauftrag (LF-initiiert):**
 
@@ -1291,18 +1169,9 @@ APERAK on the Gas APERAK clock — **nächster Werktag 12:00 Uhr** for a
 Folgeprozess, 3 Werktage for an Initialprozess (APERAK AHB 1.1 § 2.3.1). Not
 10 Werktage: that is the supplier's Vorlauffrist before a Lieferbeginn.
 
-| PID | Content | Sender → Empfänger |
-|---|---|---|
-| **13002** | Zählerstand Gas | MSBA/MSBN → GNB · GNB → LF |
-| **13007** | Gasbeschaffenheit (Brennwert, Zustandszahl) | GNB → LF · MSBA → GNB |
-| **13008** | Lastgang Gas | GNB → LF · MSBA → GNB |
-| **13009** | Energiemenge Gas | MSBA/MSBN → GNB · GNB → LF |
-
-> **PIDs 13013 and 13014** are listed here for cross-reference only.
-> **13013** (Allokationsliste Gas, MMMA) belongs to `mako-gabi-gas` (`gabi-gas-mmma`) — GaBi Gas
-> billing domain (BK7-24-01-008). **13014** (Bilanzierte Menge Gas/Strom) is a GaBi Gas/ÜNB process.
-> Neither is registered under `mako-geli-gas`; Gas-only deployments that do not load `mako-gabi-gas`
-> will dead-letter these PIDs.
+13013 (Allokationsliste Gas, MMMA) belongs to `mako-gabi-gas` `gabi-gas-mmma`
+and 13014 (bilanzierte Menge) to `mako-gpke` `gpke-allokationsliste`; a
+deployment without those modules dead-letters them.
 
 | PID | Content | Sender → Empfänger | Crate |
 |---|---|---|---|
@@ -1311,21 +1180,18 @@ Folgeprozess, 3 Werktage for an Initialprozess (APERAK AHB 1.1 § 2.3.1). Not
 | **13008** | Lastgang Gas | GNB → LF · MSBA → GNB | `mako-geli-gas` ✅ |
 | **13009** | Energiemenge Gas | MSBA/MSBN → GNB · GNB → LF | `mako-geli-gas` ✅ |
 | **13013** | Allokationsliste Gas (MaLo-scharf, MMMA) | GNB → MGV | **`mako-gabi-gas`** `gabi-gas-mmma` — GaBi Gas domain |
-| **13014** | Bilanzierte Menge Gas/Strom (MaLo-scharf) | ÜNB → GNB · GNB → LF | **`mako-gabi-gas`** — GaBi Gas domain |
+| **13014** | Bilanzierte Menge Gas/Strom (MaLo-scharf) | ÜNB → NB · NB → LF | `mako-gpke` `gpke-allokationsliste` |
 
 ---
 
 ### Process Symmetry: GPKE ↔ GeLi Gas
 
-> **Why doesn't GeLi Gas have every GPKE process?**
->
-> GPKE (Strom) and GeLi Gas (Gas) share the same *business goals* — supplier switching,
-> disconnection, billing, data retrieval — but have structurally different regulatory frameworks.
-> The asymmetry is real and intentional, not a documentation or implementation gap.
+GPKE and GeLi Gas share business goals but rest on different Festlegungen, so
+not every process has a twin.
 
 | GPKE Process (Strom) | GeLi Gas Equivalent | Notes |
 |---|---|---|
-| Lieferantenwechsel (NB-Sicht) — UTILMD 55001–55018 | Lieferantenwechsel (GNB-Sicht) — UTILMD G 44001–44021 | ✅ Direct equivalent. Gas has no fast-switch option (10 WT only) |
+| Lieferantenwechsel (NB-Sicht) — UTILMD 55001–55018 | Lieferantenwechsel (GNB-Sicht) — UTILMD G 44001–44021 | ✅ Direct equivalent; the Gas LF-Vorlauf is 10 WT |
 | Lieferantenwechsel (LF-Sicht) — `gpke-lf-anmeldung` | Lieferbeginn (LF-Sicht) — `geli-gas-lf-anmeldung` (44001 out, 44002/44003 in) | ✅ Direct equivalent |
 | Abmeldung NB-initiiert — UTILMD 55007–55009 | Abmeldung NN (GNB → LFN) — UTILMD G 44007–44009 | ✅ Direct equivalent |
 | Stornierung — UTILMD 55022–55024 | Stornierung — UTILMD G 44022–44024 | ✅ Direct equivalent (role-conditional routing) |
@@ -1431,9 +1297,9 @@ Ergebnis (AWH WiM Gas 2.0 Kap. 4.3.2 Nr. 2/4).
 | 23001 | Störungsmeldung | LF/NB → MSB | beide |
 | 23003 | Ablehnung der Störungsmeldung | MSB → Melder | beide |
 | 23004 | Bestätigung der Störungsmeldung | MSB → Melder | beide |
-| 23005 | Informationsmeldung über die Störung an den NB | MSB → NB | **Gas** |
+| 23005 | Informationsmeldung über die Störung an den NB | MSB → NB | beide (Gas an den NB) |
 | 23008 | Mitteilung Ergebnis | MSB → Melder | beide |
-| 23009 | Informationsmeldung über die Behebung an den NB | MSB → NB | **Gas** |
+| 23009 | Informationsmeldung über die Behebung an den NB | MSB → NB | beide (Gas an den NB) |
 
 ---
 
@@ -1606,15 +1472,15 @@ LPB cannot receive the series it has just won the right to.
 
 ## Redispatch 2.0
 
-**Regulatory basis:** §§ 13, 13a, 14 EnWG; BNetzA Beschlüsse BK6-20-059,
-BK6-20-060, BK6-20-061 (see [Redispatch 2.0](@/docs/reference/redispatch.md) for the
-per-ruling deadline table)
+**Regulatory basis:** §§ 13, 13a, 14 EnWG; BK6-23-241 (BilAReM), which repealed
+BK6-20-060/061 and BK6-20-059 TZ 1 (see [Redispatch 2.0](@/docs/reference/redispatch.md)
+for the deadline table)
 
 Redispatch 2.0 uses **XML-based messages** (not EDIFACT) alongside IFTSTA
 status messages. `redispatch-xml` parses/validates the nine document types,
 `mako-redispatch` runs the eight event-sourced workflows, and `makod`'s AS4
-ingest joins the two (XML sniff → parse → `document_kind` → workflow, with
-the 5-min/6h/24h deadlines registered at spawn).
+ingest joins the two (XML sniff → parse → `document_kind` → workflow); the
+3-minute ACK is sourced, the other windows are operator-set `Betreiberfristen`.
 
 | Process | Roles | Format | IFTSTA PID | Workflow |
 |---|---|---|---|---|
@@ -1672,10 +1538,10 @@ full Anwendungsfall table.
 | 70022 | ALOCAT | NB → BKV | `gabi-gas-allocation` ✅ |
 | 70030–70034 | NOMINT | Transportkunde → NB/MGV | `gabi-gas-nomination` ✅ |
 | 70035–70039 | NOMRES | NB/MGV → Transportkunde | `gabi-gas-nomination` ✅ |
+| 70095–70096 | SSQNOT | NB → MGV | `gabi-gas-mehr-mindermengen` ✅ |
 
-SCHEDL, IMBNOT, TRANOT, DELORD/DELRES, SSQNOT, CHACAP, NUEVOR, SLPASP and
-TSIMSG are **not implemented**: `dvgw-edi` does not parse them, so they have no
-workflow and no Prüfidentifikator here.
+SCHEDL, IMBNOT, TRANOT, DELORD/DELRES, CHACAP, NUEVOR, SLPASP and TSIMSG are
+not parsed by `dvgw-edi` and have no workflow.
 
 ---
 
@@ -1683,16 +1549,11 @@ workflow and no Prüfidentifikator here.
 
 ### APERAK — Universal acknowledgement
 
-Every EDIFACT message exchange has an APERAK acknowledgement layer. The sender
-expects an APERAK within the applicable Frist. An APERAK can carry:
-
-- **Acceptance** (`Z01`) — message syntactically and semantically valid
-- **Functional rejection** (`Z04`) — AHB rule violation
-- **Technical rejection** (`Z07`) — message could not be processed
-
-The APERAK does not signal process acceptance/rejection — that is done by the
-substantive response (e.g. UTILMD 55002/55003). APERAK is purely the
-**technical receipt acknowledgement**.
+The APERAK states whether a message could be processed — not whether the
+process is accepted, which is the substantive answer's job (e.g. UTILMD
+55002/55003). Two Anwendungsfälle exist: **29002 Anerkennungsmeldung**
+(`BGM+312`, Strom only) and **29001 Fehlermeldung** (`BGM+313`, with an `ERC`
+error code); Gas sends only the Fehlermeldung (APERAK AHB 1.1 §2.3).
 
 ### CONTRL — Syntaxprüfung und Empfangsbestätigung
 
@@ -1761,7 +1622,7 @@ only the PIDs it owns; a Strom-only instance never loads any Gas crate and vice 
 > **Inbound disambiguation:** When the same PID is registered by two crates in a
 > combined Strom+Gas instance, `PidRouter` dispatches using:
 >
-> - **ORDERS/ORDRSP Sperrung** (17115, 17117, 19116–19129): by `DeploymentRoles` / `Marktrolle` (EIC prefix).
+> - **ORDERS/ORDRSP Sperrung** (17115, 17117, 19116–19129): by the Sparte of the recipient MP-ID and the `DeploymentRoles`.
 > - **WiM (INSRPT, ORDERS/ORDRSP, IFTSTA):** no disambiguation needed — one workflow serves both Sparten and takes the Sparte as an argument, resolved from the recipient MP-ID.
 >
 > In commodity-separated instances (separate makod per Sparte), no disambiguation
@@ -1769,10 +1630,6 @@ only the PIDs it owns; a Strom-only instance never loads any Gas crate and vice 
 
 ### Format versions and process transitions
 
-A process started under an older format version continues under those AHB rules
-until it completes, even after a cutover (e.g. the `FV2026-10-01` cutover on
-2026-10-01). Multiple format versions coexist simultaneously in the same engine
-instance.
-A process keeps its creation `WorkflowId` and the inbound message's own FV picks
-the adapter, so no per-workflow acceptance policy is declared or needed. See
-[Schema Versioning](@/docs/compliance/schema-versioning.md) for details.
+A process keeps the `WorkflowId` — and format version — it was created with,
+while the inbound message's own FV picks the adapter. See
+[Format-version coexistence](@/docs/architecture/engine.md#format-version-coexistence).

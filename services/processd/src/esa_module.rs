@@ -891,6 +891,7 @@ async fn dispatch(
                         "auto_accept ist aus — {ebd} ergibt {antwortcode} für {}",
                         process_name(payload.pid)
                     ),
+                    Vorschlag::Zustimmung(answer_body(payload, antwortcode, None)),
                 )
                 .await
             }
@@ -919,6 +920,7 @@ async fn dispatch(
                     payload,
                     queue,
                     format!("auto_reject ist aus — {ebd} ergibt {antwortcode}: {reason}"),
+                    Vorschlag::Ablehnung(answer_body(payload, antwortcode, Some(reason))),
                 )
                 .await
             }
@@ -931,31 +933,18 @@ async fn dispatch(
                 reason,
                 "processd ESA: Eskalation — in die Freigabewarteschlange gestellt"
             );
-            enqueue(cfg, payload, queue, reason.clone()).await
+            enqueue(cfg, payload, queue, reason.clone(), Vorschlag::Keiner).await
         }
     }
 }
 
-/// Post the answer to `makod`.
-///
-/// On the three order PIDs the Antwortcode rides `SG2 AJT` DE 4465 and makod
-/// resolves DE 1082 from the process's own Abo mode, so the code cannot travel
-/// under a tree that does not publish it.
-///
-/// The Werteanfrage refusal is different in kind: the QUOTES 15003 has **no
-/// `AJT`**, so an `E_0252` code has no segment to ride at all. Its wording goes
-/// into `FTX+ACB` — the only free text the message has, and what UC 4.1 Nr. 2
-/// means by „informiert der MSB den ESA über die Gründe".
-async fn post_answer(
-    makod: &mako_markt::makod_client::MakodClient,
+/// The body of an ESA answer — what the automatic path posts and what a held
+/// decision is frozen with on the approval queue.
+fn answer_body(
     payload: &EsaOrderPayload,
     antwortcode: &str,
     reason: Option<&String>,
-    idem_kind: &str,
-) -> anyhow::Result<()> {
-    let Some((command, marktrolle)) = answer_command(payload.pid) else {
-        anyhow::bail!("PID {} has no automatic answer command", payload.pid);
-    };
+) -> serde_json::Value {
     let mut body = serde_json::json!({
         "malo_id": payload.lokations_id,
         "auto_stp": true,
@@ -987,6 +976,40 @@ async fn post_answer(
     {
         body["reason"] = serde_json::Value::String(text.clone());
     }
+    body
+}
+
+/// What every ESA answer is addressed by: the location and, where the order
+/// named one, the Messprodukt that tells several subscriptions apart.
+fn answer_address(payload: &EsaOrderPayload) -> serde_json::Value {
+    let mut body = serde_json::json!({ "malo_id": payload.lokations_id });
+    if !payload.messprodukt.is_empty() {
+        body["messprodukt"] = serde_json::Value::String(payload.messprodukt.clone());
+    }
+    body
+}
+
+/// Post the answer to `makod`.
+///
+/// On the three order PIDs the Antwortcode rides `SG2 AJT` DE 4465 and makod
+/// resolves DE 1082 from the process's own Abo mode, so the code cannot travel
+/// under a tree that does not publish it.
+///
+/// The Werteanfrage refusal is different in kind: the QUOTES 15003 has **no
+/// `AJT`**, so an `E_0252` code has no segment to ride at all. Its wording goes
+/// into `FTX+ACB` — the only free text the message has, and what UC 4.1 Nr. 2
+/// means by „informiert der MSB den ESA über die Gründe".
+async fn post_answer(
+    makod: &mako_markt::makod_client::MakodClient,
+    payload: &EsaOrderPayload,
+    antwortcode: &str,
+    reason: Option<&String>,
+    idem_kind: &str,
+) -> anyhow::Result<()> {
+    let Some((command, marktrolle)) = answer_command(payload.pid) else {
+        anyhow::bail!("PID {} has no automatic answer command", payload.pid);
+    };
+    let body = answer_body(payload, antwortcode, reason);
     let cmd = mako_markt::makod_client::ForwardCommand {
         marktrolle: Some(marktrolle.to_owned()),
         command: command.to_owned(),
@@ -1012,12 +1035,34 @@ async fn post_answer(
     Ok(())
 }
 
+/// The decision the checks proposed for a queued ESA order, if any.
+enum Vorschlag {
+    /// A held Zustimmung, frozen with its body.
+    Zustimmung(serde_json::Value),
+    /// A held Ablehnung, frozen with its body.
+    Ablehnung(serde_json::Value),
+    /// An escalation: the answer is the operator's.
+    Keiner,
+}
+
 /// Put the decision in front of an operator, with its WiM Frist attached.
+///
+/// Approving dispatches the proposed answer; rejecting overrides it, with the
+/// operator's Antwortcode. The three order PIDs are answered by one command
+/// whose Antwortcode Cluster decides the PID, so both decisions name it and the
+/// frozen body tells them apart.
+///
+/// The Werteanfrage is answered by two commands, and only the refusal can be
+/// dispatched from the queue: the Angebot needs prices and OBIS-Kennzahlen
+/// (QUOTES AHB 1.1a §4.3, Muss) the queue does not hold, so an operator sends
+/// it through the command API, and the decision that leads there records
+/// without a market message.
 async fn enqueue(
     cfg: &EsaModuleConfig,
     payload: &EsaOrderPayload,
     queue: &PgApprovalQueue,
     reason: String,
+    vorschlag: Vorschlag,
 ) -> anyhow::Result<()> {
     let window = mako_fristen::antwort::operator_window(payload.pid, payload.received_at);
     let entry = ApprovalQueueEntry::pending(
@@ -1031,18 +1076,29 @@ async fn enqueue(
         window.expires_at,
         cfg.tenant.clone(),
     );
-    // The Werteanfrage is answered with an Angebot or its Ablehnung — two
-    // different commands, so both are named. The order PIDs are answered by one
-    // command that carries either cluster's code, so approve and reject are the
-    // same command name.
+    let address = answer_address(payload);
     let entry = if payload.pid == mako_fristen::antwort::ESA_WERTEANFRAGE_PID {
-        entry.with_commands(
-            mako_markt::commands::WIM_WERTEBESTELLUNG_ANBIETEN,
-            mako_markt::commands::WIM_WERTEBESTELLUNG_ANFRAGE_ABLEHNEN,
-            Some("MSB"),
-        )
+        let ablehnen = mako_markt::commands::WIM_WERTEBESTELLUNG_ANFRAGE_ABLEHNEN;
+        match vorschlag {
+            // Approving the refusal sends it; overriding it means an Angebot.
+            Vorschlag::Ablehnung(body) => entry
+                .with_approve_command(ablehnen, Some("MSB"))
+                .with_answer_payload(body),
+            // Approving an Angebot leads to the command API; rejecting sends
+            // the refusal with the operator's Begründung.
+            Vorschlag::Zustimmung(_) | Vorschlag::Keiner => entry
+                .with_reject_command(ablehnen, Some("MSB"))
+                .with_reject_payload(address),
+        }
     } else if let Some((command, marktrolle)) = answer_command(payload.pid) {
-        entry.with_commands(command, command, Some(marktrolle))
+        let answer = match vorschlag {
+            Vorschlag::Zustimmung(body) | Vorschlag::Ablehnung(body) => body,
+            Vorschlag::Keiner => address.clone(),
+        };
+        entry
+            .with_commands(command, command, Some(marktrolle))
+            .with_answer_payload(answer)
+            .with_reject_payload(address)
     } else {
         entry
     };

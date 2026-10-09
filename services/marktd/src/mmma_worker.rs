@@ -212,11 +212,17 @@ fn parse_strom_prices(body: &str, year: i32, month: u8) -> Result<Vec<(Decimal, 
         .collect())
 }
 
-/// Run one import cycle for the given year/month.
-#[allow(clippy::too_many_arguments)]
+/// Run one import cycle for the Anwendungsmonat starting on `price_month`.
+///
+/// A `Date` rather than a year and a month number: the month every price is
+/// written under is then the one the caller validated, and there is no number
+/// left to read as a month that is not one.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn run_import_cycle(
-    year: i32,
-    month: u8,
+    price_month: time::Date,
     http: &reqwest::Client,
     gas_url: &str,
     strom_url: &str,
@@ -226,6 +232,7 @@ pub async fn run_import_cycle(
     event_tx: &EventSink<'_>,
 ) -> Vec<ImportResult> {
     let mut results = Vec::new();
+    let (year, month) = (price_month.year(), price_month.month() as u8);
 
     // ── Gas MMMA ─────────────────────────────────────────────────────────────
     if let Some(fetch_result) = fetch_raw(http, gas_url).await {
@@ -276,12 +283,6 @@ pub async fn run_import_cycle(
                 Ok(prices) => {
                     let mut ok = true;
                     for (marktgebiet, mehr, minder) in &prices {
-                        let price_month = time::Date::from_calendar_date(
-                            year,
-                            time::Month::try_from(month).unwrap_or(time::Month::January),
-                            1,
-                        )
-                        .unwrap_or_else(|_| mako_fristen::heute());
                         if let Err(e) = gas_repo
                             .upsert_gas(price_month, marktgebiet, *mehr, *minder, "the-api")
                             .await
@@ -379,12 +380,6 @@ pub async fn run_import_cycle(
                 Ok(prices) => {
                     let mut ok = true;
                     for (mehr, minder) in &prices {
-                        let price_month = time::Date::from_calendar_date(
-                            year,
-                            time::Month::try_from(month).unwrap_or(time::Month::January),
-                            1,
-                        )
-                        .unwrap_or_else(|_| mako_fristen::heute());
                         if let Err(e) = strom_repo
                             .upsert_strom(price_month, *mehr, *minder, "bdew-csv")
                             .await
@@ -468,7 +463,6 @@ pub struct EventSink<'a> {
 /// Wakes every hour, checks whether today is the 1st and the `check_hour_utc`
 /// has been reached, then runs `run_import_cycle` if a price record for the
 /// current month does not already exist.
-#[allow(clippy::too_many_arguments)] // injected handles, each independently owned
 pub fn spawn_mmma_worker(
     cfg: Arc<crate::config::MmmaImportConfig>,
     http: reqwest::Client,
@@ -537,8 +531,7 @@ pub fn spawn_mmma_worker(
                 month, gas_missing, strom_missing, "MMMA import worker: fetching missing prices"
             );
             run_import_cycle(
-                year,
-                month,
+                price_month,
                 &http,
                 if gas_missing { &cfg.gas_url } else { "" },
                 if strom_missing { &cfg.strom_url } else { "" },

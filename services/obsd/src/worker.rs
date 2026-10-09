@@ -199,7 +199,10 @@ pub async fn sweep_deadlines(rt: &WorkerRuntime) -> Result<SweepOutcome, sqlx::E
     for row in &rows {
         let process_id: Uuid = row.try_get("process_id")?;
         let deadline_at: OffsetDateTime = row.try_get("deadline_at")?;
-        #[allow(clippy::cast_precision_loss)]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a count or ratio reported as a float, never a money amount"
+        )]
         let hours_remaining =
             ((deadline_at - now).whole_minutes() as f64 / 60.0 * 10.0).round() / 10.0;
         let data = serde_json::json!({

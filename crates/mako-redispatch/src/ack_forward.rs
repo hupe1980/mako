@@ -131,10 +131,18 @@ pub enum AckForwardState {
     Acknowledged(ReceivedData),
     /// Document forwarded upstream.
     Forwarded(ReceivedData),
-    /// A registered deadline expired without acknowledgement.
-    DeadlineExpired {
-        /// Human-readable reason.
-        reason: String,
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// The `AcknowledgementDocument` answers the transfer file's syntax and is due within 3 minutes; a late one must not fail the Geschäftsvorfall it carried, and no document gives the lapse another outcome. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<AckForwardState>,
     },
 }
 
@@ -147,9 +155,24 @@ impl AckForwardState {
             Self::Received(_) => "Received",
             Self::Acknowledged(_) => "Acknowledged",
             Self::Forwarded(_) => "Forwarded",
-            Self::DeadlineExpired { .. } => "DeadlineExpired",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
         }
     }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
+        }
+    }
+}
+
+/// The one guard a fired deadline passes: the acknowledgement window is open
+/// while the received document is unacknowledged (`Received`).
+fn window_open(label: &str, state: &AckForwardState, ack_window_label: &str) -> bool {
+    label == ack_window_label && matches!(state, AckForwardState::Received(_))
 }
 
 impl EventPayload for AckForwardEvent {
@@ -224,6 +247,12 @@ define_workflow_event!(KostenblattEvent, "Kostenblatt");
 
 /// Apply an `AckForwardEvent` to `AckForwardState`.
 pub(crate) fn apply(state: AckForwardState, event: &AckForwardEvent) -> AckForwardState {
+    // A lapsed window leaves the process waiting where it was; the next
+    // event moves it on from there.
+    let state = match state {
+        AckForwardState::FristAbgelaufen { offen, .. } => *offen,
+        other => other,
+    };
     match event {
         AckForwardEvent::Received {
             mrid,
@@ -249,8 +278,12 @@ pub(crate) fn apply(state: AckForwardState, event: &AckForwardEvent) -> AckForwa
             other => other,
         },
 
-        AckForwardEvent::DeadlineExpired { label, .. } => AckForwardState::DeadlineExpired {
-            reason: format!("deadline expired: {label}"),
+        AckForwardEvent::DeadlineExpired { label, .. } => match state {
+            AckForwardState::Received(_) => AckForwardState::FristAbgelaufen {
+                label: label.to_string(),
+                offen: Box::new(state),
+            },
+            other => other,
         },
     }
 }
@@ -261,6 +294,10 @@ pub(crate) fn handle(
     command: AckForwardCommand,
     ack_window_label: &str,
 ) -> Result<WorkflowOutput<AckForwardEvent>, WorkflowError> {
+    // A lapsed window changes nothing about what the process accepts; only
+    // the timeout itself asks about the lapse.
+    let lapsed = state;
+    let state = state.offen();
     match command {
         AckForwardCommand::Receive {
             mrid,
@@ -304,15 +341,12 @@ pub(crate) fn handle(
             ))),
         },
 
-        AckForwardCommand::TimeoutExpired { deadline_id, label } => match state {
-            AckForwardState::Acknowledged(_)
-            | AckForwardState::Forwarded(_)
-            | AckForwardState::DeadlineExpired { .. } => Ok(vec![].into()),
-            _ => {
-                let _ = ack_window_label; // used by caller for label registration
-                Ok(vec![AckForwardEvent::DeadlineExpired { deadline_id, label }].into())
+        AckForwardCommand::TimeoutExpired { deadline_id, label } => {
+            if !window_open(&label, lapsed, ack_window_label) {
+                return Ok(vec![].into());
             }
-        },
+            Ok(vec![AckForwardEvent::DeadlineExpired { deadline_id, label }].into())
+        }
     }
 }
 
@@ -335,19 +369,18 @@ macro_rules! ack_forward_workflow {
             type Event   = $event_newtype;
             type Command = AckForwardCommand;
 
+            const DEADLINE_LABELS: &'static [&'static str] = &[$ack_label];
+
             fn on_deadline(
                 deadline: &Deadline,
                 state: &Self::State,
             ) -> Option<Self::Command> {
-                if deadline.label() == $ack_label {
-                    if matches!(state, AckForwardState::Received(_)) {
-                        return Some(AckForwardCommand::TimeoutExpired {
-                            deadline_id: deadline.deadline_id(),
-                            label: deadline.label().into(),
-                        });
+                window_open(deadline.label(), state, $ack_label).then(|| {
+                    AckForwardCommand::TimeoutExpired {
+                        deadline_id: deadline.deadline_id(),
+                        label: deadline.label().into(),
                     }
-                }
-                None
+                })
             }
 
             fn apply(state: Self::State, event: &Self::Event) -> Self::State {

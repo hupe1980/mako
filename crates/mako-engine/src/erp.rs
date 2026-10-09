@@ -46,43 +46,12 @@
 //! The BO4E payload is always in the `data` field; the `payload_schema` URL
 //! maps to the CloudEvents `dataschema` attribute.
 //!
-//! ## Inbound: ERP → mako (event-driven)
-//!
-//! For ERP systems with a message bus, implement [`ErpCommandSource`] to feed
-//! BO4E business objects into the engine without a synchronous REST round-trip.
-//!
-//! ```rust,ignore
-//! struct MyKafkaSource { consumer: KafkaConsumer }
-//!
-//! impl ErpCommandSource for MyKafkaSource {
-//!     async fn next(&self) -> Result<Option<InboundErpCommand>, ErpAdapterError> {
-//!         let msg = self.consumer.poll(Duration::from_millis(100)).await;
-//!         Ok(msg.map(|m| InboundErpCommand {
-//!             idempotency_key: m.offset().to_string(),
-//!             tenant_id: TenantId::new(),
-//!             payload_schema: "…/Marktlokation.json".into(),
-//!             payload: serde_json::from_slice(m.payload()).unwrap(),
-//!         }))
-//!     }
-//!
-//!     async fn ack(&self, id: &str) -> Result<(), ErpAdapterError> {
-//!         self.consumer.commit_offset(id.parse().unwrap()).await
-//!             .map_err(ErpAdapterError::transport)
-//!     }
-//!
-//!     async fn nack(&self, _id: &str, _reason: &str) -> Result<(), ErpAdapterError> {
-//!         Ok(()) // Kafka auto-redelivers on next poll
-//!     }
-//! }
-//! ```
-//!
 //! ## Reference implementations
 //!
 //! | Type | Feature | Use case |
 //! |------|---------|---------|
 //! | `NoopErpAdapter` | `testing` | Unit tests, CI |
 //! | [`LogErpAdapter`] | — | Structured log output; starting point for new integrations |
-//! | `NoopErpCommandSource` | `testing` | No-op inbound source for tests |
 //!
 //! For the production `WebhookErpAdapter` and `POST /api/v1/commands` endpoint,
 //! see `makod/src/erp_adapter.rs`.
@@ -97,7 +66,7 @@ use crate::ids::{ConversationId, EventId, ProcessId, TenantId};
 
 // ── ErpAdapterError ───────────────────────────────────────────────────────────
 
-/// Errors produced by [`ErpAdapter`] and [`ErpCommandSource`] implementations.
+/// Errors produced by [`ErpAdapter`] implementations.
 #[derive(Debug, thiserror::Error)]
 pub enum ErpAdapterError {
     /// The ERP response payload could not be deserialised or is semantically
@@ -156,7 +125,7 @@ pub enum ErpEventType {
     /// The counterparty sent an APERAK rejecting our UTILMD.
     ///
     /// `erc_code` is `Some` when the APERAK carried a structured ERC segment
-    /// (BDEW APERAK AHB 1.0 §2.2), and `None` when the counterparty sent none.
+    /// (BDEW APERAK AHB 1.1 §2.2), and `None` when the counterparty sent none.
     AperakRejected {
         /// Structured BDEW ERC error code from the APERAK ERC segment.
         ///
@@ -372,7 +341,10 @@ pub struct ErpEvent {
 ///   will retry with exponential backoff.
 /// - Return [`ErpAdapterError::Permanent`] for non-retryable failures — the
 ///   caller will dead-letter the event.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait ErpAdapter: Send + Sync + 'static {
     /// Deliver `event` to the ERP.
     async fn notify(&self, event: ErpEvent) -> Result<(), ErpAdapterError>;
@@ -382,82 +354,6 @@ pub trait ErpAdapter: Send + Sync + 'static {
 impl<T: ErpAdapter> ErpAdapter for Arc<T> {
     async fn notify(&self, event: ErpEvent) -> Result<(), ErpAdapterError> {
         (**self).notify(event).await
-    }
-}
-
-// ── InboundErpCommand ─────────────────────────────────────────────────────────
-
-/// A BO4E business object received from the ERP, intended to trigger a mako
-/// process.
-///
-/// `mako-engine` maps the BO4E payload to an internal `Command` via the
-/// domain crate's command mapper.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InboundErpCommand {
-    /// Stable dedup key — forwarded to [`InboxStore::accept`].
-    ///
-    /// The ERP must supply a stable, unique identifier per command so that
-    /// retransmissions do not double-execute the workflow.
-    ///
-    /// [`InboxStore::accept`]: crate::inbox::InboxStore::accept
-    pub idempotency_key: String,
-
-    /// Tenant (operator GLN) that owns the target process.
-    pub tenant_id: TenantId,
-
-    /// BO4E JSON Schema URL — identifies the object type without inspecting
-    /// `payload`.
-    ///
-    /// Example:
-    /// `"https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.1.0/src/bo4e_schemas/bo/Vertrag.json"`
-    pub payload_schema: String,
-
-    /// BO4E-typed JSON payload.  `mako-engine` maps this to an internal
-    /// `Command` via the registered domain command mapper.
-    pub payload: serde_json::Value,
-}
-
-// ── ErpCommandSource trait ────────────────────────────────────────────────────
-
-/// Inbound command source — `mako-engine` polls this for new BO4E objects
-/// from the ERP.
-///
-/// Implement this for broker-based inbound flows (Kafka consumer, SFTP poll,
-/// database change feed, …) to make the entire integration fully event-driven
-/// — no synchronous REST round-trip required.
-///
-/// ## Contract
-///
-/// - [`next`](ErpCommandSource::next) must be **non-blocking** when idle —
-///   return `Ok(None)` immediately when no command is available.
-/// - [`ack`](ErpCommandSource::ack) must suppress re-delivery of `id` after
-///   a successful ack (idempotent).
-/// - [`nack`](ErpCommandSource::nack) should allow re-delivery of `id` after
-///   an appropriate backoff.
-#[allow(async_fn_in_trait)]
-pub trait ErpCommandSource: Send + Sync + 'static {
-    /// Return the next pending BO4E command, or `None` when the source is idle.
-    async fn next(&self) -> Result<Option<InboundErpCommand>, ErpAdapterError>;
-
-    /// Acknowledge successful processing of `id`.
-    ///
-    /// After a successful ack the source must not re-deliver `id`.
-    async fn ack(&self, id: &str) -> Result<(), ErpAdapterError>;
-
-    /// Negative-acknowledge — allow re-delivery of `id` after backoff.
-    async fn nack(&self, id: &str, reason: &str) -> Result<(), ErpAdapterError>;
-}
-
-/// Blanket `Arc` implementation so `ErpCommandSource` can be shared across tasks.
-impl<S: ErpCommandSource> ErpCommandSource for Arc<S> {
-    async fn next(&self) -> Result<Option<InboundErpCommand>, ErpAdapterError> {
-        (**self).next().await
-    }
-    async fn ack(&self, id: &str) -> Result<(), ErpAdapterError> {
-        (**self).ack(id).await
-    }
-    async fn nack(&self, id: &str, reason: &str) -> Result<(), ErpAdapterError> {
-        (**self).nack(id, reason).await
     }
 }
 
@@ -497,28 +393,6 @@ impl ErpAdapter for LogErpAdapter {
             pid             = event.pid,
             "ErpAdapter: event logged (no delivery configured)",
         );
-        Ok(())
-    }
-}
-
-// ── NoopErpCommandSource ──────────────────────────────────────────────────────
-
-/// An [`ErpCommandSource`] that is always idle (returns `Ok(None)`).
-///
-/// Use in tests where no inbound ERP command flow is needed.
-#[cfg(feature = "testing")]
-#[derive(Debug, Clone, Default)]
-pub struct NoopErpCommandSource;
-
-#[cfg(feature = "testing")]
-impl ErpCommandSource for NoopErpCommandSource {
-    async fn next(&self) -> Result<Option<InboundErpCommand>, ErpAdapterError> {
-        Ok(None)
-    }
-    async fn ack(&self, _id: &str) -> Result<(), ErpAdapterError> {
-        Ok(())
-    }
-    async fn nack(&self, _id: &str, _reason: &str) -> Result<(), ErpAdapterError> {
         Ok(())
     }
 }
@@ -571,76 +445,6 @@ impl ErpAdapter for ErpAdapterTestHarness {
     }
 }
 
-// ── ErpCommandSourceTestHarness ───────────────────────────────────────────────
-
-/// A controllable [`ErpCommandSource`] for use in tests.
-///
-/// Inject canned [`InboundErpCommand`] payloads and verify that the engine
-/// processes them correctly.
-///
-/// ```text
-/// let source = ErpCommandSourceTestHarness::new();
-/// source.inject(InboundErpCommand {
-///     idempotency_key: "order-42".into(),
-///     tenant_id: TenantId::new(),
-///     payload_schema: ".../Vertrag.json".into(),
-///     payload: serde_json::json!({ "_typ": "VERTRAG", ... }),
-/// }).await;
-///
-/// // The engine picks up the command on the next poll.
-/// ```
-#[cfg(feature = "testing")]
-#[derive(Debug, Clone, Default)]
-pub struct ErpCommandSourceTestHarness {
-    queue: Arc<tokio::sync::Mutex<std::collections::VecDeque<InboundErpCommand>>>,
-    acked: Arc<tokio::sync::Mutex<Vec<String>>>,
-    nacked: Arc<tokio::sync::Mutex<Vec<(String, String)>>>,
-}
-
-#[cfg(feature = "testing")]
-impl ErpCommandSourceTestHarness {
-    /// Create a new empty harness.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Enqueue a command to be returned by the next [`next`](ErpCommandSource::next) call.
-    pub async fn inject(&self, cmd: InboundErpCommand) {
-        self.queue.lock().await.push_back(cmd);
-    }
-
-    /// Return all acked command IDs.
-    pub async fn acked(&self) -> Vec<String> {
-        self.acked.lock().await.clone()
-    }
-
-    /// Return all nacked `(id, reason)` pairs.
-    pub async fn nacked(&self) -> Vec<(String, String)> {
-        self.nacked.lock().await.clone()
-    }
-}
-
-#[cfg(feature = "testing")]
-impl ErpCommandSource for ErpCommandSourceTestHarness {
-    async fn next(&self) -> Result<Option<InboundErpCommand>, ErpAdapterError> {
-        Ok(self.queue.lock().await.pop_front())
-    }
-
-    async fn ack(&self, id: &str) -> Result<(), ErpAdapterError> {
-        self.acked.lock().await.push(id.to_owned());
-        Ok(())
-    }
-
-    async fn nack(&self, id: &str, reason: &str) -> Result<(), ErpAdapterError> {
-        self.nacked
-            .lock()
-            .await
-            .push((id.to_owned(), reason.to_owned()));
-        Ok(())
-    }
-}
-
 // ── BO4E schema URL constants ─────────────────────────────────────────────────
 
 /// BO4E schema URL base for the pinned snapshot.
@@ -675,24 +479,3 @@ macro_rules! bo4e_schema_url {
         )
     };
 }
-
-/// BO4E JSON Schema URL for `Marktlokation`.
-pub const BO4E_SCHEMA_MARKTLOKATION: &str = bo4e_schema_url!("bo", "Marktlokation");
-
-/// BO4E JSON Schema URL for `Messlokation`.
-pub const BO4E_SCHEMA_MESSLOKATION: &str = bo4e_schema_url!("bo", "Messlokation");
-
-/// BO4E JSON Schema URL for `Vertrag`.
-pub const BO4E_SCHEMA_VERTRAG: &str = bo4e_schema_url!("bo", "Vertrag");
-
-/// BO4E JSON Schema URL for `Energiemenge`.
-pub const BO4E_SCHEMA_ENERGIEMENGE: &str = bo4e_schema_url!("bo", "Energiemenge");
-
-/// BO4E JSON Schema URL for `Rechnung`.
-pub const BO4E_SCHEMA_RECHNUNG: &str = bo4e_schema_url!("bo", "Rechnung");
-
-/// BO4E JSON Schema URL for `Zaehler`.
-pub const BO4E_SCHEMA_ZAEHLER: &str = bo4e_schema_url!("bo", "Zaehler");
-
-/// BO4E JSON Schema URL for `Geschaeftspartner`.
-pub const BO4E_SCHEMA_GESCHAEFTSPARTNER: &str = bo4e_schema_url!("bo", "Geschaeftspartner");

@@ -255,6 +255,15 @@ impl Invoice {
 
     /// Assemble an `Invoice` from a flat list of positions and warnings.
     ///
+    /// **This is the one rounding point.** Each position's `net_eur` is rounded
+    /// to the cent (kaufmännisch) here, once, and every figure the document
+    /// states — `netto_eur`, the BO4E `rechnungspositionen` and totals, the
+    /// EN 16931 lines and BG-22, the tax subtotals — is derived from those
+    /// lines. `round(Σ x)` and `Σ round(x)` differ by up to a cent per line, so
+    /// a second rounding point would put two totals on one invoice.
+    /// [`MwStProvider`](crate::MwStProvider) and [`tax_subtotals_of`] tax the
+    /// same rounded lines, so the tax is the base printed beside it × rate.
+    ///
     /// Separates Tax and Abschlag positions from all others:
     /// - `netto_eur` = sum of non-Tax, non-Abschlag positions
     /// - `mwst_eur`  = sum of Tax positions
@@ -268,6 +277,10 @@ impl Invoice {
         positions: Vec<BillingPosition>,
         warnings: Vec<BillingWarning>,
     ) -> Self {
+        let positions: Vec<BillingPosition> = positions
+            .into_iter()
+            .map(BillingPosition::rounded_to_cents)
+            .collect();
         let netto_eur: Decimal = positions
             .iter()
             .filter(|p| {
@@ -452,7 +465,10 @@ impl Invoice {
     /// serialises `Decimal` as a JSON string, so no value ever passes through
     /// an `f64`.
     #[must_use]
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one linear procedure; splitting it would scatter its steps across helpers used once"
+    )]
     #[cfg(feature = "bo4e")]
     pub fn to_rechnung(&self) -> rubo4e::current::Rechnung {
         use rubo4e::current as bo;
@@ -1398,7 +1414,8 @@ fn negate_wert_field(obj: &mut serde_json::Map<String, serde_json::Value>) {
 pub enum VatCategory {
     /// `S` — standard rate.
     Standard,
-    /// `Z` — zero-rated goods. §12 Abs. 3 UStG (Solar ≤ 30 kWp) lands here.
+    /// `Z` — zero-rated goods, e.g. the supply of a PV installation under §12 Abs. 3
+    /// UStG (never the electricity it produces).
     ZeroRated,
     /// `AE` — VAT reverse charge, §13b UStG.
     ReverseCharge,
@@ -1526,7 +1543,9 @@ pub fn tax_subtotals_of(positions: &[BillingPosition], default_rate: Decimal) ->
         let entry = buckets
             .entry((cat, rate.to_string()))
             .or_insert((rate, Decimal::ZERO));
-        entry.1 += p.net_eur;
+        // The rounded line, as `Invoice::from_positions` states it: the base
+        // printed in the breakdown is the sum of the lines printed above it.
+        entry.1 += p.net_eur.round_kfm(2);
     }
 
     buckets
@@ -1598,7 +1617,7 @@ mod tax_subtotal_tests {
     fn zero_rated_positions_still_get_a_subtotal() {
         let positions = vec![
             pos(dec!(1000), None, PositionCategory::Commodity),
-            // §12 Abs. 3 UStG — Solar ≤ 30 kWp.
+            // A zero-rated position.
             pos(dec!(250), Some(Decimal::ZERO), PositionCategory::Commodity),
         ];
         let subs = tax_subtotals_of(&positions, dec!(0.19));
@@ -1622,7 +1641,7 @@ mod tax_subtotal_tests {
     fn reverse_charge_is_a_distinct_ae_subtotal() {
         let positions = vec![
             pos(dec!(1000), None, PositionCategory::Commodity),
-            // §12 Abs. 3 UStG — genuine zero-rated (Solar ≤ 30 kWp).
+            // A genuinely zero-rated position.
             pos(dec!(250), Some(Decimal::ZERO), PositionCategory::Commodity),
             // §13b Abs. 2 Nr. 5 lit. b UStG — electricity to a reseller.
             BillingPosition::debit(
@@ -2013,13 +2032,14 @@ mod rechnung_json_tests {
             Some(dec!(119.01)),
             "advance gross survives to the exact cent"
         );
-        // Position amounts survive at full engine precision (5 dp), exactly.
+        // The line amount is the rounded line the totals are summed from; the
+        // unit price survives at full engine precision (5 dp), exactly.
         let pos = &back.rechnungspositionen.as_ref().unwrap()[0];
         assert_eq!(
             pos.gesamtpreis.as_ref().and_then(|b| b.wert),
             Some(invoice.positions[0].net_eur)
         );
-        assert_eq!(invoice.positions[0].net_eur, dec!(333.36333));
+        assert_eq!(invoice.positions[0].net_eur, dec!(333.36));
         assert_eq!(
             pos.einzelpreis.as_ref().and_then(|p| p.wert),
             Some(dec!(0.30003))

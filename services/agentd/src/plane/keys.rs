@@ -10,7 +10,7 @@
 //! events and the task proposals: the chain commits to *ciphertext*, an auditor
 //! with no keys still verifies it, and destroying a case's wrapping key destroys
 //! the plaintext in every copy at once — live store, replica, and every backup
-//! ever taken. `tests/plane_golden_run.rs` asserts both halves against a real
+//! ever taken. `tests/it/plane_golden_run.rs` asserts both halves against a real
 //! store.
 //!
 //! ## Why Vault and not a key in the config

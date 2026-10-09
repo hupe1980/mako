@@ -75,8 +75,7 @@ fn ensure_correctable(is_correction: bool, outcome: &str) -> BillingResult<()> {
 /// Cancelling the original **releases its period**: `br_unique_original`
 /// excludes cancelled rows, so the corrected amounts are re-billed by calling
 /// `POST /api/v1/billing/{malo_id}/calculate` again for the same window. That
-/// is the flow German accounting practice expects, and the schema used to
-/// forbid it while the endpoint's own error message recommended it.
+/// is the flow German accounting practice expects.
 ///
 /// ## § 147 AO / GoBD
 ///

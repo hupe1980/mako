@@ -408,6 +408,7 @@ pub(crate) async fn handle_command(
         marktrolle: effective_marktrolle,
         status: "accepted",
         process_id: resolved_process_id.to_string(),
+        message_ref: super::mabis::filed_message_ref(&cmd_lower, resolved_process_id),
     };
     // Recorded after the dispatch succeeded, so a failed command leaves the key
     // free for a corrected retry. A write failure is logged and not surfaced:

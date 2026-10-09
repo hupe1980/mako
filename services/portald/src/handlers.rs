@@ -18,7 +18,7 @@
 //! compares its `malo_id` to the authorised one before rendering: otherwise any
 //! authenticated customer could stream any other customer's XRechnung by id.
 
-#![allow(clippy::result_large_err)] // the error *is* the HTTP response
+#![expect(clippy::result_large_err, reason = "the error *is* the HTTP response")]
 
 use axum::{
     Extension,

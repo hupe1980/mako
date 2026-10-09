@@ -56,7 +56,8 @@ use rubo4e::identifiers::{NeloId, SrId};
 /// Stable workflow name used in `WorkflowId` and `ProcessRegistry`.
 pub const WORKFLOW_NAME: &str = "wim-steuerungsauftrag";
 
-/// Deadline label for the 5-Werktage response confirmation window (WiM BK6-24-174).
+/// Deadline label for the 5-Werktage confirmation window — an operating
+/// convention; no Festlegung or API-Guideline states a Frist for it.
 ///
 /// Register a `Deadline` with this label immediately after `KonfigurationReceived`
 /// or `InitialZustandReceived`:
@@ -233,18 +234,33 @@ pub enum SteuerungsauftragState {
     Received(SteuerungsauftragData),
     /// Final positive response sent — command executed.
     Completed(SteuerungsauftragData),
-    /// Process closed with a negative or timeout outcome.
+    /// Process closed with a negative outcome.
     Rejected {
         /// Transaction ID, if known at rejection time.
         tx_id: Option<String>,
         /// Human-readable rejection reason.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// The API-Webdienste give the MSB its execution window and no consequence of missing it. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<SteuerungsauftragState>,
+    },
 }
 
 impl mako_engine::workflow::OccupiesBusinessKey for SteuerungsauftragState {
     fn occupies_business_key(&self) -> bool {
         match self {
+            // A lapsed window leaves the Vorgang open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
             // Awaiting the MSB back-end's confirmation.
             Self::Received(_) => true,
             // Terminal. §14a EnWG Steuerungsaufträge are inherently repeated —
@@ -263,6 +279,16 @@ impl SteuerungsauftragState {
             Self::Received(_) => "Received",
             Self::Completed(_) => "Completed",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 }
@@ -340,10 +366,22 @@ impl CommandPayload for SteuerungsauftragCommand {}
 /// the API-Webdienste Strom server receives a control command from an NB or LF.
 pub struct WimSteuerungsauftragWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The execution window is open while the Steuerungsauftrag awaits its
+/// confirmation (`Received`).
+fn window_open(label: &str, state: &SteuerungsauftragState) -> bool {
+    label == STEUERUNGSAUFTRAG_DEADLINE_LABEL
+        && matches!(state, SteuerungsauftragState::Received(_))
+}
+
 impl Workflow for WimSteuerungsauftragWorkflow {
     type State = SteuerungsauftragState;
     type Event = SteuerungsauftragEvent;
     type Command = SteuerungsauftragCommand;
+
+    const DEADLINE_LABELS: &'static [&'static str] = &[STEUERUNGSAUFTRAG_DEADLINE_LABEL];
 
     /// Deadline compensation for the WiM Steuerungsauftrag 5-Werktage confirmation window.
     ///
@@ -354,18 +392,19 @@ impl Workflow for WimSteuerungsauftragWorkflow {
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (STEUERUNGSAUFTRAG_DEADLINE_LABEL, SteuerungsauftragState::Received(_)) => {
-                Some(SteuerungsauftragCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| SteuerungsauftragCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            SteuerungsauftragState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             SteuerungsauftragEvent::KonfigurationReceived {
                 tx_id,
@@ -420,20 +459,11 @@ impl Workflow for WimSteuerungsauftragWorkflow {
                 }
             }
             SteuerungsauftragEvent::DeadlineExpired { label, .. } => match state {
-                SteuerungsauftragState::Completed(_) | SteuerungsauftragState::Rejected { .. } => {
-                    state
-                }
-                _ => {
-                    let tx_id = if let SteuerungsauftragState::Received(ref d) = state {
-                        Some(d.tx_id.clone())
-                    } else {
-                        None
-                    };
-                    SteuerungsauftragState::Rejected {
-                        tx_id,
-                        reason: format!("5-Werktage deadline expired: {label}"),
-                    }
-                }
+                SteuerungsauftragState::Received(_) => SteuerungsauftragState::FristAbgelaufen {
+                    label: label.to_string(),
+                    offen: Box::new(state),
+                },
+                other => other,
             },
         }
     }
@@ -442,6 +472,10 @@ impl Workflow for WimSteuerungsauftragWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             SteuerungsauftragCommand::ReceiveKonfiguration {
                 tx_id,
@@ -539,10 +573,7 @@ impl Workflow for WimSteuerungsauftragWorkflow {
             }
 
             SteuerungsauftragCommand::TimeoutExpired { deadline_id, label } => {
-                if matches!(
-                    state,
-                    SteuerungsauftragState::Completed(_) | SteuerungsauftragState::Rejected { .. }
-                ) {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![SteuerungsauftragEvent::DeadlineExpired { deadline_id, label }].into())

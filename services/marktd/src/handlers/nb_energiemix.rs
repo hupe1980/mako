@@ -30,6 +30,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use mako_service::ApiError;
 use mako_service::Json;
 use rubo4e::current::Energiemix;
 use serde::{Deserialize, Serialize};
@@ -42,16 +43,6 @@ use std::sync::Arc;
 use mako_service::cedar::CedarEnforcer;
 
 use super::{Claims, Tenant};
-
-/// Deny response for the §42 EnWG Energiemix authority.
-fn forbidden(action: &'static str) -> axum::response::Response {
-    use axum::response::IntoResponse as _;
-    (
-        StatusCode::FORBIDDEN,
-        Json(serde_json::json!({ "error": action })),
-    )
-        .into_response()
-}
 
 // ── DTOs ─────────────────────────────────────────────────────────────────────
 
@@ -121,7 +112,7 @@ pub async fn put_nb_energiemix(
         .check(&claims.principal(), "write-energiemix", &tenant)
         .is_err()
     {
-        return forbidden("write-energiemix denied");
+        return ApiError::forbidden("write-energiemix denied").into_response();
     }
     // The BO4E gate ran while the body deserialised (`Bo4e<Energiemix>`).
     // §42 Abs. 2 Nr. 2 EnWG completeness: the grid-area Reststrommix must carry
@@ -223,7 +214,7 @@ pub async fn get_nb_energiemix(
         .check(&claims.principal(), "read-energiemix", &tenant)
         .is_err()
     {
-        return forbidden("read-energiemix denied");
+        return ApiError::forbidden("read-energiemix denied").into_response();
     }
     let row = if let Some(year) = q.year {
         sqlx::query(
@@ -309,7 +300,7 @@ pub async fn get_nb_energiemix_history(
         .check(&claims.principal(), "read-energiemix", &tenant)
         .is_err()
     {
-        return forbidden("read-energiemix denied");
+        return ApiError::forbidden("read-energiemix denied").into_response();
     }
     let rows = sqlx::query(
         r"SELECT nb_mp_id, gueltig_fuer, energiemix,

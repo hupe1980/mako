@@ -321,6 +321,14 @@ pub struct ImportTriggerQuery {
     pub month: Option<u8>,
 }
 
+/// The Anwendungsmonat an import trigger names: the first day of the month,
+/// with an absent `year`/`month` defaulting to `today`'s.
+fn import_month(q: &ImportTriggerQuery, today: Date) -> Result<Date, String> {
+    let year = q.year.unwrap_or_else(|| today.year());
+    let month = q.month.unwrap_or_else(|| today.month() as u8);
+    YearMonthPath { year, month }.to_date()
+}
+
 /// `POST /api/v1/mmma-preise/import-trigger[?year=YYYY&month=MM]`
 ///
 /// Manually trigger a MMMA Gas / MMM Strom price import cycle.
@@ -341,7 +349,10 @@ pub struct ImportTriggerQuery {
 ///   ]
 /// }
 /// ```
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn post_import_trigger(
     Extension(gas_repo): Extension<MmmaGasRepoExt>,
     Extension(strom_repo): Extension<MmmStromRepoExt>,
@@ -361,13 +372,14 @@ pub async fn post_import_trigger(
     }
 
     // The Anwendungsmonat of the published series is a German calendar month.
-    let today = mako_fristen::heute();
-    let year = q.year.unwrap_or_else(|| today.year());
-    let month = q.month.unwrap_or_else(|| today.month() as u8);
+    let price_month = match import_month(&q, mako_fristen::heute()) {
+        Ok(d) => d,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    let (year, month) = (price_month.year(), price_month.month() as u8);
 
     let results = crate::mmma_worker::run_import_cycle(
-        year,
-        month,
+        price_month,
         &http,
         &import_cfg.gas_url,
         &import_cfg.strom_url,
@@ -406,4 +418,41 @@ pub async fn post_import_trigger(
         })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod import_trigger_tests {
+    use super::{ImportTriggerQuery, import_month};
+    use time::macros::date;
+
+    /// `?month=13` is refused, as every `YearMonthPath` entry point refuses it.
+    ///
+    /// The import writes with `ON CONFLICT DO UPDATE`, so a month substituted
+    /// for an invalid one overwrites that month's settlement prices — the
+    /// prices `netzbilanzd` settles INVOIC 31001/31002 against.
+    #[test]
+    fn an_invalid_month_is_refused_not_read_as_january() {
+        let q = ImportTriggerQuery {
+            year: Some(2026),
+            month: Some(13),
+        };
+        assert!(import_month(&q, date!(2026 - 07 - 15)).is_err());
+        let q = ImportTriggerQuery {
+            year: Some(2026),
+            month: Some(0),
+        };
+        assert!(import_month(&q, date!(2026 - 07 - 15)).is_err());
+    }
+
+    #[test]
+    fn an_absent_month_is_the_current_berlin_month() {
+        let q = ImportTriggerQuery {
+            year: None,
+            month: None,
+        };
+        assert_eq!(
+            import_month(&q, date!(2026 - 07 - 15)),
+            Ok(date!(2026 - 07 - 01))
+        );
+    }
 }

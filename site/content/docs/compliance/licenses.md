@@ -3,15 +3,13 @@ title = "License Governance"
 description = "License governance for the mako workspace. SPDX identifiers allowed in deny.toml and rationale for each decision."
 weight = 50
 +++
-This document records the rationale for every SPDX license identifier allowed in
-`deny.toml` and tracks decisions that required explicit governance review.
+The rationale for every SPDX licence identifier allowed in `deny.toml`.
 
 ---
 
 ## Standard Allowed Licences
 
-The following are approved for all direct and transitive dependencies without further
-review. They are permissive OSI-approved licences commonly used in the Rust ecosystem.
+Approved for all direct and transitive dependencies without further review.
 
 | SPDX Identifier | Notes |
 |---|---|
@@ -32,21 +30,17 @@ review. They are permissive OSI-approved licences commonly used in the Rust ecos
 
 ## Licences Requiring Governance Review
 
-The following licences required an explicit decision before being added to `deny.toml`.
-Each entry documents the rationale and the transitive path that introduced the licence.
+Each entry records the decision and the transitive path that introduced the licence.
 
 ### `0BSD` — Zero-Clause BSD
 
 **Status:** Approved  
 **Approval owner:** project maintainer (see deny.toml commit)
 
-**Rationale:**  
-`0BSD` (Zero-Clause BSD) is a public-domain-equivalent licence: it permits unrestricted
-use, modification, and distribution without any attribution requirement. It is more
-permissive than `MIT` and imposes no conditions whatsoever.
+**Rationale:** public-domain-equivalent — unrestricted use, modification and
+distribution, no attribution requirement.
 
-**Transitive path:** `mailparse` → `quoted_printable` (via `asx-rs`); both are
-still in `Cargo.lock`.
+**Transitive path:** `mailparse` → `quoted_printable` (via `asx-rs`).
 
 **Risk assessment:** None. The licence imposes no obligations. It is on the
 [SPDX approved list](https://spdx.org/licenses/0BSD.html) and is OSI-approved.

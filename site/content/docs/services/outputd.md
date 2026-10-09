@@ -11,31 +11,14 @@ delivery evidence. What a document **says** — amounts, VAT, legal basis — st
 with the issuing service: billingd for invoices, accountingd for the Mahnwesen
 figures, vertragd for a price change. outputd never recomputes a number.
 
-The template system is deliberately not invoice-specific: one brand has one
-template store, and a logo change must reach the invoice *and* the Mahnung.
+One brand has one template store, so a logo change reaches the invoice *and*
+the Mahnung.
 
-**The vocabulary this page runs on.** A **Mahnung** is a dunning letter and a
-**Preisanpassung** a price-change notice; both must reach the customer in
-**Textform** (§ 126b BGB — a durable, readable, non-signed medium). **EN 16931**
-is the European semantic standard for an electronic invoice; **XRechnung** is
-Germany's national implementation of it, and **ZUGFeRD** a PDF/A-3 that carries
-the same data as an embedded XML attachment. The services named above act in the
-**LF** (Lieferant, supplier) role of German market communication; the roles and
-the market objects are the [domain model](@/docs/architecture/domain-model.md), and the shared vocabulary is
-the [glossary](@/docs/architecture/domain-model.md#glossary).
-
-Three kinds of document and one carrier format run through the page. A
-**Mahnung** is a dunning letter — a formal payment demand, computed by
-[accountingd](@/docs/services/accountingd.md). A **Preisanpassung** is the
-statutory price-change notice a supplier owes under § 41 Abs. 5 EnWG. Both are
-**Textform** documents: § 126b BGB wants a readable declaration on a durable
-medium naming the sender and the recipient, and nothing more — no signature, no
-registered post. An invoice, by contrast, goes out as **ZUGFeRD**: a PDF that
-also carries the machine-readable invoice XML inside it, so one file is both the
-page a human reads and the data a recipient's system books. **XRechnung** is
-Germany's national restriction of the same EN 16931 invoice model, mandatory
-toward public authorities; a document declares which of the two it is in the
-EN 16931 term **BT-24**, and outputd stamps the carrier from that.
+| Document | What it is | Form |
+|---|---|---|
+| **Mahnung** | dunning letter, computed by [accountingd](@/docs/services/accountingd.md) | Textform (§ 126b BGB: a readable declaration on a durable medium naming sender and recipient; no signature) |
+| **Preisanpassung** | the price-change notice of § 41 Abs. 5 EnWG | Textform |
+| **Invoice** | from billingd | **ZUGFeRD**: a PDF/A-3 carrying the EN 16931 invoice XML; **XRechnung** is the German CIUS. The document declares which in **BT-24**, and outputd stamps the carrier from that |
 
 Port: `:9880`
 
@@ -72,31 +55,20 @@ What "about" means depends on the kind:
 | `INVOICE` | `model` — the EN 16931 semantic model | outputd projects the page view from it, so the projection the publish gate proves templates against is the one production feeds them |
 | `MAHNUNG`, `PREISANPASSUNG` | `view` — the kind's own view | their producer has no EN 16931 model, and the view *is* the contract |
 
-`POST /api/v1/documents/issue/{kind}` takes the same body plus a `subject_ref`, a
-`recipient` and the `channels` to queue. See *Issuing and delivery* below.
+`POST /api/v1/documents/issue/{kind}` takes the same body plus `subject_ref`,
+`recipient` and `channels`. Sending the model rather than a caller-projected view
+keeps one implementation of `en16931::Invoice → DocumentView` — the one the
+publish gate proves templates against.
 
-A caller projecting `en16931::Invoice → DocumentView` itself and sending the
-result would be two implementations of one contract with nothing tying them
-together: the gate proves templates against outputd's, production would feed
-them the caller's, and a field added to either yields templates that pass the
-gate and fail in production. Both services already depend on `en16931`, so the
-model is a type they share the way they share `zugferd::Profile`.
-
-Admission is checked before anything renders, each refusal a `422` naming the
-fix: a pinned hash must belong to **this kind** (a Textform template must never
-become a carrier — `RENDERED_PDFA` is exactly the proof it lacks), the subject
-must match the kind, an `INVOICE` render **requires** the attachment (a handsome
-PDF without its embedded invoice is the failure mode that looks like success),
-and a Textform render must not carry one.
-
-A pinned hash belonging to another tenant does not resolve at all —
-`template_store::by_hash` is tenant-scoped, so the rule lives in the query
-rather than in a check each caller-facing path has to remember.
+Admission is checked before rendering, each refusal a `422` naming the fix: a
+pinned hash must belong to **this kind**, the subject must match the kind, an
+`INVOICE` render **requires** the attachment, and a Textform render must not
+carry one. A hash of another tenant does not resolve (`template_store::by_hash`
+is tenant-scoped).
 
 ## Authorization
 
-Authentication establishes *who* is calling; `policies/outputd.cedar` decides
-what they may do, and every route checks it before touching the database.
+`policies/outputd.cedar` decides every route before it touches the database:
 
 | Action | Routes | Who |
 |---|---|---|
@@ -109,54 +81,33 @@ what they may do, and every route checks it before touching the database.
 | `report-delivery` | `POST /deliveries/{id}/status` | `LF`, `MSB`, `ESA` |
 | `read-document` | `GET /documents…`, `/spool`, `POST /deliveries/{id}/read` | any authenticated caller in the tenant |
 
-Authentication alone is not enough here: without a policy, any token the OIDC
-verifier accepts could roll out the layout every invoice and Mahnung of the
-tenant renders with, or render arbitrary content under the operator's
-Briefkopf. A template is not one document — it is the shape of all of them.
-
-`tests/authorization.rs` pins the two lists together in both directions: an
-action a handler checks and `policies/outputd.cedar` does not grant is a
-permanent 403 (Cedar is default-deny), and an action the policy grants that no
-handler checks usually means a route lost its guard.
-
-A preview is a read on purpose: it renders mako's own specimen, stores nothing,
-moves nothing and reaches no customer.
-
-Reading issued documents is a tenant read rather than a role-gated act, because
-the scope that protects a customer here is the **query**:
-`GET /api/v1/documents` refuses to answer without a `malo_id` or a `kunden_nr`,
-so no token can ask for the portfolio. `portald` is the caller that turns a
-customer's OIDC identity into that scope, and it resolves the scope from
-`vertragd`.
+A template is the shape of every document, so publishing, rolling out and
+rendering need a market role. `tests/it/authorization.rs` holds handler checks
+and policy grants to each other in both directions. Reading is a tenant read
+because the **query** scopes it: `GET /api/v1/documents` refuses to answer
+without `malo_id` or `kunden_nr` (`UNSCOPED_QUERY`). `portald` turns a
+customer's identity into that scope via `vertragd`.
 
 ## Issuing and delivery
 
-`POST /render/{kind}` produces bytes and keeps none — the right endpoint for a
-preview, a re-print, or a caller with its own archive. `POST /documents/issue/{kind}`
-is the same render **recorded and queued**, which is what makes two regulated
-questions answerable:
+`POST /render/{kind}` keeps nothing (preview, re-print, a caller with its own
+archive). `POST /documents/issue/{kind}` records and queues, which answers two
+regulated questions:
 
-- **reproduce what was issued.** § 14 Abs. 1 Satz 2 UStG and
-  § 147 Abs. 1 Nr. 2–3 AO keep the Rechnungsdoppel for eight years *in the form
-  in which it was issued*. A pinned template hash makes the layout resolvable;
-  it does not make the document resolvable, because the data behind it moves.
+- **Reproduce what was issued.** § 14 Abs. 1 Satz 2 UStG and § 147 Abs. 1
+  Nr. 2–3 AO keep the Rechnungsdoppel eight years in the form issued;
   `GET /documents/{id}/content` returns the stored bytes, never a re-render.
-- **did the customer receive it.** § 126b BGB and § 41f Abs. 1/Abs. 5 EnWG rest
-  on notices that must have *reached* the customer, four weeks and eight
-  Werktage before a disconnection.
+- **Did the customer receive it.** § 126b BGB and § 41f Abs. 1/Abs. 5 EnWG rest
+  on notices that *reached* the customer.
 
-Both stores are append-only, like `document_templates` and for the same statute.
-A corrected document is a new row.
+Both stores are append-only; a corrected document is a new row.
 
 ### Idempotency
 
-`subject_ref` names what the document is about, in the issuing service's own
-terms — a Rechnungsnummer for an `INVOICE`, a dunning-case id for a `MAHNUNG`, a
-product-slice id for a `PREISANPASSUNG`. It is unique per `(tenant, kind)`, so a
-service that retries after a timeout gets back the document it already issued.
-That matters most where a duplicate is not untidy but unlawful: a second Mahnung
-is a second statutory demand with its own payment deadline and a second § 41f
-clock nobody can reconcile with the first.
+`subject_ref` names the subject in the issuer's terms (Rechnungsnummer,
+dunning-case id, product-slice id) and is unique per `(tenant, kind)`, so a
+retry gets the document already issued — essential where a duplicate Mahnung
+would be a second statutory demand.
 
 ### Channels
 
@@ -167,67 +118,34 @@ clock nobody can reconcile with the first.
 | `POST` | a spool a print service pulls (`GET /api/v1/spool`); an optional push when `postal_relay_url` is set | the batch reference it reports back | the service reports it posted |
 | `ERP` | `POST` to the operator's own webhook | its response | the ERP reports it |
 
-outputd embeds **no SMTP client and no print driver**. Both are adapters an
-operator already runs, and embedding them turns a document daemon into a mail
-server. Each outbound channel is an HTTP relay — a URL, a bearer token, JSON
-with the document base64-encoded — the same contract `accountingd` uses for its
-bank adapter. A deployment that configures none still has the portal channel,
-which is what § 41 Abs. 5 EnWG and § 126b BGB actually ask for: Textform on a
-durable medium, not registered post.
+outputd embeds **no SMTP client and no print driver**: each outbound channel is
+an HTTP relay (URL, bearer token, JSON with the document base64-encoded, signed
+Standard Webhooks). With none configured, the portal channel still delivers.
 
-A channel with nothing to send to — `EMAIL` with no address on file — is stored
-`SUPPRESSED` **with its reason**, never omitted, so *why did this never go out*
-is answerable from the row rather than from its absence.
-
-**A postal address is all-or-nothing**, and typed. `recipient.address` needs a
-street, a postcode and a town, and `Recipient.address` is already `Option`, so
-"we do not know where they live" has a representation and it is the one that
-suppresses the channel. While the field was free-form JSON, an issuing service
-that found a customer record with no address still produced
-`{"line1":null,"post_code":null,…}` — which is `Some`, so `POST` was not
-suppressed, and the delivery target recorded as *where the letter went* was that
-JSON text. The producers had a second, disagreeing answer beside it: a
-`post_code && city` test chose the channel while the address was attached
-regardless. One predicate now decides both.
-
-`SENT` and `DELIVERED` are deliberately different states. A relay accepting a
-message is not the recipient's server accepting it, and a spool being collected
-is not a letter being posted; those become `DELIVERED` only when the far end
-reports it through `POST /deliveries/{id}/status`. A bounce reported there turns
-an apparently-successful notice into the failure it was.
+A channel with nothing to send to (`EMAIL` with no address) is stored
+`SUPPRESSED` **with its reason**. `recipient.address` is typed and
+all-or-nothing — street, postcode and town — and an absent address suppresses
+`POST`. `SENT` (relay accepted) and `DELIVERED` (far end reported via
+`POST /deliveries/{id}/status`) are different states; a reported bounce turns
+even a `DELIVERED` row `FAILED` and clears `delivered_at`.
 
 ### The worker
 
-One loop drains what is `PENDING`, with doubling backoff from 60 s to 6 h and a
-configurable attempt ceiling (default 8, about half a day). Replicas are safe:
-the claim is `FOR UPDATE SKIP LOCKED` with an immediate `next_attempt_at` push,
-so a replica that dies mid-send releases its claim when the backoff elapses.
+One loop drains `PENDING` rows with doubling backoff from 60 s to 6 h up to
+`max_attempts` (default 8, about half a day); the claim is `FOR UPDATE SKIP
+LOCKED`, so replicas are safe. At the ceiling a delivery becomes `FAILED` and is
+logged at `error`.
 
-At the ceiling a delivery becomes `FAILED` and is logged at `error`. That is the
-one outcome an operator must not have to go looking for: the platform believes
-it communicated something and the customer never received it.
-
-**A `POST` delivery with no `postal_relay_url` is not on that clock.** The pull
-model — the print service calls `GET /api/v1/spool`, fetches each document's
-bytes and reports back through `POST /deliveries/{id}/status` — is a supported
-integration and not a failed push, so the worker does not claim those rows at
-all: no attempt is recorded, the ceiling is never reached, and the letter stays
-`PENDING` in the spool for as long as nobody has collected it. Configuring
-`postal_relay_url` switches the same rows to the push model, where they are on
-the clock like any other channel.
-
-That the two agree matters more than which behaviour is chosen: the spool lists
-`PENDING` rows, so a `POST` row driven to `FAILED` by a retry budget disappears
-from the only list anyone looks at. It did, until this was fixed — a pull-only
-deployment lost every letter about half a day after issuing it, silently.
+A `POST` delivery without `postal_relay_url` is **not on that clock**: in the
+pull model the print service reads `GET /api/v1/spool`, fetches the bytes and
+reports back, so the worker never claims those rows and they stay `PENDING` in
+the spool until collected. Setting `postal_relay_url` switches them to push.
 
 ## Errors
 
-Every route answers failures with one envelope and a stable code. A template
-that does not compile returns its diagnostics as a **list** — each already
-`path:line:col: message`, pointing into the operator's own file — because
-flattening them into one string is the single thing that makes them useless to
-the editor the operator is writing the template in:
+Every route answers with one envelope and a stable code. Template compile errors
+come back as a **list** of `path:line:col: message` diagnostics pointing into the
+operator's file:
 
 ```json
 { "error": { "code": "TEMPLATE_DID_NOT_COMPILE",
@@ -256,11 +174,8 @@ the editor the operator is writing the template in:
 
 The **layout** belongs to the operator — a [Typst](https://typst.app) template
 published over the API and pinned by hash. The **content** belongs to the
-issuing service: outputd renders what it is handed and never recomputes an
-amount, which is why the payload arrives rendered and (for B2G) proven —
-billingd validates against the profile the document declares before anything
-crosses this boundary. That is the whole design, and it is enforced rather than
-agreed.
+issuing service, which validates the payload against its declared profile
+before it reaches outputd.
 
 ```mermaid
 graph LR
@@ -286,20 +201,13 @@ A template exports exactly one function:
 #let render(invoice) = { .. }
 ```
 
-`invoice` is `document::view::DocumentView` as a Typst dictionary — projected by
-outputd from the caller's EN 16931 model, and the §14
-Abs. 4 UStG Pflichtangaben, the lines, the VAT breakdown per rate and the
-totals, each field documented with its EN 16931 BT/BG term. Amounts are exact
-decimal strings, never floats, and they keep the scale their business term
-carries (money two decimals, a unit price four), so a template must **pad** a
-value to the precision it wants and never truncate one. This view is the
-**normative** contract — the publish gate proves templates against it; a caller
-(billingd) serialises its own copy of the same shape at the HTTP boundary.
-
-`GET /api/v1/templates/reference/{kind}` serves the layout mako ships — a complete §14
-Abs. 4-conformant invoice with DIN 5008 margins and German number formatting.
-It is compiled by the test suite on every run against the same specimen an
-operator's template will face, so the starting point is never stale.
+`invoice` is `document::view::DocumentView` as a Typst dictionary, projected by
+outputd from the EN 16931 model: the §14 Abs. 4 UStG Pflichtangaben, lines, VAT
+breakdown and totals, each field documented with its BT/BG term. Amounts are
+exact decimal strings at their term's scale (money 2, unit price 4); a template
+pads and never truncates. `GET /api/v1/templates/reference/{kind}` serves mako's
+reference layout (DIN 5008, German number formatting), compiled by the test
+suite against the gate's specimen on every run.
 
 ### What a template cannot do
 
@@ -312,13 +220,8 @@ the template, hands it the view, and emits the `pdf.attach` itself:
 #render(json("/document.json"))
 ```
 
-So a template cannot omit the invoice, rename it, replace it (Typst refuses a
-duplicate attachment path), or read it — the XML is a *literal* in mako's file,
-not a file served to the compiler, because a `World` cannot tell its callers
-apart and anything readable by the harness would be readable by the template.
-
-Beyond that, the compilation environment is the smallest one that can still
-typeset an invoice:
+So a template cannot omit, rename, replace or read the invoice: the XML is a
+literal in mako's file, not a file the compiler serves. The environment:
 
 | Capability | Available to a template |
 |---|---|
@@ -327,27 +230,16 @@ typeset an invoice:
 | Fonts | the bundled Typst set; never the host's, never the operator's |
 | Wall clock | none — `datetime.today()` returns the *document's* date (BT-2) |
 
-Compute is *not* sandboxed. Typst caps loop iterations and call depth, but
-nested loops still multiply, so a render runs on a blocking thread under a
-20 s budget; on timeout the caller is freed and the thread finishes on its own,
-because Typst offers no way to interrupt a compilation.
-
-Concurrent renders are **capped** at one fewer than the machine's cores.
-Typesetting is CPU-bound and runs on tokio's blocking pool — the same pool
-`sqlx` uses — so an unbounded burst of publishes would contend for cores, take
-proportionally longer each, and in the limit stall database work unrelated to
-rendering. Queuing is strictly better than thrashing: the work is serialised
-either way, and this way the rest of the service keeps moving. Waiting for a
-slot counts against the caller's budget, so a queue can never outlast the
-deadline a caller asked for. The permit is held by the render itself rather than
-by the caller, so a timed-out render keeps its slot until it genuinely ends —
-which is the truth about the machine.
+Compute is not sandboxed: a render runs on a blocking thread under a 20 s budget
+(`RENDER_BUDGET_EXCEEDED`), and concurrent renders are capped at one fewer than
+the machine's cores so typesetting cannot starve `sqlx` on the shared blocking
+pool. Waiting for a slot counts against the budget; a timed-out render keeps its
+slot until it actually ends.
 
 ### The Factur-X carrier
 
 A PDF/A-3 with the XML stapled inside it is not yet a ZUGFeRD document.
-ZUGFeRD 2.3 requires four things of the carrier, and a receiver's validator
-checks all four:
+ZUGFeRD 2.3 requires four things of the carrier:
 
 | Requirement | Written by |
 |---|---|
@@ -356,125 +248,62 @@ checks all four:
 | `/AFRelationship /Alternative` + catalogue `/AF` | Typst |
 | XMP `fx:DocumentType` / `DocumentFileName` / `Version` / `ConformanceLevel`, **plus** the PDF/A extension schema description | `document::facturx::stamp` |
 
-The last one has no hook in `typst-pdf`, so mako adds it by **incremental
-update**: every byte the renderer produced stays in place and a new definition
-of the metadata object is appended with its own cross-reference section — the
-same mechanism a digital signature uses. Re-serialising the file through a
-general-purpose PDF library would be less code and would risk quietly breaking
-a conformance property nobody re-validates.
-
-Only the *writing* half is mako's. Reading a finished document — walking the
-catalogue to the payload, parsing it back as CII, and reporting any
-disagreement between what the PDF declares and what it contains — is
-`en16931-formats::zugferd::extract`, and the profile vocabulary is that crate's
-`Profile`. mako had its own name-tree walk and its own two-variant profile enum;
-both are gone. A private enum that knows two of six profiles is how a MINIMUM
-document — which carries no lines and is **not** an EN 16931 invoice — ends up
-wrapped in a carrier claiming it is one.
-
-The profile is derived from BT-24, never configured: a document declaring plain
-EN 16931 gets `factur-x.xml` and conformance level `EN 16931`; one declaring the
-XRechnung CIUS gets `xrechnung.xml` and `XRECHNUNG`. A carrier whose XMP claims
-a profile the XML does not satisfy is exactly the mismatch a validator exists to
-find, so it is made unrepresentable.
+The XMP is added by **incremental update** — the renderer's bytes stay in place
+and a new metadata object is appended, the mechanism a digital signature uses.
+Reading a finished document back is `en16931-formats::zugferd::extract`, with
+that crate's `Profile`. The profile is derived from BT-24, never configured:
+plain EN 16931 gets `factur-x.xml` and level `EN 16931`; the XRechnung CIUS gets
+`xrechnung.xml` and `XRECHNUNG`.
 
 ### Publishing is gated by proof
 
-`POST /api/v1/templates` does not store what it is given. It renders the
-candidate against a specimen chosen to be *awkward* — two VAT rates, an exempt
-position with a BT-120 reason, a credit line, a four-decimal unit price beside
-two-decimal money, umlauts, a long item name, absent optional fields — then:
+`POST /api/v1/templates` renders the candidate against an awkward specimen —
+two VAT rates, an exempt position with a BT-120 reason, a credit line, a
+four-decimal unit price, umlauts, a long item name, absent optional fields —
+then:
 
-1. enforces the declared PDF/A level (a level that cannot carry an embedded
-   file is **refused**, because it would produce a handsome PDF with no invoice
-   in it — the one failure mode that looks like success);
+1. enforces the declared PDF/A level (one that cannot embed a file is refused);
 2. stamps the Factur-X XMP;
-3. **reads the finished document back with the counterparty's reader** —
-   `en16931-formats::zugferd::extract`, the same code a receiver runs, not
-   mako's. The payload must come out byte-identical, re-parse as CII, carry the
-   same BT-1 and BT-115 that went in, and produce **no `Divergence`**: the four
-   ways a hybrid invoice is wrong while still opening cleanly — XMP profile ≠
-   BT-24, XMP filename ≠ the file attached, an `/AFRelationship` calling the
-   invoice supplementary, or no XMP at all;
-4. reads the text back off the **page** and requires the § 14 Abs. 4 UStG terms
-   that are not a matter of taste — the invoice number (Nr. 4), both party
-   names (Nr. 1), and the seller's tax identifier (Nr. 2). Without this,
-   `#let render(invoice) = []` passes: conformant PDF/A-3, perfectly
-   extractable CII invoice, blank page.
+3. reads the document back with **the counterparty's reader**
+   (`en16931-formats::zugferd::extract`): the payload must be byte-identical,
+   re-parse as CII, carry the same BT-1 and BT-115, and produce **no
+   `Divergence`** (XMP profile ≠ BT-24, XMP filename ≠ attachment,
+   supplementary `/AFRelationship`, missing XMP);
+4. reads the **page** text and requires the invoice number (§ 14 Abs. 4 Nr. 4
+   UStG), both party names (Nr. 1) and the USt-IdNr. (BT-31) *or* Steuernummer
+   (BT-32) (Nr. 2) — so `#let render(invoice) = []` fails;
+5. refuses more than 8 pages on the specimen (3 for a Mahnung or
+   Preisanpassung).
 
-   Nr. 2 is checked as the **disjunction** the statute writes — the USt-IdNr.
-   (BT-31) *or* the Steuernummer (BT-32), either one satisfying it, so a § 19
-   UStG Kleinunternehmer prints a lawful page from the Steuernummer alone;
-5. refuses a layout that spends more than 8 pages on the specimen.
+The specimen is a real `en16931::Invoice`, rendered through
+`DocumentView::of` and `en16931_formats::cii` like production; a two-sided test
+pins its BT-23, BT-34, BG-14 and BG-16 to what billingd's `einvoice::build`
+stamps. A failing template answers `422` with diagnostics.
+`document_templates.proof` records `RENDERED_PDFA` or `RENDERED_TEXTFORM`, and a
+`CHECK` ties each kind to its proof.
 
-The specimen is a real `en16931::Invoice`, reconciled by the crate that owns
-BG-23 and BG-22. The view the template renders comes from `DocumentView::of`
-and the payload from `en16931_formats::cii` — the same shapes production sends
-— so the gate proves the pipeline rather than an approximation of it. A
-two-sided test tripwire pins the specimen's stamped terms (BT-23, BT-34,
-BG-14, BG-16) to what billingd's `einvoice::build` actually stamps, so the two
-cannot drift apart across the service boundary unnoticed.
-
-Only then is a row written. A template that fails answers **422** with the
-compiler's diagnostics, each formatted `path:line:col` and pointing into the
-operator's own file.
-
-`document_templates.proof` records *which* proof was obtained —
-`RENDERED_PDFA` for a carrier, `RENDERED_TEXTFORM` for a Textform kind — and a
-`CHECK` constraint ties each kind to the one its contract requires, so a
-Textform template can never be stored as a proven carrier or the reverse.
-
-`POST /api/v1/templates/preview` runs the same render and returns the PDF
-without storing anything — the loop an operator actually works in, so iterating
-on a layout does not put a row in an append-only table each time. It covers
-`INVOICE` (stamped exactly as an issued one, so the file can go straight into
-veraPDF) and `MAHNUNG`. A `PREISANPASSUNG` candidate answers **422
-`NO_SPECIMEN`** and has to be checked by publishing it — the gate proves that
-kind, the preview path does not.
+`POST /api/v1/templates/preview` runs the same render for `INVOICE` and
+`MAHNUNG` and stores nothing; `PREISANPASSUNG` answers `422 NO_SPECIMEN` and is
+checked by publishing.
 
 ### Renders are reproducible
 
-Nothing ambient reaches the output. The date is BT-2, the PDF `/ID` is derived
-from tenant, template hash and record id, and the fonts are compiled into the
-binary — so re-rendering an issued invoice produces the *same bytes*, not an
-equivalent document. `rendering_the_same_invoice_twice_produces_the_same_file`
-is the test that keeps it true.
-
-The template that rendered an issued document is **pinned by the issuing
-service**: `X-Mako-Template-Hash` goes back with every render, billingd writes
-it next to the record on the first render after dispatch, and every later
-request sends the hash back to reproduce that document. Rolling out a redesign
-changes what new invoices look like and nothing about one already sent.
-
-A draft renders with the current layout every time and pins nothing. That
-matters because the store never deletes — pinning a draft would trap an
-operator's own preview on the version they were about to fix, permanently.
+Nothing ambient reaches the output: the date is BT-2, the PDF `/ID` derives
+from tenant, template hash and record id, and the fonts are compiled in — so a
+re-render produces the same bytes
+(`rendering_the_same_invoice_twice_produces_the_same_file`). The issuing service
+pins `X-Mako-Template-Hash` beside its record (billingd:
+`billing_records.template_hash`); a draft pins nothing.
 
 ### The template store
 
-Templates live in `document_templates`, **content-addressed and append-only**: a
-template is identified by `(tenant, SHA-256 of its source)`, rows are never
-updated or deleted, and the issuing service records which one rendered each
-document (for
-an invoice: `billing_records.template_hash` in billingd). The pin lives in
-*another service's database*, so no foreign key can guard it — this store's
-append-only policy is the whole guarantee that it stays resolvable. `document_template_current` is a separate, mutable pointer per
-`(tenant, kind)` — the pointer moves, the templates it references do not.
-
-The identity is scoped to the **tenant**, not global. outputd ships a reference
-layout (`GET /api/v1/templates/reference/{kind}`) that operators are told to start
-from, so a globally unique hash would make the first tenant to publish it
-unchanged its owner for everyone: every other tenant is refused and told to add
-a cosmetic comment — which makes the audit identity of an eight-year document
-depend on filler — and the refusal itself discloses that some other tenant holds
-those exact bytes. Two tenants publishing the same source get two rows and never
-observe each other.
-
-That shape is required, not chosen. An invoice is a Buchungsbeleg kept **8 years**
-(§ 14b UStG / § 147 AO) and GoBD requires *Unveränderbarkeit*, so a document
-issued today must still be explicable in 2034 — including why it looked the way
-it did. Editing a template in place would silently rewrite the history of every
-document it ever rendered.
+Templates live in `document_templates`, **content-addressed and append-only**,
+identified by `(tenant, SHA-256 of the source)` — scoped to the tenant, so two
+tenants publishing the reference layout unchanged get two rows and never see
+each other. The pin lives in another service's database, so append-only is the
+whole guarantee that it resolves for the 8 years an invoice is kept (§ 14b UStG
+/ § 147 AO, GoBD *Unveränderbarkeit*). `document_template_current` is the
+mutable pointer per `(tenant, kind)`.
 
 | Kind | Output | Default conformance | Proof |
 |---|---|---|---|
@@ -482,34 +311,15 @@ document it ever rendered.
 | `MAHNUNG` | Textform (§ 126b BGB) | — | `RENDERED_TEXTFORM` |
 | `PREISANPASSUNG` | § 41 Abs. 5 EnWG notice, Textform | — | `RENDERED_TEXTFORM` |
 
-There is no weaker level: every kind has a specimen and a page-content check, so
-every template is proven against one, and the schema refuses a row on anything
-else.
-
-A **Mahnung** is proven against the **Stufe-3 specimen** — the most legally
-loaded variant — which requires the § 126b declarant, the Gesamtforderung, the
-Zahlungsfrist and the § 41f Sperrtermin on the page.
-`document::mahnung::MahnungView` projects what `accountingd`'s Mahnwesen
-computes: Stufe 1–3, the open Posten, § 288 BGB Verzugszinsen with their basis,
-the Mahngebühr, and the Stufe-3 § 41f EnWG Sperrandrohung.
-
-A **Preisanpassung** is the kind whose *content* the statute fixes rather than
-its form. § 41 Abs. 5 Satz 1 EnWG wants the change, its Anlass and its
-**Umfang**; Satz 4 gives the customer a termination right without notice to the
-day the change takes effect, and Satz 1 obliges the supplier to state that right
-**in the same notice**. A letter that announces the price and omits the right is
-not a valid Preisänderungsanzeige, so the gate renders a **mixed** specimen —
-one price up, one down — and requires the declarant, the Wirksamkeit, *both*
-changed prices and the Sonderkündigungsrecht date on the page. A template that
-prints one position, or assumes every price rises, is refused.
-
-The views live with the renderer rather than with the data — `accountingd` and
-`vertragd` conform to them the way a browser conforms to HTML. That is what made
-this daemon extractable.
-
-The Textform kinds share the store and the engine deliberately: two template
-systems for one brand is how a logo change reaches the invoice and not the
-Mahnung.
+A **Mahnung** is proven against the Stufe-3 specimen and must show the § 126b
+declarant, the Gesamtforderung, the Zahlungsfrist and the § 41f Sperrtermin;
+`document::mahnung::MahnungView` projects accountingd's Mahnwesen (Stufe 1–3,
+open Posten, § 288 BGB Verzugszinsen, Mahngebühr, Sperrandrohung). A
+**Preisanpassung** must state the change, its Anlass and Umfang and the
+Sonderkündigungsrecht in the same notice (§ 41 Abs. 5 Satz 1 and 4 EnWG); the
+gate renders a mixed specimen (one price up, one down) and requires the
+declarant, the Wirksamkeit, both changed prices and the Kündigungsrecht date.
+The views live with the renderer; `accountingd` and `vertragd` conform to them.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -521,84 +331,39 @@ Mahnung.
 | `GET` | `/api/v1/templates/{kind}/current` | What this tenant renders with now |
 | `GET` | `/api/v1/templates/by-hash/{hash}` | Resolve any template by hash — how an audit answers *why did the 2027 invoice look like that* |
 
-Publishing and rolling out are separate calls because they are separate
-decisions: a template is stored before anyone is billed with it, and rolling back
-is the same `PUT` with the previous hash — possible only because the store never
-deletes, and *performable* only because `GET /api/v1/templates` says what the
-previous hash was. There is **no update and no delete** endpoint by design.
-
-The listing omits the source: a template runs to tens of kilobytes and the point
-is to choose one, not to ship every version of a layout at once. `GET
-/api/v1/templates/by-hash/{hash}` fetches the source for the one chosen.
-
+Publishing and rolling out are separate decisions; a rollback is the same `PUT`
+with the previous hash from `GET /api/v1/templates`. There is **no update and no
+delete** endpoint. The listing omits the source; `by-hash` returns it.
 
 ### Verifying a generated document
 
-`just zugferd-specimen` writes a stamped ZUGFeRD file to `target/`. It exists
-because two properties cannot be checked from inside mako, and both need an
-artefact:
+`just zugferd-specimen` writes stamped specimens to `target/`; `just zugferd-verify` runs the external panel in containers (veraPDF, Mustang under Temurin):
 
 | Check | Tool | Status |
 |---|---|---|
 | Payload against the 227 EN 16931 rules | `en16931 validate` (`cargo install en16931-cli`) | **valid — 0 findings**, an independent implementation reading what mako wrote |
 | Payload validity *before* embedding | the caller (billingd), and the publish gate for its specimen | enforced |
 | Carrier round-trip, `Divergence`, page content | mako's publish gate | enforced on every publish |
-| XMP well-formed, every `fx:` property declared in its extension schema | `tests/zugferd_carrier.rs` | enforced |
-| The incremental update disturbs **exactly one object**, `/ID` `/Root` `/Size` preserved | `tests/zugferd_carrier.rs` | enforced |
+| XMP well-formed, every `fx:` property declared in its extension schema | `tests/it/zugferd_carrier.rs` | enforced |
+| The incremental update disturbs **exactly one object**, `/ID` `/Root` `/Size` preserved | `tests/it/zugferd_carrier.rs` | enforced |
 | **PDF/A-3b conformance** | veraPDF (`verapdf/cli:latest`) | **compliant, 0 failed rules** — both profiles and the pre-stamp control |
 | XRechnung-profile payload (core + BR-DE) | `en16931 validate` | **valid — 0 findings of 282 rules** |
 | Carrier + payload against the ZUGFeRD specification | Mustang 2.25.0 (reference validator) | **valid, both profiles** — XRechnung profile with zero findings; core profile carries one upstream warning (below) |
 
-The independent payload check is not decoration: it is what found a missing
-BT-152 on the exempt line of mako's own gate specimen, which every internal
-check had passed because a carrier round-trips an invalid payload exactly as
-faithfully as a valid one. The gate now validates the payload before embedding
-it, so that class of defect cannot recur.
+`tests/it/zugferd_carrier.rs` parses the stamped XMP, requires every `fx:`
+property to be declared in the fx extension schema, requires the
+`pdfaExtension:schemas` bag to occur once (a second occurrence breaks PDF/A
+6.6.2.1 / 6.6.4), and walks every object of the pre- and post-stamp files, the
+`/Metadata` stream being the single permitted difference. veraPDF is not part of
+`just ci`; re-run it after any change to `document::facturx`.
 
-The XMP check is the one PDF/A property that *is* testable without veraPDF, and
-it matters because `stamp` splices into the metadata stream as a **string** — a
-`contains` assertion passes just as happily on a packet that is no longer
-well-formed. The test parses it, and requires every `fx:` property to be
-declared in the fx extension schema's own entry, because PDF/A rejects an
-undeclared property and Typst writes an extension schema of its own that would
-otherwise appear to satisfy the requirement.
+Mustang raises `PEPPOL-EN16931-R008` on the core-profile file for the empty
+`<ram:ApplicableHeaderTradeDelivery/>`. It is a false positive: the element is
+mandatory in the CII D16B XSD and KoSIT's Schematron carves it out of R008. Do
+not omit the element.
 
-The object-isolation check is the closest mako can get to the PDF/A question
-without veraPDF. It cannot prove the file conforms — but it proves the thing
-mako is *responsible* for: that appending the update left a document whose
-conformance the generator had already established otherwise untouched. It walks
-every object in the pre-stamp file and requires the post-stamp file to resolve
-each identically, with the `/Metadata` stream the single permitted exception.
-
-**The stamp must respect an XMP data-model rule that XML well-formedness does
-not imply:** a property may appear **once** per packet, and
-`pdfaExtension:schemas` is one Typst already writes. mako's schema description
-therefore joins the existing bag rather than opening a second, a test pins the
-single occurrence, and all three specimens (`just zugferd-specimen`) validate
-compliant. A second occurrence renders the file unparseable (veraPDF 6.6.2.1)
-with no PDF/A identification (6.6.4). veraPDF is not part of `just ci` — re-run
-it after any change to `document::facturx`.
-
-**`just zugferd-verify` runs the whole panel containerized** — veraPDF via the
-foundation's `verapdf/cli` image, Mustang under Temurin — so verification needs
-Docker and nothing else. Every file must come back valid; the pre-stamp control
-is what isolates a future stamp regression from a renderer one.
-
-One expected notice on the core-profile file, and it is a **false positive**:
-Mustang raises `PEPPOL-EN16931-R008` (*document must not contain empty
-elements*) on the empty `<ram:ApplicableHeaderTradeDelivery/>` a document
-without delivery terms carries. The element is mandatory in the CII D16B XSD
-(no `minOccurs`, which defaults to 1 — omitting it fails schema validation
-outright), and KoSIT's own Schematron carves exactly this element out of the
-R008 empty-element rule when translating Peppol's UBL-targeted rule to CII;
-Peppol publishes no CII Schematron at all. Empty is correct — do not "fix" it
-by omitting the element. The XRechnung-profile specimen validates with zero
-findings.
-
-> **Version note:** `en16931`/`en16931-formats` are pinned exactly at **0.7.0**.
-> The ZUGFeRD PDF/A-3 carrier is written by `document::facturx` on top of Typst's
-> PDF/A enforcement; the `en16931-formats` `zugferd` feature is the *reader* the
-> publish gate checks the result with.
+`en16931` / `en16931-formats` are on 0.7; `document::facturx` writes the carrier
+and the `zugferd` feature is the reader the gate checks it with.
 
 ## Configuration
 
@@ -610,31 +375,21 @@ tenant = "9900357000004"   # the operator's MP-ID — every template row is scop
 [database]
 url = "postgresql://outputd:secret@db:5432/outputd"
 
-# OIDC token verification for the HTTP API. outputd refuses to start without
-# it unless `allow_insecure_no_auth = true` (dev only) — an open outputd lets
-# anyone publish the layout every customer document renders with, and render
-# arbitrary content under the operator's Briefkopf.
+# Required unless allow_insecure_no_auth = true (dev only).
 [oidc]
 issuer   = "https://idp.example/realms/mako"
 audience = "outputd"
 
-# How issued documents reach the customer. Every outbound channel is an HTTP
-# relay pointed at whatever the operator already runs; with none configured,
-# documents are still stored and served and the portal channel still delivers.
-#
-# A relay URL requires its key: the body carries the document, the recipient's
-# name, e-mail, MaLo and Kundennummer, and the key is both the bearer token and
-# the Standard Webhooks signing key. `outputd` refuses to start on a URL
-# without one.
+# Every outbound channel is an HTTP relay. A relay URL requires its key — the
+# bearer token and the Standard Webhooks signing key; a URL without one is a
+# startup refusal.
 [delivery]
 enabled             = true          # default
 max_attempts        = 8             # default; with the doubling backoff, ~half a day
 from_address        = "rechnung@stadtwerke-musterstadt.example"
 email_relay_url     = "https://mail-relay.internal/api/v1/send"
 email_relay_api_key = "env:OUTPUTD_MAIL_RELAY_KEY"
-# Optional: most print services pull from GET /api/v1/spool instead. Leaving it
-# unset selects the pull model — POST rows are never claimed by the worker and
-# wait in the spool; setting it switches them to the push model and its retries.
+# Optional: unset selects the pull model (GET /api/v1/spool).
 postal_relay_url    = "https://druckdienstleister.example/api/v1/jobs"
 postal_relay_api_key = "env:OUTPUTD_PRINT_KEY"
 # The ERP channel — the operator's own system, which then owns delivery.

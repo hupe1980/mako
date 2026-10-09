@@ -420,7 +420,10 @@ fn geschaeftsvorfall_of(ergaenzung: &str) -> Option<Geschaeftsvorfall> {
 /// pipeline (55004 / 44004). Returns `true` when this module handled the event
 /// — including when it escalated — and `false` when the PID belongs to another
 /// role or another module.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn evaluate_and_decide(
     event: &serde_json::Value,
     config: &NbModuleConfig,
@@ -698,21 +701,23 @@ pub async fn evaluate_and_decide(
     // ── 6. Dispatch command to makod ──────────────────────────────────────
     match &result {
         NbEntscheidung::Accept(_) => {
-            // §20 EnWG Diskriminierungsfreiheitspflicht:
-            // When the initiating LF shares the same MP-ID as our operator
-            // (vertically integrated utility — §6b EnWG deployment), automatic
-            // acceptance is forbidden.  The operator must review manually.
-            // Bypassing this check exposes the NB to BNetzA sanctions.
+            // Two Anmeldungen leave the automatic path for operator review: a
+            // Wechsel on a Selbstzahler MaLo (GPKE Teil 1, Vorbemerkung), and one
+            // whose LF MP-ID is the operator's own `own_mp_id`
+            // (`initiator_is_affiliate`), where § 20 Abs. 1 Satz 1 EnWG forbids
+            // the affiliate a faster path than any other LF.
             if incumbent_is_selbstzahler {
                 warn!(
                     %process_id, pid, %malo_id, lf_mp_id = %lf_mp_id,
                     "processd NB: Lieferantenwechsel on a Selbstzahler MaLo —                      held for operator review (GPKE Teil 1, Vorbemerkung)"
                 );
-                enqueue_for_operator(
+                enqueue_held_accept(
                     queue,
                     config,
                     &payload_meta,
                     "Lieferantenwechsel (E03) on a MaLo whose Netznutzer is the                      Letztverbraucher itself (Selbstzahler). GPKE Teil 1, Vorbemerkung,                      takes the LF's Lieferantenwechsel-Meldungen out of the role the                      Selbstzahler otherwise steps into, so the automatic path does not                      apply — the operator decides",
+                    None,
+                    answer_command(reader, pid, &malo_id, process_id, &result, None, None).await?,
                 )
                 .await?;
             } else if initiator_is_affiliate {
@@ -721,7 +726,7 @@ pub async fn evaluate_and_decide(
                     "processd NB: §20 EnWG — affiliate Anmeldung detected; \
                      auto_accept overridden to false — operator must review"
                 );
-                enqueue_for_operator(
+                enqueue_held_accept(
                     queue,
                     config,
                     &payload_meta,
@@ -730,6 +735,8 @@ pub async fn evaluate_and_decide(
                          `mako-pruefung` says Accept, but an affiliate may not take the \
                          automatic path a third party does not get"
                     ),
+                    None,
+                    answer_command(reader, pid, &malo_id, process_id, &result, None, None).await?,
                 )
                 .await?;
             } else if config.auto_accept {
@@ -741,12 +748,14 @@ pub async fn evaluate_and_decide(
                       "processd NB: dispatched bestaetigen");
             } else {
                 info!(%process_id, pid, %malo_id, "processd NB: Accept held for operator confirmation (auto_accept = false)");
-                enqueue_for_operator(
+                enqueue_held_accept(
                     queue,
                     config,
                     &payload_meta,
                     "`mako-pruefung` says Accept; auto_accept is off, so the \
                      Bestätigung is dispatched on operator approval",
+                    None,
+                    answer_command(reader, pid, &malo_id, process_id, &result, None, None).await?,
                 )
                 .await?;
             }
@@ -894,7 +903,10 @@ pub struct DritterMarktbeteiligter {
 /// Failure **is** propagated, unlike a Meldepflicht: without the Anfrage the
 /// Anmeldung has no path to an answer at all, so failing the event and letting
 /// the fan-out redeliver is the only outcome that still meets the 11:00 Frist.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 async fn dispatch_abmeldeanfrage(
     makod: &MakodClient,
     config: &NbModuleConfig,
@@ -1045,7 +1057,6 @@ fn lfa_antwort(v: &serde_json::Value) -> Option<mako_pruefung::LfaAntwort> {
 }
 
 /// Propagates store and transport failures so the fan-out redelivers.
-#[allow(clippy::too_many_arguments)]
 pub async fn resume_after_lfa_antwort(
     event: &serde_json::Value,
     config: &NbModuleConfig,
@@ -1258,13 +1269,23 @@ pub async fn resume_after_lfa_antwort(
             if rec.initiator_is_affiliate {
                 warn!(%anmeldung_process_id, pid, %malo_id,
                       "processd NB: § 20 EnWG — affiliate Anmeldung held for operator review");
-                enqueue_for_operator_with_followup(
+                enqueue_held_accept(
                     queue,
                     config,
                     &meta,
                     "§ 20 EnWG affiliate Anmeldung — the LFA released the Marktlokation, but \
                      an affiliate may not take the automatic path a third party does not get",
                     beendigung,
+                    answer_command(
+                        reader,
+                        pid,
+                        &malo_id,
+                        anmeldung_process_id,
+                        &result,
+                        dritter.as_ref(),
+                        fall_b,
+                    )
+                    .await?,
                 )
                 .await?;
             } else if config.auto_accept {
@@ -1283,13 +1304,23 @@ pub async fn resume_after_lfa_antwort(
                     .beenden(makod, &malo_id, anmeldung_process_id, zuordnungsende)
                     .await;
             } else {
-                enqueue_for_operator_with_followup(
+                enqueue_held_accept(
                     queue,
                     config,
                     &meta,
                     "the LFA released the Marktlokation and E_0623 confirms; auto_accept is \
                      off, so the Bestätigung is dispatched on operator approval",
                     beendigung,
+                    answer_command(
+                        reader,
+                        pid,
+                        &malo_id,
+                        anmeldung_process_id,
+                        &result,
+                        dritter.as_ref(),
+                        fall_b,
+                    )
+                    .await?,
                 )
                 .await?;
             }
@@ -1587,6 +1618,20 @@ async fn enqueue_for_operator(
     enqueue_for_operator_with_followup(queue, config, meta, reason, None).await
 }
 
+/// Queue an Accept held back from the automatic path, frozen with the answer
+/// that path would have sent — so the operator approves the Bestätigung they
+/// are shown, and the approval has the Antwortcode `makod` requires.
+async fn enqueue_held_accept(
+    queue: &PgApprovalQueue,
+    config: &NbModuleConfig,
+    meta: &AnmeldungMeta,
+    reason: &str,
+    followup: Option<(&'static str, serde_json::Value)>,
+    answer: ForwardCommand,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    enqueue_entry(queue, config, meta, reason, followup, Some(answer.payload)).await
+}
+
 /// Queue a decision that carries a **Meldepflicht** the operator's approval
 /// must discharge with it.
 ///
@@ -1600,6 +1645,18 @@ async fn enqueue_for_operator_with_followup(
     meta: &AnmeldungMeta,
     reason: &str,
     followup: Option<(&'static str, serde_json::Value)>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    enqueue_entry(queue, config, meta, reason, followup, None).await
+}
+
+/// Write the queue entry; `answer` is the frozen approval body, if any.
+async fn enqueue_entry(
+    queue: &PgApprovalQueue,
+    config: &NbModuleConfig,
+    meta: &AnmeldungMeta,
+    reason: &str,
+    followup: Option<(&'static str, serde_json::Value)>,
+    answer: Option<serde_json::Value>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let window = mako_fristen::antwort::operator_window(meta.pid, meta.received_at);
     let (accept, reject) = answer_commands(meta.pid);
@@ -1617,6 +1674,9 @@ async fn enqueue_for_operator_with_followup(
     .with_commands(accept, reject, Some("NB"));
     if let Some((command, payload)) = followup {
         entry = entry.with_followup(command, payload);
+    }
+    if let Some(answer) = answer {
+        entry = entry.with_answer_payload(answer);
     }
     queue.enqueue(&entry).await?;
     info!(
@@ -1772,7 +1832,6 @@ fn messtyp_of(bilanzierungsmethode: Option<&str>) -> Messtyp {
 }
 
 /// The NB's decision on an inbound Abmeldung (55004 / 44004), EBD `E_0607`.
-#[allow(clippy::too_many_arguments)]
 async fn decide_abmeldung(
     payload: AbmeldungPayload,
     event: &serde_json::Value,
@@ -1847,7 +1906,7 @@ async fn decide_abmeldung(
             if initiator_is_affiliate {
                 warn!(%process_id, pid, %malo_id, %lf_mp_id,
                       "processd NB: § 20 EnWG — affiliate Abmeldung held for operator review");
-                enqueue_for_operator(
+                enqueue_held_accept(
                     queue,
                     config,
                     &meta,
@@ -1855,6 +1914,8 @@ async fn decide_abmeldung(
                         "§ 20 EnWG affiliate Abmeldung (LF {lf_mp_id} is this operator) — \
                          E_0607 says Accept, but an affiliate may not take the automatic path"
                     ),
+                    None,
+                    answer_command(reader, pid, &malo_id, process_id, &result, None, None).await?,
                 )
                 .await?;
             } else if config.auto_accept {
@@ -1865,12 +1926,14 @@ async fn decide_abmeldung(
                 info!(%process_id, pid, %malo_id, antwortcode = result.antwortcode(),
                       "processd NB: dispatched Bestätigung Abmeldung");
             } else {
-                enqueue_for_operator(
+                enqueue_held_accept(
                     queue,
                     config,
                     &meta,
                     "E_0607 says Accept; auto_accept is off, so the Bestätigung is \
                      dispatched on operator approval",
+                    None,
+                    answer_command(reader, pid, &malo_id, process_id, &result, None, None).await?,
                 )
                 .await?;
             }
@@ -1949,8 +2012,11 @@ fn classify(
             None,
             Some(format!(
                 "waiting on the Anfrage zur Beendigung der Zuordnung to {lfa_mp_ids:?} \
-                 (GPKE Teil 2 § 2.1.2 Nr. 3); the LFA answers by 09:00 Uhr des 1. WT and \
-                 silence counts as Zustimmung"
+                 (GPKE Teil 2 § 2.1.2 Nr. 3); {frist}; silence counts as Zustimmung",
+                frist = mako_fristen::antwort::antwort_obligation(55_010).map_or_else(
+                    || "no answer Frist is catalogued for 55010".to_owned(),
+                    |o| format!("the {} answers {}", o.answered_by, o.frist.beschreibung()),
+                ),
             )),
         ),
         NbEntscheidung::Escalate { reason } => (
@@ -1974,7 +2040,10 @@ fn classify(
 ///
 /// The Gas Codelisten are not named in `STS` DE 1131, so a Gas answer sends
 /// `zustimmung` alongside the code instead of an EBD id.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 async fn dispatch(
     makod: &MakodClient,
     marktd: &mako_markt::marktd_client::MarktdClient,
@@ -1985,6 +2054,39 @@ async fn dispatch(
     dritter: Option<&DritterMarktbeteiligter>,
     lfa_lieferende: Option<time::Date>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let cmd = answer_command(
+        marktd,
+        pid,
+        malo_id,
+        process_id,
+        result,
+        dritter,
+        lfa_lieferende,
+    )
+    .await?;
+    let verb = if cmd.command == answer_commands(pid).0 {
+        "accept"
+    } else {
+        "reject"
+    };
+    makod
+        .post_command(&format!("processd-nb-{verb}-{process_id}"), &cmd)
+        .await
+        .inspect_err(|e| warn!(%e, %process_id, "processd NB: dispatch failed"))?;
+    Ok(())
+}
+
+/// The `makod` command a decided answer is dispatched as — the automatic
+/// path's, and the one a held Accept is frozen with on the approval queue.
+async fn answer_command(
+    marktd: &mako_markt::marktd_client::MarktdClient,
+    pid: u32,
+    malo_id: &str,
+    process_id: Uuid,
+    result: &NbEntscheidung,
+    dritter: Option<&DritterMarktbeteiligter>,
+    lfa_lieferende: Option<time::Date>,
+) -> Result<ForwardCommand, Box<dyn std::error::Error + Send + Sync>> {
     let (accept_cmd, reject_cmd) = answer_commands(pid);
     let (antwort, accept, detail) = match result {
         NbEntscheidung::Accept(a) => (a, true, None),
@@ -2080,19 +2182,13 @@ async fn dispatch(
         }
     }
 
-    let cmd = ForwardCommand {
+    Ok(ForwardCommand {
         marktrolle: Some("NB".to_owned()),
         command: if accept { accept_cmd } else { reject_cmd }.to_owned(),
         malo_id: Some(malo_id.to_owned()),
         melo_id: None,
         payload,
-    };
-    let verb = if accept { "accept" } else { "reject" };
-    makod
-        .post_command(&format!("processd-nb-{verb}-{process_id}"), &cmd)
-        .await
-        .inspect_err(|e| warn!(%e, %process_id, "processd NB: dispatch failed"))?;
-    Ok(())
+    })
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────

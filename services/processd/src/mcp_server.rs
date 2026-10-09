@@ -15,8 +15,8 @@
 //! | `list_affiliate_decisions`  | Gleichbehandlung: decisions for affiliate-initiated requests |
 //! | `list_pending_approvals`    | List LF approval-queue entries needing operator action |
 //! | `get_queue_entry`           | Get a single LF approval-queue entry by its UUID |
-//! | `approve_queue_entry`       | Approve a pending queue entry (dispatch einwilligung) |
-//! | `reject_queue_entry`        | Reject a pending queue entry (dispatch ablehnen) |
+//! | `approve_queue_entry`       | Approve a pending queue entry (dispatch its answer) |
+//! | `reject_queue_entry`        | Reject a pending queue entry (dispatch its refusal) |
 
 use std::sync::Arc;
 
@@ -136,6 +136,31 @@ pub struct QueueActionParams {
     /// Abs. 1 EnWG parity evidence and a GoBD record.
     #[serde(default)]
     pub decided_by: Option<String>,
+    /// The EBD Antwortcode, when the entry does not carry a frozen answer —
+    /// an escalated entry, or any refusal.
+    #[serde(default)]
+    pub antwort_code: Option<String>,
+    /// The Entscheidungsbaum the code is resolved in (e.g. `E_0622`).
+    #[serde(default)]
+    pub antwort_tree: Option<String>,
+    /// The Codeliste DE 1131, where the MIG carries one.
+    #[serde(default)]
+    pub antwort_codeliste: Option<String>,
+    /// `FTX+ACB` Erläuterung; also the Begründung of a refusal with no code.
+    #[serde(default)]
+    pub bemerkung: Option<String>,
+}
+
+impl QueueActionParams {
+    /// The operator's answer, as the decision endpoints read it.
+    fn answer(&self) -> crate::pg::approval::OperatorAnswer {
+        crate::pg::approval::OperatorAnswer {
+            antwort_code: self.antwort_code.clone(),
+            antwort_tree: self.antwort_tree.clone(),
+            antwort_codeliste: self.antwort_codeliste.clone(),
+            bemerkung: self.bemerkung.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -146,9 +171,15 @@ pub struct GetQueueEntryParams {
 #[derive(Clone)]
 pub struct ProcessdMcpHandler {
     state: Arc<ProcessdMcpState>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     tool_router: ToolRouter<ProcessdMcpHandler>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     prompt_router: PromptRouter<ProcessdMcpHandler>,
 }
 
@@ -367,11 +398,11 @@ Any entry with decision=Accept indicates a §20 EnWG violation — report to BNe
         }
     }
     #[tool(
-        description = "Approve a pending LF E_0624 Einwilligung queue entry. \
-Dispatches `gpke.nb-lieferende.bestaetigen` (PID 55008 Strom) or \
-`geli.stornierung.initiieren` (Gas 44022/44023) to makod, then marks the entry Approved. \
-⚠ Regulatory: the 45-min APERAK window applies from the original process.initiated event. \
-Use `list_pending_approvals` first to check `expires_at` before approving.",
+        description = "Approve a pending approval-queue entry: dispatch the entry's approve \
+command to makod and mark it Approved. A held decision is sent with the answer frozen when it \
+was queued; an escalated entry needs `antwort_code` (and `antwort_tree` where the command \
+resolves one) and is refused without it. `expires_at` is the business answer Frist less an \
+hour — check it with `list_pending_approvals` first.",
         annotations(
             read_only_hint = false,
             idempotent_hint = false,
@@ -411,6 +442,7 @@ Use `list_pending_approvals` first to check `expires_at` before approving.",
         match crate::server::QUEUE_APPROVE
             .request(&up, id)
             .header("X-Decided-By", decided_by)
+            .json(&p.answer())
             .send()
             .await
         {
@@ -418,7 +450,7 @@ Use `list_pending_approvals` first to check `expires_at` before approving.",
                 ContentBlock::json(serde_json::json!({
                     "id": p.id,
                     "status": "Approved",
-                    "note": "einwilligung dispatched to makod; queue entry marked Approved.",
+                    "note": "answer dispatched to makod; queue entry marked Approved.",
                 }))
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None))
@@ -432,10 +464,10 @@ Use `list_pending_approvals` first to check `expires_at` before approving.",
     }
 
     #[tool(
-        description = "Reject a pending LF E_0624 Einwilligung queue entry. \
-Dispatches `gpke.nb-lieferende.ablehnen` (PID 55009) to makod, then marks the entry Rejected. \
-Use this when §20 EnWG affiliate check is the reason (operator override). \
-For §20 parity data: use `obsd` `get_kpi_report`.",
+        description = "Reject a pending approval-queue entry: dispatch the entry's refusal \
+command to makod and mark it Rejected. The refusal's `antwort_code` is the operator's; a \
+refusal that carries no code (the ESA Werteanfrage) takes its Begründung from `bemerkung`. \
+For § 20 EnWG parity data use `obsd` `get_kpi_report`.",
         annotations(
             read_only_hint = false,
             idempotent_hint = false,
@@ -475,6 +507,7 @@ For §20 parity data: use `obsd` `get_kpi_report`.",
         match crate::server::QUEUE_REJECT
             .request(&up, id)
             .header("X-Decided-By", decided_by)
+            .json(&p.answer())
             .send()
             .await
         {
@@ -482,7 +515,7 @@ For §20 parity data: use `obsd` `get_kpi_report`.",
                 ContentBlock::json(serde_json::json!({
                     "id": p.id,
                     "status": "Rejected",
-                    "note": "ablehnen dispatched to makod; queue entry marked Rejected.",
+                    "note": "refusal dispatched to makod; queue entry marked Rejected.",
                 }))
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None))

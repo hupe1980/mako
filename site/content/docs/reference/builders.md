@@ -249,7 +249,7 @@ println!("{}", pid);           // "55001"
 
 Builders carry two `PhantomData` type parameters that track whether the sender
 and the receiver have been set. They start `Unset` and `.sender(…)` / `.receiver(…)`
-flip them to `Set` (`crates/edi-energy/src/builders/mod.rs:82`): `.build()` and
+flip them to `Set` (`crates/edi-energy/src/builders/mod.rs`): `.build()` and
 `.serialize()` exist only on `UtilmdBuilder<Set, Set>`.
 
 Missing mandatory parties are therefore a **compile error**, not a runtime panic:

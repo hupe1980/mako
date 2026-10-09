@@ -52,7 +52,10 @@ use energy_billing::{
 ///
 /// VPP-specific references (tx-id, SR-ID, dispatch process ids) are appended as
 /// document-level ZusatzAttribute on the typed BO before serialisation.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 fn build_vpp_settlement(
     malo_id: &str,
     aggregator_mp_id: &str,
@@ -187,7 +190,10 @@ fn zusatz_attribut(name: &str, wert: serde_json::Value) -> rubo4e::current::Zusa
 /// Each rendered position carries the `marktlokationsId` it came from; the
 /// document-level tax positions carry none, because they belong to the whole
 /// document.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 fn build_aggregate_invoice(
     subject_id: &str,
     lf_mp_id: &str,

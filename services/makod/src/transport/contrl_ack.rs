@@ -1,4 +1,4 @@
-//! CONTRL Empfangsbestätigung service — CONTRL AHB 1.0 §2.3 / APERAK AHB 1.0 §2.3.
+//! CONTRL Empfangsbestätigung service — CONTRL AHB 1.0 §2.3 / APERAK AHB 1.1 §2.3.
 //!
 //! ## Regulatory obligation
 //!
@@ -11,7 +11,7 @@
 //!
 //! > „Auf eine APERAK ist immer eine CONTRL zu senden."
 //! >
-//! > — APERAK AHB 1.0 §2.3 (Gas rules)
+//! > — APERAK AHB 1.1 §2.3 (Gas rules)
 //!
 //! For every inbound **Gas** interchange (UNB…UNZ) **or Gas APERAK**, makod MUST
 //! send a CONTRL Empfangsbestätigung (UCI DE0083 = 7) back to the sender.
@@ -23,10 +23,14 @@
 //! ## The two Ausprägungen
 //!
 //! [`Verdict`] is the pair `UCI` DE 0083 admits — `7` „Übertragung bestätigt"
-//! and `4` „Diese Ebene und alle tieferen Ebenen zurückgewiesen", the latter
-//! carrying a DE 0085 [`SyntaxFehler`]. The Sparte decides whether a *clean*
-//! interchange is acknowledged; it never decides whether a broken one is
-//! reported, which both Sparten owe.
+//! and `4` „Diese Ebene und alle tieferen Ebenen zurückgewiesen". A rejection
+//! names its fault either on the `UCI` (DE 0085, a [`SyntaxFehler`]) or, when
+//! the fault sits inside messages, on an `SG1 UCM` per broken message with its
+//! `SG2 UCS` / `UCD` (CONTRL AHB 1.0 Kap. 3, „Syntaxfehlermeldung in der
+//! Nachricht"; [`syntaxpruefung`] decides which). Either way the whole
+//! Übertragungsdatei is rejected (Kap. 1.3). The Sparte decides whether a
+//! *clean* interchange is acknowledged; it never decides whether a broken one
+//! is reported, which both Sparten owe.
 //!
 //! ## The window is not one number
 //!
@@ -89,6 +93,10 @@ pub enum Verdict {
     /// Syntaxfehlermeldung — `UCI` DE 0083 = `4` plus the DE 0085 code, and with
     /// it the statement that the Übertragungsdatei is not processed further.
     Syntaxfehler(SyntaxFehler),
+    /// Syntaxfehlermeldung **in der Nachricht** — `UCI` DE 0083 = `4` with no
+    /// DE 0085, the faults named on the `SG1 UCM` / `SG2` beneath it (CONTRL
+    /// AHB 1.0 Kap. 3). The file is rejected just the same.
+    SyntaxfehlerInNachrichten,
 }
 
 impl Verdict {
@@ -98,7 +106,7 @@ impl Verdict {
 
     const fn syntax_error(self) -> Option<&'static str> {
         match self {
-            Self::Empfangsbestaetigung => None,
+            Self::Empfangsbestaetigung | Self::SyntaxfehlerInNachrichten => None,
             Self::Syntaxfehler(code) => Some(code.de0085()),
         }
     }
@@ -107,6 +115,7 @@ impl Verdict {
         match self {
             Self::Empfangsbestaetigung => "Empfangsbestätigung",
             Self::Syntaxfehler(_) => "Syntaxfehlermeldung",
+            Self::SyntaxfehlerInNachrichten => "Syntaxfehlermeldung in der Nachricht",
         }
     }
 }
@@ -159,6 +168,456 @@ impl SyntaxFehler {
             _ => Self::UngueltigerWert,
         }
     }
+}
+
+// ── Syntaxprüfung of one Übertragungsdatei ───────────────────────────────────
+
+/// The outcome of the syntax check of one Übertragungsdatei, as the CONTRL
+/// reports it.
+///
+/// CONTRL AHB 1.0 (Stand 11.12.2025) Kap. 1.3: „In der CONTRL wird entweder
+/// eine Übertragungsdatei bestätigt oder die gesamte Übertragungsdatei
+/// zurückgewiesen." A fault in any one message therefore rejects the whole
+/// file — Kap. 1.2: „bei Syntaxfehlern \[werden\] alle in der Übertragungsdatei
+/// enthaltenen Geschäftsvorfälle vom Empfänger nicht verarbeitet" — and what
+/// differs between the two rejecting variants is only where the CONTRL places
+/// the fault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Syntaxpruefung {
+    /// Every message parsed.
+    Fehlerfrei,
+    /// Faults located inside messages: the Kap. 3 column „Syntaxfehlermeldung
+    /// in der Nachricht" — `UCI` DE 0083 = `4`, one `SG1 UCM` per broken message.
+    Nachrichten(Vec<NachrichtenFehler>),
+    /// A fault that cannot be placed on a message: the column
+    /// „Syntaxfehlermeldung in der Übertragungsdatei", `UCI` DE 0083 = `4` with
+    /// its DE 0085 code.
+    Uebertragungsdatei(SyntaxFehler),
+}
+
+/// One broken message of an Übertragungsdatei — its `SG1 UCM` and what goes
+/// beneath it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NachrichtenFehler {
+    /// `UCM` DE 0062 — the message's `UNH` reference.
+    pub message_ref: String,
+    /// `UCM` S009 DE 0065.
+    pub message_type: String,
+    /// `UCM` S009 DE 0052.
+    pub version: String,
+    /// `UCM` S009 DE 0054.
+    pub release: String,
+    /// `UCM` S009 DE 0051.
+    pub agency: String,
+    /// `UCM` S009 DE 0057, the BDEW Versionsnummer.
+    pub association: Option<String>,
+    /// Where in the message the fault is.
+    pub fehler: Fehlerort,
+}
+
+/// Where a fault inside a message sits (CONTRL AHB 1.0 Kap. 3, MIG 2.0b).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "ebene", rename_all = "snake_case")]
+pub enum Fehlerort {
+    /// A fault in `UNH` or `UNT`: `UCM` DE 0085 with the service segment in
+    /// DE 0013, and no `SG2`.
+    Nachricht {
+        /// `UCM` DE 0085.
+        code: String,
+        /// `UCM` DE 0013 — `UNH` or `UNT`.
+        service_segment: String,
+    },
+    /// A fault in a segment between them: `SG2 UCS`, and `UCD` when the data
+    /// element is known.
+    Segment {
+        /// `UCS` DE 0096 — the segment's position, `UNH` counting as 1.
+        position: u32,
+        /// `UCS` DE 0085 — only when no `UCD` can be given (MIG 2.0b).
+        code: Option<String>,
+        /// `UCD` — the data element.
+        datenelement: Option<Datenelement>,
+    },
+}
+
+/// A `UCD` — the faulty data element of the segment its `UCS` names.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Datenelement {
+    /// `UCD` DE 0085.
+    pub code: String,
+    /// `UCD` DE 0098 — the segment tag is position 1, each data element or
+    /// composite after it one more (CONTRL MIG 2.0b).
+    pub position: u32,
+    /// `UCD` DE 0104 — the component inside a composite, from 1.
+    pub komponente: Option<u32>,
+}
+
+/// Check one Übertragungsdatei: `results` is what the parser made of each
+/// `UNH`…`UNT` window of `interchange`, in wire order.
+///
+/// A fault is placed as deep as the parser's error allows (Kap. 2.2.2: „Die
+/// Position des Fehlers ist so genau wie möglich … anzugeben"). When any fault
+/// cannot be placed on a message — or the windows cannot be matched to the
+/// results — the whole file is reported at the `UCI` instead, which is still a
+/// true statement about it.
+#[must_use]
+pub fn syntaxpruefung(
+    interchange: &[u8],
+    results: &[Result<AnyMessage, edi_energy::Error>],
+) -> Syntaxpruefung {
+    let first_error = results.iter().find_map(|r| r.as_ref().err());
+    let Some(first_error) = first_error else {
+        return Syntaxpruefung::Fehlerfrei;
+    };
+    let whole_file =
+        Syntaxpruefung::Uebertragungsdatei(SyntaxFehler::from_parse_error(first_error));
+    let Some(windows) = raw_windows(interchange) else {
+        return whole_file;
+    };
+    if windows.len() != results.len() {
+        return whole_file;
+    }
+    let mut fehler = Vec::new();
+    for (window, result) in windows.iter().zip(results) {
+        let Err(error) = result else { continue };
+        let Some(ort) = fehlerort(window, error) else {
+            return whole_file;
+        };
+        fehler.push(NachrichtenFehler {
+            message_ref: window.unh_component(0, 0),
+            message_type: window.unh_component(1, 0),
+            version: window.unh_component(1, 1),
+            release: window.unh_component(1, 2),
+            agency: window.unh_component(1, 3),
+            association: Some(window.unh_component(1, 4)).filter(|a| !a.is_empty()),
+            fehler: ort,
+        });
+    }
+    if fehler
+        .iter()
+        .any(|f| f.message_ref.is_empty() || f.message_type.is_empty())
+    {
+        // `UCM` DE 0062 and DE 0065 are Muss; without them there is no UCM.
+        return whole_file;
+    }
+    Syntaxpruefung::Nachrichten(fehler)
+}
+
+/// Where in `window` the parser's `error` sits, or `None` when it does not say.
+fn fehlerort(window: &RawWindow, error: &edi_energy::Error) -> Option<Fehlerort> {
+    use edifact_rs::EdifactError as E;
+    let unh = || Fehlerort::Nachricht {
+        code: "12".to_owned(),
+        service_segment: "UNH".to_owned(),
+    };
+    match error {
+        // The release or the message type in UNH names nothing this side
+        // reads: `UCM` DE 0085 `12` „Ungültiger Wert" on `UNH`.
+        edi_energy::Error::UnknownMessageType { .. }
+        | edi_energy::Error::FeatureNotEnabled { .. }
+        | edi_energy::Error::MissingRelease
+        | edi_energy::Error::InvalidRelease(_)
+        | edi_energy::Error::ProfileNotFound { .. } => Some(unh()),
+        edi_energy::Error::Parse(inner) => match inner {
+            // The tag itself is the faulty element: DE 0098 position 1.
+            E::InvalidSegmentTag(tag) => Some(Fehlerort::Segment {
+                position: window.position_of_tag(tag)?,
+                code: None,
+                datenelement: Some(Datenelement {
+                    code: "12".to_owned(),
+                    position: 1,
+                    komponente: None,
+                }),
+            }),
+            E::SegmentCountMismatch { .. } => Some(Fehlerort::Nachricht {
+                code: "29".to_owned(),
+                service_segment: "UNT".to_owned(),
+            }),
+            E::MissingRequiredElement { tag, element_index } => {
+                missing(window, tag, *element_index, None)
+            }
+            E::MissingRequiredComponent {
+                tag,
+                element_index,
+                component_index,
+            } => missing(window, tag, *element_index, Some(*component_index)),
+            E::InvalidText { offset } => window.at_offset(*offset, "21"),
+            E::InvalidReleaseSequence { offset } | E::InvalidDelimiter { offset, .. } => {
+                window.at_offset(*offset, "22")
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// A missing (composite) data element: `13` „Fehlt".
+fn missing(
+    window: &RawWindow,
+    tag: &str,
+    element_index: usize,
+    component_index: Option<usize>,
+) -> Option<Fehlerort> {
+    if tag == "UNH" || tag == "UNT" {
+        return Some(Fehlerort::Nachricht {
+            code: "13".to_owned(),
+            service_segment: tag.to_owned(),
+        });
+    }
+    Some(Fehlerort::Segment {
+        position: window.position_of_tag(tag)?,
+        code: None,
+        datenelement: Some(Datenelement {
+            code: "13".to_owned(),
+            position: u32::try_from(element_index).ok()?.checked_add(2)?,
+            komponente: component_index
+                .and_then(|c| u32::try_from(c).ok())
+                .and_then(|c| c.checked_add(1)),
+        }),
+    })
+}
+
+/// The service characters of an interchange (ISO 9735 `UNA`, or the defaults).
+#[derive(Clone, Copy)]
+struct Delimiters {
+    component: u8,
+    element: u8,
+    release: u8,
+    terminator: u8,
+}
+
+/// One segment of the raw interchange: its byte range, text and tag.
+struct RawSegment {
+    start: usize,
+    end: usize,
+    text: Vec<u8>,
+    tag: String,
+}
+
+/// One `UNH`…`UNT` window of the raw interchange.
+struct RawWindow {
+    /// The `UNH` segment's text, without its terminator.
+    unh: Vec<u8>,
+    /// Every segment from `UNH` to `UNT`, in order.
+    segments: Vec<RawSegment>,
+    delimiters: Delimiters,
+}
+
+impl RawWindow {
+    /// `UNH` element `element`, component `component`, unescaped.
+    fn unh_component(&self, element: usize, component: usize) -> String {
+        let d = self.delimiters;
+        split_unreleased(&self.unh, d.element, d.release)
+            .get(element + 1)
+            .map(|e| split_unreleased(e, d.component, d.release))
+            .and_then(|c| c.get(component).cloned())
+            .map(|c| unescape(&c, d.release))
+            .unwrap_or_default()
+    }
+
+    /// The DE 0096 position of the first segment tagged `tag` (`UNH` = 1).
+    fn position_of_tag(&self, tag: &str) -> Option<u32> {
+        let i = self.segments.iter().position(|s| s.tag == tag)?;
+        u32::try_from(i + 1).ok()
+    }
+
+    /// The segment and data element containing byte `offset` of the
+    /// interchange, as a `UCS` + `UCD` carrying `code`.
+    fn at_offset(&self, offset: usize, code: &str) -> Option<Fehlerort> {
+        let (i, seg) = self
+            .segments
+            .iter()
+            .enumerate()
+            .find(|(_, s)| (s.start..=s.end).contains(&offset))?;
+        let (position, komponente) = self.element_position(seg, offset - seg.start);
+        Some(Fehlerort::Segment {
+            position: u32::try_from(i + 1).ok()?,
+            code: None,
+            datenelement: Some(Datenelement {
+                code: code.to_owned(),
+                position,
+                komponente,
+            }),
+        })
+    }
+
+    /// DE 0098 / DE 0104 of byte `at` inside `seg`: the tag is element 1 and
+    /// every unreleased element separator before `at` adds one; inside a
+    /// composite, every component separator before `at` adds one to a count
+    /// starting at 1.
+    fn element_position(&self, seg: &RawSegment, at: usize) -> (u32, Option<u32>) {
+        let d = self.delimiters;
+        let mut element = 1u32;
+        let mut component = 1u32;
+        let mut composite = false;
+        let mut i = 0usize;
+        let upto = at.min(seg.text.len());
+        while i < upto {
+            let b = seg.text[i];
+            if b == d.release {
+                i += 2;
+                continue;
+            }
+            if b == d.element {
+                element += 1;
+                component = 1;
+                composite = false;
+            } else if b == d.component {
+                component += 1;
+                composite = true;
+            }
+            i += 1;
+        }
+        // A component separator after `at` in the same element also makes it a
+        // composite.
+        let rest = &seg.text[upto..];
+        let mut j = 0usize;
+        while j < rest.len() && rest[j] != d.element {
+            if rest[j] == d.release {
+                j += 2;
+                continue;
+            }
+            if rest[j] == d.component {
+                composite = true;
+            }
+            j += 1;
+        }
+        (element, composite.then_some(component))
+    }
+}
+
+/// The `UNB` of a raw interchange: (sender, recipient, control reference).
+///
+/// Read off the bytes rather than through the parser, because the parser
+/// refuses an interchange whose messages do not tokenize — and a CONTRL for such
+/// an interchange still has to be addressed. `None` when there is no `UNB`
+/// with all three (CONTRL AHB 1.0 Kap. 2.2.2.1: then no CONTRL can be built).
+#[must_use]
+pub fn unb_parties(raw: &[u8]) -> Option<(String, String, String)> {
+    let (d, segments) = raw_segments(raw);
+    let unb = segments.into_iter().find(|s| s.tag == "UNB")?;
+    let elements = split_unreleased(&unb.text, d.element, d.release);
+    let first = |i: usize| -> Option<String> {
+        let e = elements.get(i)?;
+        let c = split_unreleased(e, d.component, d.release);
+        Some(unescape(c.first()?, d.release)).filter(|v| !v.is_empty())
+    };
+    Some((first(2)?, first(3)?, first(5)?))
+}
+
+/// Split `raw` into its `UNH`…`UNT` windows, or `None` when it is not
+/// segmentable at all.
+fn raw_windows(raw: &[u8]) -> Option<Vec<RawWindow>> {
+    let (d, segments) = raw_segments(raw);
+    let mut windows = Vec::new();
+    let mut current: Option<RawWindow> = None;
+    for segment in segments {
+        if segment.tag == "UNH" {
+            current = Some(RawWindow {
+                unh: segment.text.clone(),
+                segments: Vec::new(),
+                delimiters: d,
+            });
+        }
+        let closes = segment.tag == "UNT";
+        if let Some(w) = current.as_mut() {
+            w.segments.push(segment);
+        }
+        if closes && let Some(w) = current.take() {
+            windows.push(w);
+        }
+    }
+    if let Some(w) = current {
+        windows.push(w);
+    }
+    Some(windows)
+}
+
+/// The service characters and segments of a raw interchange.
+fn raw_segments(raw: &[u8]) -> (Delimiters, Vec<RawSegment>) {
+    let mut d = Delimiters {
+        component: b':',
+        element: b'+',
+        release: b'?',
+        terminator: b'\'',
+    };
+    let mut pos = 0usize;
+    if raw.starts_with(b"UNA") && raw.len() >= 9 {
+        d = Delimiters {
+            component: raw[3],
+            element: raw[4],
+            release: raw[6],
+            terminator: raw[8],
+        };
+        pos = 9;
+    }
+    let mut segments = Vec::new();
+    while pos < raw.len() {
+        // Line breaks between segments are not part of either.
+        while pos < raw.len() && matches!(raw[pos], b'\r' | b'\n' | b' ' | b'\t') {
+            pos += 1;
+        }
+        if pos >= raw.len() {
+            break;
+        }
+        let start = pos;
+        let mut end = pos;
+        while end < raw.len() && raw[end] != d.terminator {
+            end += if raw[end] == d.release { 2 } else { 1 };
+        }
+        let end = end.min(raw.len());
+        let text = &raw[start..end];
+        let tag_end = text
+            .iter()
+            .position(|&b| b == d.element)
+            .unwrap_or(text.len());
+        segments.push(RawSegment {
+            start,
+            end,
+            text: text.to_vec(),
+            tag: String::from_utf8_lossy(&text[..tag_end]).into_owned(),
+        });
+        pos = end + 1;
+    }
+    (d, segments)
+}
+
+/// Split `raw` at every `sep` not preceded by the release character.
+fn split_unreleased(raw: &[u8], sep: u8, release: u8) -> Vec<Vec<u8>> {
+    let mut out = vec![Vec::new()];
+    let mut i = 0;
+    while i < raw.len() {
+        let b = raw[i];
+        if b == release && i + 1 < raw.len() {
+            if let Some(last) = out.last_mut() {
+                last.extend_from_slice(&raw[i..i + 2]);
+            }
+            i += 2;
+            continue;
+        }
+        if b == sep {
+            out.push(Vec::new());
+        } else if let Some(last) = out.last_mut() {
+            last.push(b);
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Remove release characters.
+fn unescape(raw: &[u8], release: u8) -> String {
+    let mut out = Vec::with_capacity(raw.len());
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == release && i + 1 < raw.len() {
+            out.push(raw[i + 1]);
+            i += 2;
+        } else {
+            out.push(raw[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 // ── ContrlAckService ─────────────────────────────────────────────────────────
@@ -214,7 +673,7 @@ impl ContrlAckService {
     ///   teilt dem Absender unverzüglich, jedoch spätestens **6 Stunden** nach Erhalt
     ///   der Übertragungsdatei oder APERAK, das Ergebnis seiner syntaktischen Prüfung
     ///   mittels der Nachricht CONTRL mit."
-    /// - APERAK AHB 1.0 §2.3: "Auf eine APERAK ist immer eine CONTRL zu senden."
+    /// - APERAK AHB 1.1 §2.3: "Auf eine APERAK ist immer eine CONTRL zu senden."
     ///
     /// This means: we MUST send CONTRL for both Gas interchanges AND Gas APERAKs we
     /// receive.  Only CONTRL-on-CONTRL is forbidden (§2.2.2.2).
@@ -367,10 +826,9 @@ impl ContrlAckService {
     /// UTILMD or ORDERS 15 minutes rather than 6 hours).
     ///
     /// Sending it says two things at once (§2.3.2 / §2.4.2): the Übertragungsdatei
-    /// arrived, and it „wird nicht weiterbearbeitet". Call it only where that is
-    /// true of the whole file — a fault inside one message of an otherwise
-    /// readable interchange is reported per message, which needs the segment
-    /// positions the ingest loop does not carry.
+    /// arrived, and it „wird nicht weiterbearbeitet". This is the variant for a
+    /// fault that cannot be placed on a message; one that can is reported with
+    /// [`emit_message_syntax_errors`](Self::emit_message_syntax_errors).
     ///
     /// # When no CONTRL can be sent at all
     ///
@@ -416,6 +874,51 @@ impl ContrlAckService {
         .await
     }
 
+    /// Emit the **Syntaxfehlermeldung in der Nachricht** for an Übertragungsdatei
+    /// whose faults [`syntaxpruefung`] located inside its messages.
+    ///
+    /// One CONTRL for the file (CONTRL AHB 1.0 Kap. 1.3), `UCI` DE 0083 = `4`
+    /// without DE 0085, and per broken message an `SG1 UCM` with DE 0083 = `4`
+    /// and the `SG2 UCS` / `UCD` naming the segment and data element (Kap. 3).
+    /// Owed in both Sparten, under the same windows as
+    /// [`emit_syntax_error`](Self::emit_syntax_error); in Gas it is the CONTRL
+    /// the file gets instead of an Empfangsbestätigung.
+    ///
+    /// # Errors
+    ///
+    /// As [`emit_for_interchange`](Self::emit_for_interchange).
+    pub async fn emit_message_syntax_errors(
+        &self,
+        interchange: &[u8],
+        interchange_ref: &str,
+        recipient_mp_id: &str,
+        sender_mp_id: &str,
+        fehler: &[NachrichtenFehler],
+    ) -> Result<(), EngineError> {
+        if sender_mp_id.is_empty() {
+            tracing::warn!(
+                interchange_ref,
+                "CONTRL: no UNB sender on a rejected interchange — \
+                 Syntaxfehlermeldung NOT enqueued (regulatory gap)"
+            );
+            return Ok(());
+        }
+        let types = unh_message_types(interchange);
+        if !types.is_empty() && types.iter().all(|t| t == "CONTRL") {
+            return Ok(());
+        }
+        let anlass = syntaxfehler_anlass(self.mp_id_registry.sparte_of(recipient_mp_id), &types);
+        self.enqueue_with(
+            sender_mp_id,
+            interchange_ref,
+            recipient_mp_id,
+            Verdict::SyntaxfehlerInNachrichten,
+            anlass,
+            fehler,
+        )
+        .await
+    }
+
     /// Queue the CONTRL and its delivery deadline, atomically.
     ///
     /// `verdict` is what the UCI states about the interchange, and `anlass` the
@@ -429,6 +932,27 @@ impl ContrlAckService {
         recipient_mp_id: &str,
         verdict: Verdict,
         anlass: mako_fristen::ContrlAnlass,
+    ) -> Result<(), EngineError> {
+        self.enqueue_with(
+            sender_mp_id,
+            interchange_ref,
+            recipient_mp_id,
+            verdict,
+            anlass,
+            &[],
+        )
+        .await
+    }
+
+    /// [`enqueue`](Self::enqueue) carrying the per-message report.
+    async fn enqueue_with(
+        &self,
+        sender_mp_id: &str,
+        interchange_ref: &str,
+        recipient_mp_id: &str,
+        verdict: Verdict,
+        anlass: mako_fristen::ContrlAnlass,
+        fehler: &[NachrichtenFehler],
     ) -> Result<(), EngineError> {
         // CONTRL sender = the own MP-ID the interchange was addressed to (the
         // Sparte-correct MP-ID, even in a multi-Sparte deployment). Fall back to the
@@ -464,6 +988,9 @@ impl ContrlAckService {
                 // Surfaced from the parsed interchange header; the CONTRL
                 // renderer uses this to populate UCI reference fields.
                 "interchange_ref": interchange_ref,
+                // SG1 UCM / SG2 UCS / UCD, on a Syntaxfehlermeldung in der
+                // Nachricht.
+                "messages":        fehler,
             }),
         );
 

@@ -502,10 +502,11 @@ pub async fn post_ausfallarbeit_malo_split(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal::prelude::FromPrimitive;
 
+    /// A test literal, read from its shortest decimal rendering — `0.1` is
+    /// `0.1`, not the binary expansion of the nearest `f64`.
     fn dec(v: f64) -> Decimal {
-        Decimal::from_f64(v).expect("finite")
+        v.to_string().parse().expect("finite")
     }
 
     /// The tenant the test principal and the test configuration share — Cedar

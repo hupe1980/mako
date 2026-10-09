@@ -286,8 +286,8 @@ pub struct WebhookConfig {
 /// The `marktd` subscription registered at startup.
 ///
 /// The event type and the PID filter are deliberately not configurable:
-/// `invoicd` acts on `de.mako.process.initiated` for the PIDs in
-/// [`crate::routing::ROUTES`] and nothing else, so a key offering to change
+/// `invoicd` acts on `de.mako.process.initiated` as
+/// [`crate::routing::disposition_for`] decides and nothing else, so a key offering to change
 /// either would promise a behaviour the service does not have.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

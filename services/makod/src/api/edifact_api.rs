@@ -30,8 +30,9 @@
 //! }
 //! ```
 //!
-//! **Response `422 Unprocessable Entity`** — body was received but no messages
-//! could be parsed (syntax error in every message):
+//! **Response `422 Unprocessable Entity`** — body was received but no message
+//! was accepted (a syntax error, a missing Prüfidentifikator, or a workflow
+//! command that failed, in every message):
 //! ```json
 //! { "accepted": 0, "rejected": 1, "messages": [{ "status": "parse_error", "error": "…" }] }
 //! ```
@@ -42,9 +43,11 @@
 //!
 //! - When an [`EdifactIngestDispatcher`][crate::ingest_dispatcher::EdifactIngestDispatcher]
 //!   is wired into `EdifactApiState::dispatcher`, workflow dispatch is executed
-//!   immediately after routing for every `Routed` message.  Dispatch failures
-//!   are non-fatal and logged at `warn` level — the HTTP response still returns
-//!   `"status": "routed"` so the caller knows the message was accepted.
+//!   immediately after routing for every `Routed` message. A message whose
+//!   workflow command fails has not landed: it is dead-lettered (§ 147 AO /
+//!   GoBD), exactly as the AS4 door records it, and answered `"status":
+//!   "dispatch_failed"` with the error, counted as rejected. The gateway
+//!   redelivers it; a response saying `"routed"` would tell it not to.
 //! - A `pid` of `null` means the message was parsed successfully but carries no
 //!   recognised Prüfidentifikator (e.g. CONTRL, APERAK without BGM).
 //! - An unknown `pid` (not registered in the `PidRouter`) returns `status:
@@ -218,7 +221,8 @@ pub struct MessageResult {
     #[schema(example = "51238696012")]
     pub malo_id: Option<String>,
 
-    /// Human-readable parse error, present only when `status == "parse_error"`.
+    /// Human-readable error, present when `status` is `"parse_error"` or
+    /// `"dispatch_failed"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -254,18 +258,21 @@ pub enum MessageStatus {
     MissingPid,
     /// Could not be parsed at all.
     ParseError,
+    /// Parsed and routed, but the workflow command failed — no process holds
+    /// the message. Dead-lettered and counted as rejected, so the sender
+    /// redelivers it.
+    DispatchFailed,
 }
 
 impl MessageStatus {
     /// Classify one parsed message from its Prüfidentifikator and the workflow
     /// the router resolved for it.
     ///
-    /// Shared by both ingest doors. They used to classify independently and had
-    /// already drifted: the REST path distinguished [`MessageStatus::NoPid`]
-    /// from [`MessageStatus::MissingPid`] and dead-lettered the second, while
-    /// the AS4 path — the production door — called every PID-less message
-    /// `NoPid` and counted it as accepted, so a UTILMD whose `RFF+Z13` never
-    /// parsed was acknowledged and dropped with no § 147 AO record.
+    /// Shared by both ingest doors, so they cannot drift: both distinguish
+    /// [`MessageStatus::NoPid`] from [`MessageStatus::MissingPid`] and
+    /// dead-letter the second. A door that called every PID-less message
+    /// `NoPid` would count a UTILMD whose `RFF+Z13` never parsed as accepted,
+    /// and drop it with no § 147 AO record.
     #[must_use]
     pub(crate) fn classify(
         msg: &AnyMessage,
@@ -318,6 +325,125 @@ impl MessageStatus {
             Self::UnknownPid | Self::MissingPid | Self::MissingParty
         )
     }
+
+    /// `true` when the message did not land and the sender must resend it.
+    #[must_use]
+    pub(crate) fn is_rejected(self) -> bool {
+        matches!(
+            self,
+            Self::ParseError | Self::MissingPid | Self::DispatchFailed
+        )
+    }
+}
+
+/// Reject an Übertragungsdatei carrying a syntax error: dispatch none of its
+/// messages, record each, and owe one CONTRL naming the
+/// broken ones.
+///
+/// CONTRL AHB 1.0 Kap. 1.2 / 1.3: a syntax error rejects the whole file —
+/// none of its Geschäftsvorfälle is processed — and the CONTRL either
+/// confirms the file or rejects it whole. Where [`syntaxpruefung`] can place
+/// every fault on a message, the CONTRL is the Kap. 3 „Syntaxfehlermeldung
+/// in der Nachricht" (`UCI` 4, `SG1 UCM` per broken message, `SG2 UCS` /
+/// `UCD`); otherwise it is the interchange-level Syntaxfehlermeldung. Both
+/// Sparten owe it; in Gas it replaces the Empfangsbestätigung.
+///
+/// [`syntaxpruefung`]: crate::contrl_ack::syntaxpruefung
+pub(crate) async fn reject_broken_interchange(
+    state: &EdifactApiState,
+    contrl_ack: Option<&crate::contrl_ack::ContrlAckService>,
+    edifact: &[u8],
+    results: &[Result<AnyMessage, edi_energy::Error>],
+    msg_id: &str,
+) {
+    use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+    // The `UNB` is read off the bytes: the parser refuses the whole file once a
+    // message in it does not tokenize, and the CONTRL still needs its parties.
+    let header = crate::contrl_ack::unb_parties(edifact);
+    let context = || {
+        match &header {
+            Some((sender, receiver, control_ref)) => {
+                AuditContext::from_interchange(sender, receiver, control_ref)
+            }
+            None => AuditContext::now(),
+        }
+        .with_message_ref(msg_id)
+        .with_tenant_id(state.tenant_id.to_string())
+    };
+    // § 147 AO / GoBD: every message of the file leaves a record — the
+    // broken ones with their parse error, the readable ones with the
+    // reason they were not processed either.
+    for result in results {
+        let (message, message_type) = match result {
+            Err(e) => (
+                format!("EDIFACT parse error: {e}"),
+                "UNPARSEABLE".to_owned(),
+            ),
+            Ok(m) => (
+                "interchange_rejected: the Übertragungsdatei carries a syntax error \
+                 in another message, so none of its messages is processed \
+                 (CONTRL AHB 1.0 Kap. 1.2)"
+                    .to_owned(),
+                m.try_message_type()
+                    .map(|t| t.to_string())
+                    .unwrap_or_default(),
+            ),
+        };
+        state.dl_sink.reject(&DeadLetterReason::ProcessingError {
+            message,
+            context: context().with_message_type(message_type.as_str()),
+        });
+    }
+    tracing::warn!(
+        message_ref = %msg_id,
+        messages = results.len(),
+        broken = results.iter().filter(|r| r.is_err()).count(),
+        "ingest: Übertragungsdatei with a syntax error — no message dispatched, \
+         CONTRL Syntaxfehlermeldung owed",
+    );
+
+    let (Some(contrl_svc), Some((sender, receiver, control_ref))) = (contrl_ack, header.as_ref())
+    else {
+        return;
+    };
+    let sent = match crate::contrl_ack::syntaxpruefung(edifact, results) {
+        crate::contrl_ack::Syntaxpruefung::Nachrichten(fehler) => {
+            contrl_svc
+                .emit_message_syntax_errors(edifact, control_ref, receiver, sender, &fehler)
+                .await
+        }
+        crate::contrl_ack::Syntaxpruefung::Uebertragungsdatei(code) => {
+            contrl_svc
+                .emit_syntax_error(edifact, control_ref, receiver, sender, code)
+                .await
+        }
+        crate::contrl_ack::Syntaxpruefung::Fehlerfrei => Ok(()),
+    };
+    if let Err(e) = sent {
+        state.dl_sink.reject(&DeadLetterReason::ProcessingError {
+            message: format!("contrl_syntaxfehler_failed: {e}"),
+            context: context().with_message_type("CONTRL"),
+        });
+    }
+}
+
+/// Record a Phase-2 dispatch failure as a dead letter (§ 147 AO / GoBD).
+///
+/// Shared by both ingest doors. A failed dispatch is the message's last chance:
+/// on the AS4 door the dedup entry is already durable, so the sender's retries
+/// come back as duplicates, and on `/edifact` nothing else records the message.
+/// Without this entry it is simply gone — the same reason the parse-error and
+/// unknown-PID paths dead-letter.
+pub(crate) fn dead_letter_dispatch_failure(
+    sink: &dyn DeadLetterSink,
+    context: AuditContext,
+    workflow: &str,
+    error: &mako_engine::error::EngineError,
+) {
+    sink.reject(&DeadLetterReason::ProcessingError {
+        message: format!("dispatch_failed: workflow {workflow}: {error}"),
+        context,
+    });
 }
 
 /// Validate one routed message against its own release profile and record the
@@ -613,7 +739,11 @@ pub(crate) async fn ingest_edifact(
                 message_type: m.document.map(|d| d.message_type().to_string()),
                 pid: m.pruefidentifikator,
                 workflow: m.workflow.clone(),
-                status: if m.error.is_some() {
+                // A parsed message carries its document; an error on one is the
+                // dispatch failing, not the parse.
+                status: if m.error.is_some() && m.document.is_some() {
+                    MessageStatus::DispatchFailed
+                } else if m.error.is_some() {
                     MessageStatus::ParseError
                 } else if m.pruefidentifikator.is_none() {
                     MessageStatus::MissingPid
@@ -694,6 +824,21 @@ pub(crate) async fn ingest_edifact(
         Ok(pi) => pi,
         Err(e) => {
             tracing::warn!(error = %e, "EDIFACT REST ingest: interchange parse error");
+            // The same answer the AS4 door gives a file with a syntax error:
+            // nothing of it is dispatched, every message is recorded, and the
+            // sender is owed a CONTRL Syntaxfehlermeldung.
+            let results: Vec<Result<AnyMessage, edi_energy::Error>> = state
+                .platform
+                .parse_interchange(std::io::Cursor::new(&body[..]))
+                .collect();
+            reject_broken_interchange(
+                &state,
+                state.contrl_ack.as_deref(),
+                &body,
+                &results,
+                "edifact-rest",
+            )
+            .await;
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(IngestResponse {
@@ -794,7 +939,7 @@ pub(crate) async fn ingest_edifact(
             .and_then(|p| state.resolve_workflow(p.as_u32(), &recipient_mp_id))
             .map(str::to_owned);
 
-        let status = MessageStatus::classify(&msg, pid, workflow.as_deref());
+        let mut status = MessageStatus::classify(&msg, pid, workflow.as_deref());
 
         // Conformance is recorded for every routed message, not only the ones
         // whose adapter happens to ask — see `record_ahb_conformance`.
@@ -868,6 +1013,7 @@ pub(crate) async fn ingest_edifact(
         // Phase 2: execute workflow command if dispatcher is wired.
         let mut dispatch_process_id: Option<String> = None;
         let mut dispatch_malo_id: Option<String> = None;
+        let mut dispatch_error: Option<String> = None;
         if let (Some(pid_val), Some(wf_name), Some(dispatcher)) =
             (pid, workflow.as_deref(), state.dispatcher.as_deref())
             && matches!(status, MessageStatus::Routed)
@@ -917,13 +1063,27 @@ pub(crate) async fn ingest_edifact(
                     );
                 }
                 Err(e) => {
-                    tracing::warn!(
+                    dead_letter_dispatch_failure(
+                        state.dl_sink.as_ref(),
+                        AuditContext::from_interchange(
+                            &env.header.sender_id,
+                            &env.header.receiver_id,
+                            &env.header.control_ref,
+                        )
+                        .with_message_type(message_type.as_deref().unwrap_or(""))
+                        .with_pid(pid_val)
+                        .with_tenant_id(state.tenant_id.to_string()),
+                        wf_name,
+                        &e,
+                    );
+                    tracing::error!(
                         workflow = %wf_name,
                         pid      = pid_val.as_u32(),
                         error    = %e,
-                        "EDIFACT REST ingest: Phase 2 command dispatch failed \
-                         (non-fatal — message was routed)",
+                        "EDIFACT REST ingest: Phase 2 command dispatch failed — dead-lettered",
                     );
+                    status = MessageStatus::DispatchFailed;
+                    dispatch_error = Some(format!("dispatch failed: {e}"));
                 }
             }
         }
@@ -935,7 +1095,7 @@ pub(crate) async fn ingest_edifact(
             status,
             process_id: dispatch_process_id,
             malo_id: dispatch_malo_id,
-            error: None,
+            error: dispatch_error,
         });
         parsed_msgs.push(msg);
     }
@@ -961,15 +1121,7 @@ pub(crate) async fn ingest_edifact(
         }
     }
 
-    let accepted = messages
-        .iter()
-        .filter(|m| {
-            !matches!(
-                m.status,
-                MessageStatus::ParseError | MessageStatus::MissingPid
-            )
-        })
-        .count();
+    let accepted = messages.iter().filter(|m| !m.status.is_rejected()).count();
     let rejected = messages.len() - accepted;
 
     let http_status = if messages.is_empty() || accepted == 0 {
@@ -1033,10 +1185,10 @@ UNH+1+UTILMD:D:11A:UN:S2.1'BGM+E01+55001+9'DTM+137:202608041045?+00:303'\
     /// `sender().and_then(|n| n.party_id.as_deref()).unwrap_or("")` — 47 sites.
     /// That empty string becomes the workflow's counterparty, and the
     /// counterparty is what the answer's outbox entry is addressed to. A
-    /// message with no `NAD+MS` therefore used to spawn a real process, run a
-    /// real Frist, and produce an answer addressed to nobody — surfacing much
-    /// later as an `OutboxExhausted` dead letter for partner `""` rather than
-    /// as the defective message it was.
+    /// message with no `NAD+MS` admitted at ingest would spawn a real process,
+    /// run a real Frist, and produce an answer addressed to nobody — surfacing
+    /// much later as an `OutboxExhausted` dead letter for partner `""` rather
+    /// than as the defective message it is.
     #[test]
     fn a_message_without_a_sender_party_is_refused() {
         let msg = utilmd(&format!("NAD+MR+{NB}::293'"));

@@ -170,6 +170,30 @@ pub enum FristShape {
 }
 
 impl FristShape {
+    /// The Frist as a German phrase — „bis 11:00 Uhr des 1. Werktags nach dem
+    /// Übertragungstag", „bis zum Ablauf des 4. Werktags" — for a sentence an
+    /// operator or an agent reads. Rendering from the shape is what keeps such a
+    /// sentence from stating a window the engine does not apply.
+    #[must_use]
+    pub fn beschreibung(self) -> String {
+        match self {
+            Self::WerktagAt { werktage, at } => format!(
+                "bis {:02}:{:02} Uhr des {werktage}. Werktags nach dem Übertragungstag",
+                at.hour(),
+                at.minute()
+            ),
+            Self::EndOfWerktag(n) => format!("bis zum Ablauf des {n}. Werktags nach Eingang"),
+            Self::SameDayAt(at) => {
+                format!(
+                    "bis {:02}:{:02} Uhr am Übertragungstag",
+                    at.hour(),
+                    at.minute()
+                )
+            }
+            Self::SameDay => "bis zum Ablauf des Übertragungstags".to_owned(),
+        }
+    }
+
     /// Resolve this Frist against the instant the message arrived.
     ///
     /// # Panics
@@ -1174,6 +1198,49 @@ pub const TECHNIKAENDERUNG_WERKTAGE: u32 = 10;
 /// anfrage an den MSB are stated identically.
 pub const GESCHAEFTSDATENANFRAGE_WERKTAGE: u32 = 1;
 
+/// Werktage the NB has to transmit Abrechnungsbrennwert and Zustandszahl after
+/// the LF's Anfrage (ORDERS 17103) arrives — GeLi Gas 3.0 Kap. 4.2, AWH GeLi
+/// Gas 2.0 Kap. 4.2.5 Nr. 2. See [`brennwert_zustandszahl_due`] for the second
+/// bound.
+pub const BRENNWERT_WERKTAGE: u32 = 10;
+
+/// When the NB must have transmitted Abrechnungsbrennwert and Zustandszahl for
+/// an Anfrage that arrived at `eingang` and asks for a Zeitspanne ending on
+/// `zeitspanne_bis`.
+///
+/// „Die Übermittlung erfolgt spätestens 10 Werktage nach Eingang der Anfrage
+/// des Lieferanten, aber nicht vor dem 10. Werktag des Monats der auf den Monat
+/// folgt, in den das Ende der durch den Lieferanten zuvor mitgeteilten
+/// Zeitspanne fällt" (BK7-24-01-009 GeLi Gas 3.0 Kap. 4.2). The Abrechnungs­
+/// brennwert of a month exists only from that 10. Werktag on, so where it lies
+/// beyond the ten Werktage after Eingang, it is the day the answer is due. A
+/// flat ten Werktage therefore reports the answer late for every Anfrage about
+/// the running or the previous month.
+#[must_use]
+pub fn brennwert_zustandszahl_due(
+    eingang: OffsetDateTime,
+    zeitspanne_bis: time::Date,
+    cal: HolidayCalendar,
+) -> OffsetDateTime {
+    let nach_eingang = crate::end_of_werktag_after(eingang, BRENNWERT_WERKTAGE, cal);
+    let monatsende = time::Date::from_calendar_date(
+        zeitspanne_bis.year(),
+        zeitspanne_bis.month(),
+        zeitspanne_bis.month().length(zeitspanne_bis.year()),
+    )
+    .unwrap_or(zeitspanne_bis);
+    let fruehester =
+        crate::end_of_day_berlin(crate::add_werktage(monatsende, BRENNWERT_WERKTAGE, cal));
+    nach_eingang.max(fruehester)
+}
+
+/// The NB's „Mitteilung zum weiteren Vorgehen zur Bestellung" on a Bestellung
+/// einer Konfiguration vom LF, in Werktage — „Unverzüglich, jedoch spätester
+/// ÜT ist der 1. WT nach dem ÜT von Nr. 1" (BK6-24-174 GPKE Teil 3 Kap. 1.3.2.2
+/// Nr. 2). The Änderung des Bilanzierungsverfahrens (ORDERS 17120, Prognose­
+/// grundlage) is ordered through this Use-Case (Kap. 1.1.2).
+pub const KONFIGURATION_MITTEILUNG_WERKTAGE: u32 = 1;
+
 /// Answer window on an INSRPT Störungsmeldung for a **kME ohne RLM or an mME**,
 /// in Werktage (WiM Strom Teil 2 Kap. 1.2 Nr. 2).
 pub const STOERUNGSMELDUNG_KME_WERKTAGE: u32 = 3;
@@ -1665,9 +1732,53 @@ pub fn operator_window(trigger_pid: u32, received: OffsetDateTime) -> OperatorWi
 
 #[cfg(test)]
 mod tests {
+    /// The phrase carries the shape's own numbers.
+    #[test]
+    fn the_beschreibung_renders_the_shape() {
+        assert_eq!(
+            FristShape::WerktagAt {
+                werktage: 1,
+                at: Time::from_hms(11, 0, 0).unwrap()
+            }
+            .beschreibung(),
+            "bis 11:00 Uhr des 1. Werktags nach dem Übertragungstag"
+        );
+        assert_eq!(
+            FristShape::EndOfWerktag(4).beschreibung(),
+            "bis zum Ablauf des 4. Werktags nach Eingang"
+        );
+    }
+
     use super::*;
     use std::collections::BTreeSet;
     use time::{Date, Month};
+
+    /// Ten Werktage after Eingang, unless the Brennwert of the month after the
+    /// Zeitspanne is not yet due by then (GeLi Gas 3.0 Kap. 4.2).
+    #[test]
+    fn the_brennwert_answer_waits_for_the_tenth_werktag_of_the_following_month() {
+        let eingang = time::macros::datetime!(2026-10-07 08:00 UTC);
+        // Zeitspanne ends in September: the 10. WT of October (14.10.) is
+        // earlier than ten Werktage after Eingang (21.10.).
+        assert_eq!(
+            brennwert_zustandszahl_due(
+                eingang,
+                time::macros::date!(2026 - 09 - 30),
+                HolidayCalendar::BdewMaKo
+            ),
+            crate::end_of_day_berlin(time::macros::date!(2026 - 10 - 21))
+        );
+        // Zeitspanne ends in October: the November Brennwert exists from the
+        // 10. WT of November (13.11.) on, and that is when the answer is due.
+        assert_eq!(
+            brennwert_zustandszahl_due(
+                eingang,
+                time::macros::date!(2026 - 10 - 15),
+                HolidayCalendar::BdewMaKo
+            ),
+            crate::end_of_day_berlin(time::macros::date!(2026 - 11 - 13))
+        );
+    }
 
     fn utc(y: i32, m: Month, d: u8, h: u8) -> OffsetDateTime {
         OffsetDateTime::new_utc(

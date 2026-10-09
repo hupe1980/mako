@@ -10,7 +10,6 @@
 //!
 //! This mirrors the `mako-engine` / `makod` split exactly:
 //! `mako-engine` defines traits only; `makod` wires axum + `SlateDB`.
-#![allow(clippy::doc_markdown)]
 //!
 //! # Modules
 //!
@@ -26,8 +25,14 @@
 
 #![deny(unsafe_code)]
 #![warn(clippy::pedantic)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::missing_errors_doc)]
+#![expect(
+    clippy::module_name_repetitions,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
+#![allow(
+    clippy::missing_errors_doc,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 
 pub mod bo4e;
 pub mod cloudevents;

@@ -1,12 +1,12 @@
 //! HTTP handlers for `productd`.
 
-use crate::rounding::RoundMoney;
 use axum::{
     Extension,
     extract::{Path, Query},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use grid_billing::RoundMoney;
 use mako_service::{ApiError, ApiResult, Json, cedar::CedarEnforcer, oidc::Claims};
 use rubo4e::current::{Energiemix, Tarifinfo, Tarifmerkmal, Tarifpreisblatt, Tariftyp};
 use rust_decimal::Decimal;
@@ -33,12 +33,10 @@ pub(crate) type Authz = Extension<std::sync::Arc<CedarEnforcer>>;
 /// Authorize `action` for the caller against the service tenant.
 ///
 /// Authentication establishes *who* is calling; this decides what they may do.
-/// The two are separate questions, and this service used to ask only the first:
-/// every route extracted `Claims` and, at most, compared the path's `lf_mp_id`
-/// with the token's tenant — which answers "is this my tenant's catalogue?",
-/// not "may this caller change its prices". Any token the verifier accepted for
-/// the tenant could `PUT` a new Arbeitspreis onto a live tariff, and the next
-/// `billingd` run would bill it.
+/// Comparing the path's `lf_mp_id` with the token's tenant answers "is this my
+/// tenant's catalogue?", not "may this caller change its prices" — without this
+/// check any token the verifier accepts for the tenant could `PUT` a new
+/// Arbeitspreis onto a live tariff, and the next `billingd` run would bill it.
 ///
 /// The denial is a bare `403`. Which rule refused, and for which subject, goes
 /// to the log: a caller holding a valid token learns that it may not, not which
@@ -1403,8 +1401,9 @@ pub fn compute_cost_breakdown(
             })?;
         energiesteuer + behg
     } else if sparte_upper.contains("STROM") {
-        // § 3 StromStG: 20,50 EUR/MWh = 2,05 ct/kWh.
-        pos.stromsteuer_ct_per_kwh.unwrap_or(dec!(2.05))
+        // § 3 StromStG: 20,50 EUR/MWh, from the one Stromsteuer series.
+        pos.stromsteuer_ct_per_kwh
+            .unwrap_or(grid_billing::STROMSTEUER_REGELSATZ_CT_PER_KWH)
     } else {
         // Fernwärme and Wasser bear neither Strom- nor Energiesteuer on the
         // delivery itself — what is owed is taxed in the fuel upstream — so

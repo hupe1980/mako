@@ -167,7 +167,7 @@ async fn flush(
                     "invoicd: ERP outbox permanent failure — dead-lettering (check ERP webhook config)"
                 );
                 // The attempt is already counted by the claim, so losing this
-                // write no longer means an endless retry — it only means the
+                // write does not mean an endless retry — it only means the
                 // row spends its remaining budget re-POSTing bytes the ERP has
                 // already refused before it dead-letters itself. Visible, but
                 // wasteful and wrong, so it is logged rather than discarded.

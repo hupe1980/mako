@@ -83,7 +83,10 @@ pub const fn ebd_fuer_antwort(imd_7081: &str) -> Option<&'static str> {
 ///
 /// The **first** gate of Kapitel 4: six questions the MSB must answer before it
 /// may price an offer at all, five of them from its own records.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent switch, not a state machine"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EsaAnfrage {
     /// Whether the requested Messprodukt is marked `Pflicht` in the Codeliste
@@ -263,7 +266,10 @@ fn angebot_erstellen() -> AntwortDetail {
 /// questions and eight of them have a boolean answer the MSB's own records
 /// give. Collapsing them into flag words would make the call sites unreadable
 /// and lose the one-field-per-Prüfschritt correspondence an auditor needs.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent switch, not a state machine"
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct EsaBestellung {
     /// End of the Bindungsfrist the MSB stated in its own Angebot.

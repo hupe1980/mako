@@ -18,6 +18,7 @@
 //! | `DELETE` | `/admin/malo/{malo_id}` | Remove a record |
 //! | `GET` | `/admin/malo/stats` | Per-tenant statistics |
 
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{
@@ -150,10 +151,6 @@ fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
 }
 
-fn forbidden() -> Response {
-    (StatusCode::FORBIDDEN, "Forbidden").into_response()
-}
-
 fn internal_error(e: impl std::fmt::Display) -> Response {
     tracing::error!("malo-admin-api internal error: {e}");
     (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
@@ -202,7 +199,7 @@ pub(crate) async fn handle_get(
             malo_id: Some(&malo_id),
         },
     ) {
-        return forbidden();
+        return ApiError::Forbidden.into_response();
     }
     let tenant_id = match resolve_tenant(&headers, &state.tenant_id) {
         Ok(id) => id,
@@ -251,7 +248,7 @@ pub(crate) async fn handle_put(
             malo_id: Some(&malo_id),
         },
     ) {
-        return forbidden();
+        return ApiError::Forbidden.into_response();
     }
     // Validate that the path parameter matches the payload MaLo-ID.
     if body.result.data_market_location.malo_id.as_ref() != malo_id {
@@ -323,7 +320,7 @@ pub(crate) async fn handle_delete(
             malo_id: Some(&malo_id),
         },
     ) {
-        return forbidden();
+        return ApiError::Forbidden.into_response();
     }
     let tenant_id = match resolve_tenant(&headers, &state.tenant_id) {
         Ok(id) => id,
@@ -362,7 +359,7 @@ pub(crate) async fn handle_stats(
             malo_id: None,
         },
     ) {
-        return forbidden();
+        return ApiError::Forbidden.into_response();
     }
     let tenants_res = state.cache.list_tenants().await;
     let tenant_ids = match tenants_res {

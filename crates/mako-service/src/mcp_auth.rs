@@ -551,10 +551,10 @@ impl McpAuth {
                         return resp;
                     }
                     // Cedar, when configured. The same-tenant clause its rules
-                    // carry is now defence in depth: the comparison above has
+                    // carry is defence in depth: the comparison above has
                     // already refused a foreign tenant, so a rule written
-                    // without that clause no longer authorises across tenants
-                    // on this surface.
+                    // without that clause cannot authorise across tenants on
+                    // this surface.
                     if let Some(ref cedar) = self.cedar {
                         let principal = crate::oidc::Claims(claims.clone()).principal();
                         if let Err(e) = cedar.check(&principal, "use-mcp", &self.tenant) {
@@ -609,7 +609,10 @@ impl McpAuth {
     /// short-circuit with.
     // The `Err` is a fully-formed HTTP response the caller returns as-is; boxing
     // it would add an allocation on every auth failure for no benefit.
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "the error carries the context its caller reports, and the path is not hot"
+    )]
     pub fn authorize(
         &self,
         headers: &axum::http::HeaderMap,
@@ -675,7 +678,10 @@ impl McpAuth {
     /// gets. The caller has already proved membership of the realm, so naming
     /// the tenant this deployment serves would tell them something they came
     /// without.
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "the error carries the context its caller reports, and the path is not hot"
+    )]
     fn check_token_tenant(&self, claim: Option<&str>) -> Result<(), axum::response::Response> {
         match claim {
             // Missing entirely: not an MCP caller. (Tenant-less tokens are only
@@ -744,7 +750,10 @@ impl McpAuth {
     /// A key is issued by the operator running this deployment, so its principal
     /// tenant is this service's tenant — the same-tenant clause every policy
     /// carries holds, and what remains for the policy to decide is the roles.
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "the error carries the context its caller reports, and the path is not hot"
+    )]
     fn check_key(&self, key: &McpApiKey, action: &str) -> Result<(), axum::response::Response> {
         self.check_principal(
             &crate::cedar::CedarPrincipal {
@@ -757,7 +766,10 @@ impl McpAuth {
     }
 
     /// Run the Cedar check if one is configured.
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "the error carries the context its caller reports, and the path is not hot"
+    )]
     fn check_principal(
         &self,
         principal: &crate::cedar::CedarPrincipal,

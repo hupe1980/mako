@@ -170,9 +170,15 @@ pub struct ManualBuchungParams {
 #[derive(Clone)]
 pub struct AccountingdMcpHandler {
     state: Arc<AccountingdMcpState>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     tool_router: ToolRouter<AccountingdMcpHandler>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     prompt_router: PromptRouter<AccountingdMcpHandler>,
 }
 
@@ -849,9 +855,17 @@ Confirm with post_manual_booking or by importing the bank file.",
         // owes roughly this much". Ranked, never auto-booked.
         let tol_pct = p.tolerance_pct.unwrap_or(2.0);
         let tol_factor = 1.0 + tol_pct / 100.0;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_precision_loss,
+            reason = "the value is bounded well inside the target type; a count or ratio reported as a float, never a money amount"
+        )]
         let lo = (p.amount_ct as f64 / tol_factor) as i64;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_precision_loss,
+            reason = "the value is bounded well inside the target type; a count or ratio reported as a float, never a money amount"
+        )]
         let hi = (p.amount_ct as f64 * tol_factor) as i64;
 
         // Candidate matching is on the balance cache (the authoritative balance
@@ -884,14 +898,21 @@ Confirm with post_manual_booking or by importing the bank file.",
                 // Amount proximity is the only signal here — the reference
                 // already failed to identify anyone. Scoring it as if it were
                 // two independent signals overstated the confidence.
-                #[allow(clippy::cast_precision_loss)]
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "a count or ratio reported as a float, never a money amount"
+                )]
                 let closeness = if p.amount_ct == 0 {
                     0.0_f64
                 } else {
                     1.0 - (balance_ct - p.amount_ct).unsigned_abs() as f64
                         / p.amount_ct.unsigned_abs() as f64
                 };
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "clamped to 0..=100 before the cast"
+                )]
                 let score = (closeness.clamp(0.0, 1.0) * 100.0).round() as u32;
                 // No fuzzy match is ever HIGH: an amount that happens to line up
                 // is not evidence of who paid. The exact rung above is the only
@@ -1048,9 +1069,8 @@ impl ServerHandler for AccountingdMcpHandler {
 /// Abschlagsforderung against every account due that day, `import_payments`
 /// books a ZAHLUNG per CAMT.054 entry, `update_abschlag` rewrites the monthly
 /// advance and the SEPA billing day, and `run_sepa_collection` emits a
-/// bank-submittable pain.008 carrying every mandate's IBAN. The policy used to
-/// exempt the whole surface as "read-only by construction"; five of the
-/// thirteen tools disprove that.
+/// bank-submittable pain.008 carrying every mandate's IBAN. Five of the thirteen
+/// tools write, so the surface is not "read-only by construction".
 ///
 /// Every tool is mapped, not only the five that write, because accountingd's
 /// *reads* are role-split too: `read-account` is open to any token of the

@@ -481,13 +481,9 @@ pub(crate) fn parse_interchange_buffered_impl(
 
 /// A configured parser for EDI@Energy messages and interchanges.
 ///
-/// `Parser` is the primary API for parsing with custom [`ParseConfig`].
-/// Construct with [`Parser::new`] (default config) or [`Parser::with_config`].
-///
-/// The [`Parser`] API is the primary API for parsing with custom [`ParseConfig`].
-/// Construct with [`Parser::new`] (default config) or [`Parser::with_config`].
-/// Use `Parser` directly whenever you need custom segment limits, a reference date, or the
-/// more advanced interchange paths.
+/// The primary API for parsing with custom [`ParseConfig`] — segment limits, a
+/// reference date, or the interchange paths. Construct with [`Parser::new`]
+/// (default config) or [`Parser::with_config`].
 ///
 /// # Example
 ///
@@ -735,7 +731,10 @@ impl Parser {
 /// the UNZ control reference or message count is mismatched; after that it
 /// returns `None` permanently.
 pub struct InterchangeIter {
-    #[expect(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "the type is spelled once, where it is used"
+    )]
     inner: MessageWindows<
         'static,
         std::iter::Map<
@@ -894,7 +893,10 @@ pub(crate) fn parse_interchange_full_with_arc_registry(
     parse_interchange_full_from_segments_with_registry(segments, &config, registry)
 }
 
-#[expect(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the signature fits the `map_err` it is passed to"
+)]
 fn parse_interchange_full_from_segments_with_registry(
     segments: Vec<OwnedSegment>,
     config: &ParseConfig,
@@ -1183,8 +1185,14 @@ pub(crate) fn dispatch_message_on_date(
 }
 
 /// Dispatch to a concrete `AnyMessage` variant based on the decoded type code.
-#[allow(unused_variables)] // params unused when all features are disabled
-#[allow(clippy::too_many_lines)]
+#[allow(
+    unused_variables,
+    reason = "params unused when all features are disabled"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one linear procedure; splitting it would scatter its steps across helpers used once"
+)]
 fn dispatch_by_type(
     msg_type_code: &str,
     segments: Vec<OwnedSegment>,

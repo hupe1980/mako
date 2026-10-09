@@ -193,6 +193,19 @@ pub enum KonfigurationState {
         /// Human-readable rejection reason from the MSB.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// No Festlegung states a consequence of the Konfigurationsbestellung going unanswered. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<KonfigurationState>,
+    },
 }
 
 impl KonfigurationState {
@@ -204,6 +217,16 @@ impl KonfigurationState {
             Self::Beauftragt(_) => "Beauftragt",
             Self::Bestaetigt { .. } => "Bestaetigt",
             Self::Abgelehnt { .. } => "Abgelehnt",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 }
@@ -262,10 +285,21 @@ impl CommandPayload for KonfigurationCommand {}
 /// send ORDERS 17134 to the MSB after confirming a supplier change (PID 55001).
 pub struct GpkeKonfigurationWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the Beauftragung waits for its ORDRSP
+/// (`Beauftragt`).
+fn window_open(label: &str, state: &KonfigurationState) -> bool {
+    label == KONFIGURATION_WINDOW_LABEL && matches!(state, KonfigurationState::Beauftragt(_))
+}
+
 impl Workflow for GpkeKonfigurationWorkflow {
     type State = KonfigurationState;
     type Event = KonfigurationEvent;
     type Command = KonfigurationCommand;
+
+    const DEADLINE_LABELS: &'static [&'static str] = &[KONFIGURATION_WINDOW_LABEL];
 
     /// Deadline compensation for the GPKE Konfiguration ORDRSP window.
     ///
@@ -276,18 +310,19 @@ impl Workflow for GpkeKonfigurationWorkflow {
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (KONFIGURATION_WINDOW_LABEL, KonfigurationState::Beauftragt(_)) => {
-                Some(KonfigurationCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| KonfigurationCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            KonfigurationState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             KonfigurationEvent::BeauftragungGesendet {
                 orders_pid,
@@ -318,18 +353,13 @@ impl Workflow for GpkeKonfigurationWorkflow {
                 },
                 other => other,
             },
-            KonfigurationEvent::DeadlineExpired { label, .. } => {
-                // Terminal states absorb late-firing deadlines without error.
-                match state {
-                    KonfigurationState::Bestaetigt { .. }
-                    | KonfigurationState::Abgelehnt { .. } => state,
-                    KonfigurationState::Beauftragt(data) => KonfigurationState::Abgelehnt {
-                        data,
-                        reason: format!("deadline expired: {label}"),
-                    },
-                    KonfigurationState::New => state, // should not happen; no-op
-                }
-            }
+            KonfigurationEvent::DeadlineExpired { label, .. } => match state {
+                KonfigurationState::Beauftragt(_) => KonfigurationState::FristAbgelaufen {
+                    label: label.to_string(),
+                    offen: Box::new(state),
+                },
+                other => other,
+            },
         }
     }
 
@@ -337,6 +367,10 @@ impl Workflow for GpkeKonfigurationWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             KonfigurationCommand::NbSendsBeauftragung {
                 orders_pid,
@@ -407,10 +441,7 @@ impl Workflow for GpkeKonfigurationWorkflow {
             }
 
             KonfigurationCommand::TimeoutExpired { deadline_id, label } => {
-                if matches!(
-                    state,
-                    KonfigurationState::Bestaetigt { .. } | KonfigurationState::Abgelehnt { .. }
-                ) {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![KonfigurationEvent::DeadlineExpired { deadline_id, label }].into())
@@ -487,7 +518,7 @@ impl Projection for KonfigurationProjection {
                 record.status = "Abgelehnt";
             }
             KonfigurationEvent::DeadlineExpired { .. } => {
-                record.status = "Abgelehnt";
+                record.status = "FristAbgelaufen";
             }
         }
     }

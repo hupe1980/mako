@@ -514,7 +514,8 @@ pub enum LegalReference {
     ///
     /// Governs time-variable (ToU) NNE for heat pumps, EV chargers, etc.
     Sect14aEnwg {
-        /// Module: Modul1 (flat reduction), Modul2 (HT/NT), or Modul3 (spot).
+        /// Module: Modul1 (pauschale Reduzierung), Modul2 (prozentuale
+        /// Arbeitspreis-Reduzierung), or Modul3 (zeitvariable Netzentgelte).
         module: Sect14aModule,
     },
     /// MsbG — Messstellenbetriebsgesetz (metering point operation).
@@ -603,32 +604,15 @@ impl LegalReference {
 ///
 /// Every rate used in a billing position must be traceable to a `TariffSource`.
 /// This enables operators and auditors to answer: *"Why was this rate used?"*
+///
+/// The engine settles from the published Preisblatt only, so that is the one
+/// origin there is; a source no settlement path produces is not a variant.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum TariffSource {
     /// Rate from the published and approved `PreisblattNetznutzung` tariff sheet.
     PublishedTariffSheet {
         /// Tariff sheet identifier or version, e.g. `"Preisblatt 2025 Q1"`.
         sheet_id: String,
-    },
-    /// Rate from a historical tariff (retroactive billing or correction).
-    HistoricalTariff {
-        /// Original valid_from date of the tariff.
-        valid_from: time::Date,
-    },
-    /// Regulatory rate mandated by a BNetzA decision.
-    RegulatoryTariff {
-        /// BNetzA decision reference.
-        decision_ref: &'static str,
-    },
-    /// Contract-specific rate negotiated between NB and customer.
-    ContractTariff {
-        /// Contract reference.
-        contract_ref: String,
-    },
-    /// Manual override by operator (requires documentation).
-    ManualOverride {
-        /// Reason for the override.
-        reason: String,
     },
 }
 
@@ -1477,6 +1461,7 @@ pub struct Grundpreis {
 /// Netzbetreiber and Gemeinde may agree lower figures (Satz 4); where they have,
 /// state them here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NiederspannungsEinstufung {
     /// Months of the Abrechnungsjahr in which the **gemessene** Leistung
     /// exceeded the Leistungswert — the statutory 30 kW, or the lower figure
@@ -1547,6 +1532,7 @@ impl NiederspannungsEinstufung {
 /// „unter Einschluß des Netznutzungsentgelts" over the whole supply. Both are
 /// supplied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Grenzpreisvergleich {
     /// The customer's Durchschnittspreis im Kalenderjahr, in ct/kWh, ohne USt.
     pub durchschnittspreis_ct_per_kwh: Decimal,
@@ -1578,6 +1564,7 @@ pub const KAV_GAS_GRENZMENGE_KWH: Decimal = rust_decimal::dec!(5_000_000);
 /// `Option`s let the ceiling check be skipped exactly when an over-charge is
 /// most likely to go unnoticed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Konzessionsabgabe {
     /// Published rate in ct/kWh.
     pub satz_ct_per_kwh: Decimal,

@@ -132,7 +132,7 @@ pub struct ProcessdState {
     pub tenant: String,
     /// Operator's own Marktpartner-ID (used for LFA command routing).
     pub own_mp_id: String,
-    /// `marktd` client — used by the §14a Steuerungsauftrag auto-ORDRSP module (N5).
+    /// `marktd` client — used by the §14a Steuerungsauftrag auto-ORDRSP module.
     pub marktd: Arc<mako_markt::marktd_client::MarktdClient>,
     /// When `true`, an `Accept` MSB-Wechsel verdict dispatches the Bestätigung
     /// itself; when `false` it goes to the approval queue.
@@ -662,7 +662,10 @@ mod rest {
     // The `Err` is a fully-formed HTTP response the caller returns as-is, the
     // same shape `mako_service::mcp_auth::authorize` uses; boxing it would add
     // an allocation on every denial for no benefit.
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "the error carries the context its caller reports, and the path is not hot"
+    )]
     fn authorize(
         enforcer: &CedarEnforcer,
         claims: &Claims,
@@ -908,9 +911,27 @@ mod rest {
         id_str: &str,
         approve: bool,
         decided_by: &str,
+        body: &[u8],
     ) -> axum::response::Response {
         let Ok(id) = id_str.parse::<uuid::Uuid>() else {
             return StatusCode::BAD_REQUEST.into_response();
+        };
+        // The operator's answer, when the entry does not carry one. An empty
+        // body is no answer; anything else must be exactly an
+        // `OperatorAnswer` — an unknown key is refused, not dropped.
+        let operator: crate::pg::approval::OperatorAnswer = if body
+            .iter()
+            .all(u8::is_ascii_whitespace)
+        {
+            crate::pg::approval::OperatorAnswer::default()
+        } else {
+            match serde_json::from_slice(body) {
+                Ok(a) => a,
+                Err(e) => {
+                    return mako_service::ApiError::unprocessable(format!("decision body: {e}"))
+                        .into_response();
+                }
+            }
         };
         let queue = PgApprovalQueue::new(pool);
         let target = if approve {
@@ -940,6 +961,34 @@ mod rest {
             return StatusCode::NO_CONTENT.into_response();
         };
 
+        // The body the command needs: frozen at enqueue where the answer was
+        // known then, otherwise stated by the operator now. Refused here —
+        // and the claim released — rather than sent and refused by `makod`.
+        let frozen = if approve {
+            entry.answer_payload.as_ref()
+        } else {
+            entry.reject_payload.as_ref()
+        };
+        let payload = match crate::pg::approval::decision_body(&entry, command, frozen, &operator) {
+            Ok(mut p) => {
+                let by = if approve {
+                    "approved_by"
+                } else {
+                    "rejected_by"
+                };
+                if let Some(m) = p.as_object_mut() {
+                    m.insert(by.into(), serde_json::json!(decided_by));
+                }
+                p
+            }
+            Err(refusal) => {
+                if let Err(e) = queue.unclaim(id, &state.tenant).await {
+                    tracing::error!(%id, error = %e, "processd: failed to release the queue claim");
+                }
+                return mako_service::ApiError::unprocessable(refusal.to_string()).into_response();
+            }
+        };
+
         // The key names the queue entry, not a role — the NB, LF and MSB all
         // enqueue here. The UUID makes it unique; the prefix is what an
         // operator reads in makod's idempotency log.
@@ -949,18 +998,7 @@ mod rest {
             command: command.to_owned(),
             malo_id: entry.malo_id.clone(),
             melo_id: None,
-            payload: if approve {
-                serde_json::json!({
-                    "process_id": entry.process_id,
-                    "approved_by": decided_by,
-                })
-            } else {
-                serde_json::json!({
-                    "process_id": entry.process_id,
-                    "reason": entry.reason,
-                    "rejected_by": decided_by,
-                })
-            },
+            payload,
         };
         if let Err(e) = state
             .makod
@@ -1025,9 +1063,15 @@ mod rest {
 
     /// Approve an approval-queue entry: claim it, then dispatch its command.
     ///
-    /// **Regulatory note:** `expires_at` carries the *business* answer Frist of
-    /// the queued process — 24 h (GPKE), 3/5/7/1 WT (WiM), 10 WT (GeLi Gas) —
-    /// less an hour of headroom. Operators must act before it.
+    /// A held Accept is dispatched with the answer frozen when it was queued;
+    /// an escalated entry needs the operator's answer in the body
+    /// (`OperatorAnswer`: `antwort_code`, `antwort_tree`, `antwort_codeliste`,
+    /// `bemerkung`) and is refused with `422` without the fields its command
+    /// needs.
+    ///
+    /// `expires_at` carries the *business* answer Frist of the queued process,
+    /// read from `mako_fristen::antwort`, less an hour of headroom. Operators
+    /// must act before it.
     pub async fn approve_queue_entry(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
@@ -1035,14 +1079,27 @@ mod rest {
         claims: Claims,
         headers: axum::http::HeaderMap,
         Path(id_str): Path<String>,
+        body: axum::body::Bytes,
     ) -> impl IntoResponse {
         if let Err(deny) = authorize(&enforcer, &claims, "decide-queue", &state.tenant) {
             return deny;
         }
-        decide_queue_entry(&state, pool, &id_str, true, &decided_by(&claims, &headers)).await
+        decide_queue_entry(
+            &state,
+            pool,
+            &id_str,
+            true,
+            &decided_by(&claims, &headers),
+            &body,
+        )
+        .await
     }
 
-    /// Reject an approval-queue entry: claim it, then dispatch its command.
+    /// Reject an approval-queue entry: claim it, then dispatch its refusal.
+    ///
+    /// The refusal's Antwortcode is the operator's, stated in the body like an
+    /// escalated approval; what the refusal is addressed by (the `tx_id` of a
+    /// Steuerungsauftrag, the MaLo of the row) comes from the entry.
     pub async fn reject_queue_entry(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
@@ -1050,11 +1107,20 @@ mod rest {
         claims: Claims,
         headers: axum::http::HeaderMap,
         Path(id_str): Path<String>,
+        body: axum::body::Bytes,
     ) -> impl IntoResponse {
         if let Err(deny) = authorize(&enforcer, &claims, "decide-queue", &state.tenant) {
             return deny;
         }
-        decide_queue_entry(&state, pool, &id_str, false, &decided_by(&claims, &headers)).await
+        decide_queue_entry(
+            &state,
+            pool,
+            &id_str,
+            false,
+            &decided_by(&claims, &headers),
+            &body,
+        )
+        .await
     }
 
     /// The one `standard` Bilanzkreis this deployment declared, if any.
@@ -1440,8 +1506,9 @@ mod rest {
                             "message": format!(
                                 "GeLi Gas Mindestvorlauffrist not met. Earliest allowed \
                                  Lieferbeginn for a Lieferantenwechsel: {fruehestens}. \
-                                 Requested: {lieferbeginn}. (Mindestens 10 WT vor Aufnahme \
-                                 der Belieferung — AWH GeLi Gas 2.0 Kap. 2.5.2 SD Lieferbeginn Nr. 1)"
+                                 Requested: {lieferbeginn}. (Mindestens {wt} WT vor Aufnahme \
+                                 der Belieferung — AWH GeLi Gas 2.0 Kap. 2.5.2 SD Lieferbeginn Nr. 1)",
+                                wt = mako_fristen::vorlauf::GAS_WECHSEL_VORLAUF_WT,
                             ),
                             "earliest_lieferbeginn": fruehestens.to_string(),
                             "berlin_date": today_berlin.to_string(),
@@ -1497,7 +1564,11 @@ mod rest {
                     "status": "initiated",
                     // The GNB's answer window, not the supplier's own 10 WT
                     // Vorlauffrist — two different clocks (Kap. 3.2.3).
-                    "message": "GeLi Gas Lieferbeginn (PID 44001) initiated — GNB-Antwort bis zum Ablauf des 4. Werktages (GeLi Gas Kap. 3.2.3)",
+                    "message": format!(
+                        "GeLi Gas Lieferbeginn (PID 44001) initiated — GNB-Antwort {}",
+                        mako_fristen::antwort::antwort_obligation(44_001)
+                            .map_or_else(String::new, |o| format!("{} ({})", o.frist.beschreibung(), o.source)),
+                    ),
                     "vorlauffrist_hinweis": vorlauf_hinweis
                 })),
             )

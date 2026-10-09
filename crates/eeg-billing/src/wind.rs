@@ -18,7 +18,7 @@
 //! Anlage 2 Nummer 7 — Anlage 2 Nummer 7 only defines how the Standortertrag
 //! that feeds the Gütefaktor is measured. See [`KORREKTURFAKTOR_STUETZWERTE`].
 
-use crate::rounding::RoundMoney;
+use grid_billing::RoundMoney;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 use time::Date;

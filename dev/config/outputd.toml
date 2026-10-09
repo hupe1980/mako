@@ -1,0 +1,17 @@
+# outputd.toml — local development: `just dev outputd` starts outputd with this file against
+# the PostgreSQL of dev/docker-compose.yml (`just infra-up`). Authentication is
+# off and the secrets are fixed strings. DO NOT use in production.
+#
+# Every key can be overridden by an environment variable — `OUTPUTD_<KEY>`, nested
+# keys joined with `__`. `outputd --help` lists the conventions.
+
+allow_insecure_no_auth = true
+
+port   = 9880
+tenant = "9900357000004"
+
+[database]
+url = "postgres://dev:dev@localhost:5432/outputd"
+
+[delivery]
+enabled = true

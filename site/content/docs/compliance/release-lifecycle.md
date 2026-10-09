@@ -3,26 +3,26 @@ title = "Release Lifecycle"
 description = "The BDEW format-version lifecycle — active, upcoming and archived — and how mako-engine runs two Formatversionen side by side without splitting a process."
 weight = 11
 +++
-EDI@Energy specifications are updated on a recurring cycle. This document describes how new BDEW releases are incorporated into `edi-energy`, how they are rolled out across the platform, and what the `xtask` automation covers.
+How a BDEW release enters `edi-energy`, which gates hold it, and what a mako release ships.
 
 ---
 
 ## BDEW Release Cycle
 
-Cutovers are **staggered per message type**, not synchronised on one annual date. A given format version carries its own `valid_from`, and different message types move on different dates in the same year.
+Cutovers are **staggered per message type**: each format version carries its own `valid_from`.
 
 | Event | Timing |
 |---|---|
-| BDEW publishes a new specification | **six months** before its Anwendungszeitpunkt — published 01.04., applies 01.10.; published 01.10., applies 01.04. (Allgemeine Festlegungen 6.1d §2.5.1/§2.5.2) |
+| BDEW publishes a new specification | on the Änderungsmanagement schedule, **six months** before its Anwendungszeitpunkt (Allgemeine Festlegungen 6.1d §2.5.1/§2.5.2); a deviating date names the Mitteilung that set it (`publikation_quelle`) |
 | The specification becomes **valid** | its own `valid_from` — **January 1**, **April 1** or **October 1** (e.g. `fv20260101`, `fv20260401`, `fv20261001`) |
 | The predecessor **expires** | the day before its successor's `valid_from` |
 | Transition window (both valid) | **none** — EDIFACT changes at a single Anwendungszeitpunkt (Allgemeine Festlegungen 6.1 §2.5) |
 
-`edi-energy` enforces this via `valid_from` / `valid_until` metadata in each profile JSON: a release is acceptable from its `valid_from` up to and including its `valid_until`, and the leading edge is hard. `ReleaseRegistry::with_receive_tolerance_days(n)` extends the *trailing* edge for an operator who chooses to accept a late-arriving message in the superseded format — a local receiving policy, defaulting to zero.
-
-The 15-Werktage Übergangszeitraum in Allgemeine Festlegungen §8.5 is the **XML** rule: it begins at the Anwendungszeitpunkt, counts Werktage, and selects the version by the Erfüllungsdatum stated in the message. It does not apply to the EDIFACT formats.
-
-Because the cutover dates differ per message type, a running instance normally holds several format versions valid at once — see [Annual Release Workflow](@/docs/compliance/annual-release-workflow.md) for the step-by-step rollout and its appendices.
+Each profile's `valid_from` / `valid_until` bound when it is acceptable, and
+the leading edge is hard; see [Transition Window Handling](#transition-window-handling)
+for the trailing edge. A running instance normally holds several format versions
+at once — the rollout steps are in the
+[Annual Release Workflow](@/docs/compliance/annual-release-workflow.md).
 
 ---
 
@@ -78,8 +78,8 @@ The predecessor gets its `valid_until` (the day before the successor's `valid_fr
 
 | Gate | What it holds |
 |---|---|
-| `tests/skeletons.rs` | every Anwendungsfall's skeleton validates against its own Prüfschablone |
-| `tests/validation_snapshot.rs` | the verdict of every fixture, rule id by rule id |
+| `tests/it/skeletons.rs` | every Anwendungsfall's skeleton validates against its own Prüfschablone |
+| `tests/it/validation_snapshot.rs` | the verdict of every fixture, rule id by rule id |
 | `validate-profiles` | `sources.json` ↔ files, dates and continuity, Prüfidentifikatoren, AHB rows ↔ MIG structure, every cited Bedingung has its text |
 | `import-profiles --check` | a committed profile against its PDF — SKIPs where the mirror is absent |
 | `check-pid-coverage` | the shipped columns against BDEW's Anwendungsübersicht |
@@ -100,14 +100,118 @@ When all profile and code changes are merged and `just ci` is green:
 1. **Bump the workspace version** with `cargo xtask bump-version <X.Y.Z>`.
 2. **Create and push a tag**: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. The `release.yml` GitHub Actions workflow runs automatically:
-   - Runs pre-flight `fmt` / `clippy` / `test` and `validate-profiles`.
-   - Publishes the workspace's library crates to [crates.io](https://crates.io)
-     via `cargo publish`, in dependency order.
+   - Runs pre-flight `fmt` / `clippy` / `test`, checks the tag equals the
+     workspace version and the publish order resolves, and runs
+     `validate-profiles`.
+   - Runs `just semver` (`cargo-semver-checks` against the previous `v*` tag,
+     over every crate the workflow publishes): a public-API break the new
+     version number does not admit stops the release before anything is
+     published. It runs only here, not in `just ci`.
+   - Publishes the 25 library crates to [crates.io](https://crates.io)
+     with `cargo publish`, in dependency order, by Trusted Publishing.
    - Builds and pushes multi-arch Docker images (`linux/amd64`, `linux/arm64`)
      for each service daemon to `ghcr.io/hupe1980/mako-<service>` (e.g.
-     `ghcr.io/hupe1980/mako-makod`) with tags `X.Y.Z`, `X.Y`, and `latest`.
+     `ghcr.io/hupe1980/mako-makod`) with tags `X.Y.Z`, `X.Y`, and `latest`,
+     and attests each image and each binary inside it.
    - Builds and publishes the [`makotest`](@/docs/reference/makotest.md) Python
      package to [PyPI](https://pypi.org/project/makotest/).
+   - Creates the GitHub Release `vX.Y.Z` carrying the evidence pack, the
+     CycloneDX SBOMs and the VEX document.
+
+### What a release carries
+
+A release answers two questions for an operator, an auditor or an incident
+responder: what is in it, and who built it. Each answer is an artefact a third
+party checks without trusting this repository.
+
+| Artefact | Where | How to check it |
+|---|---|---|
+| **Dependency manifest in every binary** | each service binary, `.dep-v0` section (`cargo auditable`) | `rust-audit-info <binary>` or `cargo audit bin <binary>` on a binary copied out of the image |
+| **Image provenance and SBOM** (BuildKit, `provenance: mode=max`, `sbom: true`) | the image index on ghcr.io | `docker buildx imagetools inspect <image>` lists the attestation manifests |
+| **CycloneDX SBOM per service binary** | GitHub Release assets `<service>_bin.cdx.json` | any CycloneDX reader |
+| **Build-provenance and SBOM attestations** for each image and each binary | GitHub's attestation store and, for images, the registry | `gh attestation verify oci://ghcr.io/hupe1980/mako-makod:X.Y.Z --repo hupe1980/mako`; add `--predicate-type https://cyclonedx.org/bom` for the SBOM |
+| **VEX** for every advisory `deny.toml` ignores | GitHub Release asset `vex.json` (OpenVEX) | any OpenVEX consumer, e.g. a scanner reading the SBOM |
+| **Evidence pack** | GitHub Release asset `evidence-vX.Y.Z.json`, itself attested | `gh attestation verify evidence-vX.Y.Z.json --repo hupe1980/mako` |
+
+**The manifest survives `strip`.** `cargo auditable` writes the dependency list
+into a `.dep-v0` section, and the Dockerfile's GNU `strip` keeps it. Each
+builder stage reads the manifest back from every stripped binary with
+`rust-audit-info` and fails the image build when one is absent; the release
+reads it once more from the binaries it extracts from the pushed images.
+
+**The SBOMs.** `cargo cyclonedx` describes each service binary from the
+lockfile's resolved graph, without build-time dependencies, and `processd`
+with the `integrated` feature the image builds it with. Regulation (EU)
+2024/2847 Annex I Part II point (1) asks a manufacturer to draw up „a software
+bill of materials in a commonly used and machine-readable format covering at
+the very least the top-level dependencies"; Annex VII point 2(b) places it in
+the technical documentation, and Annex VII point 8 provides it to a market
+surveillance authority on reasoned request. Whether those obligations bind mako
+depends on its role under the Regulation, which this page does not determine.
+
+**VEX.** `release/vex.json` carries one OpenVEX statement per RustSec ID in
+`deny.toml`'s `[advisories] ignore` list — status, justification and impact
+statement — so a scanner does not re-raise an advisory the project has
+already assessed. `cargo xtask check-vex` holds the two lists equal in both
+directions and, where a local RustSec database is present, refuses a statement
+naming a different crate than the advisory does. The Regulation does not name
+VEX; it is the machine-readable form chosen here for documenting how a known
+vulnerability is addressed (Annex I Part II point (2)).
+
+**Who built it.** Every attestation is a keyless Sigstore bundle signed with
+the release job's OIDC identity: repository, workflow file and commit are in
+the certificate, and no signing key exists to leak. GitHub's documentation
+(*Artifact attestations*) states that artifact attestations alone provide SLSA
+v1.0 Build Level 2.
+
+**Publishing without a stored secret.** crates.io trusts repository
+`hupe1980/mako`, workflow `release.yml` and environment `crates-io` for each
+crate. `rust-lang/crates-io-auth-action` exchanges the job's OIDC token for a
+crates.io token valid for 30 minutes, revoked when the job ends; because 25
+verified publishes take longer than that, each crate mints its own immediately
+before it publishes. No repository secret can publish anything. Trusted
+Publishing takes over an existing crate only: a new crate is published once by
+hand, then given a trusted publisher on crates.io, and the release refuses a
+crate crates.io does not know yet, by name, before uploading anything. PyPI
+works the same way (below).
+
+**One compiler.** `rust-toolchain.toml` names the toolchain. Every workflow job
+and the Docker `chef` stage assert that the active `rustc` is that channel and
+fail otherwise, so an override that would compile a release with a different
+compiler cannot pass silently.
+
+**Pinned supply chain.** Every third-party action is pinned to a full commit
+SHA with its release tag in a trailing comment, every Dockerfile base image to
+an `@sha256:` digest, and every workflow grants `contents: read` by default with
+each job declaring what more it needs. `cargo xtask check-action-pins` refuses a
+tag-pinned `uses:`, a digest-less `FROM` and a wider workflow default; Dependabot
+proposes the next SHA or digest. OpenSSF Scorecard scores the repository weekly
+(`scorecard.yml`), publishes the result and fails below a recorded floor.
+
+#### The evidence pack
+
+`cargo xtask evidence-pack` assembles `evidence-vX.Y.Z.json` in the last release
+job from what the earlier jobs produced:
+
+| Section | Content |
+|---|---|
+| `fidelity` | `DAMAGE_BUDGET` and `SILENT_PERMIT_BUDGET` from `extraction_fidelity.rs`, and the values the test measured on the release commit |
+| `outbound_sweep` | the outbound conformance sweep's per-PID result |
+| `guards` | every recipe of `just ci` with its exit status — the single-`cargo xtask` recipes run in the release job, the workspace builds ran as `preflight` |
+| `mutation_score` | the mutation score |
+| `release_lead_time` | the lead time from BDEW publication to a shipped profile |
+| `sbom` | the SHA-256 of each CycloneDX document |
+| `attestations` | per service: the image index digest, the binary digests and the URL of each attestation |
+
+`outbound_sweep`, `mutation_score` and `release_lead_time` have no producer in
+the release workflow, so every pack reads `not measured` for them.
+
+**A section without its producer reads `not measured`, never a zero**, with a
+`reason` and no figure. `cargo xtask evidence-pack --check` refuses
+a pack with a section absent, a status other than `measured` or `not measured`,
+a `measured` section without its figures, a fidelity figure over budget, or a
+guard that exited non-zero — and the GitHub Release is not created from a
+refused pack.
 
 ### The `makotest` Python package
 
@@ -121,11 +225,9 @@ x86_64/aarch64, Windows x86_64) rather than interpreter versions. Linux wheels
 build inside a `manylinux` container so they install on distros older than the
 runner.
 
-Each matrix entry passes its `target` to `maturin build` explicitly rather than
-relying on the runner's host architecture. The Intel macOS wheel is
-**cross-compiled from the Apple Silicon runner**: because the extension is abi3
-and `pyo3/extension-module` leaves the Python symbols undefined, nothing links
-against libpython, so no Intel runner or Intel interpreter is required.
+Each matrix entry passes its `target` to `maturin build`; the Intel macOS
+wheel is cross-compiled from the Apple Silicon runner, since an abi3 extension
+does not link libpython.
 
 Publication uses **PyPI Trusted Publishing** (OIDC) — no API token is stored.
 PyPI is configured to trust `hupe1980/mako` with workflow `release.yml`; the
@@ -143,19 +245,10 @@ distroless) via `docker buildx bake`. See the
 [makod Operator Guide](@/docs/services/makod.md#docker-deployment) for image details and
 deployment patterns.
 
-To read the delta between two annual releases — for the release PR's summary
-and for reviewing what the Festlegung changed:
-
-```bash
-cargo xtask profile-diff utilmd fv20251001 fv20261001
-cargo xtask profile-diff utilmd fv20251001 fv20261001 --pid 55001
-```
-
-It lists which Prüfidentifikatoren appeared or were withdrawn and, per
-Prüfidentifikator, the places whose status changed, the codes that gained or
-lost an operand, and the Bedingungen and Pakete that were rewritten. Places are
-named by where they sit and what the MIG calls them, because the MIG renumbers
-its segments between Nachrichtentypversionen.
+`cargo xtask profile-diff utilmd fv20251001 fv20261001 [--pid 55001]` reads
+the delta between two releases (see [CI Gates](#ci-gates)); places are named by
+position and MIG name, because the MIG renumbers its segments between
+Nachrichtentypversionen.
 
 ---
 
@@ -176,25 +269,17 @@ time and read as data:
 Adding a message type or a Formatversion is therefore an import and a
 `sources.json` entry — never a generated-source review.
 
-A profile stays compiled in for as long as `sources.json` names it, and is
-deleted when no deployment can still receive its format. Nothing is archived
-behind a feature flag: a Formatversion is either shipped or gone.
-
 ---
 
 ## Transition Window Handling
 
-**The EDIFACT cut-over has no Übergangsfrist.** A message is validated against
-the profile in force on its date; the day the successor applies, the predecessor
-stops being acceptable. The 15-Werktage Übergangszeitraum of Allgemeine
-Festlegungen § 8.5 is the **XML** rule and does not transfer — it starts at the
-Anwendungszeitpunkt, counts Werktage rather than calendar days, and selects by
-the Erfüllungsdatum stated in the message rather than by when it was sent.
-`DEFAULT_RECEIVE_TOLERANCE_DAYS` is therefore `0`.
-
-An operator who chooses to accept a late-arriving message in the superseded
-format sets its own trailing-edge tolerance. It is an inbound policy, not a
-licence to send late:
+**The EDIFACT cut-over has no Übergangsfrist** (Allgemeine Festlegungen 6.1
+§2.5): the day the successor applies, the predecessor stops being acceptable.
+The 15-Werktage Übergangszeitraum of § 8.5 is the **XML** rule — it counts
+Werktage from the Anwendungszeitpunkt and selects by the Erfüllungsdatum in the
+message. `DEFAULT_RECEIVE_TOLERANCE_DAYS` is therefore `0`; an operator who
+accepts late-arriving messages in the superseded format sets an inbound
+trailing-edge tolerance:
 
 ```rust
 use edi_energy::Platform;

@@ -1,7 +1,7 @@
 [package]
 name             = "processd"
 version.workspace = true
-description      = "Process decision engine for German energy market (LF auto-response + NB Anmeldung STP)"
+description      = "Process decision daemon: answers the published Entscheidungsbäume for NB, LF and MSB and queues what it cannot decide"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -105,7 +105,6 @@ mako-wim      = { workspace = true }
 mako-pruefung  = { workspace = true }
 
 anyhow             = { workspace = true }
-thiserror          = { workspace = true }
 axum               = { version = "0.8", features = [] }
 # Exact percent arithmetic for the E_0623 Tranchen-Prüfschritte: the shares are
 # summed and compared against the one the LFN registered.
@@ -114,7 +113,6 @@ serde              = { workspace = true }
 serde_json         = { workspace = true }
 toml               = { version = "0.8", default-features = false, features = ["parse"] }
 time               = { workspace = true }
-time-tz            = { workspace = true }
 uuid               = { workspace = true }
 tokio              = { version = "1", features = ["full"] }
 tokio-util         = { workspace = true }
@@ -123,12 +121,12 @@ mako-service       = { workspace = true, features = ["otel", "cedar", "oidc", "m
 rmcp               = { workspace = true }
 schemars           = { workspace = true }
 secrecy            = "0.10"
-subtle             = "2"
 reqwest            = { workspace = true }
 prometheus         = "0.14"
 sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json"] }
 
 [dev-dependencies]
+mako-service = { workspace = true, features = ["testing"] }
 mako-markt   = { workspace = true }
 # The LF answer path is a contract between two producers (`mako-gpke`,
 # `mako-geli-gas`) and one consumer. The round-trip tests build the event with
@@ -145,3 +143,6 @@ tokio        = { version = "1", features = ["full"] }
 serde_json   = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+
+[lints]
+workspace = true

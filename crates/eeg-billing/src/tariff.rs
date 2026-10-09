@@ -197,7 +197,8 @@ pub type EegSettleTariffKleinunternehmer<'a> = EegSettleTariff<'a>;
 
 /// Return `true` when the settlement output can be turned into a billing document.
 ///
-/// `NoData` and `PriceMissing` produce empty documents (no positions to bill);
+/// `NoData`, `PriceMissing` and `FassungNichtTabelliert` produce empty
+/// documents (no positions to bill);
 /// `Sanctioned` produces a EUR 0 audit line via `settlement_to_line_items()`.
 /// `FoerderungBeendet` produces an empty document.
 /// `Calculated` produces the normal positions.
@@ -205,6 +206,8 @@ pub type EegSettleTariffKleinunternehmer<'a> = EegSettleTariff<'a>;
 pub fn is_billable(output: &SettleOutput) -> bool {
     !matches!(
         output.status,
-        SettlementStatus::NoData | SettlementStatus::PriceMissing
+        SettlementStatus::NoData
+            | SettlementStatus::PriceMissing
+            | SettlementStatus::FassungNichtTabelliert
     )
 }

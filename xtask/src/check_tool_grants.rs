@@ -637,7 +637,6 @@ fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bo
             format!("governed consumer: {agents} specialists"),
         ),
         ("README.md", format!("agentd<br/>{agents} specialists")),
-        ("README.md", format!("**{agents} specialist manifests**")),
         ("README.md", format!("agent plane — {agents} specialists")),
         (
             "site/templates/index.html",

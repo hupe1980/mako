@@ -4,6 +4,7 @@
 //!   PUT  /api/v1/melos/:id
 //!   GET  /api/v1/melos/:id
 
+use crate::state::AppState;
 use std::sync::Arc;
 
 use axum::{
@@ -16,10 +17,7 @@ use mako_markt::{
     cloudevents::{EventExtensions, MarktEvent},
     domain::{MaloId, MeloId},
     error::MdmError,
-    repository::{
-        AppState, CorrelationIndex, MaloRepository, MeloRepository, PartnerRepository,
-        SubscriptionRepository,
-    },
+    repository::MeloRepository,
 };
 use mako_service::Json;
 use rubo4e::current::{Messlokation, Standorteigenschaften};
@@ -127,22 +125,15 @@ pub struct MeloResponse {
         (status = 409, description = "Version conflict"),
     )
 )]
-pub async fn put_melo<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn put_melo(
+    State(state): State<Arc<AppState>>,
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     headers: HeaderMap,
     claims: Claims,
     Path(id): Path<String>,
     Json(req): Json<MeloUpsertRequest>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "write-melo", &state.tenant)
         .is_err()
@@ -273,19 +264,12 @@ where
         (status = 404, description = "Not found"),
     )
 )]
-pub async fn get_melo<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn get_melo(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(id): Path<String>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "read-melo", &state.tenant)
         .is_err()
@@ -347,8 +331,7 @@ where
 /// `NetworkConstraintDocument` cross-references and Gas billing zone routing.
 ///
 /// Returns 404 when the MeLo has no `standorteigenschaften` column populated yet.
-/// Use `PUT /api/v1/melos/{id}` with a `data.standorteigenschaften` field to populate it,
-/// or wait for WiM Stammdaten auto-population (Roadmap N3).
+/// Use `PUT /api/v1/melos/{id}` with a `data.standorteigenschaften` field to populate it.
 #[utoipa::path(
     get,
     path = "/api/v1/melos/{id}/standorteigenschaften",
@@ -359,19 +342,12 @@ where
         (status = 404, description = "MeLo not found or no Standorteigenschaften"),
     )
 )]
-pub async fn get_melo_standorteigenschaften<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn get_melo_standorteigenschaften(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(id): Path<String>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "read-melo", &state.tenant)
         .is_err()

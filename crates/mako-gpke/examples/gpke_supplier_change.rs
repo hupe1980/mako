@@ -21,6 +21,7 @@
 //! ```
 
 use edi_energy::{AnyMessage, EdiEnergyMessage, Platform};
+use mako_engine::process::RunOptions;
 use mako_engine::{
     builder::EngineBuilder,
     deadline::{Deadline, DeadlineStore, InMemoryDeadlineStore},
@@ -208,29 +209,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[3/6] Dispatching ReceiveUtilmd...");
 
     let envs = process
-        .execute(SupplierChangeCommand::ReceiveUtilmd {
-            pid,
-            sender: sender.clone(),
-            receiver: receiver.clone(),
-            location_id: location.clone(),
-            document_date: document_date.clone(),
-            process_date: process_date.clone(),
-            message_ref: msg_ref.clone(),
-            received_at: time::OffsetDateTime::now_utc(),
-            validation_passed,
-            validation_errors: validation_errors.clone(),
-            bilanzierungsgebiet: None,
-            bilanzierungsmethode: None,
-            transaktionsgrund: None,
-            transaktionsgrund_ergaenzung: None,
-            veraeusserungsform: None,
-            tranchengroesse_prozent: None,
-            vorgangsnummer: None,
-            produktpaket_id: Some("1".to_owned()),
-            kunde_name: None,
-            kunde_namensformat: None,
-            fallgruppe: None,
-        })
+        .run(
+            SupplierChangeCommand::ReceiveUtilmd {
+                pid,
+                sender: sender.clone(),
+                receiver: receiver.clone(),
+                location_id: location.clone(),
+                document_date: document_date.clone(),
+                process_date: process_date.clone(),
+                message_ref: msg_ref.clone(),
+                received_at: time::OffsetDateTime::now_utc(),
+                validation_passed,
+                validation_errors: validation_errors.clone(),
+                bilanzierungsgebiet: None,
+                bilanzierungsmethode: None,
+                transaktionsgrund: None,
+                transaktionsgrund_ergaenzung: None,
+                veraeusserungsform: None,
+                tranchengroesse_prozent: None,
+                vorgangsnummer: None,
+                produktpaket_id: Some("1".to_owned()),
+                kunde_name: None,
+                kunde_namensformat: None,
+                fallgruppe: None,
+            },
+            RunOptions::new(),
+        )
         .await?;
 
     for env in &envs {
@@ -286,7 +290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_causation(utilmd_event_id.into()); // From<EventId> for CausationId
 
     let aperak_envs = process
-        .execute_with(
+        .run(
             SupplierChangeCommand::SendAntwort {
                 antwort: nb_antwort(true, None),
                 // Build GPKE Teil 3/4 post-acceptance obligations via the
@@ -300,7 +304,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
                 lfa_lieferende: None,
             },
-            antwort_ctx,
+            RunOptions::new().context(antwort_ctx),
         )
         .await?;
 
@@ -342,7 +346,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("[5/6] Activating supply relationship...");
 
-    let activate_envs = process.execute(SupplierChangeCommand::Activate).await?;
+    let activate_envs = process
+        .run(SupplierChangeCommand::Activate, RunOptions::new())
+        .await?;
     for env in &activate_envs {
         println!("  ✓ {} (seq {})", env.event_type, env.sequence_number);
     }
@@ -400,29 +406,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("[+] Guard: stale ReceiveUtilmd on completed process is rejected...");
     let guard_err = process
-        .execute(SupplierChangeCommand::ReceiveUtilmd {
-            pid,
-            sender: sender.clone(),
-            receiver: receiver.clone(),
-            location_id: location.clone(),
-            document_date: document_date.clone(),
-            process_date: process_date.clone(),
-            message_ref: msg_ref.clone(),
-            received_at: time::OffsetDateTime::now_utc(),
-            validation_passed: true,
-            validation_errors: vec![],
-            bilanzierungsgebiet: None,
-            bilanzierungsmethode: None,
-            transaktionsgrund: None,
-            transaktionsgrund_ergaenzung: None,
-            veraeusserungsform: None,
-            tranchengroesse_prozent: None,
-            vorgangsnummer: None,
-            produktpaket_id: Some("1".to_owned()),
-            kunde_name: None,
-            kunde_namensformat: None,
-            fallgruppe: None,
-        })
+        .run(
+            SupplierChangeCommand::ReceiveUtilmd {
+                pid,
+                sender: sender.clone(),
+                receiver: receiver.clone(),
+                location_id: location.clone(),
+                document_date: document_date.clone(),
+                process_date: process_date.clone(),
+                message_ref: msg_ref.clone(),
+                received_at: time::OffsetDateTime::now_utc(),
+                validation_passed: true,
+                validation_errors: vec![],
+                bilanzierungsgebiet: None,
+                bilanzierungsmethode: None,
+                transaktionsgrund: None,
+                transaktionsgrund_ergaenzung: None,
+                veraeusserungsform: None,
+                tranchengroesse_prozent: None,
+                vorgangsnummer: None,
+                produktpaket_id: Some("1".to_owned()),
+                kunde_name: None,
+                kunde_namensformat: None,
+                fallgruppe: None,
+            },
+            RunOptions::new(),
+        )
         .await
         .unwrap_err();
     assert!(

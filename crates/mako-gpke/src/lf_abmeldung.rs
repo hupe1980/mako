@@ -35,7 +35,7 @@
 //!
 //! - **BDEW GPKE Teil 2 §2.5** — NB-seitiges Lieferende
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format
-//! - **APERAK AHB 1.0 § 2.4.1** — technical acknowledgement, **45 Minuten** on a
+//! - **APERAK AHB 1.1 § 2.4.1** — technical acknowledgement, **45 Minuten** on a
 //!   weekday for a UTILMD. A separate clock from the business answer window,
 //!   which GPKE Teil 2 states as a wall-clock instant on the 1. Werktag nach
 //!   dem ÜT.
@@ -65,7 +65,7 @@ pub const LF_ABMELDUNG_PIDS: &[u32] = &[55007];
 /// Deadline label for the **business** answer window — 05:00 Uhr des 1. WT nach
 /// dem ÜT (GPKE Teil 2 § 2.5.2.2), resolved by `mako_fristen::antwort`.
 ///
-/// Not the APERAK clock: that is 45 Minuten for a UTILMD (APERAK AHB 1.0
+/// Not the APERAK clock: that is 45 Minuten for a UTILMD (APERAK AHB 1.1
 /// § 2.4.1) and rides `mako_fristen::APERAK_STROM_WINDOW_LABEL`.
 pub const LF_ABMELDUNG_ANTWORT_WINDOW_LABEL: &str = "gpke-lf-abmeldung-antwortfrist";
 
@@ -111,15 +111,6 @@ pub enum LfAbmeldungEvent {
     },
     /// Supply relationship ended per NB notice.
     Beendet,
-    /// APERAK 29001 dispatched for technical failure.
-    AperakFehlerDispatched {
-        /// APERAK PID.
-        aperak_pid: Pruefidentifikator,
-        /// Error reason.
-        reason: String,
-        /// Outbound APERAK message reference.
-        outbound_ref: MessageRef,
-    },
     /// Process rejected due to validation failure or deadline expiry.
     Rejected {
         /// Human-readable reason.
@@ -141,7 +132,6 @@ impl EventPayload for LfAbmeldungEvent {
             Self::ValidationPassed { .. } => "LfAbmeldungValidationPassed",
             Self::AntwortGesendet { .. } => "LfAbmeldungAntwortGesendet",
             Self::Beendet => "LfAbmeldungBeendet",
-            Self::AperakFehlerDispatched { .. } => "LfAbmeldungAperakFehlerDispatched",
             Self::Rejected { .. } => "LfAbmeldungRejected",
             Self::DeadlineExpired { .. } => "LfAbmeldungDeadlineExpired",
         }
@@ -207,6 +197,19 @@ pub enum LfAbmeldungState {
         /// Human-readable reason.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// GPKE Teil 2 Kap. 2.5.2.2 gives the LF its answer window on the NB's Abmeldung and no consequence of missing it. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<LfAbmeldungState>,
+    },
 }
 
 impl LfAbmeldungState {
@@ -220,6 +223,16 @@ impl LfAbmeldungState {
             Self::AntwortGesendet { .. } => "AntwortGesendet",
             Self::Beendet(_) => "Beendet",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -227,6 +240,7 @@ impl LfAbmeldungState {
     #[must_use]
     pub fn data(&self) -> Option<&LfAbmeldungData> {
         match self {
+            Self::FristAbgelaufen { offen, .. } => offen.data(),
             Self::Eingegangen(d) | Self::ValidationPassed(d) | Self::Beendet(d) => Some(d),
             Self::AntwortGesendet { data, .. } => Some(data),
             Self::New | Self::Rejected { .. } => None,
@@ -275,13 +289,6 @@ pub enum LfAbmeldungCommand {
     },
     /// Record that the supply relationship has ended.
     BeendenBestaetigen,
-    /// Dispatch APERAK 29001 for technical processing failure.
-    DispatchAperakFehler {
-        /// Error reason.
-        reason: String,
-        /// Outbound APERAK message reference.
-        outbound_ref: MessageRef,
-    },
     /// A registered deadline fired; close the process.
     TimeoutExpired {
         /// Unique deadline ID.
@@ -306,25 +313,40 @@ impl CommandPayload for LfAbmeldungCommand {}
 /// ```
 pub struct GpkeLfAbmeldungWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the LF still owes its answer
+/// (`Eingegangen`, `ValidationPassed`).
+fn window_open(label: &str, state: &LfAbmeldungState) -> bool {
+    label == LF_ABMELDUNG_ANTWORT_WINDOW_LABEL
+        && matches!(
+            state,
+            LfAbmeldungState::Eingegangen(_) | LfAbmeldungState::ValidationPassed(_)
+        )
+}
+
 impl Workflow for GpkeLfAbmeldungWorkflow {
     type State = LfAbmeldungState;
     type Event = LfAbmeldungEvent;
     type Command = LfAbmeldungCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[LF_ABMELDUNG_ANTWORT_WINDOW_LABEL];
+
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (LF_ABMELDUNG_ANTWORT_WINDOW_LABEL, LfAbmeldungState::Eingegangen(_))
-            | (LF_ABMELDUNG_ANTWORT_WINDOW_LABEL, LfAbmeldungState::ValidationPassed(_)) => {
-                Some(LfAbmeldungCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| LfAbmeldungCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            LfAbmeldungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             LfAbmeldungEvent::AnkuendigungErhalten {
                 location_id,
@@ -373,17 +395,17 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                 LfAbmeldungState::AntwortGesendet { data, .. } => LfAbmeldungState::Beendet(data),
                 other => other,
             },
-            LfAbmeldungEvent::AperakFehlerDispatched { reason, .. } => LfAbmeldungState::Rejected {
-                reason: format!("APERAK 29001: {reason}"),
-            },
             LfAbmeldungEvent::Rejected { reason } => LfAbmeldungState::Rejected {
                 reason: reason.clone(),
             },
             LfAbmeldungEvent::DeadlineExpired { label, .. } => match state {
-                LfAbmeldungState::Beendet(_) | LfAbmeldungState::Rejected { .. } => state,
-                _ => LfAbmeldungState::Rejected {
-                    reason: format!("deadline expired: {label}"),
-                },
+                LfAbmeldungState::Eingegangen(_) | LfAbmeldungState::ValidationPassed(_) => {
+                    LfAbmeldungState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
+                }
+                other => other,
             },
         }
     }
@@ -392,6 +414,10 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             LfAbmeldungCommand::ReceiveAnkuendigung {
                 pid,
@@ -433,8 +459,8 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                     events.push(LfAbmeldungEvent::ValidationPassed {
                         message_ref: message_ref.clone(),
                     });
-                    // F-038: APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.0 §2.4.
-                    // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
+                    // APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.1 §2.4.
+                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
                     let outbox = vec![
                         // The business notification. `processd`'s LF module
                         // decides this process, and it only ever sees a message
@@ -463,8 +489,8 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                     events.push(LfAbmeldungEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
-                    // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
+                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
                             receiver_gln.as_str(),
@@ -532,35 +558,12 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                 Ok(vec![LfAbmeldungEvent::Beendet].into())
             }
 
-            LfAbmeldungCommand::DispatchAperakFehler {
-                reason,
-                outbound_ref,
-            } => {
-                match state {
-                    LfAbmeldungState::Eingegangen(_) | LfAbmeldungState::ValidationPassed(_) => {}
-                    _ => {
-                        return Err(WorkflowError::invalid_state(
-                            "Eingegangen or ValidationPassed",
-                            state.label(),
-                        ));
-                    }
+            LfAbmeldungCommand::TimeoutExpired { deadline_id, label } => {
+                if !window_open(&label, lapsed) {
+                    return Ok(vec![].into());
                 }
-                let aperak_pid = Pruefidentifikator::new(29_001)
-                    .map_err(|e| WorkflowError::rejected(e.clone()))?;
-                Ok(vec![LfAbmeldungEvent::AperakFehlerDispatched {
-                    aperak_pid,
-                    reason,
-                    outbound_ref,
-                }]
-                .into())
+                Ok(vec![LfAbmeldungEvent::DeadlineExpired { deadline_id, label }].into())
             }
-
-            LfAbmeldungCommand::TimeoutExpired { deadline_id, label } => match state {
-                LfAbmeldungState::Beendet(_) | LfAbmeldungState::Rejected { .. } => {
-                    Ok(vec![].into())
-                }
-                _ => Ok(vec![LfAbmeldungEvent::DeadlineExpired { deadline_id, label }].into()),
-            },
         }
     }
 }

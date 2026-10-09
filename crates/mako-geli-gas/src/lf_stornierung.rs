@@ -182,16 +182,31 @@ pub enum LfStornierungState {
     Pending(LfStornierungData),
     /// GNB accepted the cancellation (PID 44023 received).
     Accepted(LfStornierungData),
-    /// GNB rejected or deadline expired.
+    /// GNB rejected.
     Rejected {
         /// Human-readable rejection reason.
         reason: String,
+    },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// No Festlegung states a consequence of the GNB leaving the Stornierung unanswered. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<LfStornierungState>,
     },
 }
 
 impl mako_engine::workflow::OccupiesBusinessKey for LfStornierungState {
     fn occupies_business_key(&self) -> bool {
         match self {
+            // A lapsed window leaves the Vorgang open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
             // Awaiting the GNB's answer inside the Stornierung window.
             Self::Pending(_) => true,
             // `Accepted` and `Rejected` are both terminal — the Stornierung
@@ -209,6 +224,16 @@ impl LfStornierungState {
             Self::Pending(_) => "Pending",
             Self::Accepted(_) => "Accepted",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -288,10 +313,21 @@ impl CommandPayload for LfStornierungCommand {}
 /// ```
 pub struct GeliGasLfStornierungWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The GNB's answer window is open while the Stornierung waits for it
+/// (`Pending`).
+fn window_open(label: &str, state: &LfStornierungState) -> bool {
+    label == GNB_RESPONSE_WINDOW_LABEL && matches!(state, LfStornierungState::Pending(_))
+}
+
 impl Workflow for GeliGasLfStornierungWorkflow {
     type State = LfStornierungState;
     type Event = LfStornierungEvent;
     type Command = LfStornierungCommand;
+
+    const DEADLINE_LABELS: &'static [&'static str] = &[GNB_RESPONSE_WINDOW_LABEL];
 
     /// Deadline compensation for the GNB's Stornierung answer window.
     ///
@@ -302,19 +338,19 @@ impl Workflow for GeliGasLfStornierungWorkflow {
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        if deadline.label() == GNB_RESPONSE_WINDOW_LABEL
-            && matches!(state, LfStornierungState::Pending(_))
-        {
-            Some(LfStornierungCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            })
-        } else {
-            None
-        }
+        window_open(deadline.label(), state).then(|| LfStornierungCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            LfStornierungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             LfStornierungEvent::Initiated {
                 pruefidentifikator,
@@ -344,10 +380,11 @@ impl Workflow for GeliGasLfStornierungWorkflow {
                 }
             }
             LfStornierungEvent::DeadlineExpired { label, .. } => match state {
-                LfStornierungState::Accepted(_) | LfStornierungState::Rejected { .. } => state,
-                _ => LfStornierungState::Rejected {
-                    reason: format!("deadline expired: {label}"),
+                LfStornierungState::Pending(_) => LfStornierungState::FristAbgelaufen {
+                    label: label.to_string(),
+                    offen: Box::new(state),
                 },
+                other => other,
             },
         }
     }
@@ -356,6 +393,10 @@ impl Workflow for GeliGasLfStornierungWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             LfStornierungCommand::InitiateStornierung {
                 pid,
@@ -432,7 +473,7 @@ impl Workflow for GeliGasLfStornierungWorkflow {
             }
 
             LfStornierungCommand::TimeoutExpired { deadline_id, label } => {
-                if state.is_terminal() {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![LfStornierungEvent::DeadlineExpired { deadline_id, label }].into())
@@ -588,8 +629,9 @@ mod tests {
         assert!(GeliGasLfStornierungWorkflow::handle(&state, cmd).is_err());
     }
 
+    /// The GNB's silence is a Frist breach, not a rejection.
     #[test]
-    fn timeout_in_pending_transitions_to_rejected() {
+    fn timeout_in_pending_is_a_frist_breach() {
         use mako_engine::ids::DeadlineId;
         let state = LfStornierungState::Pending(LfStornierungData {
             pruefidentifikator: pid(44022),
@@ -607,7 +649,7 @@ mod tests {
             .events
             .iter()
             .fold(state, GeliGasLfStornierungWorkflow::apply);
-        assert!(matches!(next, LfStornierungState::Rejected { .. }));
+        assert!(matches!(next, LfStornierungState::FristAbgelaufen { .. }));
     }
 
     #[test]

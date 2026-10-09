@@ -5,12 +5,10 @@
 //! the V-rules first: the only way to obtain the type is to call
 //! [`ValidatedReads::validate`], and its field is private to this module.
 //!
-//! That matters because the failure is silent. An unvalidated path stores rows
+//! The failure is silent otherwise: an unvalidated path stores rows
 //! indistinguishable from validated ones, and V03 (negative energy), V04
-//! (statistical outlier) and V09 (non-billable quality) simply never fire for
-//! that source — while § 147 AO / GoBD requires billed data to have been
-//! validated. Making the state unrepresentable is cheaper than remembering to
-//! check.
+//! (statistical outlier) and V09 (non-billable quality) never fire for that
+//! source.
 //!
 //! ## One configuration, one register split, every caller
 //!
@@ -18,21 +16,17 @@
 //! configures each group from [`config_for`], and returns the issues tagged with
 //! the register they are about. Ingest annotation ([`ValidatedReads::validate`]),
 //! the MCP `validate_timeseries` tool and the § 60 Abs. 1 substitute path all go
-//! through it, because a validator that answers differently depending on which
-//! surface asked is worse than one that does not exist: it is consulted exactly
-//! when nobody is checking. A per-surface `ValidationConfig::default()` —
-//! electricity thresholds, an assumed 900 s grid — would have each of the three
-//! disagree with the ingest door about whether a perfectly ordinary hourly gas
-//! delivery is clean.
+//! through it. A per-surface `ValidationConfig::default()` — electricity
+//! thresholds, an assumed 900 s grid — would disagree with the ingest door about
+//! whether an ordinary hourly gas delivery is clean.
 //!
 //! ## The rule set is `metering`'s, not a fixed V01–V10
 //!
-//! `metering` runs **V01–V09, V11 and V12**. There is no V10: it was a
-//! "register rollover" rule comparing consecutive interval energies, which is
-//! meaningless because a [`MeterInterval`](metering::MeterInterval) carries the
-//! energy *in* an interval and not a cumulative Zählerstand — for it to fire, one
-//! quarter-hour would have had to carry 50 MWh. The number is left unused so a
-//! stored `V10` finding cannot be silently reinterpreted. V11 reports an
+//! `metering` runs **V01–V09, V11 and V12**. There is no V10: a register
+//! rollover is meaningless over a [`MeterInterval`](metering::MeterInterval),
+//! which carries the energy *in* an interval and not a cumulative Zählerstand.
+//! The number stays unused so a stored `V10` finding cannot be silently
+//! reinterpreted. V11 reports an
 //! unordered input series and V12 an average power above the plant's physical
 //! capacity. Nothing here enumerates the rules: the set is whatever the crate
 //! runs, and the findings are stored by their own `rule_id`.

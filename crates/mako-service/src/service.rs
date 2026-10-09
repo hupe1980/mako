@@ -163,19 +163,28 @@ pub trait Daemon: Send + 'static {
 /// Propagates any startup failure (config, pool connect, migration, bind) and
 /// the final serve error.
 pub async fn run<D: Daemon>() -> anyhow::Result<()> {
-    // `--check`: probe the already-running instance's readiness and exit — the
-    // container HEALTHCHECK entrypoint. Handled before anything else so it neither
-    // starts tracing nor binds a port.
-    if std::env::args().skip(1).any(|a| a == "--check") {
-        return health_check::<D>().await;
+    // Handled before tracing, config or a port: `--help` must print on a
+    // machine with no config at all, and `--check` is the container
+    // HEALTHCHECK, which binds nothing.
+    match Mode::parse(std::env::args().skip(1)) {
+        Ok(Mode::Help) => {
+            print!("{}", usage(D::NAME));
+            return Ok(());
+        }
+        Ok(Mode::PrintConfig) => return print_config::<D>(),
+        Ok(Mode::Check) => return health_check::<D>().await,
+        Ok(Mode::Serve) => {}
+        Err(arg) => {
+            eprint!("{}", usage(D::NAME));
+            anyhow::bail!("unknown argument {arg:?}");
+        }
     }
 
     // Keep the tracing/OTel guard alive until serve returns (dropping it flushes
     // spans), so bind it to a name that lives for the whole function.
     let _guard = crate::init_tracing_from_env_with(D::NAME, D::tracing_layer());
 
-    let cfg: D::Config =
-        crate::load_config(D::NAME).with_context(|| format!("load {} config", D::NAME))?;
+    let cfg: D::Config = crate::load_config(D::NAME)?;
     let cfg = Arc::new(cfg);
 
     // Stateless daemons have no `[database]`: skip pool + migrations entirely.
@@ -204,9 +213,25 @@ pub async fn run<D: Daemon>() -> anyhow::Result<()> {
         .await
         .context("build service router")?;
 
+    let app = mount::<D>(domain, ready_ctx);
+
+    let addr = cfg.bind_addr();
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .with_context(|| format!("bind {addr}"))?;
+    crate::shutdown::serve(listener, app, shutdown).await
+}
+
+/// The daemon's router as [`run`] serves it: the infra routes (health,
+/// metrics, tracing) with the domain router merged in.
+///
+/// One function for [`run`] and [`build_for_test`], so a startup test merges
+/// exactly what production merges — a daemon registering `/metrics` or
+/// `/health/*` collides with the runner here, in the test, rather than at boot.
+fn mount<D: Daemon>(domain: axum::Router, ready_ctx: ServiceContext) -> axum::Router {
     // Real readiness: a fresh DB ping (bounded, so a stuck pool fails fast) when
     // the daemon has a database, plus the daemon's own check — never `|| true`.
-    let app = crate::ServiceBuilder::new()
+    crate::ServiceBuilder::new()
         .with_health(move || {
             let ctx = ready_ctx.clone();
             async move {
@@ -220,13 +245,147 @@ pub async fn run<D: Daemon>() -> anyhow::Result<()> {
         .with_trace_layer()
         .with_metrics()
         .merge(domain)
-        .build();
+        .build()
+}
 
-    let addr = cfg.bind_addr();
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .with_context(|| format!("bind {addr}"))?;
-    crate::shutdown::serve(listener, app, shutdown).await
+/// Build `D`'s router the way [`run`] does — [`Daemon::build`], then the infra
+/// routes — without binding a port or reaching a database.
+///
+/// The startup test every daemon carries. A route axum refuses (a `/:id`
+/// capture under axum 0.8), a merge collision with the runner's `/metrics` or
+/// `/health/*`, or a `build` that panics on its own config all fail here, in
+/// `cargo test`, instead of when the container starts.
+///
+/// A daemon with a database gets a **lazy** pool on an address nothing listens
+/// on: `build` may hand it to workers and routers, and a statement executed
+/// against it fails fast instead of connecting. The shutdown token is cancelled
+/// once the router is built, so the workers `build` spawned stop.
+///
+/// # Errors
+///
+/// Whatever [`Daemon::build`] refuses — a config that must not start.
+#[cfg(feature = "testing")]
+pub async fn build_for_test<D: Daemon>(cfg: D::Config) -> anyhow::Result<axum::Router> {
+    let pool = match cfg.database() {
+        Some(_) => Some(
+            sqlx::postgres::PgPoolOptions::new()
+                .acquire_timeout(std::time::Duration::from_millis(200))
+                .connect_lazy("postgres://startup-test@127.0.0.1:1/startup-test")
+                .context("lazy pool")?,
+        ),
+        None => None,
+    };
+    build_with::<D>(cfg, pool).await
+}
+
+/// [`build_for_test`] against a real database: [`Daemon::migrate`] runs on
+/// `pool` first, as at boot.
+///
+/// For a daemon whose `build` itself reaches the database — one that connects
+/// a store of its own from `[database] url` — and therefore cannot start on a
+/// lazy pool. Point `cfg`'s `[database] url` at the same database.
+///
+/// # Errors
+///
+/// A failed migration, or whatever [`Daemon::build`] refuses.
+#[cfg(feature = "testing")]
+pub async fn build_for_test_on<D: Daemon>(
+    cfg: D::Config,
+    pool: PgPool,
+) -> anyhow::Result<axum::Router> {
+    D::migrate(&pool).await.context("run migrations")?;
+    build_with::<D>(cfg, Some(pool)).await
+}
+
+#[cfg(feature = "testing")]
+async fn build_with<D: Daemon>(
+    cfg: D::Config,
+    pool: Option<PgPool>,
+) -> anyhow::Result<axum::Router> {
+    let shutdown = CancellationToken::new();
+    let ctx = ServiceContext {
+        pool,
+        http: crate::http::default_client(),
+        shutdown: shutdown.clone(),
+    };
+    let ready_ctx = ctx.clone();
+    let domain = D::build(Arc::new(cfg), ctx).await;
+    shutdown.cancel();
+    Ok(mount::<D>(domain?, ready_ctx))
+}
+
+/// What the command line asks the runner to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// No argument: start the daemon.
+    Serve,
+    /// `--check`: probe the running instance's readiness.
+    Check,
+    /// `-h` / `--help`: print usage, read nothing.
+    Help,
+    /// `--print-config`: print the merged config layers, secrets redacted, and
+    /// check them.
+    PrintConfig,
+}
+
+impl Mode {
+    /// The first recognised flag wins; an unrecognised one is refused rather
+    /// than ignored, so `--chek` does not start a daemon.
+    fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
+        let mut mode = Self::Serve;
+        for arg in args {
+            let next = match arg.as_str() {
+                "-h" | "--help" => Self::Help,
+                "--check" => Self::Check,
+                "--print-config" => Self::PrintConfig,
+                _ => return Err(arg),
+            };
+            if mode == Self::Serve {
+                mode = next;
+            }
+        }
+        Ok(mode)
+    }
+}
+
+/// The `--help` text: the flags, where the config comes from, and the env
+/// prefix — everything needed to write a first config without reading source.
+fn usage(name: &str) -> String {
+    let prefix = crate::config::env_prefix(name);
+    format!(
+        "{name} — a mako service daemon
+
+Usage: {name} [--check | --print-config | --help]
+
+Options:
+  (none)          start the daemon
+  --check         probe the running instance's /health/ready and exit 0 when ready
+  --print-config  print the merged file + environment config (secrets redacted)
+                  and report every missing, unknown or invalid key
+  -h, --help      print this text
+
+Configuration:
+  file            ${prefix}CONFIG, else ./{name}.toml (absent: environment only)
+  environment     {prefix}<KEY> overrides a key; nested keys join with `__`
+                  ({prefix}DATABASE__URL sets [database] url)
+  secrets         {prefix}<KEY>_FILE reads the value from a file;
+                  a value \"env:VAR\" in the file reads it from VAR
+  logging         {prefix}LOG_LEVEL, {prefix}LOG_FORMAT, RUST_LOG
+"
+    )
+}
+
+/// The `--print-config` path: the merged layers as TOML, then the same check
+/// startup runs — so a config can be validated without a database.
+///
+/// # Errors
+///
+/// Returns the [`ConfigError`](crate::ConfigError) when the config would not
+/// load.
+fn print_config<D: Daemon>() -> anyhow::Result<()> {
+    print!("{}", crate::config::render_config(D::NAME, None)?);
+    let _: D::Config = crate::load_config(D::NAME)?;
+    Ok(())
 }
 
 /// The `--check` path: GET the running instance's `/health/ready` on loopback and
@@ -237,8 +396,7 @@ pub async fn run<D: Daemon>() -> anyhow::Result<()> {
 ///
 /// Returns `Err` when the config cannot load or the instance is not ready.
 async fn health_check<D: Daemon>() -> anyhow::Result<()> {
-    let cfg: D::Config =
-        crate::load_config(D::NAME).with_context(|| format!("load {} config", D::NAME))?;
+    let cfg: D::Config = crate::load_config(D::NAME)?;
     // Probe loopback regardless of the bind interface (0.0.0.0 → 127.0.0.1).
     let port = cfg
         .bind_addr()
@@ -269,4 +427,44 @@ async fn db_ready(pool: &PgPool) -> bool {
         tokio::time::timeout(std::time::Duration::from_secs(2), ping).await,
         Ok(Ok(_))
     )
+}
+
+#[cfg(test)]
+mod mode_tests {
+    use super::{Mode, usage};
+
+    fn parse(args: &[&str]) -> Result<Mode, String> {
+        Mode::parse(args.iter().map(|a| (*a).to_owned()))
+    }
+
+    #[test]
+    fn no_argument_serves() {
+        assert_eq!(parse(&[]), Ok(Mode::Serve));
+    }
+
+    #[test]
+    fn help_is_recognised_in_both_spellings() {
+        assert_eq!(parse(&["--help"]), Ok(Mode::Help));
+        assert_eq!(parse(&["-h"]), Ok(Mode::Help));
+    }
+
+    #[test]
+    fn check_and_print_config_are_recognised() {
+        assert_eq!(parse(&["--check"]), Ok(Mode::Check));
+        assert_eq!(parse(&["--print-config"]), Ok(Mode::PrintConfig));
+    }
+
+    /// A typo must not start the daemon as though no flag were given.
+    #[test]
+    fn an_unknown_argument_is_refused() {
+        assert_eq!(parse(&["--chek"]), Err("--chek".to_owned()));
+    }
+
+    #[test]
+    fn usage_names_the_file_and_the_env_prefix() {
+        let text = usage("mabis-syncd");
+        assert!(text.contains("MABIS_SYNCD_CONFIG"), "{text}");
+        assert!(text.contains("./mabis-syncd.toml"), "{text}");
+        assert!(text.contains("MABIS_SYNCD_DATABASE__URL"), "{text}");
+    }
 }

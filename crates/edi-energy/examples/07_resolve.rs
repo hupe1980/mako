@@ -22,7 +22,7 @@ use edi_energy::{EdiEnergyMessage, MessageType, Platform, Release, ReleaseRegist
 /// Declares that this example prints validation findings on its happy path.
 ///
 /// The sweep below is the same one
-/// `tests/skeletons.rs::every_anwendungsfall_has_a_conformant_skeleton`
+/// `tests/it/skeletons.rs::every_anwendungsfall_has_a_conformant_skeleton`
 /// asserts, and that test is where the invariant is enforced: it names the
 /// places the generator cannot yet reach, one rule id each, and refuses both a
 /// new one and a stale one. Asserting here as well would mean keeping that

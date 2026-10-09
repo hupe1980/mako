@@ -1276,9 +1276,9 @@ pub enum ValueShape {
     /// „Wenn Wert in SG7 RFF+AGK DE1154 vorhanden" / „Wenn im selben SG12 NAD
     /// DE3124 nicht vorhanden" — the element carries a value, whatever it is.
     ///
-    /// This is the shape the reader used to settle for the surrounding segment
-    /// on, which answers a different question: a `NAD` exists in almost every
-    /// message, and DE 3124 inside it usually does not.
+    /// Distinct from asking whether the surrounding segment exists, which
+    /// answers a different question: a `NAD` exists in almost every message,
+    /// and DE 3124 inside it usually does not.
     Any,
 }
 
@@ -1837,8 +1837,8 @@ mod tests {
     }
 
     /// The Bedingungen column wraps after a `/`, and a code list broken that
-    /// way used to parse to an empty alternative and be refused whole — which
-    /// is eleven COMDIS/IFTSTA Antwortcode rules never evaluated.
+    /// way must be rejoined: parsed as an empty alternative it is refused whole,
+    /// and eleven COMDIS/IFTSTA Antwortcode rules are never evaluated.
     #[test]
     fn a_code_list_the_column_wrapped_is_rejoined() {
         let v = Voraussetzung::parse("Wenn in dieser SG7 AJT DE4465 = A01/A21/A22/ A23/A90/A96")

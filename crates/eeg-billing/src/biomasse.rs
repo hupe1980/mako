@@ -21,7 +21,7 @@
 //! There is no § 42a EEG, and the EEG 2023 imposes no Holzbiomasse restriction —
 //! the sustainability rules for solid biomass sit outside it.
 
-use crate::rounding::RoundMoney;
+use grid_billing::RoundMoney;
 use rust_decimal::Decimal;
 
 // ── BiomassBrennstoff ─────────────────────────────────────────────────────────

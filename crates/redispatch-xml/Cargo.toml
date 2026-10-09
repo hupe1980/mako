@@ -1,7 +1,8 @@
 [package]
 name         = "redispatch-xml"
 version.workspace     = true
-description  = "Redispatch 2.0 XML/XSD format parsing and validation for the German electricity grid (CIM/ENTSO-E-based, per BDEW specifications)"
+description  = "Redispatch 2.0 XML parser and validator for the German electricity grid: the nine CIM document types of the BDEW specification"
+homepage.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true
@@ -15,3 +16,6 @@ quick-xml   = { version = "0.41", features = ["serialize"] }
 serde       = { workspace = true }
 thiserror   = { workspace = true }
 time        = { workspace = true }
+
+[lints]
+workspace = true

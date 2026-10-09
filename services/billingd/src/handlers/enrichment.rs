@@ -283,54 +283,33 @@ pub(crate) async fn fetch_dynamic_intervals(
         .map_err(|e| BillingError::upstream("edmd", format!("Lastgang: {e}")))
 }
 
-/// Whether the nEHS market overlay applies: Gas/Wärme categories only, and
-/// only when the operator has **not** pinned an explicit `[rates]` BEHG
-/// override — an explicit override always wins, so the market fetch is
-/// skipped entirely.
-pub(crate) fn nehs_overlay_applies(category: &str, cfg: &BillingdConfig) -> bool {
-    matches!(category, "GAS" | "WAERME") && cfg.behg_override().is_none()
-}
-
-/// Overlay the nEHS market price onto the period rates (CO2KostAufG §3).
+/// The nEHS certificate price point a `GAS`/`WAERME` period is priced from,
+/// read at the period start (CO2KostAufG § 3).
 ///
 /// Since 2026 the nEHS certificate price is auction-formed (§10 Abs. 1 BEHG:
-/// weekly EEX auctions from 01.07.2026, Verkaufsphase 68 EUR/t), so the Gas
-/// CO₂ component follows the supplier's dated acquisition prices in productd's
-/// `nehs_prices` series. Resolution: explicit `[rates]` override > market
-/// series > year table (fallback inside `regulatory_rates_for_period`).
+/// weekly EEX auctions from 01.07.2026), so the Gas CO₂ component follows the
+/// supplier's dated acquisition prices in productd's `nehs_prices` series.
+/// [`BillingdConfig::try_regulatory_rates_for_period`] takes the point only
+/// when it was set in the period's own year, and for a year with no § 10 BEHG
+/// price only through the configured regime's check.
 ///
-/// The lookup date is the **period start**: a straddling period takes the
-/// start-of-period regime, the same basis `regulatory_rates_for_period` uses
-/// (`period_from.year()`) for the year-table fallback — so market overlay and
-/// fallback cannot diverge on which side of a boundary they bill.
-///
-/// The EUR/t → ct/kWh conversion uses the delivery year's EBeV Emissionsfaktor.
-/// § 3 Abs. 2 CO2KostAufG requires the BEHG Standardwerte and the ordinance
-/// publishes one Erdgas row, so only the certificate price is the operator's.
-pub(crate) async fn apply_nehs_market_price(
-    rates: &mut energy_billing::RegulatoryRates,
+/// The lookup date is the **period start**, the same basis the rate
+/// resolution reads its year from, so the two cannot disagree on which side
+/// of a boundary they bill. A fetch failure yields `None`: the period is then
+/// priced from the § 10 BEHG table, or refused where there is none.
+pub(crate) async fn fetch_nehs_price(
     category: &str,
     period_from: time::Date,
-    cfg: &BillingdConfig,
     productd: &ProductdClient,
-) {
-    if !nehs_overlay_applies(category, cfg) {
-        return;
+) -> Option<crate::config::NehsPreis> {
+    if !matches!(category, "GAS" | "WAERME") {
+        return None;
     }
     match productd.get_latest_nehs_price(period_from).await {
-        Ok(Some(eur_per_t)) => {
-            // The Emissionsfaktor is the delivery year's EBeV Standardwert —
-            // § 3 Abs. 2 CO2KostAufG allows no other. Only the certificate
-            // price is the operator's, and that is what the series carries.
-            if let Some(ct) =
-                energy_billing::behg_ct_per_kwh_from_price(eur_per_t, period_from.year())
-            {
-                rates.behg_gas_ct_per_kwh = ct;
-            }
-        }
-        Ok(None) => {} // no series data — year-table fallback stands
+        Ok(p) => p,
         Err(e) => {
-            tracing::warn!(error = %e, "billingd: nEHS price fetch failed; using year-table BEHG rate");
+            tracing::warn!(error = %e, "billingd: nEHS price fetch failed; using the § 10 BEHG table");
+            None
         }
     }
 }
@@ -577,56 +556,7 @@ mod gas_enrichment_tests {
 
 #[cfg(test)]
 mod nehs_overlay_tests {
-    use super::nehs_overlay_applies;
-    use crate::config::BillingdConfig;
     use rust_decimal::dec;
-
-    /// Minimal config; `rates` is spliced in as-is (`null` = no `[rates]`).
-    fn cfg(rates: serde_json::Value) -> BillingdConfig {
-        serde_json::from_value(serde_json::json!({
-            "database": { "url": "postgres://unused" },
-            "tenant": "9900000000001",
-            "productd_url": "http://127.0.0.1:1",
-            "edmd_url": "http://127.0.0.1:1",
-            "marktd_url": "http://127.0.0.1:1",
-            "rates": rates,
-        }))
-        .expect("test config must deserialize")
-    }
-
-    /// Overlay precedence: an explicit `[rates] behg_gas_ct_per_kwh` override
-    /// short-circuits the market lookup — `apply_nehs_market_price` returns
-    /// before any productd fetch, so the pinned rate stands untouched.
-    #[test]
-    fn explicit_behg_override_skips_the_market_fetch() {
-        let pinned = cfg(serde_json::json!({ "behg_gas_ct_per_kwh": "1.25" }));
-        assert_eq!(pinned.behg_override(), Some(dec!(1.25)));
-        assert!(
-            !nehs_overlay_applies("GAS", &pinned),
-            "explicit [rates] override must win over the nEHS market series"
-        );
-        assert!(!nehs_overlay_applies("WAERME", &pinned));
-    }
-
-    /// Without an override, Gas and Wärme periods consult the market series.
-    #[test]
-    fn gas_and_waerme_without_override_use_the_market_series() {
-        let open = cfg(serde_json::Value::Null);
-        assert!(nehs_overlay_applies("GAS", &open));
-        assert!(nehs_overlay_applies("WAERME", &open));
-        // Other [rates] keys do not pin BEHG.
-        let other = cfg(serde_json::json!({ "stromsteuer_ct_per_kwh": "2.05" }));
-        assert!(nehs_overlay_applies("GAS", &other));
-    }
-
-    /// BEHG is a fuel-emissions levy — non-Gas/Wärme categories never overlay.
-    #[test]
-    fn non_gas_categories_never_overlay() {
-        let open = cfg(serde_json::Value::Null);
-        for category in ["STROM", "EEG", "SOLAR", "SHARING", "WASSER"] {
-            assert!(!nehs_overlay_applies(category, &open), "{category}");
-        }
-    }
 
     /// Only the certificate price is the operator's. § 3 Abs. 2 CO2KostAufG
     /// requires the BEHG Standardwerte, and the EBeV publishes one Erdgas row,

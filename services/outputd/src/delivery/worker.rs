@@ -164,11 +164,11 @@ pub async fn tick(
 
 /// What one attempt did.
 ///
-/// The third state the worker used to lack. `Ok`/`Err` alone forced a `POST`
-/// delivery with no relay into the error arm, where the retry budget turned it
-/// into `FAILED` — and `postal_spool` lists `PENDING`, so a deployment that
-/// integrates its Druckdienstleister by pull silently lost every letter about
-/// half a day after issuing it.
+/// Three states, not `Ok`/`Err`: a `POST` delivery with no relay is neither.
+/// In the error arm the retry budget would turn it into `FAILED`, and since
+/// `postal_spool` lists `PENDING`, a deployment that integrates its
+/// Druckdienstleister by pull would silently lose every letter about half a
+/// day after issuing it.
 enum DeliveryAttempt {
     /// The channel pushed (or published) the document.
     Pushed(DeliveryOutcome),

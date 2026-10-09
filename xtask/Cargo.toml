@@ -12,13 +12,12 @@ mako-fristen = { workspace = true }
 edi-energy = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = { workspace = true }
+# `check-clippy-bans` reads the workspace `clippy.toml`.
+toml = "0.8"
 # The MIG/AHB table readers match fixed-width `pdftotext -layout` rows.
 regex       = "1"
-jsonschema = { version = "0.49", default-features = false }
-lopdf       = { version = "0.44", default-features = false }
 time        = { workspace = true }
 zip         = { version = "3", default-features = false, features = ["deflate"] }
-quick-xml   = { version = "0.41", features = ["serialize"] }
 # The identifier guard validates EIC codes with the same implementation the
 # services use, so the check can never disagree with the validator that matters.
 rubo4e      = { workspace = true }
@@ -39,3 +38,6 @@ reqwest       = { version = "0.13", default-features = false, features = ["json"
 # same version when it corrects it, so the version alone cannot say whether the
 # local copy is current.
 sha2          = "0.10"
+
+[lints]
+workspace = true

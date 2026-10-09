@@ -44,7 +44,7 @@
 //! appears in no other Sequenzdiagramm: it is anchored on
 //! [`MeldungAnchor::EigeneAnkuendigung`].
 //!
-//! `services/makod/tests/meldepflicht_coverage.rs` pins the catalogue against
+//! `services/makod/tests/it/meldepflicht_coverage.rs` pins the catalogue against
 //! what the PID router actually handles, so a new entry here is either routed
 //! or declared missing with a reason. No deadline is registered for a message
 //! that cannot be rendered.

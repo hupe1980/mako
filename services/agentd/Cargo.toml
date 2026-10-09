@@ -1,6 +1,6 @@
 [package]
 name        = "agentd"
-description = "Auditable advisory agent plane for mako"
+description = "Advisory agent plane: declarative specialists over the services' MCP tools, with journaled effects and human triage"
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
@@ -75,6 +75,9 @@ rmcp = { version = "3.1", default-features = false, features = [
 async-trait = "0.1.91"
 
 [dev-dependencies]
+mako-service = { workspace = true, features = ["testing"] }
+# The startup test answers the MCP handshake `build` performs with every peer.
+rmcp = { version = "3.1", features = ["server", "transport-streamable-http-server"] }
 # testkit brings FakeProvider, Faulty and the replay assertions. It carries no
 # reqwest dependency, so it resolves independently of the provider drivers.
 agentplane = { version = "0.29", features = [
@@ -102,3 +105,6 @@ bedrock  = ["agentplane/bedrock"]
 role-lf  = []
 role-nb  = []
 role-msb = []
+
+[lints]
+workspace = true

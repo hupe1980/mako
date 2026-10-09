@@ -515,9 +515,10 @@ pub struct ComputeRequest {
 /// the typed BO4E `Kosten` payload for CIM export, and stores the record.
 ///
 /// Energy is resolved in the order BK6-20-061 §4.2 implies: an operator override
-/// first, then the Lastgang summed over the exact activation window, and only
-/// then the monthly billing-period aggregate. A 15-minute activation settled
-/// against a monthly aggregate is wrong by three orders of magnitude, so the
+/// first, then the Einspeisung summed over the exact activation window, and only
+/// then the Einspeisung of the whole Europe/Berlin delivery day. A 15-minute
+/// activation settled against a day's figure is wrong by up to two orders of
+/// magnitude, so the
 /// fallback is logged loudly and recorded in `dispatch_source`.
 ///
 /// # Errors
@@ -549,15 +550,15 @@ pub async fn post_compute(
             }
             match lastgang_sum(&http, &cfg, &req.malo_id, window).await {
                 Some(summe) => (summe.kwh, "lastgang_sum", summe.coverage_pct),
-                None => match billing_period_fallback(&http, &cfg, &req.malo_id, window).await {
+                None => match einspeisung_tag_fallback(&http, &cfg, &req.malo_id, window).await {
                     Some(kwh) => {
                         tracing::warn!(
                             malo_id = %req.malo_id,
                             window = %req.activation_start_utc,
-                            "netzbilanzd: no Lastgang for the activation window — falling back to \
-                             the monthly billing-period aggregate, which is not window-specific"
+                            "netzbilanzd: no Einspeisung in the activation window — falling back \
+                             to the delivery day's Einspeisung, which is not window-specific"
                         );
-                        (kwh, "billing_period", None)
+                        (kwh, "einspeisung_tag", None)
                     }
                     None => {
                         return Err(ApiError::NotFound);
@@ -690,28 +691,30 @@ pub async fn post_compute(
     ))
 }
 
-/// The monthly billing-period aggregate, as a last resort.
-async fn billing_period_fallback(
+/// The delivery day's fed-in energy, as a last resort.
+///
+/// The same `EINSPEISUNG` projection as [`lastgang_sum`], over the whole
+/// Europe/Berlin day the activation starts on rather than the activation
+/// window. Never the billing-period aggregate: its `arbeitsmenge_kwh` is the
+/// MaLo's **Bezug**, and for a curtailed generator that is the auxiliary
+/// consumption it drew while it fed in nothing — a figure in the opposite
+/// direction, filed to the ÜNB as Einsatzkosten.
+///
+/// `None` when the day carries no Einspeisung; the caller then refuses.
+async fn einspeisung_tag_fallback(
     client: &reqwest::Client,
     cfg: &NetzbilanzConfig,
     malo_id: &str,
     window: Window,
 ) -> Option<Decimal> {
-    let edmd = cfg.edmd(client.clone())?;
-    let day = window.start.date();
-    let path = format!("/api/v1/billing-period/{malo_id}");
-    // A Redispatch Kostenblatt is a Strom document; state the Sparte rather
-    // than inheriting edmd's default, so the aggregation boundary is a decision
-    // and not a coincidence.
-    let request = edmd.get(&path).query(&[
-        ("from", day.to_string()),
-        ("to", day.to_string()),
-        ("sparte", "strom".to_owned()),
-    ]);
-    let body: serde_json::Value = edmd.json(request).await.ok().flatten()?;
-    body.get("arbeitsmenge_kwh")
-        .and_then(decimal_from_json)
-        .filter(|&v| v > Decimal::ZERO)
+    let day = mako_fristen::berlin_date(window.start);
+    let tag = Window {
+        start: mako_fristen::berlin_midnight(day),
+        end: mako_fristen::berlin_midnight(day.next_day()?),
+    };
+    lastgang_sum(client, cfg, malo_id, tag)
+        .await
+        .map(|summe| summe.kwh)
 }
 
 // ── §13a Abs. 2 Vergütung ─────────────────────────────────────────────────────
@@ -887,6 +890,74 @@ pub async fn post_verguetung(
 mod tests {
     use super::*;
     use rust_decimal::dec;
+
+    /// An `edmd` stand-in for a curtailed wind farm: during the activation it
+    /// feeds in nothing and draws its auxiliary consumption, so the energy
+    /// projection reports `BEZUG` intervals and no `EINSPEISUNG`, and the
+    /// billing-period aggregate's `arbeitsmenge_kwh` is that `Bezug`.
+    async fn curtailed_wind_farm() -> NetzbilanzConfig {
+        use axum::{Json, extract::Query, routing::get};
+        use std::collections::HashMap;
+        let app = axum::Router::new()
+            .route(
+                "/api/v1/billing-period/{malo}",
+                get(|| async { Json(serde_json::json!({ "arbeitsmenge_kwh": "1234.5" })) }),
+            )
+            .route(
+                "/api/v1/energy/{malo}",
+                get(|Query(q): Query<HashMap<String, String>>| async move {
+                    let kwh = if q.get("direction").map(String::as_str) == Some("BEZUG") {
+                        "12.5"
+                    } else {
+                        "0"
+                    };
+                    Json(serde_json::json!({
+                        "coverage_pct": 100.0,
+                        "intervals": [
+                            { "start": "2026-01-15T10:00:00Z", "end": "2026-01-15T10:15:00Z",
+                              "kwh": kwh, "quality": "MEASURED" }
+                        ]
+                    }))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        serde_json::from_value(serde_json::json!({
+            "database": { "url": "postgres://unused" },
+            "marktd_url": "http://127.0.0.1:9",
+            "marktd_api_key": "",
+            "makod_url": "http://127.0.0.1:9",
+            "makod_api_key": "",
+            "edmd_url": format!("http://{addr}"),
+        }))
+        .expect("config")
+    }
+
+    /// The fallback never files the farm's draw as its dispatch.
+    ///
+    /// The primary path asks for `EINSPEISUNG`; a fallback reading
+    /// `arbeitsmenge_kwh` — which `edmd` computes as `Bezug` — files the
+    /// auxiliary consumption of a curtailed generator as Einsatzkosten to the
+    /// ÜNB. With no Einspeisung on file the fallback has nothing to offer.
+    #[tokio::test]
+    async fn the_fallback_never_files_the_bezug_as_dispatch() {
+        let cfg = curtailed_wind_farm().await;
+        let window = Window {
+            start: utc("2026-01-15T10:00:00Z"),
+            end: utc("2026-01-15T10:15:00Z"),
+        };
+        let got =
+            einspeisung_tag_fallback(&reqwest::Client::new(), &cfg, "51238696012", window).await;
+        assert_ne!(
+            got,
+            Some(dec!(1234.5)),
+            "the Bezug aggregate was filed as dispatch"
+        );
+        assert_eq!(got, None, "no Einspeisung on file: no fallback figure");
+    }
 
     fn utc(s: &str) -> time::OffsetDateTime {
         time::OffsetDateTime::parse(s, &Rfc3339).expect("valid RFC 3339")

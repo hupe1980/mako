@@ -42,7 +42,7 @@
 //!       └── validate             (edi-energy)
 //!           └── extract fields   (application code)
 //!               └── GasSupplierChangeCommand { pid, malo_id, … }
-//!                   └── Process::execute(cmd)  ← pure domain logic here
+//!                   └── Process::run(cmd, opts)  ← pure domain logic here
 //! ```
 //!
 //! ## „GeLi Gas 2.0" and „GeLi Gas 3.0" are both current, and both correct
@@ -51,7 +51,7 @@
 //!
 //! | Name | Document | Stand |
 //! |---|---|---|
-//! | **GeLi Gas 3.0** | the BNetzA Anlage zu BK7-06-067 in der Fassung **BK7-24-01-009** — the Festlegung itself | Beschluss 12.09.2025, Tenor ab 01.01.2026 |
+//! | **GeLi Gas 3.0** | the Anlage to BNetzA **BK7-24-01-009** — the Festlegung itself, superseding BK7-06-067 and BK7-19-001 | Beschluss 12.09.2025, Tenor ab 01.01.2026 |
 //! | **GeLi Gas 2.0** | the BDEW/VKU/GEODE/FNB Gas **Anwendungshilfe** (V1.2, 26.03.2026), which still carries the BK7-19-001 title | gültig ab 01.04.2026 |
 //!
 //! The Anwendungsübersicht Prüfidentifikatoren names „GeLi Gas 2.0" in its
@@ -106,21 +106,44 @@
 //!     fallgruppe: None,
 //! };
 //!
-//! process.execute(cmd).await?;
+//! process.run(cmd, RunOptions::new()).await?;
 //! ```
 
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::pedantic, clippy::must_use_candidate)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::doc_markdown)] // German MaKo terms and BDEW acronyms produce many false positives
-#![allow(clippy::too_many_lines)] // process handle() functions are necessarily verbose
-#![allow(clippy::match_same_arms)] // sometimes intentional for process-family readability
-#![allow(clippy::manual_let_else)] // existing code style; rewrite in follow-up
-#![allow(clippy::redundant_closure_for_method_calls)]
-#![allow(clippy::unnested_or_patterns)]
-#![allow(clippy::map_unwrap_or)]
-#![allow(clippy::items_after_statements)]
+#![expect(
+    clippy::module_name_repetitions,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
+#![expect(
+    clippy::doc_markdown,
+    reason = "German MaKo terms and BDEW acronyms produce many false positives"
+)]
+#![expect(
+    clippy::too_many_lines,
+    reason = "process handle() functions are necessarily verbose"
+)]
+#![expect(
+    clippy::match_same_arms,
+    reason = "sometimes intentional for process-family readability"
+)]
+#![expect(
+    clippy::manual_let_else,
+    reason = "existing code style; rewrite in follow-up"
+)]
+#![expect(
+    clippy::redundant_closure_for_method_calls,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
+#![expect(
+    clippy::map_unwrap_or,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
+#![expect(
+    clippy::items_after_statements,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 
 pub mod antwortfrist;
 pub mod datenabruf;
@@ -247,31 +270,46 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         "geli-gas"
     }
 
-    fn workflow_names(&self) -> &'static [&'static str] {
-        // Every entry is the owning module's own constant. A literal here can
-        // disagree with the name `register_pids` routes to, and the two are
-        // checked against each other only at `EngineBuilder::build`.
-        &[
-            lieferbeginn::WORKFLOW_NAME,
+    fn drivers(&self) -> Vec<mako_engine::driver::WorkflowDriver> {
+        use mako_engine::driver::WorkflowDriver;
+        // Each workflow by type, under its module's own name constant.
+        vec![
+            WorkflowDriver::of::<lieferbeginn::GeliGasSupplierChangeWorkflow>(
+                lieferbeginn::WORKFLOW_NAME,
+            ),
             // LFN-side Anmeldung: sends 44001/44004, awaits the GNB's answer
             // within the window the outbound PID publishes (4 WT for a 44001).
-            lf_anmeldung::WORKFLOW_NAME,
+            WorkflowDriver::of::<lf_anmeldung::GeliGasLfAnmeldungWorkflow>(
+                lf_anmeldung::WORKFLOW_NAME,
+            ),
             // GNB-side: receives 44022 from LFN/LFA, sends 44023/44024 response.
             // Registered when Nb-only (no Msb/Nmsb). For all() and gMSB, `WimModule` owns these.
-            stornierung::WORKFLOW_NAME,
+            WorkflowDriver::of::<stornierung::GeliGasStornierungWorkflow>(
+                stornierung::WORKFLOW_NAME,
+            ),
             // LF-side: LFN/LFA sends 44022 outbound, receives 44023/44024 inbound.
             // Registered when Lf-only (no Msb/Nmsb). Outbound 44022 is ERP-initiated.
-            lf_stornierung::WORKFLOW_NAME,
-            mscons::WORKFLOW_NAME,
-            datenabruf::WORKFLOW_NAME,
-            sperrung_lf::WORKFLOW_NAME,
-            sperrung_nb::WORKFLOW_NAME,
-            stammdatenaenderung::WORKFLOW_NAME,
-            partin::WORKFLOW_NAME,
+            WorkflowDriver::of::<lf_stornierung::GeliGasLfStornierungWorkflow>(
+                lf_stornierung::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<mscons::GeliGasMsconsWorkflow>(mscons::WORKFLOW_NAME),
+            WorkflowDriver::of::<datenabruf::GeliGasDatenabrufWorkflow>(datenabruf::WORKFLOW_NAME),
+            WorkflowDriver::of::<sperrung_lf::GeliGasSperrungLfWorkflow>(
+                sperrung_lf::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<sperrung_nb::GeliGasSperrungNbWorkflow>(
+                sperrung_nb::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<stammdatenaenderung::GeliGasStammdatenaenderungWorkflow>(
+                stammdatenaenderung::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<partin::GeliGasPartinWorkflow>(partin::WORKFLOW_NAME),
             // PID 31011 — Rechnung sonstige Leistung / AWH Sperrprozesse Gas (VNB → LFN/LFA).
             // GeLi Gas (BK7-24-01-009) billing for disconnection services; NOT GaBi Gas.
-            invoic::WORKFLOW_NAME,
-            zuordnungsmeldung::WORKFLOW_NAME,
+            WorkflowDriver::of::<invoic::GeliGasSperrprozesseInvoicWorkflow>(invoic::WORKFLOW_NAME),
+            WorkflowDriver::of::<zuordnungsmeldung::GeliGasZuordnungsmeldungWorkflow>(
+                zuordnungsmeldung::WORKFLOW_NAME,
+            ),
         ]
     }
 
@@ -340,7 +378,7 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         // PIDs 19116/19117 are shared with GPKE Sperrung Strom; process context is
         // resolved by correlation ID at runtime in mixed Strom+Gas deployments.
         // Regulatory basis: BK7-24-01-009 (GeLi Gas 3.0).
-        // Business answer window: per-PID via `mako_fristen::antwort`. APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.0 §2.3.1).
+        // Business answer window: per-PID via `mako_fristen::antwort`. APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.1 §2.3.1).
         for &pid in sperrung_lf::ORDRSP_SPERRUNG_PIDS {
             router.register(pid, sperrung_lf::WORKFLOW_NAME);
         }
@@ -353,7 +391,7 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         // PIDs 17115/17116/17117 are shared with GPKE Sperrung Strom (NB-role); process
         // context is resolved by commodity (Gas vs. Strom) at runtime.
         // Regulatory basis: BK7-24-01-009 (AWH Sperrprozesse Gas).
-        // Business answer window: per-PID via `mako_fristen::antwort`. APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.0 §2.3.1).
+        // Business answer window: per-PID via `mako_fristen::antwort`. APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.1 §2.3.1).
         for &pid in sperrung_nb::SPERRUNG_PIDS {
             router.register(pid, sperrung_nb::WORKFLOW_NAME);
         }

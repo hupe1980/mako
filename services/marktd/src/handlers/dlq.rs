@@ -1,4 +1,4 @@
-//! Dead-letter queue admin endpoints for the durable fan-out (F-003).
+//! Dead-letter queue admin endpoints for the durable fan-out.
 //!
 //! Dead-lettering is a **status column** on `event_delivery`: a per-subscriber
 //! delivery with `dead_lettered_at IS NOT NULL` has exhausted all retry
@@ -21,6 +21,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use mako_service::ApiError;
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use serde::{Deserialize, Serialize};
@@ -70,14 +71,6 @@ fn map_row(r: &sqlx::postgres::PgRow) -> Result<DlqEntry, sqlx::Error> {
     })
 }
 
-fn deny_forbidden() -> axum::response::Response {
-    (
-        StatusCode::FORBIDDEN,
-        Json(serde_json::json!({"error": "Forbidden", "detail": "manage-fanout action required"})),
-    )
-        .into_response()
-}
-
 /// `GET /admin/fanout/dlq` — list dead-lettered deliveries.
 pub async fn list_dlq(
     Extension(pool): Extension<PgPool>,
@@ -90,7 +83,7 @@ pub async fn list_dlq(
         .check(&claims.principal(), "manage-fanout", &tenant)
         .is_err()
     {
-        return deny_forbidden();
+        return ApiError::forbidden("manage-fanout action required").into_response();
     }
 
     let offset = i64::from(q.page * q.size);
@@ -138,7 +131,7 @@ pub async fn retry_dlq_entry(
         .check(&claims.principal(), "manage-fanout", &tenant)
         .is_err()
     {
-        return deny_forbidden();
+        return ApiError::forbidden("manage-fanout action required").into_response();
     }
 
     match sqlx::query(
@@ -184,7 +177,7 @@ pub async fn delete_dlq_entry(
         .check(&claims.principal(), "manage-fanout", &tenant)
         .is_err()
     {
-        return deny_forbidden();
+        return ApiError::forbidden("manage-fanout action required").into_response();
     }
 
     match sqlx::query(

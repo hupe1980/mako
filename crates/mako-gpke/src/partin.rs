@@ -9,7 +9,7 @@
 //! |-------|----------------------------------------|-----------------|-------------|
 //! | 37000 | Kommunikationsdaten des LF Strom       | LF → NB/MSB     | GPKE Teil 4 |
 //! | 37001 | Kommunikationsdaten des NB Strom       | NB → LF         | GPKE Teil 4 |
-//! | 37002 | Kommunikationsdaten des MSB Strom      | MSB → LF        | GPKE Teil 4 |
+//! | 37002 | Kommunikationsdaten des MSB Strom      | MSB → NB · LF · ÜNB · MSB · ESA | GPKE Teil 4 |
 //! | 37003 | Kommunikationsdaten des MSBN Strom     | MSBN → LF       | GPKE Teil 4 |
 //! | 37004 | Kommunikationsdaten des MSBA Strom     | MSBA → LF       | GPKE Teil 4 |
 //! | 37005 | Kommunikationsdaten des ÜNB Strom      | ÜNB → LF        | GPKE Teil 4 |
@@ -40,7 +40,7 @@ pub const WORKFLOW_NAME: &str = "gpke-partin";
 ///
 /// - 37000: LF sends own communication data (inbound when NB/MSB receives from LF)
 /// - 37001: NB sends communication data to LF (LF receives)
-/// - 37002: MSB sends communication data to LF (LF receives)
+/// - 37002: MSB sends its communication data to NB, LF, ÜNB, MSB or ESA
 /// - 37003: MSBN sends communication data (multi-party)
 /// - 37004: MSBA sends communication data (multi-party)
 /// - 37005: ÜNB sends communication data to LF (LF receives)

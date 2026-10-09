@@ -371,6 +371,10 @@ pub enum WertebestellungEvent {
         /// Deadline label that fired.
         label: String,
     },
+    /// The Angebot's Bindungsfrist ran out without a Bestellung. No party
+    /// missed anything: UC 4.1 Nr. 3 admits no order after it, so the offer
+    /// is void and the process ends.
+    AngebotVerfallen,
 }
 
 impl EventPayload for WertebestellungEvent {
@@ -392,6 +396,7 @@ impl EventPayload for WertebestellungEvent {
             Self::LieferungBegonnen => "WertebestellungLieferungBegonnen",
             Self::BeendetDurchMsb { .. } => "WertebestellungBeendetDurchMsb",
             Self::FristVersaeumt { .. } => "WertebestellungFristVersaeumt",
+            Self::AngebotVerfallen => "WertebestellungAngebotVerfallen",
         }
     }
 }
@@ -534,6 +539,19 @@ pub enum WertebestellungState {
         /// Reason.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// WiM Teil 2 Kap. 4 gives the MSB its Angebot (5 WT) and ORDRSP (2 WT) windows and no consequence of missing them. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<WertebestellungState>,
+    },
 }
 
 impl WertebestellungState {
@@ -551,6 +569,16 @@ impl WertebestellungState {
             Self::Storniert(_) => "Storniert",
             Self::Beendet { .. } => "Beendet",
             Self::Abgelehnt { .. } => "Abgelehnt",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -560,17 +588,18 @@ impl WertebestellungState {
     /// delivery path should gate on it rather than on the presence of a
     /// Bestellung alone.
     #[must_use]
-    pub const fn lieferung_erlaubt(&self) -> bool {
+    pub fn lieferung_erlaubt(&self) -> bool {
         matches!(
-            self,
+            self.offen(),
             Self::BestellungBestaetigt { .. } | Self::AbbestellungEingegangen { .. }
         )
     }
 
     /// Process data, when the process has advanced past `New`.
     #[must_use]
-    pub const fn data(&self) -> Option<&WertebestellungData> {
+    pub fn data(&self) -> Option<&WertebestellungData> {
         match self {
+            Self::FristAbgelaufen { offen, .. } => offen.data(),
             Self::AnfrageEingegangen(d)
             | Self::BestellungEingegangen(d)
             | Self::StornierungEingegangen(d)
@@ -780,6 +809,26 @@ impl CommandPayload for WertebestellungCommand {}
 /// ESA Wertebestellung workflow (WiM Strom Teil 2, Kapitel 4).
 pub struct WimWertebestellungWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The Angebot window is open while the Anfrage awaits it, the ORDRSP window
+/// while a Bestellung, Stornierung or Abbestellung awaits its answer, and the
+/// Bindungsfrist while the Angebot awaits its Bestellung. The Bindungsfrist
+/// owes nothing from either party: lapsing without a Bestellung ends the offer,
+/// since UC 4.1 Nr. 3 admits no order after it.
+fn window_open(label: &str, state: &WertebestellungState) -> bool {
+    use WertebestellungState as S;
+    matches!(
+        (state, label),
+        (S::AnfrageEingegangen(_), ANGEBOT_WINDOW_LABEL)
+            | (S::AngebotAbgegeben { .. }, BINDUNGSFRIST_LABEL)
+            | (S::BestellungEingegangen(_), ANTWORT_WINDOW_LABEL)
+            | (S::StornierungEingegangen(_), ANTWORT_WINDOW_LABEL)
+            | (S::AbbestellungEingegangen { .. }, ANTWORT_WINDOW_LABEL)
+    )
+}
+
 /// Default for a persisted `BestellungEingegangen` written before `IMD+7081`
 /// was modelled: those were all Abo starts, since nothing else was renderable.
 const fn default_start_abo() -> Abonnement {
@@ -810,33 +859,32 @@ impl Workflow for WimWertebestellungWorkflow {
     type Event = WertebestellungEvent;
     type Command = WertebestellungCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[
+        ANGEBOT_WINDOW_LABEL,
+        ANTWORT_WINDOW_LABEL,
+        BINDUNGSFRIST_LABEL,
+    ];
+
     /// Turn a fired deadline into the [`WertebestellungCommand::TimeoutExpired`]
-    /// that `handle` already knows how to decide.
-    ///
-    /// Without this hook the three windows this workflow registers —
-    /// [`ANGEBOT_WINDOW_LABEL`], [`ANTWORT_WINDOW_LABEL`] and
-    /// [`BINDUNGSFRIST_LABEL`] — fired into the engine's default `None` and the
-    /// process sat in `AnfrageEingegangen` forever. `handle` decides which of
-    /// them is a Fristversäumnis and which merely ends an offer; this only has
-    /// to make sure the three reach it and nothing else does.
+    /// that records a Fristversäumnis, while the window it names is still
+    /// outstanding — see `window_open`.
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
-        _state: &Self::State,
+        state: &Self::State,
     ) -> Option<Self::Command> {
-        let owned = matches!(
-            deadline.label(),
-            ANGEBOT_WINDOW_LABEL | ANTWORT_WINDOW_LABEL | BINDUNGSFRIST_LABEL
-        );
-        // `handle` already checks whether the window was actually outstanding in
-        // the current state and returns no events when it was not, so the state
-        // filter belongs there and not here.
-        owned.then(|| WertebestellungCommand::TimeoutExpired {
+        window_open(deadline.label(), state).then(|| WertebestellungCommand::TimeoutExpired {
             deadline_id: deadline.deadline_id(),
             label: deadline.label().into(),
         })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            WertebestellungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         use WertebestellungEvent as E;
         use WertebestellungState as S;
         match event {
@@ -1055,7 +1103,29 @@ impl Workflow for WimWertebestellungWorkflow {
             },
             // A missed Frist is recorded for supervision; it does not by itself
             // change the obligation, which stays outstanding until answered.
-            E::FristVersaeumt { .. } => state,
+            // The MSB's own window lapsed with its answer still owed.
+            // UC 4.1 Nr. 3 admits no order after the Bindungsfrist, so
+            // `AngebotAbgegeben` can never advance again, and a process that
+            // cannot advance must release its business key.
+            E::AngebotVerfallen => match state {
+                S::AngebotAbgegeben { bindungsfrist, .. } => S::Abgelehnt {
+                    reason: format!(
+                        "Bindungsfrist des Angebots am {bindungsfrist} abgelaufen, ohne dass \
+                         bestellt wurde"
+                    ),
+                },
+                other => other,
+            },
+            E::FristVersaeumt { label } => match state {
+                S::AnfrageEingegangen(_)
+                | S::BestellungEingegangen(_)
+                | S::StornierungEingegangen(_)
+                | S::AbbestellungEingegangen { .. } => S::FristAbgelaufen {
+                    label: label.clone(),
+                    offen: Box::new(state),
+                },
+                other => other,
+            },
         }
     }
 
@@ -1213,6 +1283,10 @@ impl Workflow for WimWertebestellungWorkflow {
         use WertebestellungEvent as E;
         use WertebestellungState as S;
 
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             C::ReceiveAnfrage {
                 pid,
@@ -1849,22 +1923,16 @@ impl Workflow for WimWertebestellungWorkflow {
             }
 
             C::TimeoutExpired { label, .. } => {
-                let outstanding = matches!(
-                    (state, label.as_ref()),
-                    (S::AnfrageEingegangen(_), ANGEBOT_WINDOW_LABEL)
-                        | (S::BestellungEingegangen(_), ANTWORT_WINDOW_LABEL)
-                        | (S::StornierungEingegangen(_), ANTWORT_WINDOW_LABEL)
-                        | (S::AbbestellungEingegangen { .. }, ANTWORT_WINDOW_LABEL)
-                );
-                if outstanding {
-                    return Ok(vec![E::FristVersaeumt {
-                        label: label.to_string(),
-                    }]
-                    .into());
+                if !window_open(&label, lapsed) {
+                    return Ok(Vec::new().into());
                 }
-                // The Bindungsfrist lapsing without a Bestellung simply ends the
-                // offer; that is not a Fristversäumnis by either party.
-                Ok(Vec::new().into())
+                if &*label == BINDUNGSFRIST_LABEL {
+                    return Ok(vec![E::AngebotVerfallen].into());
+                }
+                Ok(vec![E::FristVersaeumt {
+                    label: label.to_string(),
+                }]
+                .into())
             }
         }
     }

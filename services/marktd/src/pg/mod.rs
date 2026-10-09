@@ -1,7 +1,7 @@
 //! PostgreSQL repository implementations for `marktd`.
 //!
 //! Each `Pg*` struct is a thin `PgPool` wrapper.  The pool is `Clone + Send + Sync`
-//! and can be passed to axum `State<Arc<AppState<...>>>` without extra `Arc` wrapping.
+//! and can be passed to axum `State<Arc<AppState>>` without extra `Arc` wrapping.
 
 use mako_markt::error::MdmError;
 
@@ -55,7 +55,8 @@ pub fn write_error(e: sqlx::Error) -> MdmError {
     match db.code().as_deref() {
         Some(EXCLUSION_VIOLATION) => MdmError::Unprocessable {
             reason: format!(
-                "{}: the row's [valid_from, valid_to) window overlaps one already stored.                  Close the existing row at the new start date, or move valid_from.",
+                "{}: the row's [valid_from, valid_to) window overlaps one already stored. \
+                 Close the existing row at the new start date, or move valid_from.",
                 db.message()
             ),
         },

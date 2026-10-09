@@ -59,15 +59,15 @@ establishment and made available to ENISA at the same time:
 report of exploitation is escalated before it is fully triaged.
 
 Whether mako ships as **manufacturer** or as **open-source software steward**
-decides which obligations bind it; that determination is not yet written down,
-and it changes who files the notification above rather than whether one is owed.
+decides which obligations bind it. This page does not make that determination;
+it changes who files the notification above, not whether one is owed.
 
 ## Supported versions
 
-mako is **unreleased** and pre-1.0. Only `main` is supported: fixes land there,
-and no patch releases are made for earlier tags.
+mako is unreleased and pre-1.0. Fixes land on `main` and ship in the next release; no patch
+releases are made for earlier tags.
 
-## What the artefact carries today
+## What a release carries
 
 Stated plainly, because a security page that overstates is worse than none:
 
@@ -78,8 +78,26 @@ Stated plainly, because a security page that overstates is worse than none:
   either is missing after the manifest merge. Read them with
   `docker buildx imagetools inspect --format '{{ json .Provenance }}' <image>`
   and `--format '{{ json .SBOM }}'`.
-- The images are **not signed**. Provenance says how they were built, not who
-  vouches for them; a signature (cosign/Sigstore) is a separate thing mako does
-  not do yet.
-- There is **no in-binary dependency manifest** yet (`cargo auditable`), so an
-  operator reads the SBOM from the image rather than from the binary.
+- Every service binary embeds its **dependency manifest** (`cargo auditable`,
+  `.dep-v0` section), and it survives `strip`: read it from a binary copied out
+  of an image with `rust-audit-info <binary>` or `cargo audit bin <binary>`. The
+  image build and the release both fail on a binary without one.
+- Each release publishes a **CycloneDX SBOM per service binary** and a
+  **VEX document** (`release/vex.json`, OpenVEX) with one statement for every
+  advisory `deny.toml` accepts, as GitHub Release assets.
+- Each image and each binary inside it carries **GitHub artifact attestations**
+  — build provenance and its CycloneDX SBOM — as keyless Sigstore bundles signed
+  with the release workflow's identity. Verify with
+  `gh attestation verify oci://ghcr.io/hupe1980/mako-<service>:<version> --repo hupe1980/mako`.
+- Crates reach crates.io by **Trusted Publishing** and the Python package PyPI
+  the same way: no registry token is stored in the repository.
+- Every workflow action is pinned to a commit SHA, every base image to a
+  digest, and `cargo xtask check-action-pins` refuses a tag pin.
+- Each release carries an **evidence pack** (`evidence-vX.Y.Z.json`): the
+  extraction-fidelity budgets and measured values, every `just ci` guard with
+  its exit status, the SBOM digests and the attestations; a figure that was not
+  measured reads `not measured`.
+
+The release process and how to check each artefact are on the
+[Release Lifecycle](https://hupe1980.github.io/mako/docs/compliance/release-lifecycle/#what-a-release-carries)
+page.

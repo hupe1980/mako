@@ -32,7 +32,6 @@
 
 use mako_engine::{
     error::WorkflowError,
-    ids::DeadlineId,
     outbox::PendingOutbox,
     types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
@@ -72,9 +71,6 @@ pub const ORDRSP_ABLEHNUNG_PIDS: &[u32] = &[19110, 19115];
 /// | 13014 | Marktlokationsscharfe bilanzierte Menge Strom/Gas (MMMA), Strom side |
 pub const MSCONS_RESPONSE_PIDS: &[u32] = &[13014];
 
-/// Deadline label for the allocation-list response window.
-pub const ANTWORT_WINDOW_LABEL: &str = "gpke-allokationsliste-antwort";
-
 // ── Domain events ─────────────────────────────────────────────────────────────
 
 /// Events emitted by the GPKE Allokationsliste workflow.
@@ -106,13 +102,6 @@ pub enum AllokationslisteEvent {
         /// Message reference of the MSCONS.
         message_ref: MessageRef,
     },
-    /// Deadline expired before response arrived.
-    DeadlineExpired {
-        /// Deadline ID.
-        deadline_id: DeadlineId,
-        /// Deadline label.
-        label: Box<str>,
-    },
 }
 
 impl EventPayload for AllokationslisteEvent {
@@ -121,7 +110,6 @@ impl EventPayload for AllokationslisteEvent {
             Self::AnforderungGesendet { .. } => "AllokationslisteAnforderungGesendet",
             Self::AnforderungAbgelehnt { .. } => "AllokationslisteAnforderungAbgelehnt",
             Self::DatenGeliefert { .. } => "AllokationslisteDatenGeliefert",
-            Self::DeadlineExpired { .. } => "AllokationslisteDeadlineExpired",
         }
     }
 }
@@ -146,7 +134,6 @@ pub struct AnforderungData {
 /// ```text
 /// New → AnforderungGesendet → DatenErhalten
 ///                          ↘ Abgelehnt
-///                          ↘ DeadlineExpired
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
@@ -171,11 +158,6 @@ pub enum AllokationslisteState {
         /// Original request.
         anforderung: AnforderungData,
     },
-    /// Deadline expired.
-    DeadlineExpired {
-        /// Original request.
-        anforderung: AnforderungData,
-    },
 }
 
 impl AllokationslisteState {
@@ -187,17 +169,13 @@ impl AllokationslisteState {
             Self::AnforderungGesendet(_) => "AnforderungGesendet",
             Self::Abgelehnt { .. } => "Abgelehnt",
             Self::DatenErhalten { .. } => "DatenErhalten",
-            Self::DeadlineExpired { .. } => "DeadlineExpired",
         }
     }
 
     /// Whether terminal.
     #[must_use]
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
-            Self::Abgelehnt { .. } | Self::DatenErhalten { .. } | Self::DeadlineExpired { .. }
-        )
+        matches!(self, Self::Abgelehnt { .. } | Self::DatenErhalten { .. })
     }
 }
 
@@ -233,13 +211,6 @@ pub enum AllokationslisteCommand {
         /// Message reference.
         message_ref: MessageRef,
     },
-    /// Deadline fired.
-    TimeoutExpired {
-        /// Deadline ID.
-        deadline_id: DeadlineId,
-        /// Deadline label.
-        label: Box<str>,
-    },
 }
 
 impl CommandPayload for AllokationslisteCommand {}
@@ -247,27 +218,18 @@ impl CommandPayload for AllokationslisteCommand {}
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
 /// GPKE Allokationsliste workflow — LF requests allocation and billing-basis data.
+///
+/// The workflow registers no Frist. The MMM AWH V2.1 answers the Gas
+/// Abonnement (17110) „unverzüglich", which counts nothing, and its 1-WT
+/// window on the Strom Bestellung der bilanzierten Menge (17114, Kap. 4.1.2.3
+/// Nr. 2) has no application from 01.10.2026 (Kap. 4.1.2.2 „Weitere
+/// Anforderungen").
 pub struct GpkeAllokationslisteWorkflow;
 
 impl Workflow for GpkeAllokationslisteWorkflow {
     type State = AllokationslisteState;
     type Event = AllokationslisteEvent;
     type Command = AllokationslisteCommand;
-
-    fn on_deadline(
-        deadline: &mako_engine::deadline::Deadline,
-        state: &Self::State,
-    ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (ANTWORT_WINDOW_LABEL, AllokationslisteState::AnforderungGesendet(_)) => {
-                Some(AllokationslisteCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
-    }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
         match event {
@@ -297,12 +259,6 @@ impl Workflow for GpkeAllokationslisteWorkflow {
             AllokationslisteEvent::DatenGeliefert { .. } => match state {
                 AllokationslisteState::AnforderungGesendet(anforderung) => {
                     AllokationslisteState::DatenErhalten { anforderung }
-                }
-                other => other,
-            },
-            AllokationslisteEvent::DeadlineExpired { .. } => match state {
-                AllokationslisteState::AnforderungGesendet(anforderung) => {
-                    AllokationslisteState::DeadlineExpired { anforderung }
                 }
                 other => other,
             },
@@ -380,13 +336,6 @@ impl Workflow for GpkeAllokationslisteWorkflow {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![AllokationslisteEvent::DatenGeliefert { message_ref }].into())
-            }
-
-            AllokationslisteCommand::TimeoutExpired { deadline_id, label } => {
-                if state.is_terminal() {
-                    return Ok(WorkflowOutput::events(vec![]));
-                }
-                Ok(vec![AllokationslisteEvent::DeadlineExpired { deadline_id, label }].into())
             }
         }
     }

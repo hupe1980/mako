@@ -91,7 +91,10 @@ pub struct ResolveProductParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "reached only in some feature or target combinations"
+)]
 pub struct CustomerProductParams {
     pub malo_id: String,
     pub lf_mp_id: String,
@@ -101,14 +104,6 @@ pub struct CustomerProductParams {
 pub struct EpexPriceParams {
     /// Date in ISO-8601 format (YYYY-MM-DD).
     pub date: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct ExpiringContractsParams {
-    /// LF MP-ID to filter contracts for.
-    pub lf_mp_id: String,
-    /// Days until expiry threshold (default 60 — show contracts ending within 2 months).
-    pub days_ahead: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -150,9 +145,15 @@ pub struct ExplainInvoicePositionParams {
 #[derive(Clone)]
 pub struct ProductdMcpHandler {
     state: Arc<ProductdMcpState>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     tool_router: ToolRouter<ProductdMcpHandler>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     prompt_router: PromptRouter<ProductdMcpHandler>,
 }
 
@@ -552,9 +553,7 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
         // Single-source of truth: run the EXACT validation the PUT endpoint
         // runs (`crate::handlers::normalize_tarifpreisblatt`), so config that
         // this tool blesses cannot be rejected by the write path and vice
-        // versa. Previously this was a separate re-implementation that
-        // diverged on `_version`, `preisstaffeln`, and the sparte↔category
-        // cross-check.
+        // versa.
         let category = p.category.to_uppercase();
         match crate::handlers::normalize_tarifpreisblatt(&category, p.data.clone()) {
             Ok(_) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(

@@ -6,7 +6,7 @@
 //!
 //! # Write / read split
 //!
-//! - [`NewEvent`] is what the caller submits to [`EventStore::append`][crate::event_store::EventStore::append]. It
+//! - [`NewEvent`] is what the caller submits to [`AtomicAppend::append`][crate::event_store::AtomicAppend::append]. It
 //!   contains everything the *caller* knows: context IDs, the typed payload.
 //!   It intentionally **omits** `event_id`, `stream_id`, `sequence_number`,
 //!   and `timestamp` — the store assigns those atomically during the append.
@@ -80,7 +80,10 @@ impl NewEvent {
     /// In application code, prefer
     /// [`CommandContext::new_event`][crate::workflow::CommandContext::new_event]
     /// which propagates correlation metadata automatically.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
     #[must_use]
     pub fn new(
         correlation_id: CorrelationId,
@@ -118,7 +121,7 @@ impl NewEvent {
 /// ## Sequence numbers
 ///
 /// `sequence_number` is 1-based and monotonically increasing **per stream**.
-/// It is assigned by the [`EventStore`] during [`EventStore::append`] and
+/// It is assigned by the [`EventStore`] during [`AtomicAppend::append`] and
 /// must not be set by callers.
 ///
 /// ## Immutability
@@ -127,7 +130,7 @@ impl NewEvent {
 /// new events.
 ///
 /// [`EventStore`]: crate::event_store::EventStore
-/// [`EventStore::append`]: crate::event_store::EventStore::append
+/// [`AtomicAppend::append`]: crate::event_store::AtomicAppend::append
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EventEnvelope {
     /// Globally unique event instance identifier (assigned by store).

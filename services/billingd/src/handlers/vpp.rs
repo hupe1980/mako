@@ -138,9 +138,7 @@ pub async fn post_vpp_billing(
 
     let (period_from, period_to) = parse_period(&req.period_from, &req.period_to)?;
 
-    let mwst_rate = req
-        .mwst_rate_override
-        .unwrap_or_else(|| cfg.regulatory_rates().mwst_rate);
+    let mwst_rate = req.mwst_rate_override.unwrap_or_else(|| cfg.mwst_rate());
 
     // Dispatches already settled — by an earlier run of this endpoint or by the
     // auto-settlement webhook — are excluded before anything is priced.
@@ -307,7 +305,7 @@ pub async fn post_vpp_billing(
         }),
     );
     issue_record(&mut tx, cfg, record_id, &ce).await?;
-    crate::einvoice::store(&mut *tx, record_id, &invoice, cfg, &req.malo_id).await?;
+    crate::einvoice::store(&mut tx, record_id, &invoice, cfg, &req.malo_id).await?;
     tx.commit().await?;
 
     Ok((
@@ -659,7 +657,7 @@ pub async fn post_vpp_webhook(
 
     let mwst_rate = contract
         .mwst_rate_override
-        .unwrap_or_else(|| cfg.regulatory_rates().mwst_rate);
+        .unwrap_or_else(|| cfg.mwst_rate());
 
     // From the tenant's `VG` (Gutschrift) series, like the manual path. The old
     // `VPP-{vpp}-{date}-{tx-prefix}` string was einmalig only as long as no two
@@ -801,7 +799,7 @@ pub async fn post_vpp_webhook(
         }
     }
     if let Err(e) =
-        crate::einvoice::store(&mut *tx, record_id, &invoice, cfg, &contract.malo_id).await
+        crate::einvoice::store(&mut tx, record_id, &invoice, cfg, &contract.malo_id).await
     {
         tracing::error!(%record_id, error = ?e, "billingd: attach en16931 model failed");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();

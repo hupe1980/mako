@@ -84,7 +84,7 @@ use mako_engine::{
     error::WorkflowError,
     projection::Projection,
     types::{BikoId, BillingPeriod, MarktpartnerCode, MessageRef},
-    workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
+    workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
 
 use mako_pruefung::mabis::MabisAntwort;
@@ -676,6 +676,16 @@ pub enum BillingState {
     Geschlossen(BillingData),
 }
 
+impl mako_engine::workflow::OccupiesBusinessKey for BillingState {
+    /// A settlement holds its MaBiS-Zählpunkt and Bilanzierungsmonat for good:
+    /// versions accumulate while it is open, and a closed one refuses a late
+    /// version rather than yielding to a second settlement of the same
+    /// Zählpunkt and month.
+    fn occupies_business_key(&self) -> bool {
+        !matches!(self, Self::New)
+    }
+}
+
 impl BillingState {
     /// Stable string label for the current variant.
     #[must_use]
@@ -723,6 +733,12 @@ pub enum BillingCommand {
         version: SzrVersion,
         /// Whether the arrival date fell inside the Erstaufschlag window.
         im_erstaufschlag: bool,
+        /// When the BKA clearing window for this Zeitreihe closes —
+        /// [`crate::fristen::Bilanzierungsmonat::clearing_ende`], a calendar
+        /// fact like `im_erstaufschlag`. The version that opens the settlement
+        /// registers it as the [`crate::fristen::CLEARING_ENDE_LABEL`]
+        /// deadline; `None` where Tabelle 2 defines no window.
+        clearing_ende: Option<time::OffsetDateTime>,
         /// Party that sent it.
         absender: MarktpartnerCode,
         /// Bilanzkoordinator of this settlement.
@@ -792,6 +808,8 @@ impl Workflow for MabisBillingWorkflow {
     type State = BillingState;
     type Event = BillingEvent;
     type Command = BillingCommand;
+
+    const DEADLINE_LABELS: &'static [&'static str] = &[crate::fristen::CLEARING_ENDE_LABEL];
 
     /// Close the settlement when the clearing window lapses.
     ///
@@ -889,6 +907,7 @@ impl Workflow for MabisBillingWorkflow {
                 bilanzierungsmonat,
                 version,
                 im_erstaufschlag,
+                clearing_ende,
                 absender,
                 biko_id,
                 message_ref,
@@ -927,7 +946,14 @@ impl Workflow for MabisBillingWorkflow {
                     }
                     BillingState::New => {}
                 }
-                Ok(vec![BillingEvent::SummenzeitreiheReceived {
+                // The version that opens the settlement starts its clearing
+                // window; later versions arrive inside the one already running.
+                let fenster: Vec<PendingDeadline> = clearing_ende
+                    .filter(|_| matches!(state, BillingState::New))
+                    .map(|due| PendingDeadline::new(crate::fristen::CLEARING_ENDE_LABEL, due))
+                    .into_iter()
+                    .collect();
+                let events = vec![BillingEvent::SummenzeitreiheReceived {
                     zeitreihe,
                     mabis_zp,
                     bilanzierungsmonat,
@@ -936,8 +962,12 @@ impl Workflow for MabisBillingWorkflow {
                     absender,
                     biko_id,
                     message_ref,
-                }]
-                .into())
+                }];
+                Ok(WorkflowOutput::with_outbox_and_deadlines(
+                    events,
+                    Vec::new(),
+                    fenster,
+                ))
             }
 
             BillingCommand::SendPruefmitteilung {
@@ -1224,6 +1254,7 @@ mod tests {
             bilanzierungsmonat: BillingPeriod::new("2026-01"),
             version: v(version),
             im_erstaufschlag,
+            clearing_ende: Some(time::OffsetDateTime::UNIX_EPOCH),
             absender: MarktpartnerCode::new("9900357000004"),
             biko_id: BikoId::new("10YDE-VE-TRANSMIX"),
             message_ref: MessageRef::new(format!("MSCONS-{version}")),
@@ -1239,6 +1270,21 @@ mod tests {
             let out = MabisBillingWorkflow::handle(&s, c).expect("command accepted");
             apply_all(s, &out.events)
         })
+    }
+
+    /// The version that opens the settlement registers the close of its
+    /// clearing window; a later version registers nothing, because the window
+    /// is already running.
+    #[test]
+    fn the_first_version_registers_the_clearing_close() {
+        let first = MabisBillingWorkflow::handle(&BillingState::default(), receive(1, true))
+            .expect("accepted");
+        let labels: Vec<&str> = first.deadlines.iter().map(|d| d.label.as_str()).collect();
+        assert_eq!(labels, [crate::fristen::CLEARING_ENDE_LABEL]);
+
+        let state = apply_all(BillingState::default(), &first.events);
+        let second = MabisBillingWorkflow::handle(&state, receive(2, false)).expect("accepted");
+        assert!(second.deadlines.is_empty());
     }
 
     #[test]

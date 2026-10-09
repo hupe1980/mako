@@ -1,7 +1,7 @@
 //! HTTP handlers for `sperrd`.
 //!
 //! Every route is authenticated (`Claims`) **and** authorized (Cedar);
-//! `tests/authorization_guard.rs` pins both. Authentication alone would let a
+//! `tests/it/authorization_guard.rs` pins both. Authentication alone would let a
 //! valid token from any tenant order a disconnection in this operator's name.
 
 use axum::{
@@ -32,15 +32,6 @@ use crate::{
     },
 };
 
-/// The 403 body every Cedar denial returns.
-fn forbidden(e: &mako_service::cedar::CedarError) -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        Json(serde_json::json!({ "error": e.to_string() })),
-    )
-        .into_response()
-}
-
 #[derive(Debug, Deserialize)]
 pub struct OrdersQuery {
     /// `pending` | `executed` | `failed` | `cancelled`.
@@ -68,7 +59,7 @@ pub async fn create_order(
     Json(req): Json<CreateOrderRequest>,
 ) -> ApiResult<Response> {
     if let Err(e) = cedar.check(&claims.principal(), "create-sperr-order", &tenant) {
-        return Ok(forbidden(&e));
+        return Err(ApiError::forbidden(e.to_string()));
     }
     req.validate().map_err(ApiError::unprocessable)?;
     let Some(id) = create_order_pg(&pool, &tenant, &req).await? else {
@@ -91,7 +82,7 @@ pub async fn list_orders(
     Query(q): Query<OrdersQuery>,
 ) -> ApiResult<Response> {
     if let Err(e) = cedar.check(&claims.principal(), "read-sperr-order", &tenant) {
-        return Ok(forbidden(&e));
+        return Err(ApiError::forbidden(e.to_string()));
     }
     // An unknown status is a client error, not a filter that quietly matches
     // nothing and looks like "no work outstanding".
@@ -122,7 +113,7 @@ pub async fn get_order(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Response> {
     if let Err(e) = cedar.check(&claims.principal(), "read-sperr-order", &tenant) {
-        return Ok(forbidden(&e));
+        return Err(ApiError::forbidden(e.to_string()));
     }
     let row = fetch_order_pg(&pool, id, &tenant)
         .await?
@@ -158,7 +149,7 @@ pub async fn execute_order(
     Json(req): Json<ExecuteRequest>,
 ) -> ApiResult<Response> {
     if let Err(e) = cedar.check(&claims.principal(), "execute-sperr-order", &tenant) {
-        return Ok(forbidden(&e));
+        return Err(ApiError::forbidden(e.to_string()));
     }
     let executed_at = match req.executed_at.as_deref() {
         Some(s) => OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
@@ -224,7 +215,7 @@ pub async fn fail_order(
     Json(req): Json<FailRequest>,
 ) -> ApiResult<Response> {
     if let Err(e) = cedar.check(&claims.principal(), "execute-sperr-order", &tenant) {
-        return Ok(forbidden(&e));
+        return Err(ApiError::forbidden(e.to_string()));
     }
     if req.reason.trim().is_empty() {
         return Err(ApiError::unprocessable(
@@ -343,7 +334,7 @@ pub async fn get_stats(
     Extension(Tenant(tenant)): Extension<Tenant>,
 ) -> ApiResult<Response> {
     if let Err(e) = cedar.check(&claims.principal(), "read-sperr-order", &tenant) {
-        return Ok(forbidden(&e));
+        return Err(ApiError::forbidden(e.to_string()));
     }
     Ok(Json(stats_pg(&pool, &tenant).await?).into_response())
 }

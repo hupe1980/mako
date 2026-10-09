@@ -26,8 +26,7 @@
 //!
 //! # Atomicity
 //!
-//! [`SlateDbStore::append`], [`SlateDbStore::append_with_outbox`], and all
-//! counter-maintaining outbox/deadline/registry writes use
+//! [`AtomicAppend::append`] and all counter-maintaining outbox/deadline/registry writes use
 //! **Serializable Snapshot Isolation (SSI)** transactions
 //! (`IsolationLevel::SerializableSnapshot`). SSI is pinned explicitly — never
 //! `IsolationLevel::default()` — so an upstream SlateDB change to its default
@@ -36,8 +35,8 @@
 //! SSI detects write-write conflicts on shared keys (e.g. `sv/{stream_id}`,
 //! `_count/om`, `_count/dl`, `_count/pr`). When two concurrent writers race,
 //! the second commit is rejected with `ErrorKind::Transaction`, mapped to
-//! [`EngineError::VersionConflict`]. This eliminates the TOCTOU window that
-//! existed with the previous `get → check → WriteBatch::write` pattern.
+//! [`EngineError::VersionConflict`] — no TOCTOU window between the version
+//! check and the write, which a blind `get → check → WriteBatch::write` has.
 //!
 //! # Opening
 //!
@@ -65,10 +64,13 @@ use crate::{
     deadline::{Deadline, DeadlineStore, DueNowResult},
     envelope::{EventEnvelope, NewEvent},
     error::EngineError,
-    event_store::{AppendResult, AtomicAppend, EventStore, ExpectedVersion},
+    event_store::{
+        AppendBatch, AppendResult, AtomicAppend, EventStore, ExpectedVersion,
+        validate_correlation_tag,
+    },
     ids::{DeadlineId, OutboxMessageId, ProcessIdentity, StreamId, TenantId},
     inbox::InboxStore,
-    outbox::{OutboxMessage, OutboxStore, PendingOutbox},
+    outbox::{OutboxMessage, OutboxStore},
     registry::{ProcessRegistry, RegistryKey},
     snapshot::{Snapshot, SnapshotStore},
 };
@@ -222,7 +224,10 @@ fn pr_key(tenant_id: TenantId, key: &RegistryKey) -> String {
 
 /// Prefix for all routing entries belonging to `tenant_id`.
 #[cfg(test)]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "reached only in some feature or target combinations"
+)]
 fn pr_tenant_prefix(tenant_id: TenantId) -> String {
     format!("pr/{tenant_id}/")
 }
@@ -243,40 +248,6 @@ fn ci_key(tenant_id: TenantId, tag: &str, process_id: crate::ids::ProcessId) -> 
 /// Used for `scan_prefix` in `lookup_correlated`.
 fn ci_tag_prefix(tenant_id: TenantId, tag: &str) -> String {
     format!("ci/{tenant_id}/{tag}/")
-}
-
-/// Validate a correlated-index tag before use in a key.
-///
-/// Rejects tags that would corrupt the `ci/{tenant}/{tag}/{process}` key
-/// structure and produce cross-tag scan boundary leakage:
-///
-/// - Tags containing `\0` can corrupt key scan boundaries on byte-string
-///   backends and are forbidden by the `RegistryKey` contract.
-/// - Empty tags would collapse the tag segment and make lookups ambiguous.
-/// - Tags containing `/` create a sub-prefix that leaks into or out of sibling
-///   tags when scanning by prefix.
-/// - Tags exceeding 128 bytes offer no additional expressiveness and could
-///   create abnormally long keys.
-fn validate_ci_tag(tag: &str) -> Result<(), EngineError> {
-    if tag.contains('\0') {
-        return Err(EngineError::registry(
-            "ci tag must not contain NUL bytes ('\\0')",
-        ));
-    }
-    if tag.is_empty() {
-        return Err(EngineError::registry("ci tag must not be empty"));
-    }
-    if tag.contains('/') {
-        return Err(EngineError::registry(
-            "ci tag must not contain '/' — use '-' or ':' as a separator",
-        ));
-    }
-    if tag.len() > 128 {
-        return Err(EngineError::registry(
-            "ci tag exceeds the 128-byte maximum length",
-        ));
-    }
-    Ok(())
 }
 
 // ── Inbox key helpers ─────────────────────────────────────────────────────────
@@ -347,7 +318,10 @@ pub(crate) fn slatedb_error_is_transient(e: &slatedb::Error) -> bool {
     matches!(e.kind(), ErrorKind::Unavailable | ErrorKind::Closed(_))
 }
 
-#[expect(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the signature fits the `map_err` it is passed to"
+)]
 fn to_store_err(e: slatedb::Error) -> EngineError {
     tracing::error!(error = %e, "event store error");
     if slatedb_error_is_transient(&e) {
@@ -357,7 +331,10 @@ fn to_store_err(e: slatedb::Error) -> EngineError {
     }
 }
 
-#[expect(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the signature fits the `map_err` it is passed to"
+)]
 fn to_outbox_err(e: slatedb::Error) -> EngineError {
     tracing::error!(error = %e, "outbox store error");
     if slatedb_error_is_transient(&e) {
@@ -367,7 +344,10 @@ fn to_outbox_err(e: slatedb::Error) -> EngineError {
     }
 }
 
-#[expect(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the signature fits the `map_err` it is passed to"
+)]
 fn to_deadline_err(e: slatedb::Error) -> EngineError {
     tracing::error!(error = %e, "deadline store error");
     if slatedb_error_is_transient(&e) {
@@ -377,7 +357,10 @@ fn to_deadline_err(e: slatedb::Error) -> EngineError {
     }
 }
 
-#[expect(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the signature fits the `map_err` it is passed to"
+)]
 fn to_registry_err(e: slatedb::Error) -> EngineError {
     tracing::error!(error = %e, "process registry error");
     if slatedb_error_is_transient(&e) {
@@ -387,7 +370,10 @@ fn to_registry_err(e: slatedb::Error) -> EngineError {
     }
 }
 
-#[expect(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the signature fits the `map_err` it is passed to"
+)]
 fn to_inbox_err(e: slatedb::Error) -> EngineError {
     tracing::error!(error = %e, "inbox store error");
     if slatedb_error_is_transient(&e) {
@@ -418,7 +404,7 @@ pub struct SlateDbStore {
     /// Maximum number of events allowed per stream.
     ///
     /// `None` (the default) means unlimited.  When set, any `append` or
-    /// `append_with_outbox` call that would push a stream past this limit
+    /// `append` call that would push a stream past this limit
     /// returns [`EngineError::StreamQuotaExceeded`] before opening a
     /// transaction, acting as a hard guard against unbounded stream growth.
     max_stream_events: Option<u64>,
@@ -533,7 +519,7 @@ impl SlateDbStore {
 
     /// Set a per-stream event count limit for this store.
     ///
-    /// Any [`EventStore::append`] or [`AtomicAppend::append_with_outbox`] call
+    /// Any [`AtomicAppend::append`] call
     /// that would push a stream beyond `max_events` returns
     /// [`EngineError::StreamQuotaExceeded`].
     ///
@@ -735,28 +721,7 @@ impl SlateDbStore {
             write_outbox_entries_txn(&txn, messages)?;
         }
 
-        if !deadlines.is_empty() {
-            let dl_count_before = read_dl_count_txn(&txn).await?;
-            txn.put(
-                DL_COUNT_KEY,
-                (dl_count_before + deadlines.len() as u64)
-                    .to_le_bytes()
-                    .as_slice(),
-            )
-            .map_err(to_deadline_err)?;
-            for deadline in deadlines {
-                let payload = serde_json::to_vec(deadline)
-                    .map_err(|e| EngineError::deadline(e.to_string()))?;
-                let dl_k = dl_key(&deadline.deadline_id());
-                let time_key = dt_key(deadline.due_at(), &deadline.deadline_id());
-                let stream_key = ds_key(deadline.stream_id(), &deadline.deadline_id());
-                txn.put(dl_k.as_bytes(), payload.as_slice())
-                    .map_err(to_deadline_err)?;
-                txn.put(time_key.as_bytes(), b"").map_err(to_deadline_err)?;
-                txn.put(stream_key.as_bytes(), b"")
-                    .map_err(to_deadline_err)?;
-            }
-        }
+        write_deadlines_txn(&txn, deadlines).await?;
 
         txn.commit().await.map_err(to_store_err)?;
         Ok(())
@@ -951,7 +916,7 @@ impl KvNamespace {
     }
 }
 
-// ── Free helpers shared by append and append_with_outbox ─────────────────────
+// ── Free helpers for append ───────────────────────────────────────────────────
 
 fn check_version(expected: ExpectedVersion, actual: u64) -> Result<(), EngineError> {
     match expected {
@@ -1065,36 +1030,6 @@ fn map_txn_commit_err(
 // ── EventStore impl ───────────────────────────────────────────────────────────
 
 impl EventStore for SlateDbStore {
-    async fn append(
-        &self,
-        stream_id: &StreamId,
-        expected_version: ExpectedVersion,
-        events: &[NewEvent],
-    ) -> Result<AppendResult, EngineError> {
-        //  always use SSI — never IsolationLevel::default() — so an
-        // upstream SlateDB change to its default cannot silently degrade isolation.
-        let txn = self
-            .db
-            .begin(IsolationLevel::SerializableSnapshot)
-            .await
-            .map_err(to_store_err)?;
-
-        let current = read_version_in_txn(&txn, stream_id).await?;
-        check_version(expected_version, current)?;
-        self.check_quota(stream_id, current, events.len())?;
-
-        let now = OffsetDateTime::now_utc();
-        let envelopes = stamp_events_txn(&txn, stream_id, current, events, now)?;
-        txn.commit()
-            .await
-            .map_err(|e| map_txn_commit_err(e, expected_version, current))?;
-
-        Ok(AppendResult {
-            last_sequence: current + events.len() as u64,
-            events: envelopes,
-        })
-    }
-
     async fn load(&self, stream_id: &StreamId) -> Result<Vec<EventEnvelope>, EngineError> {
         self.load_from(stream_id, 0).await
     }
@@ -1290,168 +1225,67 @@ impl EventStore for SlateDbStore {
 
 // ── AtomicAppend impl ─────────────────────────────────────────────────────────
 
-/// Materialises a [`PendingOutbox`] value into a fully-typed [`OutboxMessage`]
-/// using the context carried in the corresponding stamped [`EventEnvelope`].
-///
-/// `caused_by_event_index` is clamped to `envelopes.len() - 1`.
-fn materialise_outbox(
-    pending: &PendingOutbox,
-    stream_id: &StreamId,
-    envelopes: &[EventEnvelope],
-    now: OffsetDateTime,
-) -> OutboxMessage {
-    // Clamp index so out-of-range values always point to the last event.
-    let idx = pending
-        .caused_by_event_index
-        .min(envelopes.len().saturating_sub(1));
-    let env = &envelopes[idx];
-    OutboxMessage {
-        message_id: crate::ids::OutboxMessageId::new(),
-        stream_id: stream_id.clone(),
-        process_id: env.process_id,
-        tenant_id: env.tenant_id,
-        correlation_id: env.correlation_id,
-        conversation_id: env.conversation_id,
-        causation_event_id: env.event_id,
-        message_type: pending.message_type.clone(),
-        recipient: pending.recipient.clone(),
-        trace_context: crate::trace_ctx::current().map(Into::into),
-        payload: pending.payload.clone(),
-        payload_schema: pending.payload_schema.clone(),
-        created_at: now,
-        deliver_after: pending.deliver_after,
-        attempt_count: 0,
-        workflow_name: env.workflow_id.name.clone(),
+/// Register `deadlines` inside `txn`, keeping the `_count/dl` counter in step.
+async fn write_deadlines_txn(
+    txn: &slatedb::DbTransaction,
+    deadlines: &[Deadline],
+) -> Result<(), EngineError> {
+    if deadlines.is_empty() {
+        return Ok(());
     }
+    let dl_count_before = read_dl_count_txn(txn).await?;
+    txn.put(
+        DL_COUNT_KEY,
+        (dl_count_before + deadlines.len() as u64)
+            .to_le_bytes()
+            .as_slice(),
+    )
+    .map_err(to_deadline_err)?;
+    for deadline in deadlines {
+        let payload =
+            serde_json::to_vec(deadline).map_err(|e| EngineError::deadline(e.to_string()))?;
+        let dl_k = dl_key(&deadline.deadline_id());
+        let time_key = dt_key(deadline.due_at(), &deadline.deadline_id());
+        let stream_key = ds_key(deadline.stream_id(), &deadline.deadline_id());
+        txn.put(dl_k.as_bytes(), payload.as_slice())
+            .map_err(to_deadline_err)?;
+        txn.put(time_key.as_bytes(), b"").map_err(to_deadline_err)?;
+        txn.put(stream_key.as_bytes(), b"")
+            .map_err(to_deadline_err)?;
+    }
+    Ok(())
 }
 
 impl AtomicAppend for SlateDbStore {
-    /// Atomically append `events` to `stream_id` **and** enqueue `outbox`
-    /// messages in a single SlateDB transaction.
-    ///
-    /// The `outbox` slice contains lightweight [`PendingOutbox`] values produced
-    /// by [`crate::workflow::Workflow::handle`]. This method stamps the events first, then
-    /// materialises each pending outbox entry into a full [`OutboxMessage`]
-    /// using the context fields from the stamped envelopes (including the
-    /// store-assigned `event_id` as `causation_event_id`). Both the events and
-    /// the outbox messages are committed in the same transaction, so a crash
-    /// cannot produce a partially-written state, and a concurrent writer is
-    /// detected as a [`EngineError::VersionConflict`] rather than silently
-    /// overwriting.
+    /// Write `batch` — events, outbox entries, deadlines and correlation
+    /// entries — in one SSI transaction.
     ///
     /// ## Durability guarantee (WAL)
     ///
     /// SlateDB uses a write-ahead log (WAL) backed by the same object store as
     /// the SSTable data. The transaction `.commit()` call below does **not**
     /// return until the WAL entry has been flushed and acknowledged by the
-    /// object store. Therefore, once this method returns `Ok(_)` the write is
-    /// durable: it survives a process crash and will be replayed from the WAL
-    /// on the next `SlateDbStore::open*` call.
+    /// object store, so once this returns `Ok(_)` the whole batch survives a
+    /// process crash and is replayed from the WAL on the next `open*`.
     ///
-    /// Because events and outbox entries land in the **same** `WriteBatch` /
-    /// transaction, both are present or both are absent after a crash. It is
-    /// never safe to write events first and outbox second in separate
-    /// transactions — a crash between the two would produce a committed event
-    /// without a corresponding APERAK being enqueued (silent data loss).
-    ///
-    /// # Errors
-    ///
-    /// - [`EngineError::VersionConflict`] — optimistic concurrency check failed
-    ///   (either the version pre-check or a transaction commit conflict).
-    /// - [`EngineError::Store`] / [`EngineError::Outbox`] — storage failure.
-    async fn append_with_outbox(
-        &self,
-        stream_id: &StreamId,
-        expected_version: ExpectedVersion,
-        events: &[NewEvent],
-        outbox: &[PendingOutbox],
-    ) -> Result<AppendResult, EngineError> {
-        //  always use SSI — never IsolationLevel::default().
-        let txn = self
-            .db
-            .begin(IsolationLevel::SerializableSnapshot)
-            .await
-            .map_err(to_store_err)?;
-
-        let current = read_version_in_txn(&txn, stream_id).await?;
-        check_version(expected_version, current)?;
-        self.check_quota(stream_id, current, events.len())?;
-
-        let now = OffsetDateTime::now_utc();
-        let envelopes = stamp_events_txn(&txn, stream_id, current, events, now)?;
-
-        if !outbox.is_empty() {
-            let messages: Vec<OutboxMessage> = outbox
-                .iter()
-                .map(|p| materialise_outbox(p, stream_id, &envelopes, now))
-                .collect();
-            // Increment the O(1) counter alongside the outbox entries.
-            let current_count = read_om_count_txn(&txn).await?;
-            let new_count = current_count + messages.len() as u64;
-            txn.put(OM_COUNT_KEY, new_count.to_le_bytes().as_slice())
-                .map_err(to_outbox_err)?;
-            write_outbox_entries_txn(&txn, &messages)?;
-        }
-
-        txn.commit()
-            .await
-            .map_err(|e| map_txn_commit_err(e, expected_version, current))?;
-
-        Ok(AppendResult {
-            last_sequence: current + events.len() as u64,
-            events: envelopes,
-        })
-    }
-
-    /// Atomically append `events`, enqueue `outbox` entries, **and** register
-    /// `deadlines` in a single SSI transaction.
-    ///
-    /// All three sets of writes land in one `txn.commit()`, eliminating the
-    /// non-atomic window that exists when `append_with_outbox` is followed by
-    /// separate `DeadlineStore::register` calls.  A crash after the transaction
-    /// but before a separate deadline registration would leave the process
-    /// without its regulatory deadline; this method removes that risk.
-    async fn append_with_outbox_and_deadlines(
-        &self,
-        stream_id: &StreamId,
-        expected_version: ExpectedVersion,
-        events: &[NewEvent],
-        outbox: &[crate::outbox::PendingOutbox],
-        deadlines: &[crate::deadline::Deadline],
-    ) -> Result<AppendResult, EngineError> {
-        self.append_with_outbox_deadlines_and_correlations(
+    /// Because all four parts land in the **same** transaction, they are all
+    /// present or all absent after a crash: no committed event without its
+    /// APERAK, its Frist, or the business key its counterparty's reply
+    /// resolves through.
+    async fn append(&self, batch: AppendBatch<'_>) -> Result<AppendResult, EngineError> {
+        // Refuse a malformed batch before opening the transaction.
+        batch.validate()?;
+        let AppendBatch {
             stream_id,
             expected_version,
             events,
             outbox,
             deadlines,
-            &[],
-        )
-        .await
-    }
+            correlations,
+        } = batch;
 
-    async fn append_with_outbox_deadlines_and_correlations(
-        &self,
-        stream_id: &StreamId,
-        expected_version: ExpectedVersion,
-        events: &[NewEvent],
-        outbox: &[crate::outbox::PendingOutbox],
-        deadlines: &[crate::deadline::Deadline],
-        correlations: &[crate::event_store::CorrelationEntry],
-    ) -> Result<AppendResult, EngineError> {
-        if deadlines.is_empty() && correlations.is_empty() {
-            // Degenerate to the base method when there is nothing extra to write.
-            return self
-                .append_with_outbox(stream_id, expected_version, events, outbox)
-                .await;
-        }
-
-        // Reject a malformed business key before opening the transaction: a
-        // rejected tag must not abort a batch that has already staged events.
-        for c in correlations {
-            validate_ci_tag(&c.tag)?;
-        }
-
+        //  always use SSI — never IsolationLevel::default() — so an
+        // upstream SlateDB change to its default cannot silently degrade isolation.
         let txn = self
             .db
             .begin(IsolationLevel::SerializableSnapshot)
@@ -1466,11 +1300,11 @@ impl AtomicAppend for SlateDbStore {
         let envelopes = stamp_events_txn(&txn, stream_id, current, events, now)?;
 
         // ── Outbox ────────────────────────────────────────────────────────────
-        if !outbox.is_empty() {
-            let messages: Vec<crate::outbox::OutboxMessage> = outbox
-                .iter()
-                .map(|p| materialise_outbox(p, stream_id, &envelopes, now))
-                .collect();
+        let messages: Vec<OutboxMessage> = outbox
+            .iter()
+            .map(|p| crate::outbox::materialise(p, stream_id, &envelopes, now))
+            .collect();
+        if !messages.is_empty() {
             let current_count = read_om_count_txn(&txn).await?;
             let new_count = current_count + messages.len() as u64;
             txn.put(OM_COUNT_KEY, new_count.to_le_bytes().as_slice())
@@ -1479,38 +1313,13 @@ impl AtomicAppend for SlateDbStore {
         }
 
         // ── Deadlines ─────────────────────────────────────────────────────────
-        //
-        // All deadlines are new (we just spawned the process), so we increment
-        // the counter by `deadlines.len()` without a per-deadline existence check.
-        if !deadlines.is_empty() {
-            let dl_count_before = read_dl_count_txn(&txn).await?;
-            txn.put(
-                DL_COUNT_KEY,
-                (dl_count_before + deadlines.len() as u64)
-                    .to_le_bytes()
-                    .as_slice(),
-            )
-            .map_err(to_deadline_err)?;
-        }
-        for deadline in deadlines {
-            let payload =
-                serde_json::to_vec(deadline).map_err(|e| EngineError::deadline(e.to_string()))?;
-            let dl_k = dl_key(&deadline.deadline_id());
-            let time_key = dt_key(deadline.due_at(), &deadline.deadline_id());
-            let stream_key = ds_key(deadline.stream_id(), &deadline.deadline_id());
-            txn.put(dl_k.as_bytes(), payload.as_slice())
-                .map_err(to_deadline_err)?;
-            txn.put(time_key.as_bytes(), b"").map_err(to_deadline_err)?;
-            txn.put(stream_key.as_bytes(), b"")
-                .map_err(to_deadline_err)?;
-        }
+        write_deadlines_txn(&txn, deadlines).await?;
 
         // ── Correlation index ─────────────────────────────────────────────────
         //
-        // Same batch as the events, so a spawn is either wholly visible or
-        // wholly absent. Registering afterwards left a window in which a live
-        // process could not be found by its business key — every reply resolved
-        // to nothing, and the process's own Frist was the next thing to happen.
+        // Same batch as the events, so a process is either wholly visible or
+        // wholly absent: a key written afterwards could fail on its own and
+        // leave a live process its counterparty's reply cannot find.
         for c in correlations {
             let k = ci_key(c.tenant_id, &c.tag, c.process_id);
             let v = serde_json::to_vec(&c.identity)
@@ -1526,6 +1335,7 @@ impl AtomicAppend for SlateDbStore {
         Ok(AppendResult {
             last_sequence: current + events.len() as u64,
             events: envelopes,
+            outbox: messages,
         })
     }
 }
@@ -2095,9 +1905,9 @@ impl ProcessRegistry for SlateDbProcessRegistry {
     ) -> Result<(), EngineError> {
         let k = pr_key(tenant_id, key);
         let v = serde_json::to_vec(&identity).map_err(|e| EngineError::registry(e.to_string()))?;
-        // Use SSI transaction to atomically write the routing entry and
-        // increment the _count/pr counter. Previously used WriteBatch
-        //; upgraded to SSI txn to keep the counter consistent.
+        // An SSI transaction writes the routing entry and increments the
+        // _count/pr counter atomically; a blind WriteBatch would let two
+        // concurrent writers lose an increment.
         let txn = self
             .db
             .begin(IsolationLevel::SerializableSnapshot)
@@ -2212,7 +2022,7 @@ impl ProcessRegistry for SlateDbProcessRegistry {
         process_id: crate::ids::ProcessId,
         identity: ProcessIdentity,
     ) -> Result<(), EngineError> {
-        validate_ci_tag(tag)?;
+        validate_correlation_tag(tag)?;
         let k = ci_key(tenant_id, tag, process_id);
         let v = serde_json::to_vec(&identity).map_err(|e| EngineError::registry(e.to_string()))?;
         let mut batch = WriteBatch::new();
@@ -2231,7 +2041,7 @@ impl ProcessRegistry for SlateDbProcessRegistry {
         tenant_id: TenantId,
         tag: &str,
     ) -> Result<Vec<ProcessIdentity>, EngineError> {
-        validate_ci_tag(tag)?;
+        validate_correlation_tag(tag)?;
         let prefix = ci_tag_prefix(tenant_id, tag);
         let mut iter = self
             .db
@@ -2258,7 +2068,7 @@ impl ProcessRegistry for SlateDbProcessRegistry {
         tag: &str,
         process_id: crate::ids::ProcessId,
     ) -> Result<(), EngineError> {
-        validate_ci_tag(tag)?;
+        validate_correlation_tag(tag)?;
         let k = ci_key(tenant_id, tag, process_id);
         let mut batch = WriteBatch::new();
         batch.delete(k.as_bytes());
@@ -3071,10 +2881,15 @@ impl crate::partner::PartnerStore for SlateDbPartnerStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event_store::AppendBatch;
+    use crate::outbox::PendingOutbox;
     use time::{Duration, OffsetDateTime};
     // Trait methods are called via method syntax; the explicit imports ensure
     // the compiler resolves them in a `--no-default-features` context.
-    #[allow(unused_imports)]
+    #[allow(
+        unused_imports,
+        reason = "used only in some feature or target combinations"
+    )]
     use crate::{
         deadline::Deadline,
         envelope::NewEvent,
@@ -3083,7 +2898,7 @@ mod tests {
             ConversationId, CorrelationId, EventId, OutboxMessageId, ProcessId, StreamId, TenantId,
         },
         inbox::InboxStore,
-        outbox::{OutboxMessage, OutboxStore, PendingOutbox},
+        outbox::{OutboxMessage, OutboxStore},
         registry::RegistryKey,
         version::WorkflowId,
     };
@@ -3209,7 +3024,11 @@ mod tests {
 
         let events = vec![make_event(1), make_event(2), make_event(3)];
         let result = store
-            .append(&stream, ExpectedVersion::NoStream, &events)
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::NoStream,
+                &events,
+            ))
             .await
             .unwrap();
 
@@ -3232,13 +3051,21 @@ mod tests {
 
         // First append at NoStream succeeds.
         store
-            .append(&stream, ExpectedVersion::NoStream, &[make_event(1)])
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::NoStream,
+                &[make_event(1)],
+            ))
             .await
             .unwrap();
 
         // Second append at the same version must fail.
         let err = store
-            .append(&stream, ExpectedVersion::Exact(0), &[make_event(2)])
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::Exact(0),
+                &[make_event(2)],
+            ))
             .await
             .unwrap_err();
         assert!(
@@ -3264,7 +3091,11 @@ mod tests {
 
         // Seed version 0 so both tasks can target ExpectedVersion::Exact(0).
         store
-            .append(&stream, ExpectedVersion::NoStream, &[make_event(0)])
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::NoStream,
+                &[make_event(0)],
+            ))
             .await
             .unwrap();
 
@@ -3275,12 +3106,20 @@ mod tests {
 
         // Launch both tasks; they race to append at version 1 (Exact(1)).
         let t1 = tokio::spawn(async move {
-            s1.append(&st1, ExpectedVersion::Exact(1), &[make_event(10)])
-                .await
+            s1.append(AppendBatch::new(
+                &st1,
+                ExpectedVersion::Exact(1),
+                &[make_event(10)],
+            ))
+            .await
         });
         let t2 = tokio::spawn(async move {
-            s2.append(&st2, ExpectedVersion::Exact(1), &[make_event(20)])
-                .await
+            s2.append(AppendBatch::new(
+                &st2,
+                ExpectedVersion::Exact(1),
+                &[make_event(20)],
+            ))
+            .await
         });
 
         let r1 = t1.await.expect("task 1 panicked");
@@ -3318,17 +3157,21 @@ mod tests {
         assert_eq!(store.stream_version(&stream).await.unwrap(), 0);
 
         store
-            .append(&stream, ExpectedVersion::NoStream, &[make_event(1)])
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::NoStream,
+                &[make_event(1)],
+            ))
             .await
             .unwrap();
         assert_eq!(store.stream_version(&stream).await.unwrap(), 1);
 
         store
-            .append(
+            .append(AppendBatch::new(
                 &stream,
                 ExpectedVersion::Exact(1),
                 &[make_event(2), make_event(3)],
-            )
+            ))
             .await
             .unwrap();
         assert_eq!(store.stream_version(&stream).await.unwrap(), 3);
@@ -3341,7 +3184,11 @@ mod tests {
 
         let events: Vec<NewEvent> = (1..=10).map(make_event).collect();
         store
-            .append(&stream, ExpectedVersion::NoStream, &events)
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::NoStream,
+                &events,
+            ))
             .await
             .unwrap();
 
@@ -3359,7 +3206,11 @@ mod tests {
 
         let events: Vec<NewEvent> = (1..=5).map(make_event).collect();
         store
-            .append(&stream, ExpectedVersion::NoStream, &events)
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::NoStream,
+                &events,
+            ))
             .await
             .unwrap();
 
@@ -3379,7 +3230,11 @@ mod tests {
 
         let events: Vec<NewEvent> = (1..=5).map(make_event).collect();
         store
-            .append(&stream, ExpectedVersion::NoStream, &events)
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::NoStream,
+                &events,
+            ))
             .await
             .unwrap();
 
@@ -3398,27 +3253,27 @@ mod tests {
         let store = make_store().await;
 
         store
-            .append(
+            .append(AppendBatch::new(
                 &make_stream("process/alpha"),
                 ExpectedVersion::NoStream,
                 &[make_event(1)],
-            )
+            ))
             .await
             .unwrap();
         store
-            .append(
+            .append(AppendBatch::new(
                 &make_stream("process/beta"),
                 ExpectedVersion::NoStream,
                 &[make_event(1)],
-            )
+            ))
             .await
             .unwrap();
         store
-            .append(
+            .append(AppendBatch::new(
                 &make_stream("other/gamma"),
                 ExpectedVersion::NoStream,
                 &[make_event(1)],
-            )
+            ))
             .await
             .unwrap();
 
@@ -3546,7 +3401,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn append_with_outbox_is_atomic() {
+    async fn append_with_outbox_entries_is_atomic() {
         let store = make_store().await;
         let stream = make_stream("test/atomic");
 
@@ -3558,11 +3413,9 @@ mod tests {
         );
 
         store
-            .append_with_outbox(
-                &stream,
-                ExpectedVersion::NoStream,
-                &[event],
-                &[pending_outbox],
+            .append(
+                AppendBatch::new(&stream, ExpectedVersion::NoStream, &[event])
+                    .outbox(&[pending_outbox]),
             )
             .await
             .unwrap();
@@ -3613,37 +3466,35 @@ mod tests {
         let order_ref = "BELEG-4711";
 
         store
-            .append_with_outbox_deadlines_and_correlations(
-                &stream,
-                ExpectedVersion::NoStream,
-                &[make_event(1)],
-                &[PendingOutbox::new(
-                    "UTILMD",
-                    "9900000000001",
-                    serde_json::json!({ "pid": "55001" }),
-                )],
-                &[Deadline::new(
-                    stream.clone(),
-                    process_id,
-                    tenant_id,
-                    workflow_id,
-                    "aperak-24h",
-                    OffsetDateTime::now_utc() + Duration::days(1),
-                )],
-                &[
-                    CorrelationEntry {
-                        tenant_id,
-                        tag: malo.to_owned(),
+            .append(
+                AppendBatch::new(&stream, ExpectedVersion::NoStream, &[make_event(1)])
+                    .outbox(&[PendingOutbox::new(
+                        "UTILMD",
+                        "9900000000001",
+                        serde_json::json!({ "pid": "55001" }),
+                    )])
+                    .deadlines(&[Deadline::new(
+                        stream.clone(),
                         process_id,
-                        identity: identity.clone(),
-                    },
-                    CorrelationEntry {
                         tenant_id,
-                        tag: order_ref.to_owned(),
-                        process_id,
-                        identity: identity.clone(),
-                    },
-                ],
+                        workflow_id,
+                        "aperak-24h",
+                        OffsetDateTime::now_utc() + Duration::days(1),
+                    )])
+                    .correlations(&[
+                        CorrelationEntry {
+                            tenant_id,
+                            tag: malo.to_owned(),
+                            process_id,
+                            identity: identity.clone(),
+                        },
+                        CorrelationEntry {
+                            tenant_id,
+                            tag: order_ref.to_owned(),
+                            process_id,
+                            identity: identity.clone(),
+                        },
+                    ]),
             )
             .await
             .unwrap();
@@ -3687,19 +3538,17 @@ mod tests {
         );
 
         let result = store
-            .append_with_outbox_deadlines_and_correlations(
-                &stream,
-                ExpectedVersion::NoStream,
-                &[make_event(1)],
-                &[],
-                &[],
-                &[CorrelationEntry {
-                    // `/` is the key-space separator, so it cannot appear in a tag.
-                    tenant_id,
-                    tag: "malo/with/separators".to_owned(),
-                    process_id,
-                    identity,
-                }],
+            .append(
+                AppendBatch::new(&stream, ExpectedVersion::NoStream, &[make_event(1)])
+                    .outbox(&[])
+                    .deadlines(&[])
+                    .correlations(&[CorrelationEntry {
+                        // `/` is the key-space separator, so it cannot appear in a tag.
+                        tenant_id,
+                        tag: "malo/with/separators".to_owned(),
+                        process_id,
+                        identity,
+                    }]),
             )
             .await;
 
@@ -3710,15 +3559,15 @@ mod tests {
         );
     }
 
-    /// `append_with_outbox_and_deadlines` must persist events, outbox entries,
-    /// and deadline registrations in a single transaction (F-009).
+    /// `append` must persist events, outbox entries,
+    /// and deadline registrations in a single transaction.
     ///
     /// After the call, all three sets of data must be visible:
     /// - The event appears in the stream.
     /// - The outbox message appears in `pending`.
     /// - The deadline appears in `for_stream` / `len`.
     #[tokio::test]
-    async fn append_with_outbox_and_deadlines_is_atomic() {
+    async fn append_with_deadlines_is_atomic() {
         use crate::{deadline::DeadlineStore as _, event_store::AtomicAppend as _, ids::ProcessId};
 
         let store = make_store().await;
@@ -3742,12 +3591,10 @@ mod tests {
         let deadline_id = deadline.deadline_id();
 
         store
-            .append_with_outbox_and_deadlines(
-                &stream,
-                ExpectedVersion::NoStream,
-                &[event],
-                &[pending_outbox],
-                &[deadline],
+            .append(
+                AppendBatch::new(&stream, ExpectedVersion::NoStream, &[event])
+                    .outbox(&[pending_outbox])
+                    .deadlines(&[deadline]),
             )
             .await
             .unwrap();

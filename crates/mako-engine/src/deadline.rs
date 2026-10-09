@@ -9,7 +9,7 @@
 //! | Clock | Window | Helper |
 //! |---|---|---|
 //! | CONTRL | 6 hours; 15 min for a Strom UTILMD/ORDERS Syntaxfehlermeldung; 45 min for a GABi-Gas ALOCAT; the end of a Formatumstellung window when one is open | [`mako_fristen::contrl_due_at`] |
-//! | APERAK | 45 min Strom weekday; Gas next Werktag 12:00 or 3 Werktage | [`mako_fristen::aperak_strom_due_at`] and the Gas pair |
+//! | APERAK | 45 min Strom (Sonntag 12:00 for a Saturday arrival); Gas next Werktag 12:00 or 3 Werktage | [`mako_fristen::aperak_strom_due_at`] and the Gas pair |
 //! | Antwortfrist | per Prüfidentifikator | [`mako_fristen::antwort::antwort_deadline`] |
 //!
 //! **There is no flat GPKE window.** GPKE Teil 2 states each answer Frist as a
@@ -18,21 +18,18 @@
 //! reports a lapsed Frist as still running.
 //!
 //! The `DeadlineStore` persists these timers per process stream. A background
-//! scheduler polls [`DeadlineStore::due_now`] and dispatches a
-//! `TimeoutDeadline` command to the owning process when a deadline lapses.
-//! The process workflow then handles the command — e.g. by escalating the
-//! case or switching to a failure path.
+//! scheduler polls [`DeadlineStore::due_now`] and hands each lapsed deadline to
+//! [`Process::run_timeout`](crate::process::Process::run_timeout), which asks
+//! the workflow's [`on_deadline`](crate::workflow::Workflow::on_deadline) for a
+//! compensating command.
 //!
 //! **A deadline is registered when the process spawns and is not cancelled when
 //! the process settles.** It fires for every process, including the ones that
-//! completed well inside the window, and the workflow's handler is what decides
-//! that a fired deadline is moot. That is deliberate rather than an omission:
-//! cancelling on settle is a second write that can fail independently, and a
-//! cancel that fails produces exactly the spurious fire the handler must
-//! tolerate anyway. Making the handler authoritative leaves one code path
-//! instead of two and one failure mode instead of three. [`DeadlineStore::cancel`]
-//! therefore exists for the scheduler's own use — it removes a deadline **after**
-//! it has fired, so it cannot fire twice — and not as a settle-time hook.
+//! completed well inside the window, and `on_deadline` decides that a fired
+//! deadline is moot. Cancelling on settle would be a second write that can fail
+//! independently, producing exactly the spurious fire the handler must tolerate
+//! anyway. [`DeadlineStore::cancel`] is the scheduler's own: it removes a
+//! deadline **after** it has fired, so it cannot fire twice.
 //!
 //! # Usage
 //!
@@ -52,13 +49,13 @@
 //! deadline_store.register(&deadline).await?;
 //!
 //! // Nothing cancels it when the counterparty responds in time. The deadline
-//! // fires, and the workflow's `TimeoutDeadline` arm sees a settled state and
-//! // returns no events.
+//! // fires, and the workflow's `on_deadline` sees a settled state and returns
+//! // `None`.
 //!
 //! // Background scheduler (runs every N minutes):
 //! let result = deadline_store.due_now(100).await?;
 //! for d in result.deadlines {
-//!     process_handle.execute(TimeoutDeadline { deadline_id: d.deadline_id() }).await?;
+//!     process_handle.run_timeout(&d, RunOptions::new()).await?;
 //!     // Cancel *after* dispatch, so a fired deadline cannot fire again.
 //!     deadline_store.cancel(d.deadline_id()).await?;
 //! }
@@ -92,7 +89,10 @@ use crate::{
 /// The `label` field identifies the deadline type (e.g.
 /// `"aperak-response-window"`) and is used by the scheduler to dispatch the
 /// correct timeout command.
-#[expect(clippy::struct_field_names)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "`deadline_id` is the persisted field name, beside `stream_id` and `process_id`"
+)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Deadline {
     /// Unique identifier for this deadline entry.
@@ -255,7 +255,7 @@ impl Deadline {
 /// loop {
 ///     let result = store.due_now(50).await.unwrap();
 ///     for deadline in result.deadlines {
-///         // dispatch TimeoutDeadline command …
+///         // hand it to `Process::run_timeout` …
 ///         store.cancel(deadline.deadline_id()).await.unwrap();
 ///     }
 ///     if !result.has_more { break; }
@@ -295,7 +295,10 @@ pub struct DueNowResult {
 ///
 /// `Arc<S>` implements `DeadlineStore` whenever `S: DeadlineStore`, enabling
 /// shared access from both the scheduler and command handlers.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait DeadlineStore: Send + Sync {
     /// Register a new deadline.
     ///

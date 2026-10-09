@@ -118,12 +118,12 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                 // message that omits it falls back to marktd's own record for
                 // the Marktlokation.
                 bilanzierungsgebiet: extract_bilanzierungsgebiet(u.segments()),
-                // Bilanzierungsmethode from UTILMD TM+EM segment (L1/N1).
+                // Bilanzierungsmethode from UTILMD TM+EM segment.
                 // TM qualifier Z01 = SLP, Z02 = RLM, Z04 = IMS.
                 // Extracted from the message-level raw segments: TM segment
                 // immediately after the first IDE in the SG4 transaction group.
                 bilanzierungsmethode: extract_bilanzierungsmethode(u.segments()),
-                // Gas GaBi RLM Fallgruppe from UTILMD TM+Z10 segment (L1/N1).
+                // Gas GaBi RLM Fallgruppe from UTILMD TM+Z10 segment.
                 // Only populated for Gas PIDs; Strom UTILMD has no TM+Z10.
                 fallgruppe: extract_fallgruppe(u.segments()),
                 // SG4 STS Transaktionsgrund (Statuskategorie 7) — drives the
@@ -1450,7 +1450,7 @@ pub fn gpke_datenabruf_registry() -> AdapterRegistry<GpkeDatenabrufWorkflow> {
 /// - 55023 — Bestätigung Stornierung  (NB response — accepted)
 /// - 55024 — Ablehnung Stornierung    (NB response — rejected)
 ///
-/// **APERAK Frist:** 45 Minuten für eine UTILMD (APERAK AHB 1.0 § 2.4.1).
+/// **APERAK Frist:** 45 Minuten für eine UTILMD (APERAK AHB 1.1 § 2.4.1).
 #[must_use]
 pub fn gpke_stornierung_registry() -> AdapterRegistry<GpkeStornierungWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -1533,7 +1533,7 @@ pub fn gpke_stornierung_registry() -> AdapterRegistry<GpkeStornierungWorkflow> {
 /// Routes UTILMD Strom messages with PID 55555 (GPKE Teil 4, BK6-22-024 Anlage 1d):
 ///
 /// **Message format**: UTILMD Strom S2.x (`AnyMessage::Utilmd`).
-/// **APERAK Frist:** 45 Minuten für eine UTILMD (APERAK AHB 1.0 § 2.4.1).
+/// **APERAK Frist:** 45 Minuten für eine UTILMD (APERAK AHB 1.1 § 2.4.1).
 ///
 /// The key fields extracted from the UTILMD message are:
 /// - `pid` — must be 55555

@@ -1,8 +1,11 @@
-# EEG Billing Demo
+# EEG billing demo
 
-End-to-end demonstration of **EEG feed-in settlement** using `einsd` (plant registry + §21 EEG 2023 calculation) and `edmd` (15-min meter data storage).
+End-to-end EEG feed-in settlement: `einsd` registers an Anlagenbetreiber and a
+9.8 kWp rooftop plant, `edmd` stores a month of quarter-hour Einspeisemengen,
+and the monthly settlement yields a § 21 EEG 2023 Vergütung issued as a § 14
+Abs. 2 UStG Gutschrift (a BO4E `Rechnung`).
 
-## What you're running
+## What runs
 
 | Service | Port | Role |
 |---|---|---|
@@ -11,8 +14,6 @@ End-to-end demonstration of **EEG feed-in settlement** using `einsd` (plant regi
 | `marktd` | `8180` | Market Data Hub — MaLo master data |
 | `edmd` | `8380` | Energy Data Management — meter readings + billing periods |
 | `einsd` | `9180` | EEG/KWKG settlement — plant register + monthly Vergütung |
-
-## End-to-end flow
 
 ```mermaid
 sequenceDiagram
@@ -35,24 +36,23 @@ sequenceDiagram
     einsd-->>hook: de.eeg.verguetung.berechnet
 ```
 
-The settlement *amount* alone is not a legal document. Under the **Gutschriftverfahren**
-(§14 Abs. 2 Satz 2 UStG) the Netzbetreiber issues the Gutschrift to the plant operator, so
-`einsd` renders it as a BO4E `Rechnung` and carries the document facts on the CloudEvent for
-`accountingd` to book against.
 
-The Gutschrift VAT follows the operator's **declared `ust_status`** — masterdata, not a
-function of plant size. It belongs to the person rather than to any one installation, so it
-lives on the `einspeiser` record: `fixtures/einspeiser.json` sets
-`"ust_status": "KLEINUNTERNEHMER"` (§19 UStG), the typical case for a 9.8 kWp rooftop plant,
-so the Gutschrift carries **0 % USt** (net = brutto). An operator on `REGELBESTEUERUNG`
-would instead see the full 19 % USt breakdown.
+## Run it
 
-`eeg_anlagen.einspeiser_id` is `NOT NULL` behind a foreign key to that record, which is why
-the operator is registered before the plant.
+```bash
+just build-demo-eeg        # from the workspace root: marktd, edmd, einsd images
+cd demos/eeg-billing
+docker compose up -d
+bash smoke.sh
+```
 
-## Settlement logic
+`edmd` and `einsd` come out of the full `builder` stage — budget 20–45 minutes on
+a cold cache. The smoke test asserts the outcome: the projected Einspeisung of
+**2880 kWh**, a settlement with `status=calculated` at **EUR 233.568**, and the
+`de.eeg.verguetung.berechnet` CloudEvent on the webhook. Both ingest doors are
+idempotent, so a second run against the same stack passes too.
 
-The demo plant:
+## The plant and the result
 
 | Field | Value |
 |---|---|
@@ -66,141 +66,35 @@ The demo plant:
 | §9 Steuerbarkeit | `LEISTUNGSBEGRENZUNG_60` (§9 Abs. 2 Nr. 3, the route open below 25 kW) |
 | Einspeiser | `EIN-0001`, Kleinunternehmer (§19 UStG) |
 
-`foerderendedatum` is derived from the Inbetriebnahme (2044-03-31, 20 years) and `status`
-from the lifecycle, so neither is stated at registration.
+2880 kWh × 8.11 ct = **EUR 233.568**. The settlement is the entitlement, kept at
+sub-cent precision; rounding to a payable amount happens once, in the
+Gutschrift. The operator is a § 19 UStG Kleinunternehmer (`ust_status` on the
+`einspeiser` record, not a function of plant size), so the Gutschrift carries
+0 % USt. Readings are pushed under OBIS `1-0:2.8.0` — `edmd` never reads an
+unlabelled reading as feed-in.
 
-June 2026 result: 2880 kWh × 8.11 ct = **EUR 233.568**.
+Every `Decimal` in the wire formats is a JSON **string** (`"9.8"`); a bare
+number is a `422`. `just test-demo-payloads` deserialises every body `smoke.sh`
+posts into the real request type.
 
-That is not a typo for 233.57. `settlement_eur` is the *entitlement*, held in
-`billing::Amount<5>`, so it keeps the sub-cent precision the arithmetic produces.
-Rounding to a payable cent amount happens once, in the §14 UStG Gutschrift, which
-carries its own net, VAT and gross — a settlement that rounded as well would round
-twice.
-
-The readings are pushed under **OBIS `1-0:2.8.0`** (Wirkarbeit Export). `edmd` never reads
-an unlabelled reading as feed-in — an unqualified quantity is that measuring point's
-consumption — so a push without the register stores intervals the settlement cannot see.
-
-## Money and quantities are JSON **strings**
-
-Every `Decimal` in mako's wire formats is a string — `"9.8"`, not `9.8`. A JSON
-float cannot represent a decimal exactly, so accepting one would let a tariff
-rate or a plant's capacity arrive as the nearest binary double and settle a
-Vergütung against it; `rust_decimal` under `serde-str` refuses the float
-outright.
-
-That is not a note for its own sake: an unquoted `"leistung_kwp": 9.8` makes
-`PUT /api/v1/anlagen/{tr_id}` — this demo's second step — a `422`. `just
-test-demo-payloads` deserialises every demo body into the real request type in
-seconds and without Docker, so such a drift is a test failure rather than a red
-run.
-
-## Build images
-
-```bash
-cd ../..  # workspace root
-just build-demo-eeg
-```
-
-which is the three builds this demo needs:
-
-```bash
-docker build --target marktd-runtime  -t marktd:dev  .
-docker build --target edmd-runtime    -t edmd:dev    .
-docker build --target einsd-runtime   -t einsd:dev   .
-```
-
-> Not `docker buildx bake` — that file is the CI push path (`push-by-digest`),
-> so it fails on the default docker driver and never loads a local `:dev` tag.
-
-`marktd:dev` is the image the NB STP demo already builds, so a machine that ran that demo
-needs only `edmd` and `einsd` here. Both come out of the full `builder` stage, which
-compiles **every** service in the workspace in one `cargo build` — including the
-Iceberg/DataFusion and LanceDB stacks. Budget **20–45 minutes** on a cold cache; a warm
-BuildKit cache brings a rebuild down to a few minutes.
-
-## Run the demo
-
-```bash
-cd demos/eeg-billing
-docker compose up -d
-docker compose ps   # wait until all containers are running
-```
-
-Then run the smoke test:
-
-```bash
-bash smoke.sh
-```
-
-Expected output:
-
-```
-✓ einsd is ready
-✓ edmd is ready
-✓ PUT /api/v1/malos/17835382008 → 201
-✓ PUT /api/v1/einspeiser/EIN-0001 → 204 (operator registered)
-✓ PUT /api/v1/anlagen/TR0000000001 → 204 (plant registered)
-✓ GET /api/v1/anlagen/TR0000000001 → status=aktiv  verguetungssatz_ct=8.1100 ct/kWh
-✓ POST /api/v1/meter-reads/rlm/17835382008 → 201  stored=96 intervals
-✓ POST /api/v1/meter-reads/rlm/17835382008 → 201  (29 daily buckets, 2784 kWh)
-✓ GET /api/v1/energy/17835382008?direction=EINSPEISUNG → 2880.000000 kWh
-✓ POST /settle/2026/6 → 200
-      settlement_eur=233.56800  einspeisemenge_kwh=2880.000000  status=calculated
-✓ CloudEvent received: type=de.eeg.verguetung.berechnet
-✓ GET /settlements?year=2026&month=6 → status=calculated  einspeisemenge_kwh=2880.000  settlement_eur=233.56800
-All EEG billing smoke tests passed.
-```
-
-A second run against the same stack prints `→ 200` and `stored=0` for the pushes:
-both doors are idempotent, `edmd` keyed on (MaLo, Intervall, OBIS). The end-state
-assertions are the same either way, which is why the run is repeatable.
-
-Each step asserts the outcome, not just the status code: the settlement must come back
-`status=calculated` at EUR 233.568, and the CloudEvent must reach the webhook. A run that
-stored no feed-in fails at the `/energy` check rather than reporting a green EUR 0.
-
-## Explore the APIs
+## Explore
 
 | Endpoint | Description |
 |---|---|
 | `http://localhost:9180/api/v1/anlagen/TR0000000001` | Plant registration details |
-| `http://localhost:9180/api/v1/anlagen/TR0000000001/settlements?year=2026&month=6` | The June settlement receipt. Addressed by month, not `?limit=1`: einsd settles every past month it has a plant for, so the newest row is July or August with `no_data` |
+| `http://localhost:9180/api/v1/anlagen/TR0000000001/settlements?year=2026&month=6` | The June settlement receipt — addressed by month, because later months exist too (as `no_data`) |
 | `http://localhost:9180/api/v1/einspeiser/EIN-0001` | Operator record — § 19 UStG election, payout account |
 | `http://localhost:8380/api/v1/energy/17835382008?direction=EINSPEISUNG&from=2026-06-01T00:00:00%2B02:00&to=2026-07-01T00:00:00%2B02:00` | The projected Einspeisung series the settlement reads |
 | `http://localhost:9180/mcp` | einsd MCP server (19 tools) |
 | `http://localhost:8380/mcp` | edmd MCP server (15 tools) |
 | `http://localhost:8000/events` | ERP webhook event log |
 
-## Other settlement models
-
-`settlement_model` in `fixtures/anlage.json` takes one of twelve tokens. There is one
-spelling per model — a value outside the list is refused at registration rather than
-settled under a guessed interpretation:
-
-| `settlement_model` | Model | Also needs |
-|---|---|---|
-| `VERGUETUNG` | §21 Abs. 1 Einspeisevergütung | — |
-| `AUSFALLVERGUETUNG` | §21 Abs. 1 Satz 1 Nr. 3 Ausfallvergütung (§53 Abs. 3: −20 %) | — |
-| `DIREKTVERMARKTUNG` | §20 gleitende Marktprämie | `direktverm_aw_ct` |
-| `AUSSCHREIBUNG` | §22 wettbewerblich ermittelte Marktprämie | `zuschlagswert_ct` (or `direktverm_aw_ct`) + `ausschreibungs_zuschlag_id` |
-| `SONSTIGE_DIREKTVERMARKTUNG` | §21a Direktvermarktung ohne EEG-Zahlung | — |
-| `MIETERSTROM` | §21 Abs. 3 Mieterstromzuschlag | `mieter_zuschlag_ct` |
-| `GGV` | §42b EnWG gemeinschaftliche Gebäudeversorgung | — |
-| `EIGENVERBRAUCH` | Keine Netzeinspeisung, keine Zahlung | — |
-| `POST_EEG_SPOT` | Nach Förderende: Marktwert | — |
-| `KWKG_ZUSCHLAG` | §7 KWKG 2023 KWK-Zuschlag | `erzeugungsart: "KWKG"`, `eeg_gesetz: 0`, `verguetungsform: "KWK_ZUSCHLAG"`, `kwk_foerderdauer_h` or `kwk_anlagenart` |
-| `FLEXIBILITAET` | §50b Flexibilitätsprämie (Bestandsanlagen) | `flex_praemie_ct_kwh` |
-| `FLEXIBILITAET_ZUSCHLAG` | §50a Flexibilitätszuschlag (Neuanlagen) | — |
-
-## Supported EEG laws
-
-`eeg_gesetz` in `fixtures/anlage.json` selects the regulatory version:
-`2000 | 2004 | 2009 | 2012 | 2017 | 2021 | 2023 | 0` (0 = KWKG)
-
-## Clean up
+`settlement_model` in `fixtures/anlage.json` takes one of twelve tokens and
+`eeg_gesetz` selects the law (`2000 | 2004 | 2009 | 2012 | 2017 | 2021 | 2023 | 0`
+for KWKG); the [einsd guide](https://hupe1980.github.io/mako/docs/services/einsd/)
+lists what each model needs.
 
 ```bash
-docker compose down      # keep database volumes
-docker compose down -v   # destroy all volumes (full reset)
+docker compose down      # keep the database volumes
+docker compose down -v   # full reset
 ```

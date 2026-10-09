@@ -21,13 +21,11 @@ the event *identity* layer — the `type` constants and the glob `matches()` —
 nothing else. It is safe for any crate to depend on because it pulls in nothing
 and rebuilds nothing.
 
-Everything about the CloudEvent *envelope* and its *transport* — building the
-structured-mode body, the `source` URI convention, HMAC signing/verification, and
-the retrying publisher — lives in [`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)
-(`CloudEvent`, `source`, `post_ce_with_retry`, `webhook::{sign, verify_request}`),
-which already carries the serde/uuid/time/reqwest/hmac stack those need. Keeping
-that out of `mako-events` is what preserves the leaf property. Emitters pass a
-constant from this catalog as the `type`; the two layers meet there.
+The CloudEvent *envelope* and *transport* — the structured-mode body, the
+`source` convention, Standard Webhooks signing and the retrying publisher — live
+in [`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)
+(`CloudEvent`, `source`, `post_ce_with_retry`, `webhook::{sign, verify_request}`).
+Emitters pass a constant from this catalogue as the `type`.
 
 ## Conventions
 

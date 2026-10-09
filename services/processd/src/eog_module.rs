@@ -69,7 +69,6 @@ impl Default for EogModuleConfig {
 
 /// Handle a `de.markt.versorgung.*` CloudEvent. Returns `Ok(true)` when the
 /// event was consumed by this module.
-#[allow(clippy::too_many_arguments)]
 pub async fn handle_versorgung_event(
     event: &serde_json::Value,
     cfg: &EogModuleConfig,
@@ -310,10 +309,9 @@ async fn handle_eog_begonnen(
     // (`event_ingest.rs`, „no automatic status transition"); an operator records
     // it through the REST upsert instead.
     //
-    // This used to end in `other => other.to_uppercase()`. Nothing marktd sends
-    // reaches that arm, but the column would refuse whatever it produced — and a
-    // refused INSERT here loses the §38 Abs. 4 activation entirely, so the arm
-    // was a hazard resting on a claim about a different service.
+    // No `other => other.to_uppercase()` catch-all: the column would refuse
+    // whatever it produced, and a refused INSERT here loses the §38 Abs. 4
+    // activation entirely.
     let eog_art = data["eog_art"].as_str().and_then(|s| match s {
         "Ersatzversorgung" | "ERSATZVERSORGUNG" => Some("ERSATZVERSORGUNG".to_owned()),
         "Grundversorgung" | "GRUNDVERSORGUNG" => Some("GRUNDVERSORGUNG".to_owned()),

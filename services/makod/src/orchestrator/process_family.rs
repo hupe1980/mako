@@ -2,27 +2,13 @@
 //!
 //! Three metrics carry it — `makod_process_initiated_total{family}`,
 //! `makod_process_completed_total{family,result}` and the deadline counters —
-//! and a dashboard is only useful if they join. They did not:
-//!
-//! | Site | Derivation | `geli.lieferbeginn.anmelden` / `geli-gas-lieferbeginn` |
-//! |---|---|---|
-//! | `commands_api::types::command_family` | command name's first segment, with the Gas families joined | `geli-gas` |
-//! | `core::erp_adapter` | `workflow_name.split('-').next()` | `geli` |
-//! | `orchestrator::deadline_dispatch` | `workflow_name.split('-').next()` | `geli` |
-//!
-//! So `makod_process_initiated_total{family="geli-gas"}` and
-//! `makod_process_completed_total{family="geli"}` were different time series,
-//! and every initiated-versus-completed panel showed a GeLi Gas family that
-//! starts processes and never finishes any next to one that finishes processes
-//! nobody started. GaBi Gas had the same split.
-//!
-//! The naive split had two further failure modes the table hides. It cut
-//! `geli-gas-…` at the first hyphen, which is not where the family name ends;
-//! and it returned the *empty string* for the messages `commands_api::netzzugang`
-//! enqueues directly, because those are not workflow output and carry no
-//! `workflow_name` — `"".split('-').next()` is `Some("")`, so the `unwrap_or`
-//! that was meant to catch this never ran and the label was blank rather than
-//! wrong-but-visible.
+//! and a dashboard is only useful if they join. Derived independently, a
+//! command-name split and a workflow-name split disagree (`geli-gas` vs.
+//! `geli`), so an initiated-versus-completed panel shows a family that starts
+//! processes and never finishes any next to one that finishes processes nobody
+//! started. A naive `split('-').next()` also cuts `geli-gas-…` at the wrong
+//! hyphen, and yields the *empty string* for messages `commands_api::netzzugang`
+//! enqueues directly, which carry no `workflow_name`.
 //!
 //! # The shape
 //!
@@ -216,7 +202,11 @@ mod tests {
     fn every_workflow_the_registry_knows_has_a_family() {
         let mut checked = 0_usize;
         for module in crate::startup::production_modules() {
-            for name in module.workflow_names() {
+            for name in module
+                .drivers()
+                .iter()
+                .map(mako_engine::driver::WorkflowDriver::name)
+            {
                 assert_ne!(
                     from_workflow(name),
                     UNKNOWN,
@@ -240,7 +230,7 @@ mod tests {
     fn every_family_prefix_names_workflows_that_exist() {
         let names: Vec<String> = crate::startup::production_modules()
             .iter()
-            .flat_map(|m| m.workflow_names().iter().map(|n| (*n).to_owned()))
+            .flat_map(|m| m.drivers().into_iter().map(|d| d.name().to_owned()))
             .collect();
         for family in FAMILIES {
             let Some(prefix) = family.workflow_prefix else {
@@ -266,7 +256,7 @@ mod tests {
         let completed: std::collections::BTreeSet<&'static str> =
             crate::startup::production_modules()
                 .iter()
-                .flat_map(|m| m.workflow_names().iter().map(|n| from_workflow(n)))
+                .flat_map(|m| m.drivers().into_iter().map(|d| from_workflow(d.name())))
                 .collect();
         for desc in crate::orchestrator::commands_api::COMMAND_REGISTRY {
             let label = from_command(desc.name);

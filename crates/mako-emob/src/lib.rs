@@ -103,7 +103,10 @@
 #![deny(missing_docs)]
 #![warn(clippy::pedantic, clippy::must_use_candidate)]
 // German regulatory terms (MaLo, MaBiS, NGZ, Bilanzierungsgebiet…) are not Rust items.
-#![allow(clippy::doc_markdown)]
+#![expect(
+    clippy::doc_markdown,
+    reason = "German regulatory terms (MaLo, MaBiS, NGZ, Bilanzierungsgebiet…) are not Rust items"
+)]
 
 pub mod allocation;
 pub mod bg;
@@ -170,11 +173,19 @@ impl mako_engine::builder::EngineModule for EmobModule {
         "emob"
     }
 
-    fn workflow_names(&self) -> &'static [&'static str] {
-        &[
-            modellwechsel::EmobAnmeldungWorkflow::WORKFLOW_NAME,
-            modellwechsel::EmobZuordnungsendeWorkflow::WORKFLOW_NAME,
-            modellwechsel::EmobAbmeldungWorkflow::WORKFLOW_NAME,
+    fn drivers(&self) -> Vec<mako_engine::driver::WorkflowDriver> {
+        use mako_engine::driver::WorkflowDriver;
+        // Each workflow by type, under its module's own name constant.
+        vec![
+            WorkflowDriver::of::<modellwechsel::EmobAnmeldungWorkflow>(
+                modellwechsel::EmobAnmeldungWorkflow::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<modellwechsel::EmobZuordnungsendeWorkflow>(
+                modellwechsel::EmobZuordnungsendeWorkflow::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<modellwechsel::EmobAbmeldungWorkflow>(
+                modellwechsel::EmobAbmeldungWorkflow::WORKFLOW_NAME,
+            ),
         ]
     }
 
@@ -248,7 +259,11 @@ mod tests {
         for (anfrage, antwort) in [(55_238, 55_239), (55_240, 55_241), (55_242, 55_243)] {
             assert_eq!(router.route(anfrage), router.route(antwort));
         }
-        let mut names: Vec<_> = EmobModule.workflow_names().to_vec();
+        let mut names: Vec<_> = EmobModule
+            .drivers()
+            .iter()
+            .map(mako_engine::driver::WorkflowDriver::name)
+            .collect();
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), 3);

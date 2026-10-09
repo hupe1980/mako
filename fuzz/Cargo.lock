@@ -599,6 +599,7 @@ name = "eeg-billing"
 version = "0.22.0"
 dependencies = [
  "billing",
+ "grid-billing",
  "rust_decimal",
  "serde",
  "thiserror 2.0.18",
@@ -620,12 +621,12 @@ version = "0.22.0"
 dependencies = [
  "billing",
  "eeg-billing",
+ "grid-billing",
  "rust_decimal",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "time",
- "time-tz",
  "tracing",
 ]
 
@@ -836,6 +837,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2eecf2d5dc9b66b732b97707a0210906b1d30523eb773193ab777c0c84b3e8d5"
 dependencies = [
  "polyval",
+]
+
+[[package]]
+name = "grid-billing"
+version = "0.22.0"
+dependencies = [
+ "billing",
+ "rust_decimal",
+ "serde",
+ "thiserror 2.0.18",
+ "time",
 ]
 
 [[package]]

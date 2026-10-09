@@ -3,12 +3,16 @@
 //! Split out of the flat `edifact_renderer` module; shared envelope and
 //! payload-extraction helpers live in `super`.
 
+use mako_engine::payload::{Tranchengroesse as TranchenPayload, UtilmdPayload, ZugeordneterMsb};
+
 use super::*;
 // ── UTILMD ────────────────────────────────────────────────────────────────────
 
-/// Render a UTILMD outbound message from domain-intent JSON.
+/// Render a UTILMD outbound message from its typed payload,
+/// [`UtilmdPayload`] — the struct the producing workflow built, so a field
+/// renamed on one side is a compile error on the other.
 ///
-/// Payload fields (all sourced from workflow `handle` implementations):
+/// Payload fields:
 ///
 /// | Field           | Required | Description                                  |
 /// |-----------------|----------|----------------------------------------------|
@@ -68,23 +72,18 @@ pub(super) fn render_utilmd(
     use edi_energy::utilmd_codes::{AntwortStatus, Transaktionsgrund, ergaenzung};
 
     let mt = "UTILMD";
-
-    let pid = require_u32(p, mt, "pid")?;
+    let u: UtilmdPayload = typed_payload(p)?;
+    let pid = u.pid;
 
     // A **Listennachricht** is a different message shape: an `IDE+Z01` head
     // that is the Geschäftsvorfall, with one `IDE+24` member per disputed
     // Marktlokation under it. Rendered by its own path below.
-    if let Some(positionen) = p.get("positionen").and_then(|v| v.as_array())
-        && !positionen.is_empty()
-    {
-        return render_utilmd_liste(p, msg, pid, positionen);
+    if !u.positionen.is_empty() {
+        return render_utilmd_liste(&u, msg);
     }
 
-    let sender = require_str(p, mt, "sender")?;
-    let receiver = p
-        .get("receiver")
-        .and_then(|v| v.as_str())
-        .unwrap_or(msg.recipient.as_ref());
+    let sender = u.sender.as_str();
+    let receiver = u.receiver.as_deref().unwrap_or(msg.recipient.as_ref());
 
     // Determine UTILMD release track from PID: 44xxx = Gas, everything else = Strom.
     let track = if (44_000..=44_999).contains(&pid) {
@@ -106,13 +105,18 @@ pub(super) fn render_utilmd(
         || mako_wim::antwort_pid_meaning(pid)
             .is_some_and(|(request, _)| mako_wim::geraetewechsel::wim_sparte(request).is_some());
     let location_id_key = if names_messlokation { "melo" } else { "malo" };
+    let named_location = if names_messlokation {
+        u.melo.as_deref()
+    } else {
+        u.malo.as_deref()
+    };
     // A MaBiS Vorgang is about a **MaBiS-Zählpunkt** and names no Marktlokation
     // at all — the ZP-Lifecycle Anfragen and their answers carry only
     // `mabis_zaehlpunkt`. Requiring a MaLo there refuses the whole message, and
     // a UTILMD that does not render is raw JSON on the AS4 leg.
-    let location_id = match p.get(location_id_key).and_then(|v| v.as_str()) {
+    let location_id = match named_location {
         Some(id) if !id.is_empty() => Some(id),
-        _ => match p.get("mabis_zaehlpunkt").and_then(|v| v.as_str()) {
+        _ => match u.mabis_zaehlpunkt.as_deref() {
             Some(zp) if !zp.is_empty() => Some(zp),
             _ if utilmd_carries_sg5_loc(&release, pid) => {
                 return Err(RenderError::MissingField {
@@ -126,10 +130,7 @@ pub(super) fn render_utilmd(
     // Which `SG5 LOC` DE 3227 the primary Lokation rides. A payload that named
     // only a MaBiS-Zählpunkt has already put it here, so the second-LOC block
     // below must not repeat it.
-    let primary_is_mabis_zp = location_id.is_some()
-        && p.get(location_id_key)
-            .and_then(|v| v.as_str())
-            .is_none_or(str::is_empty);
+    let primary_is_mabis_zp = location_id.is_some() && named_location.is_none_or(str::is_empty);
 
     // `SG4 DTM` is not universal. UTILMD AHB Strom Kap. 8.11 / Gas Kap. 5.8
     // leave both the „Beginn zum" and „Ende zum" columns empty for the
@@ -137,25 +138,29 @@ pub(super) fn render_utilmd(
     // and the Vorgang it refers to, and no date of its own. Emitting one there
     // is an unlisted segment, so the field is required everywhere else and
     // refused here.
-    let dtm_qualifier = p
-        .get("dtm_qualifier")
-        .and_then(|v| v.as_str())
+    let dtm_qualifier = u
+        .dtm_qualifier
+        .as_deref()
         .filter(|q| !q.is_empty())
         .unwrap_or_else(|| utilmd_dtm_qualifier(pid));
     let carries_process_date = utilmd_carries_sg4_date(&release, pid, dtm_qualifier);
     let process_date = if carries_process_date {
-        Some(require_str(p, mt, "process_date")?)
+        Some(
+            u.process_date
+                .as_deref()
+                .ok_or_else(|| RenderError::MissingField {
+                    message_type: mt.into(),
+                    field: "process_date".into(),
+                })?,
+        )
     } else {
         None
     };
 
-    let doc_date_owned = p
-        .get("document_date")
-        .and_then(|v| v.as_str())
-        .map(normalise_date);
-    let message_ref = p
-        .get("message_ref")
-        .and_then(|v| v.as_str())
+    let doc_date_owned = u.document_date.as_deref().map(normalise_date);
+    let message_ref = u
+        .message_ref
+        .as_deref()
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
@@ -189,13 +194,10 @@ pub(super) fn render_utilmd(
     // Strom 2.2 Kap. 13.3 fixes `Z07` „Aktivierung/Deaktivierung von MaBiS-ZP"
     // on all three of its Prüfidentifikatoren — so it defaults per PID rather
     // than relying on every caller to remember.
-    let document_code = p
-        .get("document_code")
-        .and_then(|v| v.as_str())
-        .or(match pid {
-            55_062..=55_064 => Some(edi_energy::utilmd_codes::BGM_MABIS_ZP_LIFECYCLE),
-            _ => None,
-        });
+    let document_code = u.document_code.as_deref().or(match pid {
+        55_062..=55_064 => Some(edi_energy::utilmd_codes::BGM_MABIS_ZP_LIFECYCLE),
+        _ => None,
+    });
     if let Some(code) = document_code {
         builder = builder.document_code(code);
     }
@@ -207,10 +209,7 @@ pub(super) fn render_utilmd(
     // `IDE+24` DE 7402. The workflow may supply its own Vorgangsnummer; the
     // message reference is a serviceable default because it is already unique
     // per outbound message and is what the counterparty echoes in RFF.
-    let vorgangsnummer = p
-        .get("vorgangsnummer")
-        .and_then(|v| v.as_str())
-        .unwrap_or(message_ref.as_str());
+    let vorgangsnummer = u.vorgangsnummer.as_deref().unwrap_or(message_ref.as_str());
 
     let mut tx = builder.transaction(vorgangsnummer);
     if let Some(date) = process_date_yyyymmdd.as_deref() {
@@ -227,19 +226,15 @@ pub(super) fn render_utilmd(
     // | `bilanzierungsende` | `159` | Gas 44037/44038 „wenn eine Bilanzierung stattfindet" (AHB Gas Kap. 5.8 Bedingung `[29]`); UTILMD 55240–55243 beside `DTM+93` |
     for (field, qualifier) in [
         (
-            "bilanzierungsbeginn",
+            u.bilanzierungsbeginn.as_deref(),
             edi_energy::utilmd_codes::dtm::BILANZIERUNGSBEGINN,
         ),
         (
-            "bilanzierungsende",
+            u.bilanzierungsende.as_deref(),
             edi_energy::utilmd_codes::dtm::BILANZIERUNGSENDE,
         ),
     ] {
-        if let Some(date) = p
-            .get(field)
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(date) = field.filter(|s| !s.is_empty()) {
             tx = tx.date(qualifier, normalise_date(date));
         }
     }
@@ -248,9 +243,9 @@ pub(super) fn render_utilmd(
     // Muss on every Antwortnachricht (UTILMD AHB Strom 2.2 / Gas 1.2). The
     // answer's own `IDE+24` must be a fresh number, so this is the only thing
     // that ties it to the request.
-    if let Some(referenz) = p
-        .get("referenz_vorgangsnummer")
-        .and_then(|v| v.as_str())
+    if let Some(referenz) = u
+        .referenz_vorgangsnummer
+        .as_deref()
         .filter(|s| !s.is_empty())
     {
         tx = tx.referenz_vorgangsnummer(referenz);
@@ -259,9 +254,9 @@ pub(super) fn render_utilmd(
     // `SG6 RFF+Z60` — Muss on a Bestätigung Anmeldung. Without it the LFN is
     // told its Anmeldung was accepted but not which of the Produktpakete it
     // offered the NB is going to implement.
-    if let Some(paket) = p
-        .get("geplantes_produktpaket")
-        .and_then(|v| v.as_str())
+    if let Some(paket) = u
+        .geplantes_produktpaket
+        .as_deref()
         .filter(|s| !s.is_empty())
     {
         tx = tx.geplantes_produktpaket(paket);
@@ -282,16 +277,16 @@ pub(super) fn render_utilmd(
     // nowhere in UTILMD AHB Gas G1.1/G1.2 — every Gas Anwendungsfall lists a
     // single `SG4 STS 9013` row. Defaulting `ZW4` onto a Gas Vorgang writes a
     // code the receiving AHB does not define into an element it does not use.
-    if let Some(grund) = p.get("transaktionsgrund").and_then(|v| v.as_str()) {
+    if let Some(grund) = u.transaktionsgrund.as_deref() {
         let t = if names_messlokation
             || track == ReleaseTrack::Gas
             || !column_lists_ergaenzung(&release, pid)
         {
             Transaktionsgrund::bare(grund)
         } else {
-            let stated = p
-                .get("transaktionsgrund_ergaenzung")
-                .and_then(|v| v.as_str())
+            let stated = u
+                .transaktionsgrund_ergaenzung
+                .as_deref()
                 .filter(|s| !s.is_empty());
             // `ZW4` „verbrauchende Marktlokation" is the default only where the
             // column admits it. 55077 and 55601 are the erzeugende pair and
@@ -333,8 +328,8 @@ pub(super) fn render_utilmd(
     // cluster. DE 1131 is the Codeliste identifier, which is the EBD number
     // only where the AHB says „EBD Nr." — every WiM MSB-Wechsel answer names an
     // `S_00xx` or `G_00xx` list instead.
-    if let Some(code) = p.get("antwort_code").and_then(|v| v.as_str()) {
-        let antwort = match p.get("antwort_codeliste").and_then(|v| v.as_str()) {
+    if let Some(code) = u.antwort_code.as_deref() {
+        let antwort = match u.antwort_codeliste.as_deref() {
             Some(cl) => AntwortStatus::from_codeliste(code, cl),
             None => AntwortStatus::bare(code),
         };
@@ -350,7 +345,7 @@ pub(super) fn render_utilmd(
         // that omits it tells the LFN its Anmeldung failed and not why the
         // incumbent would not release the Marktlokation, which is the one fact
         // it can act on.
-        let dritter = p.get("dritter_antwortcode").and_then(|v| v.as_str());
+        let dritter = u.dritter_antwortcode.as_deref();
         if edi_energy::utilmd_codes::CODES_REQUIRING_DRITTER.contains(&code) && dritter.is_none() {
             return Err(RenderError::MissingField {
                 message_type: mt.into(),
@@ -361,14 +356,11 @@ pub(super) fn render_utilmd(
             });
         }
         if let Some(dritter_code) = dritter {
-            let referenz = p
-                .get("dritter_referenz_lokation")
-                .and_then(|v| v.as_str())
+            let referenz = u
+                .dritter_referenz_lokation
+                .as_deref()
                 .filter(|s| !s.is_empty());
-            let objekt = p
-                .get("dritter_objekt")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty());
+            let objekt = u.dritter_objekt.as_deref().filter(|s| !s.is_empty());
             tx = tx.antwort_dritter(match (referenz, objekt) {
                 (Some(r), Some(o)) => {
                     edi_energy::utilmd_codes::DritterAntwortStatus::erzeugend(dritter_code, r, o)
@@ -383,7 +375,7 @@ pub(super) fn render_utilmd(
 
     // `FTX+ACB` Bemerkung — mandatory alongside the catch-all Ablehnungscodes
     // (`A99` Strom, `E14` Gas), which require a written Erläuterung.
-    if let Some(text) = p.get("bemerkung").and_then(|v| v.as_str()) {
+    if let Some(text) = u.bemerkung.as_deref() {
         tx = tx.free_text("ACB", text);
     }
 
@@ -399,11 +391,7 @@ pub(super) fn render_utilmd(
     //
     // Neither is an `FTX+ACB` remark: on a Strom Zuordnungs-Bestätigung that
     // segment is admitted on the Ablehnung only (Bedingung [48]).
-    if let Some(bilanzkreis) = p
-        .get("bilanzkreis")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(bilanzkreis) = u.bilanzkreis.as_deref().filter(|s| !s.is_empty()) {
         tx = match track {
             ReleaseTrack::Gas => tx.merkmal(
                 edi_energy::utilmd_codes::produkt::CCI_BILANZKREIS_GAS,
@@ -411,10 +399,10 @@ pub(super) fn render_utilmd(
             ),
             // Geschäftsvorfall 3 („der LFN wird einer neu zu bildenden Tranche
             // zugeordnet") adds a second mandatory product to the same package.
-            _ if is_tranchenbildung(p) => {
+            _ if is_tranchenbildung(&u) => {
                 tx.produktpaket(edi_energy::utilmd_codes::Produktpaket::tranchenbildung(
                     bilanzkreis,
-                    &tranchengroesse(p, pid)?,
+                    &tranchengroesse(&u, pid)?,
                 ))
             }
             _ => tx.produktpaket(edi_energy::utilmd_codes::Produktpaket::bilanzkreis(
@@ -428,14 +416,10 @@ pub(super) fn render_utilmd(
     // Transaktionsgrundergänzung is `ZW4`/`ZAP` (Bedingung [279]); it is the
     // „Kundenname aus Anmeldung Lieferant neu" ([572]) the LFA compares against
     // its own contract holder at `E_0624` Prüfschritt 30.
-    if let Some(name) = p
-        .get("kunde_name")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-    {
-        let format = p
-            .get("kunde_namensformat")
-            .and_then(|v| v.as_str())
+    if let Some(name) = u.kunde_name.as_deref().filter(|s| !s.is_empty()) {
+        let format = u
+            .kunde_namensformat
+            .as_deref()
             .filter(|s| !s.is_empty())
             .unwrap_or(edi_energy::utilmd_codes::namensformat::PERSON);
         // A `Z01` Personenname splits across the DE 3036 components the
@@ -459,8 +443,7 @@ pub(super) fn render_utilmd(
         tx = tx.kunde_des_lf(parts, format);
         // `SG12 NAD+Z04` Korrespondenzanschrift des Kunden — Muss on a 55001
         // beside the name.
-        if let Some(a) = p.get("kunde_anschrift").filter(|v| v.is_object()) {
-            let field = |k: &str| a.get(k).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+        if let Some(a) = u.kunde_anschrift.as_ref() {
             tx = tx.anschrift(
                 edi_energy::utilmd_codes::nad::KORRESPONDENZANSCHRIFT_KUNDE,
                 parts_of(
@@ -469,13 +452,10 @@ pub(super) fn render_utilmd(
                     listed(edi_energy::utilmd_codes::nad::KORRESPONDENZANSCHRIFT_KUNDE),
                 ),
                 format,
-                field("strasse"),
-                field("ort"),
-                field("plz"),
-                a.get("land")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("DE")
-                    .to_owned(),
+                a.strasse.clone(),
+                a.ort.clone(),
+                a.plz.clone(),
+                a.land.clone().unwrap_or_else(|| "DE".to_owned()),
             );
         }
     }
@@ -483,11 +463,7 @@ pub(super) fn render_utilmd(
     // `SG8 SEQ+Z01` Daten der Marktlokation — the Gruppenzuordnung nach EnWG
     // (`CCI+++Z15` Haushaltskunde / `Z18` kein Haushaltskunde), Muss on a
     // 55001.
-    if let Some(gruppe) = p
-        .get("kundengruppe")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(gruppe) = u.kundengruppe.as_deref().filter(|s| !s.is_empty()) {
         tx = tx
             .stammdaten(edi_energy::utilmd_codes::SEQ_DATEN_DER_MARKTLOKATION)
             .cci("", gruppe)
@@ -497,19 +473,11 @@ pub(super) fn render_utilmd(
     // zur Verringerung der Umlagen nach EnFG (`ZF9` erfüllt, `ZG0` erfüllt
     // nicht, `ZG1` keine Angabe) and, where a privilege is claimed, `CAV` with
     // its § (`ZU5` … `ZV3`).
-    if let Some(grundlage) = p
-        .get("enfg_grundlage")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(grundlage) = u.enfg_grundlage.as_deref().filter(|s| !s.is_empty()) {
         let mut block = tx
             .stammdaten(edi_energy::utilmd_codes::SEQ_DATEN_DES_KUNDEN)
             .cci("Z61", grundlage);
-        if let Some(grund) = p
-            .get("enfg_grund")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(grund) = u.enfg_grund.as_deref().filter(|s| !s.is_empty()) {
             block = block.cav(grund);
         }
         tx = block.done();
@@ -518,10 +486,8 @@ pub(super) fn render_utilmd(
     // `SG12 NAD+VY` — the beteiligte Marktpartner a Vorgang names beside sender
     // and receiver: every Altlieferant on a 55036/44036 (Bedingung [518]), the
     // auslösender Marktpartner on a 55038/44038 ([579]/[571]).
-    if let Some(parties) = p.get("beteiligte_marktpartner").and_then(|v| v.as_array()) {
-        for party in parties.iter().filter_map(|v| v.as_str()) {
-            tx = tx.beteiligter_marktpartner(party);
-        }
+    for party in &u.beteiligte_marktpartner {
+        tx = tx.beteiligter_marktpartner(party);
     }
 
     // `SG5 LOC` DE 3227. The qualifier is a property of the *object* the Vorgang
@@ -536,7 +502,7 @@ pub(super) fn render_utilmd(
     // Zählpunktbezeichnung). Sending the Strom qualifier there is a segment the
     // receiver's own profile rejects, which is why this follows the track and
     // not the caller.
-    let tx = match (location_id, p.get("lokationstyp").and_then(|v| v.as_str())) {
+    let tx = match (location_id, u.lokationstyp.as_deref()) {
         (None, _) => tx,
         (Some(id), Some(qualifier)) if !qualifier.is_empty() => tx.location(
             edi_energy::Lokationstyp::from_qualifier_code(qualifier).ok_or_else(|| {
@@ -563,9 +529,9 @@ pub(super) fn render_utilmd(
     // (55239) carry „die ID der Marktlokation und die ZPB des ZP der NGZ": the
     // LPB has no other way to learn the Zählpunkt whose Netzgangzeitreihe it
     // just won the right to receive.
-    let tx = match p
-        .get("mabis_zaehlpunkt")
-        .and_then(|v| v.as_str())
+    let tx = match u
+        .mabis_zaehlpunkt
+        .as_deref()
         .filter(|s| !s.is_empty() && !primary_is_mabis_zp)
     {
         Some(zp) => tx.location(edi_energy::Lokationstyp::MabisZaehlpunkt, zp),
@@ -579,14 +545,8 @@ pub(super) fn render_utilmd(
     // „Gemessene Marktlokation" the AHB says so explicitly (`[483]`), which is
     // why an answer that classifies the MaLo as gemessen and names no
     // Messlokation is refused here rather than at the counterparty.
-    let melos: Vec<&serde_json::Value> = p
-        .get("messlokationen")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().collect())
-        .unwrap_or_default();
-    let gemessen = p
-        .get("transaktionsgrund_ergaenzung")
-        .and_then(|v| v.as_str())
+    let melos = &u.messlokationen;
+    let gemessen = u.transaktionsgrund_ergaenzung.as_deref()
         == Some(edi_energy::utilmd_codes::ergaenzung::GEMESSENE_MALO);
     if gemessen && melos.is_empty() && !names_messlokation {
         return Err(RenderError::MissingField {
@@ -598,15 +558,13 @@ pub(super) fn render_utilmd(
         });
     }
     let mut tx = tx;
-    for melo in &melos {
-        if let Some(id) = melo.get("melo_id").and_then(|v| v.as_str()) {
-            tx = tx.messlokation(id);
-        }
+    for melo in melos.iter().filter(|m| !m.melo_id.is_empty()) {
+        tx = tx.messlokation(&melo.melo_id);
     }
     if !melos.is_empty() {
         // `SG8 SEQ+Z98` — Daten der Marktlokation, carrying the MSB the NB has
         // assigned to it. „Zugeordneter Marktpartner" is Muss inside it.
-        let msb = msb_of(p.get("malo_msb")).ok_or_else(|| RenderError::MissingField {
+        let msb = msb_of(u.malo_msb.as_ref()).ok_or_else(|| RenderError::MissingField {
             message_type: mt.into(),
             field: "malo_msb \u{2014} the SG8 SEQ+Z98 block a ZW7 answer opens makes \
                         SG10 CCI+++ZB3 \u{201e}Zugeordneter Marktpartner\u{201c} Muss"
@@ -618,11 +576,9 @@ pub(super) fn render_utilmd(
             .done();
         // `SG8 SEQ+ZF3` — one Datenblock per Messlokation (Bedingung [2284]),
         // referencing it by `RFF+Z19` and naming its own MSB.
-        for melo in &melos {
-            let Some(id) = melo.get("melo_id").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            let msb = msb_of(melo.get("msb")).ok_or_else(|| RenderError::MissingField {
+        for melo in melos.iter().filter(|m| !m.melo_id.is_empty()) {
+            let id = melo.melo_id.as_str();
+            let msb = msb_of(melo.msb.as_ref()).ok_or_else(|| RenderError::MissingField {
                 message_type: mt.into(),
                 field: format!(
                     "messlokationen[{id}].msb \u{2014} SG8 SEQ+ZF3 makes SG10 CCI+++ZB3 Muss"
@@ -650,43 +606,21 @@ struct Msb<'a> {
     gmsb_mp_id: &'a str,
 }
 
-fn msb_of(v: Option<&serde_json::Value>) -> Option<Msb<'_>> {
+fn msb_of(v: Option<&ZugeordneterMsb>) -> Option<Msb<'_>> {
     let v = v?;
-    let field = |k: &str| {
-        v.get(k)
-            .and_then(serde_json::Value::as_str)
-            .filter(|s| !s.is_empty())
-    };
-    let mp_id = field("mp_id")?;
+    fn nonempty(s: &Option<String>) -> Option<&str> {
+        s.as_deref().filter(|s| !s.is_empty())
+    }
+    let mp_id = Some(v.mp_id.as_str()).filter(|s| !s.is_empty())?;
     Some(Msb {
         mp_id,
-        rolle: field("rolle").unwrap_or(edi_energy::utilmd_codes::msb::GRUNDZUSTAENDIG),
-        grundlage: field("grundlage").unwrap_or(edi_energy::utilmd_codes::msb::GRUNDLAGE_VERTRAG),
-        gmsb_mp_id: field("gmsb_mp_id").unwrap_or(mp_id),
+        rolle: nonempty(&v.rolle).unwrap_or(edi_energy::utilmd_codes::msb::GRUNDZUSTAENDIG),
+        grundlage: nonempty(&v.grundlage)
+            .unwrap_or(edi_energy::utilmd_codes::msb::GRUNDLAGE_VERTRAG),
+        gmsb_mp_id: nonempty(&v.gmsb_mp_id).unwrap_or(mp_id),
     })
 }
 
-/// Whether this PID's Anwendungsfall carries an `SG4 DTM` process date at all.
-///
-/// Almost every UTILMD Vorgang does, so this answers `true` by default and
-/// names the exceptions. The Information über existierende Zuordnung
-/// (55036 Strom, 44036 Gas) is one: UTILMD AHB Strom Kap. 8.11 and Gas Kap. 5.8
-/// leave both its „Beginn zum" and „Ende zum" columns empty. It states who the
-/// Altlieferant is and which Anmeldung it refers to — `SG12 NAD+VY` and
-/// `SG6 RFF+TN` — and no date of its own.
-///
-/// The GeLi Gas Stornierung family (44022/44023/44024) is another: it cancels a
-/// Vorgang by reference and restates none of its dates. Its AHB table lists
-/// `DTM+137` alone — the document date, which the envelope carries — and no
-/// „Beginn zum" or „Ende zum" column at all. The MaBiS Korrekturlisten
-/// (55066/55196/55202/55224) are the same: they answer a list that covers a
-/// Bilanzierungsmonat, not a Vorgang that starts or ends on a day. The
-/// MaBiS-ZP lifecycle (55062–55064) states a `DTM+158` Bilanzierungsbeginn on
-/// an Aktivierung and a `DTM+159` Bilanzierungsende on a Deaktivierung, and
-/// no Vertragsdatum at all — the Zählpunkt has no contract.
-///
-/// Rendering one anyway emits a segment the receiving AHB does not define for
-/// the Anwendungsfall, which is a rejection the sender cannot see coming.
 /// Render a **Listennachricht** — the MaBiS Clearinglisten and their answers.
 ///
 /// A different message shape from every other UTILMD: the `SG4 IDE+Z01` head
@@ -707,22 +641,24 @@ fn msb_of(v: Option<&serde_json::Value>) -> Option<Msb<'_>> {
 /// Vorgang enthalten". A whole-list Ablehnung therefore takes the ordinary
 /// single-Vorgang path above, where its payload carries no `positionen`.
 fn render_utilmd_liste(
-    p: &serde_json::Value,
+    u: &UtilmdPayload,
     msg: &OutboxMessage,
-    pid: u32,
-    positionen: &[serde_json::Value],
 ) -> Result<RenderedInterchange, RenderError> {
     let mt = "UTILMD";
+    let pid = u.pid;
+    fn required<'a>(value: &'a Option<String>, field: &str) -> Result<&'a str, RenderError> {
+        value.as_deref().ok_or_else(|| RenderError::MissingField {
+            message_type: "UTILMD".into(),
+            field: field.into(),
+        })
+    }
 
-    let sender = require_str(p, mt, "sender")?;
-    let receiver = p
-        .get("receiver")
-        .and_then(|v| v.as_str())
-        .unwrap_or(msg.recipient.as_ref());
-    let zaehlpunkt = require_str(p, mt, "mabis_zaehlpunkt")?;
-    let version = require_str(p, mt, "zeitreihen_version")?;
-    let listennummer = require_str(p, mt, "listennummer")?;
-    let codeliste = require_str(p, mt, "antwort_codeliste")?;
+    let sender = u.sender.as_str();
+    let receiver = u.receiver.as_deref().unwrap_or(msg.recipient.as_ref());
+    let zaehlpunkt = required(&u.mabis_zaehlpunkt, "mabis_zaehlpunkt")?;
+    let version = required(&u.zeitreihen_version, "zeitreihen_version")?;
+    let listennummer = required(&u.listennummer, "listennummer")?;
+    let codeliste = required(&u.antwort_codeliste, "antwort_codeliste")?;
 
     let release = active_release(MessageType::Utilmd, ReleaseTrack::Strom).ok_or_else(|| {
         RenderError::NoActiveProfile {
@@ -733,9 +669,9 @@ fn render_utilmd_liste(
         message_type: mt.into(),
         field: format!("pid value {pid} is invalid: {e}").into(),
     })?;
-    let message_ref = p
-        .get("message_ref")
-        .and_then(|v| v.as_str())
+    let message_ref = u
+        .message_ref
+        .as_deref()
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
@@ -746,15 +682,11 @@ fn render_utilmd_liste(
         .message_ref(message_ref)
         // `BGM+Z05` — every Clearingliste and every answer to one.
         .document_code(edi_energy::utilmd_codes::BGM_CLEARINGLISTE);
-    if let Some(dd) = p.get("document_date").and_then(|v| v.as_str()) {
+    if let Some(dd) = u.document_date.as_deref() {
         builder = builder.document_date(normalise_date(dd));
     }
     // `DTM+157` in `610` — the Bilanzierungsmonat, `CCYYMM`.
-    if let Some(monat) = p
-        .get("billing_period")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(monat) = u.billing_period.as_deref().filter(|s| !s.is_empty()) {
         builder = builder.gueltigkeit_beginn(monat);
     }
 
@@ -765,27 +697,21 @@ fn render_utilmd_liste(
         .summenzeitreihe_version(version);
     // `SG6 RFF+TN` — „Es ist die Listennummer aus der Lieferanten- bzw.
     // Bilanzierungsgebietsclearingliste zu verwenden" (Bedingung `[631]`).
-    if let Some(referenz) = p
-        .get("referenz_listennummer")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(referenz) = u.referenz_listennummer.as_deref().filter(|s| !s.is_empty()) {
         head = head.referenz_vorgangsnummer(referenz);
     }
     let mut builder = head.done();
 
     // ── The members ──────────────────────────────────────────────────────────
-    for (i, pos) in positionen.iter().enumerate() {
-        let malo =
-            pos.get("malo")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| RenderError::MissingField {
-                    message_type: mt.into(),
-                    field: format!("positionen[{i}].malo").into(),
-                })?;
-        let code = pos
-            .get("antwort_code")
-            .and_then(|v| v.as_str())
+    for (i, pos) in u.positionen.iter().enumerate() {
+        let malo = Some(pos.malo.as_str())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| RenderError::MissingField {
+                message_type: mt.into(),
+                field: format!("positionen[{i}].malo").into(),
+            })?;
+        let code = Some(pos.antwort_code.as_str())
+            .filter(|s| !s.is_empty())
             .ok_or_else(|| RenderError::MissingField {
                 message_type: mt.into(),
                 field: format!("positionen[{i}].antwort_code").into(),
@@ -794,8 +720,8 @@ fn render_utilmd_liste(
         // sent, so it is minted from the list number and the position rather
         // than reusing the Marktlokations-ID.
         let vorgangsnummer = pos
-            .get("vorgangsnummer")
-            .and_then(|v| v.as_str())
+            .vorgangsnummer
+            .as_deref()
             .map_or_else(|| format!("{listennummer}-{}", i + 1), ToOwned::to_owned);
         let mut member = builder
             .transaction(vorgangsnummer)
@@ -804,8 +730,8 @@ fn render_utilmd_liste(
             ))
             .marktlokation(malo);
         if let Some(referenz) = pos
-            .get("referenz_vorgangsnummer")
-            .and_then(|v| v.as_str())
+            .referenz_vorgangsnummer
+            .as_deref()
             .filter(|s| !s.is_empty())
         {
             member = member.referenz_vorgangsnummer(referenz);
@@ -1046,9 +972,8 @@ fn column_lists_ergaenzung(release: &edi_energy::Release, pid: u32) -> bool {
 /// The Tranchengröße hangs off the Transaktionsgrundergänzung and not off the
 /// Prüfidentifikator: 55077 and 55601 each carry all three Geschäftsvorfälle,
 /// and only the third one builds a Tranche.
-fn is_tranchenbildung(p: &serde_json::Value) -> bool {
-    p.get("transaktionsgrund_ergaenzung")
-        .and_then(|v| v.as_str())
+fn is_tranchenbildung(u: &UtilmdPayload) -> bool {
+    u.transaktionsgrund_ergaenzung.as_deref()
         == Some(edi_energy::utilmd_codes::ergaenzung::GESCHAEFTSVORFALL_3)
 }
 
@@ -1064,7 +989,7 @@ fn is_tranchenbildung(p: &serde_json::Value) -> bool {
 /// `E_0623` can add up. `art` defaults to that form, being the one the
 /// Aufteilungsfaktor and the Technische-Ressourcen lists are the exception to.
 fn tranchengroesse(
-    p: &serde_json::Value,
+    u: &UtilmdPayload,
     pid: u32,
 ) -> Result<edi_energy::utilmd_codes::Tranchengroesse, RenderError> {
     use edi_energy::utilmd_codes::Tranchengroesse;
@@ -1073,20 +998,13 @@ fn tranchengroesse(
         message_type: "UTILMD".into(),
         field: "tranchengroesse".into(),
     };
-    let node = p.get("tranchengroesse").ok_or_else(missing)?;
     // A bare string is the prozentuale Aufteilung, which is what an LF sending
     // a percentage would write; the object form names the Eigenschaft.
-    let (art, wert) = match node {
-        serde_json::Value::String(s) => ("prozent", s.as_str()),
-        serde_json::Value::Object(_) => (
-            node.get("art")
-                .and_then(|v| v.as_str())
-                .unwrap_or("prozent"),
-            node.get("wert")
-                .and_then(|v| v.as_str())
-                .ok_or_else(missing)?,
-        ),
-        _ => return Err(missing()),
+    let (art, wert) = match u.tranchengroesse.as_ref().ok_or_else(missing)? {
+        TranchenPayload::Prozent(s) => ("prozent", s.as_str()),
+        TranchenPayload::Eigenschaft { art, wert } => {
+            (art.as_deref().unwrap_or("prozent"), wert.as_str())
+        }
     };
     if wert.is_empty() {
         return Err(missing());

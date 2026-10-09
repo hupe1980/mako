@@ -353,7 +353,10 @@ impl PgVersorgungsStatusRepository {
     /// at-least-once redelivery is idempotent rather than cumulative.
     ///
     /// Returns `true` when a row actually changed.
-    #[allow(clippy::too_many_arguments)] // one assignment carries its full identity
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one assignment carries its full identity"
+    )]
     pub async fn announce_lf_next_tx(
         conn: &mut PgConnection,
         malo_id: &MaloId,
@@ -538,7 +541,10 @@ impl PgVersorgungsStatusRepository {
     ///
     /// Every announced assignment is preserved — its confirmation is what ends
     /// the fallback supply.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
     pub async fn begin_eog_supply_tx(
         conn: &mut PgConnection,
         malo_id: &MaloId,
@@ -880,7 +886,6 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
         tx.commit().await.map_err(internal)
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn begin_eog_supply(
         &self,
         malo_id: &MaloId,

@@ -164,7 +164,10 @@ impl GlobalProjectionCheckpoint {
 /// instead of O(total_streams), which matters for MABIS deployments tracking
 /// tens of thousands of streams. Other backing stores may choose any suitable
 /// serialisation.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait ProjectionCheckpointStore {
     /// Load a previously saved checkpoint by name.
     ///
@@ -541,6 +544,7 @@ impl ProjectionRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event_store::{AppendBatch, AtomicAppend};
     use crate::{
         envelope::NewEvent,
         event_store::{ExpectedVersion, InMemoryEventStore},
@@ -599,11 +603,11 @@ mod tests {
         let stream = StreamId::new("proj/s1");
 
         store
-            .append(
+            .append(AppendBatch::new(
                 &stream,
                 ExpectedVersion::NoStream,
                 &[make_event(), make_event(), make_event()],
-            )
+            ))
             .await
             .unwrap();
 
@@ -622,11 +626,11 @@ mod tests {
         let stream = StreamId::new("proj/s2");
 
         store
-            .append(
+            .append(AppendBatch::new(
                 &stream,
                 ExpectedVersion::NoStream,
                 &[make_event(), make_event()],
-            )
+            ))
             .await
             .unwrap();
 
@@ -639,11 +643,11 @@ mod tests {
 
         // Append two more events.
         store
-            .append(
+            .append(AppendBatch::new(
                 &stream,
                 ExpectedVersion::Exact(2),
                 &[make_event(), make_event()],
-            )
+            ))
             .await
             .unwrap();
 
@@ -666,23 +670,27 @@ mod tests {
 
         // 2 events in s1, 3 in s2, 1 in s3.
         store
-            .append(
+            .append(AppendBatch::new(
                 &s1,
                 ExpectedVersion::NoStream,
                 &[make_event(), make_event()],
-            )
+            ))
             .await
             .unwrap();
         store
-            .append(
+            .append(AppendBatch::new(
                 &s2,
                 ExpectedVersion::NoStream,
                 &[make_event(), make_event(), make_event()],
-            )
+            ))
             .await
             .unwrap();
         store
-            .append(&s3, ExpectedVersion::NoStream, &[make_event()])
+            .append(AppendBatch::new(
+                &s3,
+                ExpectedVersion::NoStream,
+                &[make_event()],
+            ))
             .await
             .unwrap();
 
@@ -708,15 +716,19 @@ mod tests {
         let s2 = StreamId::new("process/cu-s2");
 
         store
-            .append(
+            .append(AppendBatch::new(
                 &s1,
                 ExpectedVersion::NoStream,
                 &[make_event(), make_event()],
-            )
+            ))
             .await
             .unwrap();
         store
-            .append(&s2, ExpectedVersion::NoStream, &[make_event()])
+            .append(AppendBatch::new(
+                &s2,
+                ExpectedVersion::NoStream,
+                &[make_event()],
+            ))
             .await
             .unwrap();
 
@@ -730,15 +742,19 @@ mod tests {
 
         // Add one event to each stream.
         store
-            .append(&s1, ExpectedVersion::Exact(2), &[make_event()])
+            .append(AppendBatch::new(
+                &s1,
+                ExpectedVersion::Exact(2),
+                &[make_event()],
+            ))
             .await
             .unwrap();
         store
-            .append(
+            .append(AppendBatch::new(
                 &s2,
                 ExpectedVersion::Exact(1),
                 &[make_event(), make_event()],
-            )
+            ))
             .await
             .unwrap();
 
@@ -764,19 +780,27 @@ mod tests {
         let partner = StreamId::new("partner/match-pp1"); // should NOT be included
 
         store
-            .append(&proc1, ExpectedVersion::NoStream, &[make_event()])
+            .append(AppendBatch::new(
+                &proc1,
+                ExpectedVersion::NoStream,
+                &[make_event()],
+            ))
             .await
             .unwrap();
         store
-            .append(
+            .append(AppendBatch::new(
                 &proc2,
                 ExpectedVersion::NoStream,
                 &[make_event(), make_event()],
-            )
+            ))
             .await
             .unwrap();
         store
-            .append(&partner, ExpectedVersion::NoStream, &[make_event()])
+            .append(AppendBatch::new(
+                &partner,
+                ExpectedVersion::NoStream,
+                &[make_event()],
+            ))
             .await
             .unwrap();
 
@@ -814,15 +838,27 @@ mod tests {
         let other = StreamId::new("partner/ls-c");
 
         store
-            .append(&s1, ExpectedVersion::NoStream, &[make_event()])
+            .append(AppendBatch::new(
+                &s1,
+                ExpectedVersion::NoStream,
+                &[make_event()],
+            ))
             .await
             .unwrap();
         store
-            .append(&s2, ExpectedVersion::NoStream, &[make_event()])
+            .append(AppendBatch::new(
+                &s2,
+                ExpectedVersion::NoStream,
+                &[make_event()],
+            ))
             .await
             .unwrap();
         store
-            .append(&other, ExpectedVersion::NoStream, &[make_event()])
+            .append(AppendBatch::new(
+                &other,
+                ExpectedVersion::NoStream,
+                &[make_event()],
+            ))
             .await
             .unwrap();
 

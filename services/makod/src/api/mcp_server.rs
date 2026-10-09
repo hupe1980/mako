@@ -233,9 +233,15 @@ const ANY_WORKFLOW: &str = "*";
 #[derive(Clone)]
 pub struct MakodMcpHandler {
     state: Arc<MakodMcpState>,
-    #[allow(dead_code)] // used by the #[tool_router] macro-generated dispatch code
+    #[expect(
+        dead_code,
+        reason = "used by the #[tool_router] macro-generated dispatch code"
+    )]
     tool_router: ToolRouter<MakodMcpHandler>,
-    #[allow(dead_code)] // used by the #[prompt_router] macro-generated dispatch code
+    #[expect(
+        dead_code,
+        reason = "used by the #[prompt_router] macro-generated dispatch code"
+    )]
     prompt_router: PromptRouter<MakodMcpHandler>,
 }
 
@@ -862,7 +868,7 @@ impl MakodMcpHandler {
     ///   which `mako_fristen::antwort` resolves — a clock time on a Werktag in
     ///   GPKE, Werktage in WiM and GeLi Gas, and never one flat duration
     ///
-    /// Source: APERAK AHB 1.0 §2.3 / §2.4; CONTRL AHB 1.0 §2.3.1 / §2.4.1;
+    /// Source: APERAK AHB 1.1 §2.3 / §2.4; CONTRL AHB 1.0 §2.3.1 / §2.4.1;
     /// GPKE Teil 2 (BK6-24-174 Anlage 1b) and Teil 4 (BK6-22-024 Anlage 1d);
     /// AWH GeLi Gas (BK7-24-01-009).
     ///
@@ -1217,9 +1223,9 @@ impl MakodMcpHandler {
                     - command: \"gpke.lieferbeginn.anmelden\"\n\
                     - payload: {{\"malo_id\": \"{malo_id}\", \"lieferbeginn_datum\": \"{date}\"}}\n\
                  3. Report the process_id and status.\n\
-                 4. Explain next steps: the NB answers by 11:00 Uhr des 1. Werktags \
-                    nach dem Übertragungstag with a Bestätigung (PID 55002) or Ablehnung \
-                    (PID 55003) — GPKE Teil 2, SD Lieferbeginn Prozessschritte 5/6."
+                 4. Explain next steps — the answer Frist, a Bestätigung (PID 55002) or \
+                    Ablehnung (PID 55003):\n{frist}",
+                frist = render_fristen(&[55_001]),
             ),
         )]
     }
@@ -1247,8 +1253,9 @@ impl MakodMcpHandler {
                     - command: \"geli.lieferbeginn.anmelden\"\n\
                     - payload: {{\"malo_id\": \"{malo_id}\", \"lieferbeginn_datum\": \"{date}\"}}\n\
                  3. Report the process_id and status.\n\
-                 4. Explain next steps: the GNB has 10 Werktage to respond per \
-                    BK7-24-01-009 (Saturday is not a Werktag; nor Sunday or a gesetzlicher Feiertag; German local time)."
+                 4. Explain next steps — the GNB's answer Frist (Saturday is not a \
+                    Werktag; nor Sunday or a gesetzlicher Feiertag; German local time):\n{frist}",
+                frist = render_fristen(&[44_001]),
             ),
         )]
     }
@@ -1278,8 +1285,8 @@ impl MakodMcpHandler {
                     - payload: {{\"melo_id\": \"{melo_id}\", \"process_date\": \"{date}\", \
                        \"receiver_mp_id\": \"{receiver}\"}}\n\
                  2. Report the process_id and status.\n\
-                 3. Explain next steps: the MSB has 5 Werktage to confirm or reject \
-                    per BK6-24-174."
+                 3. Explain next steps — the answer Frist is the PID's:\n{frist}",
+                frist = render_fristen(&[55_039, 55_042, 55_051, 55_168]),
             ),
         )]
     }
@@ -1295,12 +1302,13 @@ impl MakodMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "**MSB Preisanfrage (WiM Strom BK6-24-174)**\n\n\
+                format!(
+                    "**MSB Preisanfrage (WiM Strom BK6-24-174)**\n\n\
                  The nMSB (new MSB) requests a price quote from the aMSB (existing MSB) before initiating a WiM-Wechsel.\n\n\
                  **Step 1 — The aMSB receives the inbound REQOTE (PID 35001) via AS4:**\n\
                  The AS4 inbound layer handles this automatically. The `wim-preisanfrage` workflow\n\
                  is spawned by `makod` when the REQOTE arrives. No ERP command needed.\n\n\
-                 **Step 2 — aMSB responds QUOTES (PID 15001) within 5 Werktage:**\n\
+                 **Step 2 — the aMSB responds with QUOTES (PID 15001):**\n{frist}\n\
                  The Preisliste is stored in `marktd` as a `PreisblattMessung` record.\n\
                  Check: `get_partner` for the aMSB MP-ID to verify AS4 connectivity.\n\n\
                  **Step 3 — Verify process state:**\n\
@@ -1309,7 +1317,9 @@ impl MakodMcpHandler {
                  **Step 4 — Initiate WiM-Wechsel after price agreement:**\n\
                  `submit_command` with command: \"wim.geraetewechsel.beauftragen\"\n\n\
                  **§14a note:** For controllable loads (iMSys), the PRICAT must include\n\
-                 `ZeitvariablePreisposition` for time-of-use MSB fees (Modul 2/3).",
+                 `ZeitvariablePreisposition` for time-of-use MSB fees (§14a Modul 3).",
+                    frist = render_fristen(&[35_001])
+                ),
             ),
         ]
     }
@@ -1326,8 +1336,9 @@ impl MakodMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "**WiM Gas MSB-Wechsel Anmeldung (BK7-24-01-009)**\n\n\
-                 The GNB (Gasnetzbetreiber) must respond within **10 Werktage** (Saturdays, Sundays and gesetzliche Feiertage are not Werktage; German local time CET/CEST).\n\n\
+                format!(
+                    "**WiM Gas MSB-Wechsel Anmeldung (AWH WiM Gas 2.0)**\n\n\
+                 The GNB (Gasnetzbetreiber) answers within the PID's Frist (Saturdays, Sundays and gesetzliche Feiertage are not Werktage; German local time CET/CEST):\n{frist}\n\n\
                  **Step 1 — Verify the process is active:**\n\
                  Call `get_process` with the gas `malo_id` from the inbound UTILMD G.\n\
                  - If `active: true` → process exists, proceed to step 2.\n\
@@ -1341,9 +1352,11 @@ impl MakodMcpHandler {
                  Call `submit_command` with:\n\
                  - command: \"wim.geraetewechsel.bestaetigen\" or \".ablehnen\"\n\
                  - marktrolle: \"NB\" (or \"GNB\")\n\
-                 - payload: {\"melo_id\": \"<Messlokation>\", \"antwortcode\": \"<G_00xx code>\"}\n\n\
+                 - payload: {{\"melo_id\": \"<Messlokation>\", \"antwortcode\": \"<G_00xx code>\"}}\n\n\
                  **Valid ERC codes:** A02 (Bilanzierungsgebiet mismatch), A05 (unknown GMSB), A97 (invalid date), A99 (Mindestvorlauffrist not met).\n\n\
                  **Note:** `processd` auto-STP handles this automatically when configured. Manual dispatch is only needed for escalated cases.",
+                    frist = render_fristen(&[44_042])
+                ),
             ),
         ]
     }
@@ -1435,15 +1448,15 @@ impl ServerHandler for MakodMcpHandler {
              \n\
              ## Regulatory deadlines\n\
              \n\
-             | Process | Deadline | Source |\n\
-             |---|---|---|\n\
-             | GPKE Strom | a clock time on the 1. WT nach dem ÜT — 11:00 Anmeldung, 06:00 Abmeldung, 05:00 Lieferende NB→LF, 09:00 Beendigung der Zuordnung | BK6-24-174 GPKE Teil 2 |\n\
-             | WiM, both Sparten | 3 / 5 / 7 / 1 Werktage per PID | BK6-24-174 Anlage 2a · AWH WiM Gas 2.0 |\n\
-             | GeLi Gas | Ablauf des 4. / 3. / 2. Werktags | BK7-24-01-009 |\n\
-             | MaBiS | keine Antwortfrist — Clearingfenster, BK6-24-174 Anlage 3 Kap. 3.10 Tabelle 2 |\n\
-             | INVOIC | zum Zahlungsziel (`SG8 DTM+265`) | per Festlegung |\n\
+             The answer Frist runs per inbound PID (`mako_fristen::antwort`):\n\
              \n\
-             **Saturday is not a Werktag** (GPKE Teil 1 Kap. 1.7). A holiday observed in any single \
+             {fristen}\n\
+             \n\
+             MaBiS has no Antwortfrist — the Clearingfenster of BK6-24-174 Anlage 3 \
+             Kap. 3.10 Tabelle 2 bounds it. An INVOIC is answered against the \
+             Zahlungsziel it carries (`SG8 DTM+265`).\n\
+             \n\
+             **Saturday is not a Werktag** (GPKE Teil 1 Kap. 2 and Kap. 7). A holiday observed in any single \
              Bundesland counts nationwide; 24.12. and 31.12. count as holidays. All deadlines in \
              gesetzlicher deutscher Zeit (CET/CEST).\n\
              \n\
@@ -1463,6 +1476,10 @@ impl ServerHandler for MakodMcpHandler {
              for guided step-by-step workflows with pre-filled instructions.",
             ver = self.state.version,
             tenant = self.state.tenant,
+            fristen = render_fristen(&[
+                55_001, 55_004, 55_007, 55_010, 55_016, 44_001, 44_004, 44_013, 55_039, 55_042,
+                55_051, 55_168, 44_039, 44_042, 44_051, 44_168,
+            ]),
             roles = configured.join(", "),
         );
 
@@ -1705,56 +1722,102 @@ pub fn router(state: Arc<MakodMcpState>, shutdown: CancellationToken) -> Router 
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-/// Returns a short human-readable hint about what to expect after a command
-/// succeeds, based on the applicable BDEW regulatory deadline.
-fn next_steps_hint(command: &str) -> &'static str {
-    match command {
-        "gpke.lieferbeginn.anmelden" | "gpke.lieferende.anmelden" | "gpke.kuendigung.anmelden" => {
-            "Der NB antwortet bis 11:00 Uhr des 1. Werktags nach dem Übertragungstag mit einer Bestätigung oder Ablehnung (GPKE Teil 2, SD Lieferbeginn)."
-        }
-        "geli.lieferbeginn.anmelden" | "geli.lieferende.anmelden" => {
-            "GNB has 10 Werktage to respond with a Bestätigung/Ablehnung (BK7-24-01-009)."
-        }
+/// One answer obligation as a sentence, rendered from `mako_fristen::antwort`.
+///
+/// Every Frist the MCP surface states goes through here, so a sentence cannot
+/// state a window the engine does not apply.
+fn render_frist(o: &mako_fristen::antwort::AntwortObligation) -> String {
+    format!(
+        "{pid} {name}: the {who} answers {when} ({source})",
+        pid = o.trigger_pid,
+        name = o.name,
+        who = o.answered_by,
+        when = o.frist.beschreibung(),
+        source = o.source,
+    )
+}
+
+/// The rendered Fristen of `pids`, one per line; a PID the catalogue does not
+/// know contributes nothing.
+fn render_fristen(pids: &[u32]) -> String {
+    pids.iter()
+        .filter_map(|p| mako_fristen::antwort::antwort_obligation(*p))
+        .map(render_frist)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// What to expect after a command succeeds: the answer Frist of every PID the
+/// command waits on, rendered from `mako_fristen::antwort` ([`render_frist`]).
+/// A PID the catalogue knows no Frist for gets none.
+fn next_steps_hint(command: &str) -> String {
+    const WIM_STROM: &[u32] = &[55_039, 55_042, 55_051, 55_168];
+    const WIM_BEIDE: &[u32] = &[
+        55_039, 55_042, 55_051, 55_168, 44_039, 44_042, 44_051, 44_168,
+    ];
+    let (lead, pids): (&str, &[u32]) = match command {
+        "gpke.lieferbeginn.anmelden" => ("Anmeldung sent.", &[55_001]),
+        "gpke.lieferende.anmelden" => ("Abmeldung sent.", &[55_004]),
+        "gpke.kuendigung.anmelden" => ("Kündigung sent to the LFA.", &[55_016]),
+        "geli.lieferbeginn.anmelden" => ("Anmeldung sent to the GNB.", &[44_001]),
+        "geli.lieferende.anmelden" => ("Abmeldung sent to the GNB.", &[44_004]),
         "geli.stornierung.initiieren" => {
-            "GNB has 10 Werktage to respond with a positive (44023) or negative (44024) APERAK (BK7-24-01-009)."
+            return "Stornierung (UTILMD 44022) sent. The GNB answers with UTILMD 44023 \
+                    (Bestätigung) or 44024 (Ablehnung); no answer Frist is catalogued for \
+                    44022."
+                .to_owned();
         }
         "geli.datenabruf.anfragen" => {
-            "GNB has 10 Werktage to respond with the requested meter data (BK7-24-01-009)."
+            return "Datenabruf (ORDERS 17103) sent. No answer Frist is catalogued for 17103."
+                .to_owned();
         }
         "geli.gas.sperrung.bestaetigen" | "gpke.sperrung.bestaetigen" => {
-            "Execution reported. IFTSTA 21039 is queued to the Lieferant (GPKE Teil 2 § 3.5)."
+            return "Execution reported. IFTSTA 21039 is queued to the Lieferant \
+                    (GPKE Teil 2 § 3.5)."
+                .to_owned();
         }
         "gpke.sperrung.fehlgeschlagen" => {
-            "Non-execution reported with reason. IFTSTA 21039 is queued to the Lieferant \
-             so it does not wait out the answer window (GPKE Teil 2)."
+            return "Non-execution reported with reason. IFTSTA 21039 is queued to the \
+                    Lieferant so it does not wait out the answer window (GPKE Teil 2)."
+                .to_owned();
         }
-        "gpke.sperrung.beauftragen" | "gpke.entsperrung.beauftragen" => {
-            "Sperrauftrag sent to the NB. The NB answers by the 1. Werktag nach dem \
-             Übertragungstag with ORDRSP 19116 (Bestätigung) or 19117 (Ablehnung), executes \
-             within 6 Werktagen nach dem frühestmöglichen Sperrtermin and reports it via \
-             IFTSTA 21039 within 1 Werktag nach Abschluss (GPKE Teil 2 § 3.5)."
-        }
-        "gpke.sperrung.stornieren" => {
-            "Stornierung (ORDCHG 39000) sent. The NB answers with ORDRSP 19128 (Bestätigung) \
-             or 19129 (Ablehnung). Only valid until the NB has executed."
-        }
-        "wim.geraetewechsel.beauftragen" => {
-            "MSB-Wechsel order sent. The counterparty has 5 Werktage to respond with a \
-             Bestätigung/Ablehnung (BK6-24-174)."
-        }
-        "wim.geraetewechsel.bestaetigen" | "wim.geraetewechsel.ablehnen" => {
+        "gpke.sperrung.beauftragen" => (
+            "Sperrauftrag sent to the NB. After its answer the NB executes within the \
+             window GPKE Teil 2 § 3.5.1.2 Nr. 1 sets after the frühestmöglichen \
+             Sperrtermin and reports via IFTSTA 21039.",
+            &[17_115],
+        ),
+        "gpke.entsperrung.beauftragen" => (
+            "Entsperrauftrag sent to the NB, which reports the execution via IFTSTA 21039.",
+            &[17_117],
+        ),
+        "gpke.sperrung.stornieren" => (
+            "Stornierung (ORDCHG 39000) sent. Only valid until the NB has executed.",
+            &[39_000],
+        ),
+        "wim.geraetewechsel.beauftragen" => (
+            "MSB-Wechsel order sent. The window is the PID's:",
+            WIM_STROM,
+        ),
+        "wim.geraetewechsel.bestaetigen" | "wim.geraetewechsel.ablehnen" => (
             "MSB-Wechsel answer dispatched. The window is the inbound PID's, not the \
-             command's: 3 WT for a Kündigung, 5 for an Anmeldung, 7 for a Weiterverpflichtung, \
-             1 for the gMSB's Ersteinbau answer — and the Gas twins run the same clocks."
-        }
+             command's:",
+            WIM_BEIDE,
+        ),
         "mabis.abrechnung.einleiten" | "mabis.abrechnung.daten-einreichen" => {
-            "A Prüfmitteilung has no Frist (BK6-24-174 Anlage 3 Kap. 9.8.2 Nr. 1 — the \
-             receiving party „kann\" answer). It is bounded by the clearing window of \
-             Kap. 3.10 Tabelle 2: 11.–30. WT for a BG-SZR, 13.–30. WT for a BK-SZR."
+            return "A Prüfmitteilung has no Frist (BK6-24-174 Anlage 3 Kap. 9.8.2 Nr. 1 — the \
+                    receiving party „kann\" answer). It is bounded by the clearing window of \
+                    Kap. 3.10 Tabelle 2: 11.–30. WT for a BG-SZR, 13.–30. WT for a BK-SZR."
+                .to_owned();
         }
-        _ => "Engine accepted the command. Monitor the ERP webhook for status updates.",
-    }
+        _ => {
+            return "Engine accepted the command. Monitor the ERP webhook for status updates."
+                .to_owned();
+        }
+    };
+    format!("{lead}\n{}", render_fristen(pids))
 }
+
 fn dispatch_error_to_string(e: crate::commands_api::DispatchError) -> String {
     use crate::commands_api::DispatchError;
     match e {
@@ -1932,5 +1995,72 @@ mod tool_inventory_tests {
             "MCP tool inventory changed — update the tool table and the count in \
              site/content/docs/services/makod.md to match"
         );
+    }
+}
+
+#[cfg(test)]
+mod next_steps_tests {
+    use super::{next_steps_hint, render_frist};
+    use mako_fristen::antwort::antwort_obligation;
+
+    /// The PIDs whose answer each command waits for.
+    const COVERED: &[(&str, &[u32])] = &[
+        ("gpke.lieferbeginn.anmelden", &[55_001]),
+        ("gpke.lieferende.anmelden", &[55_004]),
+        ("gpke.kuendigung.anmelden", &[55_016]),
+        ("geli.lieferbeginn.anmelden", &[44_001]),
+        ("geli.lieferende.anmelden", &[44_004]),
+        ("gpke.sperrung.beauftragen", &[17_115]),
+        ("gpke.entsperrung.beauftragen", &[17_117]),
+        ("gpke.sperrung.stornieren", &[39_000]),
+        (
+            "wim.geraetewechsel.beauftragen",
+            &[55_039, 55_042, 55_051, 55_168],
+        ),
+        (
+            "wim.geraetewechsel.bestaetigen",
+            &[
+                55_039, 55_042, 55_051, 55_168, 44_039, 44_042, 44_051, 44_168,
+            ],
+        ),
+        (
+            "wim.geraetewechsel.ablehnen",
+            &[
+                55_039, 55_042, 55_051, 55_168, 44_039, 44_042, 44_051, 44_168,
+            ],
+        ),
+    ];
+
+    /// Every Frist a hint states is the catalogue's, rendered.
+    #[test]
+    fn every_hint_states_the_catalogued_frist_of_each_pid_it_covers() {
+        for (command, pids) in COVERED {
+            let hint = next_steps_hint(command);
+            for pid in *pids {
+                let o = antwort_obligation(*pid)
+                    .unwrap_or_else(|| panic!("{pid} has a catalogued obligation"));
+                assert!(
+                    hint.contains(&render_frist(o)),
+                    "{command}: the hint must state {pid}'s Frist as the catalogue does\n{hint}"
+                );
+            }
+        }
+    }
+
+    /// A command whose PID the catalogue knows no Frist for states none.
+    #[test]
+    fn an_uncatalogued_pid_gets_no_frist() {
+        for (command, pid) in [
+            ("geli.stornierung.initiieren", 44_022),
+            ("geli.datenabruf.anfragen", 17_103),
+        ] {
+            assert!(antwort_obligation(pid).is_none(), "{pid}");
+            let hint = next_steps_hint(command);
+            assert!(!hint.contains("Werktag"), "{command}: {hint}");
+            assert!(
+                !hint.contains("APERAK"),
+                "{command}: the answers are UTILMD/ORDRSP: {hint}"
+            );
+        }
     }
 }

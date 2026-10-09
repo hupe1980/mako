@@ -323,12 +323,29 @@ pub enum GasSupplierChangeEvent {
     },
     /// Gas supply became active (Lieferbeginn Gas 44001 only).
     Activated,
+    /// The counterpart let its answer window lapse, and the Festlegung gives
+    /// that silence an outcome: the Anfrage takes effect as asked.
+    ///
+    /// GeLi Gas 3.0 Kap. 3.3 for the Ersatz-/Grundversorgung (44013): „Meldet
+    /// sich der Ersatz- / Grundversorger nicht fristgerecht, ordnet der
+    /// Netzbetreiber die Marktlokation zu dem von ihm gemeldeten Termin dem
+    /// Ersatz-/ Grundversorger zu." Kap. 3.2.3 for the Abmeldungsanfrage
+    /// (44010): „Beantwortet der Altlieferant die Abmeldungsanfrage des
+    /// Netzbetreibers nicht fristgerecht, wird die Zuordnung des Altlieferanten
+    /// zum Tag vor dem Anmeldedatum beendet."
+    SchweigenWirksam {
+        /// Unique ID of the lapsed deadline.
+        deadline_id: DeadlineId,
+        /// Label of the lapsed deadline.
+        label: Box<str>,
+    },
     /// Process rejected.
     Rejected {
         /// Human-readable rejection reason.
         reason: String,
     },
-    /// Deadline expired.
+    /// A window lapsed that no Festlegung gives an outcome: the process waits
+    /// on in [`GasSupplierChangeState::FristAbgelaufen`].
     DeadlineExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
@@ -346,6 +363,7 @@ impl EventPayload for GasSupplierChangeEvent {
             Self::GnbProcessInitiated { .. } => "GasSupplierChangeGnbProcessInitiated",
             Self::GnbAntwortErhalten { .. } => "GasSupplierChangeGnbAntwortErhalten",
             Self::Activated => "GasSupplierChangeActivated",
+            Self::SchweigenWirksam { .. } => "GasSupplierChangeSchweigenWirksam",
             Self::Rejected { .. } => "GasSupplierChangeRejected",
             Self::DeadlineExpired { .. } => "GasSupplierChangeDeadlineExpired",
         }
@@ -395,10 +413,25 @@ pub enum GasSupplierChangeState {
     Active(GasSupplierChangeData),
     /// Process completed successfully (all variants except Lieferbeginn Active).
     Completed(GasSupplierChangeData),
-    /// Process rejected — validation failure, negative Antwort, or timeout.
+    /// Process rejected — validation failure or negative Antwort.
     Rejected {
         /// Human-readable rejection reason.
         reason: String,
+    },
+    /// An answer window lapsed while the process still waited in `offen`, and
+    /// no Festlegung gives that lapse an outcome.
+    ///
+    /// GeLi Gas 3.0 states the GNB's answer windows (Kap. 3.2.2, 3.2.3) but no
+    /// consequence of missing them, so a lapse is neither a rejection nor a
+    /// confirmation: the Anmeldung is still owed its answer, and the operator
+    /// is the one to act. Every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<GasSupplierChangeState>,
     },
 }
 
@@ -412,6 +445,8 @@ impl mako_engine::workflow::OccupiesBusinessKey for GasSupplierChangeState {
             | Self::AntwortGesendet { .. }
             | Self::GnbPending(_)
             | Self::Active(_) => true,
+            // A lapsed window leaves the Vorgang open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
             // `New` never started; `Completed` and `Rejected` are terminal. A
             // Gas Lieferbeginn the GNB rejected must not retire the MaLo — the
             // corrected Anmeldung is a normal GeLi Gas flow.
@@ -433,6 +468,16 @@ impl GasSupplierChangeState {
             Self::Active(_) => "Active",
             Self::Completed(_) => "Completed",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -446,6 +491,7 @@ impl GasSupplierChangeState {
             | Self::Active(d)
             | Self::Completed(d) => Some(d),
             Self::AntwortGesendet { data, .. } => Some(data),
+            Self::FristAbgelaufen { offen, .. } => offen.data(),
             Self::New | Self::Rejected { .. } => None,
         }
     }
@@ -464,7 +510,10 @@ impl GasSupplierChangeState {
 
 /// Commands for the GeLi Gas supplier-change workflow.
 #[derive(Clone)]
-#[allow(clippy::large_enum_variant)] // ReceiveUtilmd carries the whole inbound Vorgang;
+#[expect(
+    clippy::large_enum_variant,
+    reason = "ReceiveUtilmd carries the whole inbound Vorgang;"
+)]
 // boxing it would only move the allocation, and the command is built once per message.
 pub enum GasSupplierChangeCommand {
     /// Inbound UTILMD G Anfrage received (responder role — GNB or LFA).
@@ -491,11 +540,11 @@ pub enum GasSupplierChangeCommand {
         validation_errors: Vec<String>,
         /// UTC wall-clock time when the inbound UTILMD G was received.
         ///
-        /// Used to compute the APERAK Gas *sending* deadline (APERAK AHB 1.0 §2.3.1)
+        /// Used to compute the APERAK Gas *sending* deadline (APERAK AHB 1.1 §2.3.1)
         /// and the per-PID business answer deadline that are
         /// registered atomically with the `Initiated` event.
         received_at: OffsetDateTime,
-        /// Bilanzierungsmethode from UTILMD G `TM+EM` segment (L1/N1).
+        /// Bilanzierungsmethode from UTILMD G `TM+EM` segment.
         /// `"SLP"` | `"RLM"` | `"IMS"` — propagated to `ProcessInitiated` outbox
         /// so `marktd` can update `malo.bilanzierungsmethode`.
         bilanzierungsmethode: Option<String>,
@@ -509,11 +558,11 @@ pub enum GasSupplierChangeCommand {
         /// walk escalating at Prüfschritt 10 for want of the
         /// Transaktionsgrundergänzung.
         vorgang: LfVorgangsdaten,
-        /// Gas GaBi RLM Fallgruppe from UTILMD G `TM+Z10` segment (L1/N1).
+        /// Gas GaBi RLM Fallgruppe from UTILMD G `TM+Z10` segment.
         /// Only set for Gas RLM MaLos. Propagated to `ProcessInitiated` outbox
         /// so `marktd` can update `malo.fallgruppe`.
         fallgruppe: Option<String>,
-        /// Gas quality type from UTILMD G `STS` segment (L1/N1).
+        /// Gas quality type from UTILMD G `STS` segment.
         ///
         /// Normalized to canonical BO4E / BNetzA MaStR form before storage:
         /// `"H_GAS"` | `"L_GAS"` | `"H2_BLEND"` | `"BIOGAS"` | `"FLUESSIGGAS"`.
@@ -607,28 +656,65 @@ pub struct GeliGasSupplierChangeWorkflow;
 
 const GNB_INITIATOR_PIDS: &[u32] = &[44007, 44010, 44013, 44019];
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// [`RESPONSE_WINDOW_LABEL`] is open while an answer is owed — by this GNB
+/// (`Initiated`, `ValidationPassed`) or by the counterpart of an Anfrage this
+/// GNB sent (`GnbPending`). Once the answer is out the window is closed: an
+/// `AntwortGesendet` process waits for the Lieferbeginn, not for an answer. A
+/// lapsed window does not lapse twice.
+fn window_open(label: &str, state: &GasSupplierChangeState) -> bool {
+    label == RESPONSE_WINDOW_LABEL
+        && matches!(
+            state,
+            GasSupplierChangeState::Initiated(_)
+                | GasSupplierChangeState::ValidationPassed(_)
+                | GasSupplierChangeState::GnbPending(_)
+        )
+}
+
+/// What a lapsed window comes to: the outcome the Festlegung gives the
+/// counterpart's silence, where it gives one.
+fn lapse(
+    state: &GasSupplierChangeState,
+    deadline_id: DeadlineId,
+    label: Box<str>,
+) -> GasSupplierChangeEvent {
+    match state {
+        GasSupplierChangeState::GnbPending(data)
+            if matches!(
+                data.variant,
+                GasProcessVariant::EogAnmeldung | GasProcessVariant::Abmeldungsanfrage
+            ) =>
+        {
+            GasSupplierChangeEvent::SchweigenWirksam { deadline_id, label }
+        }
+        _ => GasSupplierChangeEvent::DeadlineExpired { deadline_id, label },
+    }
+}
+
 impl Workflow for GeliGasSupplierChangeWorkflow {
     type State = GasSupplierChangeState;
     type Event = GasSupplierChangeEvent;
     type Command = GasSupplierChangeCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[RESPONSE_WINDOW_LABEL];
+
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (
-                RESPONSE_WINDOW_LABEL,
-                GasSupplierChangeState::Initiated(_)
-                | GasSupplierChangeState::ValidationPassed(_)
-                | GasSupplierChangeState::AntwortGesendet { .. }
-                | GasSupplierChangeState::GnbPending(_),
-            ) => Some(GasSupplierChangeCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            }),
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| GasSupplierChangeCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            GasSupplierChangeState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             GasSupplierChangeEvent::Initiated {
                 variant,
@@ -736,6 +822,11 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 }
             }
 
+            GasSupplierChangeEvent::SchweigenWirksam { .. } => match state {
+                GasSupplierChangeState::GnbPending(data) => GasSupplierChangeState::Completed(data),
+                other => other,
+            },
+
             GasSupplierChangeEvent::Rejected { reason } => GasSupplierChangeState::Rejected {
                 reason: reason.clone(),
             },
@@ -744,19 +835,27 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 if state.is_terminal() {
                     state
                 } else {
-                    GasSupplierChangeState::Rejected {
-                        reason: format!("deadline expired: {label}"),
+                    GasSupplierChangeState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
                     }
                 }
             }
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one linear procedure; splitting it would scatter its steps across helpers used once"
+    )]
     fn handle(
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             GasSupplierChangeCommand::ReceiveUtilmd {
                 pid,
@@ -790,7 +889,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 let receiver_gln = receiver.clone();
                 // 44001 = Lieferbeginn Anfrage (Initialprozess); all others are Folgeprozesse.
                 let is_initialprozess = pid.as_u32() == 44_001;
-                // Clone before move into Initiated event for ProcessInitiated outbox (L1/N1).
+                // Clone before move into Initiated event for ProcessInitiated outbox.
                 let malo_id_str = malo_id.as_str().to_owned();
                 let process_date_clone = process_date.clone();
 
@@ -808,22 +907,12 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     events.push(GasSupplierChangeEvent::ValidationPassed {
                         message_ref: message_ref.clone(),
                     });
-                    // Register two deadlines atomically with the events:
-                    //   1. APERAK Gas *sending* deadline (APERAK AHB 1.0 §2.3.1):
-                    //      Initialprozess (44001): 3 Werktage; Folgeprozess: nächster Werktag 12:00.
-                    //   2. The business answer deadline, per Prüfidentifikator
-                    //      out of `mako_fristen::antwort` (4 / 3 / 2 WT).
-                    let aperak_send_dl = if is_initialprozess {
-                        PendingDeadline::new(
-                            APERAK_GAS_INITIALPROZESS_LABEL,
-                            aperak_gas_initialprozess_due_at(received_at),
-                        )
-                    } else {
-                        PendingDeadline::new(
-                            APERAK_GAS_FOLGEPROZESS_LABEL,
-                            aperak_gas_folgeprozess_due_at(received_at),
-                        )
-                    };
+                    // No APERAK window: in der Sparte Gas the APERAK is a
+                    // Verarbeitbarkeitsfehlermeldung only (APERAK AHB 1.1
+                    // §2.3), so a processable Anmeldung sends none, and a
+                    // delivery window for a message that never goes out could
+                    // only fire.
+                    //
                     // The business answer window, from the one table four
                     // services share. It is **not** 10 Werktage: that is the
                     // LFN's *Vorlauffrist* before Lieferbeginn
@@ -841,7 +930,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                         // Notify the GNB ERP via de.mako.process.initiated so it can
                         // decide to Bestätigen or Ablehnen the Anmeldung.
                         // Also carries bilanzierungsmethode + fallgruppe so marktd
-                        // can update malo.bilanzierungsmethode / malo.fallgruppe (L1/N1).
+                        // can update malo.bilanzierungsmethode / malo.fallgruppe.
                         vec![
                             vorgang
                                 .process_initiated(
@@ -862,7 +951,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                                 )
                                 .caused_by(1),
                         ],
-                        core::iter::once(aperak_send_dl).chain(process_dl).collect(),
+                        process_dl.into_iter().collect(),
                     ))
                 } else {
                     let reason = if validation_errors.is_empty() {
@@ -873,8 +962,8 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     events.push(GasSupplierChangeEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // F-035: APERAK BGM+313 (Verarbeitbarkeitsfehlermeldung) — mandatory
-                    // per APERAK AHB 1.0 §2.1.1 when AHB validation fails.
+                    // APERAK BGM+313 (Verarbeitbarkeitsfehlermeldung) — mandatory
+                    // per APERAK AHB 1.1 §2.1.1 when AHB validation fails.
                     // Validation failure → APERAK sent immediately: register the sending
                     // deadline so the OutboxWorker delivery is monitored.
                     let aperak_send_dl = if is_initialprozess {
@@ -1081,7 +1170,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
             },
 
             GasSupplierChangeCommand::TimeoutExpired { deadline_id, label } => {
-                if state.is_terminal() {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 let mut outbox: Vec<PendingOutbox> = vec![];
@@ -1100,7 +1189,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                         }),
                     ));
                 }
-                let event = GasSupplierChangeEvent::DeadlineExpired { deadline_id, label };
+                let event = lapse(state, deadline_id, label);
                 if outbox.is_empty() {
                     Ok(WorkflowOutput::events(vec![event]))
                 } else {
@@ -1283,10 +1372,19 @@ impl Projection for GasSupplierChangeProjection {
                     *status = "Active";
                 }
             }
-            GasSupplierChangeEvent::Rejected { .. }
-            | GasSupplierChangeEvent::DeadlineExpired { .. } => {
+            GasSupplierChangeEvent::SchweigenWirksam { .. } => {
+                if let GasSupplierChangeRecord::Active { status, .. } = record {
+                    *status = "Completed";
+                }
+            }
+            GasSupplierChangeEvent::Rejected { .. } => {
                 if let GasSupplierChangeRecord::Active { status, .. } = record {
                     *status = "Rejected";
+                }
+            }
+            GasSupplierChangeEvent::DeadlineExpired { .. } => {
+                if let GasSupplierChangeRecord::Active { status, .. } = record {
+                    *status = "FristAbgelaufen";
                 }
             }
         }
@@ -1810,21 +1908,142 @@ mod tests {
         }
     }
 
+    fn timeout(label: &str) -> GasSupplierChangeCommand {
+        GasSupplierChangeCommand::TimeoutExpired {
+            deadline_id: DeadlineId::new(),
+            label: label.into(),
+        }
+    }
+
+    /// The GNB's own answer window lapsing is a Frist breach, not a rejection:
+    /// GeLi Gas 3.0 Kap. 3.2.3 gives the lapse no outcome, so the Anmeldung is
+    /// still owed its answer — and can still be given it.
     #[test]
-    fn deadline_rejects_validation_passed_state() {
+    fn a_lapsed_answer_window_leaves_the_anmeldung_open() {
+        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44001, true)).unwrap();
+        let state = apply_all(state, &out.events);
+        let out =
+            GeliGasSupplierChangeWorkflow::handle(&state, timeout(RESPONSE_WINDOW_LABEL)).unwrap();
+        let state = apply_all(state, &out.events);
+        assert!(
+            matches!(state, GasSupplierChangeState::FristAbgelaufen { .. }),
+            "{state:?}"
+        );
+        assert!(
+            mako_engine::workflow::OccupiesBusinessKey::occupies_business_key(&state),
+            "a lapsed Anmeldung still holds its MaLo"
+        );
+
+        // A second firing of the same window does nothing.
+        let again =
+            GeliGasSupplierChangeWorkflow::handle(&state, timeout(RESPONSE_WINDOW_LABEL)).unwrap();
+        assert!(again.events.is_empty());
+
+        // The late answer still goes out and moves the process on.
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &state,
+            GasSupplierChangeCommand::SendAntwort {
+                accepted: true,
+                antwort_code: "E15".to_owned(),
+                bemerkung: None,
+                obligations: vec![],
+            },
+        )
+        .unwrap();
+        let state = apply_all(state, &out.events);
+        assert!(matches!(
+            state,
+            GasSupplierChangeState::AntwortGesendet { .. }
+        ));
+    }
+
+    /// Once the GNB has answered, its answer window is closed: the Anmeldung
+    /// waits for the Lieferbeginn, and neither the window nor a delivery
+    /// window riding on the stream ends it.
+    #[test]
+    fn an_answered_anmeldung_ignores_every_deadline() {
         let state = GasSupplierChangeState::default();
         let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44001, true)).unwrap();
         let state = apply_all(state, &out.events);
         let out = GeliGasSupplierChangeWorkflow::handle(
             &state,
-            GasSupplierChangeCommand::TimeoutExpired {
-                deadline_id: DeadlineId::new(),
-                label: RESPONSE_WINDOW_LABEL.into(),
+            GasSupplierChangeCommand::SendAntwort {
+                accepted: true,
+                antwort_code: "E15".to_owned(),
+                bemerkung: None,
+                obligations: vec![],
             },
         )
         .unwrap();
         let state = apply_all(state, &out.events);
-        assert!(matches!(state, GasSupplierChangeState::Rejected { .. }));
+        for label in [
+            RESPONSE_WINDOW_LABEL,
+            APERAK_GAS_INITIALPROZESS_LABEL,
+            APERAK_GAS_FOLGEPROZESS_LABEL,
+        ] {
+            let out = GeliGasSupplierChangeWorkflow::handle(&state, timeout(label)).unwrap();
+            assert!(
+                out.events.is_empty(),
+                "{label} must not act on an answered Anmeldung"
+            );
+        }
+    }
+
+    /// A processable Gas Anmeldung sends no APERAK (APERAK AHB 1.1 §2.3), so it
+    /// arms no APERAK window; a rejected one sends the Verarbeitbarkeits-
+    /// fehlermeldung and arms the window that watches its delivery.
+    #[test]
+    fn only_a_sent_aperak_arms_an_aperak_window() {
+        let ok = GeliGasSupplierChangeWorkflow::handle(
+            &GasSupplierChangeState::default(),
+            receive_cmd(44001, true),
+        )
+        .unwrap();
+        assert!(
+            !ok.deadlines
+                .iter()
+                .any(|d| mako_fristen::is_delivery_window(&d.label)),
+            "{:?}",
+            ok.deadlines
+        );
+        let bad = GeliGasSupplierChangeWorkflow::handle(
+            &GasSupplierChangeState::default(),
+            receive_cmd(44001, false),
+        )
+        .unwrap();
+        assert!(
+            bad.deadlines
+                .iter()
+                .any(|d| &*d.label == APERAK_GAS_INITIALPROZESS_LABEL)
+        );
+    }
+
+    /// The E/G's silence on a 44013 is the Zuordnung (GeLi Gas 3.0 Kap. 3.3):
+    /// the lapse completes the process instead of leaving it open.
+    #[test]
+    fn the_eg_silence_on_an_eog_zuordnung_completes_it() {
+        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, gnb_cmd(44013)).unwrap();
+        let state = apply_all(state, &out.events);
+        assert!(matches!(state, GasSupplierChangeState::GnbPending(_)));
+        let out =
+            GeliGasSupplierChangeWorkflow::handle(&state, timeout(RESPONSE_WINDOW_LABEL)).unwrap();
+        let state = apply_all(state, &out.events);
+        assert!(
+            matches!(state, GasSupplierChangeState::Completed(_)),
+            "{state:?}"
+        );
+    }
+
+    /// A label the workflow does not own decides nothing.
+    #[test]
+    fn a_foreign_label_does_nothing() {
+        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44001, true)).unwrap();
+        let state = apply_all(state, &out.events);
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, timeout("not-ours")).unwrap();
+        assert!(out.events.is_empty());
     }
 
     #[test]

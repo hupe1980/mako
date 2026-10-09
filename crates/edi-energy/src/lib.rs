@@ -25,17 +25,30 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
 #![deny(missing_docs)]
 #![warn(clippy::pedantic)]
-#![allow(clippy::module_name_repetitions)]
+#![expect(
+    clippy::module_name_repetitions,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 // `Error::Validation` intentionally carries a full `EdiEnergyReport` for rich diagnostics.
 // Boxing it would change the public pattern-matching API and is not worth the churn.
-#![allow(clippy::result_large_err)]
-#![allow(clippy::must_use_candidate)]
-// Builder methods that return `Self` all have obvious must-use semantics.
-#![allow(clippy::return_self_not_must_use)]
+#![expect(
+    clippy::result_large_err,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
+#![expect(
+    clippy::must_use_candidate,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
+// Builder methods that return `Self` all have obvious must-use semantics. An
+// `allow`, not an `expect`: the builders that trigger the lint compile only
+// under some feature sets, so an expectation goes unfulfilled in the others.
+#![allow(
+    clippy::return_self_not_must_use,
+    reason = "Builder methods that return `Self` all have obvious must-use semantics; the lint fires only in feature builds that compile the builders"
+)]
 
 mod agency_code;
 mod any_message;
-mod custom_rule_pack;
 mod error;
 mod interchange;
 mod light_message;
@@ -65,7 +78,6 @@ include!(concat!(env!("OUT_DIR"), "/profiles.rs"));
 
 pub use agency_code::AgencyCode;
 pub use any_message::AnyMessage;
-pub use custom_rule_pack::CustomRulePack;
 pub use error::{Error, ProfileError};
 pub use interchange::{InterchangeHeader, MessageEnvelope, ParsedInterchange, ReceiptContext};
 pub use light_message::LightMessage;

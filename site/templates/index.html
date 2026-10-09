@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{#- ⚠ Guarded numbers. `services/makod/tests/published_counts.rs` reads this file
+{#- ⚠ Guarded numbers. `services/makod/tests/it/published_counts.rs` reads this file
     and requires the phrases "469 Prüfidentifikatoren" and "71 workflows" to
     survive tag-stripping, so a number must stay immediately before its unit with
     only markup between them. `e2e_ahb_rule_coverage_guard.rs` reads the AHB-rule
@@ -31,7 +31,7 @@
     <p class="hero-run">
       <code>cargo add edi-energy</code>
       <span>for the format layer, or</span>
-      <code>docker run ghcr.io/hupe1980/makod</code>
+      <code>just dev makod</code>
       <span>for the daemon.</span>
     </p>
   </div>
@@ -61,7 +61,7 @@
     <p class="section-lead">Every MaKo message names a Marktrolle on each end. The BDEW
       Rollenmodell V2.2 defines twelve of them; these four carry the mass-market processes,
       and mako builds each as its own binary — a role-scoped deployment contains no other
-      role's code, which is what § 6a EnWG informational unbundling asks for.</p>
+      role's code, least privilege in support of § 6a EnWG informational unbundling.</p>
     <div class="card-grid card-grid-4">
       <div class="card">
         <h3><span class="role-abbr">NB</span> Netzbetreiber</h3>
@@ -143,7 +143,7 @@ graph LR
 let msg = Platform::with_all_profiles().parse(wire)?;
 
 msg.try_message_type();            // Some(Utilmd)
-msg.detect_release()?.as_str();    // "S2.1"
+msg.detect_release()?.as_str();    // "S2.2"
 msg.detect_pruefidentifikator()?;  // 55001 — Anmeldung Lieferbeginn
 
 let report = msg.validate()?;      // MIG + AHB + semantic
@@ -278,7 +278,7 @@ graph TB
     <div>
       <h2>Built for the regulatory pace</h2>
       <p>German market communication moves fast — LFW24, § 14a, § 41a dynamic tariffs,
-        § 42b/c energy sharing, the EDIFACT→API transition, the MaBiS-Hub cutover. mako's
+        § 42b/c energy sharing, the API-Webdienste beside EDIFACT, the MaBiS-Hub. mako's
         domain layer is deliberately split from transport and format, so when the market
         moves, the platform moves with an import run — not a rewrite.</p>
       <ul class="check">
@@ -294,9 +294,9 @@ graph TB
       <pre><code># Parse &amp; validate an EDIFACT interchange
 cargo add edi-energy
 
-# Run the protocol daemon
-docker run --rm -p 8080:8080 \
-  ghcr.io/hupe1980/makod:latest
+# Run the NB demo: makod, marktd, processd
+just build-demo
+cd demos/nb-stp &amp;&amp; docker compose up -d &amp;&amp; bash smoke.sh
 
 # Drive it from Python — generators, simulators, pytest plugin
 pip install makotest</code></pre>

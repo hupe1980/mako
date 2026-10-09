@@ -16,32 +16,19 @@
 //! A split view stops being invisible and becomes either a witness that refuses
 //! or two cosignatures that contradict each other and can be shown to anyone.
 //!
-//! ## Off the run path, on purpose
+//! Witnessing is **off the run path**: it is retrospective evidence gathered
+//! after sealing, so an unreachable witness yields a report that cannot be
+//! mistaken for success, never a failed run.
 //!
-//! Witnessing is retrospective evidence gathered after sealing. A run whose
-//! witnesses are unreachable finished long ago, and making the plane's
-//! availability depend on a third party would be the wrong trade for evidence
-//! that is read after the fact — a Betriebsprüfung is not a request/response
-//! deadline. What a shortfall gets instead is a report that cannot be mistaken
-//! for success.
+//! A cosignature is **kept at the witness**, not here — a copy beside the log
+//! would put the evidence back under the control of the party it is evidence
+//! about. An auditor compares what the witness last cosigned for
+//! `mako/agentd/<tenant>` with what mako hands them. Locally, a log line names
+//! the cosigned size and root.
 //!
-//! ## Where a cosignature is kept
-//!
-//! At the witness, not here. Storing a copy beside the log would put the
-//! evidence back under the control of the party it is evidence about, which is
-//! the exact symmetry this module exists to break. An auditor asks the witness
-//! what it last cosigned for `mako/agentd/<tenant>` and compares that with what
-//! mako hands them; the whole value is that those are two different sources.
-//! What this module keeps locally is a log line naming the size and root that
-//! were cosigned, so an operator can see the mechanism working.
-//!
-//! ## A witness you host yourself proves nothing about you
-//!
-//! Worth stating in mako's own tree, because the configuration makes it easy to
-//! point this at a URL inside the same cluster and read the resulting green log
-//! line as evidence. It is not. The counterparty has to be one that would not
-//! cooperate in a rewrite: a `transparency-dev` omniwitness instance, an
-//! auditor's own, a second market participant's.
+//! **A witness you host yourself proves nothing about you.** The counterparty
+//! must be one that would not cooperate in a rewrite: a `transparency-dev`
+//! omniwitness instance, an auditor's own, a second market participant's.
 
 use std::sync::Arc;
 use std::time::Duration;

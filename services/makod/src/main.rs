@@ -675,10 +675,12 @@ struct Cli {
     )]
     webdienste_root_ca_pem: Vec<String>,
 
-    /// DEV/TEST ONLY: call the API-Webdienste without a client identity.
+    /// DEV/TEST ONLY: call the API-Webdienste without a client identity and
+    /// without a content signing key.
     ///
-    /// Without it the calls are refused by the counterparty rather than here,
-    /// which is the harder place to read the failure from.
+    /// Without it the boot refuses either gap rather than leaving the calls to
+    /// be refused by the counterparty, which is the harder place to read the
+    /// failure from.
     #[arg(long, env = "MAKOD_ALLOW_UNAUTHENTICATED_WEBDIENSTE_CLIENT")]
     allow_unauthenticated_webdienste_client: bool,
 
@@ -1083,7 +1085,10 @@ fn main() -> anyhow::Result<()> {
         // SAFETY: `main` is still single-threaded here — before any
         // `thread::spawn` and before the tokio runtime is built — so nothing
         // else can be reading the environment while it is written.
-        #[allow(unsafe_code)]
+        #[expect(
+            unsafe_code,
+            reason = "the one sound unsafe operation, documented at the site"
+        )]
         unsafe {
             std::env::remove_var("MAKOD_DATA_DIR");
         }
@@ -1306,6 +1311,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         webdienste_client_identity: cli.webdienste_client_cert_pem.is_some()
             && cli.webdienste_client_key_pem.is_some(),
         allow_unauthenticated_webdienste_client: cli.allow_unauthenticated_webdienste_client,
+        webdienste_signing_key: cli.webdienste_signing_key_pem.is_some(),
         as4_partner: &cli.as4_partner,
         as4_partner_cert: &cli.as4_partner_cert,
         as4_partner_signing_cert: &cli.as4_partner_signing_cert,

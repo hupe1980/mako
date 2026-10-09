@@ -21,13 +21,22 @@ default:
 
 # Minimum gate before every commit: type-check all targets
 check:
-    cargo check --all-targets --all-features
+    cargo check --workspace --all-targets --all-features
 
-# Run all tests
 # `--all-targets` so bench targets are built and their `main` runs in test mode;
-# without it a panicking Criterion bench is invisible to `just ci`.
+# without it a panicking Criterion bench is invisible to `just ci`. Under
+# cargo-nextest each test runs in its own process; without it, `cargo test`.
+# Neither runs doctests — `just test-doc` does.
+#
+# Run all tests
 test:
-    cargo test --all-features --all-targets
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if cargo nextest --version >/dev/null 2>&1; then
+        cargo nextest run --workspace --all-features --all-targets
+    else
+        cargo test --workspace --all-features --all-targets
+    fi
 
 # Doc examples. `--all-targets` selects every lib, bin, test, bench and example
 # target and **excludes doctests** — the two flags do not compose, so `just test`
@@ -46,7 +55,7 @@ test-doc:
 #
 # Every request body demos/ posts is one the service accepts
 test-demo-payloads:
-    cargo test --test demo_payloads -p marktd -p vertragd -p productd -p billingd -p accountingd -p einsd
+    for c in marktd vertragd productd billingd accountingd einsd; do {{ just_executable() }} suite "$c" demo_payloads; done
 
 # A demo *config* is shipped surface for the same reason a demo payload is: it
 # is what an operator copies. `figment` merges the TOML with the service's
@@ -55,16 +64,34 @@ test-demo-payloads:
 # unknown key; a missing one is fine, since the demo stacks supply the database
 # URL and the secrets through the environment.
 test-demo-configs:
-    cargo test --test demo_config -p marktd -p vertragd -p productd -p billingd \
-        -p accountingd -p einsd -p edmd -p outputd -p processd
+    for c in marktd vertragd productd billingd accountingd einsd edmd outputd processd; do \
+        {{ just_executable() }} suite "$c" demo_config; done
 
 # Run tests for a specific crate (e.g. `just test-crate mako-engine`)
 test-crate crate:
     cargo test -p {{ crate }} --all-features
 
-# Run a specific integration test (e.g. `just test-integration smoke`)
-test-integration name:
-    cargo test --test {{ name }} --all-features
+# A crate's integration tests are one `tests/it` binary, so a suite is a module
+# filter on it.
+#
+# Run one integration suite of one crate (e.g. `just test-integration edmd demo_config`)
+test-integration crate name:
+    CARGO_ARGS="--all-features" {{ just_executable() }} suite {{ crate }} {{ name }}
+
+# One integration suite of one crate, with test-binary arguments after `--`.
+# A crate whose integration tests are one `tests/it` binary selects the suite as
+# a module (`--test it -- <suite>::`); one still built a file per binary selects
+# it as its own target (`--test <suite>`). Extra cargo flags go in CARGO_ARGS.
+[private]
+suite crate name *test_args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="services/{{ crate }}"; [ -d "crates/{{ crate }}" ] && dir="crates/{{ crate }}"
+    if [ -f "$dir/tests/it/main.rs" ]; then
+        cargo test -p {{ crate }} ${CARGO_ARGS:-} --test it -- {{ name }}:: {{ test_args }}
+    else
+        cargo test -p {{ crate }} ${CARGO_ARGS:-} --test {{ name }} -- {{ test_args }}
+    fi
 
 # ── Database integration tests ───────────────────────────────────────────────
 # Every suite below self-manages its PostgreSQL via testcontainers: a throwaway
@@ -93,84 +120,85 @@ check-sql:
 # Storage integration tests for edmd (meterstore hot/cold over PostgreSQL + a
 # filesystem Iceberg warehouse).
 test-edmd-db:
-    cargo test -p edmd --test meterstore_integration -- --include-ignored --test-threads=1
+    {{ just_executable() }} suite edmd meterstore_integration --include-ignored --test-threads=1
+    cargo test -p edmd --bin edmd startup_test -- --include-ignored
 
 # Handler + SQL integration tests for einsd (EEG settlement).
 test-einsd-db:
-    cargo test -p einsd --test settlement_integration -- --include-ignored --test-threads=1
+    {{ just_executable() }} suite einsd settlement_integration --include-ignored --test-threads=1
 
 # Ledger integration tests for accountingd — the doubleentry-backed
 # Massenkontokorrent (idempotency, netting, reconcile, period seal, Merkle
 # inclusion proof) against real PostgreSQL.
 test-accountingd-db:
-    cargo test -p accountingd --test db_scenarios -- --include-ignored --test-threads=1
+    {{ just_executable() }} suite accountingd db_scenarios --include-ignored --test-threads=1
+    cargo test -p accountingd --bin accountingd startup_test -- --include-ignored
 
 # Execution-queue integration tests for sperrd (ORDERS 17115/17117 ingest,
 # the claim guard, and the IFTSTA 21039 retry queue) against real PostgreSQL —
 # the only suite covering the §41f disconnection execution path.
 test-sperrd-db:
-    cargo test -p sperrd --test db_scenarios -- --include-ignored --test-threads=1
+    {{ just_executable() }} suite sperrd db_scenarios --include-ignored --test-threads=1
 
 # Records integration tests for billingd.
 test-billingd-db:
-    cargo test -p billingd --test records_integration -- --include-ignored --test-threads=1
+    {{ just_executable() }} suite billingd records_integration --include-ignored --test-threads=1
 
 # Template-store integration tests for outputd.
 test-outputd-db:
-    cargo test -p outputd --test store_integration -- --include-ignored --test-threads=1
+    {{ just_executable() }} suite outputd store_integration --include-ignored --test-threads=1
 
 # Dispatch integration tests for vertragd.
 test-vertragd-db:
-    cargo test -p vertragd --test dispatch_integration -- --include-ignored --test-threads=1
+    {{ just_executable() }} suite vertragd dispatch_integration --include-ignored --test-threads=1
 
 # Catalog integration tests for productd.
 test-productd-db:
-    cargo test -p productd --test catalog_integration -- --include-ignored --test-threads=1
+    {{ just_executable() }} suite productd catalog_integration --include-ignored --test-threads=1
 
 # All marktd integration suites (VersorgungsStatus, MeLo graph, ESA, registries,
 # durable fan-out, MaBiS-Zählpunkt, temporal constraints, tenant isolation, and
 # the 23P01 → 409 translation).
 test-marktd-db:
-    cargo test -p marktd \
-        --test versorgung_integration --test melo_graph_integration \
-        --test esa_integration --test registries_integration \
-        --test fanout_durable_integration --test mabis_zp_integration \
-        --test temporal_constraints_integration --test tenant_isolation_integration \
-        --test overlap_is_a_client_error \
-        -- --include-ignored --test-threads=1
+    cargo test -p marktd --test it -- --include-ignored --test-threads=1 \
+        versorgung_integration:: melo_graph_integration:: \
+        esa_integration:: registries_integration:: \
+        fanout_durable_integration:: mabis_zp_integration:: \
+        temporal_constraints_integration:: tenant_isolation_integration:: \
+        overlap_is_a_client_error::
 
 # invoicd's receipt store — the § 147 AO / GoBD audit trail, its per-tenant
 # uniqueness and the ERP re-dispatch lease.
 test-invoicd-db:
-    cargo test -p invoicd --test receipts_pg -- --include-ignored --test-threads=1
+    {{ just_executable() }} suite invoicd receipts_pg --include-ignored --test-threads=1
 
 # mabis-syncd's submission schema — the per-run series ledger the BIKO acks
 # against, and the constraints that stop a retry re-filing an acked series.
 test-mabis-syncd-db:
-    cargo test -p mabis-syncd --test schema_pg -- --include-ignored --test-threads=1
+    {{ just_executable() }} suite mabis-syncd schema_pg --include-ignored --test-threads=1
 
 # netzbilanzd's invoice-draft store — numbering series, Abschlag deduction,
 # the Storno chain and the tenant scoping of every read and transition.
 test-netzbilanzd-db:
-    cargo test -p netzbilanzd --test invoice_drafts_pg -- --include-ignored --test-threads=1
+    {{ just_executable() }} suite netzbilanzd invoice_drafts_pg --include-ignored --test-threads=1
 
 # obsd's sweeps — the deadline alert and the § 7a parity report, both of which
 # run on a timer with no caller to notice a wrong predicate.
 test-obsd-db:
-    cargo test -p obsd --test worker_integration -- --include-ignored --test-threads=1
+    {{ just_executable() }} suite obsd worker_integration --include-ignored --test-threads=1
 
 # The shared transactional outbox: atomicity with the caller's write, the retry
 # schedule and the dead-letter hand-off. Every service that emits depends on it.
 test-outbox-db:
-    cargo test -p mako-service --test outbox_integration -- --include-ignored --test-threads=1
+    {{ just_executable() }} suite mako-service outbox_integration --include-ignored --test-threads=1
 
 # processd's SQL suite (approval queue claim/dispatch, decision audit log).
 #
 # `--no-default-features --features integrated` because the default build is
 # role-split and these tests drive both the NB and the LF module.
 test-processd-db:
-    cargo test -p processd --no-default-features --features integrated \
-        --test sql_integration -- --include-ignored --test-threads=1
+    CARGO_ARGS="--no-default-features --features integrated" \
+        {{ just_executable() }} suite processd sql_integration --include-ignored --test-threads=1
 
 # Every real-PostgreSQL suite is `#[ignore]`d and named by a `test-*-db` recipe.
 #
@@ -192,9 +220,19 @@ check-expected-tenant:
 check-vorlauf-consulted:
     cargo xtask check-vorlauf-consulted
 
+# No BEHG price table carries a year no enacted statute prices (from 2027)
+check-behg-prices:
+    cargo xtask check-behg-prices
+
+# Local, not in `ci`: every spec's Status agrees with its tasks (or is Parked,
+# with nothing open and the roadmap's parked list naming it), and specs/ and
+# concepts/ROADMAP.md name each other. Both trees are untracked, so CI skips it.
+specs:
+    cargo xtask check-specs
+
 # Lint with warnings as errors
 clippy:
-    cargo clippy --all-targets --all-features -- -D warnings
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # Format all code
 fmt:
@@ -219,26 +257,24 @@ no-version-alias:
 
 # Build and check rustdoc (--all-features, warnings as errors)
 doc-check:
-    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
 
 # `just test` only runs --all-features, which cannot catch a module whose
 # `#[cfg(feature = ...)]` gate is missing or misplaced — that only shows up when
-# the feature is off. Mirrors the `test` matrix in .github/workflows/ci.yml.
+# the feature is off. The feature list is read from each manifest by
+# `cargo hack`, so a new feature is built with no edit here or in CI.
 #
-# Test every edi-energy feature combination CI builds
-test-features:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    for f in "--no-default-features" "--all-features" \
-             "--features utilmd" "--features mscons" "--features aperak" \
-             "--features contrl" "--features invoic" "--features orders" \
-             "--features partin" "--features remadv" "--features reqote" \
-             "--features iftsta" "--features insrpt" "--features ordchg" \
-             "--features ordrsp" "--features comdis" "--features pricat" \
-             "--features utilts" "--features quotes" "--features diagnostics"; do
-        echo "==> cargo test -p edi-energy $f"
-        cargo test -p edi-energy $f
-    done
+# Build every feature of every crate on its own (needs cargo-hack)
+check-features:
+    cargo hack check --each-feature --workspace
+
+# A dependency no source names still compiles and links, and still carries its
+# advisories; `[package.metadata.cargo-machete] ignored` names, with a reason,
+# the ones used only through a macro or a feature.
+#
+# Refuse a dependency no source file uses (needs cargo-machete)
+machete:
+    cargo machete
 
 # `cargo publish` verifies each crate **alone, with default features**, where
 # workspace feature unification no longer supplies an optional dependency. A
@@ -257,6 +293,39 @@ check-publishable:
         cargo check -q -p "$c"
     done
     echo "check-publishable: $(echo "$crates" | wc -w | tr -d ' ') crates build with default features"
+
+# Every crate under crates/ is published; a consumer finds a breaking change
+# when their build fails unless this does first. The baseline is the newest
+# `v*` tag before `HEAD`, built from git, so no registry download is needed; a
+# change the current version number does not admit (a minor bump, under 0.x)
+# fails. It runs in the release workflow before anything is published, not in
+# `ci`: between releases the API may break freely, and the bump that admits a
+# break is made when the release is cut.
+# The crate set is the release workflow's publish list, as for
+# check-publishable. Needs cargo-semver-checks; name crates to check a subset.
+#
+# Refuse a public-API break the version number does not admit
+semver *crates:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    base="$(git describe --tags --abbrev=0 --match 'v*' HEAD^)"
+    crates="{{ crates }}"
+    if [ -z "$crates" ]; then
+        crates=$(grep -oE 'cargo publish -p [a-z0-9-]+' .github/workflows/release.yml \
+                 | awk '{print $NF}' | sort -u)
+    fi
+    args=()
+    for c in $crates; do args+=(-p "$c"); done
+    echo "semver: ${#args[@]} flags against $base"
+    cargo semver-checks check-release --baseline-rev "$base" "${args[@]}"
+
+# A report, not a gate: a pin behind the registry is often a decision, and
+# `just ci` must not need the network. Pass `--recorded <file>` to read a saved
+# crates.io response instead of querying it.
+#
+# Report each direct dependency's pin against crates.io (network)
+dep-age *args:
+    cargo xtask dep-age {{ args }}
 
 # Full CI suite (minimum gate + tests + quality + release-lifecycle checks)
 # Lint every documented role-scoped deployment profile of makod.
@@ -286,7 +355,7 @@ clippy-roles:
     for f in "lf-only" "nb-only" "msb-only" "integrated"; do
         echo "==> cargo clippy -p processd --no-default-features --features $f"
         cargo clippy -p processd --no-default-features --features "$f" --all-targets -- -D warnings
-        cargo test   -p processd --no-default-features --features "$f" --test role_separation
+        CARGO_ARGS="--no-default-features --features $f" {{ just_executable() }} suite processd role_separation
     done
     # mako-pruefung carries role features of its own — the EBD trees are grouped
     # by prüfende Rolle, so an NB-only build holds no LF catalogue. The default
@@ -413,7 +482,7 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check check-fuzz test test-doc test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-event-payloads check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-dep-versions check-action-pins check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -429,8 +498,8 @@ zugferd-specimen out="target/zugferd-specimen.pdf":
     # its working directory — a relative path lands in services/outputd/, not
     # where the caller is standing.
     out="$(cd "$(dirname "{{ out }}")" 2>/dev/null && pwd || mkdir -p "$(dirname "{{ out }}")" && cd "$(dirname "{{ out }}")" && pwd)/$(basename "{{ out }}")"
-    MAKO_ZUGFERD_OUT="$out" cargo test -p outputd --test zugferd_carrier \
-        -- --ignored --nocapture write_specimen_for_external_validators
+    MAKO_ZUGFERD_OUT="$out" cargo test -p outputd --test it \
+        -- --ignored --nocapture zugferd_carrier::write_specimen_for_external_validators
     echo ""
     echo "Wrote three files: the stamped carrier, the XRechnung-profile carrier"
     echo "(\${out%.pdf}-xrechnung.pdf) and the pre-stamp control (\${out%.pdf}-unstamped.pdf)."
@@ -546,37 +615,78 @@ build-xtask:
 
 # ── Local development ─────────────────────────────────────────────────────────
 #
-# Run infrastructure dependencies in Docker, Rust services directly with cargo.
-# Requires: docker, cargo-watch  (`cargo install cargo-watch`)
+# PostgreSQL runs in Docker; the services run as cargo processes, each with its
+# config from dev/config/<service>.toml.
 #
-# Typical workflow:
-#   just infra-up                 # start postgres
-#   just dev marktd               # hot-reload marktd (separate terminal)
-#   just dev processd             # hot-reload processd (separate terminal)
-#   just infra-down               # stop postgres
+#   just dev marktd               # starts PostgreSQL if needed, then marktd
+#   just dev processd             # a second service, in a second terminal
+#   just infra-down               # stop PostgreSQL
 
-# Start infrastructure (postgres only) — services run as cargo processes
+# Start infrastructure (postgres only) and wait until it accepts connections
 infra-up:
-    docker compose -f dev/docker-compose.yml up -d
+    docker compose -f dev/docker-compose.yml up -d --wait
     @echo "Postgres ready on :5432 — connection strings in dev/docker-compose.yml"
 
 # Stop infrastructure and remove containers (volumes are preserved)
 infra-down:
     docker compose -f dev/docker-compose.yml down
 
-# Stop infrastructure and delete all volumes (full reset)
+# Stop infrastructure and delete all volumes and dev/.data (full reset)
 infra-reset:
     docker compose -f dev/docker-compose.yml down -v
+    rm -rf dev/.data
 
-# Run a single service with hot-reload (requires cargo-watch).
-# Example: just dev marktd
+# Restarts on change with watchexec or bacon when one is installed, else runs
+# once with plain `cargo run`.
+#
+# Run one service against the dev stack with dev/config/<service>.toml (just dev marktd)
 dev service:
-    cargo watch -x "run -p {{ service }}"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cfg="dev/config/{{ service }}.toml"
+    if [ ! -f "$cfg" ]; then
+        echo "no $cfg — one of: $(ls dev/config | sed 's/\.toml$//' | tr '\n' ' ')" >&2
+        exit 1
+    fi
+    # makod keeps its event store in memory in dev; every other service has a
+    # database in the compose stack.
+    if [ "{{ service }}" != makod ]; then
+        docker compose -f dev/docker-compose.yml up -d --wait >/dev/null
+    fi
+    . dev/env.sh {{ service }}
+    if command -v watchexec >/dev/null; then
+        exec watchexec --restart --exts rs,toml -- cargo run -p {{ service }}
+    elif command -v bacon >/dev/null; then
+        exec bacon run -- -p {{ service }}
+    else
+        exec cargo run -p {{ service }}
+    fi
 
-# Run a single service once (no watch).
+# Run a single service once against the dev stack (no watch).
 # Example: just run marktd
 run service:
-    cargo run -p {{ service }}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    . dev/env.sh {{ service }}
+    exec cargo run -p {{ service }}
+
+# The services are read from the directory, so a new config is covered as soon
+# as it exists.
+#
+# Every dev/config/<service>.toml loads through its service's config type
+test-dev-configs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for f in dev/config/*.toml; do
+        {{ just_executable() }} suite "$(basename "$f" .toml)" dev_config
+    done
+
+# What `just dev` promises a fresh clone. Needs Docker; with no argument it
+# boots every service under dev/config/.
+#
+# Boot services with their dev configs and wait for /health/ready (just smoke-dev marktd)
+smoke-dev *services:
+    dev/smoke.sh {{ services }}
 
 # Tail logs for an infra container (postgres).
 # Example: just infra-logs postgres
@@ -685,6 +795,22 @@ check-workflow-interpolation:
 check-outbox-notify:
     cargo xtask check-outbox-notify
 
+# A correlation key is written in the batch of its events
+check-atomic-spawn:
+    cargo xtask check-atomic-spawn
+
+# Every workflow command variant is constructed by shipped code
+check-command-constructors:
+    cargo xtask check-command-constructors
+
+# Every command processd can queue for an operator has an answer contract
+check-approval-commands:
+    cargo xtask check-approval-commands
+
+# Ingest arms deciding resume-vs-spawn on index presence alone only become fewer
+check-occupancy:
+    cargo xtask check-occupancy
+
 # Refuse `deny_unknown_fields` on a workflow event payload — an event is read
 # back years later, so a removed field must not make a § 147 AO record unfoldable.
 check-event-payloads:
@@ -708,6 +834,22 @@ check-cedar-roles:
 
 check-citations:
     cargo xtask check-citations
+
+# Refuse a claim AGENTS.md lists as known-wrong, and a tracked file that points
+# into the untracked roadmap or specifications.
+check-known-wrong:
+    cargo xtask check-known-wrong
+
+# Refuse a Werktage or clock-time literal in a string that also names a
+# Festlegung, an AHB or an AWH — the Frist renders from mako_fristen.
+check-frist-literals:
+    cargo xtask check-frist-literals
+
+# Every declared control — Frist constants, Meldepflicht rows, credential
+# fields, role columns, feature-gated security modules — is consulted, or
+# listed with a reason and the milestone that removes it.
+check-controls-consulted:
+    cargo xtask check-controls-consulted
 
 # How much of the published Prüfidentifikator inventory the AHB profiles carry,
 # and whether the PID reference names all of it. `validate-profiles` compares one
@@ -741,6 +883,24 @@ check-licenses:
 # check it against the manifests.
 check-dep-versions:
     cargo xtask check-dep-versions
+
+# Refuse an action not pinned by commit SHA, a `FROM` without a digest, and workflow-wide write permissions
+check-action-pins:
+    cargo xtask check-action-pins
+
+# A ban whose path stopped resolving is ignored by clippy in silence.
+#
+# Every clippy.toml ban fires on its planted use in xtask/clippy-fixtures
+check-clippy-bans:
+    cargo xtask check-clippy-bans
+
+# Hold release/vex.json's OpenVEX statements equal to deny.toml's ignored advisories
+check-vex:
+    cargo xtask check-vex
+
+# Assemble the release evidence pack; a section without its input reads `not measured`
+evidence-pack inputs out:
+    cargo xtask evidence-pack --inputs {{inputs}} --out {{out}}
 
 # Refuse a raw `time` value on a JSON wire: `OffsetDateTime` and `Date` derive
 # `Serialize` as their component array ([y, ordinal, h, m, s, ns, ±h, ±m, ±s]),

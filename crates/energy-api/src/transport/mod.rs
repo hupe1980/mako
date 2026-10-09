@@ -3,8 +3,8 @@
 //! | Module | Purpose | Feature |
 //! |--------|---------|---------|
 //! | [`http`] | `reqwest::Client` builder with mTLS and retry config | `client` |
-//! | [`jws`] | JWS ECDSA-SHA256 sign/verify for **directory records** | `crypto` |
-//! | [`content_security`] | TR-03116-3 DIGEST/SIGNATURE for **electricity API calls** | `crypto` |
+//! | [`jws`] | JWS ECDSA-SHA256 sign/verify for **directory records** | always |
+//! | [`content_security`] | TR-03116-3 DIGEST/SIGNATURE for **electricity API calls** | always |
 
 pub mod http;
 

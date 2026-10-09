@@ -718,7 +718,10 @@ impl Generator<'_> {
     /// a synthetic value when the element is used but not coded, or nothing.
     // The arguments are the segment's context; a struct for them would be
     // built and taken apart at the one call site.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
     fn value(
         &self,
         layout: &SegmentNode,
@@ -791,7 +794,10 @@ impl Generator<'_> {
     /// A value of the right shape for `el`, given what the segment carries so
     /// far.
     // One table of data elements; splitting it would hide what it covers.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "One table of data elements; splitting it would hide what it covers"
+    )]
     fn synthetic(
         &self,
         layout: &SegmentNode,

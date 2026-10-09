@@ -1,7 +1,7 @@
 [package]
 name         = "mako-fristen"
 version.workspace      = true
-description  = "Every Frist in German market communication: BDEW Werktage, the MaKo holiday calendar, and the per-Prüfidentifikator Antwortfrist tables"
+description  = "Deadlines in German energy market communication: BDEW Werktage, the MaKo holiday calendar and the per-Prüfidentifikator Antwortfristen"
 authors.workspace      = true
 edition.workspace      = true
 license.workspace      = true
@@ -14,3 +14,6 @@ categories   = ["date-and-time"]
 [dependencies]
 time    = { workspace = true }
 time-tz = { workspace = true }
+
+[lints]
+workspace = true

@@ -3,14 +3,10 @@ title = "Redispatch 2.0"
 description = "Redispatch 2.0 in mako: the XML document types, eight event-sourced workflows, the BilAReM regime under BK6-23-241, and IFTSTA integration."
 weight = 16
 +++
-Redispatch 2.0 is the mandatory German grid-congestion management protocol
-under §§ 13, 13a, 14 EnWG, effective 1 October 2021 (NABEG). It requires all
-TSOs (ÜNB) and DSOs (VNB) to coordinate controllable generation units across
-transmission and distribution networks using structured XML documents.
-
-Unlike GPKE / WiM / GeLi Gas, which use EDIFACT `RFF+Z13` Prüfidentifikatoren
-for routing, Redispatch 2.0 uses **CIM/IEC 62325-based XML** for primary data
-exchange and **IFTSTA (EDIFACT)** only for final status confirmations.
+Redispatch 2.0 is the German grid-congestion management process under §§ 13,
+13a, 14 EnWG (NABEG, from 1 October 2021): ÜNB and VNB coordinate controllable
+units with **CIM/IEC 62325 XML** documents, and a handful of EDIFACT messages
+(IFTSTA, MSCONS, ORDERS) carry status and Ausfallarbeit.
 
 ---
 
@@ -18,7 +14,7 @@ exchange and **IFTSTA (EDIFACT)** only for final status confirmations.
 
 | BNetzA decision | Topic | Effective |
 |---|---|---|
-| BK6-20-059 | Datenformate und Übermittlungswege | 2021-10-01 — **TZ 1 repealed** with the end of 30.06.2026; TZ 2 survives until the new EDI@Energy documents apply |
+| BK6-20-059 | Datenformate und Übermittlungswege | 2021-10-01 — **TZ 1 repealed** by BK6-23-241 TZ 1 with the end of 30.06.2026; TZ 2 applies until the new EDI@Energy documents do |
 | BK6-20-060 | Netzbetreiberkoordinierung (Stammdaten forwarding, Activation response) | 2021-10-01 — **repealed** by BK6-23-241 TZ 4 |
 | BK6-20-061 | Informationsbereitstellung (`Kostenblatt`) | 2021-10-01 — **repealed** by BK6-23-241 TZ 3 |
 | **BK6-23-241** | **BilAReM** — Bilanzieller Ausgleich von Redispatch-Maßnahmen | 2026-07-01 (ÜNB); formats follow the EDI@Energy expert group on relative deadlines |
@@ -37,7 +33,7 @@ Migration between them is one-way, at quarter boundaries, with ≥6 months' noti
 (the Spitz election is due 30.11.2028), and MaBiS Anlage 1 Kap. 17 was revoked
 **30.09.2026**, its survivors continuing as the Anlage zur BilAReM.
 
-NABEG 2019 and the above BNetzA decisions implement the legal obligation.
+
 
 The BilAReM domain layer spans three seams:
 
@@ -78,14 +74,10 @@ The Vergleichszeitraum is selected, not assumed. Kap. 3.2.2.1 admits four
 and each reach at least 10 % of the Nennleistung, taken from the side nearest the
 Maßnahme with ties going to the side before it, and never from another month —
 neither the Vormonat nor the Folgemonat
-(`crates/mako-redispatch/src/ausfallarbeit.rs:430`).
-Every one of those changes the Korrekturfaktor and through it every kWh.
-
+(`crates/mako-redispatch/src/ausfallarbeit.rs`).
 „Nearest" has **two anchors** — „vor oder nach der Viertelstunde, in der die
 Maßnahme beginnt **bzw. endet**" — so the request carries both
-`massnahme_beginn` and `massnahme_ende`. Measuring both sides from the beginning
-hands a four-hour Maßnahme a Vergleichszeitraum from hours before it when the
-quarter-hours right after are the nearest.
+`massnahme_beginn` and `massnahme_ende`.
 
 `422` when no admissible run exists: the fallback to the vereinfachte
 Spitzabrechnung or the Pauschale is a decision, not a computation.
@@ -97,9 +89,7 @@ before, never from another month — and admits only the quarter-hours of that d
 that reach 10 % of the Nennleistung and carry no Nichtbeanspruchbarkeit or
 marktbedingte Anpassung. A day too dark to qualify is stepped over rather than
 ending the search („zurückzugehen bis zu dem letzten Tag, an dem eine
-Viertelstunde mit mehr als 10 % Einspeisung stattgefunden hat"). `P_VZ,ist / G_VZ`
-scales every kWh of the Spitzabrechnung, so `vergleichstag` decides it rather
-than each party's spreadsheet.
+Viertelstunde mit mehr als 10 % Einspeisung stattgefunden hat"). 
 
 An underoccupied bin is not an error on the `kf-bin` route: Kap. 3.2.3.2
 prescribes a binding Ersatzwert order, and the response names which step
@@ -110,7 +100,7 @@ outside `]0;1[` *is* rejected — that is a data error, not a value to clamp.
 The caller supplies the quarter-hour input series — SCADA/edmd/DWD sourcing stays
 operator-side. BDEW has not published the EDI@Energy wire formats for this
 exchange: the Tenor states relative deadlines and names no calendar date
-(`crates/mako-redispatch/src/bilarem.rs:29`).
+(`crates/mako-redispatch/src/bilarem.rs`).
 
 ---
 
@@ -128,7 +118,7 @@ Suppliers (LF) and metering-point operators (MSB) are **not** in scope for
 Redispatch 2.0. These are market-role abbreviations, not `Marktrolle` variants:
 VNB, ANB and ÜNB all deploy under the **NB Strom** role, and the enum has
 `Marktrolle::Nb` and `Marktrolle::Uenb` but no `Anb`
-(`services/makod/src/startup/mod.rs:276`).
+(`services/makod/src/startup/mod.rs`).
 
 ---
 
@@ -206,7 +196,7 @@ the originating workflow without routing by type.
 Status messages are the only EDIFACT component of Redispatch 2.0. The
 `edi-energy` crate handles IFTSTA parsing; `mako-redispatch` registers all five
 Redispatch Prüfidentifikatoren in the `PidRouter`
-(`crates/mako-redispatch/src/lib.rs:210`):
+(`crates/mako-redispatch/src/lib.rs`):
 
 | PID | Nachricht | Inhalt | Von → An | EBD |
 |----:|-----------|--------|----------|-----|
@@ -264,19 +254,12 @@ carry nowhere to be recorded.
 
 ## Deadlines
 
-Four Redispatch deadlines are widely quoted — a 6-hour acknowledgement, a
-24-hour Statusanfrage answer, a 5-minute activation response, and a Kostenblatt
-due on the 15th. **Three of them no longer have a published source, and the
-fourth was never 6 hours.**
-
-BK6-23-241 repealed the decisions they came from (Tenorziffern 1, 3 and 4), and
-what replaces them is not a new table of Fristen: Tenorziffer 7 obliges the ÜNB
-to *develop* bundesweit einheitliche Prozessbeschreibungen with the industry and
-submit them to the Beschlusskammer, which then publishes them. Until that
-happens the concrete windows are a matter of the operator's own
-Prozessbeschreibung. `mako_redispatch::fristen` splits the two cases, because
-citing a repealed paragraph for a hard-coded number reads as authority and stops
-anyone re-checking it.
+BK6-23-241 repealed the decisions behind the 24-hour Statusanfrage answer,
+the 5-minute activation response and the Kostenblatt on the 15th (Tenorziffern
+1, 3 and 4); Tenorziffer 7 obliges the ÜNB to develop bundesweit einheitliche
+Prozessbeschreibungen instead, which are not published. The acknowledgement is
+3 minutes, not 6 hours. `mako_redispatch::fristen` separates sourced constants
+from operator-set `Betreiberfristen`.
 
 ### Sourced
 
@@ -297,26 +280,19 @@ anyone re-checking it.
 > > jedoch spätestens 3 Minuten** nach Erhalt der Übertragungsdatei das Ergebnis
 > > seiner syntaktischen Prüfung mittels der AcknowledgementDocument-Nachricht
 > > mit."
->
-> Six hours and three minutes are not the same obligation with a different
-> number: six hours is something a batch job satisfies, three minutes has to be
-> answered by the receiving process itself.
 
-Four protocol rules ride with it (same source), and each one is a branch an
-implementation either has or silently does not:
+Four protocol rules ride with it (same source):
 
 1. **Exactly one ACK per Übertragungsdatei**, confirming or rejecting the file
    as a whole. A positive ACK is `A01`; a negative one is `A02` plus `Z12`
    (XSD did not validate) or one of `Z13`–`Z18` (valid but not processable).
 2. **No ACK means not processed** — „Eine nicht empfangene
    AcknowledgementDocument-Nachricht bedeutet, dass die Ursprungsnachricht beim
-   Empfänger **nicht bearbeitet** wird." A sender that reads silence as success
-   loses the message.
+   Empfänger **nicht bearbeitet** wird." 
 3. **Never acknowledge an acknowledgement.**
 4. **A late ACK does not breach the business Frist** — „Syntaxfehlermeldungen,
    welche außerhalb der Frist beim Absender … eingehen, dürfen nicht zu einer
-   Fristverletzung des eigentlichen Geschäftsvorfalles führen." The transport
-   clock and the process clock are separate.
+   Fristverletzung des eigentlichen Geschäftsvorfalles führen." 
 
 ### Operator-configured
 
@@ -324,7 +300,7 @@ implementation either has or silently does not:
 as a documented default. They are **not** binding — the decisions that set them
 are repealed:
 
-| Field | Obligation | Historical default | Was |
+| Field | Obligation | Default | Repealed source |
 |---|---|---|---|
 | `aktivierung_antwort` | Activation (ACO) response | 5 minutes | BK6-20-060 §6.3 |
 | `vorabinformation_planwertmodell` | Planwertmodell Vorab-Information | none — BilAReM Kap. 6.3.1 requires the Abrufprozesse to *define* one but names no figure | BilAReM Kap. 6.3.1 |
@@ -346,16 +322,9 @@ communication-availability notification about a Marktpartner
 
 ### Real-time scheduling
 
-Whatever ACR/AAR window the operator configures, it stays a real-time
-constraint, and the 3-minute ACK is stricter still. That is a scheduling
-requirement, not just a constant: a Werktage-granularity poll cannot fire a
-3-minute window.
-
-`makod` builds **one** `DeadlineScheduler` for every workflow family
-(`services/makod/src/startup/mod.rs:859`), so its poll interval has to be set
-for the tightest window in the deployment. It defaults to 30 seconds
-(`--deadline-poll-interval-secs`, `services/makod/src/main.rs:884`); a Redispatch
-deployment must not raise it towards the GPKE/WiM scale.
+`makod` runs **one** `DeadlineScheduler` for every workflow family, so its
+poll interval (`--deadline-poll-interval-secs`, default 30 seconds) must suit
+the 3-minute ACK; a Redispatch deployment must not raise it.
 
 ---
 
@@ -376,10 +345,9 @@ itself. Kap. 3.1 hangs the Ausfallarbeit directly off the distinction:
 | §13a settlement basis | Transmitted schedule | Measured vs. reference Lastgang |
 
 `AktivierungCommand::ReceiveAco` carries the case (`Abwicklung`). The XML
-transport does not yet resolve it from the resource's Stammdaten: it defaults to
+ingest does not resolve it from the resource's Stammdaten; it sets
 Aufforderungsfall/Sollwert, the strict case
-(`services/makod/src/transport/redispatch_xml_ingest.rs:110`). Resolving a
-Duldungsfall relaxes the process, never the reverse, so the default is safe.
+(`services/makod/src/transport/redispatch_xml_ingest.rs`).
 
 ## §13a EnWG compensation
 
@@ -400,11 +368,7 @@ endpoint only — the payment run is the operator's ERP.
 | `DULDUNGSFALL` | the edmd 15-min Lastgang window (`P_lim = P_ist`, BilAReM Kap. 3.1) | the NB steered the resource, so what the plant would have produced was never transmitted |
 | `AUFFORDERUNGSFALL` | `ausfallarbeit_kwh_override`, taken from the transmitted schedule — **required**, `422` without it | the EIV steered to that schedule, and the schedule *is* the counterfactual |
 
-Resolving both from the Lastgang would settle an Aufforderungsfall against what
-happened rather than against what was instructed — a money error in whichever
-direction the plant deviated, and one nothing downstream detects. The chosen
-basis travels into the result and its calculation trace, so an audit can see
-which counterfactual a figure rests on.
+The chosen basis travels into the result and its calculation trace.
 
 ## Workflow overview
 
@@ -422,9 +386,8 @@ by the same `mako-engine` `Workflow` + `Process` infrastructure.
 | `redispatch-statusanfrage` | `StatusRequest_MarketDocument` | notification | 3-min ACK — no answer document |
 | `redispatch-kostenblatt` | `Kostenblatt` | VNB → ÜNB | 3-min ACK; submission day operator-configured |
 
-Each workflow uses a dedicated event-type newtype (e.g., `VerfuegbarkeitEvent`,
-`NetzengpassEvent`) to prevent cross-workflow event-type collisions in the
-shared `EventStore`.
+Each workflow has its own event type (`VerfuegbarkeitEvent`,
+`NetzengpassEvent`, …).
 
 ---
 
@@ -433,28 +396,19 @@ shared `EventStore`.
 `RedispatchModule` implements `mako_engine::builder::EngineModule` and is the
 single registration point for all Redispatch 2.0 handling in `makod`.
 
-Registration is a Cargo feature, not a runtime role test — `makod` pushes the
-module into its production stack behind `role-nb-strom`, which the default
-feature set contains (`services/makod/src/startup/mod.rs:279`):
-
-```rust,ignore
-#[cfg(feature = "role-nb-strom")]
-modules.push(Box::new(mako_redispatch::RedispatchModule));
-```
-
-`EngineBuilder::register` consumes and returns the builder, so it chains rather
-than being called as a statement.
-
-The module then contributes two routing tables:
+`makod::startup::production_modules` includes it behind the `role-nb-strom`
+feature (part of the default set). The module contributes:
 
 1. `build_router()` — all 8 workflows into a `RedispatchRouter` (XML
    document-type routing);
 2. `register_pids()` — the five Prüfidentifikatoren above into the `PidRouter`
-   (EDIFACT routing).
+   (EDIFACT routing);
+3. `drivers()` — a `WorkflowDriver` per workflow, so their deadlines run
+   through `on_deadline`.
 
 `configure()` does not wire anything: it *verifies* that every workflow the
 router names is reachable, and returns `Err` if one is not
-(`crates/mako-redispatch/src/lib.rs:259`).
+(`crates/mako-redispatch/src/lib.rs`).
 
 ---
 
@@ -522,39 +476,22 @@ Both transport legs are wired end-to-end:
    parses, namespace-checks and validates the document, the canonical
    `document_kind` mapping (exhaustive — enum drift fails compilation)
    picks the workflow, and the dispatcher spawns/resumes the process with
-   the regulatory deadlines registered **atomically with the first events**:
-   - `ActivationDocument` → `ReceiveAco` with a 5-minute ACR/AAR response
-     window and an ACK window. The Abwicklung defaults to
-     Aufforderungsfall/Sollwert — the strict case.
-   - `Stammdaten` → an ACK window plus a 24-hour forward window (the 1-Werktag
-     obligation, floored to next-day until the Werktage calendar is wired into
-     the scheduler).
+   the deadlines registered **atomically with the first events**. Every ACK
+   window is `fristen::ACK_FRIST` (3 minutes):
+   - `ActivationDocument` → `ReceiveAco` with the ACK window and the
+     `Betreiberfristen` ACR/AAR response window (Aufforderungsfall/Sollwert).
+   - `Stammdaten` → the ACK window plus the `Betreiberfristen` forward window,
+     its Werktage counted as calendar days (never later than the obligation).
    - The six ack-forward document types → one ACK window each.
-
-   **The ACK windows the XML ingest arms are 6 hours (24 for
-   `StatusRequest`), not the 3 minutes `fristen::ACK_FRIST` states**
-   (`services/makod/src/transport/redispatch_xml_ingest.rs:132`). The crate
-   constant is the FB 1.0g figure; the ingest still carries the pre-1.0g
-   fallbacks, so an ACK that is late by the Fachliche Beschreibung is not yet
-   detected as late here.
    - `AcknowledgementDocument` is delivered by **correlation**
      (`ReceivingDocumentIdentification` → the process registered under the
      acknowledged document's MRID), never type-routed.
 
    A parse/validation failure or unroutable document is rejected without an
    AS4 receipt (the receipt would assert successful reception), so the
-   sender corrects and retransmits. Deadlines fire through
-   `deadline_dispatch` (all 8 workflows covered). The
+   sender corrects and retransmits. The
    `redispatch_xml_pipeline` integration test in makod proves parse → kind
    → route for all nine document types.
-
-### Startup coverage check
-
-`deadline_dispatch::assert_dispatch_coverage` panics at startup when a
-registered Redispatch workflow lacks a deadline-dispatch entry — a deadline
-that can be scheduled but never fired would otherwise fail silently.
-`RedispatchModule` itself is registered for NB/ÜNB deployments (default
-feature set or `role-nb-strom`).
 
 ---
 
@@ -563,17 +500,13 @@ feature set or `role-nb-strom`).
 - `Workflow::handle` and `Workflow::apply` are **pure functions**: no I/O, no
   clock access, no global state mutation.
 - Events and `AcknowledgementDocument` outbox entries are always written in a
-  **single `WriteBatch`** via `AtomicAppend::append_with_outbox`. Separate
-  writes are not permitted — a crash between them produces a lost ACK with no
-  recovery path (regulatory violation).
+  **single `WriteBatch`** via `AtomicAppend::append(AppendBatch)`. 
 - The ACK and Activation windows use **UTC nanosecond precision**; do not
   convert to local time before comparing. Only the BilAReM Werktag obligations
   (Wetterdaten, Stammdaten-Gültigkeit, Planwert-Überführung) run on German local
   time.
 - **A late `AcknowledgementDocument` never fails the Geschäftsvorfall it
-  carried** (AcknowledgementDocument FB 1.0g). The transport clock and the
-  process clock are separate, and conflating them turns a slow counterparty
-  into a regulatory breach that did not happen.
+  carried** (AcknowledgementDocument FB 1.0g). 
 
 ---
 

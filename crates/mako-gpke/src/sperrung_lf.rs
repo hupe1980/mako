@@ -205,7 +205,7 @@ impl EventPayload for SperrungLfEvent {
 ///                       → OrdrsepErhalten(confirmed=false) → Abgelehnt (terminal)
 ///             ↘ StornierungGesendet → StornoBestaetigt (terminal)
 ///                                   → StornoAbgelehnt (terminal)
-///             ↘ DeadlineExpired (terminal)
+///             ↘ FristAbgelaufen → OrdrsepErhalten …
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
@@ -231,10 +231,18 @@ pub enum SperrungLfState {
     StornoBestaetigt(SperrungAuftragData),
     /// NB rejected the Stornierung (ORDRSP 19129, terminal — must proceed with Sperrung).
     StornoAbgelehnt(SperrungAuftragData),
-    /// A deadline expired before the NB responded (terminal).
-    DeadlineExpired {
-        /// Label of the expired deadline.
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// GPKE Teil 2 Kap. 3.5.1.2 gives the NB its answer window on the Sperrauftrag and no consequence of the NB missing it. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
         label: String,
+        /// The state the process was waiting in.
+        offen: Box<SperrungLfState>,
     },
 }
 
@@ -254,8 +262,9 @@ impl mako_engine::workflow::OccupiesBusinessKey for SperrungLfState {
             | Self::OrdrsepAbgelehnt { .. }
             | Self::Ausgefuehrt(_)
             | Self::StornoBestaetigt(_)
-            | Self::StornoAbgelehnt(_)
-            | Self::DeadlineExpired { .. } => false,
+            | Self::StornoAbgelehnt(_) => false,
+            // A lapsed window leaves the Vorgang open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
         }
     }
 }
@@ -273,7 +282,16 @@ impl SperrungLfState {
             Self::StornierungGesendet(_) => "StornierungGesendet",
             Self::StornoBestaetigt(_) => "StornoBestaetigt",
             Self::StornoAbgelehnt(_) => "StornoAbgelehnt",
-            Self::DeadlineExpired { .. } => "DeadlineExpired",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -286,7 +304,6 @@ impl SperrungLfState {
                 | Self::Ausgefuehrt(_)
                 | Self::StornoBestaetigt(_)
                 | Self::StornoAbgelehnt(_)
-                | Self::DeadlineExpired { .. }
         )
     }
 
@@ -300,7 +317,8 @@ impl SperrungLfState {
             | Self::StornierungGesendet(d)
             | Self::StornoBestaetigt(d)
             | Self::StornoAbgelehnt(d) => Some(d),
-            Self::New | Self::OrdrsepAbgelehnt { .. } | Self::DeadlineExpired { .. } => None,
+            Self::FristAbgelaufen { offen, .. } => offen.auftrag_data(),
+            Self::New | Self::OrdrsepAbgelehnt { .. } => None,
         }
     }
 }
@@ -383,25 +401,41 @@ impl CommandPayload for SperrungLfCommand {}
 /// Stornierung responses (ORDRSP 19128/19129).
 pub struct GpkeSperrungLfWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The NB's answer window is open while the Sperrauftrag waits for the
+/// ORDRSP (`AuftragGesendet`). Once the NB has answered, the window is
+/// discharged: a confirmed Sperrauftrag waits for the execution, not for an
+/// answer.
+fn window_open(label: &str, state: &SperrungLfState) -> bool {
+    label == ANTWORT_WINDOW_LABEL && matches!(state, SperrungLfState::AuftragGesendet(_))
+}
+
 impl Workflow for GpkeSperrungLfWorkflow {
     type State = SperrungLfState;
     type Event = SperrungLfEvent;
     type Command = SperrungLfCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANTWORT_WINDOW_LABEL];
+
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        if deadline.label() == ANTWORT_WINDOW_LABEL && !state.is_terminal() {
-            return Some(SperrungLfCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            });
-        }
-        None
+        window_open(deadline.label(), state).then(|| SperrungLfCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            SperrungLfState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             SperrungLfEvent::AuftragInitiiert {
                 location_id,
@@ -456,15 +490,13 @@ impl Workflow for GpkeSperrungLfWorkflow {
                 }
                 other => other,
             },
-            SperrungLfEvent::DeadlineExpired { label, .. } => {
-                if state.is_terminal() {
-                    state
-                } else {
-                    SperrungLfState::DeadlineExpired {
-                        label: label.to_string(),
-                    }
-                }
-            }
+            SperrungLfEvent::DeadlineExpired { label, .. } => match state {
+                SperrungLfState::AuftragGesendet(_) => SperrungLfState::FristAbgelaufen {
+                    label: label.to_string(),
+                    offen: Box::new(state),
+                },
+                other => other,
+            },
         }
     }
 
@@ -472,6 +504,10 @@ impl Workflow for GpkeSperrungLfWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             SperrungLfCommand::InitiateSperrung {
                 pid,
@@ -610,7 +646,7 @@ impl Workflow for GpkeSperrungLfWorkflow {
             }
 
             SperrungLfCommand::TimeoutExpired { deadline_id, label } => {
-                if state.is_terminal() {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![SperrungLfEvent::DeadlineExpired { deadline_id, label }].into())

@@ -181,15 +181,6 @@ pub enum PreisanfrageEvent {
     },
     /// Process completed.
     Abgeschlossen,
-    /// APERAK 29001 dispatched.
-    AperakFehlerDispatched {
-        /// APERAK PID.
-        aperak_pid: Pruefidentifikator,
-        /// Error reason.
-        reason: String,
-        /// Outbound message reference.
-        outbound_ref: MessageRef,
-    },
     /// Process rejected.
     Rejected {
         /// Human-readable reason.
@@ -212,7 +203,6 @@ impl EventPayload for PreisanfrageEvent {
             Self::AngebotGesendet { .. } => "PreisanfrageAngebotGesendet",
             Self::AngebotErhalten { .. } => "PreisanfrageAngebotErhalten",
             Self::Abgeschlossen => "PreisanfrageAbgeschlossen",
-            Self::AperakFehlerDispatched { .. } => "PreisanfrageAperakFehlerDispatched",
             Self::Rejected { .. } => "PreisanfrageRejected",
             Self::DeadlineExpired { .. } => "PreisanfrageDeadlineExpired",
         }
@@ -266,6 +256,19 @@ pub enum PreisanfrageState {
         /// Reason.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// WiM Teil 1 gives the MSB its answer window on the Preisanfrage and no consequence of missing it. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<PreisanfrageState>,
+    },
 }
 
 impl PreisanfrageState {
@@ -279,6 +282,16 @@ impl PreisanfrageState {
             Self::AngebotAusgetauscht { .. } => "AngebotAusgetauscht",
             Self::Abgeschlossen(_) => "Abgeschlossen",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 }
@@ -317,13 +330,6 @@ pub enum PreisanfrageCommand {
     },
     /// Mark the exchange as complete.
     Abschliessen,
-    /// Dispatch APERAK 29001.
-    DispatchAperakFehler {
-        /// Error reason.
-        reason: String,
-        /// Outbound APERAK message reference.
-        outbound_ref: MessageRef,
-    },
     /// Deadline expired.
     TimeoutExpired {
         /// Deadline ID.
@@ -348,25 +354,40 @@ impl CommandPayload for PreisanfrageCommand {}
 /// ```
 pub struct WimPreisanfrageWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the QUOTES is still owed
+/// (`Eingegangen`, `ValidationPassed`).
+fn window_open(label: &str, state: &PreisanfrageState) -> bool {
+    label == PREISANFRAGE_DEADLINE_LABEL
+        && matches!(
+            state,
+            PreisanfrageState::Eingegangen(_) | PreisanfrageState::ValidationPassed(_)
+        )
+}
+
 impl Workflow for WimPreisanfrageWorkflow {
     type State = PreisanfrageState;
     type Event = PreisanfrageEvent;
     type Command = PreisanfrageCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[PREISANFRAGE_DEADLINE_LABEL];
+
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (PREISANFRAGE_DEADLINE_LABEL, PreisanfrageState::Eingegangen(_))
-            | (PREISANFRAGE_DEADLINE_LABEL, PreisanfrageState::ValidationPassed(_)) => {
-                Some(PreisanfrageCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| PreisanfrageCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            PreisanfrageState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             PreisanfrageEvent::AnfrageErhalten {
                 sender,
@@ -406,19 +427,17 @@ impl Workflow for WimPreisanfrageWorkflow {
                 }
                 other => other,
             },
-            PreisanfrageEvent::AperakFehlerDispatched { reason, .. } => {
-                PreisanfrageState::Rejected {
-                    reason: format!("APERAK 29001: {reason}"),
-                }
-            }
             PreisanfrageEvent::Rejected { reason } => PreisanfrageState::Rejected {
                 reason: reason.clone(),
             },
             PreisanfrageEvent::DeadlineExpired { label, .. } => match state {
-                PreisanfrageState::Abgeschlossen(_) | PreisanfrageState::Rejected { .. } => state,
-                _ => PreisanfrageState::Rejected {
-                    reason: format!("deadline expired: {label}"),
-                },
+                PreisanfrageState::Eingegangen(_) | PreisanfrageState::ValidationPassed(_) => {
+                    PreisanfrageState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
+                }
+                other => other,
             },
         }
     }
@@ -427,6 +446,10 @@ impl Workflow for WimPreisanfrageWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             PreisanfrageCommand::ReceiveReqote {
                 pid,
@@ -510,35 +533,12 @@ impl Workflow for WimPreisanfrageWorkflow {
                 Ok(vec![PreisanfrageEvent::Abgeschlossen].into())
             }
 
-            PreisanfrageCommand::DispatchAperakFehler {
-                reason,
-                outbound_ref,
-            } => {
-                match state {
-                    PreisanfrageState::Eingegangen(_) | PreisanfrageState::ValidationPassed(_) => {}
-                    _ => {
-                        return Err(WorkflowError::invalid_state(
-                            "Eingegangen or ValidationPassed",
-                            state.label(),
-                        ));
-                    }
+            PreisanfrageCommand::TimeoutExpired { deadline_id, label } => {
+                if !window_open(&label, lapsed) {
+                    return Ok(vec![].into());
                 }
-                let aperak_pid = Pruefidentifikator::new(29_001)
-                    .map_err(|e| WorkflowError::rejected(e.clone()))?;
-                Ok(vec![PreisanfrageEvent::AperakFehlerDispatched {
-                    aperak_pid,
-                    reason,
-                    outbound_ref,
-                }]
-                .into())
+                Ok(vec![PreisanfrageEvent::DeadlineExpired { deadline_id, label }].into())
             }
-
-            PreisanfrageCommand::TimeoutExpired { deadline_id, label } => match state {
-                PreisanfrageState::Abgeschlossen(_) | PreisanfrageState::Rejected { .. } => {
-                    Ok(vec![].into())
-                }
-                _ => Ok(vec![PreisanfrageEvent::DeadlineExpired { deadline_id, label }].into()),
-            },
         }
     }
 }

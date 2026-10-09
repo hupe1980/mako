@@ -114,4 +114,3 @@ permit(
 // GESTALTUNG or a BETRIEB. A policy naming one would deny every caller, and an
 // endpoint nobody can reach is worse than one too many can. `published_by`
 // records who published what in the meantime, so the act stays attributable.
-// A function-role axis is tracked in ROADMAP.md.

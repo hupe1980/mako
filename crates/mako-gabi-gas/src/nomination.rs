@@ -678,26 +678,32 @@ fn nomint_counterparty(pid: u32) -> Result<NominationCounterparty, WorkflowError
     })
 }
 
+/// The one guard a fired deadline passes: the NOMRES window is open while the
+/// nomination waits for its answer (`Open`).
+fn nomres_window_open(label: &str, state: &NominationState) -> bool {
+    label == NOMRES_DEADLINE_LABEL && matches!(state, NominationState::Open(_))
+}
+
 impl Workflow for GaBiGasNominationWorkflow {
     type State = NominationState;
     type Event = NominationEvent;
     type Command = NominationCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[NOMRES_DEADLINE_LABEL];
+
     /// Turn the fired [`NOMRES_DEADLINE_LABEL`] into
-    /// [`NominationCommand::NomresDeadlineExpired`].
-    ///
-    /// The command, the event and the terminal `DeadlineExpired` state were all
-    /// there; this hook was not, so a NOMINT that never drew a NOMRES stayed in
-    /// `Open` forever and the missed D+1 window was invisible.
+    /// [`NominationCommand::NomresDeadlineExpired`] while the nomination still
+    /// waits for its NOMRES (`Open`).
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        (deadline.label() == NOMRES_DEADLINE_LABEL && matches!(state, NominationState::Open(_)))
-            .then(|| NominationCommand::NomresDeadlineExpired {
+        nomres_window_open(deadline.label(), state).then(|| {
+            NominationCommand::NomresDeadlineExpired {
                 deadline_id: deadline.deadline_id(),
                 label: deadline.label().to_owned(),
-            })
+            }
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
@@ -1067,7 +1073,7 @@ impl Workflow for GaBiGasNominationWorkflow {
             }
 
             NominationCommand::NomresDeadlineExpired { deadline_id, label } => {
-                if state.is_terminal() {
+                if !nomres_window_open(&label, state) {
                     // Deadline fired after NOMRES already received — absorb silently.
                     return Ok(WorkflowOutput::events(vec![]));
                 }

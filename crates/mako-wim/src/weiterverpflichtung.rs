@@ -181,6 +181,19 @@ pub enum WeiterverpflichtungState {
         /// Reason.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// WiM Teil 1 Kap. 2.5.2 Nr. 5 gives the MSBA its answer window on the Weiterverpflichtung and no consequence of missing it. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<WeiterverpflichtungState>,
+    },
 }
 
 impl WeiterverpflichtungState {
@@ -192,13 +205,23 @@ impl WeiterverpflichtungState {
             Self::AuftragEmpfangen(_) => "AuftragEmpfangen",
             Self::Beantwortet(_) => "Beantwortet",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 }
 
 impl mako_engine::workflow::OccupiesBusinessKey for WeiterverpflichtungState {
     fn occupies_business_key(&self) -> bool {
-        matches!(self, Self::AuftragEmpfangen(_))
+        matches!(self.offen(), Self::AuftragEmpfangen(_))
     }
 }
 
@@ -261,27 +284,38 @@ impl CommandPayload for WeiterverpflichtungCommand {}
 /// The WiM Weiterverpflichtung workflow (ORDERS 17002 → ORDRSP 19003/19004).
 pub struct WimWeiterverpflichtungWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the ORDRSP is owed (`AuftragEmpfangen`).
+fn window_open(label: &str, state: &WeiterverpflichtungState) -> bool {
+    label == ANTWORT_WINDOW_LABEL && matches!(state, WeiterverpflichtungState::AuftragEmpfangen(_))
+}
+
 impl Workflow for WimWeiterverpflichtungWorkflow {
     type State = WeiterverpflichtungState;
     type Event = WeiterverpflichtungEvent;
     type Command = WeiterverpflichtungCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANTWORT_WINDOW_LABEL];
+
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (ANTWORT_WINDOW_LABEL, WeiterverpflichtungState::AuftragEmpfangen(_)) => {
-                Some(WeiterverpflichtungCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| WeiterverpflichtungCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            WeiterverpflichtungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             WeiterverpflichtungEvent::AuftragEmpfangen {
                 melo_id,
@@ -308,11 +342,13 @@ impl Workflow for WimWeiterverpflichtungWorkflow {
                 reason: reason.clone(),
             },
             WeiterverpflichtungEvent::DeadlineExpired { label, .. } => match state {
-                WeiterverpflichtungState::Beantwortet(_)
-                | WeiterverpflichtungState::Rejected { .. } => state,
-                _ => WeiterverpflichtungState::Rejected {
-                    reason: format!("deadline expired: {label}"),
-                },
+                WeiterverpflichtungState::AuftragEmpfangen(_) => {
+                    WeiterverpflichtungState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
+                }
+                other => other,
             },
         }
     }
@@ -321,6 +357,10 @@ impl Workflow for WimWeiterverpflichtungWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             WeiterverpflichtungCommand::ReceiveAuftrag {
                 pid,
@@ -420,11 +460,7 @@ impl Workflow for WimWeiterverpflichtungWorkflow {
             }
 
             WeiterverpflichtungCommand::TimeoutExpired { deadline_id, label } => {
-                if matches!(
-                    state,
-                    WeiterverpflichtungState::Beantwortet(_)
-                        | WeiterverpflichtungState::Rejected { .. }
-                ) {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![WeiterverpflichtungEvent::DeadlineExpired { deadline_id, label }].into())
@@ -475,9 +511,11 @@ impl Projection for WeiterverpflichtungProjection {
                 record.status = "Beantwortet";
                 record.antwort_code = Some(antwort_code);
             }
-            WeiterverpflichtungEvent::Rejected { .. }
-            | WeiterverpflichtungEvent::DeadlineExpired { .. } => {
+            WeiterverpflichtungEvent::Rejected { .. } => {
                 record.status = "Rejected";
+            }
+            WeiterverpflichtungEvent::DeadlineExpired { .. } => {
+                record.status = "FristAbgelaufen";
             }
         }
     }

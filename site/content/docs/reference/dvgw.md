@@ -472,10 +472,12 @@ Three properties of the dispatch are worth stating:
   nomination on file as rejected. The matching obligations themselves are a
   process question rather than a format one.
 
-`X5G` (Endgültige Allokation) is deliberately **not** mapped to
-`AllocationVersion::Final`: DVGW publishes `X6G`/`X7G` corrections that follow
-the endgültige one, while the workflow treats `Final` as settled and refuses any
-later correction.
+`X5G` (Endgültige Allokation) maps to `AllocationVersion::Endgueltig`, not
+`Final`: DVGW publishes `X6G`/`X7G` corrections that follow the endgültige one,
+while the workflow treats `Final` as settled and refuses any later correction.
+`Endgueltig` discharges the § 47 Ziffer 1 KoV XV final-allocation window — a
+stream with its `X5G` on file raises no `de.gabi.alocat.missing` when the window
+closes, and a correction after it still applies and keeps that record.
 
 ### 9.2 INVOIC billing
 
@@ -484,7 +486,7 @@ messages validated through the AHB/MIG profile layer:
 
 | PID | Process | Direction |
 |---|---|---|
-| 31010 | Kapazitätsrechnung | FNB/VNB → BKV |
+| 31010 | Kapazitätsrechnung | NB → KN |
 | 31007 | Aggreg. MMM-Rechnung Gas | NB → MGV |
 | 31008 | MMM-Rechnung Gas selbst ausgestellt | NB → MGV |
 
@@ -511,7 +513,7 @@ Kooperationsvereinbarung — KoV XV §§ 46–47 together with DVGW G 685 — an
 § 60 Abs. 2 MsbG. That paragraph is a *Soll*-rule about processing inside the
 Smart-Meter-Gateway; its Satz 2 permits gas Aufbereitung outside the gateway
 permanently, and it obliges nobody to form an Ersatzwert at all
-(`crates/mako-gabi-gas/src/domain.rs:265`).
+(`crates/mako-gabi-gas/src/domain.rs`).
 
 ---
 

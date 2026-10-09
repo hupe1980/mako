@@ -67,6 +67,7 @@
 // ── Modules ───────────────────────────────────────────────────────────────────
 
 pub mod context;
+pub mod e_rechnung;
 /// EN 16931 semantic-model bridge (`Invoice::to_en16931`), behind `en16931`.
 #[cfg(feature = "en16931")]
 pub mod en16931_map;
@@ -111,10 +112,12 @@ pub use quantities::{
     ServiceMeterInput, SolarMeterInput, WaermeMeterInput, WasserMeterInput,
 };
 pub use rates::{
-    ERDGAS_UMRECHNUNGSFAKTOR_GJ_PER_MWH, RegulatoryRates, RoundMoney, behg_ct_per_kwh_for_year,
-    behg_ct_per_kwh_from_price, energiesteuer_gas_for_year, erdgas_emissionsfaktor_kg_per_kwh,
-    mwst_rate_for_gas_waerme_period, mwst_rate_for_period, round_money,
-    steuer_stichtage_im_zeitraum, stromsteuer_for_year,
+    BEHG_ERSTES_JAHR, BEHG_KORRIDOR_MAX_EUR_PER_T, BEHG_KORRIDOR_MIN_EUR_PER_T, BehgRegime,
+    ENERGIESTEUER_GAS_SERIE, ERDGAS_UMRECHNUNGSFAKTOR_GJ_PER_MWH, RateRefusal, RegulatoryRates,
+    ResolvedRate, RoundMoney, STROMSTEUER_SERIE, SatzZeile, behg_ct_per_kwh_for_year,
+    behg_ct_per_kwh_from_price, behg_eur_per_t_for_year, behg_rechtsgrundlage_for_year,
+    energiesteuer_gas_for_year, erdgas_emissionsfaktor_kg_per_kwh, mwst_rate_for_gas_waerme_period,
+    mwst_rate_for_period, round_money, steuer_stichtage_im_zeitraum, stromsteuer_for_year,
 };
 pub use steuer::{
     EnergiesteuerBefreiung, EnergiesteuerTarif, Steuerentlastung, StromsteuerBefreiung,

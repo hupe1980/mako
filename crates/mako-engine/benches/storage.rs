@@ -2,7 +2,7 @@
 //!
 //! Covers the critical latency budget for BDEW regulatory processes:
 //!
-//! - **GPKE**: the APERAK must be sent within **45 Minuten** on a Werktag for a
+//! - **GPKE**: the APERAK must be sent within **45 Minuten** for a
 //!   UTILMD or ORDERS (APERAK AHB 1.1 § 2.4.1) — every
 //!   `append` + `pending` call in the delivery path must stay well under 100 ms
 //!   even at queue depths of 1 000 messages.
@@ -22,6 +22,7 @@
 //!
 //! Results are written to `target/criterion/storage/`.
 
+use mako_engine::event_store::{AppendBatch, AtomicAppend};
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -100,7 +101,11 @@ fn seeded_event_store(rt: &Runtime, n: usize) -> (InMemoryEventStore, StreamId) 
     let events: Vec<NewEvent> = (0..n).map(|_| make_event()).collect();
     rt.block_on(async {
         store
-            .append(&stream, ExpectedVersion::NoStream, &events)
+            .append(AppendBatch::new(
+                &stream,
+                ExpectedVersion::NoStream,
+                &events,
+            ))
             .await
             .expect("seeded append must succeed");
     });
@@ -134,11 +139,11 @@ fn bench_append_single_event(c: &mut Criterion) {
             let store = InMemoryEventStore::new();
             let stream = StreamId::new("bench/append-single");
             store
-                .append(
+                .append(AppendBatch::new(
                     &stream,
                     ExpectedVersion::NoStream,
                     &[black_box(make_event())],
-                )
+                ))
                 .await
                 .expect("append must succeed");
         });
@@ -158,7 +163,11 @@ fn bench_append_batch_10(c: &mut Criterion) {
             let stream = StreamId::new("bench/append-batch");
             let events: Vec<NewEvent> = (0..10).map(|_| make_event()).collect();
             store
-                .append(&stream, ExpectedVersion::NoStream, black_box(&events))
+                .append(AppendBatch::new(
+                    &stream,
+                    ExpectedVersion::NoStream,
+                    black_box(&events),
+                ))
                 .await
                 .expect("batch append must succeed");
         });

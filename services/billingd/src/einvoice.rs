@@ -252,7 +252,7 @@ pub fn build(
 /// Every invoice-producing path calls this so the render endpoints can require a
 /// stored model rather than re-parsing BO4E.
 pub async fn store(
-    exec: impl sqlx::PgExecutor<'_>,
+    exec: &mut sqlx::PgConnection,
     record_id: uuid::Uuid,
     invoice: &Invoice,
     cfg: &BillingdConfig,
@@ -269,13 +269,26 @@ pub async fn store(
     // with that reason instead of "re-run the calculation" — advice that would
     // produce the same refusal. Any other mapping failure is a genuine fault
     // and propagates.
+    // § 14 Abs. 2 Satz 2 Nr. 1 UStG — the fact the paper path decides on,
+    // stored with the record it belongs to.
+    crate::pg::attach_empfaenger_unternehmer(
+        &mut *exec,
+        record_id,
+        invoice
+            .context
+            .rechnungsempfaenger
+            .as_ref()
+            .and_then(|r| r.unternehmer),
+    )
+    .await?;
     let model = match build(invoice, cfg) {
         Ok(m) => m,
         Err(e @ energy_billing::EngineError::ValidationBlocked { .. }) => {
             tracing::warn!(
                 %record_id, %malo_id,
                 reason = %e,
-                "billingd: invoice has no valid EN 16931 representation — stored as a                  paper-only document"
+                "billingd: invoice has no valid EN 16931 representation — stored without an \
+                 e-invoice model"
             );
             crate::pg::attach_en16931_blocked(exec, record_id, &e.to_string()).await?;
             return Ok(());

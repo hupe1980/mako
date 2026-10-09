@@ -565,7 +565,10 @@ impl<S, R> UtiltsBuilder<S, R> {
         self
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one linear procedure; splitting it would scatter its steps across helpers used once"
+    )]
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let dtm_val = match self.inner.document_date.as_deref() {
             Some(d) if d.starts_with("303:") => d["303:".len()..].to_owned(),

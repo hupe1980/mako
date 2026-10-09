@@ -8,7 +8,7 @@
 //!
 //! | Clock | What it is | Where it comes from |
 //! |---|---|---|
-//! | **APERAK Frist** | the *technical* acknowledgement — 45 min Strom weekday, next Werktag 12:00 Gas Folgeprozess, 3 Werktage Gas Initialprozess | `mako_fristen`, reported to obsd as `de.mako.aperak.timeout` |
+//! | **APERAK Frist** | the *technical* acknowledgement — 45 min Strom (Sonntag 12:00 for a Saturday arrival), next Werktag 12:00 Gas Folgeprozess, 3 Werktage Gas Initialprozess | `mako_fristen`, reported to obsd as `de.mako.aperak.timeout` |
 //! | **Antwortfrist** | the *business* answer — 11:00 of the 1. Werktag for a GPKE Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom | `mako_fristen::antwort`, stored as [`ProcessProjection::deadline_at`] |
 //!
 //! They differ by orders of magnitude and they fail for different reasons: a

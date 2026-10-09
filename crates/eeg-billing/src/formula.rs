@@ -1,7 +1,7 @@
 //! Pure settlement formula — [`calculate_settlement`].
 
 use crate::EuroAmount;
-use crate::rounding::RoundMoney;
+use grid_billing::RoundMoney;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 
@@ -736,6 +736,39 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
 fn calculate_settlement_inner(input: &SettleInput) -> SettleOutput {
     use crate::model::SanktionAlt;
 
+    // ── The Fassung a reduction is read from ─────────────────────────────────
+    // §§ 53b–54 cut the anzulegender Wert under the Fassung of the payment
+    // period. Where none is tabled, the same § number may carry another rule
+    // (the EEG 2027 Entwurf renumbers § 53c as § 53b), so nothing is settled.
+    if !input.aw_reductions.is_empty()
+        && crate::version::Fassung::fuer_periode(input.billing_date).is_none()
+    {
+        return SettleOutput {
+            settlement_eur: None,
+            eligible_kwh: input.einspeisemenge_kwh,
+            positions: vec![crate::model::SettlePosition {
+                description: format!(
+                    "Keine EEG-Fassung für den Abrechnungszeitraum ab {} tabelliert — \
+                     die Verringerung des anzulegenden Werts hat keine Rechtsgrundlage",
+                    input
+                        .billing_date
+                        .map_or_else(|| "unbekannt".to_owned(), |d| d.to_string())
+                ),
+                legal_basis: "§§ 53b–54 EEG (Fassung des Zahlungszeitraums)".to_owned(),
+                kwh: input.einspeisemenge_kwh.unwrap_or(Decimal::ZERO),
+                rate_ct_kwh: Decimal::ZERO,
+                eur: Decimal::ZERO,
+            }],
+            status: SettlementStatus::FassungNichtTabelliert,
+            pflichtzahlung_eur: None,
+            pflichtzahlung_faelligkeitsdatum: None,
+            verlaengerungsanspruch_qh: 0,
+            dezentrale_einspeisung_anspruch_verloren: false,
+            billing_days_fraction_applied: None,
+            faelligkeitsdatum: None,
+        };
+    }
+
     // ── § 39i Abs. 1 EEG 2023 — Getreidekorn und Mais ────────────────────────
     // „Ein durch einen Zuschlag erworbener Anspruch nach § 19 Absatz 1 für Strom
     // aus Biogas besteht nur, wenn der … eingesetzte Anteil von Getreidekorn und
@@ -912,11 +945,19 @@ fn apply_aw_cuts(
     if input.aw_reductions.is_empty() {
         return (aw_ct, Vec::new());
     }
+    // `calculate_settlement_inner` refuses a period with reductions and no
+    // tabled Fassung before any formula runs, so this branch is reached with
+    // a Fassung. Without one the AW would have no statute to be read from,
+    // and nothing is paid on it.
+    let Some(fassung) = crate::version::Fassung::fuer_periode(input.billing_date) else {
+        return (Decimal::ZERO, Vec::new());
+    };
     crate::aw_reductions::apply_aw_reductions(
         aw_ct,
         &input.aw_reductions,
         &input.tariff_source,
         input.erzeugungsart.unwrap_or_default(),
+        fassung,
     )
 }
 
@@ -1282,7 +1323,7 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 Some(n) => apply_negativpreis(kwh, n),
                 None => kwh,
             };
-            // §20 Abs. 2 + Anlage 1 EEG 2023: Jahresmarktwert takes precedence over monthly EPEX
+            // EEG 2023 Anlage 1 Nr. 2 / Nr. 4: the Jahresmarktwert takes precedence over monthly EPEX
             // when provided. The ÜNB publishes technology-specific annual market values.
             let epex_source = input.marktwert_ct_kwh;
             let Some(epex_ct) = epex_source else {

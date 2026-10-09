@@ -1,7 +1,7 @@
 [package]
 name             = "mako-pruefung"
 version.workspace = true
-description      = "Decides the Antwortnachricht a German energy market participant owes — the BDEW Entscheidungsbäume for GPKE, GeLi Gas, WiM, ESA, MaBiS and NZR-EMob, as a pure library"
+description      = "The BDEW Entscheidungsbäume as a library: which answer a German energy market participant owes, for GPKE, GeLi Gas, WiM, ESA, MaBiS and NZR-EMob"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -47,8 +47,6 @@ role-mabis = []
 ## The Zuordnung ZP der NGZ zur NZR (55235–55237) is answered from `role-mabis`
 ## (`E_0102`/`E_0103`), so a full Modell-2 deployment enables both features.
 role-emob = []
-## Enable in-memory test doubles. Must never appear in production builds.
-testing = []
 
 [dependencies]
 mako-fristen = { workspace = true }
@@ -60,10 +58,8 @@ mako-markt  = { workspace = true, optional = true }
 # Anmeldung (A54) on arithmetic rather than on the market's facts.
 rust_decimal = { workspace = true }
 serde        = { workspace = true }
-serde_json   = { workspace = true }
 thiserror    = { workspace = true }
 time         = { workspace = true }
-time-tz      = { workspace = true }
 uuid         = { workspace = true }
 
 [dev-dependencies]
@@ -75,3 +71,6 @@ time         = { workspace = true }
 # the wire library would make every role build carry it — so the two lists are
 # pinned together by a test instead.
 edi-energy   = { workspace = true, features = ["utilmd"] }
+
+[lints]
+workspace = true

@@ -206,7 +206,10 @@ pub enum TechnikDurchfuehrung {
 // `MsbEntscheidung` is the crate's answer type and carries the BDEW wording;
 // boxing it here to satisfy `result_large_err` would put an allocation on the
 // hot path of a pure decision function and hide the type at every call site.
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "the error carries the context its caller reports, and the path is not hot"
+)]
 fn schritt(
     fact: Option<bool>,
     refuse_when: bool,
@@ -243,7 +246,11 @@ fn schritt(
 // One block per published Prüfschritt, in the tree's own order. Splitting it
 // would break the line-by-line correspondence with `E_0278`/`E_0281`, which is
 // what makes the walk auditable against the EBD.
-#[allow(clippy::too_many_lines, clippy::result_large_err)]
+#[expect(
+    clippy::too_many_lines,
+    clippy::result_large_err,
+    reason = "one linear procedure; splitting it would scatter its steps across helpers used once; the error carries the context its caller reports, and the path is not hot"
+)]
 #[must_use]
 pub fn pruefe_technik_anfrage(anfrage: &TechnikAnfrage) -> Option<MsbEntscheidung> {
     let a = &anfrage.aenderung;
@@ -410,7 +417,11 @@ pub fn pruefe_technik_anfrage(anfrage: &TechnikAnfrage) -> Option<MsbEntscheidun
 /// which a test in this module rules out.
 // One block per published Prüfschritt across four trees — see the note on
 // [`pruefe_technik_anfrage`].
-#[allow(clippy::too_many_lines, clippy::result_large_err)]
+#[expect(
+    clippy::too_many_lines,
+    clippy::result_large_err,
+    reason = "one linear procedure; splitting it would scatter its steps across helpers used once; the error carries the context its caller reports, and the path is not hot"
+)]
 #[must_use]
 pub fn pruefe_technik_bestellung(
     bestellung: &TechnikBestellung,

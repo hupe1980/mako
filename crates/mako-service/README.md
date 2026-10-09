@@ -1,32 +1,62 @@
 # mako-service
 
-**The shared SDK for all mako microservices.**
+The service SDK every mako daemon is built on. `run::<D>()` owns the daemon
+lifecycle — tracing, layered config, the tuned PostgreSQL pool, migrations,
+`/health/*` and `/metrics`, graceful SIGINT/SIGTERM shutdown and `--check` — and
+the modules below supply the shared OIDC, Cedar, Standard Webhooks, CloudEvents
+and transactional-outbox plumbing, so service code is domain logic only.
+Workspace-internal (`publish = false`).
 
-Every mako daemon is built on `mako-service`. It solves the cross-cutting
-concerns that every service needs — configuration, authentication, structured
-logging, graceful shutdown, health endpoints, metrics, and more — so service
-code focuses on domain logic instead of plumbing.
+## Example
 
+`main` is one line; a daemon supplies its config type, migrations and router:
+
+```rust,no_run
+use std::sync::Arc;
+use axum::Router;
+use mako_service::{Daemon, ServiceContext, ServiceConfig, config::DatabaseConfig};
+
+#[derive(serde::Deserialize)]
+struct MyConfig { database: DatabaseConfig, port: Option<u16> }
+impl ServiceConfig for MyConfig {
+    fn database(&self) -> Option<&DatabaseConfig> { Some(&self.database) }
+    fn bind_addr(&self) -> String { format!("0.0.0.0:{}", self.port.unwrap_or(8080)) }
+}
+
+struct MyService;
+impl Daemon for MyService {
+    type Config = MyConfig;
+    const NAME: &'static str = "my-service";
+
+    async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+        sqlx::migrate!("./migrations").run(pool).await?;
+        Ok(())
+    }
+
+    async fn build(_cfg: Arc<MyConfig>, _ctx: ServiceContext) -> anyhow::Result<Router> {
+        // spawn workers on ctx.shutdown; build the domain router on ctx.pool()
+        Ok(Router::new())
+    }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    mako_service::run::<MyService>().await
+}
 ```
-             ┌──────────────────────────────────────────────────────────────┐
-             │                     mako-service SDK                          │
-             │                                                              │
-             │  config   shutdown  oidc       mcp_auth   telemetry           │
-             │  health   http      cedar      metrics    outbox              │
-             │  webhook  builder   rate_limit cloudevent                     │
-             └──────────────────────────────────────────────────────────────┘
-                  ↑            ↑             ↑           ↑
-               makod        marktd        invoicd     processd  … (all 17)
-```
 
----
+`build` must not bind a listener or add health routes — the runner mounts them,
+and `build_for_test::<D>(cfg)` (feature `testing`) builds the router exactly as
+`run` does so a startup test catches a route collision or a refused config.
 
-## Module overview
+## Modules
 
 | Module | Key exports | Purpose |
 |---|---|---|
 | `service` | `run`, `Daemon`, `ServiceConfig`, `ServiceContext` | **The daemon lifecycle owner** — `main` = `run::<D>().await` |
-| `error` | `ApiError`, `ApiResult` | Shared HTTP error → JSON problem body (`?`-friendly) |
+| `error` | `ApiError`, `ApiResult` | Shared HTTP error → JSON problem body (`?`-friendly); `ApiError::forbidden(reason)` is the one 403 |
+| `headers` | `single_str` | Identity/idempotency headers — a repeated header is refused, never first-wins |
+| `dates` | `parse_iso_date`, `DateError` | The one request-date parser — a malformed date is a 400 naming the field, never `None` |
 | `config` | `load_config`, `DatabaseConfig`, `HttpConfig` | Layered TOML + env-var config loading |
 | `shutdown` | `token()`, `serve()` | Graceful shutdown — SIGINT **and** SIGTERM |
 | `oidc` | `OidcConfig`, `OidcVerifier`, `Claims`, `ExpectedTenant` | OIDC/JWT verification + `build_verifier()` factory |
@@ -44,475 +74,11 @@ code focuses on domain logic instead of plumbing.
 | `worker_lock` | Postgres advisory locks | One runner per periodic background worker across replicas |
 | `schema_check` | `check_values_in`, `assert_agrees_in` | Reads a SQL `CHECK (col IN (…))` list, so a test can hold it against the Rust that writes the column |
 
----
-
-## Quick-start: `main` is one line
-
-`run::<D>()` owns the whole lifecycle — tracing, the **tuned** pool (with
-`application_name`), migrations, a **real** `/health/ready` (a `SELECT 1` DB
-ping, not `|| true`), the infra routes (health / metrics / tracing), bind, and
-graceful SIGINT/SIGTERM shutdown. A service supplies only its config type,
-migrations, and domain router + workers:
-
-```rust,no_run
-use std::sync::Arc;
-use axum::Router;
-use mako_service::{Daemon, ServiceContext, ServiceConfig, config::DatabaseConfig};
-
-#[derive(serde::Deserialize)]
-struct MyConfig { database: DatabaseConfig, port: Option<u16> }
-impl ServiceConfig for MyConfig {
-    fn database(&self) -> &DatabaseConfig { &self.database }
-    fn bind_addr(&self) -> String { format!("0.0.0.0:{}", self.port.unwrap_or(8080)) }
-}
-
-struct MyService;
-impl Daemon for MyService {
-    type Config = MyConfig;
-    const NAME: &'static str = "my-service";
-
-    async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
-        sqlx::migrate!("./migrations").run(pool).await?;
-        Ok(())
-    }
-
-    async fn build(cfg: Arc<MyConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
-        // spawn workers on ctx.shutdown; build the domain router with ctx.pool …
-        Ok(Router::new())
-    }
-}
-```
-
-### One optional hook: `tracing_layer`
-
-`Daemon::tracing_layer() -> Option<ExtraLayer>` installs one extra `tracing`
-layer on the registry, ahead of the filter and the formatter. It exists for a
-daemon embedding a library that **emits** metrics without choosing an exporter:
-`agentplane` publishes its whole instrument catalogue as `tracing` events on a
-dedicated target and leaves the bridge to whoever embeds it, so `agentd` returns
-a layer that turns those events into Prometheus series on the registry
-`GET /metrics` already serves. Without a seam like this the counters are emitted
-and collected by nobody — which, on a dashboard, reads exactly like a service
-where nothing happens.
-
-It is called once, before the config is loaded, so it takes no arguments. The
-layer is typed against the bare `Registry` because it is added first; a layer
-added later would be typed against a `Layered<…>` stack no caller can name.
-
-```rust,ignore
-fn tracing_layer() -> Option<mako_service::ExtraLayer> {
-    Some(Box::new(MyMetricBridge))
-}
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    mako_service::run::<MyService>().await
-}
-```
-
----
-
-## Configuration
-
-### Shared config structs
-
-Services use shared structs from `mako-service` instead of defining their own:
-
-```rust,no_run
-use mako_service::{DatabaseConfig, HttpConfig};
-use mako_service::mcp_auth::McpAuthConfig;
-use mako_service::oidc::OidcConfig;
-
-#[derive(serde::Deserialize)]
-struct MyConfig {
-    pub database: DatabaseConfig,       // [database] section — url + pool_size
-    pub http:     HttpConfig,           // [http] section — listen addr
-    pub mcp:      McpAuthConfig,        // [mcp] section — api_key + named keys
-    pub oidc:     Option<OidcConfig>,   // [oidc] section — omit for dev mode
-}
-```
-
-### `env:` indirection
-
-Any string value may be written `env:VARIABLE`. `load_config` resolves every one
-of them — at any depth, inside tables and arrays alike — before the config is
-deserialised, and an unset variable fails startup naming it.
-
-Resolution belongs to the loader rather than to each service on purpose. A
-service that had to remember, and forgot, shipped the placeholder **as the
-value**. For an API key that is merely loud (a 401). For an HMAC secret it is
-silent and worse than having no secret at all: `verify_request` runs the whole
-comparison against the literal string `env:SVC_INBOUND_SECRET`, which is a
-constant anyone can read, so a forged webhook verifies.
-
-### TOML example
-
-```toml
-[database]
-url       = "env:DATABASE_URL"   # resolved by load_config; unset → startup fails
-pool_size = 10
-
-[http]
-addr = "0.0.0.0:9080"
-
-[mcp]
-api_key       = "env:MY_SERVICE_MCP_API_KEY"   # Bearer token for agentd LLM client
-api_key_roles = ["LF"]                         # roles Cedar evaluates the key under
-
-# Optional named keys for per-caller audit:
-[[mcp.named_keys]]
-name    = "billing-bot"
-api_key = "env:BILLING_BOT_KEY"
-roles   = ["LF"]
-
-[oidc]                   # omit section → dev mode (no auth required)
-issuer   = "https://login.microsoftonline.com/{tid}/v2.0"
-audience = "api://my-service"
-```
-
-### Environment-variable overrides
-
-Every TOML key is overridable via a `SERVICE_SECTION__KEY` env var (double-underscore = section separator):
-
-```bash
-MY_SERVICE_DATABASE__URL=postgres://prod/my-service
-MY_SERVICE_MCP__API_KEY=agentd-secret
-```
-
-### Kubernetes Secret files (`_FILE` suffix)
-
-```bash
-MY_SERVICE_DATABASE__URL_FILE=/run/secrets/db-url        # contents → url
-MY_SERVICE_MCP__API_KEY_FILE=/run/secrets/mcp-api-key    # contents → api_key
-```
-
----
-
-## OIDC + MCP authentication
-
-### Build a verifier from config
-
-```rust,no_run
-use mako_service::http::default_client;
-use mako_service::oidc::OidcConfig;
-
-let http = default_client();
-// Builds OidcVerifier (with background JWKS refresh) OR disabled dev-mode verifier:
-let oidc = OidcConfig::build_verifier(cfg.oidc.as_ref(), &http, &cfg.tenant, ct.clone()).await?;
-```
-
-### MCP server authentication
-
-`McpAuth` covers every deployment scenario with a single type and handles JWT routing,
-constant-time API-key comparison, and Cedar policy checks:
-
-```rust,no_run
-use mako_service::mcp_auth::McpAuth;
-
-// OIDC + Cedar + agentd API-key fallback (production):
-let auth = McpAuth::from_auth_config_oidc(&cfg.mcp, oidc, Some(cedar), &tenant);
-
-// API-key only (services without an IdP):
-let auth = McpAuth::from_auth_config(&cfg.mcp, &tenant);
-```
-
-In every service, `mcp_auth_middleware` is a single line:
-
-```rust,no_run
-async fn mcp_auth_middleware(
-    axum::extract::State(s): axum::extract::State<std::sync::Arc<MyMcpState>>,
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    s.auth.authenticate(req, next).await
-}
-```
-
-On success, `McpAuth` injects `McpIdentity { name, method }` as an Axum extension
-so handlers can audit which caller (OIDC `sub`, API-key name, or `"dev-mode"`) made the request.
-
-### API keys are Cedar principals
-
-A named key is evaluated by the same policy as a token: principal `User::"<key name>"`,
-tenant the deployment's own, and `context.principal_roles` the roles the key's
-`roles` list declares. So the blanket `use-mcp` gate and each destructive tool's
-own action both apply to key callers, and an operator narrows a key by writing
-policy rather than by trusting the key's holder.
-
-A key that declares no roles is refused by every role-testing `permit`. That is
-the intended shape for a read-only agent: give it the roles its work needs, and
-nothing else.
-
----
-
-## Schema `CHECK` lists are guarded, not trusted
-
-A `CHECK (status IN ('draft','sent'))` list is opaque text to the compiler.
-Nothing ties it to the enum or the literal on the other side of the column, and
-drift is silent in both directions:
-
-- a value the Rust writes and the list omits is a write Postgres refuses;
-- a value the list allows and nothing writes is a claim the schema makes and the
-  code does not honour;
-- a value the list allows and the Rust *decoder* does not know is worst — it
-  decodes to whatever the fallback says.
-
-`schema_check` reads the list so a service test can assert both directions:
-
-```rust,ignore
-use mako_service::schema_check::assert_agrees_in;
-
-assert_agrees_in(
-    include_str!("../migrations/0001_schema.sql"),
-    "invoice_drafts",
-    "status",
-    &["draft", "dispatched", "paid", "disputed", "rejected"],
-);
-```
-
-It is shared rather than copied because the parser is the part that goes wrong,
-and it goes wrong by *passing*. Use `*_in` wherever a column name repeats across
-tables — an unscoped lookup answers with the first match in the file. The
-spellings these migrations actually use, each of which defeated a hand-rolled
-copy: `IS NULL OR c IN (…)`, `c IN (…) OR c IS NULL`, unquoted integer lists,
-and `--` comments between the values. An empty parse is a panic, never an empty
-list.
-
----
-
-## Graceful shutdown
-
-`shutdown::token()` creates a `CancellationToken` wired to both `SIGINT` (Ctrl-C)
-and `SIGTERM` (Kubernetes pod eviction). Pass it to background tasks and the final
-`serve()` call:
-
-```rust,no_run
-use mako_service::shutdown;
-
-let ct = shutdown::token();
-tokio::spawn(background_worker(ct.clone()));
-let listener = tokio::net::TcpListener::bind("0.0.0.0:9080").await?;
-shutdown::serve(listener, app, ct).await  // waits for signal, drains connections
-```
-
-Plain `tokio::signal::ctrl_c().await` misses `SIGTERM` — pods evicted by Kubernetes
-get `SIGTERM` first.
-
----
-
-## Tenant pinning
-
-`Claims` refuses a token carrying no `mako_tenant`. Whether that tenant is *this
-deployment's* is a second question, and the answer is one layer:
-
-```rust,no_run
-# use axum::{Router, Extension};
-# fn build(oidc: mako_service::oidc::OidcVerifier, tenant: String) -> Router {
-Router::new()
-    // …routes…
-    .layer(Extension(mako_service::oidc::ExpectedTenant(tenant)))
-    .layer(Extension(oidc))
-# }
-```
-
-Without it, a token signed by the *same realm* for a different operator extracts
-cleanly, and the only thing left between it and the data is that every Cedar rule
-remembered to carry `context.principal_tenant == context.resource_tenant`. With
-it, the comparison happens once at extraction and the policies keep theirs as
-defence in depth. `cargo xtask check-expected-tenant` checks that every service
-reading `Claims` names `ExpectedTenant` somewhere in its `src/` — presence, not
-placement, and `makod` is a documented exemption because it pins the tenant
-through its own `BearerAuthenticator`. That the layer reaches every route is
-each service's own `authorization_guard.rs`.
-
-## Telemetry
-
-`run::<D>()` installs the subscriber before anything else, so a service
-configures telemetry through the environment rather than through its TOML:
-
-| Variable | Effect |
-|---|---|
-| `<SERVICE>_LOG_LEVEL`, else `LOG_LEVEL`, else `RUST_LOG` | Filter directive; `info` when unset |
-| `<SERVICE>_LOG_FORMAT`, else `LOG_FORMAT` | `json` (default), `pretty` or `compact`. An unrecognised value falls back to `json` and says so on stderr — a log-encoding typo must not stop a daemon |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/gRPC collector. Unset → no exporter, no overhead |
-| `OTEL_SERVICE_NAME` | `service.name` on the spans; the daemon's own name when unset |
-
-A daemon that owns its lifecycle can call the same thing directly:
-
-```rust,no_run
-let _guard = mako_service::init_tracing_from_env("my-service");
-```
-
-> **Keep `_guard` alive** until process exit — dropping it flushes OTel spans.
-> Use `let _guard = …` (not `let _ = …`).
-
----
-
-## Other utilities
-
-### Error handling
-
-Return `ApiResult<T>` from handlers and use `?` — every error renders as the same
-JSON problem body with the right status, and internal errors are logged, never
-leaked:
-
-```rust,no_run
-use mako_service::{ApiError, ApiResult};
-use axum::Json;
-
-async fn get_order(id: String, pool: sqlx::PgPool) -> ApiResult<Json<String>> {
-    if id.is_empty() {
-        return Err(ApiError::bad_request("id required"));   // → 400
-    }
-    // `?` maps sqlx RowNotFound → 404, any other DB error → 500 (logged)
-    let row: (String,) = sqlx::query_as("SELECT name FROM orders WHERE id = $1")
-        .bind(&id).fetch_one(&pool).await?;
-    Ok(Json(row.0))
-}
-```
-
-**A 422 can carry structure, not just a sentence.** `unprocessable_with` merges
-an object's keys into the problem body alongside `error` and `detail`, so a
-caller can branch on *why* a payload was refused rather than parsing prose. The
-BO4E gate is what this exists for — its rejection names the stage that refused
-and the JSON-path or rule that stopped it:
-
-```rust,no_run
-# use mako_service::{ApiError, ApiResult};
-# fn demo(e: impl std::fmt::Display, detail: serde_json::Map<String, serde_json::Value>) -> ApiError {
-ApiError::unprocessable_with(e.to_string(), detail.into())
-# }
-```
-
-```json
-{
-  "error":  "Unprocessable Entity",
-  "detail": "MARKTLOKATION carries 1 out-of-schema enum value(s) at: sparte",
-  "code":   "bo4e.unknown_enum",
-  "paths":  ["sparte"]
-}
-```
-
-`error` and `detail` are never overwritten by the extra keys: the shape of a
-problem body is this type's contract, not the caller's.
-
-### Health endpoints
-
-```rust,no_run
-use mako_service::health::health_routes;
-
-let app = Router::new()
-    .merge(health_routes(|| async { pool.acquire().await.is_ok() }));
-// GET /health/live  → 200 always
-// GET /health/ready → 200 when ready_fn returns true, 503 otherwise
-```
-
-### HTTP client
-
-```rust,no_run
-// Never use reqwest::Client::new() — no connect timeout → startup hangs
-let http = mako_service::http::default_client();
-// 5 s connect timeout · 30 s request timeout · pool_max_idle_per_host = 4
-```
-
----
-
-## CloudEvents transport
-
-`mako-service` owns the whole CloudEvents *transport* layer — the envelope, the
-outbound publisher, and the one HMAC signer/verifier — so every daemon puts the
-same bytes on the wire. The event *type* names (and the glob matcher) live in the
-zero-dependency [`mako-events`](https://docs.rs/mako-events) catalog; everything about how an
-event is built, signed, and delivered lives here.
-
-### Emit an event
-
-```rust,no_run
-use mako_service::{CloudEvent, source, post_ce_with_retry, http::default_client};
-
-let ce = CloudEvent::new(
-    source("billingd", &tenant),                 // urn:mako:billingd:tenant:<tenant>
-    mako_events::billing::RECHNUNG_ERSTELLT,      // type from the mako-events catalog
-    &malo_id,                                     // subject
-    serde_json::json!({ "betrag": "42.00" }),     // data
-);
-// Signs (webhook-signature: v1,<base64>) when the secret is Some, sends
-// Content-Type: application/cloudevents+json, retries transient failures 3×,
-// and returns immediately on a permanent 4xx.
-post_ce_with_retry(&default_client(), &webhook_url, &ce, secret.map(str::as_bytes)).await?;
-```
-
-`CloudEvent::new` fixes the whole envelope by construction: `specversion = "1.0"`,
-`id` = UUID v4 (override with `.with_id` to carry an idempotency key), `time` =
-now in **RFC3339**, `datacontenttype = "application/json"`. Extension attributes
-(`makopid`, `traceparent`, …) chain via `.extension(k, v)` / `.extension_opt`.
-
-### Sign / verify
-
-The scheme is [Standard Webhooks](https://www.standardwebhooks.com/), not a bare
-HMAC over the body. Three headers travel together and the signature covers
-`{id}.{timestamp}.{body}`:
-
-```text
-webhook-id:        de.mako.process.initiated/3f2b…   ← also the dedup key
-webhook-timestamp: 1786012800                        ← seconds since epoch
-webhook-signature: v1,K5oT9r…                        ← base64, space-separated list
-```
-
-```rust,no_run
-use mako_service::webhook::{headers, verify_request};
-
-// Sending — all three at once, because sending two of them fails verification
-// for a reason nobody can read off the wire.
-for (name, value) in headers(secret, &ce.id, timestamp, &body) {
-    req = req.header(name, value);
-}
-
-// Receiving — one call checks the signature, refuses a timestamp outside
-// `webhook::TOLERANCE` (±5 min), and hands back the id to deduplicate on.
-// `secret = None` is dev mode: it verifies nothing but still returns the id.
-let dedup_key = verify_request(secret, request.headers(), &body)?;
-```
-
-Binding the id and the timestamp *into the signed material* is what makes replay
-protection part of the contract rather than each receiver's problem, and the
-signature header is a **list**, so a secret rollover can present two and have
-either verify. `verify_request` is the only entry point that enforces freshness
-and returns the dedup key, so neither half can be skipped by forgetting it.
-
-### Never lose an event: the transactional outbox
-
-An emitter must never drop a domain event because the HTTP POST failed *after*
-the business row committed. `outbox` is the fix — *persist-before-dispatch*:
-write the event to a table **in the same transaction as the business write**,
-then a background worker delivers it (at-least-once, retried, dead-lettered).
-
-```rust,no_run
-# async fn ex(pool: sqlx::PgPool, ce: mako_service::CloudEvent, ct: tokio_util::sync::CancellationToken) -> Result<(), sqlx::Error> {
-// One-time, at startup:
-mako_service::outbox::ensure_schema(&pool).await?;
-tokio::spawn(mako_service::outbox::OutboxWorker::new(pool.clone(), "https://erp/events", None).run(ct));
-
-// In a handler — event and domain write commit together, or not at all:
-let mut tx = pool.begin().await?;
-// … the business INSERT/UPDATE on &mut *tx …
-mako_service::outbox::enqueue(&mut tx, &ce).await?;
-tx.commit().await?;
-# Ok(()) }
-```
-
-Delivery reuses `post_ce_with_retry` (signing, `X-Idempotency-Key`,
-permanent-vs-transient), so a receiver dedups the at-least-once duplicates on the
-CloudEvent `id`. The worker claims batches with a lease (`FOR UPDATE SKIP LOCKED`
-+ a forward-pushed `next_attempt_at`), so it holds no long locks and recovers
-in-flight events after a crash. Dead-letters are a status column on the same row —
-inspect and requeue with `outbox::list_dead_letters` / `outbox::requeue`.
-Delivered rows are pruned hourly past `OutboxConfig::retention` (default 30 days),
-so the table stays small.
-
----
-
-## Feature flags
+Configuration is `<NAME>.toml` (or `<NAME>_CONFIG`), overridden per key by
+`<NAME>_<SECTION>__<KEY>`; a `*_FILE` variable reads the value from a file and
+`env:VAR` indirects a value inside the TOML.
+
+## Features
 
 | Feature | What it enables |
 |---|---|
@@ -521,24 +87,4 @@ so the table stays small.
 | `otel` | OpenTelemetry OTLP/gRPC traces via `tracing-opentelemetry` |
 | `metrics` | Real Prometheus `/metrics` + `mako_http_requests_total`, `mako_http_request_duration_seconds` and `mako_bo4e_decimal_from_json_number_total` |
 | `rate-limit` | GCRA rate limiter via `governor` |
-
-Typical production config:
-
-```toml
-[dependencies]
-mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
-```
-
-## Related crates
-
-This crate is **not published to crates.io**; it is workspace-internal.
-
-| Crate | Role |
-|---|---|
-| [`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service) ← **this crate** | Daemon SDK — config, OIDC/MCP auth, health, telemetry, outbox, CloudEvents transport |
-| [`mako-events`](https://docs.rs/mako-events) | The CloudEvents `type` catalog this crate's transport carries |
-| [`makod`](https://hupe1980.github.io/mako/docs/services/makod/) | The largest consumer — EDIFACT/AS4 ingest and every BDEW workflow |
-| [`marktd`](https://hupe1980.github.io/mako/docs/services/marktd/) · [`billingd`](https://hupe1980.github.io/mako/docs/services/billingd/) · [`invoicd`](https://hupe1980.github.io/mako/docs/services/invoicd/) · … | The other daemons, all built on `run::<D>()` |
-
-Part of **mako**, an open-source Rust platform for German energy market
-communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>
+| `testing` | `build_for_test` / `build_for_test_on` — a daemon's router as `run` mounts it, for startup tests; a dev-dependency feature only |

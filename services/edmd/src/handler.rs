@@ -449,16 +449,7 @@ pub async fn handle_webhook(
         // filed against the calendar month it arrived in — the publication
         // cadence — rather than being applied to the MaLo's whole history.
         if GAS_QUALITY_PIDS.contains(&pid) {
-            let decimal = |key: &str| {
-                data[key]
-                    .as_str()
-                    .and_then(|s| s.parse::<rust_decimal::Decimal>().ok())
-                    .or_else(|| {
-                        data[key]
-                            .as_f64()
-                            .and_then(rust_decimal::Decimal::from_f64_retain)
-                    })
-            };
+            let decimal = |key: &str| json_decimal(&data[key]);
             let brennwert = decimal("brennwert_kwh_per_m3");
             let zustandszahl = decimal("zustandszahl");
             if brennwert.is_some() || zustandszahl.is_some() {
@@ -556,11 +547,7 @@ pub async fn handle_webhook(
             // up. It is what makes V12 (`ImplausiblePower`) fireable: without a
             // ceiling there is nothing for an average power to be impossible
             // against, and the rule is inert.
-            let max_plant_power_kw = data.get("max_plant_power_kw").and_then(|v| {
-                v.as_str()
-                    .and_then(|s| s.parse::<rust_decimal::Decimal>().ok())
-                    .or_else(|| v.as_f64().and_then(rust_decimal::Decimal::from_f64_retain))
-            });
+            let max_plant_power_kw = data.get("max_plant_power_kw").and_then(json_decimal);
 
             let mut batch: Vec<MeterRead> = Vec::with_capacity(reads_array.len());
             let mut skipped = 0usize;
@@ -580,15 +567,7 @@ pub async fn handle_webhook(
                 // An unparseable quantity is dropped rather than defaulted to
                 // zero: a zero-kWh interval is a billable assertion that no
                 // energy flowed, which a decode failure does not establish.
-                let Some(kwh) = r["quantity_kwh"]
-                    .as_str()
-                    .and_then(|s| s.parse::<rust_decimal::Decimal>().ok())
-                    .or_else(|| {
-                        r["quantity_kwh"]
-                            .as_f64()
-                            .and_then(rust_decimal::Decimal::from_f64_retain)
-                    })
-                else {
+                let Some(kwh) = json_decimal(&r["quantity_kwh"]) else {
                     skipped += 1;
                     continue;
                 };
@@ -761,4 +740,57 @@ pub async fn handle_webhook(
     }
 
     StatusCode::NO_CONTENT.into_response()
+}
+
+/// A decimal from a JSON string or number, read from its decimal text.
+///
+/// A JSON number goes through its own rendering, never through `f64`'s binary
+/// expansion: `0.1` must read as `0.1`, not `0.1000000000000000055511151231257827`,
+/// because the quantity is billed.
+fn json_decimal(v: &serde_json::Value) -> Option<rust_decimal::Decimal> {
+    match v {
+        serde_json::Value::String(s) => s.parse().ok(),
+        serde_json::Value::Number(n) => {
+            let text = n.to_string();
+            text.parse()
+                .ok()
+                .or_else(|| rust_decimal::Decimal::from_scientific(&text).ok())
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod json_decimal_tests {
+    use super::json_decimal;
+    use std::str::FromStr as _;
+
+    /// A JSON number is read from its decimal text, so a value `f64` cannot
+    /// represent exactly arrives exactly.
+    #[test]
+    fn a_json_number_keeps_its_decimal_value() {
+        let v: serde_json::Value = serde_json::from_str("0.1").unwrap();
+        assert_eq!(
+            json_decimal(&v),
+            Some(rust_decimal::Decimal::from_str("0.1").unwrap())
+        );
+    }
+
+    #[test]
+    fn a_string_an_integer_and_an_exponent_are_read() {
+        for (json, want) in [("\"12.345\"", "12.345"), ("42", "42"), ("1e3", "1000")] {
+            let v: serde_json::Value = serde_json::from_str(json).unwrap();
+            assert_eq!(
+                json_decimal(&v),
+                Some(rust_decimal::Decimal::from_str(want).unwrap()),
+                "{json}"
+            );
+        }
+    }
+
+    #[test]
+    fn anything_else_is_none() {
+        assert_eq!(json_decimal(&serde_json::Value::Null), None);
+        assert_eq!(json_decimal(&serde_json::json!("not a number")), None);
+    }
 }

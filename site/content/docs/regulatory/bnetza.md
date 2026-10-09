@@ -3,8 +3,9 @@ title = "BNetzA Regulatory Reference"
 description = "Complete BNetzA ruling index for German energy market communication: BK6 GPKE/WiM/MaBiS, BK7 GeLi Gas, current rulings, and Fristen."
 weight = 10
 +++
-Reference document for Bundesnetzagentur rulings that govern German energy market
-communication (MaKo). Extracted from official BNetzA pages as of 2026-07-23.
+The Bundesnetzagentur rulings that govern German market communication (MaKo),
+from the official BNetzA pages as of 2026-07-23; Mitteilung Nr. 58, the MiSpeL
+Festlegung and KoV XV as of 2026-10-05.
 
 Sources:
 - BK6 Netzzugang/Messwesen: <https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/NetzZ.html>
@@ -55,12 +56,10 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 - **Mehr-/Mindermengen Strom** (INVOIC, PIDs 31005–31006) — see Mitteilung Nr. 72 below
 - **Mehr-/Mindermengen Gas** (INVOIC, PIDs 31007–31008; NB → MGV, Gas-only) — belongs to GaBi Gas (`mako-gabi-gas`)
 
-**APERAK Frist (GPKE):** **45 Minuten** für UTILMD und ORDERS an **jedem Tag
-außer Samstag** — § 2.4.1 nennt die 45 Minuten unqualifiziert und nimmt allein
-den Samstag aus, der Sonntag ist also kein Sonderfall (APERAK AHB 1.0 § 2.4.1);
-Samstagseingang bis Sonntag 12:00 Uhr, alles übrige bis 12:00 Uhr des nächsten
-Werktags. Nicht die Antwortfrist des Geschäftsprozesses —
-siehe unten.
+**APERAK Frist (GPKE):** **45 Minuten** für UTILMD und ORDERS; ein
+Samstagseingang bis Sonntag 12:00 Uhr; alles übrige bis 12:00 Uhr des nächsten
+Werktags (APERAK AHB 1.1 § 2.4.1). Das ist nicht die Antwortfrist des
+Geschäftsprozesses — siehe [unten](#antwortfristen-summary).
 
 **Laufende Verfahren:**
 
@@ -79,10 +78,9 @@ siehe unten.
 | 46 | Prozesse zur Ermittlung der Abrechnung von Mehr-/Mindermengen Strom und Gas (nicht mehr aktuell, s. Mitteilung 66) | 22.01.2015 |
 | 4 | Einführung Änderungsmanagement, Umsetzung INVOIC/REMADV, GPKE-Auslegungsgrundsätze | 28.11.2007 |
 
-> **Key boundary:** Mitteilung Nr. 72 (05.02.2026) explicitly refers to „Mehr-/Mindermengenpreises **Strom**"
-> only, confirming that PIDs 31005–31006 are Strom GPKE processes.
-> PIDs 31007–31008 (Aggreg. MMM-Rechnung, NB → MGV) are Gas-only (MGV is a Gas-domain role)
-> and belong to GaBi Gas (`mako-gabi-gas` `gabi-gas-invoic`), not GPKE.
+> Mitteilung Nr. 72 concerns the „Mehr-/Mindermengenpreis **Strom**" only:
+> 31005–31006 are GPKE; 31007–31008 (NB → MGV) are GaBi Gas
+> (`mako-gabi-gas` `gabi-gas-invoic`).
 
 ---
 
@@ -118,7 +116,11 @@ siehe unten.
 | BK6-24-210-1 | MaBiS-Hub — Messwertverarbeitung / Pseudonymisierung | 02.10.2024 |
 | BK6-24-210-2 | MaBiS-Hub — Abrechnung | 02.10.2024 |
 
-> **MaBiS-Hub:** no Beschluss. The BK6-24-210-1 consultation closed 17.11.2025; Hub go-live is scheduled for H2 2028.
+> **MaBiS-Hub:** no Beschluss. The BK6-24-210-1 consultation took Stellungnahmen
+> until 17.11.2025. Its Anwendungsfälle are to be **EDIFACT**, not new API-Webdienste:
+> „Bestehende Anwendungsfälle bleiben in EDIFACT und neue Anwendungsfälle aus der
+> ausstehenden Festlegung ‚MaBiS-Hub' werden ebenfalls in EDIFACT ausgeprägt werden"
+> ([Mitteilung Nr. 58](https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/835_mitteilungen_datenformate/Mitteilung_58/Mitteilung_Nr_58.html), 01.10.2026, „Weitere Ergebnisse").
 
 **Selected Mitteilungen:**
 
@@ -151,7 +153,7 @@ siehe unten.
 **Scope:**
 - Messstellenbetreiberwechsel (UTILMD, PIDs 55039, 55042, 55051, 55168)
   — 55039 Kündigung MSB, 55042 Anmeldung MSB, 55051 Ende MSB, 55168 Verpflichtungsanfrage;
-    legacy PIDs 11001–11003 are superseded and not in the current AHB
+    11001–11003 are not in the current AHB
 - Geräteübernahme ORDERS (PIDs 17001, 17002, 17009)
 - Stammdaten ORDERS (PIDs 17101–17135; 17101 inbound Anforderung, 17102–17135 outbound Übermittlung)
 - Stornierung ORDCHG (PID 39000; 39001–39002 outbound responses)
@@ -162,7 +164,7 @@ siehe unten.
 2.4.2 / **2.4.2 Nr. 4** — the Verpflichtungsanfrage is Prozessschritt 3 of the
 *Ende Messstellenbetrieb*, not of Kap. 2.5 „Verpflichtung gMSB"). Samstage, Sonntage und gesetzliche Feiertage sind keine Werktage.
 
-> Davon zu unterscheiden ist die **APERAK**-Eingangsbestätigung: für UTILMD Strom **45 Minuten** an jedem Tag außer Samstag (APERAK AHB § 2.4.1) — eine eigene, deutlich kürzere Frist. „An Werktagen" wäre zu eng: § 2.4.1 karenzt nur den Samstag, der Sonntag läuft auf 45 Minuten.
+> Davon zu unterscheiden ist die **APERAK**-Eingangsbestätigung: für UTILMD Strom **45 Minuten** (APERAK AHB 1.1 § 2.4.1).
 
 **Laufende Verfahren:**
 
@@ -193,19 +195,21 @@ siehe unten.
 | **BK6-20-060** | Netzbetreiberkoordinierung — `Stammdaten` forwarding (1 Werktag), Activation (5 min) | **repealed** by BK6-23-241 TZ 4 |
 | **BK6-20-061** | Informationsbereitstellung — `Kostenblatt` (15th of the following month) | **repealed** by BK6-23-241 TZ 3 |
 
-BK6-23-241 replaces those three with an obligation rather than a table: TZ 7
-tells the ÜNB to develop bundesweit einheitliche Prozessbeschreibungen and
-submit them to the Beschlusskammer. Until those are published, the windows above
-are the operator's own configuration, not a Festlegung
-(`crates/mako-redispatch/src/fristen.rs:1`).
+BK6-23-241 TZ 7 tells the ÜNB to develop bundesweit einheitliche
+Prozessbeschreibungen; until they are published, the windows above are operator
+configuration, not a Festlegung (`crates/mako-redispatch/src/fristen.rs`).
 
-The one Redispatch deadline that *is* published sits in the format
-documentation, not in a Festlegung: the `AcknowledgementDocument` is due
-„unverzüglich, jedoch spätestens **3 Minuten** nach Erhalt der Übertragungsdatei"
-(EDI@Energy `AcknowledgementDocument` Formatbeschreibung 1.0g, Stand
-01.10.2025). The widely quoted 6 hours was never that obligation — and the
-difference matters, because a 6-hour window is something a batch job satisfies
-while a 3-minute one has to be answered by the receiving process itself.
+The one published Redispatch deadline is in the format documentation: the
+`AcknowledgementDocument` is due „unverzüglich, jedoch spätestens **3 Minuten**
+nach Erhalt der Übertragungsdatei" (EDI@Energy `AcknowledgementDocument`
+Formatbeschreibung 1.0g, Stand 01.10.2025) — not 6 hours.
+
+**Next binding documents (01.04.2027):** [Mitteilung Nr. 58](https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/835_mitteilungen_datenformate/Mitteilung_58/Mitteilung_Nr_58.html)
+(01.10.2026) publishes **ActivationDocument AWT 1.1g** — „lediglich ein minimaler
+Anpassungsbedarf aufgrund einer veränderten Anforderung im Bahnstrom-Umfeld" —
+and **Regelungen zum Übertragungsweg 1.11**, whose changes „betreffen
+insbesondere die Zertifikatsnutzung für den Datenaustausch mittels mTLS". Both
+are „verbindlich ab dem 01.04.2027"; AWT 1.1f applies before that date.
 
 **Scope:**
 - All German TSOs (ÜNB) and DSOs (VNB) plus connected asset operators (ANB)
@@ -221,6 +225,29 @@ plus all installations permanently remote-controllable by a grid operator.
 **Bilanzieller Ausgleich (§14 EnWG, amended late 2025):** until **31.12.2031** the
 **BKV** performs the bilanzielle Ausgleich of DSO redispatch measures (with DSO
 compensation); from **2032** the Netzbetreiber-Ausgleich returns.
+
+---
+
+### MiSpeL — Marktintegration von Speichern und Ladepunkten (EEG-Aufsicht)
+
+**Ruling:** Festlegung **Az. 618-25-02**, entschieden am **01.10.2026**
+([Tenor mit Begründung](https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Aufsicht/MiSpeL/DL/MiSpeL_TenorMitBegruendung.pdf?__blob=publicationFile)).
+
+- **Wirksam mit der Bekanntgabe** (Tenorziffer 8, S. 2); published on the
+  MiSpeL page on 01.10.2026 and in the Amtsblatt der Bundesnetzagentur on
+  07.10.2026 (Begründung, S. 7).
+- **Übergang bis 30.09.2027:** the Abgrenzungs- and Pauschaloption apply only
+  „im Einverständnis mit dem jeweiligen Netzbetreiber und Messstellenbetreiber"
+  (Tenorziffer 9 a, S. 3). The Pauschaloption (Tenorziffern 2 and 4) applies at
+  the earliest from the month after the Commission's state-aid approval of
+  § 19 Abs. 3c EEG (Tenorziffer 9 b).
+- **NB and MSB must enable** the Umlageprivilegien, the Marktprämienzahlungen and
+  the Zuordnungen (Tenorziffer 7). The Marktkommunikation for it is BK6's to
+  set, not part of this Festlegung (Begründung 3.8, S. 92).
+
+**In mako:** `einsd` records whether a plant claims under the § 19 Abs. 3b/3c
+EEG Abgrenzungs- or Pauschaloption, and `eeg-billing::marktwertserie` moves such
+a plant onto the Jahresmarktwert (Anlage 1 Nr. 2 Satz 3 EEG).
 
 ---
 
@@ -294,6 +321,11 @@ keine Antwortfrist; die Abmeldung hat dafür **7 WT** (Kap. 3.2.2).
 **Current ruling:**
 - **GaBi Gas 2.1** — **BK7-24-01-008**, wirksam seit **01.01.2026**; ersetzt die
   Bilanzierungsregeln der GasNZV (GasNZV am 31.12.2025 außer Kraft getreten)
+- **Kooperationsvereinbarung Gas (KoV XV)** — Änderungsfassung vom 27.03.2026,
+  **in Kraft seit 01.10.2026** (KoV XV Haupttext, Deckblatt: „Inkrafttreten am
+  1. Oktober 2026"). Its Anlage 8 is the Messstellenbetreiberrahmenvertrag Gas
+  that BK7-24-01-009 Tenorziffer 14 required by 01.10.2026 (BDEW Energie-Info
+  zur KoV XV, Kap. 3.8); the gas allocation deadlines are §§ 46/47
 
 **Scope:**
 - Bilanzierung in Gasbilanzkreisen (Allokation, Nominierung)
@@ -311,6 +343,7 @@ keine Antwortfrist; die Abmeldung hat dafür **7 WT** (Kap. 3.2.2).
 
 | Nr. | Gegenstand | Datum |
 |---|---|---|
+| [58](https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/835_mitteilungen_datenformate/Mitteilung_58/Mitteilung_Nr_58.html) | Datenformate verbindlich zum **01.04.2027**: nur ActivationDocument AWT 1.1g und Regelungen zum Übertragungsweg 1.11. Keine neuen EDIFACT-, API-Webdienste- oder EBD-Dokumente. API-Webdienste bleiben auf MaLo-Ident und Steuern beschränkt; die neu konsultierten APIs (Lokationsbündel, Berechnungsformel) werden zurückgezogen, UTILTS bleibt; MaBiS-Hub-Anwendungsfälle in EDIFACT | 01.10.2026 |
 | 56 | Finale Datenformate, verbindlich zum **01.10.2026**: UTILMD Strom 2.2, UTILMD Gas 1.2, MSCONS 3.2, ORDERS/ORDRSP 1.1b, EBD 4.3; neues Attribut „fernsteuerbar" (§10b EEG) auf der TR | 01.04.2026 |
 | 55 | Konsultation der Datenformate zum **01.10.2026** | 02.02.2026 |
 | 54 | Datenformate verbindlich zum **01.04.2026** | 01.10.2025 |
@@ -320,7 +353,7 @@ keine Antwortfrist; die Abmeldung hat dafür **7 WT** (Kap. 3.2.2).
 
 ---
 
-## APERAK Fristen Summary
+## Antwortfristen summary
 
 | Process family | Frist | Shape |
 |---|---|---|
@@ -337,19 +370,15 @@ registriert daraus die Prozessfrist, `processd` bemisst die Operator-Queue,
 **unbekannt**, nie *unbefristet*.
 
 > GPKE Teil 2 nennt jede Antwortfrist als Uhrzeit auf einem Werktag, nie als
-> Dauer: eine Freitagnachmittag eingegangene Nachricht ist bis Montag früh zu
-> beantworten, eine am Dienstagabend eingegangene hat keine sechzehn Stunden. Die
-> 10-Werktage-Zahl bei GeLi Gas ist die **Vorlauffrist des Lieferanten**, nicht
-> die Antwortfrist des Netzbetreibers.
+> Dauer. Die 10 Werktage bei GeLi Gas sind die **Vorlauffrist des Lieferanten**,
+> nicht die Antwortfrist des Netzbetreibers.
 
 > **Werktag rule:** Saturdays, Sundays and public holidays are not Werktage (GPKE Teil 1). 24.12. and 31.12. count as holidays.
 
 > **Redispatch 2.0 deadlines are separate** — they use UTC wall-clock time, not Werktage:
 > **3 Minuten** (`AcknowledgementDocument`, „unverzüglich, jedoch spätestens 3 Minuten nach
 > Erhalt der Übertragungsdatei" — EDI@Energy Formatbeschreibung 1.0g), 24 h (`StatusRequest`),
-> and 5 min (Activation response). **Not 6 hours**: that figure is widely quoted and was never
-> this obligation, and the difference decides the design — a 6-hour window is something a batch
-> job satisfies, a 3-minute one has to be answered by the receiving process itself.
+> and 5 min (Activation response) — not 6 hours.
 > The full deadline table is in the [PID reference](@/docs/regulatory/pid-reference.md#redispatch-2-0-xml-document-types-not-edifact-pids).
 
 ---
@@ -366,4 +395,4 @@ registriert daraus die Prozessfrist, `processd` bemisst die Operator-Queue,
 
 > INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) is billed by the GNB/VNB
 > to the LFN/LFA for AWH performed during the Sperrprozess — it belongs to GeLi Gas (BK7-24-01-009),
-> not GaBi Gas. INVOIC 31010 (Kapazitätsrechnung, NB → BKV) is GaBi Gas (BK7-24-01-008).
+> not GaBi Gas. INVOIC 31010 (Kapazitätsrechnung, NB → KN — INVOIC AHB 1.0b Kap. 3.1.4) is GaBi Gas (BK7-24-01-008).

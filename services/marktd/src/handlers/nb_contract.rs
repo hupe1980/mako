@@ -225,7 +225,6 @@ fn parse_req(
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `PUT /api/v1/nb-contracts/:id`
-#[allow(clippy::too_many_arguments)]
 pub async fn put_nb_contract(
     Extension(repo): Extension<NbContractRepoExt>,
     claims: Claims,

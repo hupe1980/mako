@@ -24,7 +24,7 @@
 //! The window series this produces reproduces the Bundesnetzagentur's published
 //! "Anzulegende Werte für Solaranlagen" spreadsheet exactly — see the tests.
 
-use crate::rounding::RoundMoney;
+use grid_billing::RoundMoney;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 use time::{Date, Month};

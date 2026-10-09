@@ -45,7 +45,7 @@
 //! ## What it scans
 //!
 //! Every `.rs`, `.md`, `.sql`, `.cedar`, `.yaml` and `.yml` file under `crates`,
-//! `services`, `xtask`, `site/content`, `concepts` and `.github`, plus the root
+//! `services`, `xtask`, `site/content`, `concepts`, `specs` and `.github`, plus the root
 //! `AGENTS.md`. The agent-instruction files are in scope deliberately: a
 //! citation an agent reads before writing code is the one most likely to be
 //! copied into it — and those files are `services/agentd/agents/*.yaml`, so a
@@ -174,7 +174,9 @@ const RULES: &[Rule] = &[
 /// Files that may name a refused form because they define or enforce the rule.
 const RULE_SITES: &[&str] = &[
     "xtask/src/check_citations.rs",
-    "services/sperrd/tests/authorization_guard.rs",
+    // States the same repeal as one of its own known-wrong phrases.
+    "xtask/src/check_known_wrong.rs",
+    "services/sperrd/tests/it/authorization_guard.rs",
     "services/sperrd/README.md",
 ];
 
@@ -190,6 +192,7 @@ pub fn run(workspace_root: &Path) -> bool {
         "xtask",
         "site/content",
         "concepts",
+        "specs",
         ".github",
     ] {
         collect(

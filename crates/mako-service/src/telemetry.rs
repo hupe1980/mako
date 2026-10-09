@@ -188,6 +188,9 @@ pub fn init_tracing_with(
     otel: Option<&OtelConfig>,
     extra: Option<ExtraLayer>,
 ) -> OtelGuard {
+    // Read only by the OTLP exporter, which exists with the `otel` feature.
+    #[cfg(not(feature = "otel"))]
+    let _ = (service_name, otel);
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
 
     // Boxed because the three builders are three different types; the

@@ -1,7 +1,7 @@
 [package]
 name         = "mako-redispatch"
 version.workspace     = true
-description  = "Redispatch 2.0 process engine for German grid congestion management (§§ 13, 13a, 14 EnWG)"
+description  = "Redispatch 2.0 workflows for German grid congestion management (§§ 13, 13a, 14 EnWG)"
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true
@@ -21,11 +21,12 @@ mako-engine      = { workspace = true }
 mako-fristen     = { workspace = true }
 rust_decimal     = { workspace = true }
 serde            = { workspace = true }
-serde_json       = { workspace = true }
 thiserror        = { workspace = true }
 time             = { workspace = true }
-uuid             = { workspace = true }
 
 [features]
 testing = ["mako-engine/testing"]
 tracing = ["mako-engine/tracing"]
+
+[lints]
+workspace = true

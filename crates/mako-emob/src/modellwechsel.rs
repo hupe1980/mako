@@ -246,7 +246,7 @@ pub struct Modellwechseldaten {
 /// ```text
 /// New ─┬─ Gesendet ──── AntwortErhalten                (we asked)
 ///      └─ Erhalten ──── Beantwortet                    (we were asked)
-///                    ↘ Eskaliert (window lapsed, no default outcome)
+///                    ↘ FristAbgelaufen (window lapsed, no default outcome)
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", content = "data")]
@@ -272,13 +272,16 @@ pub enum ModellwechselState {
         /// What came back.
         antwort: Box<EmobAntwort>,
     },
-    /// Terminal — the window lapsed with no answer.
+    /// The window lapsed with the answer still outstanding in `offen`.
     ///
-    /// Not a Zustimmung: no published rule gives an unanswered Modell-2 leg a
-    /// default outcome, so this waits for an operator.
-    Eskaliert {
-        /// Why.
-        grund: String,
+    /// Not a Zustimmung: neither Anlage 6 nor the AWH gives an unanswered
+    /// Modell-2 leg a default outcome, so the leg waits — visible to the
+    /// operator — and a late answer still closes it.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the leg was waiting in.
+        offen: Box<ModellwechselState>,
     },
     /// Terminal — refused before it began.
     Rejected {
@@ -297,7 +300,7 @@ impl ModellwechselState {
             Self::Erhalten(_) => "Erhalten",
             Self::Beantwortet { .. } => "Beantwortet",
             Self::AntwortErhalten { .. } => "AntwortErhalten",
-            Self::Eskaliert { .. } => "Eskaliert",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
             Self::Rejected { .. } => "Rejected",
         }
     }
@@ -310,10 +313,7 @@ impl ModellwechselState {
     pub const fn ist_terminal(&self) -> bool {
         matches!(
             self,
-            Self::Beantwortet { .. }
-                | Self::AntwortErhalten { .. }
-                | Self::Eskaliert { .. }
-                | Self::Rejected { .. }
+            Self::Beantwortet { .. } | Self::AntwortErhalten { .. } | Self::Rejected { .. }
         )
     }
 
@@ -323,7 +323,17 @@ impl ModellwechselState {
         match self {
             Self::Gesendet(d) | Self::Erhalten(d) => Some(d),
             Self::Beantwortet { data, .. } | Self::AntwortErhalten { data, .. } => Some(data),
-            Self::New | Self::Eskaliert { .. } | Self::Rejected { .. } => None,
+            Self::FristAbgelaufen { offen, .. } => offen.daten(),
+            Self::New | Self::Rejected { .. } => None,
+        }
+    }
+
+    /// The state the leg is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 }
@@ -422,6 +432,12 @@ impl CommandPayload for ModellwechselCommand {}
 // ── Shared behaviour ──────────────────────────────────────────────────────────
 
 fn apply(state: ModellwechselState, event: &ModellwechselEvent) -> ModellwechselState {
+    // A lapsed window leaves the process waiting where it was; the next
+    // event moves it on from there.
+    let state = match state {
+        ModellwechselState::FristAbgelaufen { offen, .. } => *offen,
+        other => other,
+    };
     match event {
         ModellwechselEvent::AnfrageGesendet { data } => ModellwechselState::Gesendet(data.clone()),
         ModellwechselEvent::AnfrageErhalten { data, .. } => {
@@ -441,15 +457,15 @@ fn apply(state: ModellwechselState, event: &ModellwechselEvent) -> Modellwechsel
             },
             other => other,
         },
-        ModellwechselEvent::FristAbgelaufen { label } => {
-            if state.ist_terminal() {
-                state
-            } else {
-                ModellwechselState::Eskaliert {
-                    grund: format!("Antwortfrist {label} verstrichen, keine Antwort eingegangen"),
+        ModellwechselEvent::FristAbgelaufen { label } => match state {
+            ModellwechselState::Gesendet(_) | ModellwechselState::Erhalten(_) => {
+                ModellwechselState::FristAbgelaufen {
+                    label: label.clone(),
+                    offen: Box::new(state),
                 }
             }
-        }
+            other => other,
+        },
         ModellwechselEvent::Abgewiesen { grund } => ModellwechselState::Rejected {
             grund: grund.clone(),
         },
@@ -510,6 +526,10 @@ fn handle(
     command: ModellwechselCommand,
     leg: LegWire,
 ) -> Result<WorkflowOutput<ModellwechselEvent>, WorkflowError> {
+    // A lapsed window changes nothing about what the process accepts; only
+    // the timeout itself asks about the lapse.
+    let lapsed = state;
+    let state = state.offen();
     match command {
         ModellwechselCommand::Senden { data } => {
             if !matches!(state, ModellwechselState::New) {
@@ -528,8 +548,23 @@ fn handle(
             validation_passed,
             validation_errors,
         } => {
-            if !matches!(state, ModellwechselState::New) {
-                return Err(WorkflowError::invalid_state("New", state.label()));
+            match state {
+                ModellwechselState::New => {}
+                // The counterparty sent the same Anfrage again while our answer
+                // is still owed: the answer to the first covers it.
+                ModellwechselState::Erhalten(first) if **first == *data => {
+                    return Ok(vec![].into());
+                }
+                // A different Anfrage on a leg whose answer is still owed is
+                // refused by name, so it reaches an operator instead of being
+                // folded into the first.
+                ModellwechselState::Erhalten(_) => {
+                    return Err(WorkflowError::rejected(format!(
+                        "a second {} Anfrage with different content while the first is unanswered",
+                        leg.anfrage_pid
+                    )));
+                }
+                other => return Err(WorkflowError::invalid_state("New", other.label())),
             }
             if data.pruefidentifikator.as_u32() != leg.anfrage_pid {
                 return Err(WorkflowError::rejected(format!(
@@ -579,7 +614,7 @@ fn handle(
         },
 
         ModellwechselCommand::TimeoutExpired { label, .. } => {
-            if state.ist_terminal() {
+            if !window_open(&label, lapsed, leg) {
                 return Ok(vec![].into());
             }
             Ok(vec![ModellwechselEvent::FristAbgelaufen {
@@ -592,22 +627,34 @@ fn handle(
 
 // ── One workflow per leg ──────────────────────────────────────────────────────
 
-/// The shared tail of every leg's `on_deadline`: fire only while the leg is
-/// still open.
+/// The shared body of every leg's `on_deadline`, given the label and the
+/// leg: fire only while the leg's own window is open.
 ///
-/// Each impl tests `deadline.label()` against **its own** window before calling
-/// this. That test belongs in the impl and not here: an `on_deadline` that does
-/// not read the label consumes every deadline on the stream, the APERAK
+/// The label is tested against **this** leg's window: an `on_deadline` that
+/// does not read the label consumes every deadline on the stream, the APERAK
 /// 45-minute and CONTRL 6-hour delivery windows included, and a late
 /// acknowledgement then fails the business process.
 fn timeout_command(
+    label: &str,
     deadline: &Deadline,
     state: &ModellwechselState,
+    leg: LegWire,
 ) -> Option<ModellwechselCommand> {
-    (!state.ist_terminal()).then(|| ModellwechselCommand::TimeoutExpired {
+    window_open(label, state, leg).then(|| ModellwechselCommand::TimeoutExpired {
         deadline_id: deadline.deadline_id(),
-        label: deadline.label().into(),
+        label: label.into(),
     })
+}
+
+/// The one guard a fired deadline passes: `leg`'s own window is open while its
+/// answer is outstanding (`Gesendet`, `Erhalten`). A lapsed window does not
+/// lapse twice.
+fn window_open(label: &str, state: &ModellwechselState, leg: LegWire) -> bool {
+    label == leg.window_label
+        && matches!(
+            state,
+            ModellwechselState::Gesendet(_) | ModellwechselState::Erhalten(_)
+        )
 }
 
 /// **55238 → 55239** — the LPB asks the VNB to balance a Marktlokation in its
@@ -673,11 +720,10 @@ impl Workflow for EmobAnmeldungWorkflow {
     type Event = ModellwechselEvent;
     type Command = ModellwechselCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANMELDUNG.window_label];
+
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        if deadline.label() != ANMELDUNG_WINDOW_LABEL {
-            return None;
-        }
-        timeout_command(deadline, state)
+        timeout_command(deadline.label(), deadline, state, ANMELDUNG)
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
@@ -697,11 +743,10 @@ impl Workflow for EmobZuordnungsendeWorkflow {
     type Event = ModellwechselEvent;
     type Command = ModellwechselCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[ZUORDNUNGSENDE.window_label];
+
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        if deadline.label() != ZUORDNUNGSENDE_WINDOW_LABEL {
-            return None;
-        }
-        timeout_command(deadline, state)
+        timeout_command(deadline.label(), deadline, state, ZUORDNUNGSENDE)
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
@@ -721,11 +766,10 @@ impl Workflow for EmobAbmeldungWorkflow {
     type Event = ModellwechselEvent;
     type Command = ModellwechselCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[ABMELDUNG.window_label];
+
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        if deadline.label() != ABMELDUNG_WINDOW_LABEL {
-            return None;
-        }
-        timeout_command(deadline, state)
+        timeout_command(deadline.label(), deadline, state, ABMELDUNG)
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
@@ -768,6 +812,42 @@ mod tests {
         )
         .expect("accepted");
         out.events.iter().fold(ModellwechselState::New, apply)
+    }
+
+    #[test]
+    fn a_repeated_identical_anfrage_on_an_open_leg_is_a_duplicate() {
+        let state = erhalten(ANMELDUNG);
+        let out = handle(
+            &state,
+            ModellwechselCommand::ReceiveAnfrage {
+                data: Box::new(daten(ANMELDUNG.anfrage_pid)),
+                message_ref: MessageRef::new("MSG2"),
+                validation_passed: true,
+                validation_errors: Vec::new(),
+            },
+            ANMELDUNG,
+        )
+        .expect("a repeat is not an error");
+        assert!(out.events.is_empty(), "{:?}", out.events);
+    }
+
+    #[test]
+    fn a_differing_anfrage_on_an_open_leg_is_refused() {
+        let state = erhalten(ANMELDUNG);
+        let mut other = daten(ANMELDUNG.anfrage_pid);
+        other.process_date = "20270201".to_owned();
+        let err = handle(
+            &state,
+            ModellwechselCommand::ReceiveAnfrage {
+                data: Box::new(other),
+                message_ref: MessageRef::new("MSG2"),
+                validation_passed: true,
+                validation_errors: Vec::new(),
+            },
+            ANMELDUNG,
+        )
+        .expect_err("different content must not be folded into the first");
+        assert!(err.to_string().contains("different content"), "{err}");
     }
 
     #[test]
@@ -942,7 +1022,8 @@ mod tests {
     }
 
     /// **Silence is not consent.** No published rule gives an unanswered
-    /// Modell-2 leg a default outcome, so the window escalates.
+    /// Modell-2 leg a default outcome, so the lapse is a Frist breach that
+    /// leaves the leg open.
     #[test]
     fn an_expired_window_escalates_rather_than_confirming() {
         let state = erhalten(ANMELDUNG);
@@ -957,10 +1038,10 @@ mod tests {
         .expect("fires");
         let next = out.events.iter().fold(state, apply);
         assert!(
-            matches!(next, ModellwechselState::Eskaliert { .. }),
+            matches!(next, ModellwechselState::FristAbgelaufen { .. }),
             "{next:?}"
         );
-        assert!(next.ist_terminal());
+        assert!(!next.ist_terminal(), "a lapsed leg still awaits its answer");
     }
 
     /// A deadline that fires after the answer went out changes nothing.

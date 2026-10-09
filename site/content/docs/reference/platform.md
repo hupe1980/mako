@@ -73,7 +73,7 @@ let msg = platform.parse(bytes)?;
 ```
 
 `Profile` is a **struct**, not a trait — a profile is the MIG and AHB read as
-data (`crates/edi-energy/src/profile/mod.rs:31`), so there is nothing to
+data (`crates/edi-energy/src/profile/mod.rs`), so there is nothing to
 implement. The `&'static Profile` values that go into that `Vec` are the
 crate-private generated statics, which is why this constructor is in practice
 for tests and benchmarks that want an isolated registry rather than a way to
@@ -186,7 +186,7 @@ std::thread::spawn(move || {
 ## `ReleaseRegistry` Deep Dive
 
 `ReleaseRegistry` maps `(MessageType, Release)` to `&'static Profile`
-(`crates/edi-energy/src/registry/mod.rs:115`). Each profile bundles:
+(`crates/edi-energy/src/registry/mod.rs`). Each profile bundles:
 
 - the **MIG** — the Nachrichtenstruktur and every place's Segmentlayout
 - the **AHB** — one Prüfschablone per Prüfidentifikator

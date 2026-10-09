@@ -61,7 +61,10 @@ pub const MAX_INBOX_KEY_LEN: usize = 509;
 /// A claim that is never settled — the process died mid-message — must not
 /// block the key forever, so an unsettled claim carries a lease
 /// ([`CLAIM_LEASE`]) after which another delivery may take it over.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait InboxStore: Send + Sync {
     /// Phase 1: atomically claim `key`.
     ///

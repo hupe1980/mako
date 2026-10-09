@@ -19,15 +19,44 @@ impl Workflow for MyWorkflow {
 
     fn apply(state: Self::State, event: &Self::Event)
         -> Self::State { … } // pure
+
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANTWORT_LABEL];
+
+    fn on_deadline(deadline: &Deadline, state: &Self::State)
+        -> Option<Self::Command> { … } // pure; asks window_open
 }
 ```
 
+`cargo xtask check-workflow-purity` refuses a clock, RNG, environment or
+filesystem read inside a `Workflow` impl — an instant is a command field.
+
+### Deadlines are owned
+A workflow lists every label it registers in `Workflow::DEADLINE_LABELS`. The
+engine refuses to persist any other label (`EngineError::UnownedDeadlineLabel`)
+unless it is a delivery window (`mako_fristen::is_delivery_window` — the APERAK
+and CONTRL windows, retired by the outbox worker on delivery).
+`Process::run_timeout` calls `on_deadline` only for an owned label.
+
+Deadlines are never cancelled, so every one fires — on the healthy path too.
+`on_deadline` and the `TimeoutExpired` arm of `handle` must ask the same
+`window_open(label, state)` guard; a lapse with no sourced default outcome
+records `FristAbgelaufen` rather than inventing an answer.
+
+### Modules register drivers
+An `EngineModule` registers each workflow once, by type, in `drivers()`:
+`WorkflowDriver::of::<MyWorkflow>(WORKFLOW_NAME)`. The driver carries the
+labels and — with `slatedb` — the monomorphised `run_timeout` and migration
+entry points, so a host dispatches by name without a name→type table.
+
 ### Dual-write atomicity — critical
-Events and outbox entries **must** be written together in a single `WriteBatch`:
+Events, outbox entries, deadlines and correlation keys **must** be written together
+in a single `WriteBatch`. `AtomicAppend::append(AppendBatch)` is the store's only
+write and has no default body:
 ```rust
-store.append_with_outbox(&stream_id, events, outbox_entries).await?;
-// NEVER: write events first, then outbox — a crash between the two loses the APERAK permanently
+store.append(AppendBatch::new(&stream_id, version, &events).outbox(&outbox).deadlines(&deadlines)).await?;
+// NEVER: write events first, then the rest — a crash between the two loses the APERAK permanently
 ```
+`tests/it/append_conformance.rs` runs one suite over every store.
 
 ## Typed IDs
 
@@ -70,7 +99,7 @@ let obligation: Option<&'static AntwortObligation> =
 
 // Werktage arithmetic, where a Festlegung really does count days.
 // A Werktag is any day that is not a Samstag, a Sonntag or a gesetzlicher
-// Feiertag (GPKE Teil 1 Kap. 1.7) — Saturday does NOT count.
+// Feiertag (GPKE Teil 1 Kap. 2 and Kap. 7 „Fristenberechnung“) — Saturday does NOT count.
 let deadline = fristen::add_werktage(received_date, 5, HolidayCalendar::BdewMaKo);
 ```
 
@@ -101,7 +130,10 @@ Use `FormatVersion::parse(s)?` for user-supplied strings. `FormatVersion::new(..
 ```rust
 // Spawn a new process
 let process = ctx.spawn::<MyWorkflow>(tenant_id, workflow_id);
-let envelopes = process.execute(command).await?;
+let ran = process.run(command, RunOptions::new()).await?;   // the one way to run a command
+
+// A fired deadline: the workflow's own on_deadline decides the command
+let acted = process.run_timeout(&deadline, RunOptions::new()).await?;
 
 // Resume an existing process by identity (looked up via ProcessRegistry)
 let identity = ctx.registry().lookup(tenant, &conv_id).await?.unwrap();
@@ -117,4 +149,5 @@ let state = process.state_with_snapshot().await?;
 ## Testing
 
 - Use `InMemoryEventStore` + `testing` feature for unit tests — never hit SlateDB in unit tests.
-- Run: `cargo test -p mako-engine --all-features`
+- Integration tests are modules of the one binary `tests/it/` (`main.rs` declares them).
+- Run: `cargo test -p mako-engine --all-features` (or `--test it` for the integration binary).

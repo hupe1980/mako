@@ -194,16 +194,28 @@ impl EngineModule for RedispatchModule {
         "redispatch"
     }
 
-    fn workflow_names(&self) -> &'static [&'static str] {
-        &[
-            stammdaten::WORKFLOW_NAME,
-            aktivierung::WORKFLOW_NAME,
-            ack_forward::verfuegbarkeit::WORKFLOW_NAME,
-            ack_forward::netzengpass::WORKFLOW_NAME,
-            ack_forward::kaskade::WORKFLOW_NAME,
-            ack_forward::planungsdaten::WORKFLOW_NAME,
-            ack_forward::statusanfrage::WORKFLOW_NAME,
-            ack_forward::kostenblatt::WORKFLOW_NAME,
+    fn drivers(&self) -> Vec<mako_engine::driver::WorkflowDriver> {
+        use mako_engine::driver::WorkflowDriver;
+        // Each workflow by type, under its module's own name constant.
+        vec![
+            WorkflowDriver::of::<stammdaten::StammdatenWorkflow>(stammdaten::WORKFLOW_NAME),
+            WorkflowDriver::of::<aktivierung::AktivierungWorkflow>(aktivierung::WORKFLOW_NAME),
+            WorkflowDriver::of::<ack_forward::VerfuegbarkeitWorkflow>(
+                ack_forward::verfuegbarkeit::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<ack_forward::NetzengpassWorkflow>(
+                ack_forward::netzengpass::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<ack_forward::KaskadeWorkflow>(ack_forward::kaskade::WORKFLOW_NAME),
+            WorkflowDriver::of::<ack_forward::PlanungsdatenWorkflow>(
+                ack_forward::planungsdaten::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<ack_forward::StatusanfrageWorkflow>(
+                ack_forward::statusanfrage::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<ack_forward::KostenblattWorkflow>(
+                ack_forward::kostenblatt::WORKFLOW_NAME,
+            ),
         ]
     }
 
@@ -359,8 +371,12 @@ mod tests {
 
     #[test]
     fn workflow_names_are_non_empty() {
-        assert!(!RedispatchModule.workflow_names().is_empty());
-        for name in RedispatchModule.workflow_names() {
+        assert!(!RedispatchModule.drivers().is_empty());
+        for name in RedispatchModule
+            .drivers()
+            .iter()
+            .map(mako_engine::driver::WorkflowDriver::name)
+        {
             assert!(
                 name.starts_with("redispatch-"),
                 "workflow name '{name}' must start with 'redispatch-'"

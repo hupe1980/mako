@@ -343,7 +343,7 @@ impl TryFrom<Box<str>> for StreamId {
 /// // Restore on a subsequent message:
 /// let identity = routing_table.get(&aperak_conversation_id)?;
 /// let process = Process::<MyWorkflow, _>::from_identity(store, identity);
-/// process.execute(HandleAperak { .. }).await?;
+/// process.run(HandleAperak { .. }, RunOptions::new()).await?;
 /// ```
 ///
 /// [`Process`]: crate::process::Process

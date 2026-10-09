@@ -210,9 +210,11 @@ pub fn pruefe_zuordnung(
                 "Ankündigung Zuordnung LF für MaLo {}: die Nachricht nennt keinen \
                  Anwendungsfall (SG4 STS+7 DE 9013, Element 3 — ZW8/ZW9/ZX0/ZX1 für \
                  Fall 1–4), und die Antwort muss den zugehörigen Entscheidungsbaum in \
-                 SG4 STS+E01 DE 1131 nennen (E_0603…E_0606). Ohne Antwort bis 15:00 Uhr \
-                 am ÜT ordnet der NB den LF selbst zu (GPKE Teil 2 § 2.4.2.2 Nr. 3).",
-                anfrage.malo_id
+                 SG4 STS+E01 DE 1131 nennen (E_0603…E_0606). Ohne Antwort {} ordnet \
+                 der NB den LF selbst zu (GPKE Teil 2 § 2.4.2.2 Nr. 3).",
+                anfrage.malo_id,
+                mako_fristen::antwort::antwort_obligation(55_607)
+                    .map_or_else(String::new, |o| o.frist.beschreibung())
             ),
         );
     };

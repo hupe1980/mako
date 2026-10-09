@@ -322,7 +322,10 @@ struct LfaWiderspruch {
     grund: Option<String>,
 }
 
-#[allow(clippy::match_same_arms)]
+#[expect(
+    clippy::match_same_arms,
+    reason = "the arms are separate cases of the source table that happen to agree"
+)]
 fn widerspruch(anfrage: &Abmeldeanfrage, bereits_abgemeldet: &str) -> Widerspruch {
     // The arms are deliberately not merged: each is a distinct Prüfschritt of
     // `E_0623` reaching the same node, and collapsing them would lose which one
@@ -386,7 +389,10 @@ fn widerspruch(anfrage: &Abmeldeanfrage, bereits_abgemeldet: &str) -> Widerspruc
 // The two `Ok(true)` arms are 420 „nein" and 430 „nein" — distinct Prüfschritte
 // reaching the same node, and merging them would lose which one a reader is
 // looking at. The same reason `widerspruch` carries this allow.
-#[allow(clippy::match_same_arms)]
+#[expect(
+    clippy::match_same_arms,
+    reason = "the arms are separate cases of the source table that happen to agree"
+)]
 pub(super) fn tranche_freigeworden(
     antwort: Option<&LfaAntwort>,
     lf_mp_id: &str,
@@ -446,7 +452,10 @@ fn widerspruch_detail(
 }
 
 #[cfg(test)]
-#[allow(clippy::fn_params_excessive_bools, clippy::unnecessary_wraps)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "test fixtures return the Option the production inputs take"
+)]
 mod tests {
     use super::*;
     use crate::nb::types::{

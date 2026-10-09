@@ -147,14 +147,12 @@ pub(super) fn ccyymmddhhmm_utc(value: &str) -> String {
     feature = "invoic",
     feature = "orders",
     feature = "partin",
-    feature = "pricat",
     feature = "reqote",
     feature = "remadv",
     feature = "ordchg",
     feature = "ordrsp",
     feature = "quotes",
     feature = "comdis",
-    feature = "utilts",
 ))]
 pub(super) fn now_ccyymmddhhmm() -> String {
     let now = time::OffsetDateTime::now_utc();
@@ -184,7 +182,24 @@ pub(super) fn now_ccyymmddhhmm() -> String {
 // emit_comp!(w, "NAD", ["MS"], [id, "", "293"]);       // NAD+MS+<id>::293
 // ```
 
-#[cfg(any_message)]
+#[cfg(any(
+    feature = "aperak",
+    feature = "comdis",
+    feature = "iftsta",
+    feature = "insrpt",
+    feature = "invoic",
+    feature = "mscons",
+    feature = "ordchg",
+    feature = "orders",
+    feature = "ordrsp",
+    feature = "partin",
+    feature = "pricat",
+    feature = "quotes",
+    feature = "remadv",
+    feature = "reqote",
+    feature = "utilmd",
+    feature = "utilts",
+))]
 macro_rules! emit_seg {
     ($writer:expr, $tag:expr, $($elem:expr),+ $(,)?) => {{
         let elements: &[&str] = &[$($elem),+];
@@ -218,7 +233,24 @@ macro_rules! emit_comp {
 /// A fixed `293` here would put a BDEW code list on every Gas message — which
 /// UTILMD AHB Gas G1.1/G1.2 does not define on a party NAD — and contradict the
 /// DVGW `502` the same interchange declares in UNB DE 0007.
-#[cfg(any_message)]
+#[cfg(any(
+    feature = "aperak",
+    feature = "comdis",
+    feature = "iftsta",
+    feature = "insrpt",
+    feature = "invoic",
+    feature = "mscons",
+    feature = "ordchg",
+    feature = "orders",
+    feature = "ordrsp",
+    feature = "partin",
+    feature = "pricat",
+    feature = "quotes",
+    feature = "remadv",
+    feature = "reqote",
+    feature = "utilmd",
+    feature = "utilts",
+))]
 pub(crate) fn agency_for(explicit: Option<crate::AgencyCode>, mp_id: &str) -> &'static str {
     explicit
         .unwrap_or_else(|| crate::AgencyCode::for_mp_id(mp_id))

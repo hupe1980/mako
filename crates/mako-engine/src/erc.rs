@@ -99,7 +99,7 @@ impl From<&str> for ErcCode {
 /// This is **advice**, not a hard rule.  The ERP decides whether to follow
 /// it based on local policy, retry budget, and operator escalation settings.
 ///
-/// Source: BDEW APERAK AHB 1.0; CONTRL AHB 1.0; Allgemeine Festlegungen V6.1d §4.
+/// Source: BDEW APERAK AHB 1.1; CONTRL AHB 1.0; Allgemeine Festlegungen V6.1d §4.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErcAction {
     /// Correct the named field and re-submit the process.

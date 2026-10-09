@@ -4,6 +4,7 @@
 //!   GET /api/v1/correlations/:process_id
 //!   GET /api/v1/correlations            (query by erp_order_id, malo_id, status)
 
+use crate::state::AppState;
 use std::sync::Arc;
 
 use axum::{
@@ -15,10 +16,7 @@ use axum::{
 use mako_markt::{
     domain::{MaloId, ProcessStatus},
     error::MdmError,
-    repository::{
-        AppState, CorrelationFilter, CorrelationIndex, MaloRepository, MeloRepository,
-        PartnerRepository, SubscriptionRepository,
-    },
+    repository::{CorrelationFilter, CorrelationIndex},
 };
 use serde::Deserialize;
 use uuid::Uuid;
@@ -35,19 +33,12 @@ pub struct CorrelationQuery {
 }
 
 /// `GET /api/v1/correlations/:process_id`
-pub async fn get_correlation<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn get_correlation(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "read-correlation", &state.tenant)
         .is_err()
@@ -69,19 +60,12 @@ where
 }
 
 /// `GET /api/v1/correlations`
-pub async fn list_correlations<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn list_correlations(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Query(q): Query<CorrelationQuery>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "read-correlation", &state.tenant)
         .is_err()

@@ -1,6 +1,9 @@
 //! Virtual meter endpoints — derived time series from `AggregationRule`.
 
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "used only in some feature or target combinations"
+)]
 use super::*;
 
 // ── Virtual meter endpoints ──────────────────────────────────────────────
@@ -17,10 +20,9 @@ use super::*;
 /// direction dropped, reactive and fault registers refused, and the total
 /// register preferred over its own HT/NT decomposition.
 ///
-/// Sharing that projection fixed a defect specific to this path: it used to keep
-/// **one** register per slot, so a dual-tariff source reporting only HT and NT —
-/// with no total register to prefer — had its NT consumption discarded rather
-/// than added, and every derived series ran low by that amount.
+/// Keeping **one** register per slot instead would discard the NT consumption
+/// of a dual-tariff source reporting only HT and NT — with no total register to
+/// prefer — and every derived series would run low by that amount.
 pub(crate) fn source_intervals(
     reads: &[MeterRead],
     generation: bool,

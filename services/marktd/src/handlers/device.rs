@@ -337,7 +337,6 @@ pub async fn get_konfigurationsprodukte(
 /// on every successful write so ERP subscribers and `processd` see the change.
 ///
 /// Returns `204 No Content` on success.
-#[allow(clippy::too_many_arguments)]
 pub async fn put_konfigurationsprodukte(
     Extension(repo): Extension<SrRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -901,25 +900,17 @@ pub async fn get_geraet_konfigurationen(
 ///
 /// - Server-side deduplication: last entry wins for duplicate `parameter` values.
 /// - `updated_at` on each stored entry is set server-side (UTC now).
-/// - Emits `de.markt.geraet.konfiguration.updated` via the durable fan-out so
-///   `edmd` certificate-expiry worker and `processd` §14a Steuerungsauftrag handler
-///   receive SMGW cert / CLS-capability updates in near-real-time.
+/// - Emits `de.markt.geraet.konfiguration.updated` via the durable fan-out. Its
+///   subscribers are the ERP and `agentd`'s `smgw-diagnostics-agent`; neither
+///   `edmd` nor `processd` consumes it.
 ///
-/// ### §14a Steuerungsauftrag integration
+/// ### `SmgwTlsCertFingerprint` and `SmgwCertAblaufdatum`
 ///
-/// When `ClsFaehig = "true"` is set, `processd` auto-acknowledges §14a
-/// `WimSteuerungsauftrag` requests for this device (BK6-24-174 §14a rules).
-/// When `ClsFaehig = "false"` or the entry is absent, `processd` rejects with ERC A97.
-///
-/// ### SMGW certificate expiry monitoring
-///
-/// `SmgwCertAblaufdatum` (`SMGW_CERT_ABLAUFDATUM`) is the certificate expiry date.
-/// `edmd`'s daily certificate-expiry worker sweeps every gateway certificate and
-/// emits a tiered `de.messwert.smgw.cert.expiry-warning` at **90 / 30 / 7 days**
-/// before expiry (BSI TR-03109-4 §6.3), once per tier per certificate — an expired
-/// cert silently ends §14a Fernsteuerbarkeit. The `agentd` `smgw-diagnostics-agent`
-/// consumes the warning and escalates renewal to the MSB.
-#[allow(clippy::too_many_arguments)]
+/// Both are master data here. `edmd`'s daily certificate-expiry worker sweeps
+/// the `SmgwSession` each gateway registered with `edmd` itself and emits a
+/// tiered `de.messwert.smgw.cert.expiry-warning` at **90 / 30 / 7 days** before
+/// expiry (BSI TR-03109-4 §6.3), once per tier per certificate; it does not read
+/// these entries.
 pub async fn put_geraet_konfigurationen(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1276,9 +1267,8 @@ pub async fn list_zaehler_saisons(
 /// ## Why this endpoint?
 ///
 /// ERP systems (Schleupen, SAP IS-U, powercloud) need to display Time-of-Use register
-/// definitions to customer portal users for §14a Modul 3 tariffs (HT/ST/NT).  Previously,
-/// clients had to query two separate endpoints and assemble the nested structure
-/// themselves.  This endpoint returns the canonical BO4E `Zaehlzeitdefinition` shape
+/// definitions to customer portal users for §14a Modul 3 tariffs (HT/ST/NT), without
+/// querying two endpoints and assembling the nested structure themselves.  This endpoint returns the canonical BO4E `Zaehlzeitdefinition` shape
 /// (saisons → tagtypen → umschaltzeiten) that portals can display and validate
 /// schema-first without custom ETL.
 ///
@@ -1309,9 +1299,9 @@ pub async fn list_zaehler_saisons(
 /// Registers with `valid_to IS NOT NULL` (historical) are included in the response.
 /// Use `?valid_only=true` to restrict to currently valid registers.
 ///
-/// ## §14a Modul 2 context
+/// ## §14a Modul 3 context
 ///
-/// Under BK6-22-300 §14a Modul 2, the NB assigns ToU registers (HT/NT) to
+/// Under §14a Modul 3 (zeitvariable Netzentgelte, BK8-22/010-A), the NB assigns ToU registers (HT/ST/NT) to
 /// controllable loads at specific switching times.  The MSB must communicate these
 /// definitions to the NB via WiM Stammdaten (ORDERS 17102–17133 ZAK+ZE segments).
 /// This endpoint exposes those definitions in BO4E form for downstream ERP + portal

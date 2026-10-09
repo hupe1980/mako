@@ -22,11 +22,11 @@
 //!     &data.new_supplier,
 //!     Some(&msb_mp_id),
 //! );
-//! process.execute(SupplierChangeCommand::SendAntwort {
+//! process.run(SupplierChangeCommand::SendAntwort {
 //!     accepted: true,
 //!     reason: None,
 //!     obligations,
-//! }).await?;
+//! }, RunOptions::new()).await?;
 //! ```
 
 use mako_engine::{

@@ -68,11 +68,9 @@ use crate::api_bridge::{location_id_to_domain, party_id_to_marktpartner};
 use axum::Router;
 use energy_api::models::electricity::{IdentificationParameter, WimAnmeldungRequest};
 use energy_api::server::{control_measures, malo_ident, wim_order};
-use mako_engine::deadline::Deadline;
 use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId};
 use mako_engine::inbox::{InboxClaim, InboxStore as _};
 use mako_engine::outbox::{OutboxMessage, OutboxStore as _};
-use mako_engine::registry::ProcessRegistry as _;
 use mako_engine::store_slatedb::SlateDbStore;
 use mako_engine::types::MeLo;
 use mako_wim::geraetewechsel::{
@@ -83,7 +81,7 @@ use mako_wim::steuerungsauftrag::{
     WimSteuerungsauftragWorkflow,
 };
 use serde_json::json;
-use tracing::{info, warn};
+use tracing::info;
 
 // ── Caller identity ───────────────────────────────────────────────────────────
 
@@ -242,7 +240,7 @@ impl malo_ident::MaloIdentHandler for MakodApiHandler {
                 "internal://malo-ident-callback",
                 payload,
             );
-            if let Err(e) = store.enqueue(&[msg]).await {
+            if let Err(e) = enqueue_callback(&store, msg).await {
                 settle_abandoned(&store, &inbox_key).await;
                 tracing::error!("outbox enqueue error: {e}");
                 return Err(energy_api::Error::Http {
@@ -259,6 +257,26 @@ impl malo_ident::MaloIdentHandler for MakodApiHandler {
             Ok(())
         }
     }
+}
+
+/// Enqueue the MaLo-ID callback for the outbox worker.
+async fn enqueue_callback(
+    store: &SlateDbStore,
+    msg: OutboxMessage,
+) -> Result<(), mako_engine::error::EngineError> {
+    #[cfg(test)]
+    if OUTBOX_FAULT.try_with(|f| *f).unwrap_or(false) {
+        return Err(mako_engine::error::EngineError::outbox(
+            "injected outbox fault",
+        ));
+    }
+    store.enqueue(&[msg]).await
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    /// Test-only fault point: while set, the MaLo-ID callback enqueue fails.
+    static OUTBOX_FAULT: bool;
 }
 
 /// Claim `key` for this request, mapping a store failure to a 500.
@@ -464,9 +482,9 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
     /// 2. Inbox idempotency guard — rejects duplicate `tx_id` values.
     /// 3. Converts the REST payload to a `DeviceChangeCommand::ReceiveRestOrder`.
     /// 4. Spawns a `WimDeviceChangeWorkflow` process.
-    /// 5. Registers the per-PID response deadline (BDEW WiM / BK6-24-174).
-    /// 6. Registers a correlated index under `tx_id` for later ERP lookup.
-    /// 7. Returns `Ok(())` → axum sends `202 Accepted`.
+    /// 5. Writes the per-PID response deadline (BDEW WiM / BK6-24-174) and
+    ///    the `tx_id` correlation key in the same batch as the events.
+    /// 6. Returns `Ok(())` → axum sends `202 Accepted`.
     fn on_anmeldung(
         &self,
         tx_id: String,
@@ -555,11 +573,6 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
     }
 }
 
-/// Spawn a new `WimDeviceChangeWorkflow` process for an inbound REST order
-/// and execute the first command.
-///
-/// Used by the WiM Order API (`/wimBestellung/v1/anmeldung/`).
-/// Registers a 5-Werktage deadline and a correlated index under `tx_id`.
 /// The business-answer Frist for the order this command opens.
 ///
 /// The MSB-Wechsel windows differ per Prüfidentifikator (BK6-24-174 WiM Teil 1):
@@ -601,6 +614,11 @@ fn device_change_window_label(command: &DeviceChangeCommand) -> &'static str {
     }
 }
 
+/// Spawn a `WimDeviceChangeWorkflow` process for an inbound REST order
+/// (`/wimBestellung/v1/anmeldung/`) and execute the first command.
+///
+/// Writes the per-PID answer deadline and the `tx_id` correlation key in the
+/// spawn's own batch.
 async fn spawn_device_change(
     store: SlateDbStore,
     tenant_id: TenantId,
@@ -612,71 +630,40 @@ async fn spawn_device_change(
     let fv = latest_format_version();
     let workflow_id = WorkflowId::new(DEVICE_CHANGE_WORKFLOW_NAME, fv);
 
-    let store_arc = std::sync::Arc::new(store.clone());
-    let process = mako_engine::process::Process::<
-        WimDeviceChangeWorkflow,
-        std::sync::Arc<SlateDbStore>,
-    >::new(
-        std::sync::Arc::clone(&store_arc),
-        tenant_id,
-        workflow_id.clone(),
-    );
-
-    let process_id = process.process_id();
-    let stream_id = process.stream_id().clone();
-    let identity = process.identity();
-
     // Business-answer Frist, sized from the order's own Prüfidentifikator —
     // 55039 → 3 WT, 55042 → 5 WT, 55051 → 7 WT, 55168 → 1 WT (BK6-24-174 WiM
     // Teil 1, Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2). This REST door has to agree
     // with the AS4 door; a flat 5 WT here would give the same order two
     // different deadlines depending on which transport it arrived on.
     //
-    // deadline_at_werktage computes 17:00 Europe/Berlin on the due Werktag,
-    // correctly handling CET/CEST transitions.
+    // deadline_at_werktage runs to the end of the due Werktag in
+    // Europe/Berlin, correctly handling CET/CEST transitions.
     let frist_wt = device_change_frist_wt(&command);
     let due_at = mako_fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
         frist_wt,
         mako_fristen::HolidayCalendar::BdewMaKo,
     );
-    let deadline = Deadline::new(
-        stream_id,
-        process_id,
+    let label = device_change_window_label(&command);
+    // Events, the Frist and the `tx_id` key in one write: the ERP's
+    // `wim.geraetewechsel.*` answer finds the process only by `tx_id`.
+    crate::commands_api::spawn_process::<WimDeviceChangeWorkflow>(
+        &std::sync::Arc::new(store),
         tenant_id,
         workflow_id,
-        device_change_window_label(&command),
-        due_at,
-    );
-    // Atomically persist events + deadline in one WriteBatch (F-043 fix).
-    // A crash between separate writes would lose the deadline permanently.
-    process
-        .execute_and_enqueue_with_deadlines(command, &[deadline])
-        .await?;
-
-    // Register correlated index so ERP commands can look up this process
-    // by tx_id via `ProcessRegistry::find_correlated`.
-    if let Err(e) = store
-        .as_process_registry()
-        .register_correlated(tenant_id, tx_id, process_id, identity)
-        .await
-    {
-        warn!(
-            tx_id,
-            process_id = %process_id,
-            error = %e,
-            "WiM Anmeldung: business-key registration failed \
-             (non-fatal — process spawned; ERP correlation will fail)"
-        );
-    }
-
-    Ok(process_id)
+        command,
+        &[(label, due_at)],
+        &[tx_id],
+    )
+    .await
 }
 
+/// Spawn a `WimSteuerungsauftragWorkflow` process for an inbound Control
+/// Measures order and execute the first command.
 ///
-/// Uses the latest BDEW format version from the compiled `edi-energy` registry.
-/// Also registers the Steuerungsauftrag's 5-Werktage confirmation deadline
-/// (BDEW WiM / BK6-24-174).
+/// Stamps the latest format version in force and writes the 5-Werktage
+/// confirmation deadline and the `tx_id` correlation key in the spawn's own
+/// batch.
 async fn spawn_steuerungsauftrag(
     store: SlateDbStore,
     tenant_id: TenantId,
@@ -688,62 +675,31 @@ async fn spawn_steuerungsauftrag(
     let fv = latest_format_version();
     let workflow_id = WorkflowId::new(STEUERUNGSAUFTRAG_WORKFLOW_NAME, fv);
 
-    let store_arc = std::sync::Arc::new(store.clone());
-    let process = mako_engine::process::Process::<
-        WimSteuerungsauftragWorkflow,
-        std::sync::Arc<SlateDbStore>,
-    >::new(
-        std::sync::Arc::clone(&store_arc),
-        tenant_id,
-        workflow_id.clone(),
-    );
-
-    let process_id = process.process_id();
-    let stream_id = process.stream_id().clone();
-    // Capture identity before consume-by-execute.
-    let identity = process.identity();
-
-    // The Steuerungsauftrag has its own flat 5-Werktage confirmation window —
+    // The API-Webdienste channel states no Frist for the Steuerungsauftrag; the
+    // 5 Werktage are mako's operating convention (`mako_wim::steuerungsauftrag`),
     // unrelated to the per-PID MSB-Wechsel Fristen above.
-    // deadline_at_werktage computes 17:00 Europe/Berlin on the due Werktag,
-    // correctly handling CET/CEST transitions.
+    // deadline_at_werktage runs to the end of the due Werktag in
+    // Europe/Berlin, correctly handling CET/CEST transitions.
     let due_at = mako_fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
         5,
         mako_fristen::HolidayCalendar::BdewMaKo,
     );
-    let deadline = Deadline::new(
-        stream_id,
-        process_id,
+    // Events, the Frist and the `tx_id` key in one write:
+    // `wim.steuerungsauftrag.bestaetigen` / `.ablehnen` find the process only
+    // by `tx_id`.
+    crate::commands_api::spawn_process::<WimSteuerungsauftragWorkflow>(
+        &std::sync::Arc::new(store),
         tenant_id,
         workflow_id,
-        mako_wim::steuerungsauftrag::STEUERUNGSAUFTRAG_DEADLINE_LABEL,
-        due_at,
-    );
-    // Atomically persist events + deadline in one WriteBatch (F-043 fix).
-    // A crash between separate writes would lose the deadline permanently.
-    process
-        .execute_and_enqueue_with_deadlines(command, &[deadline])
-        .await?;
-
-    // Register the process under the tx_id business key so that ERP commands
-    // `wim.steuerungsauftrag.bestaetigen` / `.ablehnen` can look it up via the
-    // `ProcessRegistry` correlated index.
-    if let Err(e) = store
-        .as_process_registry()
-        .register_correlated(tenant_id, tx_id, process_id, identity)
-        .await
-    {
-        warn!(
-            tx_id,
-            process_id = %process_id,
-            error = %e,
-            "Steuerungsauftrag: business-key registration failed \
-             (non-fatal — process was spawned; bestaetigen/ablehnen will fail until re-registered)"
-        );
-    }
-
-    Ok(process_id)
+        command,
+        &[(
+            mako_wim::steuerungsauftrag::STEUERUNGSAUFTRAG_DEADLINE_LABEL,
+            due_at,
+        )],
+        &[tx_id],
+    )
+    .await
 }
 
 /// The latest BDEW format version **in force today**, for stamping an outbound
@@ -806,6 +762,12 @@ pub fn build_app(
     trust_client_mp_id_header: bool,
 ) -> Router {
     let routes = router(handler)
+        // Innermost, so the handlers only ever see a request whose signature,
+        // when it carries one, verified.
+        .layer(axum::middleware::from_fn_with_state(
+            max_body_bytes,
+            content_signature_middleware,
+        ))
         .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
         // Below the auth layer, so the identity is in scope for the handlers
         // whether or not `makod` itself checks a bearer token.
@@ -820,6 +782,207 @@ pub fn build_app(
         )),
         None => routes,
     }
+}
+
+// ── Content signature (Inhaltsdatensicherung) ────────────────────────────────
+
+/// Header carrying the Base64 signature value (Regelungen zum Übertragungsweg
+/// für API-Webdienste 1.2, Kap. 3.3).
+pub const HEADER_BDEW_SIGNATURE: &str = "x-bdew-signature";
+/// Header carrying the Base64 signed digest `Hash(M)` (same chapter).
+pub const HEADER_BDEW_DIGEST: &str = "x-bdew-digest";
+/// Header carrying the signer's certificate, encoded as RFC 9440 §2.1 does for
+/// a TLS certificate (same chapter).
+pub const HEADER_BDEW_CERT: &str = "x-bdew-cert";
+
+/// Verify the content-layer signature of an inbound request before any handler
+/// sees it.
+///
+/// Regelungen zum Übertragungsweg für API-Webdienste 1.2, Kap. 3.3 signs the
+/// URI with its query, the RFC 8785 canonical payload and the
+/// `creationDateTime` / `transactionId` headers; the signature, the digest and
+/// the signer's certificate travel in [`HEADER_BDEW_SIGNATURE`],
+/// [`HEADER_BDEW_DIGEST`] and [`HEADER_BDEW_CERT`]. A request carrying a
+/// signature that does not verify against the certificate it names is refused
+/// with `401` — a forged or altered order never reaches the workflow.
+///
+/// What this checks and what it does not:
+///
+/// - The signature is checked against the public key of the certificate in
+///   [`HEADER_BDEW_CERT`]. That certificate's SM-PKI chain is not validated
+///   here; the mTLS-terminating proxy authenticates the caller.
+/// - The signed URI is rebuilt as `https://{Host}{path?query}`, the URL the
+///   caller addressed through the proxy.
+/// - A request carrying `initialTransactionId` is refused: the digest
+///   `energy_api::transport::content_security` computes does not include it.
+/// - A request carrying no signature at all passes with a warning.
+pub async fn content_signature_middleware(
+    axum::extract::State(max_body_bytes): axum::extract::State<usize>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    let refuse = |why: String| {
+        tracing::warn!(reason = %why, "API-Webdienste: content signature refused");
+        (
+            axum::http::StatusCode::UNAUTHORIZED,
+            format!("content signature refused: {why}"),
+        )
+            .into_response()
+    };
+    let headers = request.headers();
+    let one = |name: &str| mako_service::headers::single_str(headers, name);
+    let (signature, digest, cert) = match (
+        one(HEADER_BDEW_SIGNATURE),
+        one(HEADER_BDEW_DIGEST),
+        one(HEADER_BDEW_CERT),
+    ) {
+        (Ok(None), Ok(None), Ok(None)) => {
+            tracing::warn!(
+                path = %request.uri().path(),
+                "API-Webdienste: inbound request carries no content signature"
+            );
+            return next.run(request).await;
+        }
+        (Ok(Some(s)), Ok(Some(d)), Ok(Some(c))) => (s.to_owned(), d.to_owned(), c.to_owned()),
+        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
+            return refuse(format!("{} must appear at most once", e.name));
+        }
+        _ => {
+            return refuse(format!(
+                "{HEADER_BDEW_SIGNATURE}, {HEADER_BDEW_DIGEST} and {HEADER_BDEW_CERT} \
+                 travel together"
+            ));
+        }
+    };
+    if headers.contains_key("initialtransactionid") {
+        return refuse("a signature over initialTransactionId cannot be verified here".to_owned());
+    }
+    let (Ok(Some(creation_dt)), Ok(Some(tx_id)), Ok(Some(host))) =
+        (one("creationdatetime"), one("transactionid"), one("host"))
+    else {
+        return refuse("creationDateTime, transactionId and Host are signed inputs".to_owned());
+    };
+    let (creation_dt, tx_id) = (creation_dt.to_owned(), tx_id.to_owned());
+    let uri = format!(
+        "https://{host}{}",
+        request
+            .uri()
+            .path_and_query()
+            .map_or("/", axum::http::uri::PathAndQuery::as_str)
+    );
+    let key = match verifying_key_from_rfc9440(&cert) {
+        Ok(k) => k,
+        Err(e) => return refuse(e),
+    };
+
+    let (parts, body) = request.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, max_body_bytes).await else {
+        return refuse("the body could not be read".to_owned());
+    };
+    let canonical = if bytes.is_empty() {
+        Vec::new()
+    } else {
+        let parsed: serde_json::Value = match serde_json::from_slice(&bytes) {
+            Ok(v) => v,
+            Err(e) => return refuse(format!("the signed payload is not JSON: {e}")),
+        };
+        match energy_api::transport::content_security::canonical_json(&parsed) {
+            Ok(c) => c,
+            Err(e) => return refuse(e.to_string()),
+        }
+    };
+    if let Err(e) = energy_api::transport::content_security::verify_request(
+        &uri,
+        &canonical,
+        &creation_dt,
+        &tx_id,
+        &digest,
+        &signature,
+        &key,
+    ) {
+        return refuse(e.to_string());
+    }
+    let request = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
+    next.run(request).await
+}
+
+/// The verifying key of the certificate in an RFC 9440 §2.1 header value — the
+/// DER, standard Base64, between colons.
+fn verifying_key_from_rfc9440(
+    value: &str,
+) -> Result<energy_api::transport::content_security::ContentVerifyingKey, String> {
+    use base64::Engine as _;
+    let inner = value
+        .trim()
+        .strip_prefix(':')
+        .and_then(|v| v.strip_suffix(':'))
+        .ok_or_else(|| format!("{HEADER_BDEW_CERT} is not an RFC 9440 byte sequence"))?;
+    let der = base64::engine::general_purpose::STANDARD
+        .decode(inner)
+        .map_err(|e| format!("{HEADER_BDEW_CERT} Base64: {e}"))?;
+    let spki = subject_public_key_info(&der)
+        .ok_or_else(|| format!("{HEADER_BDEW_CERT} is not an X.509 certificate"))?;
+    // RFC 7468 §2: the Base64 body wraps at 64 characters.
+    let b64 = base64::engine::general_purpose::STANDARD.encode(spki);
+    let body: Vec<&str> = b64
+        .as_bytes()
+        .chunks(64)
+        .map(|c| std::str::from_utf8(c).unwrap_or_default())
+        .collect();
+    let pem = format!(
+        "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----\n",
+        body.join("\n")
+    );
+    energy_api::transport::content_security::verifying_key_from_pem(&pem).map_err(|e| e.to_string())
+}
+
+/// The `subjectPublicKeyInfo` of a DER X.509 certificate (RFC 5280 §4.1):
+/// `Certificate ::= SEQUENCE { tbsCertificate, … }`, and inside the
+/// `tbsCertificate` an optional `[0]` version, then serialNumber, signature,
+/// issuer, validity and subject before it.
+fn subject_public_key_info(der: &[u8]) -> Option<&[u8]> {
+    /// One DER TLV at the front of `b`: (tag, header length, total length).
+    fn tlv(b: &[u8]) -> Option<(u8, usize, usize)> {
+        let tag = *b.first()?;
+        let first = *b.get(1)?;
+        let (len, hdr) = if first < 0x80 {
+            (usize::from(first), 2)
+        } else {
+            let n = usize::from(first & 0x7f);
+            if n == 0 || n > 4 {
+                return None;
+            }
+            let mut len = 0usize;
+            for i in 0..n {
+                len = (len << 8) | usize::from(*b.get(2 + i)?);
+            }
+            (len, 2 + n)
+        };
+        let total = hdr.checked_add(len)?;
+        (total <= b.len()).then_some((tag, hdr, total))
+    }
+    let (tag, hdr, _) = tlv(der)?;
+    if tag != 0x30 {
+        return None;
+    }
+    let cert = &der[hdr..];
+    let (tag, hdr, total) = tlv(cert)?;
+    if tag != 0x30 {
+        return None;
+    }
+    let mut tbs = &cert[hdr..total];
+    if tbs.first() == Some(&0xa0) {
+        let (_, _, t) = tlv(tbs)?;
+        tbs = &tbs[t..];
+    }
+    // serialNumber, signature, issuer, validity, subject.
+    for _ in 0..5 {
+        let (_, _, t) = tlv(tbs)?;
+        tbs = &tbs[t..];
+    }
+    let (tag, _, t) = tlv(tbs)?;
+    (tag == 0x30).then(|| &tbs[..t])
 }
 
 /// Bearer/OIDC authentication state for the `:8090` API-Webdienste port.
@@ -913,4 +1076,227 @@ pub async fn webdienste_auth_middleware(
             .into_response();
     }
     next.run(request).await
+}
+
+#[cfg(test)]
+mod retry_tests {
+    //! A request whose work fails after its inbox claim must be processed when
+    //! the caller retries the same `transactionId`; one whose work completed
+    //! must answer the retry as a duplicate.
+    //!
+    //! The order is the whole mechanism: a handler that accepts the claim
+    //! before the work succeeds answers every retry of a failed request as a
+    //! duplicate of work that never happened, and the caller stops retrying.
+
+    use energy_api::server::control_measures::ControlMeasuresHandler as _;
+    use energy_api::server::malo_ident::MaloIdentHandler as _;
+    use energy_api::server::wim_order::WimOrderHandler as _;
+    use mako_engine::outbox::OutboxStore as _;
+    use mako_engine::registry::ProcessRegistry as _;
+
+    use super::*;
+
+    const TENANT: &str = "9900357000004";
+    const CALLER: &str = "9900001000001";
+    const TX: &str = "f81d4fae-7dec-11d0-a765-00a0c91e6bf6";
+
+    async fn store() -> SlateDbStore {
+        SlateDbStore::open_in_memory()
+            .await
+            .expect("open in-memory SlateDB")
+    }
+
+    fn handler(store: SlateDbStore) -> MakodApiHandler {
+        MakodApiHandler {
+            store,
+            tenant_id: TenantId::from_party_id(TENANT),
+        }
+    }
+
+    /// Every write to a fresh stream is refused, so a spawn fails in the
+    /// store, after the claim.
+    fn failing(store: &SlateDbStore) -> MakodApiHandler {
+        handler(store.clone().with_max_stream_events(0))
+    }
+
+    async fn processes_under(store: &SlateDbStore, key: &str) -> usize {
+        store
+            .as_process_registry()
+            .lookup_correlated(TenantId::from_party_id(TENANT), key)
+            .await
+            .expect("lookup")
+            .len()
+    }
+
+    fn location() -> energy_api::models::electricity::LocationId {
+        serde_json::from_value(serde_json::json!("E1234848431")).expect("NeLo")
+    }
+
+    fn control() -> energy_api::models::electricity::CommandControl {
+        serde_json::from_value(serde_json::json!({
+            "maximumPowerValue": "4.2",
+            "executionTimeFrom": "2026-09-01T00:00:00Z",
+        }))
+        .expect("CommandControl")
+    }
+
+    fn regular() -> energy_api::models::electricity::CommandRegular {
+        serde_json::from_value(serde_json::json!({
+            "executionTimeFrom": "2026-09-01T00:00:00Z",
+        }))
+        .expect("CommandRegular")
+    }
+
+    fn anmeldung() -> WimAnmeldungRequest {
+        serde_json::from_value(serde_json::json!({
+            "meloId": "DE0001234567890123456789012345678",
+            "netzbetreiberId": CALLER.parse::<i64>().expect("13 digits"),
+            "processDate": "2026-10-01",
+            "deviceCategory": "iMSys",
+        }))
+        .expect("WimAnmeldungRequest")
+    }
+
+    fn identification() -> IdentificationParameter {
+        serde_json::from_value(serde_json::json!({
+            "identificationDateTime": "2026-09-30T22:00:00Z",
+            "energyDirection": "consumption",
+            "identificationParameterAddress": {},
+        }))
+        .expect("IdentificationParameter")
+    }
+
+    /// Run `call` with the caller identity in scope. Pass an `async` block
+    /// that makes the handler call: the handlers read the identity when they
+    /// are called, not when their future is polled.
+    async fn as_caller<F: std::future::Future>(call: F) -> F::Output {
+        CLIENT_MP_ID.scope(Some(CALLER.to_owned()), call).await
+    }
+
+    #[tokio::test]
+    async fn konfiguration_is_processed_on_retry_after_a_failure() {
+        let store = store().await;
+        let first = as_caller(async {
+            failing(&store)
+                .on_konfiguration(TX.into(), String::new(), location(), control())
+                .await
+        })
+        .await;
+        assert!(first.is_err(), "the spawn failed, so the request failed");
+        assert_eq!(processes_under(&store, TX).await, 0);
+
+        as_caller(async {
+            handler(store.clone())
+                .on_konfiguration(TX.into(), String::new(), location(), control())
+                .await
+        })
+        .await
+        .expect("the retry is processed, not answered as a duplicate");
+        assert_eq!(processes_under(&store, TX).await, 1);
+
+        as_caller(async {
+            handler(store.clone())
+                .on_konfiguration(TX.into(), String::new(), location(), control())
+                .await
+        })
+        .await
+        .expect("a completed request answers its retry as a duplicate");
+        assert_eq!(processes_under(&store, TX).await, 1, "no second process");
+    }
+
+    #[tokio::test]
+    async fn initial_zustand_is_processed_on_retry_after_a_failure() {
+        let store = store().await;
+        let first = as_caller(async {
+            failing(&store)
+                .on_initial_zustand(TX.into(), String::new(), location(), regular())
+                .await
+        })
+        .await;
+        assert!(first.is_err());
+        assert_eq!(processes_under(&store, TX).await, 0);
+
+        as_caller(async {
+            handler(store.clone())
+                .on_initial_zustand(TX.into(), String::new(), location(), regular())
+                .await
+        })
+        .await
+        .expect("the retry is processed");
+        assert_eq!(processes_under(&store, TX).await, 1);
+
+        as_caller(async {
+            handler(store.clone())
+                .on_initial_zustand(TX.into(), String::new(), location(), regular())
+                .await
+        })
+        .await
+        .expect("duplicate");
+        assert_eq!(processes_under(&store, TX).await, 1);
+    }
+
+    #[tokio::test]
+    async fn wim_anmeldung_is_processed_on_retry_after_a_failure() {
+        let store = store().await;
+        let first = as_caller(async {
+            failing(&store)
+                .on_anmeldung(TX.into(), String::new(), anmeldung())
+                .await
+        })
+        .await;
+        assert!(first.is_err());
+        assert_eq!(processes_under(&store, TX).await, 0);
+
+        as_caller(async {
+            handler(store.clone())
+                .on_anmeldung(TX.into(), String::new(), anmeldung())
+                .await
+        })
+        .await
+        .expect("the retry is processed");
+        assert_eq!(processes_under(&store, TX).await, 1);
+
+        as_caller(async {
+            handler(store.clone())
+                .on_anmeldung(TX.into(), String::new(), anmeldung())
+                .await
+        })
+        .await
+        .expect("duplicate");
+        assert_eq!(processes_under(&store, TX).await, 1);
+    }
+
+    #[tokio::test]
+    async fn malo_ident_request_is_queued_on_retry_after_a_failure() {
+        let store = store().await;
+        let queued = |store: SlateDbStore| async move {
+            store.pending_now(100).await.expect("outbox").len()
+        };
+
+        let first = OUTBOX_FAULT
+            .scope(
+                true,
+                handler(store.clone()).on_request(
+                    TX.into(),
+                    String::new(),
+                    CALLER.into(),
+                    identification(),
+                ),
+            )
+            .await;
+        assert!(first.is_err(), "the enqueue failed, so the request failed");
+        assert_eq!(queued(store.clone()).await, 0);
+
+        handler(store.clone())
+            .on_request(TX.into(), String::new(), CALLER.into(), identification())
+            .await
+            .expect("the retry is processed");
+        assert_eq!(queued(store.clone()).await, 1);
+
+        handler(store.clone())
+            .on_request(TX.into(), String::new(), CALLER.into(), identification())
+            .await
+            .expect("duplicate");
+        assert_eq!(queued(store.clone()).await, 1, "no second callback");
+    }
 }

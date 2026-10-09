@@ -128,18 +128,16 @@ impl Default for Verbraucherinformationen {
 ///
 /// # Why this is on the context
 ///
-/// The engine prices a Marktlokation; it holds no customer master. So it used
-/// to name the recipient by the **MaLo alone** — a `Geschaeftspartner` carrying
-/// one `mako:externe_kunden_id` ZusatzAttribut and no name, no address. That is
-/// not a document § 14 UStG describes, and a BO4E consumer reading the stored
-/// `Rechnung` found no recipient at all, while the *same* invoice's EN 16931
-/// model carried the customer in full because the caller supplied it on a
-/// separate channel.
+/// The engine prices a Marktlokation; it holds no customer master. Naming the
+/// recipient by the **MaLo alone** is not a document § 14 UStG describes, and
+/// if only the EN 16931 model received the customer, a BO4E consumer reading
+/// the stored `Rechnung` would find no recipient while the *same* invoice's
+/// EN 16931 view named the customer in full.
 ///
-/// One source now: the caller that resolves the customer puts it here, and both
+/// One source: the caller that resolves the customer puts it here, and both
 /// maps read it. `None` still works — the document then names the
-/// Marktlokation, which is the documented degradation for an uncontracted MaLo
-/// rather than a failed run — but it is now the same degradation on both sides.
+/// Marktlokation, the documented degradation for an uncontracted MaLo rather
+/// than a failed run — and it is the same degradation on both sides.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rechnungsempfaenger {
@@ -161,6 +159,12 @@ pub struct Rechnungsempfaenger {
     /// USt-IdNr., where the customer has one (BT-48).
     #[serde(default)]
     pub vat_id: Option<String>,
+    /// Whether the Leistungsempfänger is a Unternehmer receiving for his
+    /// Unternehmen — the party § 14 Abs. 2 Satz 2 Nr. 1 UStG owes an
+    /// E-Rechnung. `None` when the contract does not say; see
+    /// [`crate::e_rechnung`].
+    #[serde(default)]
+    pub unternehmer: Option<bool>,
 }
 
 impl Rechnungsempfaenger {
@@ -340,7 +344,10 @@ impl InvoiceType {
     }
 }
 
-#[allow(clippy::derivable_impls)]
+#[expect(
+    clippy::derivable_impls,
+    reason = "the default is written out to show it is a deliberate value"
+)]
 impl Default for InvoiceType {
     fn default() -> Self {
         Self::Initial
@@ -455,6 +462,7 @@ impl CustomerKategorie {
 /// If consumption bill = EUR 1 600, Zahlbetrag = EUR 160 (balance due).
 /// If consumption bill = EUR 1 300, Zahlbetrag = EUR -140 (refund).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AbschlagDeduction {
     /// Payment date (shown on the invoice for §41 EnWG compliance).
     pub datum: time::Date,

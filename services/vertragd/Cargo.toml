@@ -1,6 +1,6 @@
 [package]
 name        = "vertragd"
-description = "B2B + B2C contract & customer management daemon for mako (Vertragsmanagement)"
+description = "Contract and customer daemon: supply contracts, Kündigungsfristen, GGV and aggregator contracts"
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
@@ -35,16 +35,16 @@ rubo4e        = { workspace = true }
 rust_decimal  = { workspace = true }
 sepa          = { workspace = true }
 tracing       = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow        = { workspace = true }
-thiserror     = { workspace = true }
 secrecy       = { version = "0.10" }
 rmcp          = { workspace = true, features = ["transport-streamable-http-server","transport-io"] }
 tokio-util    = { workspace = true }
-hmac          = { version = "0.12", features = ["std"] }
-sha2          = "0.10"
 
 [dev-dependencies]
+mako-service = { path = "../../crates/mako-service", features = ["testing"] }
 toml       = "0.8"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+
+[lints]
+workspace = true

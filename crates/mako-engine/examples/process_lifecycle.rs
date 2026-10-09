@@ -11,15 +11,15 @@
 //!    — writes state to `InMemorySnapshotStore`, then reconstructs with O(k)
 //!    tail replay instead of O(n) full replay.
 //!
-//! 3. **`execute_with_retry`** — demonstrates the automatic version-conflict
-//!    retry loop for commands that may race with concurrent writers.
+//! 3. **`RunOptions::attempts`** — the version-conflict retry `Process::run`
+//!    applies to commands that may race with concurrent writers.
 //!
 //! 4. **Error classification via `EngineError::is_*`** — `is_workflow_error()`,
 //!    `as_workflow_error()`, and `is_invalid_state()` for clean error routing
 //!    without exhaustive `match` arms.
 //!
 //! 5. **`process.workflow_id()` / `process.tenant_id()` accessors** — used to
-//!    build a `CommandContext` for `execute_with` without threading IDs.
+//!    build a `CommandContext` for `RunOptions::context` without threading IDs.
 //!
 //! ## Run
 //!
@@ -27,6 +27,7 @@
 //! cargo run --example process_lifecycle -p mako-engine
 //! ```
 
+use mako_engine::process::RunOptions;
 use mako_engine::{
     builder::EngineBuilder,
     error::{EngineError, WorkflowError},
@@ -193,16 +194,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register
     let envs = process
-        .execute(ActivationCommand::Register {
-            name: "Messstelle 12345".to_owned(),
-        })
+        .run(
+            ActivationCommand::Register {
+                name: "Messstelle 12345".to_owned(),
+            },
+            RunOptions::new(),
+        )
         .await?;
     for env in &envs {
         println!("  ✓ {} (seq {})", env.event_type, env.sequence_number);
     }
 
     // Activate — after this we have 2 events, SNAP_INTERVAL = 2 → snapshot fires.
-    let envs = process.execute(ActivationCommand::Activate).await?;
+    let envs = process
+        .run(ActivationCommand::Activate, RunOptions::new())
+        .await?;
     for env in &envs {
         println!("  ✓ {} (seq {})", env.event_type, env.sequence_number);
     }
@@ -246,27 +252,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("  ✓ Event count: {}", resumed.event_count().await?);
 
-    // Deactivate using execute_with (propagates tenant / workflow from accessors).
+    // Deactivate with an explicit context (tenant / workflow from accessors).
     let cmd_ctx = CommandContext::new(
         resumed.tenant_id(),
         resumed.process_id(),
         resumed.workflow_id().clone(),
     );
     let envs = resumed
-        .execute_with(
+        .run(
             ActivationCommand::Deactivate {
                 reason: "Planned maintenance".to_owned(),
             },
-            cmd_ctx,
+            RunOptions::new().context(cmd_ctx),
         )
         .await?;
     for env in &envs {
         println!("  ✓ {} (seq {})", env.event_type, env.sequence_number);
     }
 
-    // ── Phase 3: execute_with_retry ───────────────────────────────────────────
+    // ── Phase 3: retry on version conflict ────────────────────────────────────
     println!();
-    println!("Phase 3: execute_with_retry — automatic version-conflict retry");
+    println!("Phase 3: RunOptions::attempts — automatic version-conflict retry");
     println!("─────────────────────────────────────────────────────────────");
 
     // Create a second process to demonstrate retry. After one Register it will
@@ -276,15 +282,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         TenantId::new(),
         WorkflowId::new("activation", "FV2025-04-01"),
     );
-    p2.execute(ActivationCommand::Register {
-        name: "P2-Messstelle".to_owned(),
-    })
+    p2.run(
+        ActivationCommand::Register {
+            name: "P2-Messstelle".to_owned(),
+        },
+        RunOptions::new(),
+    )
     .await?;
     let envs = p2
-        .execute_with_retry(ActivationCommand::Activate, 3)
+        .run(ActivationCommand::Activate, RunOptions::new().attempts(3))
         .await?;
     println!(
-        "  ✓ execute_with_retry succeeded (max_attempts=3): {} at seq {}",
+        "  ✓ run succeeded (attempts=3): {} at seq {}",
         envs[0].event_type, envs[0].sequence_number
     );
 
@@ -295,7 +304,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Activate on an already-Inactive process → InvalidState workflow error.
     let err: EngineError = resumed
-        .execute(ActivationCommand::Activate)
+        .run(ActivationCommand::Activate, RunOptions::new())
         .await
         .unwrap_err();
 
@@ -338,7 +347,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Final state  : {}", final_state.status.as_str());
     println!("  Total events : {total_events}");
     println!("  Checks passed: process resumption, snapshot-accelerated replay,");
-    println!("                 execute_with_retry, error classification.");
+    println!("                 RunOptions::attempts, error classification.");
     println!("══════════════════════════════════════════════════════════════════");
 
     Ok(())

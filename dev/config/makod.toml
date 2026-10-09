@@ -1,0 +1,37 @@
+# makod.toml — local development: `just dev makod` starts makod with this file.
+# The event store is in memory (lost on restart), authorization is the built-in
+# permit-all baseline, and the operator is one synthetic NB/LF/MSB identity.
+# DO NOT use in production.
+#
+# Every key has a flag and a `MAKOD_*` variable; `makod --help` lists them.
+
+[authz]
+permit_all = true
+
+[logging]
+level  = "info"
+format = "pretty"
+
+[storage]
+allow_volatile = true
+
+[http]
+addr = "127.0.0.1:8080"
+# The HTTP port submits commands, so makod refuses to open it without a key.
+# The other dev configs call makod with `dev-makod-key`; agentd's MCP client
+# presents `dev-mcp-key`.
+auth_keys = ["dev=dev-makod-key", "agentd=dev-mcp-key"]
+
+[[party]]
+mp_id   = "9900357000004"
+roles   = ["NB", "LF", "MSB"]
+primary = true
+
+[erp]
+webhook_url = "http://127.0.0.1:8180/api/v1/events"
+
+# No AS4 key material in dev: outbound EDIFACT is not delivered, and inbound AS4
+# signatures are not checked against a trust anchor.
+[as4]
+allow_no_signing      = true
+allow_no_trust_anchor = true

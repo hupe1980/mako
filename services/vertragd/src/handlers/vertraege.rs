@@ -575,8 +575,10 @@ pub async fn kuendigen(
 
 /// `POST /api/v1/vertraege/{id}/widerruf-kuendigung` — withdraw a Kündigung.
 ///
-/// Allowed while the Lieferende is still ahead. The in-flight Lieferende UTILMD
-/// is the operator's to cancel in `processd`; the response says so.
+/// Allowed while the Lieferende is still ahead. The queued Lieferende UTILMD
+/// and Schlussablesung are parked in the same transaction; one that already
+/// reached `processd` is the operator's to cancel there, and the response
+/// names its component in `lieferende_bereits_versandt`.
 pub async fn widerruf_kuendigung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -585,14 +587,17 @@ pub async fn widerruf_kuendigung(
 ) -> ApiResult<Json<serde_json::Value>> {
     authorize(&enforcer, &claims, "kuendigen-vertrag", ctx.tenant())?;
     let mut tx = ctx.pool.begin().await.map_err(anyhow_from)?;
-    if let Err(e) = pg::widerruf_kuendigung(&mut tx, id, ctx.tenant()).await {
-        let msg = e.to_string();
-        return Err(if msg.contains("not found") {
-            ApiError::NotFound
-        } else {
-            ApiError::conflict(msg)
-        });
-    }
+    let outcome = match pg::widerruf_kuendigung(&mut tx, id, ctx.tenant()).await {
+        Ok(o) => o,
+        Err(e) => {
+            let msg = e.to_string();
+            return Err(if msg.contains("not found") {
+                ApiError::NotFound
+            } else {
+                ApiError::conflict(msg)
+            });
+        }
+    };
     let ce = build_cloud_event(
         mako_events::vertrag::KUENDIGUNG_WIDERRUFEN,
         id,
@@ -603,11 +608,19 @@ pub async fn widerruf_kuendigung(
         .await
         .map_err(|e| ApiError::Internal(e.into()))?;
     tx.commit().await.map_err(anyhow_from)?;
+    let versandt = &outcome.lieferende_bereits_versandt;
     ok(serde_json::json!({
         "vertrag_id": id,
         "status": "AKTIV",
-        "message": "Kündigung widerrufen — ein bereits versandtes Lieferende-UTILMD \
-                    ist über processd zu stornieren",
+        // The queued Lieferende and Schlussablesung are parked; only one that
+        // already reached processd needs the operator.
+        "lieferende_bereits_versandt": versandt,
+        "message": if versandt.is_empty() {
+            "Kündigung widerrufen — kein Lieferende-UTILMD hatte die Warteschlange verlassen"
+        } else {
+            "Kündigung widerrufen — das bereits versandte Lieferende-UTILMD ist über \
+             processd zu stornieren"
+        },
     }))
 }
 
@@ -912,7 +925,8 @@ pub async fn put_preisgarantie(
     let bis = canonical
         .pointer("/zeitlicheGueltigkeit/enddatum")
         .and_then(serde_json::Value::as_str)
-        .and_then(parse_iso_date);
+        .map(|s| mako_service::dates::parse_iso_date("zeitlicheGueltigkeit.enddatum", s))
+        .transpose()?;
 
     let mut tx = ctx.pool.begin().await.map_err(anyhow_from)?;
     if !pg::upsert_preisgarantie(&mut *tx, vertrag_id, ctx.tenant(), &canonical, bis)
@@ -952,38 +966,6 @@ pub async fn get_preisgarantie(
         .ok_or(ApiError::NotFound)
 }
 
-/// Parse the date prefix of a BO4E date or date-time string.
-fn parse_iso_date(s: &str) -> Option<Date> {
-    let head: String = s.chars().take(10).collect();
-    Date::parse(&head, &time::format_description::well_known::Iso8601::DATE).ok()
-}
-
 fn anyhow_from(e: sqlx::Error) -> ApiError {
     ApiError::Internal(anyhow::Error::new(e))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_iso_date;
-    use time::macros::date;
-
-    #[test]
-    fn a_plain_date_parses() {
-        assert_eq!(parse_iso_date("2027-06-30"), Some(date!(2027 - 06 - 30)));
-    }
-
-    #[test]
-    fn a_date_time_yields_its_date() {
-        // BO4E serialises `zeitlicheGueltigkeit` as a date-time in some
-        // producers; taking the date prefix keeps the guard working for both.
-        assert_eq!(
-            parse_iso_date("2027-06-30T00:00:00Z"),
-            Some(date!(2027 - 06 - 30))
-        );
-    }
-
-    #[test]
-    fn nonsense_is_none_rather_than_a_wrong_date() {
-        assert_eq!(parse_iso_date("bald"), None);
-    }
 }

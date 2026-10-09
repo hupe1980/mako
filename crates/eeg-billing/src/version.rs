@@ -246,3 +246,185 @@ pub const SECT51B_GENEHMIGT_AB: time::Date = time::macros::date!(2025 - 09 - 18)
 pub fn sect51b_anwendbar(periodenbeginn: Option<time::Date>) -> bool {
     periodenbeginn.is_some_and(|d| d >= SECT51B_GENEHMIGT_AB)
 }
+
+// ── Beihilfevorbehalt for every Teil-3 payment from 01.01.2027 ───────────────
+
+/// The last supply day the European Commission's state-aid approval of the
+/// EEG 2023 covers: **31 December 2026**.
+///
+/// BT-Drs. 21/7867, Begründung zu § 104 EEG 2027: „Der Genehmigungsvorbehalt
+/// ist weit gestaltet, weil die Beihilfegenehmigung für das EEG 2023 bis zum
+/// 31. Dezember 2026 befristet ist. Es sind also auch solche
+/// beihilferelevanten Bestimmungen unter Beihilfevorbehalt zu stellen, die
+/// durch das EEG 2027 nicht angepasst werden." § 104 Abs. 1 of the Entwurf
+/// lets the Bestimmungen des Teils 3 „erst nach der beihilferechtlichen
+/// Genehmigung durch die Europäische Kommission und nur nach Maßgabe dieser
+/// Genehmigung" be applied; Abs. 2 has the BMWE announce it in the
+/// Bundesanzeiger.
+pub const EEG2023_BEIHILFEGENEHMIGUNG_BIS: time::Date = time::macros::date!(2026 - 12 - 31);
+
+/// A recorded state-aid approval of the Commission that opens Teil-3 payments
+/// for the supply periods it covers.
+///
+/// The scope is recorded as the decision states it. A decision „nach Maßgabe"
+/// of conditions is still one record; whether a given rule lies inside its
+/// scope is read off `umfang` by the operator, not inferred here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+pub struct Beihilfegenehmigung {
+    /// When the decision reached the Bundesregierung — the date the
+    /// Begründung zu § 104 Abs. 2 calls „zeitlich relevant".
+    pub eingang: time::Date,
+    /// First supply day the decision covers.
+    pub gilt_ab: time::Date,
+    /// Last supply day the decision covers, if it is limited.
+    pub gilt_bis: Option<time::Date>,
+    /// The Bundesanzeiger notice (§ 104 Abs. 2).
+    pub bundesanzeiger: String,
+    /// The scheme and scope as the decision states them.
+    pub umfang: String,
+}
+
+/// Whether a Teil-3 payment for a supply period may be applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Beihilfevorbehalt<'a> {
+    /// The period lies inside the EEG 2023 approval.
+    Eeg2023Genehmigt,
+    /// A recorded approval covers the period.
+    Genehmigt(&'a Beihilfegenehmigung),
+    /// No approval covers the period — or the period is unknown.
+    Offen,
+}
+
+impl Beihilfevorbehalt<'_> {
+    /// `true` unless the payment is under the open reservation.
+    #[must_use]
+    pub const fn anwendbar(&self) -> bool {
+        !matches!(self, Self::Offen)
+    }
+}
+
+/// The Beihilfevorbehalt for the supply period starting `periodenbeginn`.
+///
+/// Keyed on the supply period, like [`sect51b_anwendbar`]: a Gutschrift issued
+/// in 2027 for December 2026 settles a supply the EEG 2023 approval covers. An
+/// unknown period is [`Beihilfevorbehalt::Offen`] — a payment under a
+/// reservation is not made on the strength of not knowing when the supply
+/// happened.
+#[must_use]
+pub fn beihilfevorbehalt(
+    periodenbeginn: Option<time::Date>,
+    genehmigungen: &[Beihilfegenehmigung],
+) -> Beihilfevorbehalt<'_> {
+    let Some(d) = periodenbeginn else {
+        return Beihilfevorbehalt::Offen;
+    };
+    if d <= EEG2023_BEIHILFEGENEHMIGUNG_BIS {
+        return Beihilfevorbehalt::Eeg2023Genehmigt;
+    }
+    genehmigungen
+        .iter()
+        .find(|g| g.gilt_ab <= d && g.gilt_bis.is_none_or(|bis| d <= bis))
+        .map_or(Beihilfevorbehalt::Offen, Beihilfevorbehalt::Genehmigt)
+}
+
+// ── The Fassung of a payment period ──────────────────────────────────────────
+
+/// The EEG Fassung that governs a **payment period** — distinct from
+/// [`EegGesetz`], the plant's vintage.
+///
+/// The vintage still decides § 52 and the § 100 Übergangsbestimmungen; the
+/// Fassung decides which statute a reduction of the anzulegender Wert is
+/// read from, because the same § number carries a different rule in another
+/// Fassung. Only Fassungen read from their text are tabled; a period outside
+/// them has none, and a settlement that needs one is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Fassung {
+    /// EEG 2023, in force from 01.01.2023; tabled to the last day its state-aid
+    /// approval covers, [`EEG2023_BEIHILFEGENEHMIGUNG_BIS`].
+    Eeg2023,
+}
+
+/// First supply day of the EEG 2023.
+const EEG2023_AB: time::Date = time::macros::date!(2023 - 01 - 01);
+
+impl Fassung {
+    /// The Fassung governing the payment period starting `periodenbeginn`, or
+    /// `None` where none is tabled.
+    #[must_use]
+    pub fn fuer_periode(periodenbeginn: Option<time::Date>) -> Option<Self> {
+        let d = periodenbeginn?;
+        (EEG2023_AB..=EEG2023_BEIHILFEGENEHMIGUNG_BIS)
+            .contains(&d)
+            .then_some(Self::Eeg2023)
+    }
+
+    /// The suffix a § is cited with in this Fassung — `"EEG 2023"`.
+    #[must_use]
+    pub const fn zitat(self) -> &'static str {
+        match self {
+            Self::Eeg2023 => "EEG 2023",
+        }
+    }
+}
+
+#[cfg(test)]
+mod beihilfe_tests {
+    use super::*;
+    use time::macros::date;
+
+    fn genehmigung() -> Beihilfegenehmigung {
+        Beihilfegenehmigung {
+            eingang: date!(2027 - 02 - 10),
+            gilt_ab: date!(2027 - 01 - 01),
+            gilt_bis: None,
+            bundesanzeiger: "BAnz AT (Fixture)".to_owned(),
+            umfang: "EEG 2027 Teil 3".to_owned(),
+        }
+    }
+
+    /// December 2026 is inside the EEG 2023 approval; January 2027 is not, and
+    /// stays under the reservation until an approval is recorded.
+    #[test]
+    fn january_2027_is_reserved_until_an_approval_is_recorded() {
+        assert_eq!(
+            beihilfevorbehalt(Some(date!(2026 - 12 - 01)), &[]),
+            Beihilfevorbehalt::Eeg2023Genehmigt
+        );
+        assert_eq!(
+            beihilfevorbehalt(Some(date!(2027 - 01 - 01)), &[]),
+            Beihilfevorbehalt::Offen
+        );
+        let g = [genehmigung()];
+        assert_eq!(
+            beihilfevorbehalt(Some(date!(2027 - 01 - 01)), &g),
+            Beihilfevorbehalt::Genehmigt(&g[0])
+        );
+        assert_eq!(beihilfevorbehalt(None, &g), Beihilfevorbehalt::Offen);
+    }
+
+    /// A limited approval does not cover a period after it.
+    #[test]
+    fn a_limited_approval_ends_where_it_says() {
+        let g = [Beihilfegenehmigung {
+            gilt_bis: Some(date!(2027 - 06 - 30)),
+            ..genehmigung()
+        }];
+        assert!(beihilfevorbehalt(Some(date!(2027 - 06 - 01)), &g).anwendbar());
+        assert!(!beihilfevorbehalt(Some(date!(2027 - 07 - 01)), &g).anwendbar());
+    }
+
+    /// The Fassung follows the payment period, not the plant.
+    #[test]
+    fn the_fassung_follows_the_payment_period() {
+        assert_eq!(
+            Fassung::fuer_periode(Some(date!(2026 - 12 - 01))),
+            Some(Fassung::Eeg2023)
+        );
+        assert_eq!(Fassung::fuer_periode(Some(date!(2027 - 01 - 01))), None);
+        assert_eq!(Fassung::fuer_periode(Some(date!(2022 - 12 - 01))), None);
+        assert_eq!(Fassung::fuer_periode(None), None);
+    }
+}

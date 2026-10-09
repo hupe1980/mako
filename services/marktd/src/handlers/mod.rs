@@ -1,4 +1,7 @@
-#![allow(clippy::type_complexity)]
+#![expect(
+    clippy::type_complexity,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 //! Axum handler utilities shared across all endpoint modules.
 //!
 //! - `Claims` — JWT bearer extraction via `FromRequestParts`

@@ -63,8 +63,8 @@
 //!   LF-Zuordnung zu einer erzeugenden Marktlokation", SD Fälle 1–4
 //! - **EDI@Energy EBD 4.3** Kap. 6.50–6.53 — `E_0603`–`E_0606`
 //! - **UTILMD AHB Strom 2.1/2.2** — message layout
-//! - **APERAK AHB 1.0 § 2.4.1** — the separate technical acknowledgement,
-//!   45 minutes on a Werktag (Sonntag 12:00 for a Saturday arrival)
+//! - **APERAK AHB 1.1 § 2.4.1** — the separate technical acknowledgement,
+//!   45 minutes on every day but Samstag (Sonntag 12:00 for a Saturday arrival)
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -139,15 +139,6 @@ pub enum AnkuendigungZuordnungLfEvent {
     },
     /// Supply location assignment acknowledged — process complete.
     Zugeordnet,
-    /// APERAK 29001 dispatched for technical processing failure.
-    AperakFehlerDispatched {
-        /// APERAK PID sent.
-        aperak_pid: Pruefidentifikator,
-        /// Error reason included in the APERAK.
-        reason: String,
-        /// Reference ID of the outbound APERAK message.
-        outbound_ref: MessageRef,
-    },
     /// Process rejected due to validation failure or deadline expiry.
     Rejected {
         /// Human-readable reason.
@@ -169,7 +160,6 @@ impl EventPayload for AnkuendigungZuordnungLfEvent {
             Self::ValidationPassed { .. } => "AnkuendigungZuordnungLfValidationPassed",
             Self::AntwortGesendet { .. } => "AnkuendigungZuordnungLfAntwortGesendet",
             Self::Zugeordnet => "AnkuendigungZuordnungLfZugeordnet",
-            Self::AperakFehlerDispatched { .. } => "AnkuendigungZuordnungLfAperakFehlerDispatched",
             Self::Rejected { .. } => "AnkuendigungZuordnungLfRejected",
             Self::DeadlineExpired { .. } => "AnkuendigungZuordnungLfDeadlineExpired",
         }
@@ -235,6 +225,19 @@ pub enum AnkuendigungZuordnungLfState {
         /// Human-readable reason.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// GPKE Teil 2 Kap. 2.4.2 Prozessschritt 3 has the NB assign the LFN „aufgrund fehlender Antwort" when the LFN does not answer in time — an act of the NB, which reaches this process as the NB's own message, so the lapse itself decides nothing here. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<AnkuendigungZuordnungLfState>,
+    },
 }
 
 impl AnkuendigungZuordnungLfState {
@@ -248,6 +251,16 @@ impl AnkuendigungZuordnungLfState {
             Self::AntwortGesendet { .. } => "AntwortGesendet",
             Self::Zugeordnet(_) => "Zugeordnet",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -255,6 +268,7 @@ impl AnkuendigungZuordnungLfState {
     #[must_use]
     pub fn data(&self) -> Option<&AnkuendigungZuordnungLfData> {
         match self {
+            Self::FristAbgelaufen { offen, .. } => offen.data(),
             Self::Eingegangen(d) | Self::ValidationPassed(d) | Self::Zugeordnet(d) => Some(d),
             Self::AntwortGesendet { data, .. } => Some(data),
             Self::New | Self::Rejected { .. } => None,
@@ -302,13 +316,6 @@ pub enum AnkuendigungZuordnungLfCommand {
     },
     /// Confirm that the assignment has been acknowledged and the process is complete.
     ZuordnungBestaetigen,
-    /// Dispatch APERAK 29001 for technical processing failure.
-    DispatchAperakFehler {
-        /// Error reason.
-        reason: String,
-        /// Outbound APERAK message reference.
-        outbound_ref: MessageRef,
-    },
     /// A registered deadline fired; close the process.
     TimeoutExpired {
         /// Unique deadline ID.
@@ -338,29 +345,43 @@ impl CommandPayload for AnkuendigungZuordnungLfCommand {}
 /// ```
 pub struct GpkeAnkuendigungZuordnungLfWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the LFN still owes its answer to the
+/// Ankündigung (`Eingegangen`, `ValidationPassed`).
+fn window_open(label: &str, state: &AnkuendigungZuordnungLfState) -> bool {
+    label == ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL
+        && matches!(
+            state,
+            AnkuendigungZuordnungLfState::Eingegangen(_)
+                | AnkuendigungZuordnungLfState::ValidationPassed(_)
+        )
+}
+
 impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
     type State = AnkuendigungZuordnungLfState;
     type Event = AnkuendigungZuordnungLfEvent;
     type Command = AnkuendigungZuordnungLfCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL];
+
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (
-                ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL,
-                AnkuendigungZuordnungLfState::Eingegangen(_),
-            )
-            | (
-                ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL,
-                AnkuendigungZuordnungLfState::ValidationPassed(_),
-            ) => Some(AnkuendigungZuordnungLfCommand::TimeoutExpired {
+        window_open(deadline.label(), state).then(|| {
+            AnkuendigungZuordnungLfCommand::TimeoutExpired {
                 deadline_id: deadline.deadline_id(),
                 label: deadline.label().into(),
-            }),
-            _ => None,
-        }
+            }
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            AnkuendigungZuordnungLfState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             AnkuendigungZuordnungLfEvent::AnkuendigungErhalten {
                 location_id,
@@ -413,22 +434,20 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                 }
                 other => other,
             },
-            AnkuendigungZuordnungLfEvent::AperakFehlerDispatched { reason, .. } => {
-                AnkuendigungZuordnungLfState::Rejected {
-                    reason: format!("APERAK 29001: {reason}"),
-                }
-            }
             AnkuendigungZuordnungLfEvent::Rejected { reason } => {
                 AnkuendigungZuordnungLfState::Rejected {
                     reason: reason.clone(),
                 }
             }
             AnkuendigungZuordnungLfEvent::DeadlineExpired { label, .. } => match state {
-                AnkuendigungZuordnungLfState::Zugeordnet(_)
-                | AnkuendigungZuordnungLfState::Rejected { .. } => state,
-                _ => AnkuendigungZuordnungLfState::Rejected {
-                    reason: format!("deadline expired: {label}"),
-                },
+                AnkuendigungZuordnungLfState::Eingegangen(_)
+                | AnkuendigungZuordnungLfState::ValidationPassed(_) => {
+                    AnkuendigungZuordnungLfState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
+                }
+                other => other,
             },
         }
     }
@@ -437,6 +456,10 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             AnkuendigungZuordnungLfCommand::ReceiveAnkuendigung {
                 pid,
@@ -478,8 +501,8 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                     events.push(AnkuendigungZuordnungLfEvent::ValidationPassed {
                         message_ref: message_ref.clone(),
                     });
-                    // F-038: APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.0 §2.4.
-                    // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
+                    // APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.1 §2.4.
+                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
                     let outbox = vec![
                         // The business notification. `processd`'s LF module
                         // decides this process, and it only ever sees a message
@@ -508,8 +531,8 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                     events.push(AnkuendigungZuordnungLfEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
-                    // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
+                    // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
                             receiver_gln.as_str(),
@@ -577,38 +600,15 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                 Ok(vec![AnkuendigungZuordnungLfEvent::Zugeordnet].into())
             }
 
-            AnkuendigungZuordnungLfCommand::DispatchAperakFehler {
-                reason,
-                outbound_ref,
-            } => {
-                match state {
-                    AnkuendigungZuordnungLfState::Eingegangen(_)
-                    | AnkuendigungZuordnungLfState::ValidationPassed(_) => {}
-                    _ => {
-                        return Err(WorkflowError::invalid_state(
-                            "Eingegangen or ValidationPassed",
-                            state.label(),
-                        ));
-                    }
+            AnkuendigungZuordnungLfCommand::TimeoutExpired { deadline_id, label } => {
+                if !window_open(&label, lapsed) {
+                    return Ok(vec![].into());
                 }
-                let aperak_pid = Pruefidentifikator::new(29_001)
-                    .map_err(|e| WorkflowError::rejected(e.clone()))?;
-                Ok(vec![AnkuendigungZuordnungLfEvent::AperakFehlerDispatched {
-                    aperak_pid,
-                    reason,
-                    outbound_ref,
-                }]
-                .into())
-            }
-
-            AnkuendigungZuordnungLfCommand::TimeoutExpired { deadline_id, label } => match state {
-                AnkuendigungZuordnungLfState::Zugeordnet(_)
-                | AnkuendigungZuordnungLfState::Rejected { .. } => Ok(vec![].into()),
-                _ => Ok(
+                Ok(
                     vec![AnkuendigungZuordnungLfEvent::DeadlineExpired { deadline_id, label }]
                         .into(),
-                ),
-            },
+                )
+            }
         }
     }
 }
@@ -859,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    fn deadline_in_eingegangen_closes_process() {
+    fn deadline_in_eingegangen_is_a_frist_breach() {
         // Construct Eingegangen state directly (bypass handle to skip validation).
         let eingegangen = AnkuendigungZuordnungLfState::Eingegangen(AnkuendigungZuordnungLfData {
             location_id: malo("51238696781"),
@@ -880,8 +880,8 @@ mod tests {
         .unwrap();
         let state = apply_all(eingegangen, &out.events);
         assert!(
-            matches!(state, AnkuendigungZuordnungLfState::Rejected { .. }),
-            "deadline in Eingegangen must close process as Rejected"
+            matches!(state, AnkuendigungZuordnungLfState::FristAbgelaufen { .. }),
+            "a lapse of the LFN's own answer window is a Frist breach, not a rejection"
         );
     }
 
@@ -905,7 +905,7 @@ mod tests {
     }
 
     #[test]
-    fn deadline_in_validation_passed_closes_process() {
+    fn deadline_in_validation_passed_is_a_frist_breach() {
         let out = GpkeAnkuendigungZuordnungLfWorkflow::handle(
             &AnkuendigungZuordnungLfState::New,
             ankuendigung_cmd(true),
@@ -928,8 +928,8 @@ mod tests {
         .unwrap();
         let state = apply_all(state, &out.events);
         assert!(
-            matches!(state, AnkuendigungZuordnungLfState::Rejected { .. }),
-            "deadline in ValidationPassed must close process as Rejected"
+            matches!(state, AnkuendigungZuordnungLfState::FristAbgelaufen { .. }),
+            "a lapse of the LFN's own answer window is a Frist breach, not a rejection"
         );
     }
 

@@ -180,8 +180,6 @@ pub fn derive_pflichtverstoesse(
     }
 
     // ── Nr. 9 — §21c Zuordnung/Wechsel not notified ──────────────────────────
-    // The registry has carried an index for exactly this predicate since the
-    // column was added, and nothing ever queried it.
     if anlage.last_veraeusserungsform_switch.is_some()
         && anlage.veraeusserungsform_notification_sent_at.is_none()
     {

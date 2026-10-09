@@ -53,7 +53,7 @@ Fehlermeldung and `29002` Anerkennungsmeldung.
   vorhanden`, `mehr als einmal vorhanden`).
 - `Profile::skeleton` generates the minimal message a column admits; every
   Anwendungsfall's skeleton validating against its own column is the test that
-  extraction and validator agree (`tests/skeletons.rs`).
+  extraction and validator agree (`tests/it/skeletons.rs`).
 - `Profile::pruefschablone(pid)` prints the column for a reader.
 
 ## Versioning

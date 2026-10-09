@@ -1,0 +1,19 @@
+# Planted fixture for `cargo xtask check-clippy-bans`: one use of every item the
+# workspace `clippy.toml` disallows. A workspace of its own (the empty table
+# below) because it exists to fail clippy; clippy's upward search for
+# `clippy.toml` still reaches the repository root, so it is linted under
+# exactly the configuration the workspace is.
+[workspace]
+
+[package]
+name    = "clippy-fixtures"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+chrono       = { version = "0.4", default-features = false, features = ["clock"] }
+num-traits   = "0.2"
+rust_decimal = "1"
+sqlx         = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
+tokio        = { version = "1", features = ["rt"] }

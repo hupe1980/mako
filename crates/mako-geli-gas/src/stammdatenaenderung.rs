@@ -35,7 +35,7 @@
 //! - **GeLiGas AWH V1.2 (26.03.2026)** § 4.3 (Stammdatenänderung), § 4.3.2 Nr. 2/4 (Frist)
 //! - **UTILMD AHB Gas 1.1** — object → PID map
 //! - **EBD 4.2** §13.10–13.13 (E_3010–E_3013, codes E15/E13/E17/…)
-//! - **APERAK AHB 1.0** — Gas Folgeprozess APERAK (nächster Werktag 12:00)
+//! - **APERAK AHB 1.1** — Gas Folgeprozess APERAK (nächster Werktag 12:00)
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -46,10 +46,7 @@ use mako_engine::{
     types::{MaLo, MarktpartnerCode, MessageRef},
     workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
-use mako_fristen::{
-    APERAK_GAS_FOLGEPROZESS_LABEL, HolidayCalendar, aperak_gas_folgeprozess_due_at,
-    deadline_at_werktage,
-};
+use mako_fristen::{HolidayCalendar, deadline_at_werktage};
 
 // ── PID model ─────────────────────────────────────────────────────────────────
 
@@ -377,6 +374,19 @@ pub enum GasStammdatenState {
         /// Human-readable reason.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// GeLi Gas 3.0 Kap. 4.3 bounds the Stammdatenänderung by Fristen „die insgesamt 10 Werktage nicht überschreiten", and states no consequence of missing them. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<GasStammdatenState>,
+    },
 }
 
 impl GasStammdatenState {
@@ -392,6 +402,16 @@ impl GasStammdatenState {
             Self::Gesendet(_) => "Gesendet",
             Self::Abgeschlossen { .. } => "Abgeschlossen",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -516,27 +536,42 @@ fn apply_outbox(data: &GasStammdatenData, patch: &serde_json::Value) -> PendingO
 /// GeLi Gas Stammdatenänderung workflow (PIDs 44109–44182).
 pub struct GeliGasStammdatenaenderungWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while an Antwort is owed: by this party
+/// (`Eingegangen`, `ValidationPassed`) or to it (`Gesendet`).
+fn window_open(label: &str, state: &GasStammdatenState) -> bool {
+    label == ANTWORT_WINDOW_LABEL
+        && matches!(
+            state,
+            GasStammdatenState::Eingegangen(_)
+                | GasStammdatenState::ValidationPassed(_)
+                | GasStammdatenState::Gesendet(_)
+        )
+}
+
 impl Workflow for GeliGasStammdatenaenderungWorkflow {
     type State = GasStammdatenState;
     type Event = GasStammdatenEvent;
     type Command = GasStammdatenCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANTWORT_WINDOW_LABEL];
+
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (
-                ANTWORT_WINDOW_LABEL | APERAK_GAS_FOLGEPROZESS_LABEL,
-                GasStammdatenState::Eingegangen(_)
-                | GasStammdatenState::ValidationPassed(_)
-                | GasStammdatenState::Gesendet(_),
-            ) => Some(GasStammdatenCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            }),
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| GasStammdatenCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            GasStammdatenState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             GasStammdatenEvent::AenderungErhalten {
                 location_id,
@@ -602,15 +637,15 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
             GasStammdatenEvent::Rejected { reason } => GasStammdatenState::Rejected {
                 reason: reason.clone(),
             },
-            GasStammdatenEvent::DeadlineExpired { label, .. } => {
-                if state.is_terminal() {
-                    state
-                } else {
-                    GasStammdatenState::Rejected {
-                        reason: format!("Antwort-Frist verstrichen: {label}"),
-                    }
-                }
-            }
+            GasStammdatenEvent::DeadlineExpired { label, .. } => match state {
+                GasStammdatenState::Eingegangen(_)
+                | GasStammdatenState::ValidationPassed(_)
+                | GasStammdatenState::Gesendet(_) => GasStammdatenState::FristAbgelaufen {
+                    label: label.to_string(),
+                    offen: Box::new(state),
+                },
+                other => other,
+            },
         }
     }
 
@@ -618,6 +653,10 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             // ── Berechtigter: inbound Änderung ───────────────────────────────
             GasStammdatenCommand::ReceiveAenderung {
@@ -679,30 +718,23 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
                 events.push(GasStammdatenEvent::ValidationPassed {
                     message_ref: message_ref.clone(),
                 });
-                let outbox = vec![
-                    PendingOutbox::aperak_anerkennung(
-                        receiver_gln.as_str(),
-                        sender_mp_id.as_str(),
-                        message_ref.as_str(),
-                    )
-                    .caused_by(1),
-                ];
-                let deadlines = vec![
-                    PendingDeadline::new(
-                        APERAK_GAS_FOLGEPROZESS_LABEL,
-                        aperak_gas_folgeprozess_due_at(received_at),
+                // No APERAK: in der Sparte Gas the APERAK carries only the
+                // Verarbeitbarkeitsfehler (APERAK AHB 1.1 §2.3); processability
+                // follows from the Frist passing without one. So no APERAK
+                // delivery window either — it would watch a message that never
+                // goes out.
+                let deadlines = vec![PendingDeadline::new(
+                    ANTWORT_WINDOW_LABEL,
+                    deadline_at_werktage(
+                        received_at,
+                        mako_fristen::antwort::STAMMDATEN_ANTWORT_WERKTAGE_GAS,
+                        HolidayCalendar::BdewMaKo,
                     ),
-                    PendingDeadline::new(
-                        ANTWORT_WINDOW_LABEL,
-                        deadline_at_werktage(
-                            received_at,
-                            mako_fristen::antwort::STAMMDATEN_ANTWORT_WERKTAGE_GAS,
-                            HolidayCalendar::BdewMaKo,
-                        ),
-                    ),
-                ];
+                )];
                 Ok(WorkflowOutput::with_outbox_and_deadlines(
-                    events, outbox, deadlines,
+                    events,
+                    Vec::new(),
+                    deadlines,
                 ))
             }
 
@@ -752,16 +784,12 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
                     ));
                 }
 
-                // Auto data-return: APERAK 312 receipt + the Antwort PID carrying
-                // the requested Marktlokation's current master data (rendered by
-                // makod's outbox worker from marktd).
+                // Auto data-return: the Antwort PID carrying the requested
+                // Marktlokation's current master data (rendered by makod's
+                // outbox worker from marktd). No APERAK precedes it — a Gas
+                // APERAK is a Verarbeitbarkeitsfehlermeldung only (APERAK AHB
+                // 1.1 §2.3).
                 let outbox = vec![
-                    PendingOutbox::aperak_anerkennung(
-                        owner.as_str(),
-                        requester.as_str(),
-                        message_ref.as_str(),
-                    )
-                    .caused_by(0),
                     PendingOutbox::new(
                         "UTILMD",
                         requester.as_str(),
@@ -913,9 +941,7 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
             }
 
             GasStammdatenCommand::TimeoutExpired { deadline_id, label } => {
-                if state.is_terminal() {
-                    Ok(vec![].into())
-                } else if label.as_ref() == ANTWORT_WINDOW_LABEL {
+                if window_open(&label, lapsed) {
                     Ok(vec![GasStammdatenEvent::DeadlineExpired { deadline_id, label }].into())
                 } else {
                     Ok(vec![].into())
@@ -1017,6 +1043,33 @@ mod tests {
         // Zustimmung → apply outbox present.
         assert_eq!(out.outbox.len(), 2);
         assert_eq!(out.outbox[1].message_type.as_ref(), "ProcessCompleted");
+    }
+
+    /// A processable Gas Änderung is answered by no APERAK.
+    ///
+    /// APERAK AHB 1.1 §2.3: „In der Sparte Gas wird dem Absender eines
+    /// Geschäftsvorfalls … nur eines der beiden Ergebnisse … via APERAK
+    /// mitgeteilt: Das Ergebnis, dass der geprüfte Geschäftsvorfall einen
+    /// Verarbeitbarkeitsfehler enthält." Processability follows from the
+    /// Frist passing without one, so an APERAK 29002 (`BGM+312`) here is wire
+    /// output the AHB does not allow.
+    #[test]
+    fn a_valid_aenderung_enqueues_no_aperak() {
+        let out = GeliGasStammdatenaenderungWorkflow::handle(
+            &GasStammdatenState::New,
+            receive_cmd(44112, "20260715", true),
+        )
+        .unwrap();
+        assert!(
+            out.outbox
+                .iter()
+                .all(|o| o.message_type.as_ref() != "APERAK"),
+            "a Gas Anerkennungsmeldung was enqueued: {:?}",
+            out.outbox
+                .iter()
+                .map(|o| (o.message_type.as_ref(), o.payload["pid"].clone()))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1132,13 +1185,22 @@ mod tests {
         assert!(matches!(state, GasStammdatenState::Rejected { .. }));
     }
 
+    /// The Berechtigter's own Antwort window lapsing is a Frist breach, not a
+    /// rejection — and a processable Änderung arms no APERAK window to lapse.
     #[test]
-    fn antwort_timeout_rejects() {
+    fn antwort_timeout_is_a_frist_breach() {
         let out = GeliGasStammdatenaenderungWorkflow::handle(
             &GasStammdatenState::New,
             receive_cmd(44112, "20260715", true),
         )
         .unwrap();
+        assert!(
+            out.deadlines
+                .iter()
+                .all(|d| !mako_fristen::is_delivery_window(&d.label)),
+            "{:?}",
+            out.deadlines
+        );
         let state = apply_all(GasStammdatenState::New, &out.events);
         let out = GeliGasStammdatenaenderungWorkflow::handle(
             &state,
@@ -1149,7 +1211,7 @@ mod tests {
         )
         .unwrap();
         let state = apply_all(state, &out.events);
-        assert!(matches!(state, GasStammdatenState::Rejected { .. }));
+        assert!(matches!(state, GasStammdatenState::FristAbgelaufen { .. }));
     }
 
     #[test]
@@ -1199,16 +1261,13 @@ mod tests {
             [GasStammdatenEvent::AnfrageBeantwortet { antwort_pid, .. }]
                 if antwort_pid.as_u32() == 44142
         ));
-        // Outbox: APERAK 29002 Anerkennung + the UTILMD data-return (Antwort PID
-        // 44142). `BGM+312` is not in the payload: it follows from 29002 having
-        // no Fehlerbeschreibung and is derived by the renderer.
-        assert_eq!(out.outbox.len(), 2);
-        assert_eq!(out.outbox[0].message_type.as_ref(), "APERAK");
-        assert_eq!(out.outbox[0].payload["pid"], 29002);
-        assert_eq!(out.outbox[0].payload["orig_message_ref"], "GSA-001");
-        assert_eq!(out.outbox[1].message_type.as_ref(), "UTILMD");
-        assert_eq!(out.outbox[1].payload["pid"], 44142);
-        assert_eq!(out.outbox[1].payload["data_return"], true);
+        // Outbox: the UTILMD data-return (Antwort PID 44142) and nothing else.
+        // A Gas APERAK is a Verarbeitbarkeitsfehlermeldung only (APERAK AHB 1.1
+        // §2.3), so a processable Anfrage is acknowledged by no APERAK at all.
+        assert_eq!(out.outbox.len(), 1);
+        assert_eq!(out.outbox[0].message_type.as_ref(), "UTILMD");
+        assert_eq!(out.outbox[0].payload["pid"], 44142);
+        assert_eq!(out.outbox[0].payload["data_return"], true);
         let state = apply_all(GasStammdatenState::New, &out.events);
         assert!(matches!(
             state,

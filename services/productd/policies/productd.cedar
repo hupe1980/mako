@@ -82,7 +82,7 @@
 // serve `fetch_comparison_feed`, whose `WHERE` clause pins
 // `product_status = 'PUBLISHED'` and restricts the rows to the `FEED_CATEGORIES`
 // allowlist. A draft tariff, a withdrawn one and an Angebot are unreachable
-// through them. `tests/authorization_guard.rs` pins both facts, so the
+// through them. `tests/it/authorization_guard.rs` pins both facts, so the
 // exemption's justification stays checkable rather than remaining a claim in a
 // comment.
 //

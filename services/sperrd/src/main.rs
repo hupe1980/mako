@@ -213,3 +213,40 @@ impl Daemon for Sperrd {
 async fn main() -> anyhow::Result<()> {
     mako_service::run::<Sperrd>().await
 }
+
+/// The router builds the way `mako_service::run` mounts it.
+///
+/// `build` runs with a minimal configuration and a lazy pool, and the runner's
+/// infra routes are merged in exactly as at boot — so a route axum refuses, a
+/// merge collision with the runner's `/metrics` or `/health/*`, or a `build`
+/// that panics fails `cargo test` instead of the container start.
+#[cfg(test)]
+mod startup_test {
+    /// A peer that answers every request `200` — the subscription `build`
+    /// registers, if it registers one.
+    async fn peer() -> String {
+        let app = axum::Router::new().fallback(|| async { axum::http::StatusCode::OK });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn the_router_builds_as_the_runner_mounts_it() {
+        let peer = peer().await;
+        let cfg = serde_json::from_value(serde_json::json!({
+            "database": {"url": "postgres://startup-test/sperrd"},
+            "tenant": "9900357000004",
+            "makod_url": peer, "makod_api_key": "test",
+            "inbound_hmac_secret": "s3cret",
+            "allow_insecure_no_auth": true,
+        }))
+        .expect("the configuration parses");
+        let _app = mako_service::build_for_test::<super::Sperrd>(cfg)
+            .await
+            .expect("the router builds");
+    }
+}

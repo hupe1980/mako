@@ -7,12 +7,9 @@ weight = 36
 services into one customer-facing REST API, and proxies the § 41 EnWG
 self-service writes to the services that own them.
 
-**LF** (Lieferant) is the retail-supplier Marktrolle — the counterpart to the **NB**
-(grid operator) and **MSB** (metering operator); see
-[Party Roles](@/docs/architecture/domain-model.md#party-roles-marktrollen). Every route is
-keyed on a **Marktlokation** (MaLo) — the delivery point, an 11-digit id, not a meter; see
-[MaLo vs MeLo](@/docs/architecture/domain-model.md#malo-vs-melo-the-critical-distinction).
-A **Lastgang** is the quarter-hourly consumption series behind `/lastgang`.
+It serves the **LF** (Lieferant) role; every route is keyed on a
+[Marktlokation](@/docs/architecture/domain-model.md#malo-vs-melo-the-critical-distinction)
+(MaLo).
 
 ```mermaid
 graph LR
@@ -58,13 +55,10 @@ Port: **`:9480`**
 
 `portald` verifies no tokens and holds no customer↔MaLo map. It forwards the
 customer's `Authorization: Bearer` header to
-`vertragd GET /api/v1/kunden/authenticate?malo_id=…` and relays the verdict.
-`vertragd` owns the OIDC verifier, the customer record and the mapping, so it is
-the only place that can answer "may this identity read this delivery point" —
-and a second verifier here could only ever disagree with it.
-
-The service credential rides as `X-Api-Key`, never as a second `Authorization`
-header: which identity `vertragd` sees must not depend on header ordering.
+`vertragd GET /api/v1/kunden/authenticate?malo_id=…` — the owner of the OIDC
+verifier, the customer record and the mapping — and relays the verdict. Its own
+service credential rides as `X-Api-Key`, never as a second `Authorization`
+header.
 
 | `vertragd` answers | `portald` answers |
 |---|---|
@@ -73,22 +67,14 @@ header: which identity `vertragd` sees must not depend on header ordering.
 | `403` | `403` |
 | unreachable, `5xx`, or `2xx` without a `kunden_id` | `503` |
 
-An authorization service that cannot answer is not an answer of yes.
-
-**One gate, applied everywhere.** `auth::authorize` is the only way to obtain a
-`PortalAuthCtx`, and every customer-scoped handler takes one by value — a route
-that skips the check has no context to work with.
-`tests/authorization_guard.rs` drives all 17 customer-scoped routes against a refusing
-`vertragd` and fails if any of them answers with upstream data.
-
-**Object ownership is checked too.** `GET …/invoices/{record_id}/download`
-re-reads the billing record and compares its `malo_id` to the authorised one
-before rendering. Authorising the path parameter alone would let any customer
-stream any invoice in the tenant by id.
-
-Starting without `vertragd_url` is refused unless `allow_insecure_no_auth = true`
-is set explicitly — an omitted URL is a mistake, not a request to serve every
-customer's data to every caller.
+`auth::authorize` is the only way to obtain a `PortalAuthCtx`, and every
+customer-scoped handler takes one by value. `tests/it/authorization_guard.rs`
+drives every customer-scoped method handler against a refusing `vertragd` and
+fails if any answers with upstream data, or if the router gains a handler the
+test does not list.
+`…/invoices/{record_id}/download` also compares the record's `malo_id` with the
+authorised one. Starting without `vertragd_url` is refused unless
+`allow_insecure_no_auth = true`.
 
 ---
 
@@ -121,14 +107,11 @@ All paths are prefixed `/api/v1/portal/{malo_id}`.
 
 ### Invoices and documents are two different lists
 
-`/invoices` is what `billingd` **calculated** — drafts the risk gate is holding
-included. `/dokumente` is what the customer was **sent**, byte for byte, with the
-delivery evidence beside it. An inbox shows the second; opening a document there
-records the read receipt a § 41f EnWG dispute asks about, which is more than
-§ 126b BGB requires and exactly what is asked for afterwards.
-
-Both are scoped twice: portald forwards the authorised MaLo, and `outputd`
-refuses a document query that names neither a MaLo nor a Kundennummer.
+`/invoices` is what `billingd` **calculated**, drafts held by the risk gate
+included. `/dokumente` is what the customer was **sent**, byte for byte, with
+delivery evidence; opening one records the read receipt a § 41f EnWG dispute
+asks about. `outputd` refuses a document query that names neither a MaLo nor a
+Kundennummer.
 
 ---
 
@@ -156,30 +139,23 @@ concurrently and returns one object:
 
 ### Notice periods live in `vertragd`
 
-`portald` validates the date *format* and nothing else. Whether a `lieferende`
-or `wirksamkeit` is reachable depends on the Vertragsart, on whether the
-customer is a Haushaltskunde (§ 3 Nr. 57 EnWG) and on the reason —
-§ 20 Abs. 1 StromGVV/GasGVV in the Grundversorgung, § 41b Abs. 5 EnWG on a move,
-§ 41 Abs. 5 Satz 4 EnWG after a price change, § 309 Nr. 9 lit. c BGB on term
-length. `vertragd` holds all of them.
-
-A second, simpler rule here could only disagree with the one that decides, and
-would reject terminations the contract allows. `vertragd` answers `422` with the
-rule it applied, and that answer is relayed unchanged.
-
-Call `GET /kuendigungsfrist` first to show the customer the reachable dates.
+`portald` validates the date format only. Whether a `lieferende` or
+`wirksamkeit` is reachable depends on Vertragsart, Haushaltskunde status (§ 3
+Nr. 57 EnWG) and the reason — § 20 Abs. 1 StromGVV/GasGVV in the
+Grundversorgung, § 41b Abs. 5 EnWG on a move, § 41 Abs. 5 Satz 4 EnWG after a
+price change, § 309 Nr. 9 lit. c BGB on term length — and `vertragd` decides.
+Its `422` naming the rule is relayed unchanged. Call `GET /kuendigungsfrist`
+first to show the reachable dates.
 
 ### SEPA mandates
 
 `PUT /sepa` registers a mandate with `accountingd`, which validates the IBAN
 (ISO 13616 mod-97) and the debtor address.
 
-Two fields the caller does not supply. **`sequence_type`** — the scheme requires
-a `FRST` collection before any `RCUR`, and the sequence is `accountingd`'s to
-track across the mandate's life. **`mandatsref`** — derived here with a random
-suffix (35 characters, the SEPA `MndtId` limit), so a customer correcting a
-mistyped IBAN the same day gets a new mandate rather than reusing the reference
-of the one being replaced.
+The caller supplies neither `sequence_type` (`FRST` before `RCUR` is
+`accountingd`'s to track) nor `mandatsref` (derived here with a random suffix,
+35 characters, the SEPA `MndtId` limit, so a same-day IBAN correction gets a new
+mandate).
 
 `debtor_address` is optional until **15 November 2026**, when version 1.1 of the
 2025 SEPA rulebooks ends the unstructured address and the schemes begin
@@ -227,9 +203,7 @@ outputd_url     = "http://outputd:9880"
 api_key = "env:PORTALD_MCP_API_KEY"
 ```
 
-There is deliberately no `oidc_issuer` / `oidc_audience`: `portald` verifies no
-tokens, and a key suggesting otherwise would misstate where the trust boundary
-is.
+There is no `oidc_issuer` / `oidc_audience`: `portald` verifies no tokens.
 
 ---
 
@@ -268,15 +242,11 @@ portald:
 
 Prompts: `customer-overview`, `billing-dispute`, `eeg-foerderung-check`.
 
-**This surface is operator-facing, not customer-facing.** Its tools take a
-`malo_id` and carry no customer token, so they do not run through the
-authorization gate the REST routes do — whoever can call `/mcp` can read every
-customer in the tenant. That is the right shape for a customer-service agent and
-the wrong one for a portal. `portald` therefore refuses to start without an
-`[mcp] api_key` — an absent key leaves `McpAuth` accepting a request with no
-`Authorization` header at all, which is a posture reached by leaving a config
-section out rather than by choosing it. Keep the credential off the public
-ingress and never hand it to an end user.
+**This surface is operator-facing.** Its tools take a `malo_id` and carry no
+customer token, so they bypass the ownership gate: whoever can call `/mcp` reads
+every customer in the tenant. `portald` therefore refuses to start without
+`[mcp] api_key` (unless `allow_insecure_no_auth`). Keep the credential off the
+public ingress.
 
 ---
 

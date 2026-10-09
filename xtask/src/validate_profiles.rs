@@ -23,8 +23,10 @@
 //!   operand cites has an evaluator in `edi_energy::profile::formatbedingung`,
 //!   bar the [`UNEVALUATED_FORMATBEDINGUNGEN`] ratchet;
 //! - every profile on a regular Anwendungszeitpunkt states the
-//!   `publikationsdatum` Allgemeine Festlegungen 6.1d § 2.5 fixes for it, and an
-//!   ausserordentliche release states none;
+//!   `publikationsdatum` Allgemeine Festlegungen 6.1d § 2.5 expects for it; a
+//!   date off that timetable is admitted only with a `publikation_quelle` that
+//!   names the BNetzA Mitteilung, and no publication falls on or after its
+//!   `valid_from`;
 //! - the `source.sha256` matches the mirrored document when the mirror is here.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -468,13 +470,12 @@ type Span = (String, time::Date, Option<time::Date>, BTreeSet<u32>);
 /// fields.
 ///
 /// **The schedule is the expectation, not the definition.** A release may be
-/// given a different Umsetzungszeitraum, and BNetzA Mitteilung Nr. 57
-/// (31.07.2026) proposes exactly that for FV 2027-04: „ein Umsetzungszeitraum
-/// von **zwölf Monaten** anstelle der ansonsten üblichen sechs Monate", which
-/// would publish 01.10.2026 and bind 01.10.2027. Read as a definition, this
-/// function would call that a typo and refuse the import it exists to protect.
-/// So a stated date that deviates is admitted when the entry names the
-/// Mitteilung that published it, and only then.
+/// given a different Umsetzungszeitraum by the BNetzA Mitteilung that publishes
+/// it. Read as a definition, this function would call such a release a typo and
+/// refuse the import it exists to protect. So a stated date that deviates is
+/// admitted when the entry names that Mitteilung in `publikation_quelle` —
+/// „Mitteilung Nr. `<n>`“ or its bundesnetzagentur.de page, see
+/// [`names_a_mitteilung`] — and only then.
 ///
 /// An ausserordentliche release — mako carries 01.01.2026 and 06.06.2025 — sits
 /// outside both timetables for the same reason and is admitted on the same
@@ -491,6 +492,96 @@ fn entailed_publikationsdatum(valid_from: &str) -> Option<String> {
         (4, 1) => Some(format!("{}-10-01", d.year() - 1)),
         _ => None,
     }
+}
+
+/// Whether `quelle` names a BNetzA Mitteilung: „Mitteilung Nr. `<n>`“ (the
+/// form the Beschlusskammern title them with), or the Mitteilung's page on
+/// bundesnetzagentur.de.
+fn names_a_mitteilung(quelle: &str) -> bool {
+    let q = quelle.trim();
+    if q.starts_with("https://www.bundesnetzagentur.de/") && q.contains("Mitteilung") {
+        return true;
+    }
+    q.match_indices("Mitteilung Nr.").any(|(i, m)| {
+        q[i + m.len()..]
+            .trim_start()
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit())
+    })
+}
+
+/// The publication-date rule of Allgemeine Festlegungen 6.1d § 2.5 for one
+/// `sources.json` entry — see [`entailed_publikationsdatum`].
+fn publication_errors(
+    dir: &str,
+    valid_from: &str,
+    publikationsdatum: Option<&str>,
+    quelle: Option<&str>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if let Some(q) = quelle
+        && !names_a_mitteilung(q)
+    {
+        errors.push(format!(
+            "{dir}: publikation_quelle {q:?} names no BNetzA Mitteilung. State it as \
+             „Mitteilung Nr. <n>“ or by its bundesnetzagentur.de URL — a free string \
+             separates a deviation from a typo no better than no source at all"
+        ));
+    }
+    if quelle.is_some() && publikationsdatum.is_none() {
+        errors.push(format!(
+            "{dir}: publikation_quelle is set but publikationsdatum is not — the source \
+             has no date to stand behind"
+        ));
+    }
+    match (
+        entailed_publikationsdatum(valid_from),
+        publikationsdatum,
+        quelle,
+    ) {
+        // On the § 2.5 timetable: the Festlegung is the source.
+        (Some(entailed), Some(stated), _) if stated == entailed => {}
+        // Off it, and sourced: a deviation somebody can point at. Whether the
+        // source names a Mitteilung is checked above.
+        (_, Some(_), Some(_)) => {}
+        // Off it, unsourced: indistinguishable from a typo, so refused.
+        (Some(entailed), Some(stated), None) => errors.push(format!(
+            "{dir}: publikationsdatum {stated} is not the {entailed} that Allgemeine \
+             Festlegungen 6.1d § 2.5 expects for a release applying {}. If the release \
+             was given a different Umsetzungszeitraum, name the BNetzA Mitteilung that \
+             published it in `publikation_quelle`; otherwise one of the two dates is a typo",
+            valid_from,
+        )),
+        (None, Some(stated), None) => errors.push(format!(
+            "{dir}: valid_from {} falls on neither § 2.5 timetable, so publikationsdatum \
+             {stated} is not entailed by anything. State the Mitteilung that published it \
+             in `publikation_quelle`, or remove the date",
+            valid_from,
+        )),
+        // Expected by the timetable and simply missing.
+        (Some(entailed), None, _) => errors.push(format!(
+            "{dir}: valid_from {} is a regular Anwendungszeitpunkt, so Allgemeine \
+             Festlegungen 6.1d § 2.5 expects its publikationsdatum on {entailed} — state it",
+            valid_from,
+        )),
+        (None, None, _) => {}
+    }
+
+    // A release cannot bind before it is published, whatever the timetable.
+    if let (Some(stated), Some(pub_d), Some(from_d)) = (
+        publikationsdatum,
+        publikationsdatum.and_then(date),
+        date(valid_from),
+    ) && pub_d >= from_d
+    {
+        errors.push(format!(
+            "{dir}: publikationsdatum {stated} is not before valid_from {} — a release \
+             cannot take effect before the documents describing it exist",
+            valid_from,
+        ));
+    }
+    errors
 }
 
 fn load<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
@@ -556,53 +647,12 @@ pub fn run(workspace_root: &str) -> bool {
             }
         };
 
-        // Allgemeine Festlegungen 6.1d § 2.5 — see `entailed_publikationsdatum`.
-        match (
-            entailed_publikationsdatum(&src.valid_from),
+        errors.extend(publication_errors(
+            dir,
+            &src.valid_from,
             src.publikationsdatum.as_deref(),
             src.publikation_quelle.as_deref(),
-        ) {
-            // On the § 2.5 timetable: the Festlegung is the source.
-            (Some(entailed), Some(stated), _) if stated == entailed => {}
-            // Off it, and sourced: a deviation somebody can point at. Mitteilung
-            // Nr. 57 proposes exactly this for FV 2027-04.
-            (_, Some(_), Some(_)) => {}
-            // Off it, unsourced: indistinguishable from a typo, so refused.
-            (Some(entailed), Some(stated), None) => errors.push(format!(
-                "{dir}: publikationsdatum {stated} is not the {entailed} that Allgemeine \
-                 Festlegungen 6.1d § 2.5 expects for a release applying {}. If the release \
-                 was given a different Umsetzungszeitraum, name the BNetzA Mitteilung that \
-                 published it in `publikation_quelle`; otherwise one of the two dates is a typo",
-                src.valid_from,
-            )),
-            (None, Some(stated), None) => errors.push(format!(
-                "{dir}: valid_from {} falls on neither § 2.5 timetable, so publikationsdatum \
-                 {stated} is not entailed by anything. State the Mitteilung that published it \
-                 in `publikation_quelle`, or remove the date",
-                src.valid_from,
-            )),
-            // Expected by the timetable and simply missing.
-            (Some(entailed), None, _) => errors.push(format!(
-                "{dir}: valid_from {} is a regular Anwendungszeitpunkt, so Allgemeine \
-                 Festlegungen 6.1d § 2.5 expects its publikationsdatum on {entailed} — state it",
-                src.valid_from,
-            )),
-            (None, None, _) => {}
-        }
-
-        // A release cannot bind before it is published, whatever the timetable.
-        if let (Some(stated), Some(pub_d), Some(from_d)) = (
-            src.publikationsdatum.as_deref(),
-            src.publikationsdatum.as_deref().and_then(date),
-            date(&src.valid_from),
-        ) && pub_d >= from_d
-        {
-            errors.push(format!(
-                "{dir}: publikationsdatum {stated} is not before valid_from {} — a release \
-                 cannot take effect before the documents describing it exist",
-                src.valid_from,
-            ));
-        }
+        ));
         let message_type = ty.to_ascii_uppercase();
         let mig: Mig = match load(&profiles.join(dir).join("mig.json")) {
             Ok(m) => m,
@@ -827,7 +877,9 @@ pub fn run(workspace_root: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{UNEVALUATED_FORMATBEDINGUNGEN, entailed_publikationsdatum, format_ids};
+    use super::{
+        UNEVALUATED_FORMATBEDINGUNGEN, entailed_publikationsdatum, format_ids, publication_errors,
+    };
 
     /// The exemption list only shrinks.
     ///
@@ -938,5 +990,86 @@ mod tests {
         );
         // An unparseable date entails nothing rather than defaulting.
         assert_eq!(entailed_publikationsdatum("not-a-date"), None);
+    }
+
+    /// Every arm of the publication rule, by the entry that reaches it.
+    mod publication {
+        use super::publication_errors;
+
+        const NR_58: &str = "BNetzA Mitteilung Nr. 58 (01.10.2026)";
+
+        fn refused(valid_from: &str, stated: Option<&str>, quelle: Option<&str>) -> bool {
+            !publication_errors("utilmd/fvX", valid_from, stated, quelle).is_empty()
+        }
+
+        #[test]
+        fn a_date_on_the_timetable_needs_no_source() {
+            assert!(!refused("2026-10-01", Some("2026-04-01"), None));
+            assert!(!refused("2027-04-01", Some("2026-10-01"), None));
+        }
+
+        #[test]
+        fn a_date_off_the_timetable_is_admitted_when_a_mitteilung_published_it() {
+            assert!(!refused("2027-10-01", Some("2026-10-01"), Some(NR_58)));
+            assert!(!refused(
+                "2027-10-01",
+                Some("2026-10-01"),
+                Some(
+                    "https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/\
+                     835_mitteilungen_datenformate/Mitteilung_58/Mitteilung_Nr_58.html"
+                ),
+            ));
+            // An ausserordentliche Veröffentlichung, off both timetables.
+            assert!(!refused("2026-01-01", Some("2025-12-11"), Some(NR_58)));
+        }
+
+        #[test]
+        fn a_date_off_the_timetable_without_a_source_is_refused() {
+            assert!(refused("2027-10-01", Some("2026-10-01"), None));
+            assert!(refused("2026-01-01", Some("2025-12-11"), None));
+        }
+
+        /// The source is what separates a deviation from a typo, so a string
+        /// that names no Mitteilung separates nothing.
+        #[test]
+        fn a_source_that_names_no_mitteilung_is_refused() {
+            for quelle in [
+                "x",
+                "",
+                "  ",
+                "BDEW",
+                "Mitteilung",
+                "Nr. 58",
+                "https://example.org/58",
+            ] {
+                assert!(
+                    refused("2027-10-01", Some("2026-10-01"), Some(quelle)),
+                    "publikation_quelle {quelle:?} names no BNetzA Mitteilung"
+                );
+            }
+        }
+
+        #[test]
+        fn a_regular_anwendungszeitpunkt_without_its_date_is_refused() {
+            assert!(refused("2026-10-01", None, None));
+            assert!(refused("2026-10-01", None, Some(NR_58)));
+        }
+
+        #[test]
+        fn an_extraordinary_release_may_state_no_date() {
+            assert!(!refused("2026-01-01", None, None));
+        }
+
+        /// A source with no date to source is a field nothing reads.
+        #[test]
+        fn a_source_without_a_date_is_refused() {
+            assert!(refused("2026-01-01", None, Some(NR_58)));
+        }
+
+        #[test]
+        fn a_publication_on_or_after_its_anwendungszeitpunkt_is_refused() {
+            assert!(refused("2027-10-01", Some("2027-10-01"), Some(NR_58)));
+            assert!(refused("2027-10-01", Some("2027-11-01"), Some(NR_58)));
+        }
     }
 }

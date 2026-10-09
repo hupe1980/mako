@@ -196,10 +196,23 @@ pub enum GeliGasStornierungState {
     AperakSent(GeliGasStornierungData),
     /// Cancellation fully completed (positive APERAK sent, original process cancelled).
     Completed(GeliGasStornierungData),
-    /// Process rejected — validation failure, Ablehnung, or deadline expiry.
+    /// Process rejected — validation failure or Ablehnung.
     Rejected {
         /// Human-readable reason for the rejection.
         reason: String,
+    },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// No Festlegung states a consequence of the GNB leaving the Stornierung unanswered. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<GeliGasStornierungState>,
     },
 }
 
@@ -214,6 +227,16 @@ impl GeliGasStornierungState {
             Self::AperakSent(_) => "AperakSent",
             Self::Completed(_) => "Completed",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 }
@@ -275,30 +298,43 @@ impl CommandPayload for GeliGasStornierungCommand {}
 /// PID 44024 (Ablehnung).
 pub struct GeliGasStornierungWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the GNB still owes its 44023 / 44024
+/// (`Initiated`, `ValidationPassed`).
+fn window_open(label: &str, state: &GeliGasStornierungState) -> bool {
+    label == STORNIERUNG_RESPONSE_WINDOW_LABEL
+        && matches!(
+            state,
+            GeliGasStornierungState::Initiated(_) | GeliGasStornierungState::ValidationPassed(_)
+        )
+}
+
 impl Workflow for GeliGasStornierungWorkflow {
     type State = GeliGasStornierungState;
     type Event = GeliGasStornierungEvent;
     type Command = GeliGasStornierungCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[STORNIERUNG_RESPONSE_WINDOW_LABEL];
+
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (
-                STORNIERUNG_RESPONSE_WINDOW_LABEL,
-                GeliGasStornierungState::Initiated(_)
-                | GeliGasStornierungState::ValidationPassed(_)
-                | GeliGasStornierungState::AperakSent(_),
-            ) => Some(GeliGasStornierungCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            }),
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| GeliGasStornierungCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            GeliGasStornierungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             GeliGasStornierungEvent::StornierungReceived {
                 pruefidentifikator,
@@ -346,11 +382,14 @@ impl Workflow for GeliGasStornierungWorkflow {
             },
 
             GeliGasStornierungEvent::DeadlineExpired { label, .. } => match state {
-                GeliGasStornierungState::Completed(_)
-                | GeliGasStornierungState::Rejected { .. } => state,
-                _ => GeliGasStornierungState::Rejected {
-                    reason: format!("deadline expired: {label}"),
-                },
+                GeliGasStornierungState::Initiated(_)
+                | GeliGasStornierungState::ValidationPassed(_) => {
+                    GeliGasStornierungState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
+                }
+                other => other,
             },
         }
     }
@@ -359,6 +398,10 @@ impl Workflow for GeliGasStornierungWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             GeliGasStornierungCommand::ReceiveUtilmd {
                 pid,
@@ -399,8 +442,8 @@ impl Workflow for GeliGasStornierungWorkflow {
                     events.push(GeliGasStornierungEvent::ValidationFailed {
                         errors: validation_errors,
                     });
-                    // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
-                    // APERAK Frist (Gas Folgeprozess): nächster Werktag 12 Uhr (APERAK AHB 1.0 §2.3.1).
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
+                    // APERAK Frist (Gas Folgeprozess): nächster Werktag 12 Uhr (APERAK AHB 1.1 §2.3.1).
                     // Note: this is the process answer window (an operating
                     // convention — see STORNIERUNG_RESPONSE_WINDOW_LABEL), not
                     // the APERAK sending deadline, which is a separate clock.
@@ -428,38 +471,51 @@ impl Workflow for GeliGasStornierungWorkflow {
                         ));
                     }
                 };
-                // Always enqueue one APERAK outbox entry with domain payload.
-                // The renderer/sender applies the Gas silence rule:
-                //   positive = true  → suppress_wire, no wire EDIFACT (APERAK AHB 1.0 §2.3)
-                //   positive = false → BGM+313 rendered and sent
-                let mut aperak_payload = serde_json::json!({
-                    "sender":   data.receiver.as_str(),  // GNB = sender of APERAK wire message
-                    "pid":      data.pruefidentifikator.as_u32(),
-                    "positive": positive,
-                });
-                if positive {
-                    aperak_payload["suppress_wire"] = serde_json::Value::Bool(true);
-                }
-                aperak_payload["orig_message_ref"] =
-                    serde_json::Value::String(data.message_ref.as_str().to_owned());
-                if let Some(ref r) = reason {
-                    aperak_payload["reason"] = serde_json::Value::String(r.clone());
-                }
-                let outbox_entry =
-                    PendingOutbox::new("APERAK", data.sender.as_str(), aperak_payload).caused_by(0);
+                // One APERAK outbox entry, typed. Gas has no Anerkennungsmeldung
+                // (APERAK AHB 1.1 §2.3): a positive decision is recorded for the
+                // ERP and kept off the wire; a negative one is a 29001
+                // Verarbeitbarkeitsfehlermeldung naming the 44022 it answers.
+                let from = data.receiver.as_str(); // GNB = sender of the APERAK
+                let to = data.sender.as_str();
+                let orig = data.message_ref.as_str();
+                let aperak = match &reason {
+                    None if positive => {
+                        mako_engine::payload::AperakPayload::anerkennung(from, to, orig)
+                            .off_the_wire()
+                    }
+                    Some(r) if !positive => mako_engine::payload::AperakPayload::fehler(
+                        from,
+                        to,
+                        orig,
+                        mako_engine::erc::codes::Z29,
+                        r.clone(),
+                    ),
+                    Some(_) => {
+                        return Err(WorkflowError::validation(
+                            "a positive decision carries no reason",
+                        ));
+                    }
+                    None => {
+                        return Err(WorkflowError::validation(
+                            "a negative decision needs its reason (FTX+ABO)",
+                        ));
+                    }
+                };
+                let outbox_entry = PendingOutbox::typed(to, &aperak).caused_by(0);
                 Ok(WorkflowOutput::with_outbox(
                     vec![GeliGasStornierungEvent::AperakDispatched { positive, reason }],
                     vec![outbox_entry],
                 ))
             }
 
-            GeliGasStornierungCommand::TimeoutExpired { deadline_id, label } => match state {
-                GeliGasStornierungState::Completed(_)
-                | GeliGasStornierungState::Rejected { .. } => Ok(WorkflowOutput::events(vec![])),
-                _ => Ok(WorkflowOutput::events(vec![
+            GeliGasStornierungCommand::TimeoutExpired { deadline_id, label } => {
+                if !window_open(&label, lapsed) {
+                    return Ok(WorkflowOutput::events(vec![]));
+                }
+                Ok(WorkflowOutput::events(vec![
                     GeliGasStornierungEvent::DeadlineExpired { deadline_id, label },
-                ])),
-            },
+                ]))
+            }
         }
     }
 }
@@ -597,8 +653,9 @@ mod tests {
         assert!(matches!(state, GeliGasStornierungState::Rejected { .. }));
     }
 
+    /// The GNB's own answer window lapsing is a Frist breach, not a rejection.
     #[test]
-    fn deadline_expired_rejects_initiated_process() {
+    fn deadline_expired_is_a_frist_breach() {
         let state = GeliGasStornierungState::New;
         let output =
             GeliGasStornierungWorkflow::handle(&state, stornierung_cmd(44022, true)).unwrap();
@@ -619,7 +676,10 @@ mod tests {
             .events
             .iter()
             .fold(state, GeliGasStornierungWorkflow::apply);
-        assert!(matches!(state, GeliGasStornierungState::Rejected { .. }));
+        assert!(matches!(
+            state,
+            GeliGasStornierungState::FristAbgelaufen { .. }
+        ));
     }
 
     #[test]

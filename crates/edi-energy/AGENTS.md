@@ -64,7 +64,7 @@ The crate enforces `#![deny(unsafe_code)]`, `#![deny(missing_docs)]`, and `#![wa
 
 ## Testing
 
-- Integration tests live in `crates/edi-energy/tests/`; `tests/skeletons.rs` proves every Anwendungsfall's skeleton against its own Prüfschablone and must stay at 100 %.
+- Integration tests are modules of the one binary `tests/it/` (`main.rs` declares them); `tests/it/skeletons.rs` proves every Anwendungsfall's skeleton against its own Prüfschablone and must stay at 100 %.
 - Fixtures live in `crates/edi-energy/tests/fixtures/<type>/{valid,invalid}/` — curated examples; regenerate a valid one from the profile's skeleton rather than editing segments by hand.
 - Inline EDIFACT in a test must be conformant (start from `07_resolve --skeleton TYPE RELEASE PID`); prefer fixture files or the builder API (`crates/edi-energy/src/builders/`).
 - Run with: `cargo test -p edi-energy --all-features`

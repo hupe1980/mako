@@ -33,7 +33,6 @@
 //! `register-eeg-plant`, `settle-monthly`, `check-foerderung-expiry`,
 //! `ausschreibung-workflow`, `post-eeg-transition`, `anlagenerweiterung`
 
-use rust_decimal::RoundingStrategy;
 use std::sync::Arc;
 
 use axum::{
@@ -296,9 +295,15 @@ pub struct ExplainSettlementParams {
 #[derive(Clone)]
 pub struct EinsdMcpHandler {
     state: Arc<EinsdMcpState>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     tool_router: ToolRouter<EinsdMcpHandler>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     prompt_router: PromptRouter<EinsdMcpHandler>,
 }
 
@@ -473,7 +478,16 @@ impl EinsdMcpHandler {
             },
         )
         .await
-        .map_err(|e| McpError::internal_error(format!("{e:#}"), None))?
+        .map_err(|e| {
+            // A state-aid refusal is the plant's or period's state, not a fault.
+            if crate::settle::settle_error_status(&e)
+                == axum::http::StatusCode::UNPROCESSABLE_ENTITY
+            {
+                McpError::invalid_params(format!("{e:#}"), None)
+            } else {
+                McpError::internal_error(format!("{e:#}"), None)
+            }
+        })?
         .ok_or_else(|| {
             McpError::invalid_params(format!("plant {} not found", params.tr_id), None)
         })?;
@@ -1066,7 +1080,7 @@ impl EinsdMcpHandler {
             "annual_quota_kwh": kontingent.to_string(),
             "ytd_fed_in_kwh": ytd.to_string(),
             "remaining_quota_kwh": verbleibend.to_string(),
-            "exhaustion_pct": ausschoepfung.round_dp_with_strategy(1, RoundingStrategy::MidpointAwayFromZero).to_string(),
+            "exhaustion_pct": eeg_billing::RoundMoney::round_kfm(&ausschoepfung, 1).to_string(),
             "alert": if ausschoepfung >= Decimal::from(90) {
                 "CRITICAL: the quota is over 90 % used — further kWh are paid at the Marktwert, or nothing at all on a Marktprämie"
             } else if ausschoepfung >= Decimal::from(75) {

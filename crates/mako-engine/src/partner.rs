@@ -358,7 +358,10 @@ impl PartnerRecord {
 /// ## Blanket `Arc` implementation
 ///
 /// `Arc<S>` implements `PartnerStore` whenever `S: PartnerStore`.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait PartnerStore: Send + Sync {
     /// Insert or update the record for `(tenant_id, record.mp_id)`.
     ///
@@ -495,7 +498,10 @@ pub struct NoopPartnerStore;
 // defining module). The guard is still effective: *callers* that instantiate
 // `NoopPartnerStore` outside of test/feature-gated code will see the warning.
 #[cfg(any(test, feature = "testing"))]
-#[allow(deprecated)]
+#[allow(
+    deprecated,
+    reason = "the deprecated item is the one this code exists to support"
+)]
 impl PartnerStore for NoopPartnerStore {
     async fn upsert(
         &self,

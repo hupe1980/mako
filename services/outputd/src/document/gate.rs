@@ -1027,10 +1027,8 @@ mod tests {
     /// The specimen's stamped terms match what billingd's production stamps.
     ///
     /// The specimen is hand-built, so it can drift from `billingd::einvoice::build`
-    /// — and it had: it was once missing BT-23, BT-34 and BG-16, proving
-    /// templates against a document shape production never emits. The old
-    /// in-process equality check died with the extraction; the tripwire is now
-    /// two-sided: billingd's `einvoice_render.rs::production_stamps_the_terms_the_gate_specimen_proves_templates_against`
+    /// — missing BT-23, BT-34 or BG-16, say — and prove templates against a
+    /// document shape production never emits. The tripwire is two-sided: billingd's `einvoice_render.rs::production_stamps_the_terms_the_gate_specimen_proves_templates_against`
     /// pins production to these same expected values.
     #[test]
     fn the_specimen_carries_the_terms_production_stamps() {

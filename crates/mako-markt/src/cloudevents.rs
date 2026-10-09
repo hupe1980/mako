@@ -1,4 +1,7 @@
-#![allow(clippy::doc_markdown)]
+#![expect(
+    clippy::doc_markdown,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 //! CloudEvents 1.0 envelope types for `mako-markt`.
 //!
 //! Two flavours:

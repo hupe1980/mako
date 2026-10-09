@@ -1,6 +1,6 @@
 [package]
 name        = "productd"
-description = "Product and tariff catalogue daemon (LF role) — Tarifpreisblatt, MaLo-Zuordnung und die EPEX-Spot-Day-Ahead-Reihe für § 41a"
+description = "Product and tariff catalogue daemon (LF): Tarifpreisblätter, offers and the EPEX day-ahead series for § 41a tariffs"
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
@@ -37,15 +37,16 @@ time         = { workspace = true }
 time-tz      = { workspace = true }
 uuid         = { workspace = true, features = ["v4", "serde"] }
 rust_decimal = { workspace = true }
+grid-billing = { workspace = true }
 tracing      = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tower-http   = { version = "0.6" }
 anyhow       = "1"
-secrecy      = { version = "0.10" }
-reqwest      = { workspace = true }
 tokio-util   = { workspace = true }
 
 [dev-dependencies]
+mako-service = { workspace = true, features = ["testing"] }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+
+[lints]
+workspace = true

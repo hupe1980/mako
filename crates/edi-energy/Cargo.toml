@@ -1,7 +1,7 @@
 [package]
 name         = "edi-energy"
 version.workspace     = true
-description  = "EDI@Energy EDIFACT parser and validator for the German energy market"
+description  = "BDEW EDI@Energy EDIFACT parser, validator and builder for the German energy market, with profiles read from the published MIGs and AHBs"
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true
@@ -110,6 +110,5 @@ required-features = ["utilmd"]
 name = "06_parse_reader"
 required-features = ["utilmd"]
 
-[[test]]
-name = "pid_detection"
-required-features = ["mscons", "reqote", "quotes", "orders", "ordchg", "ordrsp"]
+[lints]
+workspace = true

@@ -36,7 +36,7 @@ pub struct CommandsApiState {
     pub store: Arc<mako_engine::store_slatedb::SlateDbStore>,
     /// Snapshot store — shares the same underlying DB as `store`.
     ///
-    /// Passed to `execute_and_enqueue_with_snapshot_and_retry` so replay cost
+    /// Passed to `RunOptions::snapshot` so replay cost
     /// for long-lived processes is bounded to at most 100 tail events instead
     /// of a full O(n) event scan on every command dispatch.
     pub snapshot_store: mako_engine::store_slatedb::SlateDbSnapshotStore,
@@ -141,6 +141,13 @@ pub struct CommandAccepted {
     /// `de.mako.process.initiated` (or other) event the ERP received.
     #[schema(example = "3181967a-02d1-4d0e-9105-0cc46f3b25c9")]
     pub process_id: String,
+    /// The reference of the message this command filed (`UNH` DE 0062), when
+    /// the command files one whose reference is fixed at acceptance —
+    /// `mabis.summenzeitreihe.uebermitteln`. It is what the counterparty's
+    /// answer names, so a caller records it rather than a placeholder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "3181967a02d14d")]
+    pub message_ref: Option<String>,
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
@@ -191,7 +198,7 @@ pub enum DispatchError {
         process_id: ProcessId,
         malo_id: String,
     },
-    /// Command is known but the full workflow routing is not yet implemented.
+    /// Command is known but has no workflow routing in this build.
     NotImplemented(String),
 }
 

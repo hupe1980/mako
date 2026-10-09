@@ -1143,7 +1143,9 @@ pub async fn kuendige_vertrag(
                     lf_mp_id,
                     input.lieferende,
                 );
-                outbound::enqueue(&mut *tx, &vertrag.tenant, &task).await?;
+                // Superseding for the same reason: the key carries the date,
+                // and a task for another date that is still queued is obsolete.
+                outbound::enqueue_superseding(&mut *tx, &vertrag.tenant, &task).await?;
                 // The component leaves supply on the agreed date either way;
                 // the UTILMD tells the NB, it does not decide the contract.
                 schedule_lieferende(&mut *tx, k.id, input.lieferende).await?;
@@ -1210,9 +1212,10 @@ pub async fn mark_kuendigung_bestaetigt(
 /// Revert a GEKÜNDIGT contract to AKTIV (Widerruf der Kündigung).
 ///
 /// Valid only while the Lieferende is still ahead. Reverts exactly the
-/// components this Kündigung ended — reverting every BEENDET component put one
-/// that had ended for its own reasons, possibly years earlier, back into supply
-/// and nulled the lieferende that said when it left.
+/// components this Kündigung ended — never one that ended for its own reasons,
+/// possibly years earlier — and parks the `LIEFERENDE` UTILMD and
+/// `ABLESUNG_ENDE` reading order it queued, in the caller's transaction. A
+/// Lieferende that already left the queue is returned in [`WiderrufResult`].
 ///
 /// # Errors
 ///
@@ -1221,7 +1224,7 @@ pub async fn widerruf_kuendigung(
     conn: &mut sqlx::PgConnection,
     id: Uuid,
     tenant: &str,
-) -> Result<()> {
+) -> Result<WiderrufResult> {
     let vertrag: Option<(String, Option<Date>)> = sqlx::query_as(
         "SELECT status, kuendigung_zum FROM versorgungsvertraege WHERE id = $1 AND tenant = $2",
     )
@@ -1244,6 +1247,48 @@ pub async fn widerruf_kuendigung(
             "Kündigung Widerruf only allowed before the Lieferende — supply ended on {zum}"
         );
     }
+
+    // The Lieferende UTILMD and the Schlussablesung this Kündigung queued are
+    // parked with it, as `storniere_vertrag` parks its registration: left
+    // armed, the worker de-registers a customer whose termination was
+    // withdrawn. The dedupe key is released with the park, so a Kündigung
+    // re-issued to the same date queues again instead of colliding with the
+    // parked row. One already performed is reported, because only `processd`
+    // (UTILMD) or `edmd` (reading order) can withdraw it now.
+    let lieferende_bereits_versandt: Vec<Uuid> = sqlx::query_scalar(
+        r"SELECT komp_id FROM outbound_tasks
+           WHERE kind = 'LIEFERENDE' AND completed_at IS NOT NULL
+             AND tenant = $2
+             AND komp_id IN (
+                 SELECT id FROM vertragskomponenten
+                  WHERE vertrag_id = $1 AND tenant = $2
+                    AND lieferende IS NOT NULL AND lieferende > heute()
+             )",
+    )
+    .bind(id)
+    .bind(tenant)
+    .fetch_all(&mut *conn)
+    .await?;
+    sqlx::query(
+        // Tenant on both sides, as in `storniere_vertrag`: `komp_id` is a
+        // foreign key, so the subquery alone decides which rows are reached.
+        r"UPDATE outbound_tasks
+          SET dead_lettered_at = now(),
+              last_error = 'Kündigung widerrufen',
+              dedupe_key = dedupe_key || ':widerrufen:' || id
+          WHERE kind IN ('LIEFERENDE', 'ABLESUNG_ENDE')
+            AND completed_at IS NULL AND dead_lettered_at IS NULL
+            AND tenant = $2
+            AND komp_id IN (
+                SELECT id FROM vertragskomponenten
+                 WHERE vertrag_id = $1 AND tenant = $2
+                   AND lieferende IS NOT NULL AND lieferende > heute()
+            )",
+    )
+    .bind(id)
+    .bind(tenant)
+    .execute(&mut *conn)
+    .await?;
 
     // Revert exactly what this Kündigung scheduled — components whose supply
     // has not run out yet. A component that ended for its own reasons, possibly
@@ -1273,7 +1318,17 @@ pub async fn widerruf_kuendigung(
     .execute(&mut *conn)
     .await?;
 
-    Ok(())
+    Ok(WiderrufResult {
+        lieferende_bereits_versandt,
+    })
+}
+
+/// What [`widerruf_kuendigung`] could not take back.
+#[derive(Debug, Clone)]
+pub struct WiderrufResult {
+    /// Components whose Lieferende UTILMD had already left the queue — the
+    /// NB has it, and only a Stornierung in `processd` withdraws it.
+    pub lieferende_bereits_versandt: Vec<Uuid>,
 }
 
 /// Cancel a contract that has not yet gone into supply.

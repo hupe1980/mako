@@ -18,7 +18,7 @@ profiles ([vocabulary](@/docs/reference/_index.md#vocabulary)):
   what *that* case must, may and must not send. It rides `SG1 RFF+Z13` in every
   message type but APERAK and CONTRL, which carry it in `BGM` DE 1004; the
   profile records which in its `pid_source`
-  (`crates/edi-energy/src/pid_scan.rs:48`).
+  (`crates/edi-energy/src/pid_scan.rs`).
 
 ---
 
@@ -70,7 +70,7 @@ format `303` really carries `CCYYMMDDHHMMZZZ`.
 
 MIG `M` always binds; MIG `R` (BDEW-erforderlich) is the union over all
 Anwendungsfälle and yields to the selected column
-(`crates/edi-energy/src/profile/validate.rs:238`).
+(`crates/edi-energy/src/profile/validate.rs`).
 
 ### Before the layers — the envelope
 
@@ -459,7 +459,7 @@ of them may carry Bedingungen — `Muss [10]`, `X [UB1] ∧ [496]`,
 
 Allgemeine Festlegungen 6.1d Kap. 6.4 fixes what a Bedingung number means by its
 range, and the evaluator follows that split
-(`crates/edi-energy/src/profile/conditions.rs:1`):
+(`crates/edi-energy/src/profile/conditions.rs`):
 
 | Range | Kind | Evaluated? |
 |---|---|---|

@@ -167,11 +167,10 @@ impl RegulatoryRegime {
     /// Refuse to price Netzentgelte under a regime whose methodology does not
     /// exist yet.
     ///
-    /// The AgNeS successor system (GBK-25-01) is draft only: the
-    /// Rahmenfestlegung is expected end-2026, and its parameter tables follow
-    /// as configuration once binding. Until then, a settlement whose Entgelt
-    /// axis resolves to [`EntgeltRegime::AgNeS`] must be refused rather than
-    /// computed with the lapsed Verordnung math and merely tagged.
+    /// The AgNeS successor system (GBK-25-01) is draft only and has no binding
+    /// parameter tables, so a settlement whose Entgelt axis resolves to
+    /// [`EntgeltRegime::AgNeS`] is refused rather than computed with the lapsed
+    /// Verordnung math and merely tagged.
     ///
     /// Builders whose charges are not formed on the Entgelt axis do not call
     /// this — see the exemption comments at [`crate::billing::settle_mmm`],

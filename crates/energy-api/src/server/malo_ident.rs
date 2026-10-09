@@ -47,7 +47,10 @@ use crate::models::electricity::{
 /// - `Ok(Some(r))` — MaLo found; deliver positive callback with `r`.
 /// - `Ok(None)`    — MaLo not found; deliver negative callback.
 /// - `Err(_)`      — Transient storage error; retry via outbox.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait MaloRegistry: Send + Sync + 'static {
     /// Look up a market location by the BDEW identification parameters.
     async fn lookup(

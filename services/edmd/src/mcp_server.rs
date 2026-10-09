@@ -20,7 +20,7 @@
 //! | `validate_timeseries`        | Run the metering validation rules (V01–V09/V11/V12) on meter reads |
 //! | `get_quality_assessments`    | Per-batch quality history (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD)) |
 //! | `get_summenzeitreihe`        | Monthly aggregated kWh for MaBiS |
-//! | `get_annual_forecast`        | § 40a Abs. 2 EnWG Verbrauchsschätzung / Abschlagshöhe |
+//! | `get_annual_forecast`        | § 40a Abs. 2 EnWG Verbrauchsschätzung · § 13 Abs. 1 StromGVV Abschlagshöhe |
 //! | `get_gas_quality`            | PID 13007 Brennwert + Zustandszahl |
 //!
 //! ## Prompts (5)
@@ -287,9 +287,15 @@ pub struct GetGasQualityParams {
 #[derive(Clone)]
 pub struct EdmdMcpHandler {
     state: Arc<EdmdMcpState>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     tool_router: ToolRouter<EdmdMcpHandler>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     prompt_router: PromptRouter<EdmdMcpHandler>,
 }
 
@@ -457,7 +463,7 @@ impl EdmdMcpHandler {
     ///
     /// Returns arbeitsmenge (total kWh), spitzenleistung_kw (RLM Strom peak
     /// demand), and Gas conversion factors (brennwert, zustandszahl).
-    /// Used by `invoicd` for RLM plausibility and by `netzbilanzd` (N4)
+    /// Used by `invoicd` for RLM plausibility and by `netzbilanzd`
     /// for NNE invoice generation.
     #[tool(
         description = "Get aggregated billing period summary for a MaLo (arbeitsmenge, spitzenleistung, brennwert, zustandszahl). Used by invoicd and netzbilanzd.",
@@ -806,7 +812,10 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
     ///
     /// Returns `meter_reads` rows where `quality_warnings->>'has_warnings' = 'true'`
     /// in the given time range, structured by the Hampel-k3-t3 algorithm.
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     #[tool(
         description = "Query Hampel-filter quality warnings for a MaLo in a time range. \
 Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %.",
@@ -1866,7 +1875,7 @@ impl EdmdMcpHandler {
                  ### Triggers (automatic)\n\
                  | Event | Reading order created |\n\
                  |---|---|\n\
-                 | INSRPT 23001 Störungsmeldung | `INSRPT_STOERUNG` (WiM Störungsmeldung; die MSB-Antwort ist 3 bzw. 1 Werktag je Messtechnik, WiM Teil 2 Kap. 1.2 Nr. 2) |\n\
+                 | INSRPT 23001 Störungsmeldung | `INSRPT_STOERUNG` (WiM Störungsmeldung; die MSB-Antwortfrist folgt der Messtechnik, WiM Teil 2 Kap. 1.2 Nr. 2) |\n\
                  | INSRPT 23003/23008 Technische Änderung | `SONDERABLESUNG` at handover date |\n\
                  | GPKE 55001 Lieferbeginn | `LIEFERBEGINN` at Lieferbeginndatum |\n\
                  | GPKE 55004/55007 Abmeldung/Beendigung der Zuordnung | `LIEFERENDE` at Lieferendedatum |\n\

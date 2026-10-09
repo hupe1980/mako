@@ -275,6 +275,15 @@ pub enum ProfilState {
     },
 }
 
+impl mako_engine::workflow::OccupiesBusinessKey for ProfilState {
+    /// Occupied while the LF may still check the delivery; an accepted,
+    /// complained-about or invalid delivery is settled, and the next delivery
+    /// is a new process.
+    fn occupies_business_key(&self) -> bool {
+        matches!(self, Self::Erhalten(_))
+    }
+}
+
 impl ProfilState {
     /// Stable string label for the current variant.
     #[must_use]

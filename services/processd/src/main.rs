@@ -134,3 +134,40 @@ impl Daemon for Processd {
 async fn main() -> anyhow::Result<()> {
     mako_service::run::<Processd>().await
 }
+
+/// The router builds the way `mako_service::run` mounts it.
+///
+/// `build` runs with the shipped demo configuration and a lazy pool, and the
+/// runner's infra routes are merged in exactly as at boot — so a route axum
+/// refuses, a merge collision with the runner's `/metrics` or `/health/*`, or
+/// a `build` that panics fails `cargo test` instead of the container start.
+///
+/// `build` registers this processd's webhook with `marktd` and refuses to start
+/// when that fails, so the test answers the registration from a stand-in.
+#[cfg(test)]
+mod startup_test {
+    /// A `marktd` that accepts any subscription.
+    async fn marktd() -> String {
+        let app = axum::Router::new().fallback(|| async { axum::http::StatusCode::OK });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn the_router_builds_as_the_runner_mounts_it() {
+        let mut cfg: toml::Value =
+            toml::from_str(include_str!("../../../demos/nb-stp/processd.toml"))
+                .expect("the demo configuration parses");
+        cfg["marktd"]["url"] = toml::Value::String(marktd().await);
+        let cfg = cfg
+            .try_into()
+            .expect("the demo configuration is a processd one");
+        let _app = mako_service::build_for_test::<super::Processd>(cfg)
+            .await
+            .expect("the router builds");
+    }
+}

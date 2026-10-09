@@ -8,7 +8,7 @@
 //! answers the counterparty — accept or dispute — through `makod`.
 //!
 //! ```text
-//! marktd ──POST /webhook──► invoicd ──route_for(pid)──► check
+//! marktd ──POST /webhook──► invoicd ──disposition_for(pid)──► check
 //!                              │                          │
 //!                        marktd price sheets ─────────────┘
 //!                              │
@@ -50,8 +50,10 @@
 //! nested sections, e.g. `INVOICD_DATABASE__URL`). See [`config`].
 //!
 //! At startup `invoicd` calls `PUT /api/v1/subscriptions/invoicd` on `marktd`
-//! to register for `de.mako.process.initiated`, filtered to the PIDs in
-//! [`routing::ROUTES`]. The `PUT` is idempotent and safe on every restart.
+//! to register for `de.mako.process.initiated`. No PID filter is sent: every
+//! fan-out arrives and [`routing::disposition_for`] decides whether it is
+//! checked, refused into `invoic_dlq`, or not an INVOIC. The `PUT` is
+//! idempotent and safe on every restart.
 
 #![deny(unsafe_code)]
 

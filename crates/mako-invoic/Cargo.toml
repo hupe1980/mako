@@ -1,7 +1,7 @@
 [package]
 name         = "mako-invoic"
 version.workspace      = true
-description  = "The INVOIC settle/dispute state machine shared by every German energy market billing process (GPKE, WiM, GaBi Gas, GeLi Gas)"
+description  = "The INVOIC settle/dispute state machine shared by the German energy market billing processes"
 authors.workspace      = true
 edition.workspace      = true
 license.workspace      = true
@@ -24,3 +24,6 @@ serde_json  = { workspace = true }
 mako-engine = { workspace = true, features = ["testing"] }
 serde_json  = { workspace = true }
 tokio       = { version = "1", features = ["full"] }
+
+[lints]
+workspace = true

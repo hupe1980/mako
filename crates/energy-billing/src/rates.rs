@@ -1,54 +1,24 @@
-//! `RegulatoryRates` — statutory levy rates, operator-configured.
+//! `RegulatoryRates` — the statutory rates of one billing period.
 //!
-//! All rates come from `billingd.toml [rates]`. The library never hardcodes
-//! statutory rates; they change with each legislative year.
+//! The per-kWh taxes come from dated series that end at the last year their
+//! statute was read for; a year outside a series has no rate and its
+//! provider refuses the period.
 
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 use serde::{Deserialize, Serialize};
 
-/// Kaufmännisches Runden (DIN 1333): round half **away from zero**.
-///
-/// German commercial practice — and the EN 16931 / XRechnung validation
-/// ecosystem — expect half-up rounding, while `Decimal::round_dp` defaults
-/// to banker's rounding (MidpointNearestEven). The two agree everywhere except
-/// exact midpoints, which is where a price quoted in ct with three decimals
-/// lands, so the wrong mode misstates a cent without failing any test written
-/// against ordinary numbers. `cargo xtask check-rounding` refuses a bare
-/// `round_dp` workspace-wide for that reason.
-///
-/// Away-from-zero (not literal half-up) keeps credit notes and Stornorechnungen
-/// symmetric to their originals: round(-0.005) = -0.01 mirrors
-/// round(0.005) = 0.01.
-///
-/// The mode itself is [`billing::RoundingStrategy::MidpointAwayFromZero`] — the
-/// same strategy the `billing` arithmetic core applies inside every `Amount`
-/// conversion, multiplication and division. One authority, two call styles:
-/// typed fixed-point via `billing::Amount` where the precision is statutory,
-/// and this helper where a runtime `dp` is needed on a raw `Decimal`.
-#[must_use]
-pub fn round_money(value: Decimal, dp: u32) -> Decimal {
-    value.round_dp_with_strategy(dp, billing::RoundingStrategy::MidpointAwayFromZero.into())
-}
-
-/// Method-call form of [`round_money`] — `x.round_kfm(2)`.
-pub trait RoundMoney {
-    /// Round to `dp` decimal places, half away from zero (DIN 1333).
-    #[must_use]
-    fn round_kfm(&self, dp: u32) -> Decimal;
-}
-
-impl RoundMoney for Decimal {
-    fn round_kfm(&self, dp: u32) -> Decimal {
-        round_money(*self, dp)
-    }
-}
+pub use grid_billing::{RoundMoney, round_money};
 
 // ── BEHG CO₂ price table ──────────────────────────────────────────────────────
 
-/// BEHG §10 CO₂ price in EUR/t by calendar year.
+/// BEHG CO₂ price in EUR/t by calendar year.
 ///
-/// Source: Brennstoffemissionshandelsgesetz §10 BEHG (BGBl. I 2021 Nr. 37).
+/// 2021–2025: the Festpreise of § 10 Abs. 2 Satz 2 BEHG. 2026: the Mittelwert
+/// of the § 10 Abs. 2 Satz 4 BEHG 55–65 corridor, which § 4 Abs. 1 Nr. 2
+/// CO2KostAufG makes the maßgeblicher Preis. No statute fixes a price for a
+/// later year, so none is tabled; `cargo xtask check-behg-prices` refuses a
+/// row for one.
 ///
 /// | Year | EUR/t | ct/kWh_Hs |
 /// |---|---|---|
@@ -125,51 +95,49 @@ pub fn erdgas_emissionsfaktor_kg_per_kwh(year: i32) -> Option<Decimal> {
         .map(|(_, t_per_gj)| ERDGAS_UMRECHNUNGSFAKTOR_GJ_PER_MWH * t_per_gj)
 }
 
+// ── Dated statutory series ───────────────────────────────────────────────────
+
+pub use grid_billing::SatzZeile;
+
+/// The row of `series` covering `year`, if any.
+fn zeile_fuer(series: &'static [SatzZeile], year: i32) -> Option<&'static SatzZeile> {
+    SatzZeile::fuer(series, year)
+}
+
 // ── Stromsteuer (§ 3 StromStG) ───────────────────────────────────────────────
 
-/// The standard § 3 StromStG rate: **2,05 ct/kWh** (20,50 EUR/MWh), unchanged
-/// since 01.04.2003 (BGBl. I 2002 S. 4602).
-pub const STROMSTEUER_REGELSATZ_CT_PER_KWH: Decimal = dec!(2.05);
-
-/// First calendar year the § 3 StromStG standard rate applies to.
-const STROMSTEUER_SINCE: i32 = 2003;
-
-/// The standard § 3 StromStG rate (ct/kWh) for a calendar year.
-///
-/// `None` before 2003, when the rate was still climbing through the Ökosteuer
-/// stages — a caller billing such a period must supply the rate itself rather
-/// than inherit today's.
-///
-/// This replaced a 24-row table of identical values. The rate has not moved in
-/// twenty-three years and the reliefs that did move are **Entlastungen**
-/// (§ 9b StromStG, permanent at the EU minimum rate since 01.01.2026), which
-/// the customer claims from the Hauptzollamt and which never change what a
-/// supplier invoices — see [`crate::steuer`].
-///
-/// ## Usage for retroactive corrections
-///
-/// ```rust
-/// use energy_billing::rates::stromsteuer_for_year;
-/// assert_eq!(stromsteuer_for_year(2024), Some(rust_decimal::dec!(2.05)));
-/// assert_eq!(stromsteuer_for_year(1999), None); // before the standard rate
-/// ```
-#[must_use]
-pub fn stromsteuer_for_year(year: i32) -> Option<Decimal> {
-    (year >= STROMSTEUER_SINCE).then_some(STROMSTEUER_REGELSATZ_CT_PER_KWH)
-}
+/// The § 3 StromStG series lives in `grid-billing`, the one source `eeg-billing`
+/// reads as well; the reliefs that did move are **Entlastungen** (§ 9b
+/// StromStG), which the customer claims from the Hauptzollamt and which never
+/// change what a supplier invoices — see [`crate::steuer`].
+pub use grid_billing::stromsteuer::{
+    STROMSTEUER_REGELSATZ_CT_PER_KWH, STROMSTEUER_SERIE, stromsteuer_for_year,
+};
 
 // ── Energiesteuer Erdgas (§ 2 Abs. 3 Satz 1 Nr. 4 EnergieStG) ────────────────
 
-/// The Erdgas-als-Heizstoff rate: **0,55 ct/kWh_Hs** (5,50 EUR/MWh).
+/// The Erdgas-als-Heizstoff rate: **0,55 ct/kWh_Hs** — „für 1 MWh Erdgas und
+/// 1 MWh gasförmige Kohlenwasserstoffe 5,50 EUR".
 pub const ENERGIESTEUER_GAS_CT_PER_KWH: Decimal = dec!(0.55);
 
-/// First calendar year the EnergieStG applies to (in force 01.08.2006).
-const ENERGIESTEUER_SINCE: i32 = 2006;
+/// The § 2 Abs. 3 Satz 1 Nr. 4 EnergieStG series.
+///
+/// Starts in 2006, the first year of the EnergieStG (in force 01.08.2006);
+/// ends with the year the statute was last read. The time-limited Fassungen
+/// of § 68 EnergieStG (2022 and 2026) reach § 2 Abs. 1 motor fuels only, never
+/// § 2 Abs. 3 heating gas.
+pub const ENERGIESTEUER_GAS_SERIE: &[SatzZeile] = &[SatzZeile {
+    von_jahr: 2006,
+    bis_jahr: 2027,
+    ct_per_kwh: ENERGIESTEUER_GAS_CT_PER_KWH,
+    quelle: "§ 2 Abs. 3 Satz 1 Nr. 4 EnergieStG (5,50 EUR/MWh), gelesen auf \
+             gesetze-im-internet.de am 2026-10-05; Abs. 3 ohne Befristung und \
+             ohne verkündete Änderung für 2027",
+}];
 
 /// The § 2 Abs. 3 Satz 1 Nr. 4 EnergieStG heating-gas rate (ct/kWh_Hs) for a
-/// calendar year, or `None` before the EnergieStG.
+/// calendar year, or `None` outside [`ENERGIESTEUER_GAS_SERIE`].
 ///
-/// Constant since the 2003 Ökosteuer stage and carried over into the EnergieStG.
 /// The 2022 Energiesteuersenkungsgesetz (BGBl. I 2022 S. 810) reduced
 /// **motor-fuel** rates (§ 2 Abs. 1) only; the 2022/23 gas reliefs were the
 /// Dezember-Soforthilfe (EWSG) and the USt cut to 7 % (§ 28 Abs. 5/6 UStG, see
@@ -180,16 +148,18 @@ const ENERGIESTEUER_SINCE: i32 = 2006;
 /// // No heating-gas reduction existed in 2022 (the Tankrabatt was fuels-only)
 /// assert_eq!(energiesteuer_gas_for_year(2022), Some(rust_decimal::dec!(0.55)));
 /// assert_eq!(energiesteuer_gas_for_year(2005), None);
+/// assert_eq!(energiesteuer_gas_for_year(2028), None); // not yet read for 2028
 /// ```
 #[must_use]
 pub fn energiesteuer_gas_for_year(year: i32) -> Option<Decimal> {
-    (year >= ENERGIESTEUER_SINCE).then_some(ENERGIESTEUER_GAS_CT_PER_KWH)
+    zeile_fuer(ENERGIESTEUER_GAS_SERIE, year).map(|z| z.ct_per_kwh)
 }
 
-/// Compute BEHG ct/kWh_Hs for a given calendar year.
+/// Compute BEHG ct/kWh_Hs for a calendar year from the § 10 BEHG price table.
 ///
-/// Returns `None` when the year has no §10 BEHG price or no EBeV emission
-/// factor (caller should fall back to `RegulatoryRates::behg_gas_ct_per_kwh`).
+/// Returns `None` when the year has no tabled price or no EBeV emission
+/// factor. From 2027 no statutory price exists; the caller resolves one
+/// through a [`BehgRegime`] or refuses the period.
 ///
 /// # Example
 /// ```rust
@@ -197,14 +167,40 @@ pub fn energiesteuer_gas_for_year(year: i32) -> Option<Decimal> {
 /// // 2024: 45 EUR/t × 0.18139464 kg/kWh_Hs ÷ 10
 /// let ct = behg_ct_per_kwh_for_year(2024).unwrap();
 /// assert!(ct > rust_decimal::dec!(0.81) && ct < rust_decimal::dec!(0.82));
+/// assert!(behg_ct_per_kwh_for_year(2027).is_none());
 /// ```
 #[must_use]
 pub fn behg_ct_per_kwh_for_year(year: i32) -> Option<Decimal> {
-    let eur_per_t = BEHG_EUR_PER_T
+    behg_eur_per_t_for_year(year).and_then(|eur_per_t| behg_ct_per_kwh_from_price(eur_per_t, year))
+}
+
+/// The § 10 BEHG price (EUR/t) tabled for a year, if any.
+#[must_use]
+pub fn behg_eur_per_t_for_year(year: i32) -> Option<Decimal> {
+    BEHG_EUR_PER_T
         .iter()
         .find(|(y, _)| *y == year)
-        .map(|(_, eur_per_t)| Decimal::from(*eur_per_t))?;
-    behg_ct_per_kwh_from_price(eur_per_t, year)
+        .map(|(_, eur_per_t)| Decimal::from(*eur_per_t))
+}
+
+/// The first year the BEHG prices: § 10 Abs. 2 Satz 2 Nr. 1 BEHG opens the
+/// Festpreise „im Zeitraum vom 1. Januar 2021". A period before it carries no
+/// CO₂ component — zero, not missing.
+pub const BEHG_ERSTES_JAHR: i32 = 2021;
+
+/// The legal basis of a tabled BEHG year, for the invoice trace.
+#[must_use]
+pub fn behg_rechtsgrundlage_for_year(year: i32) -> Option<&'static str> {
+    match year {
+        ..BEHG_ERSTES_JAHR => {
+            Some("kein Brennstoffemissionshandel vor 2021 (§ 10 Abs. 2 Satz 2 Nr. 1 BEHG)")
+        }
+        2021..=2025 => Some("§ 10 Abs. 2 Satz 2 BEHG (Festpreis)"),
+        2026 => Some(
+            "§ 4 Abs. 1 Nr. 2 CO2KostAufG (Mittelwert des Preiskorridors nach § 10 Abs. 2 Satz 4 BEHG)",
+        ),
+        _ => None,
+    }
 }
 
 /// Convert an nEHS certificate price (EUR/t CO₂) into the Gas CO₂ cost
@@ -230,24 +226,173 @@ pub fn behg_ct_per_kwh_from_price(eur_per_t: Decimal, year: i32) -> Option<Decim
     erdgas_emissionsfaktor_kg_per_kwh(year).map(|factor| eur_per_t * factor / dec!(10))
 }
 
+// ── The 2027 BEHG price regime ───────────────────────────────────────────────
+
+/// Which law prices nEHS certificates in 2027 — a deployment choice, because
+/// the two candidates are incompatible and only one can bind.
+///
+/// | Regime | Legal basis | Supplied 2027 price |
+/// |---|---|---|
+/// | [`RvoBezugspreis`](Self::RvoBezugspreis) | § 10 Abs. 3 Satz 2 Nr. 4/Nr. 5 BEHG in force: the sale price „in jedem Quartal des Jahres 2027" is the „mengengewichteten Durchschnittspreis der Versteigerungen von Berechtigungen nach § 10 des Treibhausgas-Emissionshandelsgesetzes in dem jeweils vorletzten vorangegangenen Quartal" | any positive price; nothing to bound it by |
+/// | [`Korridor`](Self::Korridor) | § 10 Abs. 2 Satz 4 BEHG as the 3. BEHG-ÄndG (BT-Drs. 21/7869, Art. 1 Nr. 4 a) would word it: „Für die Jahre 2026 und 2027 wird ein Preiskorridor mit einem Mindestpreis von 55 Euro … und einem Höchstpreis von 65 Euro … festgelegt" | inside 55–65 EUR/t |
+///
+/// `RvoBezugspreis` is the default because it is the law in force; the
+/// corridor is a Gesetzentwurf. Neither regime carries a 2027 price: no
+/// statute fixes one in advance, so a 2027 Gas period refuses until a price
+/// is supplied, under either.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BehgRegime {
+    /// § 10 Abs. 3 Satz 2 Nr. 4/Nr. 5 BEHG — the enacted Verordnungsermächtigung.
+    #[default]
+    RvoBezugspreis,
+    /// The 55–65 EUR/t corridor of the 3. BEHG-ÄndG (BT-Drs. 21/7869).
+    Korridor,
+}
+
+/// Mindestpreis of the corridor regime — BT-Drs. 21/7869, Art. 1 Nr. 4 a).
+pub const BEHG_KORRIDOR_MIN_EUR_PER_T: Decimal = dec!(55);
+/// Höchstpreis of the corridor regime — BT-Drs. 21/7869, Art. 1 Nr. 4 a).
+pub const BEHG_KORRIDOR_MAX_EUR_PER_T: Decimal = dec!(65);
+
+impl BehgRegime {
+    /// The legal basis an invoice trace names for a price set under this regime.
+    #[must_use]
+    pub const fn rechtsgrundlage(self) -> &'static str {
+        match self {
+            Self::RvoBezugspreis => {
+                "§ 10 Abs. 3 Satz 2 Nr. 4/Nr. 5 BEHG (Bezugspreis der TEHG-Versteigerungen)"
+            }
+            Self::Korridor => "§ 10 Abs. 2 Satz 4 BEHG i. d. F. des 3. BEHG-ÄndG (BT-Drs. 21/7869)",
+        }
+    }
+
+    /// Check a supplied price for a year with no tabled § 10 BEHG price.
+    ///
+    /// # Errors
+    ///
+    /// The price is not positive, or — under [`Korridor`](Self::Korridor) —
+    /// lies outside 55–65 EUR/t.
+    pub fn pruefe(self, eur_per_t: Decimal, year: i32) -> Result<(), RateRefusal> {
+        if eur_per_t <= Decimal::ZERO {
+            return Err(RateRefusal::new(
+                "BEHG",
+                year,
+                format!("{eur_per_t} EUR/t ist kein Zertifikatspreis"),
+            ));
+        }
+        if self == Self::Korridor
+            && !(BEHG_KORRIDOR_MIN_EUR_PER_T..=BEHG_KORRIDOR_MAX_EUR_PER_T).contains(&eur_per_t)
+        {
+            return Err(RateRefusal::new(
+                "BEHG",
+                year,
+                format!(
+                    "{eur_per_t} EUR/t liegt außerhalb des Preiskorridors \
+                     {BEHG_KORRIDOR_MIN_EUR_PER_T}–{BEHG_KORRIDOR_MAX_EUR_PER_T} EUR/t ({})",
+                    self.rechtsgrundlage()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The refusal for a year with no tabled price and none supplied.
+    #[must_use]
+    pub fn fehlender_preis(self, year: i32) -> RateRefusal {
+        let was = match self {
+            Self::RvoBezugspreis => {
+                "der mengengewichtete Durchschnittspreis der TEHG-Versteigerungen des \
+                 vorletzten vorangegangenen Quartals"
+            }
+            Self::Korridor => "ein Zertifikatspreis innerhalb des Preiskorridors",
+        };
+        RateRefusal::new(
+            "BEHG",
+            year,
+            format!(
+                "kein gesetzlicher Preis für {year}; {was} ist nicht hinterlegt ({})",
+                self.rechtsgrundlage()
+            ),
+        )
+    }
+}
+
+// ── Refusal ──────────────────────────────────────────────────────────────────
+
+/// Why no statutory rate is available for a period.
+///
+/// Carried in [`RegulatoryRates`] in place of a rate, and raised as
+/// [`EngineError::RateRefused`](crate::EngineError::RateRefused) by the first
+/// provider that needs it — so a Strom invoice is never refused for a missing
+/// Gas levy, and a Gas invoice always is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[error("{satz} {jahr}: {grund}")]
+pub struct RateRefusal {
+    /// The rate: `Stromsteuer`, `Energiesteuer Erdgas`, `BEHG`.
+    pub satz: String,
+    /// The calendar year the rate was asked for.
+    pub jahr: i32,
+    /// What is missing, and under which provision.
+    pub grund: String,
+}
+
+impl RateRefusal {
+    /// A refusal for `satz` in `jahr`.
+    #[must_use]
+    pub fn new(satz: &str, jahr: i32, grund: impl Into<String>) -> Self {
+        Self {
+            satz: satz.to_owned(),
+            jahr,
+            grund: grund.into(),
+        }
+    }
+
+    /// The refusal for a year past (or before) a statutory series.
+    #[must_use]
+    pub fn ausserhalb_der_serie(satz: &str, series: &[SatzZeile], jahr: i32) -> Self {
+        let (von, bis) = (
+            series.iter().map(|z| z.von_jahr).min().unwrap_or(jahr),
+            series.iter().map(|z| z.bis_jahr).max().unwrap_or(jahr),
+        );
+        Self::new(
+            satz,
+            jahr,
+            format!(
+                "kein gelesener Satz für {jahr}; die Reihe ist für {von}–{bis} belegt — \
+                 den Satz für {jahr} aus dem Gesetz in der geltenden Fassung hinterlegen"
+            ),
+        )
+    }
+}
+
+/// A rate as resolved for one period: known, or refused with its reason.
+pub type ResolvedRate = Result<Decimal, RateRefusal>;
+
 // ── RegulatoryRates ───────────────────────────────────────────────────────────
 
-/// Platform-level defaults for statutory rates.
+/// The statutory rates resolved for one billing period.
 ///
-/// Configure under `[rates]` in `billingd.toml`. These defaults reflect
-/// 2025/2026 published rates and will be superseded by operator configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Each per-kWh tax is a [`ResolvedRate`]: the rate, or the reason there is
+/// none for the period. The provider that bills the tax refuses on the
+/// reason; nothing substitutes another year's rate.
+///
+/// [`Default`] is the **2026** set — the rates for an example or a fixture
+/// dated 2026, not a fallback for any other year.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RegulatoryRates {
-    /// §3 StromStG — ct/kWh (current: 2.05 ct/kWh since 01.04.2003,
-    /// BGBl. I 2002 S. 4602; see [`stromsteuer_for_year`]).
-    pub stromsteuer_ct_per_kwh: Decimal,
-    /// § 2 Abs. 3 Satz 1 Nr. 4 EnergieStG, Erdgas als Heizstoff —
-    /// ct/kWh_Hs (current: 0.55 ct/kWh = 5,50 EUR/MWh).
-    pub energiesteuer_gas_ct_per_kwh: Decimal,
-    /// BEHG CO₂ levy for Erdgas H — ct/kWh_Hs.
+    /// § 3 StromStG — ct/kWh (see [`stromsteuer_for_year`]).
+    pub stromsteuer_ct_per_kwh: ResolvedRate,
+    /// § 2 Abs. 3 Satz 1 Nr. 4 EnergieStG, Erdgas als Heizstoff — ct/kWh_Hs
+    /// (see [`energiesteuer_gas_for_year`]).
+    pub energiesteuer_gas_ct_per_kwh: ResolvedRate,
+    /// BEHG CO₂ cost component for Erdgas — ct/kWh_Hs
     /// = CO₂-Preis EUR/t × Emissionsfaktor kg_CO₂/kWh_Hs ÷ 10
-    /// (see [`erdgas_emissionsfaktor_kg_per_kwh`])
-    pub behg_gas_ct_per_kwh: Decimal,
+    /// (see [`erdgas_emissionsfaktor_kg_per_kwh`]).
+    pub behg_gas_ct_per_kwh: ResolvedRate,
+    /// The legal basis the BEHG price was set under — named on the CO₂ line
+    /// and in its trace.
+    pub behg_rechtsgrundlage: String,
     /// Standard MwSt rate (fraction, e.g. `0.19`).
     pub mwst_rate: Decimal,
     /// Reduced MwSt rate (§ 12 Abs. 2 UStG, fraction, e.g. `0.07`).
@@ -267,12 +412,15 @@ fn default_mwst_reduced() -> Decimal {
 impl Default for RegulatoryRates {
     fn default() -> Self {
         Self {
-            stromsteuer_ct_per_kwh: dec!(2.05),
-            energiesteuer_gas_ct_per_kwh: dec!(0.55),
+            stromsteuer_ct_per_kwh: Ok(STROMSTEUER_REGELSATZ_CT_PER_KWH),
+            energiesteuer_gas_ct_per_kwh: Ok(ENERGIESTEUER_GAS_CT_PER_KWH),
             // 60 EUR/t — § 4 Abs. 1 Nr. 2 CO2KostAufG bills the *Mittelwert* of
             // the § 10 Abs. 2 BEHG 55–65 corridor, not its Höchstpreis —
             // × 0.18139464 kg_CO₂/kWh_Hs ÷ 10
-            behg_gas_ct_per_kwh: dec!(1.08836784),
+            behg_gas_ct_per_kwh: Ok(dec!(1.08836784)),
+            behg_rechtsgrundlage: behg_rechtsgrundlage_for_year(2026)
+                .unwrap_or_default()
+                .to_owned(),
             mwst_rate: dec!(0.19),
             mwst_rate_reduced: dec!(0.07),
         }
@@ -280,6 +428,34 @@ impl Default for RegulatoryRates {
 }
 
 impl RegulatoryRates {
+    /// The statutory per-kWh taxes for a calendar year, straight from the
+    /// series: Stromsteuer, Energiesteuer Erdgas and the tabled § 10 BEHG
+    /// price, each refused where the year has no row. The VAT fields are the
+    /// [`Default`] ones; a caller resolving a real period sets them.
+    #[must_use]
+    pub fn for_year(year: i32) -> Self {
+        let regime = BehgRegime::default();
+        Self {
+            stromsteuer_ct_per_kwh: stromsteuer_for_year(year).ok_or_else(|| {
+                RateRefusal::ausserhalb_der_serie("Stromsteuer", STROMSTEUER_SERIE, year)
+            }),
+            energiesteuer_gas_ct_per_kwh: energiesteuer_gas_for_year(year).ok_or_else(|| {
+                RateRefusal::ausserhalb_der_serie(
+                    "Energiesteuer Erdgas",
+                    ENERGIESTEUER_GAS_SERIE,
+                    year,
+                )
+            }),
+            behg_gas_ct_per_kwh: behg_ct_per_kwh_for_year(year)
+                .or_else(|| (year < BEHG_ERSTES_JAHR).then_some(Decimal::ZERO))
+                .ok_or_else(|| regime.fehlender_preis(year)),
+            behg_rechtsgrundlage: behg_rechtsgrundlage_for_year(year)
+                .unwrap_or(regime.rechtsgrundlage())
+                .to_owned(),
+            ..Self::default()
+        }
+    }
+
     // ── Typed product helpers (used by Product::build_engine) ─────────────────
 
     /// Effective MwSt for an [`ElectricityProduct`](crate::ElectricityProduct).
@@ -331,60 +507,63 @@ impl RegulatoryRates {
 
     // ── Override-based helpers (used by providers) ────────────────────────────
 
-    /// Effective Stromsteuer — product `override_ct` wins, else statutory rate.
-    #[must_use]
-    pub fn effective_stromsteuer(&self, override_ct: Option<Decimal>) -> Decimal {
-        override_ct.unwrap_or(self.stromsteuer_ct_per_kwh)
-    }
-
-    /// Effective Energiesteuer Gas — product `override_ct` wins.
-    #[must_use]
-    pub fn effective_energiesteuer_gas(&self, override_ct: Option<Decimal>) -> Decimal {
-        override_ct.unwrap_or(self.energiesteuer_gas_ct_per_kwh)
-    }
-
-    /// Effective BEHG CO₂ levy — product `override_ct` wins.
-    #[must_use]
-    pub fn effective_behg_gas(&self, override_ct: Option<Decimal>) -> Decimal {
-        override_ct.unwrap_or(self.behg_gas_ct_per_kwh)
-    }
-
-    /// Effective BEHG for a specific billing year (retroactive corrections).
-    #[must_use]
-    pub fn effective_behg_gas_for_year(&self, override_ct: Option<Decimal>, year: i32) -> Decimal {
-        if let Some(o) = override_ct {
-            return o;
-        }
-        behg_ct_per_kwh_for_year(year).unwrap_or(self.behg_gas_ct_per_kwh)
-    }
-
-    /// Effective Stromsteuer for a specific billing year (retroactive corrections).
-    #[must_use]
-    pub fn effective_stromsteuer_for_year(
-        &self,
-        override_ct: Option<Decimal>,
-        year: i32,
-    ) -> Decimal {
-        if let Some(o) = override_ct {
-            return o;
-        }
-        stromsteuer_for_year(year).unwrap_or(self.stromsteuer_ct_per_kwh)
-    }
-
-    /// Effective Energiesteuer Gas for a specific billing year (retroactive corrections).
+    /// Effective Stromsteuer — a product `override_ct` wins, else the period's
+    /// statutory rate.
     ///
-    /// Heating gas has been 0.55 ct/kWh throughout (§2 Abs. 3 Nr. 4 EnergieStG) —
-    /// the 2022 Energiesteuersenkungsgesetz cut motor fuels only, never heating gas.
-    #[must_use]
-    pub fn effective_energiesteuer_gas_for_year(
+    /// # Errors
+    ///
+    /// No override and no statutory rate for the period.
+    pub fn effective_stromsteuer(
         &self,
         override_ct: Option<Decimal>,
-        year: i32,
-    ) -> Decimal {
-        if let Some(o) = override_ct {
-            return o;
-        }
-        energiesteuer_gas_for_year(year).unwrap_or(self.energiesteuer_gas_ct_per_kwh)
+    ) -> Result<Decimal, crate::EngineError> {
+        resolve(override_ct, &self.stromsteuer_ct_per_kwh)
+    }
+
+    /// Effective Energiesteuer Erdgas — a product `override_ct` wins, else the
+    /// period's statutory rate.
+    ///
+    /// # Errors
+    ///
+    /// No override and no statutory rate for the period.
+    pub fn effective_energiesteuer_gas(
+        &self,
+        override_ct: Option<Decimal>,
+    ) -> Result<Decimal, crate::EngineError> {
+        resolve(override_ct, &self.energiesteuer_gas_ct_per_kwh)
+    }
+
+    /// Effective BEHG CO₂ component — a product `override_ct` wins **only
+    /// where the period has a lawful price**.
+    ///
+    /// Unlike the two taxes, an override does not stand in for a missing
+    /// BEHG price: a product price for a year no law has priced yet is the
+    /// same unsourced figure the refusal exists to stop, with a product name
+    /// on it.
+    ///
+    /// # Errors
+    ///
+    /// The period has no lawful BEHG price, override or not.
+    pub fn effective_behg_gas(
+        &self,
+        override_ct: Option<Decimal>,
+    ) -> Result<Decimal, crate::EngineError> {
+        let statutory = self
+            .behg_gas_ct_per_kwh
+            .clone()
+            .map_err(crate::EngineError::RateRefused)?;
+        Ok(override_ct.unwrap_or(statutory))
+    }
+}
+
+/// Override wins; else the resolved rate, or its refusal as an engine error.
+fn resolve(
+    override_ct: Option<Decimal>,
+    rate: &ResolvedRate,
+) -> Result<Decimal, crate::EngineError> {
+    match override_ct {
+        Some(o) => Ok(o),
+        None => rate.clone().map_err(crate::EngineError::RateRefused),
     }
 }
 
@@ -476,16 +655,104 @@ mod tests {
         assert!(behg_ct_per_kwh_from_price(dec!(65), 2031).is_none());
     }
 
+    /// Each series ends at the last year the statute was read for, so the
+    /// year after it has no rate. Answering it with the last row's rate bills
+    /// a year nobody checked as if somebody had.
     #[test]
-    fn effective_behg_for_year_prefers_override() {
-        let rates = RegulatoryRates::default();
+    fn the_tax_series_end_where_they_were_read() {
+        let last_strom = STROMSTEUER_SERIE.iter().map(|z| z.bis_jahr).max().unwrap();
+        let last_gas = ENERGIESTEUER_GAS_SERIE
+            .iter()
+            .map(|z| z.bis_jahr)
+            .max()
+            .unwrap();
+        assert_eq!(stromsteuer_for_year(last_strom), Some(dec!(2.05)));
+        assert_eq!(stromsteuer_for_year(last_strom + 1), None);
+        assert_eq!(energiesteuer_gas_for_year(last_gas), Some(dec!(0.55)));
+        assert_eq!(energiesteuer_gas_for_year(last_gas + 1), None);
+        assert_eq!(stromsteuer_for_year(2002), None);
+        assert_eq!(energiesteuer_gas_for_year(2005), None);
+        for z in STROMSTEUER_SERIE.iter().chain(ENERGIESTEUER_GAS_SERIE) {
+            assert!(
+                z.quelle.contains("gelesen"),
+                "a row names when it was read: {z:?}"
+            );
+        }
+    }
+
+    /// A year outside the series is refused by the provider that bills it,
+    /// naming the tax and the year — and a product override still wins.
+    #[test]
+    fn an_unread_year_refuses_and_an_override_still_wins() {
+        let rates = RegulatoryRates::for_year(2028);
+        let err = rates
+            .effective_stromsteuer(None)
+            .expect_err("2028 is unread");
+        let msg = err.to_string();
+        assert!(msg.contains("Stromsteuer") && msg.contains("2028"), "{msg}");
+        assert_eq!(err.code(), "RATE_REFUSED");
+        assert!(rates.effective_energiesteuer_gas(None).is_err());
         assert_eq!(
-            rates.effective_behg_gas_for_year(Some(dec!(0.99)), 2024),
+            rates.effective_stromsteuer(Some(dec!(1.5))).unwrap(),
+            dec!(1.5)
+        );
+        assert_eq!(
+            RegulatoryRates::for_year(2026)
+                .effective_stromsteuer(None)
+                .unwrap(),
+            dec!(2.05)
+        );
+    }
+
+    /// 2027 has no § 10 BEHG price, and a product override does not stand in
+    /// for one: it is the same unsourced figure with a product name on it.
+    #[test]
+    fn a_2027_behg_price_is_refused_override_or_not() {
+        let rates = RegulatoryRates::for_year(2027);
+        let err = rates
+            .effective_behg_gas(None)
+            .expect_err("2027 has no price");
+        assert!(err.to_string().contains("2027"), "{err}");
+        assert!(rates.effective_behg_gas(Some(dec!(1.2))).is_err());
+        assert_eq!(
+            RegulatoryRates::for_year(2024)
+                .effective_behg_gas(Some(dec!(0.99)))
+                .unwrap(),
             dec!(0.99)
         );
-        // Without override, uses statutory year rate
-        let ct = rates.effective_behg_gas_for_year(None, 2024);
-        assert_eq!(ct, dec!(45) * dec!(0.18139464) / dec!(10));
+    }
+
+    /// The corridor regime bounds a supplied price; the RVO regime has
+    /// nothing to bound it by.
+    #[test]
+    fn the_corridor_regime_bounds_the_price_and_the_rvo_regime_does_not() {
+        let k = BehgRegime::Korridor;
+        assert!(k.pruefe(dec!(54), 2027).is_err());
+        assert!(k.pruefe(dec!(66), 2027).is_err());
+        assert!(k.pruefe(dec!(55), 2027).is_ok());
+        assert!(k.pruefe(dec!(60), 2027).is_ok());
+        assert!(k.pruefe(dec!(65), 2027).is_ok());
+        let r = BehgRegime::RvoBezugspreis;
+        assert!(r.pruefe(dec!(80), 2027).is_ok());
+        assert!(r.pruefe(dec!(0), 2027).is_err());
+        assert_eq!(BehgRegime::default(), BehgRegime::RvoBezugspreis);
+        assert!(
+            r.fehlender_preis(2027)
+                .grund
+                .contains("vorletzten vorangegangenen Quartals")
+        );
+    }
+
+    /// Before 2021 there was no Brennstoffemissionshandel: the CO₂ component
+    /// of a 2020 correction is zero, not a refusal and not today's price.
+    #[test]
+    fn a_period_before_the_behg_carries_no_co2_component() {
+        assert_eq!(
+            RegulatoryRates::for_year(2020)
+                .effective_behg_gas(None)
+                .unwrap(),
+            Decimal::ZERO
+        );
     }
 }
 
@@ -642,7 +909,7 @@ mod mwst_period_tests {
 /// caller can split `[from, stichtag-1]` and `[stichtag, to]` and bill each at
 /// its own rate. An empty result means one rate governs the whole period.
 ///
-/// Two families of Stichtag exist:
+/// Three families of Stichtag exist:
 ///
 /// - **Umsatzsteuer** — the COVID window (01.07.2020–31.12.2020, 16 %) for every
 ///   commodity, plus the gas/Fernwärme window (01.10.2022–31.03.2024, 7 %,
@@ -651,6 +918,10 @@ mod mwst_period_tests {
 ///   so a `GAS` period spanning a year-end has two levy rates. A Fernwärme
 ///   period does not: its CO₂ cost is the heat product's own CO2KostAufG § 3
 ///   figure, which no calendar boundary moves.
+/// - **End of a series** — a 1 January after which a per-year rate (BEHG,
+///   Energiesteuer Erdgas for `GAS`; Stromsteuer for the electricity
+///   categories) has no row: the leg after it refuses rather than inherit
+///   the year before's rate.
 ///
 /// # Example
 ///
@@ -701,32 +972,49 @@ pub fn steuer_stichtage_im_zeitraum(
     // both sides of a year boundary. Splitting a heat period there yields two
     // legs priced identically.
     //
-    // Both years must be in the § 10 BEHG table. `Some(rate) != None` is not a
-    // rate change: a year pair the table does not cover cannot be split into
-    // two known rates, so it is left to the operator.
+    // A year whose price is not tabled is a boundary too: billing the leg
+    // after it at the earlier year's price is the substitution the refusal
+    // exists to stop, so the period splits and the untabled leg refuses on
+    // its own. The same holds where a tax series ends.
     if category == "GAS" {
-        for year in (from.year() + 1)..=to.year() {
-            let Ok(jan1) = time::Date::from_calendar_date(year, time::Month::January, 1) else {
-                continue;
-            };
-            if jan1 <= from || jan1 > to {
-                continue;
-            }
-            let (Some(before), Some(after)) = (
-                behg_ct_per_kwh_for_year(year - 1),
-                behg_ct_per_kwh_for_year(year),
-            ) else {
-                continue;
-            };
-            if before != after {
-                stichtage.push(jan1);
-            }
-        }
+        stichtage.extend(jahresgrenzen(from, to, behg_ct_per_kwh_for_year));
+        stichtage.extend(jahresgrenzen(from, to, energiesteuer_gas_for_year));
+    }
+    if STROMSTEUER_KATEGORIEN.contains(&category) {
+        stichtage.extend(jahresgrenzen(from, to, stromsteuer_for_year));
     }
 
     stichtage.sort_unstable();
     stichtage.dedup();
     stichtage
+}
+
+/// The product categories whose providers bill § 3 StromStG.
+const STROMSTEUER_KATEGORIEN: &[&str] = &[
+    "STROM",
+    "WAERMEPUMPE",
+    "WALLBOX",
+    "SOLAR",
+    "HEMS",
+    "EMOBILITY",
+    "SHARING",
+];
+
+/// Each 1 January inside `(from, to]` where a per-year rate changes or where
+/// either side has none.
+fn jahresgrenzen(
+    from: time::Date,
+    to: time::Date,
+    rate: fn(i32) -> Option<Decimal>,
+) -> Vec<time::Date> {
+    ((from.year() + 1)..=to.year())
+        .filter_map(|year| {
+            let jan1 = time::Date::from_calendar_date(year, time::Month::January, 1).ok()?;
+            let (before, after) = (rate(year - 1), rate(year));
+            (jan1 > from && jan1 <= to && (before.is_none() || after.is_none() || before != after))
+                .then_some(jan1)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -804,6 +1092,18 @@ mod stichtag_tests {
         );
     }
 
+    /// Where the § 3 StromStG series ends, the year after has no rate; a
+    /// period running into it splits so that leg refuses on its own.
+    #[test]
+    fn the_end_of_the_stromsteuer_series_splits_an_electricity_period() {
+        let last = STROMSTEUER_SERIE.iter().map(|z| z.bis_jahr).max().unwrap();
+        let von = time::Date::from_calendar_date(last, time::Month::December, 1).unwrap();
+        let bis = time::Date::from_calendar_date(last + 1, time::Month::January, 31).unwrap();
+        let jan1 = time::Date::from_calendar_date(last + 1, time::Month::January, 1).unwrap();
+        assert_eq!(steuer_stichtage_im_zeitraum("STROM", von, bis), vec![jan1]);
+        assert!(steuer_stichtage_im_zeitraum("WASSER", von, bis).is_empty());
+    }
+
     /// Electricity carries no BEHG levy, so a year crossing does not split it.
     #[test]
     fn a_year_crossing_electricity_period_does_not_split() {
@@ -831,10 +1131,11 @@ mod stichtag_tests {
         );
     }
 
-    /// Both years must carry a § 10 BEHG price. Past the end of the table there
-    /// is no second rate to bill the other leg at, so there is nothing to split.
+    /// A year with no tabled § 10 BEHG price is a boundary: the leg after it
+    /// cannot be billed at the year before's price, so the period splits there
+    /// and that leg refuses on its own.
     #[test]
-    fn a_year_pair_the_behg_table_does_not_cover_is_no_stichtag() {
+    fn a_year_the_behg_table_does_not_cover_is_a_stichtag() {
         let last_tabled = BEHG_EUR_PER_T
             .iter()
             .map(|(y, _)| *y)
@@ -844,10 +1145,9 @@ mod stichtag_tests {
             .expect("1 December exists");
         let bis = time::Date::from_calendar_date(last_tabled + 1, time::Month::January, 31)
             .expect("31 January exists");
-        assert!(
-            steuer_stichtage_im_zeitraum("GAS", von, bis).is_empty(),
-            "an untabled year is left to the operator, not split at a rate that does not exist"
-        );
+        let jan1 = time::Date::from_calendar_date(last_tabled + 1, time::Month::January, 1)
+            .expect("1 January exists");
+        assert_eq!(steuer_stichtage_im_zeitraum("GAS", von, bis), vec![jan1]);
     }
 
     /// A long gas period can carry both a VAT and a BEHG Stichtag, in order.

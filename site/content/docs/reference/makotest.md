@@ -314,7 +314,7 @@ them out would be transcribing constants it cannot check. The EIC is a **Party**
 code — draw one with `bilanzkreise()`.
 
 The group is **Muss** on 55001, 55077, 55600, 55601, 55014 and 55608
-(`crates/edi-energy/src/builders/utilmd.rs:453`): without a Bilanzkreis the NB
+(`crates/edi-energy/src/builders/utilmd.rs`): without a Bilanzkreis the NB
 cannot assign the Marktlokation to the LF. The builder does **not** enforce it —
 omitting `bilanzkreis=` emits the `SEQ+Z79` group without its `CAV+ZV4` and the
 message still validates, because no AHB row makes the value itself Muss. Assert

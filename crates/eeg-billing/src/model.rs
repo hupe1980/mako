@@ -570,7 +570,7 @@ pub struct SettleInput {
     pub einspeisemenge_kwh: Option<Decimal>,
 
     /// Monthly EPEX Spot Day-Ahead average **or** technology-specific Jahresmarktwert
-    /// (§20 Abs. 2 + Anlage 1 EEG 2023) in ct/kWh.
+    /// (EEG 2023 Anlage 1 Nr. 4) in ct/kWh.
     ///
     /// This is the **market reference price** used for all calculations that compare
     /// EEG payment against the market:
@@ -851,7 +851,7 @@ pub struct SettleInput {
     /// Default: `false` (conservative — retains the exemption when unknown).
     pub has_imesys: bool,
 
-    /// Technology-specific Jahresmarktwert category (§20 Abs. 2 + Anlage 1 EEG 2023).
+    /// Technology-specific Jahresmarktwert category (EEG 2023 Anlage 1 Nr. 4.3.1).
     ///
     /// Documents which ÜNB technology category `marktwert_ct_kwh` was sourced from.
     /// The library uses `marktwert_ct_kwh` directly — this field is informational only
@@ -1233,4 +1233,9 @@ pub enum SettlementStatus {
     /// It is a **terminal** outcome for the period: re-running the settlement on
     /// the same facts will not change it.
     KeinAnspruch,
+    /// A reduction of the anzulegender Wert applies, but no EEG Fassung is
+    /// tabled for the payment period ([`crate::Fassung::fuer_periode`]), so
+    /// there is no statute to read it from. Nothing is settled; the period is
+    /// retried once the Fassung is tabled.
+    FassungNichtTabelliert,
 }

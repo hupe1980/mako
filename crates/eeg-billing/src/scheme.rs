@@ -32,7 +32,7 @@ use time::Date;
 ///
 /// ## Design rationale
 ///
-/// The data-bearing enum eliminates an entire class of bugs: it is now impossible to
+/// The data-bearing enum eliminates an entire class of bugs: it is impossible to
 /// construct a `SettleInput` with `kwk_max_kwh` set for a `FeedInTariff` plant,
 /// or with `direktverm_aw_ct` absent for a `MarketPremium` plant. The compiler
 /// enforces scheme-parameter consistency at build time.
@@ -308,7 +308,10 @@ pub enum TariffSource {
     Transitional(Paragraph100Rule),
 }
 
-#[allow(clippy::derivable_impls)]
+#[expect(
+    clippy::derivable_impls,
+    reason = "the default is written out to show it is a deliberate value"
+)]
 impl Default for TariffSource {
     fn default() -> Self {
         Self::Statutory
@@ -547,7 +550,10 @@ pub enum SettlementType {
     },
 }
 
-#[allow(clippy::derivable_impls)]
+#[expect(
+    clippy::derivable_impls,
+    reason = "the default is written out to show it is a deliberate value"
+)]
 impl Default for SettlementType {
     fn default() -> Self {
         Self::Initial

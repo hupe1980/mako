@@ -238,7 +238,10 @@ impl CommandPayload for GasMsconsDatenCommand {}
 /// Gasbeschaffenheit factors PID 13007 carries. `malo_id` is unconditional:
 /// `edmd` refuses an event without one before it reaches either the interval
 /// parser or the Brennwert branch, so both depend on it.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 fn erp_payload(
     pid: Pruefidentifikator,
     sender: &MarktpartnerCode,

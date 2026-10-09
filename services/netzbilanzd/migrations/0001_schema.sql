@@ -305,10 +305,10 @@ CREATE TABLE kostenblatt_records (
 
     -- Provenance of dispatch_kwh for § 147 AO / GoBD auditability:
     --   'lastgang_sum'    — summed from edmd 15-min intervals (most precise)
-    --   'billing_period'  — fallback: edmd billing-period aggregate
+    --   'einspeisung_tag' — fallback: edmd EINSPEISUNG over the Berlin delivery day
     --   'manual_override' — supplied by the operator
     dispatch_source         TEXT        CHECK (dispatch_source IN (
-                                'lastgang_sum', 'billing_period', 'manual_override'
+                                'lastgang_sum', 'einspeisung_tag', 'manual_override'
                             )),
 
     kosten_json             JSONB,      -- typed BO4E Kosten for CIM export

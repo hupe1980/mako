@@ -343,7 +343,7 @@ pub fn is_bo4e_preistyp(value: &str) -> bool {
 /// `VARIANTS`, as `(column, wire values)`.
 ///
 /// `zaehler.zaehler_typ` has its own guard in
-/// `services/marktd/tests/schema_enum_guard.rs`, which also pins the
+/// `services/marktd/tests/it/schema_enum_guard.rs`, which also pins the
 /// `INTELLIGENTES_MESSSYSTEM` spelling `Zaehlertyp` and `Geraetetyp` disagree
 /// on. `geraet.geraet_typ` is not `CHECK`-constrained: 48 variants that turn
 /// over between BO4E versions would make an inline list the next thing to

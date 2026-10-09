@@ -12,9 +12,7 @@
 //! with, while the **inbound message's own** FV selects the adapter, so a
 //! process started under one FV accepts a counterparty's later-FV answer by
 //! construction. What is checked instead is coverage —
-//! `AdapterRegistry::uncovered_format_versions`, refused at boot. The name
-//! survives in some test prose as a label for that behaviour; it is not a thing
-//! in the code.
+//! `AdapterRegistry::uncovered_format_versions`, refused at boot.
 //!
 //! # How it works
 //!
@@ -37,12 +35,10 @@
 //!    the new `workflow_id`. Inspect [`MigrationReport`] for errors.
 //! 3. Remove the old FV from the adapter registry and redeploy.
 //!
-//! > **Note**: `MigrationRunner::run_and_update_registry` handles the
-//! > `ProcessRegistry` update automatically (updating `ProcessIdentity.workflow_id`
-//! > for every primary process-keyed entry). For conversation- or correlation-keyed
-//! > entries (which are short-lived and self-expire) no action is needed.
-//! > If you only want the snapshot migration without registry updates, use the
-//! > simpler `MigrationRunner::run()` instead.
+//! `run_and_update_registry` rewrites `ProcessIdentity.workflow_id` for every
+//! primary process-keyed entry; conversation- and correlation-keyed entries are
+//! short-lived and need nothing. `MigrationRunner::run()` migrates snapshots
+//! only.
 //!
 //! # Example
 //!
@@ -570,6 +566,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event_store::{AppendBatch, AtomicAppend};
     use crate::{
         envelope::NewEvent,
         event_store::{ExpectedVersion, InMemoryEventStore},
@@ -728,7 +725,7 @@ mod tests {
 
         // Append 3 increment events under the V1 workflow.
         store
-            .append(
+            .append(AppendBatch::new(
                 &sid,
                 ExpectedVersion::Any,
                 &[
@@ -736,7 +733,7 @@ mod tests {
                     make_increment_event(wid_v1.clone()),
                     make_increment_event(wid_v1.clone()),
                 ],
-            )
+            ))
             .await
             .unwrap();
 
@@ -763,7 +760,11 @@ mod tests {
         let wid_v2 = WorkflowId::new("counter", "FV2025-04-01"); // already V2
 
         store
-            .append(&sid, ExpectedVersion::Any, &[make_increment_event(wid_v2)])
+            .append(AppendBatch::new(
+                &sid,
+                ExpectedVersion::Any,
+                &[make_increment_event(wid_v2)],
+            ))
             .await
             .unwrap();
 
@@ -816,7 +817,11 @@ mod tests {
         let wid_v1 = WorkflowId::new("counter", "FV2024-10-01");
 
         store
-            .append(&sid, ExpectedVersion::Any, &[make_increment_event(wid_v1)])
+            .append(AppendBatch::new(
+                &sid,
+                ExpectedVersion::Any,
+                &[make_increment_event(wid_v1)],
+            ))
             .await
             .unwrap();
 

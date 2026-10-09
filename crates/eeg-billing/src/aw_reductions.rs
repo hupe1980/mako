@@ -46,10 +46,11 @@ pub const SECT54_ABS1_ABS2_CT_KWH: Decimal = dec!(0.3);
 /// §54 Abs. 3 EEG 2023 — 2,5 ct/kWh for a missing Agri-PV Nutzungsnachweis.
 pub const SECT54_ABS3_CT_KWH: Decimal = dec!(2.5);
 
-/// §3 StromStG — the full electricity-tax rate, 20,50 EUR/MWh = 2,05 ct/kWh.
+/// §3 StromStG — the full electricity-tax rate, read from the one Stromsteuer
+/// series in `grid-billing` that retail billing reads as well.
 ///
 /// The upper bound on a §53c reduction: an exemption cannot exceed the tax.
-pub const STROMSTEUER_VOLLSATZ_CT_KWH: Decimal = dec!(2.05);
+pub use grid_billing::stromsteuer::STROMSTEUER_REGELSATZ_CT_PER_KWH;
 
 // ── §54 ───────────────────────────────────────────────────────────────────────
 
@@ -149,14 +150,19 @@ impl AwReductionContext {
 ///
 /// `tariff_source` decides §53b: the statute limits it to plants "deren
 /// anzulegender Wert gesetzlich bestimmt ist", which excludes tender-determined
-/// values. `art` gates §54, which is a solar-first-segment rule.
+/// values. `art` gates §54, which is a solar-first-segment rule. `fassung` is
+/// the Fassung of the payment period ([`crate::Fassung::fuer_periode`]); every
+/// applied reduction names it. Only the EEG 2023 is tabled, so the rules below
+/// are its rules.
 #[must_use]
 pub fn apply_aw_reductions(
     aw_ct: Decimal,
     ctx: &AwReductionContext,
     tariff_source: &TariffSource,
     art: ErzeugungsArt,
+    fassung: crate::version::Fassung,
 ) -> (Decimal, Vec<AwReductionApplied>) {
+    let f = fassung.zitat();
     let mut aw = aw_ct;
     let mut applied = Vec::new();
 
@@ -166,8 +172,8 @@ pub fn apply_aw_reductions(
     if ctx.regionalnachweis_ausgestellt && !tariff_source.is_auction() {
         aw -= SECT53B_REGIONALNACHWEIS_CT_KWH;
         applied.push(AwReductionApplied {
-            description: "\u{00a7}53b EEG 2023 Regionalnachweis (\u{00a7}79a)".to_owned(),
-            legal_basis: "\u{00a7}53b EEG 2023".to_owned(),
+            description: format!("\u{00a7}53b {f} Regionalnachweis (\u{00a7}79a)"),
+            legal_basis: format!("\u{00a7}53b {f}"),
             deduction_ct_kwh: SECT53B_REGIONALNACHWEIS_CT_KWH,
         });
     }
@@ -180,13 +186,13 @@ pub fn apply_aw_reductions(
         .stromsteuerbefreiung_ct_kwh
         .filter(|c| *c > Decimal::ZERO)
     {
-        let deduction = befreiung.min(STROMSTEUER_VOLLSATZ_CT_KWH);
+        let deduction = befreiung.min(STROMSTEUER_REGELSATZ_CT_PER_KWH);
         aw -= deduction;
         applied.push(AwReductionApplied {
             description: format!(
-                "\u{00a7}53c EEG 2023 Stromsteuerbefreiung ({deduction}\u{202f}ct/kWh)"
+                "\u{00a7}53c {f} Stromsteuerbefreiung ({deduction}\u{202f}ct/kWh)"
             ),
-            legal_basis: "\u{00a7}53c EEG 2023".to_owned(),
+            legal_basis: format!("\u{00a7}53c {f}"),
             deduction_ct_kwh: deduction,
         });
     }
@@ -198,10 +204,10 @@ pub fn apply_aw_reductions(
             // subsumes the others: there is nothing left for them to reduce.
             let deduction = aw.max(Decimal::ZERO);
             applied.push(AwReductionApplied {
-                description: "\u{00a7}54 Abs.\u{202f}4 EEG 2023 Landesverordnung \
-                              nicht erf\u{00fc}llt (AW \u{2192} 0)"
-                    .to_owned(),
-                legal_basis: "\u{00a7}54 Abs. 4 EEG 2023".to_owned(),
+                description: format!(
+                    "\u{00a7}54 Abs.\u{202f}4 {f} Landesverordnung nicht erf\u{00fc}llt (AW \u{2192} 0)"
+                ),
+                legal_basis: format!("\u{00a7}54 Abs. 4 {f}"),
                 deduction_ct_kwh: deduction,
             });
             return (Decimal::ZERO, applied);
@@ -209,30 +215,32 @@ pub fn apply_aw_reductions(
         if s54.zahlungsberechtigung_nach_18_monaten {
             aw -= SECT54_ABS1_ABS2_CT_KWH;
             applied.push(AwReductionApplied {
-                description: "\u{00a7}54 Abs.\u{202f}1 EEG 2023 Zahlungsberechtigung erst \
-                              nach dem 18.\u{202f}Kalendermonat beantragt"
-                    .to_owned(),
-                legal_basis: "\u{00a7}54 Abs. 1 EEG 2023".to_owned(),
+                description: format!(
+                    "\u{00a7}54 Abs.\u{202f}1 {f} Zahlungsberechtigung erst nach dem \
+                     18.\u{202f}Kalendermonat beantragt"
+                ),
+                legal_basis: format!("\u{00a7}54 Abs. 1 {f}"),
                 deduction_ct_kwh: SECT54_ABS1_ABS2_CT_KWH,
             });
         }
         if s54.flurstueck_abweichung {
             aw -= SECT54_ABS1_ABS2_CT_KWH;
             applied.push(AwReductionApplied {
-                description: "\u{00a7}54 Abs.\u{202f}2 EEG 2023 Standort weicht von den \
-                              Gebots-Flurst\u{00fc}cken ab"
-                    .to_owned(),
-                legal_basis: "\u{00a7}54 Abs. 2 EEG 2023".to_owned(),
+                description: format!(
+                    "\u{00a7}54 Abs.\u{202f}2 {f} Standort weicht von den Gebots-Flurst\u{00fc}cken ab"
+                ),
+                legal_basis: format!("\u{00a7}54 Abs. 2 {f}"),
                 deduction_ct_kwh: SECT54_ABS1_ABS2_CT_KWH,
             });
         }
         if s54.agri_nutzungsnachweis_fehlt {
             aw -= SECT54_ABS3_CT_KWH;
             applied.push(AwReductionApplied {
-                description: "\u{00a7}54 Abs.\u{202f}3 EEG 2023 Nachweis der gleichzeitigen \
-                              landwirtschaftlichen Nutzung fehlt"
-                    .to_owned(),
-                legal_basis: "\u{00a7}54 Abs. 3 EEG 2023".to_owned(),
+                description: format!(
+                    "\u{00a7}54 Abs.\u{202f}3 {f} Nachweis der gleichzeitigen landwirtschaftlichen \
+                     Nutzung fehlt"
+                ),
+                legal_basis: format!("\u{00a7}54 Abs. 3 {f}"),
                 deduction_ct_kwh: SECT54_ABS3_CT_KWH,
             });
         }
@@ -261,6 +269,7 @@ mod tests {
             &ctx,
             &TariffSource::Statutory,
             ErzeugungsArt::SolarAufdach,
+            crate::version::Fassung::Eeg2023,
         );
         assert_eq!(
             aw,
@@ -284,6 +293,7 @@ mod tests {
             &ctx,
             &auction(),
             ErzeugungsArt::SolarFreiflaeche,
+            crate::version::Fassung::Eeg2023,
         );
         assert_eq!(aw, dec!(5.80));
         assert!(applied.is_empty());
@@ -297,7 +307,13 @@ mod tests {
             ..AwReductionContext::default()
         };
         let ts = TariffSource::Transitional(crate::scheme::Paragraph100Rule::OldPlantBeforeEeg2023);
-        let (aw, _) = apply_aw_reductions(dec!(9.00), &ctx, &ts, ErzeugungsArt::SolarAufdach);
+        let (aw, _) = apply_aw_reductions(
+            dec!(9.00),
+            &ctx,
+            &ts,
+            ErzeugungsArt::SolarAufdach,
+            crate::version::Fassung::Eeg2023,
+        );
         assert_eq!(aw, dec!(8.90));
     }
 
@@ -312,6 +328,7 @@ mod tests {
             &ctx,
             &TariffSource::Statutory,
             ErzeugungsArt::SolarAufdach,
+            crate::version::Fassung::Eeg2023,
         );
         assert_eq!(aw, dec!(6.06));
         assert_eq!(applied[0].legal_basis, "§53c EEG 2023");
@@ -329,6 +346,7 @@ mod tests {
             &ctx,
             &TariffSource::Statutory,
             ErzeugungsArt::SolarAufdach,
+            crate::version::Fassung::Eeg2023,
         );
         assert_eq!(aw, dec!(6.06));
         assert_eq!(applied[0].deduction_ct_kwh, dec!(2.05));
@@ -344,8 +362,13 @@ mod tests {
             }),
             ..AwReductionContext::default()
         };
-        let (aw, applied) =
-            apply_aw_reductions(dec!(7.35), &ctx, &auction(), ErzeugungsArt::WindOnshore);
+        let (aw, applied) = apply_aw_reductions(
+            dec!(7.35),
+            &ctx,
+            &auction(),
+            ErzeugungsArt::WindOnshore,
+            crate::version::Fassung::Eeg2023,
+        );
         assert_eq!(aw, dec!(7.35));
         assert!(applied.is_empty());
     }
@@ -366,6 +389,7 @@ mod tests {
             &ctx,
             &auction(),
             ErzeugungsArt::SolarFreiflaeche,
+            crate::version::Fassung::Eeg2023,
         );
         assert_eq!(aw, dec!(5.20));
         assert_eq!(applied.len(), 2);
@@ -380,7 +404,13 @@ mod tests {
             }),
             ..AwReductionContext::default()
         };
-        let (aw, _) = apply_aw_reductions(dec!(8.00), &ctx, &auction(), ErzeugungsArt::SolarAgriPv);
+        let (aw, _) = apply_aw_reductions(
+            dec!(8.00),
+            &ctx,
+            &auction(),
+            ErzeugungsArt::SolarAgriPv,
+            crate::version::Fassung::Eeg2023,
+        );
         assert_eq!(aw, dec!(5.50));
     }
 
@@ -401,6 +431,7 @@ mod tests {
             &ctx,
             &auction(),
             ErzeugungsArt::SolarFreiflaeche,
+            crate::version::Fassung::Eeg2023,
         );
         assert_eq!(aw, Decimal::ZERO);
         assert_eq!(
@@ -427,6 +458,7 @@ mod tests {
             &ctx,
             &TariffSource::Statutory,
             ErzeugungsArt::SolarAufdach,
+            crate::version::Fassung::Eeg2023,
         );
         assert_eq!(aw, Decimal::ZERO);
     }
@@ -440,6 +472,7 @@ mod tests {
             &ctx,
             &TariffSource::Statutory,
             ErzeugungsArt::SolarAufdach,
+            crate::version::Fassung::Eeg2023,
         );
         assert_eq!(aw, dec!(8.11));
         assert!(applied.is_empty());

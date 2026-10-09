@@ -34,7 +34,7 @@
 //!
 //! | Clock | Window | Owner |
 //! |-------|--------|-------|
-//! | Technical acknowledgement (APERAK) | **45 min** on weekdays, Sunday 12:00 Berlin for a Saturday arrival (APERAK AHB 1.0 § 2.4.1) | **`makod`**, automatically |
+//! | Technical acknowledgement (APERAK) | **45 min**, Sunday 12:00 Berlin for a Saturday arrival (APERAK AHB 1.1 § 2.4.1) | **`makod`**, automatically |
 //! | Business answer | the per-PID Frist above | this module / the operator |
 //!
 //! The queue is bounded by the **business** window, from [`mako_fristen::antwort`].
@@ -62,7 +62,7 @@
 //!
 //! - **BK6-24-174 GPKE Teil 2**, **BK7-24-01-009 GeLi Gas 3.0** — the processes
 //! - **EBD 4.3** — the Prüfschritte and Codelisten, in [`mako_pruefung`]
-//! - **APERAK AHB 1.0 § 2.4.1** — the separate 45-minute technical window
+//! - **APERAK AHB 1.1 § 2.4.1** — the separate 45-minute technical window
 
 use crate::config::BilanzkreisEintrag;
 use mako_gpke::LfVorgangsdaten;
@@ -895,7 +895,12 @@ pub async fn process_lf_antwort(
         "processd LF: decision"
     );
 
-    let enqueue = async |reason: String| -> Result<(), sqlx::Error> {
+    // `held` is a decided answer an operator has to release: approving sends
+    // it as decided, rejecting sends the other cluster's command with the
+    // operator's Antwortcode. Without one, both need the operator's code.
+    let enqueue = async |reason: String,
+                         held: Option<(&'static str, serde_json::Value)>|
+           -> Result<(), sqlx::Error> {
         let entry = ApprovalQueueEntry::pending(
             anfrage.process_id,
             i32::try_from(payload.process.trigger_pid).unwrap_or(0),
@@ -906,12 +911,24 @@ pub async fn process_lf_antwort(
             ),
             payload.window.expires_at,
             config.tenant.clone(),
-        )
-        .with_commands(
-            payload.process.bestaetigen,
-            payload.process.ablehnen,
-            Some("LF"),
         );
+        let entry = match held {
+            Some((command, body)) => {
+                let other = if command == payload.process.bestaetigen {
+                    payload.process.ablehnen
+                } else {
+                    payload.process.bestaetigen
+                };
+                entry
+                    .with_commands(command, other, Some("LF"))
+                    .with_answer_payload(body)
+            }
+            None => entry.with_commands(
+                payload.process.bestaetigen,
+                payload.process.ablehnen,
+                Some("LF"),
+            ),
+        };
         queue
             .enqueue(&entry)
             .await
@@ -967,27 +984,46 @@ pub async fn process_lf_antwort(
                 });
                 dispatch_antwort(makod, payload.process, anfrage, antwort, eog_extras).await?;
             } else {
+                // A Zustimmung that is not dispatchable for want of the EoG
+                // facts is not frozen: what it lacks is what the operator
+                // has to supply.
+                let held = eog_missing.is_none().then(|| {
+                    let eog_extras = (payload.process.walk == Walk::AnmeldungEog).then(|| {
+                        (
+                            config.eog_versorgungsart.clone(),
+                            bilanzkreis_fuer(
+                                &config.bilanzkreise,
+                                mako_pruefung::Bilanzkreisart::Standard,
+                                None,
+                            ),
+                        )
+                    });
+                    answer_payload(payload.process, anfrage, antwort, eog_extras)
+                });
                 // auto_respond off means "an operator decides", not "nobody
                 // answers": without a queue row the process goes unanswered and
                 // unseen.
-                enqueue(format!(
-                    "{} — {} für MaLo {} ist entschieden: {} {} ({})",
-                    match (config.auto_respond, eog_missing) {
-                        (_, Some(fehlt)) =>
-                            format!("Zustimmung nicht versandfähig, es fehlt {fehlt}"),
-                        (true, None) => "eog_auto_respond disabled".to_owned(),
-                        (false, None) => "auto_respond disabled".to_owned(),
-                    },
-                    payload.process.name,
-                    anfrage.malo_id,
-                    if antwort.zustimmung {
-                        "Zustimmung"
-                    } else {
-                        "Ablehnung"
-                    },
-                    antwort.code,
-                    antwort.bedeutung,
-                ))
+                enqueue(
+                    format!(
+                        "{} — {} für MaLo {} ist entschieden: {} {} ({})",
+                        match (config.auto_respond, eog_missing) {
+                            (_, Some(fehlt)) =>
+                                format!("Zustimmung nicht versandfähig, es fehlt {fehlt}"),
+                            (true, None) => "eog_auto_respond disabled".to_owned(),
+                            (false, None) => "auto_respond disabled".to_owned(),
+                        },
+                        payload.process.name,
+                        anfrage.malo_id,
+                        if antwort.zustimmung {
+                            "Zustimmung"
+                        } else {
+                            "Ablehnung"
+                        },
+                        antwort.code,
+                        antwort.bedeutung,
+                    ),
+                    held,
+                )
                 .await?;
             }
         }
@@ -1003,10 +1039,13 @@ pub async fn process_lf_antwort(
                 %grund,
                 "processd LF: escalated — creating approval_queue entry"
             );
-            enqueue(format!(
-                "{} Prüfschritt {pruefschritt}: {grund}",
-                payload.process.ebd
-            ))
+            enqueue(
+                format!(
+                    "{} Prüfschritt {pruefschritt}: {grund}",
+                    payload.process.ebd
+                ),
+                None,
+            )
             .await?;
         }
     }
@@ -1061,6 +1100,38 @@ async fn dispatch_antwort(
     antwort: &LfAntwort,
     eog_extras: Option<(Option<String>, Option<String>)>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let (command, payload) = answer_payload(process, anfrage, antwort, eog_extras);
+    let cmd = ForwardCommand {
+        marktrolle: None,
+        command: command.to_owned(),
+        malo_id: Some(anfrage.malo_id.clone()),
+        melo_id: None,
+        payload,
+    };
+    makod
+        .post_command(
+            &format!("processd-lf-{}-{}", antwort.code, anfrage.process_id),
+            &cmd,
+        )
+        .await
+        .inspect_err(|e| warn!(%e, command, "processd LF: answer dispatch failed"))?;
+    info!(
+        process_id = %anfrage.process_id,
+        command,
+        antwort_code = %antwort.code,
+        "processd LF: dispatched answer"
+    );
+    Ok(())
+}
+
+/// The command and body a resolved answer is sent as — by the automatic path,
+/// and frozen on the approval queue when an operator has to release it.
+fn answer_payload(
+    process: LfAntwortProcess,
+    anfrage: &LfAnfrage,
+    antwort: &LfAntwort,
+    eog_extras: Option<(Option<String>, Option<String>)>,
+) -> (&'static str, serde_json::Value) {
     let command = if antwort.zustimmung {
         process.bestaetigen
     } else {
@@ -1101,28 +1172,7 @@ async fn dispatch_antwort(
             payload["bilanzkreis"] = serde_json::Value::String(bk);
         }
     }
-
-    let cmd = ForwardCommand {
-        marktrolle: None,
-        command: command.to_owned(),
-        malo_id: Some(anfrage.malo_id.clone()),
-        melo_id: None,
-        payload,
-    };
-    makod
-        .post_command(
-            &format!("processd-lf-{}-{}", antwort.code, anfrage.process_id),
-            &cmd,
-        )
-        .await
-        .inspect_err(|e| warn!(%e, command, "processd LF: answer dispatch failed"))?;
-    info!(
-        process_id = %anfrage.process_id,
-        command,
-        antwort_code = %antwort.code,
-        "processd LF: dispatched answer"
-    );
-    Ok(())
+    (command, payload)
 }
 
 /// Fetch the contract for a MaLo as of the Nachrichteneingang, or `None` when

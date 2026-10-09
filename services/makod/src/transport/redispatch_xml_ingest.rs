@@ -17,32 +17,27 @@
 //!
 //! Every acknowledgement window is [`ACK_FRIST`] — **3 minutes**, „unverzüglich,
 //! jedoch spätestens 3 Minuten nach Erhalt der Übertragungsdatei"
-//! (`AcknowledgementDocument` FB 1.0g). This module armed 6 hours for five of
-//! them and 24 hours for the Statusanfrage, so a late `AcknowledgementDocument`
-//! was never once detected as late: the deadline fired hundreds of times later
-//! than the obligation it was meant to watch, by which point the transfer file
-//! it answered was long settled. The constant is read from `mako-redispatch`
-//! rather than restated here, so the two cannot drift apart again.
+//! (`AcknowledgementDocument` FB 1.0g). The constant is read from
+//! `mako-redispatch` rather than restated here, so the two cannot drift apart.
+//! A 6- or 24-hour window would fire hundreds of times later than the
+//! obligation it watches.
 //!
-//! The 24 hours the Statusanfrage carried were not a second, longer ack window:
-//! the historical 24-hour figure was the window for *answering* a Statusanfrage,
-//! a different obligation on a different message, and the label armed here is
-//! `statusanfrage::ACK_WINDOW_LABEL` — the acknowledgement. That answer window
-//! has no published source under the current regime either (BK6-23-241 repealed
-//! BK6-20-059 Tz. 1, BK6-20-060 and BK6-20-061; the replacing
-//! Prozessbeschreibungen of Tz. 7 are not published), and `mako-redispatch`
-//! carries no field for it, so nothing is armed for it here.
+//! The Statusanfrage label armed here, `statusanfrage::ACK_WINDOW_LABEL`, is the
+//! acknowledgement too. The 24-hour figure often quoted for it was the window
+//! for *answering* a Statusanfrage, which has no published source under the
+//! current regime (BK6-23-241 repealed BK6-20-059 Tz. 1, BK6-20-060 and
+//! BK6-20-061; the replacing Prozessbeschreibungen of Tz. 7 are not published),
+//! so nothing is armed for it.
 //!
 //! The two windows that are *not* Fristen — the ACO response window and the
 //! Stammdaten forward window — are [`Betreiberfristen`]: operator-configured,
-//! defaulted to the repealed BK6-20-05x figures because that is what the market
-//! ran on until 30.06.2026. They are read from `historisch()` so the code says
-//! which they are; a deployment with its own Prozessbeschreibung replaces them.
+//! defaulted to the repealed BK6-20-05x figures, which the market ran on until
+//! 30.06.2026. They are read from `historisch()` so the code says which they
+//! are; a deployment with its own Prozessbeschreibung replaces them.
 //!
 //! The ACO's `Abwicklung` defaults to **Aufforderungsfall/Sollwert** — the
-//! strict case (response window enforced). Resolving the Duldungsfall from
-//! the resource's Stammdaten tightens this later; defaulting to the lenient
-//! case would silently disable a hard real-time deadline.
+//! strict case (response window enforced); defaulting to the lenient case
+//! would silently disable a hard real-time deadline.
 
 use mako_engine::error::EngineError;
 use mako_redispatch::aktivierung::{

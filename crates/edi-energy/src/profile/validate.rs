@@ -201,7 +201,10 @@ fn best_fit<'p>(
 /// `M` (UN/EDIFACT-mandatory) stands regardless.
 // The walk over instances and their children is one pass; splitting it would
 // duplicate the per-node bookkeeping.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one linear procedure; splitting it would scatter its steps across helpers used once"
+)]
 fn mig_checks(
     structure: &Structure,
     res: &Resolution,
@@ -366,7 +369,10 @@ fn candidates_for(structure: &Structure, tag: &str) -> Vec<String> {
 }
 
 /// Data-element checks of one segment against its layout.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one linear procedure; splitting it would scatter its steps across helpers used once"
+)]
 fn element_checks(
     layout: &SegmentNode,
     seg: &Segment<'_>,
@@ -486,7 +492,10 @@ fn element_checks(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 fn check_leaf(
     el: &Element,
     seg: &Segment<'_>,
@@ -926,7 +935,10 @@ impl From<bool> for Truth {
     }
 }
 
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one linear procedure; splitting it would scatter its steps across helpers used once"
+)]
 fn ahb_checks(
     profile: &Profile,
     af: &Anwendungsfall,
@@ -1191,7 +1203,10 @@ fn paket_scope(ctx: &Ctx<'_, '_>, assigned: super::structure::Assigned) -> Insta
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 fn element_rules(
     ctx: &Ctx<'_, '_>,
     af: &Anwendungsfall,

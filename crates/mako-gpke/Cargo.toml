@@ -1,7 +1,7 @@
 [package]
 name         = "mako-gpke"
 version.workspace     = true
-description  = "GPKE process engine for German electricity market communication (Lieferbeginn, Lieferende, Netznutzungsabrechnung)"
+description  = "GPKE workflows for German electricity supplier switching, master-data changes, Sperrung and grid-use billing (BK6-24-174)"
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true
@@ -13,12 +13,10 @@ categories   = ["data-structures"]
 
 [dependencies]
 mako-fristen = { workspace = true }
-rubo4e      = { workspace = true }
 mako-engine = { workspace = true }
 mako-invoic = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
-thiserror   = { workspace = true }
 time        = { workspace = true }
 
 [dev-dependencies]
@@ -33,3 +31,6 @@ mako-pruefung = { workspace = true, features = ["role-lf"] }
 serde_json  = { workspace = true }
 time        = { workspace = true }
 tokio       = { version = "1", features = ["full"] }
+
+[lints]
+workspace = true

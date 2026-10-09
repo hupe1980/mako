@@ -23,6 +23,7 @@
 //!
 //! Idempotency: duplicate event IDs return `202 Accepted` without re-processing.
 
+use crate::state::AppState;
 use rust_decimal::Decimal;
 use std::str::FromStr as _;
 use std::sync::Arc;
@@ -41,10 +42,7 @@ use axum::{
 use mako_markt::repository::DeviceRepository;
 use mako_markt::{
     cloudevents::{EventExtensions, InboundMakoEvent, MarktEvent},
-    repository::{
-        AppState, CorrelationIndex, MaloRepository, MeloRepository, PartnerRepository,
-        SubscriptionRepository,
-    },
+    repository::{MaloRepository, MeloRepository},
 };
 use sqlx::PgPool;
 use tracing::{debug, error, warn};
@@ -58,9 +56,12 @@ pub struct InboundWebhookSecret(pub Option<String>);
 ///
 /// Request body: CloudEvents 1.0 JSON (`application/cloudevents+json`).
 /// Signature headers: `webhook-id`, `webhook-timestamp`, `webhook-signature`.
-#[allow(clippy::too_many_arguments)]
-pub async fn ingest_event<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
+pub async fn ingest_event(
+    State(state): State<Arc<AppState>>,
     Extension(secret): Extension<InboundWebhookSecret>,
     Extension(pool): Extension<PgPool>,
     Extension(device_repo): Extension<Arc<PgDeviceRepository>>,
@@ -72,14 +73,7 @@ pub async fn ingest_event<Ma, Me, Su, Ci, Pa>(
     Extension(melo_msb_repo): Extension<Arc<crate::pg::PgMeloMsbRepository>>,
     headers: HeaderMap,
     body: Bytes,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     // 1. Verify the inbound signature through the shared verifier, which also
     //    refuses a stale `webhook-timestamp` — this is the ingest every other
     //    service's events arrive on, so a replay here re-enters the fan-out.
@@ -862,7 +856,10 @@ async fn versorgung_changed(
     // The assignment list travels whole: a subscriber cannot reconstruct a
     // tranchierte Marktlokation from a scalar „the Lieferant", and the two
     // derived fields below are absent exactly when it is one.
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "the type is spelled once, where it is used"
+    )]
     let row: Option<(
         String,
         serde_json::Value,
@@ -1207,9 +1204,12 @@ pub(crate) fn marktrole_from_workflow(workflow_name: Option<&str>) -> Option<Str
 ///
 /// Non-fatal by contract: the CloudEvent is already acknowledged, so every
 /// failure or unknown object is logged, never propagated.
-#[allow(clippy::too_many_arguments)]
-async fn apply_object_stammdaten<Ma, Me, Su, Ci, Pa>(
-    state: &AppState<Ma, Me, Su, Ci, Pa>,
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
+async fn apply_object_stammdaten(
+    state: &AppState,
     pool: &sqlx::PgPool,
     nelo_repo: &PgNeLoRepository,
     tranche_repo: &PgTrancheRepository,
@@ -1221,13 +1221,7 @@ async fn apply_object_stammdaten<Ma, Me, Su, Ci, Pa>(
     pid: u32,
     aenderungsdatum: Option<&str>,
     patch_val: &serde_json::Value,
-) where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) {
     use mako_markt::repository::{
         MaloStammdatenPatch, MeloMsbRepository, MeloStammdatenPatch, NeLoRepository,
         NeloStammdatenPatch, SteuerbareRessourceRepository, SteuerbareRessourceStammdatenPatch,

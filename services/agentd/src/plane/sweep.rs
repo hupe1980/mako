@@ -218,7 +218,7 @@ pub fn spawn_delivery(
                 _ = ticker.tick() => {}
             }
 
-            #[allow(clippy::cast_sign_loss)]
+            #[expect(clippy::cast_sign_loss, reason = "clamped to zero before the cast")]
             let now = time::OffsetDateTime::now_utc().unix_timestamp().max(0) as u64;
             match worker.run_once(now, BATCH).await {
                 // A quiet outbox says nothing, like every other sweep here.

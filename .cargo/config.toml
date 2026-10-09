@@ -1,14 +1,24 @@
 [alias]
 xtask = "run --package xtask --"
 
-# `makotest` builds against PyO3 with `abi3-py311`, so any workspace-wide cargo
-# command — `cargo test --workspace`, `just ci`, `just doc-check` — needs a
-# Python ≥ 3.11. Left unset, PyO3 picks the first `python3` on PATH, which on
-# macOS is still the system 3.9, and the whole workspace fails to build on a
-# message about a crate nobody was working on.
+# `makotest` builds against PyO3 with `abi3-py311`, so any cargo command that
+# includes it — `--workspace`, which every `just` gate recipe passes, or
+# `-p makotest-native` — needs a Python ≥ 3.11. Left unset, PyO3 picks the first
+# `python3` on PATH, which on macOS is still the system 3.9, and the build fails
+# on a message about a crate nobody was working on. A bare `cargo build` or
+# `cargo test` at the root does not need it: `default-members` leaves
+# `makotest` out.
 #
 # Cargo does not override an environment variable that is already set, so a dev
 # who points PYO3_PYTHON somewhere else keeps their choice. `relative = true`
 # resolves against the directory holding `.cargo`, i.e. the workspace root.
 [env]
 PYO3_PYTHON = { value = ".venv/bin/python", relative = true, force = false }
+
+# Opt-in faster linker for Linux (uncomment after installing `mold`). macOS's
+# default `ld-prime` is already fast; there the link cost is debug info, which
+# `[profile.dev]` in the workspace manifest trims.
+#
+# [target.x86_64-unknown-linux-gnu]
+# linker    = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]

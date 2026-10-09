@@ -168,7 +168,10 @@ impl Snapshot {
 /// `Arc<S>` implements `SnapshotStore` whenever `S: SnapshotStore`, so
 /// `Process<W, Arc<MyEventStore>>` can accept `Arc<MySnapshotStore>` without
 /// any extra wrapper.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait SnapshotStore: Send + Sync {
     /// Persist `snapshot`, replacing any previous snapshot for the same stream.
     ///
@@ -200,6 +203,19 @@ impl<S: SnapshotStore> SnapshotStore for Arc<S> {
         self.as_ref().load(stream_id).await
     }
 }
+
+// ── NoSnapshot ────────────────────────────────────────────────────────────────
+
+/// The snapshot store of a [`RunOptions`] that takes no snapshot.
+///
+/// Uninhabited: no value exists, so a `RunOptions<NoSnapshot>` can never hold
+/// one and never writes a snapshot. It is not a [`SnapshotStore`], so unlike
+/// [`NoopSnapshotStore`] it cannot be mistaken for a store that silently
+/// discards snapshots.
+///
+/// [`RunOptions`]: crate::process::RunOptions
+#[derive(Debug, Clone, Copy)]
+pub enum NoSnapshot {}
 
 // ── NoopSnapshotStore ─────────────────────────────────────────────────────────
 

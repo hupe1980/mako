@@ -1,6 +1,6 @@
 [package]
 name        = "einsd"
-description = "Einspeiser registry and EEG settlement daemon — Anlagenregister, Vergütung, Direktvermarktung, Mieterstrom und Förderende-Alerts"
+description = "Feed-in plant registry and EEG/KWKG settlement daemon: Vergütung, Marktprämie, Mieterstrom and end-of-support alerts"
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
@@ -34,14 +34,11 @@ tokio        = { version = "1", features = ["full"] }
 serde        = { workspace = true, features = ["derive"] }
 serde_json   = { workspace = true }
 time         = { workspace = true }
-time-tz      = { workspace = true }
 uuid         = { workspace = true, features = ["v4", "serde"] }
 rust_decimal = { workspace = true }
 tokio-util   = { workspace = true }
 reqwest      = { workspace = true }
 tracing      = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tower-http   = { version = "0.6" }
 anyhow       = "1"
 secrecy      = { version = "0.10" }
 
@@ -57,3 +54,6 @@ testcontainers-modules = { workspace = true }
 time = { workspace = true }
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
+
+[lints]
+workspace = true

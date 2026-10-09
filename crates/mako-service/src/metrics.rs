@@ -89,7 +89,10 @@ pub fn init_metrics() {
             // Prometheus speaks `f64`. The count would have to pass 2^53 reads
             // in one process lifetime to lose a digit, and long before that the
             // series has already said what it exists to say.
-            #[allow(clippy::cast_precision_loss)]
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a count or ratio reported as a float, never a money amount"
+            )]
             Box::new(|| rubo4e::decimal_serde::decimal_from_json_number_count() as f64),
         )
         .expect("mako_bo4e_decimal_from_json_number_total construction failed");

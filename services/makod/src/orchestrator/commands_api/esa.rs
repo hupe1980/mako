@@ -162,8 +162,24 @@ pub(super) async fn esa_outbound_consent_gate(
 /// numeric formats (REQOTE AHB 1.2 §4.3, `LOC+172` DE 3225).
 const ZPB_LEN: usize = 33;
 
-fn parse_iso_date(s: &str) -> Option<time::Date> {
-    time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT).ok()
+/// The first of `keys` the payload carries, as a date.
+///
+/// Absent is `None`; present and malformed is a refusal naming the key, never
+/// `None` — a dropped `zeitraum_bis` reads as an open-ended period and a
+/// dropped `beendigung_zum` as „now".
+fn date_field(
+    payload: &serde_json::Value,
+    keys: &[&str],
+) -> Result<Option<time::Date>, DispatchError> {
+    let Some((key, raw)) = keys
+        .iter()
+        .find_map(|k| payload.get(*k).and_then(|v| v.as_str()).map(|s| (*k, s)))
+    else {
+        return Ok(None);
+    };
+    mako_service::dates::parse_iso_date(key, raw)
+        .map(Some)
+        .map_err(|e| DispatchError::InvalidPayload(e.to_string()))
 }
 
 /// Read the ordered Messprodukt, Wunschtermin and Abo mode out of an
@@ -190,24 +206,15 @@ fn parse_gegenstand(
                     .to_owned(),
             )
         })?;
-    let wunschtermin = payload
-        .get("wunschtermin")
-        .or_else(|| payload.get("zeitraum_von"))
-        .or_else(|| payload.get("von"))
-        .and_then(|v| v.as_str())
-        .and_then(parse_iso_date)
-        .ok_or_else(|| {
+    let wunschtermin =
+        date_field(payload, &["wunschtermin", "zeitraum_von", "von"])?.ok_or_else(|| {
             DispatchError::InvalidPayload(
                 "wunschtermin (or zeitraum_von, YYYY-MM-DD) is required — DTM+76 is Muss on \
                  the REQOTE 35003"
                     .to_owned(),
             )
         })?;
-    let zeitraum_bis = payload
-        .get("zeitraum_bis")
-        .or_else(|| payload.get("bis"))
-        .and_then(|v| v.as_str())
-        .and_then(parse_iso_date);
+    let zeitraum_bis = date_field(payload, &["zeitraum_bis", "bis"])?;
     // `IMD+7081`: a subscription (`Z01`) unless the caller asks for a single
     // transmission. Historical requests are naturally one-shots, but the caller
     // states it — guessing from `zeitraum_bis` would silently change which
@@ -280,23 +287,14 @@ fn plan_werteanfrage_msb(
             )
         })?
         .to_owned();
-    let von = payload
-        .get("zeitraum_von")
-        .or_else(|| payload.get("von"))
-        .and_then(|v| v.as_str())
-        .and_then(parse_iso_date)
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "zeitraum_von (period start, YYYY-MM-DD) is required to resolve the MSB for a \
+    let von = date_field(payload, &["zeitraum_von", "von"])?.ok_or_else(|| {
+        DispatchError::InvalidPayload(
+            "zeitraum_von (period start, YYYY-MM-DD) is required to resolve the MSB for a \
                  historical Werteanfrage"
-                    .to_owned(),
-            )
-        })?;
-    let bis = payload
-        .get("zeitraum_bis")
-        .or_else(|| payload.get("bis"))
-        .and_then(|v| v.as_str())
-        .and_then(parse_iso_date);
+                .to_owned(),
+        )
+    })?;
+    let bis = date_field(payload, &["zeitraum_bis", "bis"])?;
     Ok(MsbResolution::FromTimeline { melo, von, bis })
 }
 
@@ -374,14 +372,14 @@ pub(super) async fn dispatch_esa_werteanfrage(
     // subscribe to more than one. An order that was cancelled, ended or refused
     // is terminal, so the ESA may place a new one for the same pair.
     let subscription_key = mako_wim::esa::business_key(&location, &gegenstand.messprodukt);
-    if let Some(dup_id) =
+    let occupancy =
         find_occupying_process::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow>(
             state,
             &subscription_key,
             mako_wim::esa_wertebestellung::WORKFLOW_NAME,
         )
-        .await?
-    {
+        .await?;
+    if let Some(dup_id) = occupancy.process {
         return Err(DispatchError::DuplicateProcess {
             process_id: dup_id,
             malo_id: location,
@@ -411,62 +409,29 @@ pub(super) async fn dispatch_esa_werteanfrage(
         mako_wim::esa_wertebestellung::WORKFLOW_NAME,
         latest_format_version(),
     );
-    let process = mako_engine::process::Process::<
-        mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow,
-        Arc<mako_engine::store_slatedb::SlateDbStore>,
-    >::new(
-        Arc::clone(&state.store),
-        state.tenant_id,
-        workflow_id.clone(),
-    );
-    let process_id = process.process_id();
-
     let due_at = mako_fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
         mako_wim::wertebestellung::ANGEBOT_FRIST_WT,
         mako_fristen::HolidayCalendar::BdewMaKo,
     );
-    let deadline = Deadline::new(
-        process.stream_id().clone(),
-        process_id,
+    // Indexed under the subscription, the location *and* the REQOTE's
+    // Belegnummer, in the spawn's own write. Only the opening REQOTE is keyed on
+    // a location (`ZO-T17`); every answer from the QUOTES onwards references a
+    // Belegnummer instead, so a process missing that key is one no later
+    // message can reach.
+    let process_id = spawn_process::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow>(
+        &state.store,
         state.tenant_id,
         workflow_id,
-        mako_wim::esa_wertebestellung::ANGEBOT_WINDOW_LABEL,
-        due_at,
-    );
-    process
-        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
-        .await?;
-
-    // Index the process under the location *and* the REQOTE's Belegnummer.
-    // Only the opening REQOTE is keyed on a location (`ZO-T17`); every answer
-    // from here on references a Belegnummer instead.
-    let identity = process.identity();
-    let registry = state.store.as_process_registry();
-    for key in [
-        subscription_key.as_str(),
-        location.as_str(),
-        anfrage_key.as_str(),
-    ] {
-        // Every answer from the QUOTES onwards is found by one of these keys, so
-        // a lost registration is an ESA process that later messages cannot
-        // reach. The loop continues rather than propagating: two of the three
-        // keys still landing is strictly better than none, and the process is
-        // already spawned, so failing the caller would only produce a second
-        // one.
-        if let Err(e) = registry
-            .register_correlated(state.tenant_id, key, process_id, identity.clone())
-            .await
-        {
-            tracing::error!(
-                process_id = %process_id,
-                %key,
-                error = %e,
-                "esa: correlation-key registration failed — messages referencing this key \
-                 cannot be routed to the process",
-            );
-        }
-    }
+        domain_cmd,
+        &[(mako_wim::esa_wertebestellung::ANGEBOT_WINDOW_LABEL, due_at)],
+        &[
+            subscription_key.as_str(),
+            location.as_str(),
+            anfrage_key.as_str(),
+        ],
+    )
+    .await?;
 
     Ok(DispatchOutcome::Spawned { process_id })
 }
@@ -901,11 +866,7 @@ pub(super) async fn dispatch_esa_abbestellung(
     // delivery is to stop. A Widerruf stops it as soon as the market allows,
     // but a planned end — the service contract running out at month end — is a
     // date the caller has to be able to name.
-    let beendigung_zum = payload
-        .get("beendigung_zum")
-        .or_else(|| payload.get("ausfuehrungsdatum"))
-        .and_then(|v| v.as_str())
-        .and_then(parse_iso_date)
+    let beendigung_zum = date_field(payload, &["beendigung_zum", "ausfuehrungsdatum"])?
         .map_or_else(time::OffsetDateTime::now_utc, |d| d.midnight().assume_utc());
 
     // One named subscription, or every one running at the location.
@@ -1143,6 +1104,18 @@ mod werteanfrage_msb_tests {
         assert!(matches!(
             plan_werteanfrage_msb(&p, MALO),
             Err(DispatchError::InvalidPayload(_))
+        ));
+    }
+
+    /// A period end that is present and malformed is refused: reading it as
+    /// absent would resolve the MSB for an open-ended period the caller never
+    /// asked about.
+    #[test]
+    fn a_malformed_period_end_is_refused_not_dropped() {
+        let p = json!({ "melo_id": MELO, "zeitraum_von": "2025-03-01", "zeitraum_bis": "bald" });
+        assert!(matches!(
+            plan_werteanfrage_msb(&p, MALO),
+            Err(DispatchError::InvalidPayload(m)) if m.contains("zeitraum_bis")
         ));
     }
 

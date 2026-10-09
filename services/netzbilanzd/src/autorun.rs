@@ -97,7 +97,10 @@ pub struct MmmAutoRunRequest {
 // Every argument is an axum extractor the handler genuinely needs: the caller's
 // identity and the policy to judge it by, the pool, the configuration, the HTTP
 // client that reaches `edmd`, the MaLo and the body.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn post_mmm_run(
     claims: Claims,
     Extension(cedar): Authz,

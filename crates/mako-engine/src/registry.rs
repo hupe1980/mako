@@ -39,7 +39,7 @@
 //!     .ok_or(EngineError::registry("unknown conversation"))?;
 //!
 //! let process = ctx.resume::<SupplierChangeWorkflow>(identity);
-//! process.execute(HandleAperak { .. }).await?;
+//! process.run(HandleAperak { .. }, RunOptions::new()).await?;
 //!
 //! // Clean up after process completion:
 //! ctx.registry.remove(tenant_id, &RegistryKey::from_conversation_and_sender(utilmd_conv_id, sender_mp_id)).await?;
@@ -249,7 +249,10 @@ impl std::str::FromStr for RegistryKey {
 /// [`register_correlated`]: ProcessRegistry::register_correlated
 /// [`lookup_correlated`]:   ProcessRegistry::lookup_correlated
 /// [`remove_correlated`]:   ProcessRegistry::remove_correlated
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait ProcessRegistry: Send + Sync {
     /// Associate `key` with `identity` for the given `tenant_id`.
     ///
@@ -528,10 +531,16 @@ impl ProcessRegistry for NoopProcessRegistry {
 #[cfg(any(test, feature = "testing"))]
 #[derive(Debug, Default, Clone)]
 pub struct InMemoryProcessRegistry {
-    #[expect(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "the type is spelled once, where it is used"
+    )]
     inner: Arc<RwLock<HashMap<(TenantId, Box<str>), ProcessIdentity>>>,
     /// Correlated 1:many index: `(tenant_id, tag, process_id)` → `ProcessIdentity`.
-    #[expect(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "the type is spelled once, where it is used"
+    )]
     correlated: Arc<RwLock<HashMap<(TenantId, Box<str>, crate::ids::ProcessId), ProcessIdentity>>>,
 }
 

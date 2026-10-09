@@ -487,7 +487,7 @@ pub enum RechnungEmpfaenger {
     /// Energieserviceanbieter — „Abrechnung einer für den ESA erbrachten
     /// Leistung", WiM Teil 2 Kap. 4.5. Its tree is `E_0264`, not `E_0406`.
     Esa,
-    /// Lieferant or ESA — Abrechnung Messstellenbetrieb gegenüber dem LF,
+    /// Lieferant or MSB — Abrechnung Messstellenbetrieb gegenüber dem LF,
     /// WiM Teil 1 Kap. 3.6.3.8, and the Sparte-neutral Abrechnung von
     /// Dienstleistungen, Kap. 3.7.
     LieferantOderMsb,

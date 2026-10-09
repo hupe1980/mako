@@ -370,10 +370,24 @@ pub enum EsaWertebestellungState {
     Storniert(Box<EsaWertebestellungData>),
     /// Delivery ended (Abbestellung confirmed).
     Beendet(Box<EsaWertebestellungData>),
-    /// Terminal rejection (Anfrage timed out or Bestellung refused).
+    /// Terminal rejection (Bestellung refused, or the Angebot's Bindungsfrist
+    /// lapsed without an order).
     Abgelehnt {
         /// Reason.
         reason: String,
+    },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// WiM Teil 2 states the MSB's Angebot (5 WT) and ORDRSP (2 WT) windows and no consequence of the MSB missing them. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<EsaWertebestellungState>,
     },
 }
 
@@ -390,6 +404,8 @@ impl mako_engine::workflow::OccupiesBusinessKey for EsaWertebestellungState {
             | Self::AbbestellungGesendet(_) => true,
             // Terminal: cancelled before delivery, delivery ended, or refused.
             Self::New | Self::Storniert(_) | Self::Beendet(_) | Self::Abgelehnt { .. } => false,
+            // A lapsed window leaves the Vorgang open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
         }
     }
 }
@@ -409,19 +425,33 @@ impl EsaWertebestellungState {
             Self::Storniert(_) => "Storniert",
             Self::Beendet(_) => "Beendet",
             Self::Abgelehnt { .. } => "Abgelehnt",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
     /// `true` when delivery to the ESA is authorised (a confirmed Bestellung).
     #[must_use]
-    pub const fn beliefert(&self) -> bool {
-        matches!(self, Self::Beliefert(_) | Self::AbbestellungGesendet(_))
+    pub fn beliefert(&self) -> bool {
+        matches!(
+            self.offen(),
+            Self::Beliefert(_) | Self::AbbestellungGesendet(_)
+        )
     }
 
     /// Process data, when the process has advanced past `New`.
     #[must_use]
-    pub const fn data(&self) -> Option<&EsaWertebestellungData> {
+    pub fn data(&self) -> Option<&EsaWertebestellungData> {
         match self {
+            Self::FristAbgelaufen { offen, .. } => offen.data(),
             Self::AnfrageGesendet(d)
             | Self::BestellungGesendet(d)
             | Self::Beliefert(d)
@@ -572,6 +602,26 @@ impl CommandPayload for EsaWertebestellungCommand {}
 /// ESA-origination Wertebestellung workflow (WiM Strom Teil 2, Kapitel 4).
 pub struct EsaWertebestellungWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// Each window belongs to the step that awaits it: the Angebot
+/// (`AnfrageGesendet`), the ESA's own order within the Bindungsfrist
+/// (`AngebotErhalten`), and the MSB's ORDRSP (`BestellungGesendet`,
+/// `StornierungGesendet`, `AbbestellungGesendet`).
+fn window_open(label: &str, state: &EsaWertebestellungState) -> bool {
+    use EsaWertebestellungState as S;
+    match label {
+        ANGEBOT_WINDOW_LABEL => matches!(state, S::AnfrageGesendet(_)),
+        BINDUNGSFRIST_LABEL => matches!(state, S::AngebotErhalten { .. }),
+        ANTWORT_WINDOW_LABEL => matches!(
+            state,
+            S::BestellungGesendet(_) | S::StornierungGesendet(_) | S::AbbestellungGesendet(_)
+        ),
+        _ => false,
+    }
+}
+
 /// Render an inbound `SG2 AJT` as the Begründung an operator reads.
 ///
 /// The ORDRSP ESA answers publish **no free-text segment** (ORDRSP AHB 1.1b
@@ -632,37 +682,35 @@ impl Workflow for EsaWertebestellungWorkflow {
     type Event = EsaWertebestellungEvent;
     type Command = EsaWertebestellungCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[
+        ANGEBOT_WINDOW_LABEL,
+        BINDUNGSFRIST_LABEL,
+        ANTWORT_WINDOW_LABEL,
+    ];
+
     /// Turn a fired deadline into the
-    /// [`EsaWertebestellungCommand::TimeoutExpired`] `handle` already decides.
-    ///
-    /// Without this hook the three windows this workflow registers fired into
-    /// the engine's default `None`: an Angebot that never arrived left the
-    /// process in `AnfrageGesendet` indefinitely instead of reaching
-    /// `Abgelehnt`, and nothing surfaced the missed Frist.
-    ///
-    /// Terminal states are filtered here rather than in `handle`, which records
-    /// a `FristVersaeumt` for whatever reaches it — a Bindungsfrist lapsing
-    /// after the order was already cancelled is not a missed obligation.
+    /// [`EsaWertebestellungCommand::TimeoutExpired`] `handle` decides, while
+    /// the window its label names is still open — see `window_open`. A
+    /// Bindungsfrist lapsing after the order went out, or an ORDRSP window
+    /// firing after the answer arrived, is not a missed obligation.
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        use mako_engine::workflow::OccupiesBusinessKey as _;
-
-        let owned = matches!(
-            deadline.label(),
-            ANGEBOT_WINDOW_LABEL | ANTWORT_WINDOW_LABEL | BINDUNGSFRIST_LABEL
-        );
-        (owned && state.occupies_business_key()).then(|| {
-            EsaWertebestellungCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            }
+        window_open(deadline.label(), state).then(|| EsaWertebestellungCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
         })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
         use EsaWertebestellungEvent as E;
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            EsaWertebestellungState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         use EsaWertebestellungState as S;
         match event {
             E::AnfrageGesendet {
@@ -819,11 +867,7 @@ impl Workflow for EsaWertebestellungWorkflow {
                 other => other,
             },
             E::FristVersaeumt { label } => match state {
-                // An outstanding Angebot that never came ends the process.
-                S::AnfrageGesendet(_) => S::Abgelehnt {
-                    reason: "Angebot nicht innerhalb der Frist erhalten".to_owned(),
-                },
-                // …and so does an offer whose Bindungsfrist ran out. UC 4.1
+                // An offer whose Bindungsfrist ran out ends the process. UC 4.1
                 // Nr. 3 admits no order after it, so `AngebotErhalten` can
                 // never advance again — and a process that cannot advance must
                 // release its (Meldepunkt, Messprodukt) business key, or the
@@ -836,8 +880,16 @@ impl Workflow for EsaWertebestellungWorkflow {
                         ),
                     }
                 }
-                // A missed ORDRSP is a process anomaly the event surfaces; it
-                // does not void an authorised delivery.
+                // The MSB's Angebot or ORDRSP window lapsed: a Frist breach
+                // with no outcome the Festlegung gives it. The process waits on
+                // — a missed ORDRSP does not void an authorised delivery.
+                S::AnfrageGesendet(_)
+                | S::BestellungGesendet(_)
+                | S::StornierungGesendet(_)
+                | S::AbbestellungGesendet(_) => S::FristAbgelaufen {
+                    label: label.clone(),
+                    offen: Box::new(state),
+                },
                 other => other,
             },
             // Recorded for the audit trail; the PID decides what happens next.
@@ -894,6 +946,10 @@ impl Workflow for EsaWertebestellungWorkflow {
         use EsaWertebestellungEvent as E;
         use EsaWertebestellungState as S;
 
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             C::SendWerteanfrage {
                 esa,
@@ -1360,6 +1416,9 @@ impl Workflow for EsaWertebestellungWorkflow {
             }
 
             C::TimeoutExpired { label, .. } => {
+                if !window_open(&label, lapsed) {
+                    return Ok(WorkflowOutput::events(vec![]));
+                }
                 Ok(WorkflowOutput::events(vec![E::FristVersaeumt {
                     label: label.to_string(),
                 }]))

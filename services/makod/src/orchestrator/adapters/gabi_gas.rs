@@ -9,7 +9,7 @@ use super::*;
 ///
 /// Extracts INVOIC fields to construct a [`InvoicCommand::ReceiveInvoic`]
 /// for GaBi Gas billing PIDs:
-/// - **31010** (Kapazitätsrechnung, FNB/VNB → BKV)
+/// - **31010** (Kapazitätsrechnung, NB → KN — INVOIC AHB 1.0b Kap. 3.1.4)
 /// - **31007** (Aggreg. MMM-Rechnung Gas, NB → MGV)
 /// - **31008** (Aggreg. MMM-Rechnung Gas selbst ausgestellt, NB → MGV)
 ///
@@ -304,14 +304,15 @@ pub fn gabi_gas_allocation_registry() -> AdapterRegistry<GaBiGasAllocationWorkfl
             // final allocation ever arrived, which is what the § 47 Ziffer 1 KoV XV deadline
             // watches for.
             //
-            // `X5G` (Endgültige Allokation) is deliberately **not** mapped to
-            // `Final` here. DVGW publishes `X6G`/`X7G` Korrigierte Allokation as
-            // messages that follow the endgültige one, while the workflow treats
-            // `Final` as settled and refuses any later correction — so mapping it
-            // would drop every correction that arrives afterwards. Closing that
-            // needs the § 47 Ziffer 1 KoV XV question of what "binding" means once a
-            // correction follows, which is a process decision, not a parse one.
+            // `X5G` (Endgültige Allokation) is `Endgueltig`, not `Final`. DVGW
+            // publishes `X6G`/`X7G` Korrigierte Allokation as messages that
+            // follow the endgültige one, while the workflow treats `Final` as
+            // settled and refuses any later correction — so `Final` would drop
+            // every correction that arrives afterwards. `Endgueltig` records
+            // that the obligation the final-allocation window watches is
+            // discharged and still admits the corrections.
             let version = match msg.document {
+                DvgwDocument::EndgueltigeAllokation => AllocationVersion::Endgueltig,
                 DvgwDocument::KorrigierteAllokationBilanzierungsbrennwert
                 | DvgwDocument::KorrigierteAllokationAbrechnungsbrennwert
                 | DvgwDocument::KorrigierteMengenmeldungNkp => AllocationVersion::Correction(1),

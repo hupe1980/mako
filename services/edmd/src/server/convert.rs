@@ -1,7 +1,10 @@
 //! Conversions from `edmd`'s domain types (`MeterRead`, `Sparte`, `QualityFlag`)
 //! to their BO4E representations for API responses and Zeitreihen export.
 
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "used only in some feature or target combinations"
+)]
 use super::*;
 
 /// Convert an `edm::Sparte` to the BO4E `Sparte` enum.

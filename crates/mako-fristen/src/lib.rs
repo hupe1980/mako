@@ -75,7 +75,10 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::pedantic, clippy::must_use_candidate)]
-#![allow(clippy::doc_markdown)] // German MaKo terms produce many false positives
+#![expect(
+    clippy::doc_markdown,
+    reason = "German MaKo terms produce many false positives"
+)]
 
 pub mod abmeldung;
 pub mod antwort;
@@ -292,12 +295,32 @@ pub fn discharges_delivery_window(message_type: &str, label: &str) -> bool {
     }
 }
 
+/// Is `label` a delivery window rather than a business Frist?
+///
+/// The labels [`discharges_delivery_window`] retires on delivery. One that
+/// fires is a regulatory alert about a message that did not go out — never a
+/// step in the business process it rode beside, so no workflow decides it.
+///
+/// ```rust
+/// use mako_fristen::{is_delivery_window, APERAK_GAS_INITIALPROZESS_LABEL, CONTRL_FRIST_LABEL};
+///
+/// assert!(is_delivery_window(APERAK_GAS_INITIALPROZESS_LABEL));
+/// assert!(is_delivery_window(CONTRL_FRIST_LABEL));
+/// assert!(!is_delivery_window("geli-gas-antwortfrist"));
+/// ```
+#[must_use]
+pub fn is_delivery_window(label: &str) -> bool {
+    ["APERAK", "CONTRL"]
+        .iter()
+        .any(|message_type| discharges_delivery_window(message_type, label))
+}
+
 /// Deadline label for Strom APERAK 45-minute sending obligations.
 ///
 /// Register a `mako_engine::deadline::Deadline` with this label after
 /// enqueuing an outbound Strom APERAK.  If this deadline fires before the APERAK
 /// is delivered, the OutboxWorker has not completed delivery within the 45-minute
-/// window required by APERAK AHB 1.0 §2.4.1.
+/// window required by APERAK AHB 1.1 §2.4.1.
 pub const APERAK_STROM_WINDOW_LABEL: &str = "aperak-strom-45min-window";
 
 /// Compute the Strom APERAK sending deadline after receiving a Strom UTILMD or
@@ -356,7 +379,7 @@ pub fn aperak_strom_due_at(received: OffsetDateTime) -> OffsetDateTime {
     let berlin_dt = received.to_timezone(berlin);
 
     if berlin_dt.weekday() == Weekday::Saturday {
-        // APERAK AHB 1.0 §2.4.1: received on Saturday → by next Sunday 12:00 Berlin.
+        // APERAK AHB 1.1 §2.4.1: received on Saturday → by next Sunday 12:00 Berlin.
         let sunday = berlin_dt
             .date()
             .next_day()
@@ -437,9 +460,11 @@ pub fn aperak_strom_allgemein_due_at(received: OffsetDateTime) -> OffsetDateTime
 
 /// Deadline label for Gas APERAK sending obligations on Folgeprozesse.
 ///
-/// Per APERAK AHB 1.0 §2.3.1 (Gas rules):
-/// *"Auf eingehende Übertragungsdateien, die Folgeprozesse … darstellen:
-/// nächster Werktag 12:00 Uhr."*
+/// Per APERAK AHB 1.1 §2.3.1 (Gas rules):
+/// „Bei Verarbeitbarkeitsfehlern in Geschäftsvorfällen von Folgeprozessen teilt
+/// der Empfänger … unverzüglich, jedoch spätestens bis zum nächsten Werktag
+/// 12 Uhr gesetzlicher deutscher Zeit nach Eingang des Geschäftsvorfalls, diesen
+/// per APERAK mit."
 ///
 /// Folgeprozesse are messages that follow up on an existing process
 /// (confirmations, rejections, status messages).
@@ -447,9 +472,11 @@ pub const APERAK_GAS_FOLGEPROZESS_LABEL: &str = "aperak-gas-folgeprozess-naechst
 
 /// Deadline label for Gas APERAK sending obligations on Initialprozesse.
 ///
-/// Per APERAK AHB 1.0 §2.3.1 (Gas rules):
-/// *"Auf eingehende Übertragungsdateien, die Initialprozesse … darstellen:
-/// 3 Werktage."*
+/// Per APERAK AHB 1.1 §2.3.1 (Gas rules):
+/// „Bei Verarbeitbarkeitsfehlern in Geschäftsvorfällen von Initialprozessen
+/// teilt der Empfänger … unverzüglich, jedoch spätestens 3 Werktage nach Eingang
+/// des Geschäftsvorfalls, diesen per APERAK mit." — no clock time, so the window
+/// runs to the end of the third Werktag.
 ///
 /// Initialprozesse are messages that open a new business process
 /// (Lieferbeginn-Anfragen, MSB-Anmeldungen, etc.).
@@ -457,7 +484,7 @@ pub const APERAK_GAS_INITIALPROZESS_LABEL: &str = "aperak-gas-initialprozess-3-w
 
 /// Compute the Gas APERAK sending deadline for **Folgeprozesse**.
 ///
-/// Per APERAK AHB 1.0 §2.3.1: the receiver must dispatch the APERAK by the
+/// Per APERAK AHB 1.1 §2.3.1: the receiver must dispatch the APERAK by the
 /// **next Werktag at 12:00 Uhr Berliner Lokalzeit** after receiving the message.
 ///
 /// | `received` Berlin local date | Deadline |
@@ -466,7 +493,7 @@ pub const APERAK_GAS_INITIALPROZESS_LABEL: &str = "aperak-gas-initialprozess-3-w
 /// | Saturday | Monday 12:00 Berlin (or next Werktag if Monday is a holiday) |
 /// | Sunday | Monday 12:00 Berlin (or next Werktag if Monday is a holiday) |
 ///
-/// **Regulatory basis:** APERAK AHB 1.0 §2.3.1 — Gas Folgeprozesse.
+/// **Regulatory basis:** APERAK AHB 1.1 §2.3.1 — Gas Folgeprozesse.
 ///
 /// # Panics
 ///
@@ -530,7 +557,7 @@ pub fn aperak_gas_folgeprozess_due_at(received: OffsetDateTime) -> OffsetDateTim
 /// use time::{Date, Month, OffsetDateTime, Time};
 ///
 /// // Monday 2025-01-06 10:00 UTC (= 11:00 CET):
-/// // 3 Werktage = Tue 07, Wed 08, Thu 09 → deadline Thu 2025-01-09 12:00 CET.
+/// // 3 Werktage = Tue 07, Wed 08, Thu 09 → deadline the end of Thu 2025-01-09.
 /// let received = OffsetDateTime::new_utc(
 ///     Date::from_calendar_date(2025, Month::January, 6).unwrap(),
 ///     Time::from_hms(10, 0, 0).unwrap(),
@@ -854,9 +881,9 @@ pub fn nth_werktag_at(
 /// | Anmeldung (Lieferbeginn) | 44001 | NB | 4 |
 /// | Abmeldung (Lieferende) | 44004 | NB | 3 |
 ///
-/// Distinct from [`deadline_at_werktage`], which places the deadline at 17:00 —
-/// an end-of-business convention that fits the WiM Antwortfristen but expires a
-/// GeLi Gas Frist seven hours before the statute does.
+/// The same instant as [`deadline_at_werktage`]: „Ablauf des n. Werktags" and
+/// „spätester ÜT ist der n. WT" are one Frist shape, and both run to the end of
+/// the day they name.
 ///
 /// # Panics
 ///
@@ -1334,7 +1361,10 @@ fn buss_und_bettag(year: i32) -> Date {
 /// let e = easter_sunday(2025);
 /// assert_eq!((e.year(), e.month() as u8, e.day()), (2025, 4, 20));
 /// ```
-#[expect(clippy::many_single_char_names)]
+#[expect(
+    clippy::many_single_char_names,
+    reason = "the variable names are those of the published Easter algorithm"
+)]
 fn easter_sunday(year: i32) -> Date {
     let a = year % 19;
     let b = year / 100;
@@ -1873,7 +1903,7 @@ mod tests {
         );
     }
 
-    /// Regression test for the UTC-date edge case (F-005).
+    /// The UTC-date edge case: arrival is dated in Berlin, not UTC.
     ///
     /// A message arriving at 23:30 UTC on 2025-01-06 (Monday) is already
     /// 00:30 CET on 2025-01-07 (Tuesday) in Berlin local time.  The deadline
@@ -1943,7 +1973,7 @@ mod tests {
     }
 
     /// Saturday: deadline is next Sunday 12:00 Berlin.
-    /// APERAK AHB 1.0 §2.4.1: "samstags bis spätestens Sonntag 12:00 Uhr".
+    /// APERAK AHB 1.1 §2.4.1: "samstags bis spätestens Sonntag 12:00 Uhr".
     ///
     /// 2025-01-11 (Saturday) in CET → 2025-01-12 12:00 CET = 11:00 UTC.
     #[test]

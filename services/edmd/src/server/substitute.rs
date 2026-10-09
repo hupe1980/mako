@@ -20,7 +20,10 @@
 //! ausdrücklichem und optisch besonders hervorgehobenem Hinweis" — which is why
 //! every value written here keeps the `SUBSTITUTED` quality flag.
 
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "used only in some feature or target combinations"
+)]
 use super::*;
 
 // ── § 60 Abs. 1 MsbG Auto-Substitute (post_substitute_values) ───────────────────────
@@ -82,16 +85,9 @@ pub struct SubstituteRequest {
 /// Map a [`metering::SubstituteMethod`] onto the `substitute_value_log.method`
 /// vocabulary.
 ///
-/// One-to-one since `metering` 0.17. It was not: the crate used to expose a
-/// `ForecastMethod` describing *how* a value was derived — prior-period,
-/// weighted rolling average, profile-based, annual projection — while this
-/// column records the `substitute_value_log` substitution *categories*, and
-/// three of those methods had no category to map onto. They were folded into
-/// `LinearInterpolation` as the closest admissible description, which recorded
-/// something that had not happened.
-///
-/// `SubstituteMethod` is now exactly that vocabulary, so the audit trail records
-/// the method that actually ran. The four categories are `metering`'s and this
+/// One-to-one: `SubstituteMethod` is exactly the column's vocabulary of
+/// substitution *categories*, so the audit trail records the method that
+/// actually ran rather than the closest admissible description of it. The four categories are `metering`'s and this
 /// service's — no MsbG provision enumerates Ersatzwertbildungsverfahren.
 pub(crate) fn substitute_method_to_db(method: metering::SubstituteMethod) -> &'static str {
     use metering::SubstituteMethod as M;
@@ -372,8 +368,7 @@ pub async fn run_substitute_values(
     // Generate substitute values.
     //
     // `fill_gaps` fills the whole configured grid, so the values bracketing the
-    // gap no longer have to be found and passed in by hand: it is given the
-    // measured series and works out for itself what each gap is bounded by.
+    // gap are not passed in by hand: it is given the measured series and works out for itself what each gap is bounded by.
     // The whole queried series goes in, not just the slice inside the gap
     // window: the engine finds a gap's *closing* bracket by lookahead over
     // whatever series it was handed, so clipping at `gap_to` would hide a

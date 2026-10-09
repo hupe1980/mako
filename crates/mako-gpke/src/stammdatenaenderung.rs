@@ -61,7 +61,7 @@
 //! - **GPKE Teil 4 (BK6-22-024 Anlage 1d)** §1.4 Stammdatenänderung
 //! - **UTILMD AHB Strom 2.1** ch. 3 (object → PID → LOC map)
 //! - **EBD 4.2** E_0408/E_0409/E_0410/E_0412/E_0415/… (Rückmeldung A01/A02)
-//! - **APERAK AHB 1.0 §2.4.1** — Strom UTILMD 45-min APERAK Frist
+//! - **APERAK AHB 1.1 §2.4.1** — Strom UTILMD 45-min APERAK Frist
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -190,7 +190,7 @@ pub const STAMMDATEN_PAIRS: &[(u32, u32, StammdatenObjekt)] = &[
     // S9 — MSB → ÜNB (inert)
     (55684, 55685, StammdatenObjekt::Marktlokation),
     (55686, 55687, StammdatenObjekt::Tranche),
-    // S11 — ÜNB → NB (Bilanzkreistreue, inert)
+    // S11 — NB → ÜNB (Stammdaten Bilanzkreistreue); 55671 is the ÜNB's Rückmeldung (inert)
     (55670, 55671, StammdatenObjekt::Marktlokation),
 ];
 
@@ -511,26 +511,39 @@ fn apply_outbox(data: &StammdatenData, patch: &serde_json::Value) -> PendingOutb
 /// GPKE Teil 4 Stammdatenänderung workflow (PIDs 55615–55694, 55109/55110).
 pub struct GpkeStammdatenaenderungWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The Rückmeldung window is open while a Rückmeldung is owed: by this party
+/// (`Eingegangen`, `ValidationPassed`) or to it (`Gesendet`).
+fn window_open(label: &str, state: &StammdatenState) -> bool {
+    label == RUECKMELDUNG_WINDOW_LABEL
+        && matches!(
+            state,
+            StammdatenState::Eingegangen(_)
+                | StammdatenState::ValidationPassed(_)
+                | StammdatenState::Gesendet(_)
+        )
+}
+
 impl Workflow for GpkeStammdatenaenderungWorkflow {
     type State = StammdatenState;
     type Event = StammdatenEvent;
     type Command = StammdatenCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[RUECKMELDUNG_WINDOW_LABEL];
+
+    /// The Rückmeldung window elapsed while a Rückmeldung was still owed —
+    /// by us, or to us on a change we sent. „Verstreicht die Frist, ohne dass
+    /// eine Rückmeldung eingeht, gilt dies als Qualitätsrückmeldung ohne die
+    /// Erwartung abweichender Inhalte" (GPKE Teil 4 Kap. 1.4.2 Nr. 2): the
+    /// lapse is a tacit acceptance on both sides. The APERAK delivery window
+    /// riding beside it is not this workflow's to decide.
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            // The Rückmeldung window elapsed while we still owe an answer, or a
-            // change we sent went unanswered → tacit acceptance / close.
-            (
-                RUECKMELDUNG_WINDOW_LABEL | APERAK_STROM_WINDOW_LABEL,
-                StammdatenState::Eingegangen(_)
-                | StammdatenState::ValidationPassed(_)
-                | StammdatenState::Gesendet(_),
-            ) => Some(StammdatenCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            }),
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| StammdatenCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
@@ -818,12 +831,9 @@ impl Workflow for GpkeStammdatenaenderungWorkflow {
             }
 
             StammdatenCommand::TimeoutExpired { deadline_id, label } => {
-                if state.is_terminal() {
-                    Ok(vec![].into())
-                } else if label.as_ref() == RUECKMELDUNG_WINDOW_LABEL {
+                if window_open(&label, state) {
                     Ok(vec![StammdatenEvent::StillschweigendAngenommen { deadline_id }].into())
                 } else {
-                    // APERAK sending window is monitoring-only; do not close.
                     Ok(vec![].into())
                 }
             }

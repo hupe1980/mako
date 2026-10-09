@@ -1,11 +1,17 @@
 // Suppress lints that are impractical to fix in build-tool code.
 #![deny(unsafe_code)]
-#![allow(clippy::collapsible_if)]
-#![allow(clippy::too_many_arguments)]
-#![allow(clippy::too_many_lines)]
-#![allow(clippy::must_use_candidate)]
-#![allow(clippy::redundant_closure_for_method_calls)]
-#![allow(clippy::unnecessary_map_or)]
+#![expect(
+    clippy::collapsible_if,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
+#![expect(
+    clippy::too_many_lines,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
+#![expect(
+    clippy::redundant_closure_for_method_calls,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 
 const HELP: &str = "\
 Usage: cargo xtask <COMMAND>
@@ -24,6 +30,9 @@ Commands:
   check-db-suites     Every real-PostgreSQL suite is ignored and run by a recipe
   check-expected-tenant  A service reading `Claims` pins the tenant it expects
   check-vorlauf-consulted  Every catalogued Mindestvorlaufzeit is read by something
+  check-behg-prices   Refuse a BEHG price table row for a year no enacted statute prices
+  check-specs         Local: every spec's Status matches its tasks, and specs/ and
+                        concepts/ROADMAP.md name each other (skips when they are absent)
   check-runner-disk   Refuse a workflow job that compiles the workspace without reclaiming
                         runner disk — ~14 GB does not fit, and it fails as a linker SIGBUS
   check-runner-routes No daemon claims a route `mako_service::run` already mounts
@@ -42,6 +51,14 @@ Commands:
   check-outbox-notify    Hold each durable outbox's commit-coupled wake-up together: the
                         AFTER INSERT trigger, the channel it raises on, the worker's LISTEN
                         — and refuse an in-process notify on a producer path
+  check-approval-commands  Refuse a processd approval-queue command with no answer contract —
+                        a decision the queue cannot fill fails in makod and expires
+  check-occupancy        Hold the count of ingest arms deciding resume-vs-spawn on index
+                        presence alone (no occupancy verdict) — it may only fall
+  check-atomic-spawn     Refuse a correlation key written outside its events' batch —
+                        the duplicate guard finds a process only through that key
+  check-command-constructors  Refuse a workflow command variant only a test constructs —
+                        the states it leads to are unreachable in production
   check-workflow-interpolation  Refuse a `${{ }}` value interpolated into a `run:` script —
                         substituted as text before bash parses, so one quote executes the rest
   check-workflow-purity  Refuse a clock, random, environment or filesystem read inside an
@@ -60,17 +77,32 @@ Commands:
                         exact match on `mako_roles`, so a misspelled role is a disjunct
                         that is false for every caller and shows up only as a 403
   check-citations        Refuse a Festlegung cited in a form it does not publish
+  check-controls-consulted  Every declared control — Frist constants, Meldepflicht rows,
+                        credential fields, role columns, feature-gated security modules —
+                        names where it is consulted, or why nothing does
+  check-frist-literals   Refuse a Werktage or clock-time literal in a string that also names
+                        a Festlegung, an AHB or an AWH — the Frist renders from mako_fristen
+  check-known-wrong      Refuse a claim AGENTS.md lists as known-wrong, and a tracked file
+                        pointing into the untracked roadmap or specifications
   check-rounding         Refuse banker's rounding — money rounds kaufmännisch (DIN 1333)
   check-pid-coverage     Compare the shipped AHB profiles against the published
                         Prüfidentifikator inventory (no source documents needed)
   import-pid-overview    Extract that inventory from the BDEW Anwendungsübersicht .xlsx
   check-dep-versions     Documented dependency versions must match the manifests
+  check-action-pins      Every `uses:` pinned to a commit SHA with its tag in a comment, every
+                        Dockerfile `FROM` to a digest, every workflow defaulting to `contents: read`
+  check-vex              release/vex.json carries one OpenVEX statement per advisory deny.toml ignores
+  evidence-pack          Assemble (--inputs <dir> --out <file>) or verify (--check <file>) the
+                        release evidence pack; a section without its input reads `not measured`
   check-licenses         The licence governance page must state deny.toml's allow list
   check-wire-timestamps  Refuse raw `time` values in JSON output (they serialise as component arrays)
                         under axum 0.8 (the fix is `/{param}`)
   check-answer-commands  Refuse an invoicd PID route naming a makod command that does not exist
   check-tool-grants   Verify every agentd manifest tool grant names a real MCP tool and
                         agrees with that server's own `read_only_hint`
+  check-clippy-bans   Every clippy.toml ban fires on its planted use in xtask/clippy-fixtures
+  dep-age             Report each direct dependency's pin against crates.io (network; a
+                        report, never a failure; --recorded <file> reads a saved response)
   import-profiles     Regenerate the profiles from the mirrored BDEW documents
                         (--profile <type>/<fv>, --check to prove the committed files)
   profile-diff        Per Prüfidentifikator, what changed between two Formatversionen
@@ -84,23 +116,35 @@ Exit codes:
   1  One or more errors were found
 ";
 
+#[cfg(test)]
+mod allow_ratchet;
 mod bdew;
 mod bump_version;
+mod check_action_pins;
 mod check_answer_commands;
+mod check_approval_commands;
 mod check_as4_controls;
+mod check_atomic_spawn;
+mod check_behg_prices;
 mod check_bo4e_attributes;
 mod check_bo4e_discriminants;
 mod check_bo4e_examples;
 mod check_business_dates;
 mod check_cedar_roles;
 mod check_citations;
+mod check_clippy_bans;
+mod check_command_constructors;
+mod check_controls_consulted;
 mod check_crate_lints;
 mod check_db_suites;
 mod check_dep_versions;
 mod check_event_payloads;
 mod check_expected_tenant;
+mod check_frist_literals;
+mod check_known_wrong;
 mod check_licenses;
 mod check_malo_ids;
+mod check_occupancy;
 mod check_outbox_notify;
 mod check_prompt_tools;
 mod check_publish_order;
@@ -110,18 +154,26 @@ mod check_rounding;
 mod check_routes;
 mod check_runner_disk;
 mod check_runner_routes;
+mod check_specs;
 mod check_sql;
 mod check_tenant_predicate;
 mod check_tool_grants;
+mod check_vex;
 mod check_vorlauf_consulted;
 mod check_wire_timestamps;
 mod check_workflow_interpolation;
 mod check_workflow_purity;
+mod dep_age;
+#[cfg(test)]
+mod dev_configs;
+mod evidence_pack;
 mod import_profiles;
 mod pid_overview;
 mod profile_diff;
 mod profile_expressions;
 mod sync_regulatories;
+#[cfg(test)]
+mod test_layout;
 mod validate_ebd_codes;
 mod validate_profiles;
 
@@ -135,6 +187,8 @@ fn main() {
         Some("check-db-suites") => check_db_suites(),
         Some("check-expected-tenant") => check_expected_tenant(),
         Some("check-vorlauf-consulted") => check_vorlauf_consulted(),
+        Some("check-behg-prices") => check_behg_prices(),
+        Some("check-specs") => check_specs(),
         Some("check-routes") => check_routes(),
         Some("check-runner-disk") => check_runner_disk(),
         Some("check-runner-routes") => check_runner_routes(),
@@ -148,13 +202,30 @@ fn main() {
         Some("sync-regulatories") => sync_regulatories(),
         Some("check-business-dates") => check_business_dates(),
         Some("check-citations") => check_citations(),
+        Some("check-known-wrong") => check_known_wrong(),
+        Some("check-frist-literals") => check_frist_literals(),
+        Some("check-controls-consulted") => check_controls_consulted(),
         Some("check-rounding") => check_rounding(),
         Some("check-pid-coverage") => check_pid_coverage(),
         Some("import-pid-overview") => import_pid_overview(),
         Some("check-dep-versions") => check_dep_versions(),
+        Some("dep-age") => {
+            let (root, _) = workspace_info();
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            if !dep_age::run(std::path::Path::new(&root), &args) {
+                std::process::exit(1);
+            }
+        }
+        Some("check-action-pins") => root_task(check_action_pins::run),
+        Some("check-vex") => root_task(check_vex::run),
+        Some("evidence-pack") => evidence_pack(),
         Some("check-licenses") => check_licenses(),
         Some("check-wire-timestamps") => check_wire_timestamps(),
         Some("check-outbox-notify") => check_outbox_notify(),
+        Some("check-atomic-spawn") => check_atomic_spawn(),
+        Some("check-command-constructors") => root_task(check_command_constructors::run),
+        Some("check-approval-commands") => check_approval_commands(),
+        Some("check-occupancy") => check_occupancy(),
         Some("check-workflow-interpolation") => check_workflow_interpolation(),
         Some("check-workflow-purity") => check_workflow_purity(),
         Some("check-event-payloads") => check_event_payloads(),
@@ -163,6 +234,7 @@ fn main() {
         Some("check-as4-controls") => check_as4_controls(),
         Some("check-answer-commands") => check_answer_commands(),
         Some("check-tool-grants") => check_tool_grants(),
+        Some("check-clippy-bans") => root_task(check_clippy_bans::run),
         Some("validate-ebd-codes") => validate_ebd_codes(),
         Some("validate-profiles") => validate_profiles(),
         Some("import-profiles") => import_profiles(),
@@ -249,6 +321,41 @@ fn check_expected_tenant() {
 fn check_vorlauf_consulted() {
     let (workspace_root, _) = workspace_info();
     if !check_vorlauf_consulted::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_behg_prices() {
+    let (workspace_root, _) = workspace_info();
+    if !check_behg_prices::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_specs() {
+    let (workspace_root, _) = workspace_info();
+    if !check_specs::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_occupancy() {
+    let (workspace_root, _) = workspace_info();
+    if !check_occupancy::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_approval_commands() {
+    let (workspace_root, _) = workspace_info();
+    if !check_approval_commands::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_atomic_spawn() {
+    let (workspace_root, _) = workspace_info();
+    if !check_atomic_spawn::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }
@@ -394,6 +501,27 @@ fn check_citations() {
     }
 }
 
+fn check_controls_consulted() {
+    let (workspace_root, _) = workspace_info();
+    if !check_controls_consulted::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_frist_literals() {
+    let (workspace_root, _) = workspace_info();
+    if !check_frist_literals::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_known_wrong() {
+    let (workspace_root, _) = workspace_info();
+    if !check_known_wrong::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
 fn check_rounding() {
     let (workspace_root, _) = workspace_info();
     if !check_rounding::run(std::path::Path::new(&workspace_root)) {
@@ -426,6 +554,22 @@ fn import_pid_overview() {
 fn check_dep_versions() {
     let (workspace_root, _) = workspace_info();
     if !check_dep_versions::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+/// Run a guard that takes only the workspace root, exiting 1 when it refuses.
+fn root_task(guard: fn(&std::path::Path) -> bool) {
+    let (workspace_root, _) = workspace_info();
+    if !guard(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn evidence_pack() {
+    let (workspace_root, _) = workspace_info();
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    if !evidence_pack::run(std::path::Path::new(&workspace_root), &args) {
         std::process::exit(1);
     }
 }

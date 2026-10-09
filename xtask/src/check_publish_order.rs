@@ -13,6 +13,10 @@
 //! "Workspace member" is every member of the root manifest, not only the ones
 //! under `crates/` — a member that drops its `publish = false` is publishable
 //! wherever it lives, and a claim about all of them has to read all of them.
+//!
+//! The root manifest's `default-members` is a second list of the same members,
+//! so it is held to `members` minus the PyO3 member: a member missing there is
+//! left out of a bare `cargo test` with nothing to say so.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -52,6 +56,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let members = read_members(&root)?;
     let order = read_publish_order(&root)?;
+    let manifest = std::fs::read_to_string(Path::new(&root).join("Cargo.toml"))?;
     let position: HashMap<&str, usize> = order
         .iter()
         .enumerate()
@@ -59,6 +64,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
 
     let mut problems = String::new();
+    for p in default_members_problems(&manifest) {
+        let _ = writeln!(problems, "  {p}");
+    }
 
     for (name, member) in &members {
         if member.publishable && !position.contains_key(name.as_str()) {
@@ -146,6 +154,61 @@ fn read_publish_order(root: &str) -> Result<Vec<String>, Box<dyn std::error::Err
         return Err("no `cargo publish -p` steps found in release.yml".into());
     }
     Ok(order)
+}
+
+/// Members `default-members` leaves out on purpose: `makotest` builds against
+/// PyO3, which needs a Python interpreter a bare `cargo build` should not.
+const NOT_DEFAULT_MEMBERS: &[&str] = &["makotest"];
+
+/// The quoted paths of the root manifest's `key = [ … ]` array.
+fn manifest_list(manifest: &str, key: &str) -> Option<Vec<String>> {
+    let start = manifest
+        .lines()
+        .position(|l| l.trim_start().starts_with(&format!("{key} = [")))?;
+    let mut out = Vec::new();
+    for line in manifest.lines().skip(start + 1) {
+        let line = line.trim();
+        if line.starts_with(']') {
+            return Some(out);
+        }
+        if let Some(path) = line.strip_prefix('"').and_then(|r| r.split('"').next()) {
+            out.push(path.to_owned());
+        }
+    }
+    None
+}
+
+/// `default-members` must be `members` minus [`NOT_DEFAULT_MEMBERS`].
+fn default_members_problems(manifest: &str) -> Vec<String> {
+    let (Some(members), Some(defaults)) = (
+        manifest_list(manifest, "members"),
+        manifest_list(manifest, "default-members"),
+    ) else {
+        return vec!["the root manifest declares no `members` or no `default-members`".to_owned()];
+    };
+    let mut problems = Vec::new();
+    for m in &members {
+        let excluded = NOT_DEFAULT_MEMBERS.contains(&m.as_str());
+        let listed = defaults.contains(m);
+        if !excluded && !listed {
+            problems.push(format!(
+                "workspace member {m} is missing from `default-members`, so a bare `cargo test` skips it"
+            ));
+        }
+        if excluded && listed {
+            problems.push(format!(
+                "{m} is in `default-members`, which puts PyO3 in every bare cargo command"
+            ));
+        }
+    }
+    for d in &defaults {
+        if !members.contains(d) {
+            problems.push(format!(
+                "`default-members` names {d}, which is not a workspace member"
+            ));
+        }
+    }
+    problems
 }
 
 /// Every workspace member, with its intra-workspace deps.
@@ -249,4 +312,46 @@ fn workspace_deps(text: &str, members: &HashSet<&str>) -> Vec<String> {
         }
     }
     deps
+}
+
+#[cfg(test)]
+mod default_members_tests {
+    use super::default_members_problems;
+
+    const OK: &str = "[workspace]\nmembers = [\n    \"crates/a\",\n    \"makotest\",\n]\ndefault-members = [\n    \"crates/a\",\n]\n";
+
+    #[test]
+    fn members_minus_makotest_passes() {
+        assert!(default_members_problems(OK).is_empty());
+    }
+
+    #[test]
+    fn a_member_missing_from_default_members_is_refused() {
+        let planted = OK.replace(
+            "[workspace]\nmembers = [\n",
+            "[workspace]\nmembers = [\n    \"crates/b\",\n",
+        );
+        let problems = default_members_problems(&planted);
+        assert!(
+            problems.iter().any(|p| p.contains("crates/b")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn makotest_in_default_members_is_refused() {
+        let planted = OK.replace(
+            "default-members = [\n",
+            "default-members = [\n    \"makotest\",\n",
+        );
+        assert!(!default_members_problems(&planted).is_empty());
+    }
+
+    #[test]
+    fn the_real_manifest_passes() {
+        let manifest =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../Cargo.toml"))
+                .expect("root manifest");
+        assert_eq!(default_members_problems(&manifest), Vec::<String>::new());
+    }
 }

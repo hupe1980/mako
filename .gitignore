@@ -50,6 +50,11 @@ regulatories/bdew-mako/*
 concepts/
 .DS_Store
 
+# GitHub Spec Kit: the feature specifications and the Specify scaffolding are
+# local like concepts/, which every spec links into.
+specs/
+.specify/
+
 # Local agent configuration, skills included.
 .claude/
 
@@ -71,3 +76,6 @@ site/package-lock.json
 
 # maturin leaves the debug-symbol bundle beside the built extension.
 *.dSYM/
+
+# Local dev state written by `just dev` (edmd's Iceberg warehouse); `just infra-reset` deletes it.
+dev/.data/

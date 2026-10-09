@@ -271,13 +271,13 @@ pub(super) async fn dispatch_wim_geraetewechsel_beauftragen(
 
     // Duplicate guard — a meter can be changed more than once, so only a
     // device change still in flight blocks. See `find_occupying_process`.
-    if let Some(dup_id) = find_occupying_process::<WimDeviceChangeWorkflow>(
+    let occupancy = find_occupying_process::<WimDeviceChangeWorkflow>(
         state,
         melo_id.as_str(),
         mako_wim::WORKFLOW_NAME,
     )
-    .await?
-    {
+    .await?;
+    if let Some(dup_id) = occupancy.process {
         tracing::warn!(
             melo_id = %melo_id,
             process_id = %dup_id,
@@ -291,15 +291,6 @@ pub(super) async fn dispatch_wim_geraetewechsel_beauftragen(
     }
 
     let workflow_id = WorkflowId::new(mako_wim::WORKFLOW_NAME, latest_format_version());
-    let process = mako_engine::process::Process::<
-        WimDeviceChangeWorkflow,
-        Arc<mako_engine::store_slatedb::SlateDbStore>,
-    >::new(
-        Arc::clone(&state.store),
-        state.tenant_id,
-        workflow_id.clone(),
-    );
-    let process_id = process.process_id();
 
     // Antwortfrist per process — NOT a flat 5 WT (BK6-24-174 WiM Teil 1):
     // 55039 → 3 WT · 55042 → 5 WT · 55051 → 7 WT · 55168 → 1 WT.
@@ -311,40 +302,15 @@ pub(super) async fn dispatch_wim_geraetewechsel_beauftragen(
         frist_wt,
         mako_fristen::HolidayCalendar::BdewMaKo,
     );
-    let deadline = Deadline::new(
-        process.stream_id().clone(),
-        process_id,
+    let process_id = spawn_process::<WimDeviceChangeWorkflow>(
+        &state.store,
         state.tenant_id,
         workflow_id,
-        mako_wim::AUFTRAG_ANTWORT_WINDOW_LABEL,
-        due_at,
-    );
-    process
-        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
-        .await?;
-
-    let identity = process.identity();
-    // The correlation index is how an inbound answer finds this process; it is
-    // append-only and nothing rebuilds it. Discarding a failure here left a live
-    // process that no answer could ever be routed to — the answer is dropped as
-    // `process_not_found` and the Frist expires against a process that was doing
-    // everything right. Not propagated: the process is spawned and its message
-    // already enqueued, so failing the caller now would have it re-issue the
-    // command and start a second one.
-    if let Err(e) = state
-        .store
-        .as_process_registry()
-        .register_correlated(state.tenant_id, melo_id.as_str(), process_id, identity)
-        .await
-    {
-        tracing::error!(
-            process_id = %process_id,
-            melo_id    = %melo_id,
-            error      = %e,
-            "wim: business-key registration failed — the answer to this process cannot be \
-             correlated back to it",
-        );
-    }
+        domain_cmd,
+        &[(mako_wim::AUFTRAG_ANTWORT_WINDOW_LABEL, due_at)],
+        &[melo_id.as_str()],
+    )
+    .await?;
 
     Ok(DispatchOutcome::Spawned { process_id })
 }
@@ -881,64 +847,60 @@ pub(super) async fn dispatch_steuerungsauftrag_endantwort(
                             Arc<mako_engine::store_slatedb::SlateDbStore>,
                         >::from_identity(Arc::clone(&state.store), identity);
 
-                    #[allow(clippy::collapsible_match)]
                     if let Ok(SteuerungsauftragState::Received(ref data)) =
                         proc.state_with_snapshot(&state.snapshot_store).await
-                    {
-                        #[allow(clippy::collapsible_match)]
-                        if let (LocationId::Sr(sr_id), Some(produkt_code)) =
+                        && let (LocationId::Sr(sr_id), Some(produkt_code)) =
                             (&data.location_id, &data.produkt_code)
-                        {
-                            match marktd.get_konfigurationsprodukte(sr_id.as_ref()).await {
-                                Ok(Some(products)) => {
-                                    let contracted = products.iter().any(|p| {
-                                        // BO4E `Konfigurationsprodukt.produktcode`; the
-                                        // camelCase/snake_case variants are legacy fallbacks.
-                                        p.get("produktcode")
-                                            .or_else(|| p.get("produktCode"))
-                                            .or_else(|| p.get("produkt_code"))
-                                            .and_then(|v| v.as_str())
-                                            .map(|code| code == produkt_code.as_str())
-                                            .unwrap_or(false)
-                                    });
-                                    if !contracted {
-                                        let reject_reason = format!(
-                                            "ERC A99: Konfigurationsprodukt '{}' is not in the \
-                                             contracted konfigurationsprodukte list for SR {}",
-                                            produkt_code, sr_id
-                                        );
-                                        tracing::warn!(
-                                            tx_id = %tx_id,
-                                            sr_id = %sr_id,
-                                            produkt_code = %produkt_code,
-                                            "M1: Konfigurationsprodukt not contracted — auto-dispatching ablehnen (ERC A99)"
-                                        );
-                                        return dispatch_to_process::<WimSteuerungsauftragWorkflow, _>(
-                                            state,
-                                            &tx_id,
-                                            mako_wim::steuerungsauftrag::WORKFLOW_NAME,
-                                            move || mako_wim::steuerungsauftrag::SteuerungsauftragCommand::SendEndantwortNegativ {
-                                                reason: Some(reject_reason),
-                                            },
-                                        )
-                                        .await;
-                                    }
-                                }
-                                Ok(None) => {
+                    {
+                        match marktd.get_konfigurationsprodukte(sr_id.as_ref()).await {
+                            Ok(Some(products)) => {
+                                let contracted = products.iter().any(|p| {
+                                    // BO4E `Konfigurationsprodukt.produktcode`; the
+                                    // camelCase/snake_case variants are legacy fallbacks.
+                                    p.get("produktcode")
+                                        .or_else(|| p.get("produktCode"))
+                                        .or_else(|| p.get("produkt_code"))
+                                        .and_then(|v| v.as_str())
+                                        .map(|code| code == produkt_code.as_str())
+                                        .unwrap_or(false)
+                                });
+                                if !contracted {
+                                    let reject_reason = format!(
+                                        "ERC A99: Konfigurationsprodukt '{}' is not in the \
+                                         contracted konfigurationsprodukte list for SR {}",
+                                        produkt_code, sr_id
+                                    );
                                     tracing::warn!(
                                         tx_id = %tx_id,
                                         sr_id = %sr_id,
-                                        "M1: SR not found in marktd — skipping Konfigurationsprodukt guard"
+                                        produkt_code = %produkt_code,
+                                        "M1: Konfigurationsprodukt not contracted — auto-dispatching ablehnen (ERC A99)"
                                     );
+                                    return dispatch_to_process::<WimSteuerungsauftragWorkflow, _>(
+                                        state,
+                                        &tx_id,
+                                        mako_wim::steuerungsauftrag::WORKFLOW_NAME,
+                                        move || mako_wim::steuerungsauftrag::SteuerungsauftragCommand::SendEndantwortNegativ {
+                                            reason: Some(reject_reason),
+                                        },
+                                    )
+                                    .await;
                                 }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        tx_id = %tx_id,
-                                        sr_id = %sr_id,
-                                        error = %e,
-                                        "M1: marktd request failed — skipping Konfigurationsprodukt guard (fail-open)"
-                                    );
-                                }
+                            }
+                            Ok(None) => {
+                                tracing::warn!(
+                                    tx_id = %tx_id,
+                                    sr_id = %sr_id,
+                                    "M1: SR not found in marktd — skipping Konfigurationsprodukt guard"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    tx_id = %tx_id,
+                                    sr_id = %sr_id,
+                                    error = %e,
+                                    "M1: marktd request failed — skipping Konfigurationsprodukt guard (fail-open)"
+                                );
                             }
                         }
                     }
@@ -1032,13 +994,13 @@ pub(super) async fn dispatch_wim_rechnungsabwicklung_beenden(
 
     // Duplicate guard — one Beendigung in flight per MaLo. A settled process
     // (Bestellt/Beendet/Rejected) does not block; see `find_occupying_process`.
-    if let Some(dup_id) = find_occupying_process::<WimRechnungsabwicklungWorkflow>(
+    let occupancy = find_occupying_process::<WimRechnungsabwicklungWorkflow>(
         state,
         malo_id.as_str(),
         mako_wim::RECHNUNGSABWICKLUNG_WORKFLOW_NAME,
     )
-    .await?
-    {
+    .await?;
+    if let Some(dup_id) = occupancy.process {
         return Err(DispatchError::DuplicateProcess {
             process_id: dup_id,
             malo_id: malo_id.into(),
@@ -1049,15 +1011,6 @@ pub(super) async fn dispatch_wim_rechnungsabwicklung_beenden(
         mako_wim::RECHNUNGSABWICKLUNG_WORKFLOW_NAME,
         latest_format_version(),
     );
-    let process = mako_engine::process::Process::<
-        WimRechnungsabwicklungWorkflow,
-        Arc<mako_engine::store_slatedb::SlateDbStore>,
-    >::new(
-        Arc::clone(&state.store),
-        state.tenant_id,
-        workflow_id.clone(),
-    );
-    let process_id = process.process_id();
 
     // The counterparty's answer window: the WiM Teil 1 process window the
     // sibling workflows use (5 Werktage, BK6-24-174).
@@ -1066,40 +1019,15 @@ pub(super) async fn dispatch_wim_rechnungsabwicklung_beenden(
         5,
         mako_fristen::HolidayCalendar::BdewMaKo,
     );
-    let deadline = Deadline::new(
-        process.stream_id().clone(),
-        process_id,
+    let process_id = spawn_process::<WimRechnungsabwicklungWorkflow>(
+        &state.store,
         state.tenant_id,
         workflow_id,
-        mako_wim::RECHNUNGSABWICKLUNG_DEADLINE_LABEL,
-        due_at,
-    );
-    process
-        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
-        .await?;
-
-    let identity = process.identity();
-    // The correlation index is how an inbound answer finds this process; it is
-    // append-only and nothing rebuilds it. Discarding a failure here left a live
-    // process that no answer could ever be routed to — the answer is dropped as
-    // `process_not_found` and the Frist expires against a process that was doing
-    // everything right. Not propagated: the process is spawned and its message
-    // already enqueued, so failing the caller now would have it re-issue the
-    // command and start a second one.
-    if let Err(e) = state
-        .store
-        .as_process_registry()
-        .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
-        .await
-    {
-        tracing::error!(
-            process_id = %process_id,
-            malo_id    = %malo_id,
-            error      = %e,
-            "wim: business-key registration failed — the answer to this process cannot be \
-             correlated back to it",
-        );
-    }
+        domain_cmd,
+        &[(mako_wim::RECHNUNGSABWICKLUNG_DEADLINE_LABEL, due_at)],
+        &[malo_id.as_str()],
+    )
+    .await?;
 
     Ok(DispatchOutcome::Spawned { process_id })
 }

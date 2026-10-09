@@ -1,4 +1,7 @@
-#![allow(clippy::doc_markdown)]
+#![expect(
+    clippy::doc_markdown,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 //! HTTP client for `makod` admin APIs.
 //!
 //! The MDM calls `makod` on three paths:

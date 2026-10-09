@@ -1,7 +1,7 @@
 [package]
 name         = "mako-wim"
 version.workspace     = true
-description  = "WiM process engine for German smart-meter market communication (Wechsel des Messstellenbetreibers)"
+description  = "WiM workflows for German metering, Strom and Gas: MSB change, device takeover, price requests, INSRPT and ESA value orders"
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true
@@ -22,7 +22,6 @@ mako-engine = { workspace = true }
 mako-invoic = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
-thiserror   = { workspace = true }
 time        = { workspace = true }
 
 [dev-dependencies]
@@ -39,3 +38,6 @@ tokio       = { version = "1", features = ["full"] }
 [[example]]
 name               = "wim_geraetewechsel"
 required-features  = ["mako-engine/testing"]
+
+[lints]
+workspace = true

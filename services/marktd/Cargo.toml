@@ -1,7 +1,7 @@
 [package]
 name             = "marktd"
 version.workspace = true
-description      = "Market data daemon for German energy market (MaKo/Marktd)"
+description      = "Market data hub daemon: MaLo, MeLo, supply status, partner registries and durable CloudEvents fan-out"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -28,9 +28,7 @@ metering   = { workspace = true, features = ["serde"] }
 rubo4e    = { workspace = true, features = ["sqlx"] }
 
 anyhow             = { workspace = true }
-thiserror          = { workspace = true }
 axum               = { version = "0.8", features = [] }
-clap               = { version = "4", features = ["derive", "env"] }
 serde              = { version = "1", features = ["derive"] }
 serde_json         = { workspace = true }
 toml               = { version = "0.8", default-features = false, features = ["parse"] }
@@ -42,25 +40,24 @@ tracing            = "0.1"
 mako-service       = { workspace = true, features = ["otel", "cedar", "oidc", "metrics"] }
 rmcp               = { workspace = true }
 schemars           = { workspace = true }
-secrecy            = "0.10"
-subtle             = "2"
-hmac               = { version = "0.12", features = ["std"] }
-sha2               = "0.10"
 reqwest            = { workspace = true }
 # Bounded-concurrent fan-out delivery (`for_each_concurrent`) so one slow
 # subscriber cannot stall a whole batch on the single-threaded worker.
 futures            = { version = "0.3", default-features = false, features = ["std"] }
 rust_decimal       = { workspace = true }
 utoipa             = { version = "5", features = ["axum_extras", "uuid", "time"] }
-utoipa-axum        = "0.2"
 utoipa-swagger-ui  = { version = "9", features = ["axum"] }
 prometheus         = "0.14"
 sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json", "rust_decimal"] }
 
 [dev-dependencies]
+mako-service = { workspace = true, features = ["testing"] }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 # (no `testing` feature: every marktd repository is exercised against a real
 # PostgreSQL via testcontainers in tests/*_integration.rs)
 tokio      = { version = "1", features = ["full"] }
 serde_json = { workspace = true }
+
+[lints]
+workspace = true

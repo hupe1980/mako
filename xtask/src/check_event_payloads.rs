@@ -35,9 +35,10 @@
 //! ## What it refuses
 //!
 //! `#[serde(deny_unknown_fields)]` anywhere in a workflow crate's `src/`. That
-//! is the rule this guard can enforce textually and without false positives:
-//! these crates contain event and state payloads and no HTTP bodies, so the
-//! attribute has no legitimate use in them at all.
+//! is the rule this guard can enforce textually: these crates hold event and
+//! state payloads, and the few request-body types a calculation in them reads
+//! are listed in [`REQUEST_BODY_TYPES`] with a reason — each refused again if
+//! it ever appears inside an event or state enum.
 //!
 //! The field-default half is deliberately **not** enforced here. Whether a field
 //! needs `#[serde(default)]` depends on whether it existed in a shipped payload
@@ -73,6 +74,87 @@ const NOT_WORKFLOW_CRATES: &[&str] = &[
     "mako-invoic",
     "mako-engine",
 ];
+
+/// Typed outbound payloads, scanned although their crate holds no workflow.
+///
+/// An outbox row is written by one build and drained by the next, so these are
+/// tolerant readers by the same argument as an event: a strict struct turns a
+/// removed field into a dead-lettered message.
+const PAYLOAD_FILES: &[&str] = &["crates/mako-engine/src/payload.rs"];
+
+/// Request-body types that live in a workflow crate because the calculation
+/// that reads them lives there: `(file, type, reason)`. Each must be strict
+/// for `check-request-bodies`, and this guard refuses an entry whose type is
+/// named inside any `…Event` or `…State` enum of its crate — the one shape
+/// that would make it an event payload after all.
+const REQUEST_BODY_TYPES: &[(&str, &str, &str)] = &[
+    (
+        "crates/mako-redispatch/src/ausfallarbeit.rs",
+        "VergleichsViertelstunde",
+        "netzbilanzd Ausfallarbeit request input; never recorded as an event",
+    ),
+    (
+        "crates/mako-redispatch/src/ausfallarbeit.rs",
+        "VergleichstagViertelstunde",
+        "netzbilanzd Ausfallarbeit request input; never recorded as an event",
+    ),
+    (
+        "crates/mako-redispatch/src/ausfallarbeit.rs",
+        "UeberbauungTr",
+        "netzbilanzd Überbauung request input; never recorded as an event",
+    ),
+];
+
+/// The type a `deny_unknown_fields` line at `idx` is attached to: the first
+/// `struct`/`enum` name after it, skipping further attributes and doc lines.
+fn attached_type(lines: &[&str], idx: usize) -> Option<String> {
+    lines.iter().skip(idx + 1).take(12).find_map(|l| {
+        let t = l.trim_start();
+        let rest = t
+            .strip_prefix("pub struct ")
+            .or_else(|| t.strip_prefix("pub enum "))
+            .or_else(|| t.strip_prefix("struct "))
+            .or_else(|| t.strip_prefix("enum "))?;
+        Some(
+            rest.chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect(),
+        )
+    })
+}
+
+/// The bodies of every `enum …Event` / `enum …State` in `src`.
+fn event_and_state_enums(src: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = src;
+    while let Some(i) = rest.find("enum ") {
+        let after = &rest[i + 5..];
+        let name: String = after
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        rest = after;
+        if !(name.ends_with("Event") || name.ends_with("State")) {
+            continue;
+        }
+        let Some(open) = after.find('{') else { break };
+        let mut depth = 0usize;
+        for (j, ch) in after[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        out.push(after[open..open + j + 1].to_owned());
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
 
 /// The lowest number of workflow crates a healthy scan may find.
 ///
@@ -169,13 +251,73 @@ pub fn run(workspace_root: &Path) -> bool {
                 };
                 scanned_files += 1;
                 let body = strip_test_modules(&text);
-                for (n, line) in body.lines().enumerate() {
-                    if line.contains(FORBIDDEN) {
+                let rel = p
+                    .strip_prefix(workspace_root)
+                    .unwrap_or(&p)
+                    .display()
+                    .to_string();
+                let lines: Vec<&str> = body.lines().collect();
+                for (n, line) in lines.iter().enumerate() {
+                    if !line.contains(FORBIDDEN) {
+                        continue;
+                    }
+                    let exempt = attached_type(&lines, n).is_some_and(|ty| {
+                        REQUEST_BODY_TYPES
+                            .iter()
+                            .any(|(file, name, _)| *file == rel && *name == ty)
+                    });
+                    if !exempt {
+                        findings.push(format!("{rel}:{}: {}", n + 1, line.trim()));
+                    }
+                }
+            }
+        }
+    }
+
+    for rel in PAYLOAD_FILES {
+        let p = workspace_root.join(rel);
+        let Ok(text) = std::fs::read_to_string(&p) else {
+            findings.push(format!("{rel}: unreadable — the payload module moved"));
+            continue;
+        };
+        scanned_files += 1;
+        for (n, line) in strip_test_modules(&text).lines().enumerate() {
+            if line.contains(FORBIDDEN) {
+                findings.push(format!("{rel}:{}: {}", n + 1, line.trim()));
+            }
+        }
+    }
+
+    // An exempted request body must stay out of every event and state enum of
+    // its crate, or it is an event payload after all.
+    for (file, name, _) in REQUEST_BODY_TYPES {
+        let crate_src = Path::new(file)
+            .ancestors()
+            .find(|a| a.ends_with("src"))
+            .map(|a| workspace_root.join(a));
+        let Some(crate_src) = crate_src else { continue };
+        let mut stack = vec![crate_src];
+        while let Some(d) = stack.pop() {
+            let Ok(rd) = std::fs::read_dir(&d) else {
+                continue;
+            };
+            for e in rd.filter_map(Result::ok) {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p.extension().and_then(|s| s.to_str()) == Some("rs") {
+                    let Ok(text) = std::fs::read_to_string(&p) else {
+                        continue;
+                    };
+                    let body = strip_test_modules(&text);
+                    if event_and_state_enums(&body).iter().any(|e| {
+                        e.split(|c: char| !c.is_alphanumeric() && c != '_')
+                            .any(|w| w == *name)
+                    }) {
                         findings.push(format!(
-                            "{}:{}: {}",
-                            p.strip_prefix(workspace_root).unwrap_or(&p).display(),
-                            n + 1,
-                            line.trim()
+                            "{file}: `{name}` is exempted as a request body but rides in an \
+                             event or state enum in {}",
+                            p.strip_prefix(workspace_root).unwrap_or(&p).display()
                         ));
                     }
                 }
@@ -223,6 +365,22 @@ pub fn run(workspace_root: &Path) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn an_exempted_request_body_inside_an_event_enum_is_found() {
+        let src = "pub enum FooEvent { A(VergleichsViertelstunde), B }";
+        assert!(
+            event_and_state_enums(src)
+                .iter()
+                .any(|e| e.contains("VergleichsViertelstunde"))
+        );
+        let lines = [
+            "#[serde(deny_unknown_fields)]",
+            "/// doc",
+            "pub struct UeberbauungTr {",
+        ];
+        assert_eq!(attached_type(&lines, 0).as_deref(), Some("UeberbauungTr"));
+    }
+
     /// The guard finds the attribute it exists to refuse.
     ///
     /// A guard that cannot fail certifies nothing, so this is the input that
@@ -241,12 +399,40 @@ mod tests {
             )
             .unwrap();
         }
+        std::fs::create_dir_all(dir.join("crates/mako-engine/src")).unwrap();
+        std::fs::write(
+            dir.join("crates/mako-engine/src/payload.rs"),
+            "pub struct P {}\n",
+        )
+        .unwrap();
         std::fs::write(
             dir.join("crates/mako-a/src/lib.rs"),
             "#[derive(serde::Deserialize)]\n#[serde(deny_unknown_fields)]\npub struct D { pub a: u8 }\n",
         )
         .unwrap();
         assert!(!run(&dir), "a strict event payload must be refused");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A strict outbound payload is refused although its crate holds no
+    /// workflow: an outbox row outlives the build that wrote it.
+    #[test]
+    fn catches_a_strict_outbound_payload() {
+        let dir = std::env::temp_dir().join("mako-check-event-payloads-outbound");
+        let _ = std::fs::remove_dir_all(&dir);
+        for c in [
+            "mako-a", "mako-b", "mako-c", "mako-d", "mako-e", "mako-f", "mako-g",
+        ] {
+            std::fs::create_dir_all(dir.join("crates").join(c).join("src")).unwrap();
+            std::fs::write(dir.join("crates").join(c).join("src").join("lib.rs"), "").unwrap();
+        }
+        std::fs::create_dir_all(dir.join("crates/mako-engine/src")).unwrap();
+        std::fs::write(
+            dir.join("crates/mako-engine/src/payload.rs"),
+            "#[serde(deny_unknown_fields)]\npub struct AperakPayload {}\n",
+        )
+        .unwrap();
+        assert!(!run(&dir), "a strict outbound payload must be refused");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -265,6 +451,12 @@ mod tests {
             )
             .unwrap();
         }
+        std::fs::create_dir_all(dir.join("crates/mako-engine/src")).unwrap();
+        std::fs::write(
+            dir.join("crates/mako-engine/src/payload.rs"),
+            "pub struct P {}\n",
+        )
+        .unwrap();
         // An excluded crate may hold the attribute — it has HTTP bodies.
         std::fs::create_dir_all(dir.join("crates/mako-service/src")).unwrap();
         std::fs::write(

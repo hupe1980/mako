@@ -675,7 +675,10 @@ impl UtilmdTransaction {
         references=None, locations=None, customers=None, free_texts=None,
         antwort_dritter=None, bilanzkreis=None
     ))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
     fn new(
         vorgangsnummer: String,
         transaktionsgrund: Option<String>,
@@ -804,7 +807,10 @@ fn pid(value: u32) -> PyResult<Pruefidentifikator> {
     message_ref="1", document_date=None, document_code="E01", references=None,
     transactions=None
 ))]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub fn build_utilmd(
     pruefidentifikator: u32,
     sender: &str,
@@ -1071,7 +1077,10 @@ type IntervalQuantity = (String, String, String, String, String);
     intervals=None, on=None, release=None, message_ref="1", document_date=None,
     obis=None
 ))]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub fn build_mscons(
     pruefidentifikator: u32,
     sender: &str,
@@ -1160,7 +1169,7 @@ pub fn build_mscons(
 /// of functions exists to keep apart.
 ///
 /// `error_code` is the APERAK ERC. Supplying one selects BGM+313
-/// (Verarbeitbarkeitsfehlermeldung) per BDEW APERAK AHB 1.0 §2.1.1; without it
+/// (Verarbeitbarkeitsfehlermeldung) per BDEW APERAK AHB 1.1 §2.1.1; without it
 /// the message is a positive acknowledgement.
 #[pyfunction]
 #[pyo3(signature = (
@@ -1168,7 +1177,10 @@ pub fn build_mscons(
     acw_ref=None, error_code=None, error_text=None, message_ref="1",
     document_date=None, document_code=None
 ))]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub fn build_aperak(
     sender: &str,
     receiver: &str,
@@ -1227,7 +1239,10 @@ pub fn build_aperak(
     sender, receiver, interchange_ref, *, on=None, release=None, accept=true,
     message_ref="1", action_code=None, syntax_error=None
 ))]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub fn build_contrl(
     sender: &str,
     receiver: &str,
@@ -1275,7 +1290,10 @@ pub fn build_contrl(
     received, *, on=None, release=None, error_code=None, error_text=None,
     pruefidentifikator=None, message_ref="1", message_index=0
 ))]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub fn build_aperak_for(
     received: &[u8],
     on: Option<&str>,
@@ -1352,7 +1370,10 @@ pub fn build_aperak_for(
     document_date=None, document_code=None, antwort_code=None, antwort_ebd=None,
     process_dates=None, references=None, free_texts=None, message_index=0
 ))]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub fn build_answer(
     received: &[u8],
     answer_pid: u32,
@@ -1554,7 +1575,10 @@ impl Positionsfehler {
     release=None, kopf_gruende=None, positionsfehler=None, waehrung=None,
     message_ref="1", document_id=None, document_date=None
 ))]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub fn build_remadv(
     pruefidentifikator: u32,
     sender: &str,
@@ -1650,7 +1674,10 @@ pub fn build_remadv(
     document_code=None, document_id=None, references=None, line_item=false,
     item_description=false, message_ref="1", document_date=None
 ))]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub fn build_ordrsp(
     pruefidentifikator: u32,
     sender: &str,
@@ -1731,7 +1758,10 @@ pub fn build_ordrsp(
     document_id=None, references=None, item_description=None, message_ref="1",
     document_date=None
 ))]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub fn build_orders(
     pruefidentifikator: u32,
     sender: &str,
@@ -1800,7 +1830,10 @@ pub fn build_orders(
     order_reference=None, vertragsende=None, on=None, release=None,
     document_code=None, document_id=None, message_ref="1", document_date=None
 ))]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub fn build_iftsta(
     pruefidentifikator: u32,
     sender: &str,
@@ -1872,7 +1905,10 @@ pub fn build_iftsta(
     document_code=None, document_id=None, references=None, currency=None,
     message_ref="1", document_date=None
 ))]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub fn build_quotes(
     pruefidentifikator: u32,
     sender: &str,

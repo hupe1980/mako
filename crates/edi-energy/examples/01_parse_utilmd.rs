@@ -12,7 +12,10 @@
 //! cargo run --example 01_parse_utilmd
 //! ```
 
-#![allow(clippy::result_large_err)]
+#![expect(
+    clippy::result_large_err,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 
 use edi_energy::{AnyMessage, EdiEnergyMessage, Platform};
 

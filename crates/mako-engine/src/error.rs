@@ -105,6 +105,34 @@ pub enum EngineError {
     #[error("workflow error: {0}")]
     Workflow(#[from] WorkflowError),
 
+    /// A deadline was about to be registered under a label its workflow does
+    /// not own.
+    ///
+    /// A label is owned when it is listed in
+    /// [`Workflow::DEADLINE_LABELS`](crate::workflow::Workflow::DEADLINE_LABELS)
+    /// or is a delivery window ([`mako_fristen::is_delivery_window`]). Any other
+    /// label would fire into a workflow that never decides it, so the write is
+    /// refused rather than stored.
+    #[error("workflow '{workflow}' does not own the deadline label '{label}'")]
+    UnownedDeadlineLabel {
+        /// The workflow name the deadline was registered for.
+        workflow: Box<str>,
+        /// The refused label.
+        label: Box<str>,
+    },
+
+    /// `handle` returned an outbox entry or a deadline but no event.
+    ///
+    /// The event is the stream's record of why a message was sent or a Frist
+    /// started; without one the effect would happen with nothing in the
+    /// history to explain it, and a replay would not know it happened. The
+    /// write is refused rather than dropping the effect.
+    #[error("workflow '{workflow}' returned an outbox entry or deadline without an event")]
+    UnrecordedEffect {
+        /// The workflow name whose `handle` returned the output.
+        workflow: Box<str>,
+    },
+
     /// Appending the requested events would exceed the per-stream event count
     /// limit configured on the store.
     ///
@@ -338,12 +366,6 @@ impl EngineError {
         matches!(self, Self::VersionConflict { .. })
     }
 
-    /// Return `true` when this is a [`EngineError::StreamQuotaExceeded`].
-    #[must_use]
-    pub fn is_stream_quota_exceeded(&self) -> bool {
-        matches!(self, Self::StreamQuotaExceeded { .. })
-    }
-
     /// Return `true` when this is a [`EngineError::Workflow`].
     ///
     /// Useful for distinguishing infrastructure failures (store errors) from
@@ -367,10 +389,10 @@ impl EngineError {
     /// # Usage
     ///
     /// ```rust,ignore
+    /// // `run` already retries version conflicts; a caller retries what is transient.
     /// for attempt in 0..MAX_RETRIES {
-    ///     match process.execute(cmd.clone()).await {
+    ///     match process.run(cmd.clone(), RunOptions::new()).await {
     ///         Ok(result) => return Ok(result),
-    ///         Err(e) if e.is_version_conflict() => { /* reload and retry */ }
     ///         Err(e) if e.is_transient() => {
     ///             tokio::time::sleep(backoff(attempt)).await;
     ///         }
@@ -416,12 +438,6 @@ impl EngineError {
         matches!(self, Self::RendererNotImplemented { .. })
     }
 
-    /// Return `true` when this is a [`EngineError::Transport`].
-    #[must_use]
-    pub fn is_transport_error(&self) -> bool {
-        matches!(self, Self::Transport { .. })
-    }
-
     /// Return the inner [`WorkflowError`] if this is a workflow rejection,
     /// or `None` otherwise.
     #[must_use]
@@ -431,36 +447,6 @@ impl EngineError {
         } else {
             None
         }
-    }
-
-    /// Return `true` when this is a [`EngineError::Snapshot`].
-    #[must_use]
-    pub fn is_snapshot_error(&self) -> bool {
-        matches!(self, Self::Snapshot { .. })
-    }
-
-    /// Return `true` when this is a [`EngineError::Outbox`].
-    #[must_use]
-    pub fn is_outbox_error(&self) -> bool {
-        matches!(self, Self::Outbox { .. })
-    }
-
-    /// Return `true` when this is a [`EngineError::Deadline`].
-    #[must_use]
-    pub fn is_deadline_error(&self) -> bool {
-        matches!(self, Self::Deadline { .. })
-    }
-
-    /// Return `true` when this is a [`EngineError::Registry`].
-    #[must_use]
-    pub fn is_registry_error(&self) -> bool {
-        matches!(self, Self::Registry { .. })
-    }
-
-    /// Return `true` when this is a [`EngineError::Inbox`].
-    #[must_use]
-    pub fn is_inbox_error(&self) -> bool {
-        matches!(self, Self::Inbox { .. })
     }
 }
 
@@ -565,19 +551,5 @@ impl WorkflowError {
     #[must_use]
     pub fn is_invalid_state(&self) -> bool {
         matches!(self, Self::InvalidState { .. })
-    }
-
-    /// Return `true` when this is a [`WorkflowError::ValidationFailed`].
-    #[must_use]
-    pub fn is_validation_failed(&self) -> bool {
-        matches!(self, Self::ValidationFailed { .. })
-    }
-
-    /// Return `true` when this is a [`WorkflowError::NotImplemented`].
-    ///
-    /// This variant is never transient — callers must not retry.
-    #[must_use]
-    pub fn is_not_implemented(&self) -> bool {
-        matches!(self, Self::NotImplemented { .. })
     }
 }

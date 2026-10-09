@@ -26,6 +26,8 @@
 //! ([`mako_service::http::default_client`]), which closes the redirect bypass of
 //! the same check.
 
+use crate::state::AppState;
+use mako_service::ApiError;
 use std::{net::IpAddr, sync::Arc};
 
 use axum::{
@@ -36,10 +38,7 @@ use axum::{
 };
 use mako_markt::{
     cloudevents::MarktEvent,
-    repository::{
-        AppState, CorrelationIndex, MaloRepository, MeloRepository, PartnerRepository,
-        Subscription, SubscriptionRepository,
-    },
+    repository::{Subscription, SubscriptionRepository},
 };
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
@@ -161,33 +160,19 @@ fn is_globally_routable(ip: IpAddr) -> bool {
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-fn forbidden() -> axum::response::Response {
-    mako_markt::error::MdmError::Forbidden {
-        reason: "manage-subscription denied",
-    }
-    .into_response()
-}
-
 /// `PUT /api/v1/subscriptions/{id}`
-pub async fn put_subscription<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn put_subscription(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(id): Path<String>,
     Json(req): Json<SubscriptionUpsertRequest>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "manage-subscription", &state.tenant)
         .is_err()
     {
-        return forbidden();
+        return ApiError::forbidden("manage-subscription denied").into_response();
     }
 
     if let Err(reason) = validate_webhook_url(&req.webhook_url) {
@@ -215,24 +200,17 @@ where
 }
 
 /// `GET /api/v1/subscriptions/{id}`
-pub async fn get_subscription<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn get_subscription(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(id): Path<String>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "manage-subscription", &state.tenant)
         .is_err()
     {
-        return forbidden();
+        return ApiError::forbidden("manage-subscription denied").into_response();
     }
     match state.subscription_repo.find(&id).await {
         Ok(Some(s)) => axum::Json(sub_to_response(s)).into_response(),
@@ -246,23 +224,16 @@ where
 }
 
 /// `GET /api/v1/subscriptions`
-pub async fn list_subscriptions<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn list_subscriptions(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "manage-subscription", &state.tenant)
         .is_err()
     {
-        return forbidden();
+        return ApiError::forbidden("manage-subscription denied").into_response();
     }
     match state.subscription_repo.list_active().await {
         Ok(subs) => {
@@ -278,24 +249,17 @@ where
 /// subscriber and are § 147 AO / GoBD evidence that a market event was (or was
 /// not) delivered. A hard delete would erase that trail, so the subscription is
 /// marked inactive and stops matching future fan-outs.
-pub async fn delete_subscription<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn delete_subscription(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(id): Path<String>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "manage-subscription", &state.tenant)
         .is_err()
     {
-        return forbidden();
+        return ApiError::forbidden("manage-subscription denied").into_response();
     }
     match state.subscription_repo.deactivate(&id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
@@ -315,25 +279,18 @@ where
 /// Unlike the fan-out worker, this is a synchronous targeted delivery — only the
 /// named subscriber receives the ping, even if the event type/role would match
 /// other subscriptions.  Returns the delivery result synchronously.
-pub async fn test_subscription<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn test_subscription(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(http): Extension<reqwest::Client>,
     claims: Claims,
     Path(id): Path<String>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "manage-subscription", &state.tenant)
         .is_err()
     {
-        return forbidden();
+        return ApiError::forbidden("manage-subscription denied").into_response();
     }
 
     let sub = match state.subscription_repo.find(&id).await {

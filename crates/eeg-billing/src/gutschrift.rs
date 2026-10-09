@@ -15,8 +15,8 @@
 //! `energy-billing::Invoice::to_rechnung` and `grid_billing::bo4e::into_rechnung`
 //! already follow.
 
-use crate::rounding::RoundMoney;
 use billing::{BillingDocument, BillingError, DocumentMeta, LineItem, PricingModel, TaxCategory};
+use grid_billing::RoundMoney;
 use rubo4e::current as bo;
 use rust_decimal::Decimal;
 
@@ -109,26 +109,36 @@ fn document_to_rechnung(doc: &BillingDocument) -> Result<bo::Rechnung, BillingEr
         - doc.vat_total()?.into_decimal())
     .round_kfm(2);
 
+    let issue_date = meta
+        .issue_date
+        .as_deref()
+        .map(|d| document_date("issue_date", d))
+        .transpose()?;
+    let due_date = meta
+        .due_date
+        .as_deref()
+        .map(|d| document_date("due_date", d))
+        .transpose()?;
+    let rechnungsperiode = meta
+        .period
+        .as_ref()
+        .map(|per| -> Result<bo::Zeitraum, BillingError> {
+            Ok(bo::Zeitraum {
+                startdatum: Some(document_date("period.from", &per.from)?),
+                enddatum: Some(document_date("period.to", &per.to)?),
+                ..Default::default()
+            })
+        })
+        .transpose()?;
+
     let mut rechnung = bo::Rechnung {
         typ: Some(bo::BoTyp::Rechnung),
         sparte: Some(bo::Sparte::Strom),
         rechnungsnummer: non_empty(&meta.invoice_number),
         rechnungstitel: non_empty(&meta.period_label),
-        rechnungsdatum: meta
-            .issue_date
-            .as_deref()
-            .and_then(parse_iso_date)
-            .and_then(as_bo4e_timestamp),
-        faelligkeitsdatum: meta
-            .due_date
-            .as_deref()
-            .and_then(parse_iso_date)
-            .and_then(as_bo4e_timestamp),
-        rechnungsperiode: meta.period.as_ref().map(|per| bo::Zeitraum {
-            startdatum: parse_iso_date(&per.from),
-            enddatum: parse_iso_date(&per.to),
-            ..Default::default()
-        }),
+        rechnungsdatum: issue_date.and_then(as_bo4e_timestamp),
+        faelligkeitsdatum: due_date.and_then(as_bo4e_timestamp),
+        rechnungsperiode,
         // BO4E gesamtnetto/-steuer are EN 16931 BT-109 (taxable base) and BT-110
         // (VAT total). `taxable_total()`/`vat_total()` are the BT-accurate
         // accessors — unlike `net_total()` (BT-106−BT-107) and `tax_total()` (all
@@ -237,11 +247,21 @@ fn as_bo4e_timestamp(date: time::Date) -> Option<time::OffsetDateTime> {
         .then(|| date.midnight().assume_utc())
 }
 
-/// Parse an ISO `YYYY-MM-DD` date (tolerating a trailing time); `None` otherwise.
-fn parse_iso_date(s: &str) -> Option<time::Date> {
-    let date_part = s.get(..10)?;
+/// A document date in `meta`, as `YYYY-MM-DD` optionally followed by a time.
+///
+/// A malformed one is refused rather than dropped: the Gutschrift would
+/// otherwise go out without the date it was given, and nothing would say why.
+/// `eeg-billing` sits below `mako-service`, so it cannot share that crate's
+/// request-boundary parser; the date reaches it already inside a
+/// [`DocumentMeta`] built by the caller.
+fn document_date(field: &str, s: &str) -> Result<time::Date, BillingError> {
     let fmt = time::macros::format_description!("[year]-[month]-[day]");
-    time::Date::parse(date_part, fmt).ok()
+    s.get(..10)
+        .filter(|_| s.len() == 10 || s.as_bytes()[10] == b'T' || s.as_bytes()[10] == b' ')
+        .and_then(|d| time::Date::parse(d, fmt).ok())
+        .ok_or_else(|| BillingError::InvalidInput {
+            reason: format!("{field} must be an ISO 8601 date (YYYY-MM-DD), got {s:?}"),
+        })
 }
 
 #[cfg(test)]
@@ -273,6 +293,32 @@ mod tests {
             einspeisemenge_kwh: Some(dec!(1000)),
             ..SettleInput::default()
         })
+    }
+
+    /// A document date that is present and malformed is refused: dropping it
+    /// would issue a Gutschrift without the Rechnungsdatum § 14 Abs. 4 Nr. 3
+    /// UStG requires, and nothing would say why it is missing.
+    #[test]
+    fn a_malformed_document_date_is_refused_not_dropped() {
+        for broken in [
+            DocumentMeta {
+                issue_date: Some("bald".into()),
+                ..meta()
+            },
+            DocumentMeta {
+                due_date: Some("15.08.2026".into()),
+                ..meta()
+            },
+            DocumentMeta {
+                period: Some(Period::from_display("2026-07-01", "Ende Juli")),
+                ..meta()
+            },
+        ] {
+            assert!(
+                settlement_to_gutschrift(&feed_in_output(), VatStatus::Regelbesteuerung, broken)
+                    .is_err()
+            );
+        }
     }
 
     #[test]

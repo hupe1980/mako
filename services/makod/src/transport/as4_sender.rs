@@ -193,14 +193,14 @@ impl As4Sender for WebhookEdifactSender {
                 match edifact_renderer::render_to_wire_bytes(&msg_owned, &mp_id_registry) {
                     Ok(rendered) => String::from_utf8_lossy(&rendered.bytes).into_owned(),
                     Err(ref e) if edifact_renderer::is_suppressed(e) => {
-                        // Gas positive APERAK: silence = acceptance per APERAK AHB 1.0 §2.3.
+                        // Gas positive APERAK: silence = acceptance per APERAK AHB 1.1 §2.3.
                         // No wire EDIFACT sent; deliver domain JSON to ERP webhook so the
                         // operator sees the positive outcome.
                         tracing::debug!(
                             message_id   = %msg_owned.message_id,
                             message_type = %msg_owned.message_type,
                             "WebhookEdifactSender: Gas positive APERAK suppressed — \
-                             sending domain JSON (silence = acceptance, APERAK AHB 1.0 §2.3)",
+                             sending domain JSON (silence = acceptance, APERAK AHB 1.1 §2.3)",
                         );
                         msg_owned.payload.to_string()
                     }
@@ -412,7 +412,10 @@ impl BdewAs4Sender {
     ///
     /// Returns an error if the underlying `reqwest::Client` cannot be built
     /// (e.g. missing TLS stack).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
     pub fn new(
         session: Arc<SessionContext>,
         event_bus: Arc<EventBus>,
@@ -470,8 +473,6 @@ impl BdewAs4Sender {
         self
     }
 }
-
-// action_uri_for is now bdew_action_from_str() in mako-as4.
 
 impl As4Sender for BdewAs4Sender {
     /// Wire transport: everything except the ERP notifier's own messages.
@@ -823,14 +824,14 @@ impl As4Sender for BdewAs4Sender {
                     rendered
                 }
                 Err(ref e) if edifact_renderer::is_suppressed(e) => {
-                    // Gas positive APERAK: silence = acceptance per APERAK AHB 1.0 §2.3.
+                    // Gas positive APERAK: silence = acceptance per APERAK AHB 1.1 §2.3.
                     // No AS4 message is sent; the outbox entry is acknowledged immediately.
                     tracing::debug!(
                         message_id   = %message_id_str,
                         message_type = %message_type,
                         recipient    = %recipient,
                         "BdewAs4Sender: Gas positive APERAK suppressed — \
-                         no wire EDIFACT sent (silence = acceptance, APERAK AHB 1.0 §2.3)",
+                         no wire EDIFACT sent (silence = acceptance, APERAK AHB 1.1 §2.3)",
                     );
                     return Ok(());
                 }

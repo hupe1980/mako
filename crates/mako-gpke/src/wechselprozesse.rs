@@ -75,8 +75,8 @@
 //! - **BK6-24-174** — the BNetzA Festlegung that states every window below
 //!   (GPKE Teil 2, SD Lieferbeginn / Lieferende / Kündigung)
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format for grid connection processes
-//! - **APERAK 1.0** — technical acknowledgement, **45 Minuten** on a weekday
-//!   (APERAK AHB 1.0 § 2.4.1), a different clock from the business answer
+//! - **APERAK** — technical acknowledgement, **45 Minuten** (Sonntag 12:00 on a Saturday)
+//!   (APERAK AHB 1.1 § 2.4.1), a different clock from the business answer
 
 use std::collections::HashMap;
 
@@ -174,7 +174,7 @@ pub const UTILMD_ANFRAGE_PIDS: &[u32] = &[55001, 55004, 55077];
 /// | 21026 | GPKE / Vollzugsmeldung Auszug | NB → LF |
 /// | 21027 | GPKE / Vollzugsmeldung Netznutzung | NB → LF |
 /// | 21028 | GPKE / Vollzugsmeldung | NB → LF |
-/// | 21033 | GPKE / Statusmeldung Kündigung (Ablehnung GPKE Teil 3) | MSB → NB/LF |
+/// | 21033 | Ablehnung der Anfrage (GPKE Teil 3, Bestellung einer Konfiguration) | MSB → NB/LF |
 /// | 21035 | GPKE Teil 2 / Rückmeldung an Lieferstelle | MSB → LF |
 /// | 21045 | EnFG Informationen (GPKE Teil 4) | LF → NB |
 /// | 21047 | Bearbeitungsstandsmeldung (GPKE Teil 2/4) | NB → LF · NB → ÜNB · MSB → NB |
@@ -240,24 +240,6 @@ pub enum SupplierChangeEvent {
     },
     /// Supply relationship became active.
     Activated,
-    /// APERAK 29001 (Verarbeitbarkeitsfehler) was sent to the counterparty.
-    ///
-    /// Emitted when the NB cannot process the inbound UTILMD for technical
-    /// reasons (e.g., duplicate MsgId, system error, inconsistent state).
-    /// This is distinct from a business rejection (`AntwortGesendet { accepted: false }`):
-    /// the APERAK replaces the UTILMD 55002/55003 response channel entirely.
-    ///
-    /// APERAK AHB 1.0 § 2.4.1: **45 Minuten** on a weekday for a UTILMD — see
-    /// [`mako_fristen::aperak_strom_due_at`]. This is the technical
-    /// acknowledgement clock, not the business answer window.
-    AperakFehlerDispatched {
-        /// APERAK Prüfidentifikator sent (29001 = Verarbeitbarkeitsfehler).
-        aperak_pid: Pruefidentifikator,
-        /// Error reason included in the APERAK.
-        reason: String,
-        /// Reference ID of the outbound APERAK message.
-        outbound_ref: MessageRef,
-    },
     /// Process was rejected and closed.
     Rejected {
         /// Human-readable rejection reason.
@@ -296,7 +278,6 @@ impl EventPayload for SupplierChangeEvent {
             Self::ValidationPassed { .. } => "SupplierChangeValidationPassed",
             Self::AntwortGesendet { .. } => "SupplierChangeAntwortGesendet",
             Self::Activated => "SupplierChangeActivated",
-            Self::AperakFehlerDispatched { .. } => "SupplierChangeAperakFehlerDispatched",
             Self::Rejected { .. } => "SupplierChangeRejected",
             Self::DeadlineExpired { .. } => "SupplierChangeDeadlineExpired",
             Self::VollzugsmeldungReceived { .. } => "SupplierChangeVollzugsmeldungReceived",
@@ -355,13 +336,8 @@ pub struct InitiatedData {
     /// number — so this is the only thing that ties the two together.
     #[serde(default)]
     pub vorgangsnummer: String,
-    /// `UNH` DE 0062 of the inbound UTILMD.
-    ///
-    /// Carried into the state because the APERAK that answers it can be
-    /// dispatched by a *later* command (`DispatchAperakFehler`), long after the
-    /// command that parsed the message is gone. `SG2 RFF+ACE` is Muss in both
-    /// APERAK Anwendungsfälle, so without it the acknowledgement cannot be
-    /// rendered at all.
+    /// `UNH` DE 0062 of the inbound UTILMD — what `SG2 RFF+ACE` of its APERAK
+    /// quotes; Muss in both APERAK Anwendungsfälle.
     pub message_ref: MessageRef,
 }
 
@@ -403,6 +379,19 @@ pub enum SupplierChangeState {
         /// Human-readable rejection reason for read models and auditing.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// BK6-24-174 GPKE Teil 2 states the NB's per-PID answer window and no consequence of missing it. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<SupplierChangeState>,
+    },
 }
 
 impl SupplierChangeState {
@@ -419,6 +408,16 @@ impl SupplierChangeState {
             Self::AntwortGesendet { .. } => "AntwortGesendet",
             Self::Active(_) => "Active",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -427,6 +426,7 @@ impl SupplierChangeState {
     #[must_use]
     pub fn initiated_data(&self) -> Option<&InitiatedData> {
         match self {
+            Self::FristAbgelaufen { offen, .. } => offen.initiated_data(),
             Self::Initiated(d) | Self::ValidationPassed(d) | Self::Active(d) => Some(d),
             Self::AntwortGesendet { data, .. } => Some(data),
             Self::New | Self::Rejected { .. } => None,
@@ -447,7 +447,6 @@ impl SupplierChangeState {
 // `SG4` fact the trees branch on, and boxing it would put an allocation on the
 // hot ingest path for no benefit: a command is constructed once, moved once and
 // dropped.
-#[allow(clippy::large_enum_variant)]
 pub enum SupplierChangeCommand {
     /// Inbound UTILMD accepted from the AS4 layer. Domain fields extracted and
     /// validation performed by the caller before constructing this command.
@@ -558,7 +557,7 @@ pub enum SupplierChangeCommand {
         message_ref: MessageRef,
         /// UTC timestamp at which the inbound UTILMD was received at the transport layer.
         ///
-        /// Used to compute the APERAK 45-minute sending deadline per APERAK AHB 1.0 §2.4.1.
+        /// Used to compute the APERAK 45-minute sending deadline per APERAK AHB 1.1 §2.4.1.
         received_at: time::OffsetDateTime,
         /// `true` if `msg.validate()` returned a report with no errors.
         validation_passed: bool,
@@ -628,23 +627,6 @@ pub enum SupplierChangeCommand {
     },
     /// Mark the supply relationship as active after all checks pass.
     Activate,
-    /// Dispatch APERAK 29001 (Verarbeitbarkeitsfehler) to the counterparty.
-    ///
-    /// Use this when the NB system cannot process the inbound UTILMD for
-    /// technical reasons (duplicate MsgId, system error, inconsistent state).
-    /// The APERAK replaces the UTILMD 55002/55003 response channel.
-    ///
-    /// May be sent from `Initiated` or `ValidationPassed` state. Transitions
-    /// the process to `Rejected`.
-    ///
-    /// APERAK AHB 1.0 § 2.4.1: **45 Minuten** on a weekday for a UTILMD — see
-    /// [`mako_fristen::aperak_strom_due_at`].
-    DispatchAperakFehler {
-        /// Error reason included in the APERAK.
-        reason: String,
-        /// Message reference assigned to the outbound APERAK.
-        outbound_ref: MessageRef,
-    },
     /// A registered deadline fired and was dispatched by the scheduler.
     ///
     /// The workflow records a `DeadlineExpired` event and transitions to
@@ -744,8 +726,8 @@ pub(crate) fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruef
 /// firing on a Saturday for a Friday Anmeldung and reporting a Tuesday-morning
 /// Frist as still running until Tuesday night.
 ///
-/// It is also **not** the APERAK *sending* deadline (45 min on a weekday per
-/// APERAK AHB 1.0 § 2.4.1 — see `mako_fristen::APERAK_STROM_WINDOW_LABEL`),
+/// It is also **not** the APERAK *sending* deadline (45 min, Sonntag 12:00 for a Saturday arrival, per
+/// APERAK AHB 1.1 § 2.4.1 — see `mako_fristen::APERAK_STROM_WINDOW_LABEL`),
 /// which runs beside it on the same message.
 ///
 /// Register the deadline immediately after `ReceiveUtilmd` is processed:
@@ -772,37 +754,48 @@ pub const GPKE_PROCESS_RESPONSE_LABEL: &str = "gpke-antwortfrist";
 /// ```
 pub struct GpkeSupplierChangeWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the NB still owes its UTILMD Bestätigung
+/// or Ablehnung (`Initiated`, `ValidationPassed`).
+fn window_open(label: &str, state: &SupplierChangeState) -> bool {
+    label == GPKE_PROCESS_RESPONSE_LABEL
+        && matches!(
+            state,
+            SupplierChangeState::Initiated(_) | SupplierChangeState::ValidationPassed(_)
+        )
+}
+
 impl Workflow for GpkeSupplierChangeWorkflow {
     type State = SupplierChangeState;
     type Event = SupplierChangeEvent;
     type Command = SupplierChangeCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[GPKE_PROCESS_RESPONSE_LABEL];
+
     /// Deadline compensation for GPKE regulatory timeouts.
     ///
     /// | Label | State guard | Command emitted | BNetzA rule |
     /// |---|---|---|---|
-    /// | [`GPKE_PROCESS_RESPONSE_LABEL`] | `Initiated` or `ValidationPassed` | `TimeoutExpired` | BK6-24-174 GPKE Teil 2 — the per-PID Antwortfrist |
+    /// | [`GPKE_PROCESS_RESPONSE_LABEL`] | `Initiated` or `ValidationPassed` | `TimeoutExpired` → `FristAbgelaufen` | BK6-24-174 GPKE Teil 2 — the per-PID Antwortfrist |
     ///
-    /// Processes in `Active` or `Rejected` state absorb any late-firing
-    /// deadline as a no-op via `TimeoutExpired`'s idempotent handler.
+    /// Every other state absorbs a late-firing deadline as a no-op: once the
+    /// UTILMD answer is out the window is discharged.
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            // Process response window expired before the NB sent a UTILMD
-            // Bestätigung or Ablehnung → close as Rejected. The window is the
-            // per-PID one in BK6-24-174 GPKE Teil 2, not a flat duration.
-            (GPKE_PROCESS_RESPONSE_LABEL, SupplierChangeState::Initiated(_))
-            | (GPKE_PROCESS_RESPONSE_LABEL, SupplierChangeState::ValidationPassed(_)) => {
-                Some(SupplierChangeCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            // All other deadline labels, or terminal states — no-op.
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| SupplierChangeCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            SupplierChangeState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             SupplierChangeEvent::Initiated {
                 location_id,
@@ -866,24 +859,18 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 }
                 other => other,
             },
-            SupplierChangeEvent::AperakFehlerDispatched { reason, .. } => {
-                SupplierChangeState::Rejected {
-                    reason: format!("APERAK 29001: {reason}"),
-                }
-            }
             SupplierChangeEvent::Rejected { reason } => SupplierChangeState::Rejected {
                 reason: reason.clone(),
             },
-            SupplierChangeEvent::DeadlineExpired { label, .. } => {
-                // Treat any deadline expiry as a rejection unless the process
-                // has already completed (Active) or is already Rejected.
-                match state {
-                    SupplierChangeState::Active(_) | SupplierChangeState::Rejected { .. } => state,
-                    _ => SupplierChangeState::Rejected {
-                        reason: format!("deadline expired: {label}"),
-                    },
+            SupplierChangeEvent::DeadlineExpired { label, .. } => match state {
+                SupplierChangeState::Initiated(_) | SupplierChangeState::ValidationPassed(_) => {
+                    SupplierChangeState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
                 }
-            }
+                other => other,
+            },
 
             // Informational GPKE Vollzugsmeldung/Statusmeldung — no state change.
             SupplierChangeEvent::VollzugsmeldungReceived { .. } => state,
@@ -894,6 +881,10 @@ impl Workflow for GpkeSupplierChangeWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             SupplierChangeCommand::ReceiveUtilmd {
                 pid,
@@ -986,7 +977,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                                 // Populated by the makod adapter from `CCI+Z20`.
                                 "bilanzierungsgebiet":   bilanzierungsgebiet,
                                 // bilanzierungsmethode and fallgruppe are consumed by
-                                // marktd to update malo columns (L1/N1).
+                                // marktd to update malo columns.
                                 "bilanzierungsmethode":  bilanzierungsmethode,
                                 "fallgruppe":            fallgruppe,
                                 // SG4 STS Transaktionsgrund — consumed by processd
@@ -1017,10 +1008,10 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                         // so the ERP event correlates to the event that confirms the
                         // message was parseable and process-able.
                         .caused_by(1),
-                        // F-038: APERAK BGM+312 (Anerkennungsmeldung) — mandatory per
-                        // APERAK AHB 1.0 §2.4: both Anerkennung and rejection must always
+                        // APERAK BGM+312 (Anerkennungsmeldung) — mandatory per
+                        // APERAK AHB 1.1 §2.4: both Anerkennung and rejection must always
                         // be sent for Strom (unlike Gas, where silence = acceptance).
-                        // Frist (UTILMD/ORDERS weekday): 45 Min (APERAK AHB 1.0 §2.4.1).
+                        // Frist (UTILMD/ORDERS): 45 Min (APERAK AHB 1.1 §2.4.1).
                         // Saturday UTILMD/ORDERS: Sonntag 12 Uhr; other: nächster Werktag 12 Uhr.
                         PendingOutbox::aperak_anerkennung(
                             receiver.as_str(),
@@ -1030,9 +1021,9 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                         .caused_by(1),
                     ]
                 } else {
-                    // F-035: AHB validation failed — emit APERAK BGM+313
+                    // AHB validation failed — emit APERAK BGM+313
                     // (Verarbeitbarkeitsfehlermeldung) back to the new supplier.
-                    // APERAK AHB 1.0 §2.1.1: mandatory rejection APERAK on validation failure.
+                    // APERAK AHB 1.1 §2.1.1: mandatory rejection APERAK on validation failure.
                     // Caused by Initiated (index 0) — no ValidationPassed event in this path.
                     vec![
                         PendingOutbox::aperak_fehler(
@@ -1046,7 +1037,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                     ]
                 };
 
-                // APERAK AHB 1.0 §2.4.1: register the 45-minute sending deadline.
+                // APERAK AHB 1.1 §2.4.1: register the 45-minute sending deadline.
                 // The engine persists this atomically alongside the events.
                 let aperak_deadline = PendingDeadline::new(
                     APERAK_STROM_WINDOW_LABEL,
@@ -1205,61 +1196,11 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 Ok(vec![SupplierChangeEvent::Activated].into())
             }
 
-            SupplierChangeCommand::DispatchAperakFehler {
-                reason,
-                outbound_ref,
-            } => {
-                match state {
-                    SupplierChangeState::New => {
-                        return Err(WorkflowError::invalid_state(
-                            "Initiated or ValidationPassed",
-                            state.label(),
-                        ));
-                    }
-                    SupplierChangeState::Active(_) | SupplierChangeState::Rejected { .. } => {
-                        return Err(WorkflowError::invalid_state(
-                            "Initiated or ValidationPassed",
-                            state.label(),
-                        ));
-                    }
-                    _ => {}
-                }
-                let aperak_pid = Pruefidentifikator::new(29001)
-                    .map_err(|_| WorkflowError::other("invalid APERAK PID 29001"))?;
-                let events = vec![SupplierChangeEvent::AperakFehlerDispatched {
-                    aperak_pid,
-                    reason: reason.clone(),
-                    outbound_ref,
-                }];
-
-                // F-035: emit the APERAK outbox entry atomically with the event.
-                // APERAK AHB 1.0 § 2.4.1: 45 Minuten on a weekday for a UTILMD.
-                let outbox = if let Some(data) = state.initiated_data() {
-                    vec![
-                        PendingOutbox::aperak_fehler(
-                            data.grid_operator.as_str(),
-                            data.new_supplier.as_str(),
-                            data.message_ref.as_str(),
-                            mako_engine::erc::codes::Z29,
-                            reason,
-                        )
-                        .caused_by(0),
-                    ]
-                } else {
-                    vec![]
-                };
-
-                Ok(WorkflowOutput::with_outbox(events, outbox))
-            }
-
             SupplierChangeCommand::TimeoutExpired { deadline_id, label } => {
-                // Idempotent: terminal states (Active, Rejected) absorb the
-                // event without error so a late-firing deadline does not
-                // corrupt an already-completed process.
-                if matches!(
-                    state,
-                    SupplierChangeState::Active(_) | SupplierChangeState::Rejected { .. }
-                ) {
+                // Idempotent: a state whose window is closed absorbs the event
+                // without error, so a late-firing deadline does not corrupt a
+                // process that answered in time.
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
 
@@ -1268,7 +1209,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 // published for this Prüfidentifikator lapsed unanswered
                 // (BK6-24-174 GPKE Teil 2).
                 // The outbox entry is persisted atomically with DeadlineExpired
-                // via execute_and_enqueue_with_retry → WriteBatch.
+                // via Process::run → one WriteBatch.
                 let mut outbox: Vec<PendingOutbox> = vec![];
                 if let Some(data) = state.initiated_data() {
                     outbox.push(PendingOutbox::new(
@@ -1415,14 +1356,11 @@ impl Projection for SupplierChangeProjection {
             SupplierChangeEvent::Activated => {
                 record.status = "Active";
             }
-            SupplierChangeEvent::AperakFehlerDispatched { .. } => {
-                record.status = "Rejected";
-            }
             SupplierChangeEvent::Rejected { .. } => {
                 record.status = "Rejected";
             }
             SupplierChangeEvent::DeadlineExpired { .. } => {
-                record.status = "Rejected";
+                record.status = "FristAbgelaufen";
             }
             SupplierChangeEvent::VollzugsmeldungReceived { .. } => {
                 // Informational — does not change the status label.

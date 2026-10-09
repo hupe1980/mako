@@ -1,6 +1,6 @@
 [package]
 name        = "netzbilanzd"
-description = "NNE/KA/MMM billing daemon — generates INVOIC 31001/31002/31005 invoices (NB → LF)"
+description = "Grid operator billing daemon: issues INVOIC 31001, 31002, 31005, 31009 and 31011, tracks REMADV and computes Redispatch Kostenblätter"
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
@@ -38,8 +38,6 @@ reqwest         = { workspace = true }
 time            = { workspace = true }
 uuid            = { workspace = true, features = ["v4", "serde"] }
 tracing         = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tower-http      = { version = "0.6" }
 anyhow          = "1"
 thiserror       = { workspace = true }
 secrecy         = { version = "0.10" }
@@ -48,5 +46,9 @@ rmcp            = { workspace = true }
 tokio-util      = { workspace = true }
 
 [dev-dependencies]
+mako-service = { workspace = true, features = ["testing"] }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+
+[lints]
+workspace = true

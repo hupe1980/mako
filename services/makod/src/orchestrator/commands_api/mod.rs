@@ -1,208 +1,57 @@
-//! ERP command ingestion API.
+//! ERP command ingestion API — `POST /api/v1/commands`.
 //!
-//! ## Why the payload is not a bare BO4E object
+//! The ERP names the MaKo command it wants triggered; the engine resolves the
+//! Marktrolle, dispatches to the workflow and renders the EDIFACT. BO4E objects
+//! are master data and are never used for routing, so each command takes a
+//! typed [`ErpCommand`] envelope that embeds BO4E objects beside the process
+//! fields BO4E does not carry.
 //!
-//! BO4E objects are master data. A `MARKTLOKATION` identifies a supply point —
-//! `marktlokationsId`, `sparte`, `netzgebiet`, `bilanzierungsgebiet` — and a
-//! Lieferbeginn needs four things beyond it: the Lieferbeginn-Datum (the ERP
-//! supplies it), the sender and receiver MP-IDs (the operator's `--tenant-id`
-//! and the NB resolved from the MaLo cache), the Prüfidentifikator (implied by
-//! the command name) and the message reference (generated here).
+//! **Marktrolle.** A single-role command (`gpke.lieferbeginn.anmelden` → `LF`)
+//! infers it from the name; a multi-role command
+//! (`wim.geraetewechsel.beauftragen` → `NB` or `MSB`) requires `marktrolle`. A
+//! role outside `--marktrollen` is refused with `422 role_not_configured`.
 //!
-//! So each command takes a typed envelope that embeds BO4E objects alongside
-//! the process fields BO4E does not carry.
-//!
-//! ## Design
-//!
-//! The ERP names the exact MaKo command it wants to trigger.  The engine
-//! resolves the Marktrolle and dispatches the command to the correct workflow,
-//! generating EDIFACT.  BO4E objects are never used for routing.
-//!
-//! **Single-role commands** (e.g. `gpke.lieferbeginn.anmelden` → always `LF`)
-//! do not require a `marktrolle` field — the engine infers it from the command
-//! name.  **Multi-role commands** (e.g. `wim.geraetewechsel.beauftragen` →
-//! `NB` or `MSB`) require `marktrolle` so the engine knows which EDIFACT
-//! qualifier and workflow variant to use.
-//!
-//! The `--marktrollen` startup flag declares which roles this instance is
-//! licensed for (e.g. `LF,LFG` for a dual-fuel supplier, `NB,MSB` for an
-//! integrated Stadtwerke).  Commands for unlicensed roles are rejected with
-//! `422 role_not_configured`.
-//!
-//! ## Endpoint
-//!
-//! ### `POST /api/v1/commands`
-//!
-//! **Request headers**
-//!
-//! | Header | Required | Notes |
-//! |--------|----------|-------|
-//! | `Content-Type` | Yes | Must be `application/json` |
-//! | `Idempotency-Key` | **Required** | Stable per business request. The accepted response is stored under it for 24 h and replayed verbatim on a retry; reusing one key for a different command or payload is refused with `422 idempotency_key_reuse` |
-//!
-//! **Request body** — an [`ErpCommand`] envelope with a command-specific payload:
+//! **`Idempotency-Key`** is required. The accepted response is stored under it
+//! for 24 h and replayed verbatim on a retry; reusing one key for a different
+//! command or payload is refused with `422 idempotency_key_reuse`.
 //!
 //! ```json
 //! {
 //!   "command": "gpke.lieferbeginn.anmelden",
-//!   "payload": {
-//!     "malo_id":            "10001234558",
-//!     "lieferbeginn_datum": "2026-10-01"
-//!   }
-//! }
-//! ```
-//!
-//! For multi-role commands, include `"marktrolle"` to disambiguate:
-//!
-//! ```json
-//! {
-//!   "command":    "wim.geraetewechsel.beauftragen",
-//!   "marktrolle": "NB",
-//!   "payload": { "melo_id": "DE00012345678", "process_date": "20261001", "receiver_mp_id": "9900357000004" }
-//! }
-//! ```
-//!
-//! ### Why just `malo_id` and not a full BO4E `MARKTLOKATION` object?
-//!
-//! A UTILMD S2.x Lieferbeginn on the wire is a complex message: it references
-//! the Marktlokation, all associated Messlokationen (MeLos), and the current
-//! NB/MSB market-partner assignments valid at the supply-start date.
-//!
-//! All of that data is **already in the MaLo cache** — the ERP must seed it
-//! first via `PUT /admin/malo/{malo_id}` using the NB's `MaloIdentResultPositive`
-//! response from the API-Webdienste Strom endpoint.  That cached record carries:
-//!
-//! - `data_meter_locations` — the MeLo(s) (Messlokationen)
-//! - `data_market_location_network_operators` — the NB MP-ID (receiver)
-//! - `data_market_location_measuring_point_operators` — the MSB MP-ID
-//!
-//! The ERP therefore only needs to supply what the cache **cannot** know:
-//! the **process trigger** (which MaLo) and the **process-specific date**.
-//!
-//! `VERTRAG` (Lieferantenvertrag) is an ERP-internal concept and does not
-//! appear in the UTILMD wire format; the LF identity is the sender MP-ID.
-//!
-//! Fields the **engine owns — never supplied by the ERP**:
-//! - `sender_party_id` — always our operator party ID (BDEW code / MP-ID / EIC) from `--tenant-id`; the ERP is talking
-//!   to us, not the other way round
-//! - `receiver_party_id` — resolved by the engine from the MaLo cache / partner
-//!   registry using the `marktlokationsId`; the ERP need not know the NB's BDEW code
-//! - `pruefidentifikator` — derived from `command` (e.g. `gpke.lieferbeginn.anmelden` → 55001)
-//! - `message_ref` — derived by the EDIFACT renderer from the outbox entry's `causation_event_id` (UUID)
-//! - `document_date` — set by the EDIFACT renderer to today at dispatch time
-//!
-//! **Response `202 Accepted`**
-//!
-//! ```json
-//! {
-//!   "idempotency_key": "01924f4e-3b4a-7e12-8c47-0022f4b2d3a1",
-//!   "command":         "gpke.lieferbeginn.anmelden",
-//!   "marktrolle":      "LF",
-//!   "status":          "accepted"
+//!   "payload": { "malo_id": "10001234558", "lieferbeginn_datum": "2026-10-01" }
 //! }
 //! ```
 //!
 //! ## What the ERP supplies vs. what the engine derives
 //!
-//! | Source | Fields |
-//! |--------|--------|
-//! | **ERP supplies** | BO4E master data object, process dates, process-specific hints |
-//! | **Engine derives** | sender MP-ID (tenant config), receiver MP-ID (MaLo cache / partner registry), PID (command name), message ref (generated) |
+//! The ERP supplies only what the engine cannot know: which location the
+//! process concerns, the process dates and process-specific hints. The engine
+//! owns the rest:
 //!
-//! The engine resolves these from the MaLo cache, keyed by `marktlokationsId`:
+//! | Field | Source |
+//! |---|---|
+//! | sender MP-ID | the operator's own party (`--tenant-id`) |
+//! | receiver MP-ID, MSB MP-ID, MeLo IDs | the MaLo cache, keyed by `marktlokationsId` |
+//! | Prüfidentifikator | the command name |
+//! | message reference, document date | the EDIFACT renderer at dispatch |
 //!
-//! | MaLo cache field | Resolves |
-//! |--------------------------------------|-------|
-//! | `data_market_location_network_operators` | NB / GNB MP-ID (receiver) |
-//! | `data_market_location_measuring_point_operators` | MSB MP-ID |
-//! | `data_meter_locations` | MeLo IDs for UTILMD transactions |
+//! The ERP seeds the MaLo cache via `PUT /admin/malo/{malo_id}` from the NB's
+//! `MaloIdentResultPositive`; until it does, the command is refused with
+//! `422 malo_not_found`. WiM Gerätewechsel is keyed by `melo_id` instead.
 //!
-//! The ERP populates that cache via `PUT /admin/malo/{malo_id}` from the NB's
-//! `MaloIdentResultPositive`. Until it does, the engine answers
-//! `422 Unprocessable Entity` with `"error": "malo_not_found"`.
+//! The command set, its roles and primary PIDs live in
+//! `registry::COMMAND_REGISTRY` — the single source this module dispatches
+//! from.
 //!
-//! ## Payload schemas per command
+//! ## Invoicing commands (`gpke.abrechnung.*`)
 //!
-//! Each command defines its own required fields, and the BO4E object is embedded
-//! under a named key (`malo`, `zaehler`, `vertrag`) rather than at the top level
-//! so process fields can sit beside it. Only fields the ERP genuinely owns are
-//! listed — the MP-IDs the engine resolves are deliberately absent.
-//!
-//! | Command | ERP-supplied payload fields |
-//! |---------|----------------------------|
-//! | `gpke.lieferbeginn.anmelden` | `malo_id`, `lieferbeginn_datum` |
-//! | `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum` |
-//! | `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum`, `alter_lf_mp_id`¹ |
-//! | `gpke.sperrung.beauftragen` | `malo_id` |
-//! | `gpke.entsperrung.beauftragen` | `malo_id` |
-//! | `gpke.sperrung.stornieren` | `malo_id` |
-//! | `gpke.sperrung.bestaetigen` | `malo_id`, optional `note`/`reason` |
-//! | `gpke.sperrung.fehlgeschlagen` | `malo_id`, **`reason`** (or `note`) — required |
-//! | `gpke.abrechnung.annehmen` | `rechnung` (RECHNUNG BO4E) |
-//! | `gpke.abrechnung.ablehnen` | `rechnung` (RECHNUNG BO4E), `ablehnungsgrund` |
-//! | `geli.lieferbeginn.anmelden` | `malo_id` (Erdgas MaLo), `lieferbeginn_datum` |
-//! | `geli.lieferende.anmelden` | `malo_id` (Erdgas MaLo), `lieferende_datum` |
-//! | `wim.geraetewechsel.beauftragen` | `melo_id`, `process_date` (YYYYMMDD), `receiver_mp_id`, optional `pid`² |
-//! | `mabis.abrechnung.einleiten` | `bilanzierungsgebiet`, `abrechnungszeitraum_von`, `abrechnungszeitraum_bis` |
-//!
-//! ¹ `alter_lf_mp_id` is required only when the old supplier is a different legal
-//!   entity; derived from contract data in the ERP, not from the engine.
-//!
-//! ² For WiM Gerätewechsel the primary key is the `melo_id` (Messlokation),
-//!   not the MaLo.  The MSB and NB MP-IDs are resolved from the MeLo cache entry.
-//!
-//! ### Invoicing commands (`gpke.abrechnung.*`)
-//!
-//! These carry **flat scalar fields**, not a Business Object: `document_id`
-//! (the Rechnungsnummer), `document_code`, `document_date`, and on an Abweisung
-//! `antwort_code` / `antwort_codeliste` / `ablehnungsgrund`. See
-//! [`render_invoic`](crate::orchestrator::edifact_renderer) for the table.
-//!
-//! `makod` renders the INVOIC **envelope** — UNH, BGM, DTM, NAD, UNT, with an
-//! empty `UNS+D` detail section. It never holds the invoice's line items or
-//! amounts, so there is no BO4E `Rechnung` in a command payload and nothing
-//! here to gate. A document with positions is built by the billing services,
-//! which do hold one and do gate it (`billingd`, `invoicd`,
-//! `netzbilanzd`).
-//!
-//! ## Marktrolle
-//!
-//! | Value | Bedeutung |
-//! |-------|-----------|
-//! | `NB` | Netzbetreiber (electricity DSO) |
-//! | `GNB` | Gasnetzbetreiber (gas DSO) |
-//! | `LF` | Lieferant (electricity supplier) |
-//! | `LFG` | Lieferant Gas (gas supplier) |
-//! | `MSB` | Messstellenbetreiber |
-//! | `BKV` | Bilanzkreisverantwortlicher |
-//! | `ÜNB` | Übertragungsnetzbetreiber |
-//!
-//! ## Command registry
-//!
-//! | Command | Marktrolle | Process | PIDs |
-//! |---------|-----------|---------|------|
-//! | `gpke.lieferbeginn.anmelden` | `LF` | GPKE Lieferbeginn Strom | 55001 |
-//! | `gpke.lieferbeginn.bestaetigen` | `NB` | GPKE NB bestätigt Lieferbeginn | 55002/55003 |
-//! | `gpke.lieferende.anmelden` | `LF` | GPKE Lieferende Strom | 55004 |
-//! | `gpke.lieferende.bestaetigen` | `NB` | GPKE NB bestätigt Lieferende | 55005/55006 |
-//! | `gpke.kuendigung.anmelden` | `LF` | GPKE Kündigung Lieferbeginn | 55016 |
-//! | `gpke.sperrung.beauftragen` | `LF` | GPKE Sperrauftrag (LF → NB; ORDERS) | 17115 |
-//! | `gpke.entsperrung.beauftragen` | `LF` | GPKE Entsperrauftrag (LF → NB; ORDERS) | 17117 |
-//! | `gpke.sperrung.stornieren` | `LF` | GPKE Stornierung Sperrauftrag (ORDCHG) | 39000 |
-//! | `gpke.sperrung.bestaetigen` | `NB` | NB meldet Ausführung → IFTSTA 21039 | 17115/17117 |
-//! | `gpke.sperrung.fehlgeschlagen` | `NB` | NB meldet Nichtausführung → IFTSTA 21039 | 17115/17117 |
-//! | `gpke.abrechnung.annehmen` | `NB` | GPKE Netznutzungsabrechnung | 31002 |
-//! | `gpke.abrechnung.ablehnen` | `NB` | GPKE Abrechnungsstreit | 31001/31002 |
-//! | `geli.lieferbeginn.anmelden` | `LFG` | GeLi Gas Lieferbeginn | 44001 |
-//! | `geli.lieferbeginn.bestaetigen` | `GNB` | GeLi Gas NB bestätigt | 44002/44003 |
-//! | `geli.lieferende.anmelden` | `LFG` | GeLi Gas Lieferende | 44002 |
-//! | `geli.lieferende.bestaetigen` | `GNB` | GeLi Gas NB bestätigt | 44005/44006 |
-//! | `wim.geraetewechsel.beauftragen` | `NB`/`MSB` | WiM Messstellenbetrieb | 55039, 55042, 55051, 55168 |
-//! | `wim.geraetewechsel.bestaetigen` | `MSB` | WiM Messstellenbetrieb abgeschlossen | 55039, 55042, 55051, 55168 |
-//! | `mabis.abrechnung.einleiten` | `BKV` | MABIS Bilanzkreisabrechnung Strom | 13003 |
-//! | `mabis.abrechnung.daten-einreichen` | `BKV` | MABIS Messdaten liefern | 13003 |
-//! | `mabis.abrechnung.begleichen` | `BKV`/`ÜNB` | MABIS Abrechnung begleichen | 13003 |
+//! These carry flat scalar fields (`document_id`, `document_code`,
+//! `document_date`, and on an Abweisung `antwort_code` / `antwort_codeliste` /
+//! `ablehnungsgrund`), not a BO4E `Rechnung`. `makod` renders only the INVOIC
+//! envelope with an empty `UNS+D` detail section; a document with positions is
+//! built and gated by `billingd`, `invoicd` or `netzbilanzd`.
 
+use mako_engine::process::RunOptions;
 use std::sync::Arc;
 
 use axum::{
@@ -348,32 +197,15 @@ where
     W: mako_engine::workflow::Workflow,
     Arc<mako_engine::store_slatedb::SlateDbStore>: mako_engine::event_store::AtomicAppend,
 {
-    let workflow_id = WorkflowId::new(workflow_name, latest_format_version());
-    let process =
-        mako_engine::process::Process::<W, Arc<mako_engine::store_slatedb::SlateDbStore>>::new(
-            Arc::clone(&state.store),
-            state.tenant_id,
-            workflow_id,
-        );
-    let process_id = process.process_id();
-    let identity = process.identity();
-    process.execute_and_enqueue(command).await?;
-
-    if let Err(e) = state
-        .store
-        .as_process_registry()
-        .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
-        .await
-    {
-        tracing::warn!(
-            %process_id,
-            malo_id = %malo_id,
-            workflow_name,
-            error = %e,
-            "Meldepflicht: business-key registration failed (non-fatal — nothing resumes \
-             a one-way Meldung)",
-        );
-    }
+    let process_id = spawn_process::<W>(
+        &state.store,
+        state.tenant_id,
+        WorkflowId::new(workflow_name, latest_format_version()),
+        command,
+        &[],
+        &[malo_id.as_str()],
+    )
+    .await?;
     Ok(DispatchOutcome::Spawned { process_id })
 }
 
@@ -507,6 +339,11 @@ mod registry;
 mod types;
 mod wim;
 
+#[cfg(test)]
+mod geli_frist_tests;
+#[cfg(test)]
+mod spawn_tests;
+
 pub use handler::*;
 pub use registry::*;
 pub use types::*;
@@ -554,15 +391,131 @@ fn latest_format_version() -> mako_engine::version::FormatVersion {
         })
 }
 
+// ── Spawn ─────────────────────────────────────────────────────────────────────
+
+/// Spawn a fresh `W` process and write everything the spawn consists of in one
+/// atomic batch: its events, its outbox entries, its `deadlines` and its
+/// correlation `keys`.
+///
+/// The keys are not an index to be written afterwards. The duplicate guard
+/// ([`find_occupying_process`]) and every follow-up command find a process
+/// only through them, so a spawn whose events and outbound message are durable
+/// while its key is not is invisible: the follow-up answers `process_not_found`
+/// and the ERP's re-issue of the same command spawns a second process and sends
+/// a second message the counterparty cannot be made to forget. One batch makes
+/// the spawn either findable or absent. The ingest spawn writes the same batch
+/// (`Process::run` with `RunOptions::correlations`), and
+/// `cargo xtask check-atomic-spawn` refuses a door that registers a key in a
+/// separate write after it spawns.
+///
+/// `deadlines` are `(label, due_at)` pairs; each label must be one the
+/// workflow's deadline arm matches.
+///
+/// # Errors
+///
+/// Propagates the workflow's rejection of `command` and any store failure,
+/// including a key the correlation index refuses. Nothing is written then.
+pub(crate) async fn spawn_process<W>(
+    store: &Arc<mako_engine::store_slatedb::SlateDbStore>,
+    tenant_id: TenantId,
+    workflow_id: WorkflowId,
+    command: W::Command,
+    deadlines: &[(&'static str, time::OffsetDateTime)],
+    keys: &[&str],
+) -> Result<ProcessId, mako_engine::error::EngineError>
+where
+    W: mako_engine::workflow::Workflow,
+    Arc<mako_engine::store_slatedb::SlateDbStore>: mako_engine::event_store::AtomicAppend,
+{
+    let process =
+        mako_engine::process::Process::<W, Arc<mako_engine::store_slatedb::SlateDbStore>>::new(
+            Arc::clone(store),
+            tenant_id,
+            workflow_id.clone(),
+        );
+    let process_id = process.process_id();
+    let identity = process.identity();
+    let deadlines: Vec<Deadline> = deadlines
+        .iter()
+        .map(|&(label, due_at)| {
+            Deadline::new(
+                process.stream_id().clone(),
+                process_id,
+                tenant_id,
+                workflow_id.clone(),
+                label,
+                due_at,
+            )
+        })
+        .collect();
+    #[cfg_attr(
+        not(test),
+        expect(unused_mut, reason = "only the test fault point appends")
+    )]
+    let mut correlations: Vec<mako_engine::event_store::CorrelationEntry> = keys
+        .iter()
+        .map(|&key| mako_engine::event_store::CorrelationEntry {
+            tenant_id,
+            tag: key.to_owned(),
+            process_id,
+            identity: identity.clone(),
+        })
+        .collect();
+    #[cfg(test)]
+    if key_registration_fault() {
+        // A tag the correlation index refuses, so the store itself rejects the
+        // key write.
+        correlations.push(mako_engine::event_store::CorrelationEntry {
+            tenant_id,
+            tag: "fault\0key".to_owned(),
+            process_id,
+            identity,
+        });
+    }
+    process
+        .run(
+            command,
+            RunOptions::new()
+                .deadlines(&deadlines)
+                .correlations(&correlations),
+        )
+        .await?;
+    Ok(process_id)
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    /// Test-only fault point: while set, the spawn's business-key write is
+    /// refused by the store.
+    pub(crate) static KEY_REGISTRATION_FAULT: bool;
+}
+
+/// Whether [`KEY_REGISTRATION_FAULT`] is set for the current task.
+#[cfg(test)]
+pub(crate) fn key_registration_fault() -> bool {
+    KEY_REGISTRATION_FAULT.try_with(|f| *f).unwrap_or(false)
+}
+
 // ── Duplicate guard ───────────────────────────────────────────────────────────
+
+/// What [`find_occupying_process`] found, and the business-key lock it took.
+///
+/// The caller holds this until its spawn has committed: the lock is what makes
+/// the occupancy check and the spawn one step, and dropping it early reopens the
+/// window two concurrent spawns pass through together.
+struct KeyOccupancy {
+    /// The process still holding the key, if any.
+    process: Option<ProcessId>,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
 
 /// Return the process that still occupies `business_key`, if any.
 ///
 /// This is the check every `anmelden`-style dispatcher runs before spawning a
 /// process, and it must not be written as "does the correlation index contain
-/// an entry?". The index is append-only — `register_correlated` writes on spawn
-/// and nothing calls `remove_correlated` — so presence proves a process once
-/// existed, never that one is still running. Refusing on presence blocked a MaLo
+/// an entry?". The spawn writes the entry ([`spawn_process`]) and the process
+/// ending does not remove it, so presence proves a process once existed, never
+/// that one is still running. Refusing on presence would block a MaLo
 /// permanently after its first process, including the routine flow where the
 /// counterpart rejects and the sender submits a correction.
 ///
@@ -578,11 +531,18 @@ async fn find_occupying_process<W>(
     state: &CommandsApiState,
     business_key: &str,
     workflow_name: &str,
-) -> Result<Option<ProcessId>, DispatchError>
+) -> Result<KeyOccupancy, DispatchError>
 where
     W: mako_engine::workflow::Workflow,
     W::State: mako_engine::workflow::OccupiesBusinessKey,
 {
+    // Held by the caller across this check and its spawn: the ingest
+    // dispatcher spawns on the same index under the same lock, so a concurrent
+    // command, or an inbound message for the same key, waits rather than
+    // passing the check beside this one and spawning a second process.
+    let guard = crate::ingest_dispatcher::business_key_locks()
+        .acquire(business_key)
+        .await;
     let existing = state
         .store
         .as_process_registry()
@@ -605,7 +565,10 @@ where
             .map_err(DispatchError::Engine)?
             .occupies_business_key()
         {
-            return Ok(Some(process_id));
+            return Ok(KeyOccupancy {
+                process: Some(process_id),
+                _guard: guard,
+            });
         }
         // Retire the stale index entry now that replay has *proved* the process
         // finished. This is what keeps the index's meaning true — "processes that
@@ -646,7 +609,10 @@ where
             );
         }
     }
-    Ok(None)
+    Ok(KeyOccupancy {
+        process: None,
+        _guard: guard,
+    })
 }
 
 // ── Phase 3 — Response command dispatchers ────────────────────────────────────
@@ -727,7 +693,19 @@ where
     };
 
     let process_id = identity.process_id;
-    let identity_for_keys = identity.clone();
+    // The Belegnummern land in the same write as the command's events: an
+    // answer that references only this Belegnummer has no other way back to
+    // the process, so the key must be durable exactly when the message is.
+    let keys: Vec<mako_engine::event_store::CorrelationEntry> = extra_keys
+        .iter()
+        .filter(|k| !k.is_empty())
+        .map(|k| mako_engine::event_store::CorrelationEntry {
+            tenant_id: state.tenant_id,
+            tag: (*k).to_owned(),
+            process_id,
+            identity: identity.clone(),
+        })
+        .collect();
     let process = mako_engine::process::Process::<
         W,
         Arc<mako_engine::store_slatedb::SlateDbStore>,
@@ -735,33 +713,13 @@ where
 
     let domain_cmd = make_command();
     process
-        .execute_and_enqueue_with_snapshot_and_retry(
+        .run(
             domain_cmd,
-            3,
-            &state.snapshot_store,
-            state.snapshot_interval,
+            RunOptions::new()
+                .correlations(&keys)
+                .snapshot(&state.snapshot_store, state.snapshot_interval),
         )
         .await?;
-
-    // Index the process under any outbound order Belegnummern. Best-effort in
-    // that one lost key does not stop the others being written and does not fail
-    // a command whose message is already enqueued — but not silent: an answer
-    // that references only this Belegnummer has no other way back to the
-    // process, so the loss has to be findable.
-    for key in extra_keys.iter().filter(|k| !k.is_empty()) {
-        if let Err(e) = registry
-            .register_correlated(state.tenant_id, key, process_id, identity_for_keys.clone())
-            .await
-        {
-            tracing::warn!(
-                %process_id,
-                %key,
-                error = %e,
-                "commands api: Belegnummer registration failed — a response quoting this \
-                 reference cannot be correlated back to the process",
-            );
-        }
-    }
 
     Ok(DispatchOutcome::Dispatched { process_id })
 }
@@ -820,11 +778,9 @@ where
     let current = process.state().await?;
     let domain_cmd = make_command(&current)?;
     process
-        .execute_and_enqueue_with_snapshot_and_retry(
+        .run(
             domain_cmd,
-            3,
-            &state.snapshot_store,
-            state.snapshot_interval,
+            RunOptions::new().snapshot(&state.snapshot_store, state.snapshot_interval),
         )
         .await?;
 
@@ -1088,11 +1044,11 @@ mod tests {
         assert!(validate_command("gpke.nonexistent.action", None, &roles(&["LF"])).is_err());
     }
 
-    // ── MABIS billing dispatch (F-006) ──────────────────────────────────────
+    // ── MABIS billing dispatch ──────────────────────────────────────
     //
     // These tests exercise the full `dispatch_command` path for the three MABIS
-    // billing commands.  Before F-001 was fixed, all three fell through to the
-    // `NotImplemented` catch-all; this module is the regression gate.
+    // billing commands, which must not fall through to the `NotImplemented`
+    // catch-all.
 
     /// Build a minimal `CommandsApiState` backed by an in-memory store.
     ///

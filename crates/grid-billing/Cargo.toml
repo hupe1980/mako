@@ -1,6 +1,8 @@
 [package]
 name        = "grid-billing"
-description = "Role-neutral German grid invoice calculation — NNE, Konzessionsabgabe, Mehr-/Mindermengen and Messstellenbetrieb. Zero I/O, no float money."
+description = "German grid invoice calculation: Netznutzungsentgelt, Konzessionsabgabe, Mehr-/Mindermengen and Messstellenbetrieb, each position with its legal reference. No I/O, no float money"
+categories  = ["finance"]
+keywords    = ["billing", "energy", "grid", "netzentgelt", "bdew"]
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
@@ -41,3 +43,5 @@ serde_json          = { workspace = true }
 # disappears from the published manifest.
 mako-markt          = { path = "../mako-markt" }
 
+[lints]
+workspace = true

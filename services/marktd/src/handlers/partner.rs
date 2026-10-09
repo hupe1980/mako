@@ -10,6 +10,7 @@
 //! every enum in the tree is checked, and the canonical camelCase round-trip is
 //! what reaches the `partners.geschaeftspartner` JSONB column.
 
+use crate::state::AppState;
 use std::sync::Arc;
 
 use axum::{
@@ -23,10 +24,7 @@ use mako_markt::{
     cloudevents::{EventExtensions, MarktEvent},
     domain::{MarktpartnerId, Sparte},
     error::MdmError,
-    repository::{
-        AppState, CorrelationIndex, MaloRepository, MeloRepository, PartnerRecord,
-        PartnerRepository, PriCatRepository as _, SubscriptionRepository,
-    },
+    repository::{PartnerRecord, PartnerRepository, PriCatRepository as _},
 };
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
@@ -92,22 +90,15 @@ pub struct PartnerUpsertRequest {
 }
 
 /// `PUT /api/v1/partners/:gln`
-pub async fn put_partner<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn put_partner(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pricat_repo): Extension<PriCatRepoExt>,
     Extension(pool): Extension<sqlx::PgPool>,
     claims: Claims,
     Path(gln_str): Path<String>,
     Json(body): Json<PartnerUpsertRequest>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "write-partner", &state.tenant)
         .is_err()
@@ -265,19 +256,12 @@ where
     }
 }
 /// `GET /api/v1/partners/:gln`
-pub async fn get_partner<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn get_partner(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(gln_str): Path<String>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "read-partner", &state.tenant)
         .is_err()
@@ -336,19 +320,12 @@ where
 }
 
 /// `GET /api/v1/partners`
-pub async fn list_partners<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn list_partners(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Query(q): Query<PartnerQuery>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "read-partner", &state.tenant)
         .is_err()
@@ -390,19 +367,12 @@ where
 /// `makoadresse` and `display_name` → `geschaeftspartner.organisationsname`.
 ///
 /// Returns 404 when the partner is not registered.
-pub async fn get_partner_marktteilnehmer<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn get_partner_marktteilnehmer(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(mp_id_str): Path<String>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "read-partner", &state.tenant)
         .is_err()
@@ -443,19 +413,12 @@ where
 /// static config.
 ///
 /// Returns 404 when the partner is not registered or has no AS4 addresses.
-pub async fn get_as4_address<Ma, Me, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
+pub async fn get_as4_address(
+    State(state): State<Arc<AppState>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(mp_id_str): Path<String>,
-) -> impl IntoResponse
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
+) -> impl IntoResponse {
     if enforcer
         .check(&claims.principal(), "read-partner", &state.tenant)
         .is_err()

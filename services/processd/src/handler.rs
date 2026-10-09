@@ -49,7 +49,7 @@ use crate::server::ProcessdState;
 /// Derived from the same `cfg` gates the router uses, so it *is* the § 7 EnWG
 /// separation rather than a description of it: a `nb-only` binary that listed
 /// an LF or MSB PID here would be listing one it actually answers.
-/// `tests/role_separation.rs` asserts the set per role build.
+/// `tests/it/role_separation.rs` asserts the set per role build.
 #[must_use]
 pub fn answerable_pids() -> Vec<u32> {
     let mut pids: Vec<u32> = Vec::new();
@@ -373,6 +373,9 @@ pub async fn handle_webhook(
         let process_id = event["subject"].as_str().unwrap_or("");
         let data = event.get("data").unwrap_or(&serde_json::Value::Null);
         let sr_id = data.get("sr_id").and_then(|v| v.as_str()).unwrap_or("");
+        // The API-Webdienste `transactionId` the order arrived with: `makod`
+        // finds the Steuerungsauftrag process by it, not by the process id.
+        let tx_id = data.get("tx_id").and_then(|v| v.as_str()).unwrap_or("");
         // The dispatched produktcode is in the payload; empty means uncoded command.
         let dispatched_produktcode = data
             .get("produktcode")
@@ -483,6 +486,9 @@ pub async fn handle_webhook(
                     mako_markt::commands::WIM_STEUERUNGSAUFTRAG_ABLEHNEN,
                     Some("MSB"),
                 )
+                // Both answers are addressed by the order's `tx_id`.
+                .with_answer_payload(serde_json::json!({ "tx_id": tx_id }))
+                .with_reject_payload(serde_json::json!({ "tx_id": tx_id }))
             });
             let queue = crate::pg::PgApprovalQueue::new(state.pool.clone());
             async move {
@@ -504,6 +510,7 @@ pub async fn handle_webhook(
                     "steuerungsauftrag-bestaetigen",
                     serde_json::json!({
                         "process_id": process_id,
+                        "tx_id": tx_id,
                         "auto_ordrsp": true,
                         "produktcode": dispatched_produktcode,
                     }),
@@ -533,6 +540,7 @@ pub async fn handle_webhook(
                     "steuerungsauftrag-ablehnen",
                     serde_json::json!({
                         "process_id": process_id,
+                        "tx_id": tx_id,
                         "reason": "produktcode not in contracted konfigurationsprodukte (GPKE Teil 3 Kap. 1.3)",
                         "produktcode": dispatched_produktcode,
                     }),

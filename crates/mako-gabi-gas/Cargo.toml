@@ -1,7 +1,8 @@
 [package]
 name         = "mako-gabi-gas"
 version.workspace     = true
-description  = "GaBi Gas process engine for German gas market balancing communication (Gasbilanzierung)"
+description  = "GaBi Gas workflows for German gas balancing: allocation, MMM settlement and capacity invoices (BK7-24-01-008)"
+homepage.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true
@@ -16,14 +17,15 @@ dvgw-edi     = { workspace = true }
 mako-engine  = { workspace = true }
 mako-fristen = { workspace = true }
 mako-invoic  = { workspace = true }
-metering     = { workspace = true, features = ["serde"] }
 rust_decimal = { workspace = true }
 serde        = { workspace = true, features = ["derive"] }
 serde_json   = { workspace = true }
 time         = { workspace = true }
-time-tz      = { version = "2", features = ["db"] }
 
 [dev-dependencies]
 mako-engine         = { workspace = true, features = ["testing"] }
 serde_json          = { workspace = true }
 tokio               = { version = "1", features = ["full"] }
+
+[lints]
+workspace = true

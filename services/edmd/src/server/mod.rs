@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-// Quality scoring and Gas conversion are provided by the `metering` crate.
-// The inline `compute_quality` has been replaced with a call to `metering::score_intervals`.
+// Quality scoring (`metering::score_intervals`) and Gas conversion are
+// provided by the `metering` crate.
 // Tests for the Hampel filter logic live in the external `metering` crate.
 
 use axum::{

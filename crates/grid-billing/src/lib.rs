@@ -126,6 +126,7 @@ pub mod regulatory;
 pub mod rounding;
 pub mod sect18;
 pub mod sect19;
+pub mod stromsteuer;
 pub mod types;
 pub mod umlagen;
 pub mod umsatzsteuer;
@@ -156,7 +157,10 @@ pub use regulatory::{
     SECT19_ABS3_LETZTER_TAG,
     SECT19_ABS3_UEBERGANG_ENDE,
 };
-pub use rounding::RoundMoney;
+pub use rounding::{RoundMoney, round_money};
+pub use stromsteuer::{
+    STROMSTEUER_REGELSATZ_CT_PER_KWH, STROMSTEUER_SERIE, SatzZeile, stromsteuer_for_year,
+};
 pub use types::{
     // Abschlagsrechnung — a payment on account, and its later deduction.
     AbschlagGrundlage,

@@ -322,6 +322,20 @@ impl Bilanzierungsmonat {
 
     // ── Abrechnungsstichtage (Tabelle 2, lower block) ───────────────────────
 
+    /// The instant the clearing window for `zeitreihe` in `lauf` closes: the
+    /// end of its last day, Europe/Berlin — the due time of a
+    /// [`CLEARING_ENDE_LABEL`] deadline. `None` where Tabelle 2 defines no
+    /// window.
+    #[must_use]
+    pub fn clearing_ende(
+        self,
+        zeitreihe: Zeitreihe,
+        lauf: Abrechnungslauf,
+    ) -> Option<time::OffsetDateTime> {
+        self.clearing(zeitreihe, lauf)
+            .map(|f| mako_fristen::end_of_day_berlin(f.bis))
+    }
+
     /// Vorläufige Bilanzierung — the day by which the BIKO must have dispatched
     /// the preliminary Abrechnungssummenzeitreihen, and the Datenstand it is
     /// computed on (Kap. 13.8.2 Nr. 1).

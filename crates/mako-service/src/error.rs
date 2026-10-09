@@ -37,6 +37,11 @@ pub enum ApiError {
     /// 403 — authenticated but not permitted.
     #[error("forbidden")]
     Forbidden,
+    /// 403 with the reason the policy gave — the principal, action and tenant
+    /// a Cedar denial names, so an operator can tell a wrong role from a wrong
+    /// policy. Built by [`ApiError::forbidden`].
+    #[error("{0}")]
+    Denied(String),
     /// 400 — malformed request.
     #[error("{0}")]
     BadRequest(String),
@@ -102,6 +107,13 @@ impl ApiError {
         }
     }
 
+    /// A 403 naming why — the one denial every handler returns, instead of a
+    /// per-service `forbidden` helper building its own body.
+    #[must_use]
+    pub fn forbidden(reason: impl Into<String>) -> Self {
+        Self::Denied(reason.into())
+    }
+
     /// A 409 with a client-visible message.
     #[must_use]
     pub fn conflict(msg: impl Into<String>) -> Self {
@@ -114,7 +126,7 @@ impl ApiError {
         match self {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
-            Self::Forbidden => StatusCode::FORBIDDEN,
+            Self::Forbidden | Self::Denied(_) => StatusCode::FORBIDDEN,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::Unprocessable(_) | Self::UnprocessableWith { .. } => {
@@ -206,6 +218,16 @@ mod tests {
             "internal detail must not leak: {body}"
         );
         assert!(body.contains("internal server error"));
+    }
+
+    #[tokio::test]
+    async fn a_denial_is_a_403_that_names_its_reason() {
+        let resp = ApiError::forbidden("read-melo-msb denied for tenant t1").into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "Forbidden");
+        assert_eq!(body["detail"], "read-melo-msb denied for tenant t1");
     }
 
     #[test]

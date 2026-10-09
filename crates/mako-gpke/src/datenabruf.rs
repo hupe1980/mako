@@ -20,14 +20,14 @@
 //!
 //! - **GPKE Teil 4 § 3.2** (BK6-22-024 Anlage 1d) — „Unverzüglich, jedoch
 //!   spätester ÜZ ist 1 WT nach dem ÜZ von Nr. 1"
-//! - APERAK Frist: 45 Minuten für ORDERS (APERAK AHB 1.0 § 2.4.1)
+//! - APERAK Frist: 45 Minuten für ORDERS (APERAK AHB 1.1 § 2.4.1)
 
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
     outbox::PendingOutbox,
     types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator},
-    workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
+    workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
 
 // ── PID sets ──────────────────────────────────────────────────────────────────
@@ -133,7 +133,7 @@ pub struct AnfrageData {
 /// ```text
 /// New → AnfrageGesendet → DatenErhalten
 ///                      ↘ Abgelehnt
-///                      ↘ DeadlineExpired
+///                      ↘ FristAbgelaufen → DatenErhalten | Abgelehnt
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
@@ -158,10 +158,18 @@ pub enum DatenabrufState {
         /// Original request.
         anfrage: AnfrageData,
     },
-    /// Deadline expired without response.
-    DeadlineExpired {
-        /// Original request.
-        anfrage: AnfrageData,
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// No Festlegung states a consequence of the NB or MSB leaving the Anfrage unanswered. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<DatenabrufState>,
     },
 }
 
@@ -174,17 +182,22 @@ impl DatenabrufState {
             Self::AnfrageGesendet(_) => "AnfrageGesendet",
             Self::Abgelehnt { .. } => "Abgelehnt",
             Self::DatenErhalten { .. } => "DatenErhalten",
-            Self::DeadlineExpired { .. } => "DeadlineExpired",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
     /// Whether the process is terminal.
     #[must_use]
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
-            Self::Abgelehnt { .. } | Self::DatenErhalten { .. } | Self::DeadlineExpired { .. }
-        )
+        matches!(self, Self::Abgelehnt { .. } | Self::DatenErhalten { .. })
     }
 }
 
@@ -205,6 +218,9 @@ pub enum DatenabrufCommand {
         message_ref: MessageRef,
         /// ORDERS payload.
         payload: serde_json::Value,
+        /// When the ORDERS leaves — the Übertragungstag the counterparty's
+        /// Antwortfrist counts from ([`mako_fristen::antwort::antwort_deadline`]).
+        gesendet_am: time::OffsetDateTime,
     },
     /// Inbound ORDRSP rejection received.
     ReceiveAblehnung {
@@ -231,32 +247,63 @@ pub enum DatenabrufCommand {
 
 impl CommandPayload for DatenabrufCommand {}
 
+/// The counterparty's Antwortfrist on an outbound Datenabruf ORDERS.
+///
+/// Only the Anfrage von Werten (17102) is a Geschäftsdatenanfrage of GPKE
+/// Teil 4 § 3.2, answered „spätester ÜZ ist 1 WT nach dem ÜZ von Nr. 3"
+/// ([`mako_fristen::antwort::GESCHAEFTSDATENANFRAGE_WERKTAGE`]). The
+/// Anforderung (17004) and the Reklamation von Werten (17113) are WiM Teil 2
+/// Use-Cases, which § 3.1 excludes, and register no window here.
+fn antwortfrist(
+    orders_pid: u32,
+    gesendet_am: time::OffsetDateTime,
+) -> Option<time::OffsetDateTime> {
+    (orders_pid == 17_102).then(|| {
+        mako_fristen::antwort::FristShape::EndOfWerktag(
+            mako_fristen::antwort::GESCHAEFTSDATENANFRAGE_WERKTAGE,
+        )
+        .due_at(gesendet_am, mako_fristen::HolidayCalendar::BdewMaKo)
+    })
+}
+
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
 /// GPKE Datenabruf workflow — LF-initiated data requests and reclamations.
 pub struct GpkeDatenabrufWorkflow;
+
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the Anfrage waits for its answer
+/// (`AnfrageGesendet`).
+fn window_open(label: &str, state: &DatenabrufState) -> bool {
+    label == ANTWORT_WINDOW_LABEL && matches!(state, DatenabrufState::AnfrageGesendet(_))
+}
 
 impl Workflow for GpkeDatenabrufWorkflow {
     type State = DatenabrufState;
     type Event = DatenabrufEvent;
     type Command = DatenabrufCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANTWORT_WINDOW_LABEL];
+
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (ANTWORT_WINDOW_LABEL, DatenabrufState::AnfrageGesendet(_)) => {
-                Some(DatenabrufCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| DatenabrufCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            DatenabrufState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             DatenabrufEvent::AnfrageGesendet {
                 orders_pid,
@@ -285,10 +332,11 @@ impl Workflow for GpkeDatenabrufWorkflow {
                 }
                 other => other,
             },
-            DatenabrufEvent::DeadlineExpired { .. } => match state {
-                DatenabrufState::AnfrageGesendet(anfrage) => {
-                    DatenabrufState::DeadlineExpired { anfrage }
-                }
+            DatenabrufEvent::DeadlineExpired { label, .. } => match state {
+                DatenabrufState::AnfrageGesendet(_) => DatenabrufState::FristAbgelaufen {
+                    label: label.to_string(),
+                    offen: Box::new(state),
+                },
                 other => other,
             },
         }
@@ -298,6 +346,10 @@ impl Workflow for GpkeDatenabrufWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             DatenabrufCommand::SendAnfrage {
                 orders_pid,
@@ -305,6 +357,7 @@ impl Workflow for GpkeDatenabrufWorkflow {
                 malo,
                 message_ref,
                 payload,
+                gesendet_am,
             } => {
                 if !matches!(state, DatenabrufState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -330,7 +383,17 @@ impl Workflow for GpkeDatenabrufWorkflow {
                         "payload":    payload,
                     }),
                 )];
-                Ok(WorkflowOutput::with_outbox(vec![event], outbox))
+                // The counterparty's Antwortfrist, from the published row for
+                // this ORDERS; a PID no Festlegung quantifies registers nothing.
+                let frist: Vec<PendingDeadline> = antwortfrist(orders_pid.as_u32(), gesendet_am)
+                    .map(|due| PendingDeadline::new(ANTWORT_WINDOW_LABEL, due))
+                    .into_iter()
+                    .collect();
+                Ok(WorkflowOutput::with_outbox_and_deadlines(
+                    vec![event],
+                    outbox,
+                    frist,
+                ))
             }
 
             DatenabrufCommand::ReceiveAblehnung {
@@ -368,11 +431,50 @@ impl Workflow for GpkeDatenabrufWorkflow {
             }
 
             DatenabrufCommand::TimeoutExpired { deadline_id, label } => {
-                if state.is_terminal() {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![DatenabrufEvent::DeadlineExpired { deadline_id, label }].into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn anfrage(pid: u32, gesendet_am: time::OffsetDateTime) -> DatenabrufCommand {
+        DatenabrufCommand::SendAnfrage {
+            orders_pid: Pruefidentifikator::new(pid).expect("valid PID"),
+            recipient: MarktpartnerCode::new("9900000000003"),
+            malo: None,
+            message_ref: MessageRef::new("ORDERS-1"),
+            payload: serde_json::json!({}),
+            gesendet_am,
+        }
+    }
+
+    /// The Anfrage von Werten is a Geschäftsdatenanfrage (GPKE Teil 4 Kap.
+    /// 3.2): its answer is due by the end of the next Werktag. The WiM
+    /// Anforderung starts no window here.
+    #[test]
+    fn an_anfrage_von_werten_registers_the_one_werktag_window() {
+        // Mittwoch, 07.10.2026 → Ablauf Donnerstag, 08.10.2026.
+        let sent = time::macros::datetime!(2026-10-07 10:00 UTC);
+        let out =
+            GpkeDatenabrufWorkflow::handle(&DatenabrufState::default(), anfrage(17_102, sent))
+                .expect("accepted");
+        assert_eq!(out.deadlines.len(), 1);
+        assert_eq!(out.deadlines[0].label, ANTWORT_WINDOW_LABEL);
+        assert_eq!(
+            out.deadlines[0].due_at,
+            mako_fristen::end_of_day_berlin(time::macros::date!(2026 - 10 - 08))
+        );
+
+        let out =
+            GpkeDatenabrufWorkflow::handle(&DatenabrufState::default(), anfrage(17_004, sent))
+                .expect("accepted");
+        assert!(out.deadlines.is_empty());
     }
 }

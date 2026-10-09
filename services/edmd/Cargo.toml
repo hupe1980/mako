@@ -1,7 +1,7 @@
 [package]
 name             = "edmd"
 version.workspace = true
-description      = "Energy Data Management daemon — MSCONS storage & time-series API over a meterstore hot/cold tier (PostgreSQL + Apache Iceberg)"
+description      = "Energy data management daemon: MSCONS ingest and a time-series API over a PostgreSQL and Apache Iceberg store"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -50,7 +50,6 @@ tokio-util         = { workspace = true }
 tracing            = "0.1"
 mako-service       = { workspace = true, features = ["otel", "cedar", "oidc", "rate-limit", "metrics"] }
 krafka             = { workspace = true }
-futures            = { version = "0.3", default-features = false, features = ["std"] }
 rmcp               = { workspace = true }
 # `rust_decimal1` gives `JsonSchema` for `Decimal`, which the MCP tool schemas
 # need for their money and energy fields. It used to arrive by accident —
@@ -59,13 +58,8 @@ rmcp               = { workspace = true }
 # now, where it is actually used.
 schemars           = { workspace = true, features = ["rust_decimal1"] }
 secrecy            = "0.10"
-subtle             = "2"
-reqwest            = { workspace = true }
 sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json", "rust_decimal"] }
 rust_decimal       = { workspace = true }
-url                = "2"
-bytes              = "1"
-num_cpus           = "1"
 
 # ── meterstore cold-tier plumbing ────────────────────────────────────────────
 #
@@ -80,12 +74,16 @@ datafusion = { version = "53", default-features = false }
 arrow      = { workspace = true, features = ["ipc", "prettyprint"] }
 
 [dev-dependencies]
+mako-service = { workspace = true, features = ["testing"] }
 toml       = "0.8"
 ## `test-broker` gives the kafka_ingest e2e test an in-process broker.
 krafka              = { workspace = true, features = ["test-broker"] }
 tempfile            = "3"
 tokio               = { version = "1", features = ["full"] }
 tower               = { version = "0.5", features = ["util"] }
-## Real-PostgreSQL storage integration tests (`tests/meterstore_integration.rs`).
+## Real-PostgreSQL storage integration tests (`tests/it/meterstore_integration.rs`).
 testcontainers         = { workspace = true }
 testcontainers-modules = { workspace = true }
+
+[lints]
+workspace = true

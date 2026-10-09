@@ -25,6 +25,7 @@
 //! ```
 
 use edi_energy::{AnyMessage, EdiEnergyMessage, Platform};
+use mako_engine::process::RunOptions;
 use mako_engine::{
     builder::EngineBuilder,
     deadline::{Deadline, DeadlineStore, InMemoryDeadlineStore},
@@ -215,22 +216,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[3/6] Dispatching ReceiveUtilmd...");
 
     let envs = process
-        .execute(GasSupplierChangeCommand::ReceiveUtilmd {
-            pid,
-            sender: sender.clone(),
-            receiver: receiver.clone(),
-            malo_id: malo_id.clone(),
-            document_date: document_date.clone(),
-            process_date: String::new(),
-            message_ref: msg_ref.clone(),
-            validation_passed,
-            validation_errors: validation_errors.clone(),
-            received_at: time::OffsetDateTime::now_utc(),
-            bilanzierungsmethode: None,
-            vorgang: Default::default(),
-            fallgruppe: None,
-            gasqualitaet: None,
-        })
+        .run(
+            GasSupplierChangeCommand::ReceiveUtilmd {
+                pid,
+                sender: sender.clone(),
+                receiver: receiver.clone(),
+                malo_id: malo_id.clone(),
+                document_date: document_date.clone(),
+                process_date: String::new(),
+                message_ref: msg_ref.clone(),
+                validation_passed,
+                validation_errors: validation_errors.clone(),
+                received_at: time::OffsetDateTime::now_utc(),
+                bilanzierungsmethode: None,
+                vorgang: Default::default(),
+                fallgruppe: None,
+                gasqualitaet: None,
+            },
+            RunOptions::new(),
+        )
         .await?;
 
     for env in &envs {
@@ -300,14 +304,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_causation(utilmd_event_id.into());
 
     let aperak_envs = process
-        .execute_with(
+        .run(
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
                 antwort_code: "E15".to_owned(),
                 bemerkung: None,
                 obligations: vec![],
             },
-            aperak_ctx,
+            RunOptions::new().context(aperak_ctx),
         )
         .await?;
 
@@ -349,7 +353,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("[5/6] Activating gas supply relationship...");
 
-    let activate_envs = process.execute(GasSupplierChangeCommand::Activate).await?;
+    let activate_envs = process
+        .run(GasSupplierChangeCommand::Activate, RunOptions::new())
+        .await?;
     for env in &activate_envs {
         println!("  ✓ {} (seq {})", env.event_type, env.sequence_number);
     }
@@ -415,22 +421,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("[+] Guard: stale ReceiveUtilmd on completed process is rejected...");
     let guard_err = process
-        .execute(GasSupplierChangeCommand::ReceiveUtilmd {
-            pid,
-            sender: sender.clone(),
-            receiver: receiver.clone(),
-            malo_id: malo_id.clone(),
-            document_date: document_date.clone(),
-            process_date: String::new(),
-            message_ref: msg_ref.clone(),
-            validation_passed: true,
-            validation_errors: vec![],
-            received_at: time::OffsetDateTime::now_utc(),
-            bilanzierungsmethode: None,
-            vorgang: Default::default(),
-            fallgruppe: None,
-            gasqualitaet: None,
-        })
+        .run(
+            GasSupplierChangeCommand::ReceiveUtilmd {
+                pid,
+                sender: sender.clone(),
+                receiver: receiver.clone(),
+                malo_id: malo_id.clone(),
+                document_date: document_date.clone(),
+                process_date: String::new(),
+                message_ref: msg_ref.clone(),
+                validation_passed: true,
+                validation_errors: vec![],
+                received_at: time::OffsetDateTime::now_utc(),
+                bilanzierungsmethode: None,
+                vorgang: Default::default(),
+                fallgruppe: None,
+                gasqualitaet: None,
+            },
+            RunOptions::new(),
+        )
         .await
         .unwrap_err();
     assert!(

@@ -1,7 +1,7 @@
 [package]
 name             = "mako-service"
 version.workspace = true
-description      = "Shared service infrastructure for mako daemons — config loader, health routes, webhook HMAC verification, ServiceBuilder, telemetry"
+description      = "Service SDK for the mako daemons: lifecycle runner, config loading, health routes, OIDC, Cedar, webhook signing and the transactional outbox"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -21,6 +21,11 @@ otel = [
     "dep:opentelemetry-semantic-conventions",
     "dep:tracing-opentelemetry",
 ]
+
+## `service::build_for_test` — a daemon's router built the way `run` builds
+## it, with no port and no database. For startup tests; never in a production
+## build.
+testing = []
 
 ## Enables Cedar ABAC enforcement via `CedarEnforcer`.
 ## Wire in via `CedarEnforcer::from_policy_str(...)` and `Extension<Arc<CedarEnforcer>>`.
@@ -72,7 +77,6 @@ figment-file-provider-adapter = { workspace = true }
 toml       = "0.8"
 hmac       = { version = "0.12", default-features = false }
 sha2       = { version = "0.10", default-features = false }
-hex        = { version = "0.4" }
 # Standard Webhooks signatures are base64, not hex.
 base64     = { version = "0.22" }
 # CloudEvents envelope: RFC3339 `time` and UUID `id`. Cheap, always-on — the
@@ -114,3 +118,6 @@ tokio         = { version = "1", features = ["rt-multi-thread", "macros", "io-ut
 # Real-PostgreSQL integration tests for the transactional outbox.
 testcontainers         = { workspace = true }
 testcontainers-modules = { workspace = true }
+
+[lints]
+workspace = true

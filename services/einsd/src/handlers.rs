@@ -8,6 +8,7 @@ use axum::{
 };
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
+use mako_service::dates::parse_iso_date;
 use mako_service::error::ApiError;
 use mako_service::oidc::Claims;
 use rust_decimal::Decimal;
@@ -404,7 +405,10 @@ impl Negativpreis {
 ///
 /// `bank_iban` and `bank_bic` are included when present so `accountingd` can
 /// generate a SEPA Credit Transfer pain.001 without a secondary DB lookup.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 #[must_use]
 pub fn build_settlement_ce(
     cfg: &EinsdConfig,
@@ -953,7 +957,7 @@ pub async fn post_settle(
     {
         Ok(Some(result)) => (StatusCode::OK, Json(result)).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => (crate::settle::settle_error_status(&e), format!("{e:#}")).into_response(),
     }
 }
 
@@ -2346,9 +2350,9 @@ pub async fn post_correction_settle(
     }
 
     // The link points at the period's **initial** receipt, not at whichever row
-    // was written last. Ordering by `settled_at` made a second correction claim
-    // to supersede the first one, so the chain no longer led back to the
-    // settlement that actually created the payment obligation.
+    // was written last. Ordering by `settled_at` would let a second correction
+    // claim to supersede the first one, so the chain would no longer lead back
+    // to the settlement that actually created the payment obligation.
     let original_id: Option<uuid::Uuid> = sqlx::query_scalar(
         r"SELECT id FROM settlement_receipts
           WHERE tr_id = $1 AND tenant = $2 AND billing_year = $3 AND billing_month = $4
@@ -2392,7 +2396,9 @@ pub async fn post_correction_settle(
     {
         Ok(Some(r)) => r,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => {
+            return (crate::settle::settle_error_status(&e), format!("{e:#}")).into_response();
+        }
     };
 
     (
@@ -2695,11 +2701,6 @@ pub struct Sect54NachweisRequest {
     pub effective_until: String,
 }
 
-fn parse_iso_date(s: &str) -> Result<time::Date, String> {
-    time::Date::parse(s, &time::format_description::well_known::Iso8601::DATE)
-        .map_err(|e| format!("invalid date `{s}`: {e}"))
-}
-
 /// `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/regionalnachweis`
 ///
 /// Record that a Regionalnachweis (§79a EEG) was issued for this plant's
@@ -2886,9 +2887,9 @@ pub async fn post_sect54_nachweis_erbracht(
         )
             .into_response();
     }
-    let until = match parse_iso_date(&req.effective_until) {
+    let until = match parse_iso_date("effective_until", &req.effective_until) {
         Ok(d) => d,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiError::from(e).into_response(),
     };
     match crate::pg::close_sect54_defekt(&pool, &cfg.tenant, id, until).await {
         Ok(true) => (
@@ -2937,9 +2938,9 @@ pub async fn get_aw_reduktionen(
             .into_response();
     }
     let on = match q.on.as_deref() {
-        Some(s) => match parse_iso_date(s) {
+        Some(s) => match parse_iso_date("on", s) {
             Ok(d) => d,
-            Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+            Err(e) => return ApiError::from(e).into_response(),
         },
         None => mako_fristen::heute(),
     };
@@ -2957,8 +2958,11 @@ fn parse_period(
     from: &str,
     until: Option<&str>,
 ) -> Result<(time::Date, Option<time::Date>), String> {
-    let from = parse_iso_date(from)?;
-    let until = until.map(parse_iso_date).transpose()?;
+    let from = parse_iso_date("effective_from", from).map_err(|e| e.to_string())?;
+    let until = until
+        .map(|u| parse_iso_date("effective_until", u))
+        .transpose()
+        .map_err(|e| e.to_string())?;
     if let Some(u) = until
         && u < from
     {
@@ -3085,17 +3089,6 @@ fn parse_sanktionstyp(s: &str) -> Result<eeg_billing::SanktionsTyp, Box<Response
     })
 }
 
-fn parse_iso_date_field(field: &str, s: &str) -> Result<time::Date, Box<Response>> {
-    time::Date::parse(s, &time::format_description::well_known::Iso8601::DATE).map_err(|_| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("invalid {field} — use ISO 8601 (YYYY-MM-DD)"),
-        )
-            .into_response()
-            .into()
-    })
-}
-
 /// `GET /api/v1/anlagen/{tr_id}/pflichtverstoesse`
 ///
 /// Every §52 Abs. 1 breach recorded against the plant, newest first — open and
@@ -3173,9 +3166,9 @@ pub async fn post_pflichtverstoss(
         Ok(t) => t,
         Err(r) => return *r,
     };
-    let beginn = match parse_iso_date_field("beginn", &req.beginn) {
+    let beginn = match parse_iso_date("beginn", &req.beginn) {
         Ok(d) => d,
-        Err(r) => return *r,
+        Err(e) => return ApiError::from(e).into_response(),
     };
     let mut conn = match pool.acquire().await {
         Ok(c) => c,
@@ -3236,9 +3229,9 @@ pub async fn put_pflichtverstoss_behoben(
         Ok(t) => t,
         Err(r) => return *r,
     };
-    let behoben_am = match parse_iso_date_field("behoben_am", &req.behoben_am) {
+    let behoben_am = match parse_iso_date("behoben_am", &req.behoben_am) {
         Ok(d) => d,
-        Err(r) => return *r,
+        Err(e) => return ApiError::from(e).into_response(),
     };
     let mut conn = match pool.acquire().await {
         Ok(c) => c,

@@ -1,7 +1,7 @@
 //! `billingd` — Energy Billing Engine.
 //!
 //! Pure calculation service.  Pulls product definitions from `productd`,
-//! consumption from `edmd`, and grid pass-through from `marktd`.
+//! consumption from `edmd`; grid pass-through arrives with the request.
 //! Outputs canonical BO4E `Rechnung` objects and emits
 //! `de.billing.rechnung.erstellt` CloudEvents consumed by `accountingd`.
 //!
@@ -352,4 +352,22 @@ impl Daemon for Billingd {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     mako_service::run::<Billingd>().await
+}
+
+/// The router builds the way `mako_service::run` mounts it.
+///
+/// `build` runs with the shipped demo configuration and a lazy pool, and the
+/// runner's infra routes are merged in exactly as at boot — so a route axum
+/// refuses, a merge collision with the runner's `/metrics` or `/health/*`, or
+/// a `build` that panics fails `cargo test` instead of the container start.
+#[cfg(test)]
+mod startup_test {
+    #[tokio::test]
+    async fn the_router_builds_as_the_runner_mounts_it() {
+        let cfg = toml::from_str(include_str!("../../../demos/o2c/billingd.toml"))
+            .expect("the demo configuration parses");
+        let _app = mako_service::build_for_test::<super::Billingd>(cfg)
+            .await
+            .expect("the router builds");
+    }
 }

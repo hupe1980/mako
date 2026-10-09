@@ -27,7 +27,7 @@
 //!
 //! The rates live in § 7 itself. There is no Anlage to § 7.
 
-use crate::rounding::RoundMoney;
+use grid_billing::RoundMoney;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 use time::Date;

@@ -14,21 +14,11 @@
 //! computes a Mahnstufe nor decides a fee.
 //!
 //! The view is here anyway because it is a **page-description contract, and a
-//! contract belongs to the consumer of the format**: the publish gate must
-//! render the specimen at publish time, inside the process that owns the
-//! template store — and services in this workspace talk HTTP, never crates, so
-//! the type cannot live in `accountingd` without either a service-to-service
-//! crate dependency or a second renderer+store there (the two-template-systems
-//! outcome the platform explicitly rejects). `accountingd` conforms to this
-//! view the way a browser conforms to HTML. The precedent is
-//! [`DocumentView`](super::view::DocumentView) itself: `vertragd` owns the
-//! buyer master, the renderer owns the projection.
-//!
-//! **That extraction happened** (2026-08-10): renderer, store, gates and view
-//! contracts moved here together from `billingd`, because they are one thing.
-//! Producers duplicate the view struct at their HTTP boundary, exactly as
-//! `vertragd` client types are duplicated elsewhere — the copy here is the
-//! normative one.
+//! contract belongs to the consumer of the format**: the publish gate renders
+//! the specimen inside the process that owns the template store, and services
+//! talk HTTP, never crates. `accountingd` conforms to this view the way a
+//! browser conforms to HTML, and duplicates the struct at its HTTP boundary —
+//! the copy here is the normative one.
 //!
 //! # Textform, not PDF/A
 //!

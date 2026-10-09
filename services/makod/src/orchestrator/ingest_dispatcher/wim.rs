@@ -195,12 +195,13 @@ impl EdifactIngestDispatcher {
                     )
                     .with_time(zahlungsziel.time())
                     .assume_offset(zahlungsziel.offset());
-                    self.spawn_or_resume::<WimInvoicWorkflow>(
+                    self.spawn_or_resume_guarded::<WimInvoicWorkflow>(
                         malo_id.as_str(),
                         "wim-invoic",
                         cmd,
                         &fv,
                         &[(mako_wim::INVOIC_SETTLEMENT_WINDOW_LABEL, due_at)],
+                        occupied_by_own_reference,
                     )
                     .await
                 }
@@ -288,7 +289,7 @@ impl EdifactIngestDispatcher {
                     let melo_id = extract_melo_from_orders(msg);
                     // The Geschäftsdatenanfrage is answered „spätester ÜZ ist
                     // 1 WT nach dem ÜZ" (GPKE Teil 4 § 3.2 Nr. 2). The APERAK
-                    // runs beside it on 45 minutes (APERAK AHB 1.0 §2.4.1).
+                    // runs beside it on 45 minutes (APERAK AHB 1.1 §2.4.1).
                     let process_due_at = fristen::deadline_at_werktage(
                         OffsetDateTime::now_utc(),
                         fristen::antwort::GESCHAEFTSDATENANFRAGE_WERKTAGE,
@@ -564,12 +565,13 @@ impl EdifactIngestDispatcher {
                     } else {
                         Vec::new()
                     };
-                    self.spawn_or_resume::<mako_wim::WimRechnungsabwicklungWorkflow>(
+                    self.spawn_or_resume_guarded::<mako_wim::WimRechnungsabwicklungWorkflow>(
                         malo_id.as_str(),
                         "wim-rechnungsabwicklung",
                         cmd,
                         &fv,
                         &deadlines,
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 } else if mako_wim::RECHNUNGSABWICKLUNG_ORDRSP_PIDS.contains(&pid)

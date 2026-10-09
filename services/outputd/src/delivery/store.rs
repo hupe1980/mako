@@ -566,7 +566,9 @@ pub async fn claim_due(
 ///
 /// `delivered` separates handed off (`SENT`) from known to have arrived
 /// (`DELIVERED`). Only the second is evidence, and only channels that can
-/// observe arrival pass `true`.
+/// observe arrival pass `true`. `delivered_at` moves with the status — set on
+/// `DELIVERED`, cleared on anything else — because the table holds
+/// `CHECK ((status = 'DELIVERED') = (delivered_at IS NOT NULL))`.
 ///
 /// # Errors
 ///
@@ -582,7 +584,7 @@ pub async fn record_success(
         r"UPDATE document_deliveries
              SET status        = CASE WHEN $3 THEN 'DELIVERED' ELSE 'SENT' END,
                  first_sent_at = COALESCE(first_sent_at, now()),
-                 delivered_at  = CASE WHEN $3 THEN now() ELSE delivered_at END,
+                 delivered_at  = CASE WHEN $3 THEN now() ELSE NULL END,
                  evidence      = COALESCE($4, evidence),
                  last_error    = NULL,
                  updated_at    = now()
@@ -602,7 +604,8 @@ pub async fn record_success(
 ///
 /// The row stays `PENDING` while retries remain and becomes `FAILED` at the
 /// ceiling — the state that says a customer never received something the
-/// platform believes it sent.
+/// platform believes it sent. `delivered_at` is cleared with it, so a bounce
+/// reported on a `DELIVERED` row turns it into the failure it was.
 ///
 /// # Errors
 ///
@@ -618,6 +621,7 @@ pub async fn record_failure(
     sqlx::query(
         r"UPDATE document_deliveries
              SET status          = CASE WHEN $4 THEN 'FAILED' ELSE 'PENDING' END,
+                 delivered_at    = NULL,
                  next_attempt_at = now() + $5::interval,
                  last_error      = $3,
                  updated_at      = now()

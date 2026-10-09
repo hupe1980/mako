@@ -1,4 +1,7 @@
-#![allow(clippy::doc_markdown)]
+#![expect(
+    clippy::doc_markdown,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 //! Domain error type for `mako-markt`.
 //!
 //! No axum dependency here — `services/marktd` maps `MdmError` to HTTP responses

@@ -3,7 +3,7 @@
 //! # The pipeline
 //!
 //! ```text
-//! verify HMAC → parse event → route_for(pid) → deserialize Rechnung
+//! verify HMAC → parse event → disposition_for(pid) → deserialize Rechnung
 //!    → run the route's check → decide accept/dispute
 //!    → PERSIST the receipt  ← § 147 AO: before anything is sent
 //!    → dispatch the answer command to makod
@@ -44,7 +44,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::pg;
-use crate::routing::{CheckKind, PidRoute, route_for};
+use crate::routing::{CheckKind, Disposition, PidRoute, disposition_for};
 
 /// Shared application state for the webhook handler.
 #[derive(Clone)]
@@ -120,10 +120,11 @@ pub async fn handle_webhook(
         );
         return StatusCode::NO_CONTENT.into_response();
     }
-    let Some(route) = route_for(pid) else {
+    let disposition = disposition_for(pid);
+    if disposition == Disposition::NotInvoic {
         debug!(pid, "invoicd: PID not answered by this service");
         return StatusCode::NO_CONTENT.into_response();
-    };
+    }
     let Some(process_id) = event["subject"]
         .as_str()
         .and_then(|s| s.parse::<Uuid>().ok())
@@ -136,9 +137,19 @@ pub async fn handle_webhook(
         return StatusCode::NO_CONTENT.into_response();
     };
 
-    process_invoic(&state, route, process_id, data)
-        .await
-        .into_response()
+    match disposition {
+        Disposition::Check(route) => process_invoic(&state, route, process_id, data)
+            .await
+            .into_response(),
+        // An INVOIC this service cannot answer is recorded where the operator
+        // looks for INVOICs that need a human, not acknowledged and dropped.
+        Disposition::Refuse(reason) => {
+            warn!(pid, %process_id, reason, "invoicd: INVOIC refused");
+            dead_letter(&state, process_id, pid, data, reason).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Disposition::NotInvoic => StatusCode::NO_CONTENT.into_response(),
+    }
 }
 
 /// Everything one inbound INVOIC needs, once the envelope has been read.
@@ -506,7 +517,7 @@ struct Checked {
 /// basis nor an Entscheidungsbaum. `PreisblattMessung` is what an MSB
 /// *publishes* toward the NB and the LF; there is none for the Kapitel-4.6
 /// Messprodukte, because § 35 MsbG leaves the Entgelt for a Zusatzleistung to
-/// be agreed per request. An ESA running the sheet path therefore got
+/// be agreed per request, so on the sheet path an ESA would get
 /// `TariffNotFound` and **no price check at all**.
 ///
 /// What it has instead is the QUOTES 15003 it ordered against, and **an
@@ -523,10 +534,10 @@ struct Checked {
 /// Every one of these lookups returns `Result<Option<T>, _>`, and the two
 /// negative answers mean opposite things: `Ok(None)` is „no Preisblatt is on
 /// record for this Marktpartner" — a finding about the invoice — while `Err` is
-/// „I could not ask". Collapsing them with `.ok().flatten()` produced a verdict
-/// that *looks* authoritative but was reached without the price basis: an
-/// overpriced INVOIC came back `Ok` and was answered with a Zahlungsavis
-/// because `marktd` was briefly unreachable, and nothing in the receipt says so.
+/// „I could not ask". Collapsing them with `.ok().flatten()` would produce a
+/// verdict that *looks* authoritative but was reached without the price basis:
+/// an overpriced INVOIC answered with a Zahlungsavis because `marktd` was
+/// briefly unreachable, and nothing in the receipt saying so.
 ///
 /// So the invoice is not answered at all. `handle_webhook` turns this into a
 /// `503`, which the sender's outbox retries with backoff (a 4xx it would
@@ -1516,6 +1527,8 @@ fn dispute_reason(findings: &[invoic_checker::Finding]) -> String {
 mod tests {
     use std::collections::BTreeSet;
 
+    use crate::routing::route_for;
+
     use invoic_checker::{EuroAmount, Finding, FindingKind, amount::RoundingStrategy};
 
     use super::*;
@@ -1721,11 +1734,11 @@ mod tests {
     /// A `marktd` that does not answer at all is **not** „no Preisblatt on
     /// record": no verdict is produced.
     ///
-    /// The lookups used to end in `.ok().flatten()`, so an outage read as an
-    /// empty price basis and the invoice was checked with less data while still
-    /// reporting a plausibility outcome — an overpriced INVOIC came back `Ok`
-    /// and was answered with a Zahlungsavis nobody could tell from a checked
-    /// one.
+    /// Ending the lookups in `.ok().flatten()` would read an outage as an empty
+    /// price basis: the invoice would be checked with less data while still
+    /// reporting a plausibility outcome, and an overpriced INVOIC would come
+    /// back `Ok` and be answered with a Zahlungsavis nobody could tell from a
+    /// checked one.
     #[tokio::test]
     async fn an_unreachable_marktd_is_not_a_missing_preisblatt() {
         // Port 1 on loopback: the connection is refused, not merely slow.
@@ -1866,9 +1879,9 @@ mod tests {
     /// insert Postgres rejects at run time, against a schema the compiler never
     /// sees — `direction` failed exactly that way with a capitalised literal.
     ///
-    /// The reverse direction is the one that hid a defect. This test used to
-    /// check the labels against a hard-coded `ALLOWED` list that itself listed
-    /// `'Paid'`, so it could not notice that nothing ever wrote `'Paid'`:
+    /// The reverse direction is the one that hides a defect. Checking the labels
+    /// against a hard-coded `ALLOWED` list cannot notice a value nothing writes,
+    /// such as `'Paid'`:
     /// `confirm_payment` sets `payment_confirmed_at` and leaves `outcome`
     /// alone, which is right — `outcome` is the plausibility verdict and
     /// settlement is a separate axis, so writing `'Paid'` would overwrite the

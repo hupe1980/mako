@@ -1,6 +1,6 @@
 [package]
 name        = "accountingd"
-description = "Massenkontokorrent daemon (LF role) — Kundenkonto, Offene Posten, Zahlungszuordnung, Mahnwesen, SEPA-Lastschrift und Jahresabschluss"
+description = "Supplier sub-ledger daemon: customer accounts, open items, payment matching, dunning and SEPA direct debit on a double-entry ledger"
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
@@ -33,29 +33,24 @@ time         = { workspace = true }
 uuid         = { workspace = true, features = ["v4", "serde"] }
 rust_decimal = { workspace = true }
 rubo4e       = { workspace = true }
-reqwest      = { workspace = true }
 sepa         = { workspace = true, features = ["time"] }
 # Tamper-evident double-entry ledger kernel — accountingd's accounting/storage base.
 doubleentry  = { workspace = true, features = ["postgres", "serde"] }
 # Keyed hashing for the IBAN lookup key (app-layer, replaces pgcrypto digest()).
 blake3       = "1"
 tracing      = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tower-http   = { version = "0.6" }
 tokio-util   = { workspace = true }
 anyhow       = "1"
 thiserror    = { workspace = true }
 secrecy      = { version = "0.10", features = ["serde"] }
 
-[features]
-# Enable integration tests that require a live PostgreSQL database.
-# Usage: cargo test -p accountingd --test integration_tests --features integration-tests
-# Requires: DATABASE_URL env var pointing to a PostgreSQL admin connection.
-integration-tests = []
-
 [dev-dependencies]
+mako-service = { workspace = true, features = ["testing"] }
 toml       = "0.8"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "rust_decimal", "migrate", "macros"] }
 tokio = { version = "1", features = ["full", "test-util"] }
+
+[lints]
+workspace = true

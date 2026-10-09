@@ -32,8 +32,12 @@
 //! ── Payer, after its REMADV was refused ──────────────────────────────
 //! any settled/sent state ──ReceiveComdis 29001──► ComdisRejected
 //!
-//! Any non-terminal state ──TimeoutExpired──► Rejected
+//! InvoicReceived / ValidationPassed ──TimeoutExpired──► FristAbgelaufen
 //! ```
+//!
+//! A lapsed settlement window is a Frist breach for the operator, not an
+//! outcome: no Festlegung gives the payer's silence one, so the invoice still
+//! awaits its REMADV.
 //!
 //! # Regulatory basis
 //!
@@ -43,8 +47,8 @@
 //!   nicht": there are no Teilzahlungen, so 33002/33003/33004 are all
 //!   Abweisungen and only 33001 confirms.
 //! - **COMDIS AHB 1.0** — the invoicer's refusal of a payer's REMADV (29001).
-//! - **APERAK AHB 1.0 § 2.4.1** — the technical acknowledgement, 45 Minuten on a
-//!   weekday. A different clock from the business answer this workflow runs.
+//! - **APERAK AHB 1.1 § 2.4.1** — the technical acknowledgement: for an INVOIC
+//!   the next Werktag 12:00 (the 45 Minuten bind UTILMD and ORDERS). A different clock from the business answer this workflow runs.
 
 #![forbid(unsafe_code)]
 
@@ -264,7 +268,7 @@ pub enum InvoicState {
         /// Human-readable dispute reason.
         reason: String,
     },
-    /// Process rejected — AHB validation failure or an expired deadline.
+    /// Process rejected — AHB validation failure.
     Rejected {
         /// Human-readable rejection reason.
         reason: String,
@@ -282,6 +286,19 @@ pub enum InvoicState {
     },
     /// COMDIS 29001 received — the invoicer refused our REMADV (payer role).
     ComdisRejected(InvoicData),
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// No Festlegung gives the payer's silence past the settlement window an outcome. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<InvoicState>,
+    },
 }
 
 impl InvoicState {
@@ -299,6 +316,16 @@ impl InvoicState {
             Self::PaymentConfirmed(_) => "PaymentConfirmed",
             Self::PaymentDisputed { .. } => "PaymentDisputed",
             Self::ComdisRejected(_) => "ComdisRejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -306,6 +333,7 @@ impl InvoicState {
     #[must_use]
     pub fn data(&self) -> Option<&InvoicData> {
         match self {
+            Self::FristAbgelaufen { offen, .. } => offen.data(),
             Self::InvoicReceived(d)
             | Self::ValidationPassed(d)
             | Self::Settled(d)
@@ -517,7 +545,6 @@ pub enum InvoicCommand {
         /// cannot act on. `None` is accepted only from a caller that could not
         /// resolve a tree at all, and the renderer then refuses to put an
         /// incomplete answer on the wire.
-        #[allow(clippy::struct_field_names)]
         antwort: Option<RemadvAntwort>,
     },
     /// The settlement deadline fired before an answer was given.
@@ -536,10 +563,23 @@ impl CommandPayload for InvoicCommand {}
 /// The INVOIC settle/dispute workflow for one [`InvoicFamily`].
 pub struct InvoicWorkflow<F: InvoicFamily>(PhantomData<fn() -> F>);
 
+/// The one guard a fired deadline passes: the family's settlement window is
+/// open while the invoice is in hand and unanswered (`InvoicReceived`,
+/// `ValidationPassed`).
+fn window_open<F: InvoicFamily>(label: &str, state: &InvoicState) -> bool {
+    label == F::DEADLINE_LABEL
+        && matches!(
+            state,
+            InvoicState::InvoicReceived(_) | InvoicState::ValidationPassed(_)
+        )
+}
+
 impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
     type State = InvoicState;
     type Event = InvoicEvent;
     type Command = InvoicCommand;
+
+    const DEADLINE_LABELS: &'static [&'static str] = &[F::DEADLINE_LABEL];
 
     /// Deadline compensation for the settlement window.
     ///
@@ -549,20 +589,19 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (label, InvoicState::InvoicReceived(_) | InvoicState::ValidationPassed(_))
-                if label == F::DEADLINE_LABEL =>
-            {
-                Some(InvoicCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
+        window_open::<F>(deadline.label(), state).then(|| InvoicCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            InvoicState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             InvoicEvent::InvoicReceived {
                 invoice_ref,
@@ -618,17 +657,17 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                 reason: reason.clone(),
             },
 
-            // A deadline that fires after the process already reached an
-            // outcome changes nothing — the answer was given in time.
-            InvoicEvent::DeadlineExpired { label, .. } => {
-                if state.is_terminal() {
-                    state
-                } else {
-                    InvoicState::Rejected {
-                        reason: format!("settlement deadline expired: {label}"),
+            // A deadline that fires after the process already answered changes
+            // nothing — the answer was given in time.
+            InvoicEvent::DeadlineExpired { label, .. } => match state {
+                InvoicState::InvoicReceived(_) | InvoicState::ValidationPassed(_) => {
+                    InvoicState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
                     }
                 }
-            }
+                other => other,
+            },
 
             InvoicEvent::InvoicSent {
                 pruefidentifikator,
@@ -680,6 +719,10 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             InvoicCommand::ReceiveInvoic {
                 pid,
@@ -799,7 +842,7 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
             InvoicCommand::TimeoutExpired { deadline_id, label } => {
                 // A deadline that fires after the answer was already given is a
                 // no-op, not a rejection.
-                if state.is_terminal() {
+                if !window_open::<F>(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![InvoicEvent::DeadlineExpired { deadline_id, label }].into())
@@ -1101,9 +1144,8 @@ impl Projection for InvoicProjection {
             InvoicEvent::ValidationPassed { .. } => record.status = "ValidationPassed",
             InvoicEvent::InvoiceSettled => record.status = "Settled",
             InvoicEvent::InvoiceDisputed { .. } => record.status = "Disputed",
-            InvoicEvent::Rejected { .. } | InvoicEvent::DeadlineExpired { .. } => {
-                record.status = "Rejected";
-            }
+            InvoicEvent::Rejected { .. } => record.status = "Rejected",
+            InvoicEvent::DeadlineExpired { .. } => record.status = "FristAbgelaufen",
             InvoicEvent::InvoicSent {
                 pruefidentifikator, ..
             } => {

@@ -30,7 +30,7 @@ use mako_fristen::{self as fristen, HolidayCalendar};
 
 /// Names the rules this calendar applies. Bump the version on any change to
 /// the holiday table, the cut-off hour or the timezone.
-const RULESET: &[u8] = b"mako/werktage/bdew-mako/17:00 Europe-Berlin/v1";
+const RULESET: &[u8] = b"mako/werktage/bdew-mako/end-of-day Europe-Berlin/v2";
 
 /// The deadline kind this adds to the built-in set.
 const WORKING_DAYS: &str = "working-days";
@@ -64,7 +64,7 @@ impl MakoCalendar {
 impl Calendar for MakoCalendar {
     fn resolve(&self, from: Timestamp, spec: &DeadlineSpec) -> Result<Timestamp, CalendarError> {
         if spec.kind == WORKING_DAYS {
-            // 17:00 Europe/Berlin on the n-th Werktag, computed in local time —
+            // The end of the n-th Werktag, computed in Europe/Berlin local time —
             // the DST handling is `fristen`'s, so an agent deadline and an
             // APERAK deadline land on the same instant on 30 March.
             return Ok(fristen::deadline_at_werktage(

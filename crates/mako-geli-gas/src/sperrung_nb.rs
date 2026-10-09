@@ -223,6 +223,19 @@ pub enum GasSperrungNbState {
         /// Human-readable rejection reason.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// No Festlegung states a consequence of the GNB leaving the Gas-Sperrauftrag unanswered. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<GasSperrungNbState>,
+    },
 }
 
 impl GasSperrungNbState {
@@ -236,6 +249,16 @@ impl GasSperrungNbState {
             Self::Ausgefuehrt(_) => "Ausgefuehrt",
             Self::Storniert(_) => "Storniert",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -252,6 +275,7 @@ impl GasSperrungNbState {
     #[must_use]
     pub fn sperrung_data(&self) -> Option<&GasSperrungNbData> {
         match self {
+            Self::FristAbgelaufen { offen, .. } => offen.sperrung_data(),
             Self::AnweisungErhalten(d)
             | Self::ValidationPassed(d)
             | Self::Ausgefuehrt(d)
@@ -330,10 +354,25 @@ impl CommandPayload for GasSperrungNbCommand {}
 /// are the GNB execution window, not the APERAK sending deadline.
 pub struct GeliGasSperrungNbWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the GNB still owes its answer to the
+/// Sperrauftrag (`AnweisungErhalten`, `ValidationPassed`).
+fn window_open(label: &str, state: &GasSperrungNbState) -> bool {
+    label == ANTWORT_WINDOW_LABEL
+        && matches!(
+            state,
+            GasSperrungNbState::AnweisungErhalten(_) | GasSperrungNbState::ValidationPassed(_)
+        )
+}
+
 impl Workflow for GeliGasSperrungNbWorkflow {
     type State = GasSperrungNbState;
     type Event = GasSperrungNbEvent;
     type Command = GasSperrungNbCommand;
+
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANTWORT_WINDOW_LABEL];
 
     /// Deadline compensation for the Gas Sperrung answer window.
     ///
@@ -344,19 +383,19 @@ impl Workflow for GeliGasSperrungNbWorkflow {
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (
-                ANTWORT_WINDOW_LABEL,
-                GasSperrungNbState::AnweisungErhalten(_) | GasSperrungNbState::ValidationPassed(_),
-            ) => Some(GasSperrungNbCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            }),
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| GasSperrungNbCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            GasSperrungNbState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             GasSperrungNbEvent::AnweisungErhalten {
                 location_id,
@@ -411,12 +450,12 @@ impl Workflow for GeliGasSperrungNbWorkflow {
                 state
             }
             GasSperrungNbEvent::DeadlineExpired { label, .. } => match state {
-                GasSperrungNbState::Ausgefuehrt(_)
-                | GasSperrungNbState::Storniert(_)
-                | GasSperrungNbState::Rejected { .. } => state,
-                _ => GasSperrungNbState::Rejected {
-                    reason: format!("deadline expired: {label}"),
+                GasSperrungNbState::AnweisungErhalten(_)
+                | GasSperrungNbState::ValidationPassed(_) => GasSperrungNbState::FristAbgelaufen {
+                    label: label.to_string(),
+                    offen: Box::new(state),
                 },
+                other => other,
             },
         }
     }
@@ -425,6 +464,10 @@ impl Workflow for GeliGasSperrungNbWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             GasSperrungNbCommand::ReceiveSperrung {
                 pid,
@@ -465,8 +508,8 @@ impl Workflow for GeliGasSperrungNbWorkflow {
                     events.push(GasSperrungNbEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
-                    // APERAK Frist (Gas Folgeprozess): nächster Werktag 12 Uhr (APERAK AHB 1.0 §2.3.1).
+                    // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
+                    // APERAK Frist (Gas Folgeprozess): nächster Werktag 12 Uhr (APERAK AHB 1.1 §2.3.1).
                     // Note: the business answer window is per-PID, NOT the APERAK sending deadline.
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
@@ -500,7 +543,7 @@ impl Workflow for GeliGasSperrungNbWorkflow {
             }
 
             GasSperrungNbCommand::TimeoutExpired { deadline_id, label } => {
-                if state.is_terminal() {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![GasSperrungNbEvent::DeadlineExpired { deadline_id, label }].into())

@@ -179,9 +179,6 @@ impl EdiEnergyMessage for ContrlMessage {
     fn segments(&self) -> &[edifact_rs::OwnedSegment] {
         &self.core.segments
     }
-    fn validate_with_pack(&self, extra: crate::CustomRulePack) -> Result<EdiEnergyReport, Error> {
-        self.core.validate_with_extra_pack(None, extra.into_inner())
-    }
     fn validate_on_date(&self, reference_date: time::Date) -> Result<EdiEnergyReport, Error> {
         let release = self.core.detect_release()?;
         self.core

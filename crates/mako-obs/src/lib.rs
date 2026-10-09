@@ -1,5 +1,8 @@
 #![deny(unsafe_code)]
-#![allow(clippy::doc_markdown)]
+#![expect(
+    clippy::doc_markdown,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 //! Business-process observability library for the German energy market (MaKo).
 //!
 //! Provides a per-process event projection read-model (`ProcessProjection`)

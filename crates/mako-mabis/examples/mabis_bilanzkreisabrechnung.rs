@@ -28,6 +28,7 @@
 //! cargo run --example mabis_bilanzkreisabrechnung -p mako-mabis
 //! ```
 
+use mako_engine::process::RunOptions;
 use mako_engine::{
     builder::EngineBuilder,
     event_store::{EventStore, InMemoryEventStore},
@@ -55,7 +56,10 @@ fn v(n: u32) -> SzrVersion {
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one linear procedure; splitting it would scatter its steps across helpers used once"
+)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╔════════════════════════════════════════════════════════════╗");
     println!("║  mako-mabis — Bilanzkreisabrechnung Strom example          ║");
@@ -116,17 +120,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[1/5] Version 1 arrives on {eingang_v1} — Phase {phase_v1:?}");
 
     let envs = process
-        .execute(BillingCommand::ReceiveSummenzeitreihe {
-            pid: Pruefidentifikator::new(SUMMENZEITREIHE_PID)?,
-            zeitreihe,
-            mabis_zp: mabis_zp.clone(),
-            bilanzierungsmonat: BillingPeriod::new("2026-01"),
-            version: v(1),
-            im_erstaufschlag: phase_v1.ist_erstaufschlag(),
-            absender: absender.clone(),
-            biko_id: biko.clone(),
-            message_ref: MessageRef::new("MSCONS-BG-2026-01-V1"),
-        })
+        .run(
+            BillingCommand::ReceiveSummenzeitreihe {
+                pid: Pruefidentifikator::new(SUMMENZEITREIHE_PID)?,
+                zeitreihe,
+                mabis_zp: mabis_zp.clone(),
+                bilanzierungsmonat: BillingPeriod::new("2026-01"),
+                version: v(1),
+                im_erstaufschlag: phase_v1.ist_erstaufschlag(),
+                clearing_ende: None,
+                absender: absender.clone(),
+                biko_id: biko.clone(),
+                message_ref: MessageRef::new("MSCONS-BG-2026-01-V1"),
+            },
+            RunOptions::new(),
+        )
         .await?;
     for env in &envs {
         println!(
@@ -140,26 +148,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     process
-        .execute(BillingCommand::ReceiveIftsta {
-            pid: Pruefidentifikator::new(21_003)?,
-            version: v(1),
-            datenstatus: Some(Datenstatus::Abrechnungsdaten),
-            abweisungsgrund: None,
-            message_ref: MessageRef::new("IFTSTA-DS-V1"),
-        })
+        .run(
+            BillingCommand::ReceiveIftsta {
+                pid: Pruefidentifikator::new(21_003)?,
+                version: v(1),
+                datenstatus: Some(Datenstatus::Abrechnungsdaten),
+                abweisungsgrund: None,
+                message_ref: MessageRef::new("IFTSTA-DS-V1"),
+            },
+            RunOptions::new(),
+        )
         .await?;
 
     // ── Step 2: negative Prüfmitteilung in the Clearingphase ─────────────────
     println!();
     println!("[2/5] The NB checks version 1 and rejects it.");
     let pruef_envs = process
-        .execute(BillingCommand::SendPruefmitteilung {
-            version: v(1),
-            pid: Pruefidentifikator::new(21_005)?,
-            antwortcode: "A02".into(),
-            grund: Some("Summe weicht um 12 kWh von der eigenen Aggregation ab".into()),
-            message_ref: MessageRef::new("IFTSTA-PM-V1"),
-        })
+        .run(
+            BillingCommand::SendPruefmitteilung {
+                version: v(1),
+                pid: Pruefidentifikator::new(21_005)?,
+                antwortcode: "A02".into(),
+                grund: Some("Summe weicht um 12 kWh von der eigenen Aggregation ab".into()),
+                message_ref: MessageRef::new("IFTSTA-PM-V1"),
+            },
+            RunOptions::new(),
+        )
         .await?;
     for env in &pruef_envs {
         println!("  ✓ {} (seq {})", env.event_type, env.sequence_number);
@@ -221,46 +235,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let phase_v2 = monat.phase(zeitreihe, eingang_v2);
     println!("[3/5] Version 2 arrives on {eingang_v2} — Phase {phase_v2:?}");
     process
-        .execute(BillingCommand::ReceiveSummenzeitreihe {
-            pid: Pruefidentifikator::new(SUMMENZEITREIHE_PID)?,
-            zeitreihe,
-            mabis_zp,
-            bilanzierungsmonat: BillingPeriod::new("2026-01"),
-            version: v(2),
-            im_erstaufschlag: phase_v2.ist_erstaufschlag(),
-            absender,
-            biko_id: biko,
-            message_ref: MessageRef::new("MSCONS-BG-2026-01-V2"),
-        })
+        .run(
+            BillingCommand::ReceiveSummenzeitreihe {
+                pid: Pruefidentifikator::new(SUMMENZEITREIHE_PID)?,
+                zeitreihe,
+                mabis_zp,
+                bilanzierungsmonat: BillingPeriod::new("2026-01"),
+                version: v(2),
+                im_erstaufschlag: phase_v2.ist_erstaufschlag(),
+                clearing_ende: None,
+                absender,
+                biko_id: biko,
+                message_ref: MessageRef::new("MSCONS-BG-2026-01-V2"),
+            },
+            RunOptions::new(),
+        )
         .await?;
     process
-        .execute(BillingCommand::ReceiveIftsta {
-            pid: Pruefidentifikator::new(21_003)?,
-            version: v(2),
-            datenstatus: Some(Datenstatus::Pruefdaten),
-            abweisungsgrund: None,
-            message_ref: MessageRef::new("IFTSTA-DS-V2a"),
-        })
+        .run(
+            BillingCommand::ReceiveIftsta {
+                pid: Pruefidentifikator::new(21_003)?,
+                version: v(2),
+                datenstatus: Some(Datenstatus::Pruefdaten),
+                abweisungsgrund: None,
+                message_ref: MessageRef::new("IFTSTA-DS-V2a"),
+            },
+            RunOptions::new(),
+        )
         .await?;
     println!("  → filed after the Erstaufschlag, so it arrives as „Prüfdaten\".");
 
     process
-        .execute(BillingCommand::SendPruefmitteilung {
-            version: v(2),
-            pid: Pruefidentifikator::new(21_005)?,
-            antwortcode: "A03".into(),
-            grund: None,
-            message_ref: MessageRef::new("IFTSTA-PM-V2"),
-        })
+        .run(
+            BillingCommand::SendPruefmitteilung {
+                version: v(2),
+                pid: Pruefidentifikator::new(21_005)?,
+                antwortcode: "A03".into(),
+                grund: None,
+                message_ref: MessageRef::new("IFTSTA-PM-V2"),
+            },
+            RunOptions::new(),
+        )
         .await?;
     process
-        .execute(BillingCommand::ReceiveIftsta {
-            pid: Pruefidentifikator::new(21_003)?,
-            version: v(2),
-            datenstatus: Some(Datenstatus::Abrechnungsdaten),
-            abweisungsgrund: None,
-            message_ref: MessageRef::new("IFTSTA-DS-V2b"),
-        })
+        .run(
+            BillingCommand::ReceiveIftsta {
+                pid: Pruefidentifikator::new(21_003)?,
+                version: v(2),
+                datenstatus: Some(Datenstatus::Abrechnungsdaten),
+                abweisungsgrund: None,
+                message_ref: MessageRef::new("IFTSTA-DS-V2b"),
+            },
+            RunOptions::new(),
+        )
         .await?;
     println!("  → a positive Prüfmitteilung promotes it to „Abrechnungsdaten\".");
 
@@ -280,9 +307,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         clearing.bis
     );
     process
-        .execute(BillingCommand::CloseClearing {
-            lauf: Abrechnungslauf::Bka,
-        })
+        .run(
+            BillingCommand::CloseClearing {
+                lauf: Abrechnungslauf::Bka,
+            },
+            RunOptions::new(),
+        )
         .await?;
     let state = process.state().await?;
     println!("  Status : {}", state.status_str());
@@ -304,17 +334,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("  [+] Guard: a version after the window closed is refused...");
     let guard_err = process
-        .execute(BillingCommand::ReceiveSummenzeitreihe {
-            pid: Pruefidentifikator::new(SUMMENZEITREIHE_PID)?,
-            zeitreihe,
-            mabis_zp: MabisZaehlpunktId::new("DE0001111222233334444555566667777")?,
-            bilanzierungsmonat: BillingPeriod::new("2026-01"),
-            version: v(3),
-            im_erstaufschlag: false,
-            absender: MarktpartnerCode::new("9900357000004"),
-            biko_id: BikoId::new("10YDE-VE-TRANSMIX"),
-            message_ref: MessageRef::new("MSCONS-BG-2026-01-V3"),
-        })
+        .run(
+            BillingCommand::ReceiveSummenzeitreihe {
+                pid: Pruefidentifikator::new(SUMMENZEITREIHE_PID)?,
+                zeitreihe,
+                mabis_zp: MabisZaehlpunktId::new("DE0001111222233334444555566667777")?,
+                bilanzierungsmonat: BillingPeriod::new("2026-01"),
+                version: v(3),
+                im_erstaufschlag: false,
+                clearing_ende: None,
+                absender: MarktpartnerCode::new("9900357000004"),
+                biko_id: BikoId::new("10YDE-VE-TRANSMIX"),
+                message_ref: MessageRef::new("MSCONS-BG-2026-01-V3"),
+            },
+            RunOptions::new(),
+        )
         .await
         .unwrap_err();
     assert!(

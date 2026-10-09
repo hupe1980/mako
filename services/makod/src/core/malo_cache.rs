@@ -5,7 +5,7 @@
 //! `makod` is a communication-protocol processor, not a master-data system.
 //! The **ERP** (SAP IS-U, Powercloud, …) holds authoritative MaLo records.
 //! This cache is a **read-side snapshot** that the ERP fills via the admin
-//! API (`PUT /admin/malo/{malo_id}`) or via the `ErpCommandSource` channel.
+//! API (`PUT /admin/malo/{malo_id}`).
 //!
 //! `makod` serves every `POST /maloId/request/v1` from its local cache
 //! without calling the ERP. If the cache is stale, a negative response is
@@ -67,7 +67,7 @@ impl SlateDbMaloCache {
         Self { store }
     }
 
-    // ── Write path (admin API + ErpCommandSource) ─────────────────────────────
+    // ── Write path (admin API) ────────────────────────────────────────────────
 
     /// Insert or overwrite a MaLo record.
     ///

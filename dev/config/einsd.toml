@@ -1,0 +1,17 @@
+# einsd.toml — local development: `just dev einsd` starts einsd with this file against
+# the PostgreSQL of dev/docker-compose.yml (`just infra-up`). Authentication is
+# off and the secrets are fixed strings. DO NOT use in production.
+#
+# Every key can be overridden by an environment variable — `EINSD_<KEY>`, nested
+# keys joined with `__`. `einsd --help` lists the conventions.
+
+allow_insecure_no_auth = true
+
+port   = 9180
+tenant = "9900357000004"
+
+edmd_url     = "http://127.0.0.1:8380"
+edmd_api_key = "dev-edmd-key"
+
+[database]
+url = "postgres://dev:dev@localhost:5432/einsd"

@@ -438,6 +438,24 @@ pub struct Unt {
 /// Find the first `NAD` segment with the given `qualifier` in a segment slice.
 ///
 /// Used by message constructors to extract sender (`"MS"`) and receiver (`"MR"`).
+#[cfg(any(
+    feature = "aperak",
+    feature = "comdis",
+    feature = "iftsta",
+    feature = "insrpt",
+    feature = "invoic",
+    feature = "mscons",
+    feature = "ordchg",
+    feature = "orders",
+    feature = "ordrsp",
+    feature = "partin",
+    feature = "pricat",
+    feature = "quotes",
+    feature = "remadv",
+    feature = "reqote",
+    feature = "utilmd",
+    feature = "utilts",
+))]
 pub(crate) fn find_nad(segments: &[edifact_rs::Segment<'_>], qualifier: &str) -> Option<Nad> {
     segments
         .iter()
@@ -447,6 +465,24 @@ pub(crate) fn find_nad(segments: &[edifact_rs::Segment<'_>], qualifier: &str) ->
 }
 
 /// Find all `DTM` segments in a segment slice.
+#[cfg(any(
+    feature = "aperak",
+    feature = "comdis",
+    feature = "iftsta",
+    feature = "insrpt",
+    feature = "invoic",
+    feature = "mscons",
+    feature = "ordchg",
+    feature = "orders",
+    feature = "ordrsp",
+    feature = "partin",
+    feature = "pricat",
+    feature = "quotes",
+    feature = "remadv",
+    feature = "reqote",
+    feature = "utilmd",
+    feature = "utilts",
+))]
 pub(crate) fn collect_dtm(segments: &[edifact_rs::Segment<'_>]) -> Vec<Dtm> {
     segments
         .iter()
@@ -456,6 +492,24 @@ pub(crate) fn collect_dtm(segments: &[edifact_rs::Segment<'_>]) -> Vec<Dtm> {
 }
 
 /// Find the first `BGM` segment.
+#[cfg(any(
+    feature = "aperak",
+    feature = "comdis",
+    feature = "iftsta",
+    feature = "insrpt",
+    feature = "invoic",
+    feature = "mscons",
+    feature = "ordchg",
+    feature = "orders",
+    feature = "ordrsp",
+    feature = "partin",
+    feature = "pricat",
+    feature = "quotes",
+    feature = "remadv",
+    feature = "reqote",
+    feature = "utilmd",
+    feature = "utilts",
+))]
 pub(crate) fn find_bgm(segments: &[edifact_rs::Segment<'_>]) -> Option<Bgm> {
     segments
         .iter()
@@ -464,6 +518,7 @@ pub(crate) fn find_bgm(segments: &[edifact_rs::Segment<'_>]) -> Option<Bgm> {
 }
 
 /// Find the first `UCI` segment.
+#[cfg(feature = "contrl")]
 pub(crate) fn find_uci(segments: &[edifact_rs::Segment<'_>]) -> Option<Uci> {
     segments
         .iter()
@@ -472,6 +527,7 @@ pub(crate) fn find_uci(segments: &[edifact_rs::Segment<'_>]) -> Option<Uci> {
 }
 
 /// Find the first `RFF` segment with the given qualifier.
+#[cfg(feature = "aperak")]
 pub(crate) fn find_rff(segments: &[edifact_rs::Segment<'_>], qualifier: &str) -> Option<Rff> {
     segments
         .iter()
@@ -886,6 +942,13 @@ pub struct Com {
 
 /// Deserialize a single segment tag from a segment slice, returning `None`
 /// on failure.  Convenience wrapper used by group parsers.
+#[cfg(any(
+    feature = "aperak",
+    feature = "contrl",
+    feature = "mscons",
+    feature = "ordrsp",
+    feature = "utilmd",
+))]
 pub(crate) fn try_deserialize<T: edifact_rs::EdifactDeserialize>(
     seg: &edifact_rs::Segment<'_>,
 ) -> Option<T> {

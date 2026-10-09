@@ -3,12 +3,9 @@ title = "Domain Model"
 description = "The BDEW market role model, market objects (MaLo, MeLo, NeLo, NeBe), territories, identifier check-digit rules and their EDIFACT encoding."
 weight = 13
 +++
-This page is the definitive reference for the BDEW **Rollenmodell für die
-Marktkommunikation im deutschen Energiemarkt** and all identifier types used
-across EDI@Energy messages. It is the shared vocabulary of the whole platform —
-all 17 services speak it — and every developer working on mako will need this
-material to understand what a MaLo is, why the NB sends UTILMD messages on
-behalf of the LF, and how to parse a `9900357000004` out of a NAD segment.
+The BDEW **Rollenmodell für die Marktkommunikation**, the market objects and
+the identifier formats used across EDI@Energy messages — the vocabulary every
+mako service speaks.
 
 **Source documents:**
 
@@ -22,8 +19,8 @@ behalf of the LF, and how to parse a `9900357000004` out of a NAD segment.
 
 ## Market Role Interaction Map
 
-The following diagram shows how the core Marktrollen interact via the key MaKo processes.
-Gas-only roles (MGV, KN) are omitted for clarity — see the party role table below.
+The core Marktrollen and the key processes between them. Gas-only roles (MGV, KN)
+are in the [role table](#party-roles-marktrollen).
 
 ```mermaid
 graph LR
@@ -82,27 +79,23 @@ graph LR
 
 ## Glossary
 
-The vocabulary the rest of the documentation links back to. Each term has a
-stable heading anchor.
-
 ### Prüfidentifikator (PID)
 
 A five-digit code, `10000..=99999`, naming **one business transaction inside a
 message type** — `55001` is the GPKE Anmeldung in a UTILMD, `31009` the
 MSB-Rechnung in an INVOIC. It is not the message type and not the process: one
 UTILMD carries dozens of PIDs, and one process is a sequence of them (55001
-Anmeldung → 55002 Bestätigung *or* 55003 Ablehnung). On the wire it rides in `BGM` DE 1004 for most
-message types and in `SG1 RFF+Z13` for the rest; `edi_energy`'s `pid_scan` reads
-**both** regardless of which one the profile declares, because reading only the
-declared location makes a conformant partner's message undetectable — and an
-undetectable message is dropped without an APERAK. Both demand a *plausible*
-code, since `BGM` DE 1004 legitimately holds a Dokumentennummer. `edi_energy::Pruefidentifikator` validates the range at parse.
+Anmeldung → 55002 Bestätigung *or* 55003 Ablehnung). On the wire it rides in
+`SG1 RFF+Z13` for fifteen message types and in `BGM` DE 1004 for APERAK and
+CONTRL (the profile's `pid_source`); `edi_energy`'s `pid_scan` reads **both**
+whichever the profile declares, and demands a *plausible* code in each, since
+`BGM` DE 1004 may hold a Dokumentennummer. `edi_energy::Pruefidentifikator` validates the range.
 
 The PID is what everything else is keyed on: `mako_engine::PidRouter` routes it
 to a workflow, `mako_fristen::antwort` resolves its answer Frist, and
 `mako-pruefung` picks the decision tree the answer must come from. `makod`
-currently routes **469** PIDs across **71** workflows — a count
-`services/makod/tests/published_counts.rs` holds this page to.
+routes **469** PIDs across **71** workflows
+(`services/makod/tests/it/published_counts.rs` holds this page to the count).
 
 ### AHB and MIG
 
@@ -136,19 +129,16 @@ in DE 1131 — or, for an invoice, in REMADV `AJT`.
 
 ### Bilanzkreis and Bilanzierungsgebiet
 
-Both are 16-character ENTSO-E EIC codes and they look alike, which is the trap.
-They are different objects and ENTSO-E types them differently:
+Both are 16-character ENTSO-E EIC codes; ENTSO-E types them differently:
 
 | | EIC object type | What it is | `LOC` |
 |---|---|---|---|
 | **Bilanzkreis** (BK) | `X` — Party | the account energy is balanced in, held by a **BKV** | `237` |
 | **Bilanzierungsgebiet** (BG) | `Y` — Area | the grid region a Marktlokation balances **in** | `107` |
 
-The German codes are issued on that basis by Energie Codes und Services (EIC
-functions *Balance Group* and *Metering Grid Area*). A Bilanzierungsgebiet
-consolidates one or more Netzgebiete for settlement, and the synthetic (SLP) or
-analytical (RLM) method applies uniformly within it. `mako_mabis` keeps them as
-separate newtypes so one cannot be passed where the other belongs.
+A Bilanzierungsgebiet consolidates one or more Netzgebiete for settlement; the
+synthetic (SLP) or analytical (RLM) method applies uniformly within it.
+`mako_mabis` keeps the two as separate newtypes.
 
 ### Frist and Werktag
 
@@ -160,11 +150,9 @@ a clock time **am ÜT** itself. An unquantified PID returns `None` — *unknown*
 never *unbounded*.
 
 A **Werktag** is, per GPKE (BK6-24-174) Teil 1 Kap. 7, „alle Tage …, die kein
-Samstag, Sonntag oder gesetzlicher Feiertag sind". **Saturday is not a Werktag.**
-A holiday observed in any single Bundesland counts nationwide, and 24.12. and
-31.12. count as holidays. The count starts on the day of receipt whatever weekday
-that is; only the Werktage *counted* skip weekends. The whole calendar lives in
-`mako-fristen`, including what „today" means — see
+Samstag, Sonntag oder gesetzlicher Feiertag sind" — **Saturday is not a
+Werktag**; a holiday in any Bundesland counts nationwide, as do 24.12. and
+31.12. The calendar, including what „today" means, lives in `mako-fristen` — see
 [Dates and days](#dates-and-days).
 
 ### EDIFACT message types
@@ -198,44 +186,38 @@ type; each message declares its own PID.
 
 ## Party Roles (Marktrollen)
 
-The market role model defines who the actors are. One company can hold multiple
-roles simultaneously (e.g., a DSO may also be its own MSB). A distinct MP-ID is
-required for each role per commodity (Strom / Gas).
+One company can hold several roles (a DSO may be its own MSB), with one MP-ID
+per role and Sparte.
 
 > **Source:** RME V2.2 §3.1
 
 | Abbr. | German Name | English | Strom | Gas | Definition |
 |---|---|---|:---:|:---:|---|
-| **LF** | Lieferant | Energy Supplier | ✅ | ✅ | Responsible for supplying energy to market locations, settling billing with the DSO, and financially compensating the balance between profiled and metered energy quantities. |
-| **NB** | Netzbetreiber | Distribution System Operator (DSO) | ✅ | ✅ | Responsible for grid operation, grid maintenance, and routing of energy. Creates and manages market locations, metering locations, and technical resources within the grid area. Aggregates energy quantities for settlement. Gas: responsible for forwarding metering values to trading partners. |
-| **ÜNB** | Übertragungsnetzbetreiber | Transmission System Operator (TSO) | ✅ | — | Responsible for transmission grid stability, EEG allocation time-series, and short-term plausibility checks within the control zone. One TSO = one Regelzone. In MABIS: bilateral MSCONS exchange with BKV (PID 13003). |
-| **MSB** | Messstellenbetreiber | Metering Point Operator | ✅ | ✅ | Installs, operates and maintains meters. Strom: distributes metered, substitute and preliminary values to authorised partners. Gas: determines and forwards them to the DSO. Three prefixes distinguish the parties to a switch — see below. |
-| **BKV** | Bilanzkreisverantwortlicher | Balance Responsible Party (BRP) | ✅ | ✅ | Responsible for the energetic and financial balance within a Bilanzkreis. Counterparty to the BIKO (Strom) or MGV (Gas). |
-| **BIKO** | Bilanzkoordinator | Balance Coordinator | ✅ | — | Responsible for Bilanzkreisabrechnung (balance-circle settlement) and financial settlement between BKVs. See `mako-mabis` (PID 13003). |
-| **MGV** | Marktgebietsverantwortlicher | Market Area Manager | — | ✅ | Responsible for gas balance circle settlement and procurement/dispatch of balancing energy. Operates the virtual trading hub. |
-| **KN** | Kapazitätsnutzer | Capacity User | — | ✅ | Acquires transport capacity at bookable entry/exit points in the gas entry-exit system and allocates it to Bilanzkreise. |
-| **BTR** | Betreiber einer technischen Ressource | Technical Resource Operator | ✅ | — | Installs, operates, and maintains technical resources (generators, controllable loads). Does not change with DSO ownership transfer. |
-| **EIV** | Einsatzverantwortlicher | Dispatch Responsible Party | ✅ | — | Responsible for deploying controllable resources. Assigns SR-IDs to steuerable resources. Central actor in Redispatch 2.0. |
+| **LF** | Lieferant | Energy Supplier | ✅ | ✅ | Supplies energy to market locations and settles network usage with the NB. |
+| **NB** | Netzbetreiber | Distribution System Operator (DSO) | ✅ | ✅ | Operates the grid; creates and manages MaLo, MeLo and technical resources in its area; aggregates quantities for settlement. Gas: forwards metering values. |
+| **ÜNB** | Übertragungsnetzbetreiber | Transmission System Operator (TSO) | ✅ | — | Transmission grid stability within its one Regelzone; EEG allocation time series. |
+| **MSB** | Messstellenbetreiber | Metering Point Operator | ✅ | ✅ | Installs and operates meters and distributes their values. Three prefixes distinguish the parties to a switch — see below. |
+| **BKV** | Bilanzkreisverantwortlicher | Balance Responsible Party (BRP) | ✅ | ✅ | Energetic and financial balance of a Bilanzkreis; counterparty to the BIKO (Strom) or MGV (Gas). |
+| **BIKO** | Bilanzkoordinator | Balance Coordinator | ✅ | — | Bilanzkreisabrechnung and financial settlement between BKVs (`mako-mabis`). |
+| **MGV** | Marktgebietsverantwortlicher | Market Area Manager | — | ✅ | Gas Bilanzkreis settlement and balancing energy; operates the virtual trading hub. |
+| **KN** | Kapazitätsnutzer | Capacity User | — | ✅ | Books transport capacity at entry/exit points and allocates it to Bilanzkreise. |
+| **BTR** | Betreiber einer technischen Ressource | Technical Resource Operator | ✅ | — | Operates technical resources (generators, controllable loads). |
+| **EIV** | Einsatzverantwortlicher | Dispatch Responsible Party | ✅ | — | Deploys controllable resources and assigns SR-IDs; central in Redispatch 2.0. |
 | **DP** | Data Provider | Data Provider | ✅ | — | Forwards information to authorised trading partners on behalf of the DSO or MSB. |
-| **ESA** | Energieserviceanbieter des Anschlussnutzers | Consumer-side Energy Service Provider | ✅ | — | Requests and processes metering data on behalf of the end-customer (Anschlussnutzer). Unlike every other role it holds **no Zuordnung** to a Marktlokation — see below. `Marktrolle::Esa`. |
-| **RB** | Registerbetreiber | Registry Operator | ✅ | ✅ | Operates a database for energy market data (e.g., the national Marktstammdatenregister). |
+| **ESA** | Energieserviceanbieter des Anschlussnutzers | Consumer-side Energy Service Provider | ✅ | — | Obtains metering data on behalf of the Anschlussnutzer; holds **no Zuordnung** to a Marktlokation — see below. `Marktrolle::Esa`. |
+| **RB** | Registerbetreiber | Registry Operator | ✅ | ✅ | Operates an energy-market register (e.g. the Marktstammdatenregister). |
 
-**The three MSB prefixes name the parties to a Messstellenbetreiberwechsel, not
-three kinds of company.** The **gMSB** (grundzuständig) is the incumbent — the NB
-by default, per §41 MsbG. The **nMSB** (nicht-grundzuständig) is the challenger a
-customer may switch to. The **aMSB** (abgebend) is whoever is being replaced in a
-given switch, which is a role in *that* transaction: today's nMSB is tomorrow's
-aMSB. WiM processes are keyed on the pair, so reading the prefix as a property of
-the company rather than of the switch mis-routes every second Wechsel.
+**The three MSB prefixes name the parties to a Messstellenbetreiberwechsel,
+not kinds of company.** The **gMSB** (grundzuständig) is the incumbent — the NB
+by default, per §41 MsbG; the **nMSB** (nicht-grundzuständig) is the one a
+customer switches to; the **aMSB** (abgebend) is whoever is replaced in that
+switch. WiM processes are keyed on the pair.
 
-**The ESA is the one role with no Zuordnung**, and that is its defining feature.
-Every other market role reaches a Marktlokation through an assignment the NB
-records. The ESA reaches it through the customer instead: access rests on the
-Anschlussnutzer's consent (§49 Abs. 2 Nr. 9 MsbG) plus a bilateral contract with
-the MSB, which §34 Abs. 2 S. 2 Nr. 10 MsbG makes a mandatory, non-discriminatory
-Zusatzleistung — so the MSB may not refuse the contract, and may not price it
-discriminatorily. Data obtained this way may be used only in the consumer
-relationship it was consented for.
+**The ESA holds no Zuordnung.** It reaches a Marktlokation through the customer:
+the Anschlussnutzer's consent (§49 Abs. 2 Nr. 9 MsbG) plus a contract with the
+MSB, which §34 Abs. 2 S. 2 Nr. 10 MsbG makes a mandatory, non-discriminatory
+Zusatzleistung. Data obtained this way may be used only for the consented
+purpose.
 
 ### Role pairs in key processes
 
@@ -258,29 +240,24 @@ relationship it was consented for.
 
 ## Market Objects (Objekte)
 
-Objects are the entities that processes act on. The NB is responsible for
-creating and closing objects within the grid area and assigning MP identifiers
-to them.
+The entities processes act on. The NB creates and closes them in its grid area.
 
 > **Source:** RME V2.2 §3.2; Allgemeine Festlegungen 6.1d §2.15, §2.19
 
 | Abbr. | German | English | Strom | Gas | Definition |
 |---|---|---|:---:|:---:|---|
-| **MaLo** | Marktlokation | Market Location | ✅ | ✅ | **The central billing entity.** A point where energy is either produced or consumed, connected to a grid via at least one line. The NB is responsible for creating, managing, and closing MaLo. Identified by **MaLo-ID** (11-digit numeric). |
-| **MeLo** | Messlokation | Metering Location | ✅ | ✅ | A location where energy is measured, containing all technical equipment required for measurement and value transmission. One MaLo may have one or more MeLo. Each physical quantity is measured at most once per timestamp. Identified by **Zählpunktbezeichnung** (VDE-AR-N 4400 Strom / DVGW G2000 Gas). |
-| **NeLo** | Netzlokation | Network Location | ✅ | — | An interconnection point in a grid area. Connects one or more MaLo to the grid via exactly one line. Used for **reactive-power billing** (Blindarbeit) and monitoring power-curve limits. Identified by **NeLo-ID** (11-char alphanumeric, prefix `E`). Introduced by BNetzA BK6-22-128. |
-| **NeBe** | Netzbereich | Network Zone | ✅ | — | A sub-area within a grid for managing controllable consumption facilities (§14a EnWG). Identified by **NeBe-ID** (11-char alphanumeric, prefix `F`). Introduced by BNetzA BK6-22-300 / BK8-22/010-A. |
+| **MaLo** | Marktlokation | Market Location | ✅ | ✅ | **The central billing entity** — where energy is produced or consumed, connected to the grid via at least one line. **MaLo-ID** (11 digits). |
+| **MeLo** | Messlokation | Metering Location | ✅ | ✅ | Where energy is measured, with the equipment for measurement and transmission. One MaLo has one or more MeLo. **Zählpunktbezeichnung**. |
+| **NeLo** | Netzlokation | Network Location | ✅ | — | Connects one or more MaLo to the grid via exactly one line; used for Blindarbeit billing. **NeLo-ID** (prefix `E`), BK6-22-128. |
+| **NeBe** | Netzbereich | Network Zone | ✅ | — | Grid sub-area for §14a EnWG controllable consumption. **NeBe-ID** (prefix `F`), BK6-22-300 / BK8-22/010-A. |
 | **BK** | Bilanzkreis | Balance Circle | ✅ | ✅ | An account that balances feed-in and consumption quantities, facilitating energy trading. One BKV manages one or more BK. |
 | **NKP** | Netzkopplungspunkt | Grid Coupling Point | ✅ | ✅ | A physical point connecting two grid areas. |
-| **TR** | Technische Ressource | Technical Resource | ✅ | — | A physical asset that consumes and/or generates electricity. One TR may be assigned to two MaLo if it both consumes and produces. Identified by **TR-ID** (prefix `D`). |
-| **SR** | Steuerbare Ressource | Controllable Resource | ✅ | — | A controllable asset that affects at least one grid connection point. One or more TR are assigned to each SR. Identified by **SR-ID** (prefix `C`). |
+| **TR** | Technische Ressource | Technical Resource | ✅ | — | A physical asset that consumes and/or generates; may belong to two MaLo. **TR-ID** (prefix `D`). |
+| **SR** | Steuerbare Ressource | Controllable Resource | ✅ | — | A controllable asset grouping one or more TR. **SR-ID** (prefix `C`). |
 | **SG** | Steuergruppe | Control Group | ✅ | — | A grouping of controllable resources for dispatch purposes. Identified by **SG-ID** (prefix `B`). |
 | **CR** | Cluster Ressource | Cluster Resource | ✅ | — | A bundle of control groups. Identified by **CR-ID** (prefix `A`). |
 
 ### MaLo vs MeLo — the critical distinction
-
-These are **not** interchangeable. Confusion between them is the single most
-common domain modelling error in EDI@Energy implementations:
 
 | Aspect | MaLo | MeLo |
 |---|---|---|
@@ -291,11 +268,8 @@ common domain modelling error in EDI@Energy implementations:
 | **EDIFACT context** | UTILMD IDE+Z01, INVOIC | MSCONS, UTILMD (WiM) |
 | **Rust type** | `mako_engine::types::MaLo` | `mako_engine::types::MeLo` |
 
-**Business scenario:** When a consumer switches supplier (GPKE Lieferbeginn),
-the LF sends a UTILMD referencing the **MaLo-ID**. When the MSB reads the meter
-and sends measurements, those go in a MSCONS referencing the **MeLo-ID**
-(Zählpunktbezeichnung). They refer to the same physical site but are
-structurally different objects in the BDEW role model.
+A supplier switch references the **MaLo-ID** in UTILMD; the MSB's readings
+reference the **MeLo-ID** in MSCONS. Same site, different objects.
 
 ---
 
@@ -308,10 +282,10 @@ Each TSO operates one control zone.
 
 | Abbr. | German | English | Strom | Gas | Definition |
 |---|---|---|:---:|:---:|---|
-| **NG** | Netzgebiet | Grid Area | ✅ | ✅ | A metrologically bounded area within a market area (Gas) or control zone (Strom). May span multiple voltage/pressure levels. Operated by the NB. |
+| **NG** | Netzgebiet | Grid Area | ✅ | ✅ | A metrologically bounded area within a Marktgebiet (Gas) or Regelzone (Strom), operated by the NB. |
 | **BG** | Bilanzierungsgebiet | Balancing Zone | ✅ | — | One or more grid areas consolidated for settlement purposes. The synthetic (SLP) or analytical (RLM) balancing method is applied uniformly within a BG. |
 | **MG** | Marktgebiet | Market Area | — | ✅ | Aggregation of gas transport networks sharing a virtual trading hub operated by the MGV. |
-| **RZ** | Regelzone | Control Zone | ✅ | — | A bounded area within which one TSO (ÜNB) is responsible for frequency and voltage stability. Each ÜNB operates exactly one RZ. |
+| **RZ** | Regelzone | Control Zone | ✅ | — | The area one ÜNB keeps frequency and voltage stable in. |
 
 ---
 
@@ -346,9 +320,10 @@ qualifier is what says which:
 
 | Scheme | Shape | DE 3055 | Typical holders |
 |---|---|---|---|
-| BDEW- or DVGW-Codenummer | 13 numeric | `293` | LF, NB/VNB, MSB, BKV — the dominant scheme |
-| GS1 **GLN** | 13 numeric | `9` | the global GS1 scheme; rare in German MaKo |
-| ENTSO-E **EIC** | 16 alphanumeric | `305` | ÜNB, Regelzonen, cross-border |
+| BDEW-Codenummer (`99…`) | 13 numeric | `293` | Strom LF, NB, MSB, BKV |
+| DVGW-Codenummer (`98…`) | 13 numeric | `332` | Gas market participants |
+| GS1 **GLN** | 13 numeric | `9` | rare in German MaKo |
+| ENTSO-E **EIC** | 16 alphanumeric | `305` (`AgencyCode::Etso`) | ÜNB, Regelzonen, cross-border |
 
 `MarktpartnerCode` stores the value **without** the agency qualifier;
 `edi_energy::AgencyCode::for_mp_id` derives the right one when rendering an
@@ -537,7 +512,7 @@ The MP-ID in UNB **must be identical** to the MP-ID in the corresponding NAD+MS
 | `MS` | Message sender (Nachrichtenabsender) — always the same party as UNB DE0004 |
 | `MR` | Message receiver (Nachrichtenempfänger) — always the same party as UNB DE0010 |
 
-Code scheme (DE 3055): `293` BDEW- or DVGW-Code, `9` GS1 GLN, `305` ENTSO-E EIC —
+Code scheme (DE 3055): `293` BDEW-Code, `332` DVGW-Code, `9` GS1 GLN, `305` ENTSO-E EIC —
 see [MP-ID](#mp-id-marktpartner-13-digits).
 
 ### Market / metering location — `SG5 LOC`, not `IDE`
@@ -573,7 +548,7 @@ Nr. 00046–00053; Gas G1.2 likewise).
 #### MSCONS `SG6 LOC` — a different set, and a dangerous pair
 
 MSCONS carries three `LOC` qualifiers whose values the MIG leaves as free text,
-so **length is the only thing separating two of them**:
+so **length alone separates two of them**:
 
 | `LOC` DE 3227 | Object | DE 3225 format |
 |---|---|---|
@@ -581,17 +556,12 @@ so **length is the only thing separating two of them**:
 | `107` | Bilanzierungsgebiet | 16-char EIC, object type `Y` (Area) |
 | `237` | **Bilanzkreis** | 16-char EIC, object type `X` (Party) |
 
-A message that puts the Bilanzierungsgebiet EIC in `LOC+172` parses, validates
-and is **accepted by the BIKO**, which then files the series against the wrong
-Meldepunkt — and nothing downstream can tell that apart from a correct
-submission. `mako_mabis::MabisZaehlpunktId` and
-`mako_mabis::BilanzierungsgebietId` are separate newtypes for exactly that
-reason: the 33-character constructor rejects a 16-character EIC before it
-reaches the wire, and passing one where the other belongs is a compile error.
-
-Inbound commands deliberately keep a plain `String`. A counterparty's malformed
-Meldepunkt has to be *representable* before the workflow can reject it properly;
-parsing into a type belongs on values mako produces.
+A Bilanzierungsgebiet EIC in `LOC+172` parses, validates and is **accepted by
+the BIKO**, which files the series against the wrong Meldepunkt.
+`mako_mabis::MabisZaehlpunktId` and `mako_mabis::BilanzierungsgebietId` are
+separate newtypes, so the outbound side cannot swap them. Inbound commands keep
+a plain `String`: a counterparty's malformed Meldepunkt must be representable
+for the workflow to reject it.
 
 ### File naming convention
 
@@ -607,8 +577,8 @@ Example: `UTILMD__9900123400007_4012345393651_20261001_A177.txt`
 
 ## Rust API
 
-`mako-engine::types` provides typed newtypes that prevent cross-domain
-identifier confusion at compile time.
+`mako_engine::types` provides newtypes so one identifier kind cannot be passed
+where another belongs.
 
 ```rust
 use mako_engine::types::{
@@ -644,42 +614,27 @@ let biko: BikoId = BikoId::new("9900357000005");   // Bilanzkoordinator
 let device: DeviceId = DeviceId::new("1EMH0012345678");
 ```
 
-All types:
-- Wrap `Box<str>` — **immutable, 1-word smaller than `String`**, no heap realloc
-- Implement `Serialize` / `Deserialize` as transparent JSON strings
-- Implement `Display`, `AsRef<str>`, `From<String>`, `From<&str>`
-- Are **not validated at construction** — validation happens at the EDIFACT
-  parsing boundary in `edi-energy`. The type system enforces that a `MaLo`
-  cannot be passed where a `MeLo` is expected; the format correctness is a
-  runtime concern of the adapter layer.
-
-> **Why no validation in the constructor?**  
-> The identifier format standards themselves allow for future extensions.
-> Validating at construction would require bumping the library version every
-> time BDEW extends a format. Format validation belongs at the boundary where
-> untrusted input enters the system — i.e., in the EDIFACT parser adapters,
-> not in the typed wrappers.
+Each wraps a `Box<str>`, serialises as a transparent JSON string, and is **not
+validated at construction**: format validation happens where untrusted input
+enters — the EDIFACT adapters and the `rubo4e::identifiers` types at the REST
+boundary.
 
 ### `Sparte` across layers — deliberately distinct enums
 
-Six `Sparte` enums coexist — five of mako's own plus the one in the external
-`metering` crate. This is **by design**, not duplication: each models a
-different domain with a different legal variant set, and two of the serde
-casings are load-bearing wire formats:
+Six `Sparte` enums coexist by design — each models a different variant set,
+and two serde casings are wire formats:
 
 | Enum | Variants | Why |
 |---|---|---|
 | `metering::Sparte` (external) | Strom, Gas, **Waerme, Wasser** | Physical metering commodities — heat/water submetering under HeizkostenV is metered but is *not* market communication |
-| `mako-engine::types::Sparte` | Strom, Gas | MaKo message routing — selects the WiM APERAK Frist (5 vs 10 Werktage); serialized **lowercase** in stored process events |
+| `mako-engine::types::Sparte` | Strom, Gas | MaKo message routing (`PidRouter::route_with_sparte`) and the Strom/Gas APERAK and CONTRL rules; serialized **lowercase** in stored process events |
 | `mako-markt::Sparte` | Strom, Gas | MaKo master data — a Marktlokation exists only for Strom/Gas; serialized **SCREAMING_SNAKE** at the REST boundary |
 | `grid-billing::Sparte` | Strom, Gas | Legal-reference selector (StromNEV vs GasNEV) — regulated grid settlement has no Waerme/Wasser |
 | `mako-pruefung::msb::types::Sparte` | Strom, Gas | Selects the Entscheidungsbaum a WiM answer is read against — the trees differ per Sparte, so this is the discriminator a walk takes |
 | `mako-nbw::Sparte` | Strom, Gas | Selects the Netzbetreiberwechsel Anwendungshilfe — the two publish different Fristenkalender, and Gas has no Paket-ID at all |
 
-Adding Waerme/Wasser to the MaKo-side enums would create invalid states (a
-Wasser MaLo cannot exist), and unifying the serde casings would break stored
-event streams and the public REST contract. The same reasoning applies to the
-SQL CHECKs: `marktd` restricts `sparte` to `STROM`/`GAS`, while `edmd` also
+A Wasser MaLo cannot exist, so the MaKo-side enums carry Strom and Gas only.
+The SQL CHECKs follow: `marktd` restricts `sparte` to `STROM`/`GAS`; `edmd` also
 accepts `WAERME`/`WASSER` for submetering series.
 
 ---
@@ -689,19 +644,12 @@ accepts `WAERME`/`WASSER` for submetering series.
 **A `Decimal` is a JSON string, in both directions.** `{"arbeitspreis_ct_per_kwh": "32.0"}`,
 never `32.0`.
 
-Serde's data model has no arbitrary-precision number, so a JSON number has
-already been through `f64` before any deserializer sees it. Two things are gone
-by then and nothing downstream can recover them: the **scale** (`119.00` arrives
-as `119`) and precision past ~15 significant digits. For a billed quantity or a
-unit price that is the same objection that makes the storage column
-`NUMERIC(18,5)` — a settled energy figure is a Buchungsbeleg (§ 147 AO / GoBD)
-and must be exact.
-
-`rust_decimal/serde-str` is therefore enabled on the **workspace** pin, not
-inherited from a dependency that happens to turn it on. Cargo unifies features
-per build graph: taken from `metering/serde`, the rule would apply to a
-workspace build and not to `cargo build -p billingd`, so a service would accept
-in production the float its own workspace test run refuses.
+A JSON number has passed through `f64` before any deserializer sees it, losing
+the **scale** (`119.00` arrives as `119`) and precision past ~15 significant
+digits; a settled energy figure is a Buchungsbeleg (§ 147 AO / GoBD) and must be
+exact. `rust_decimal/serde-str` is enabled on the **workspace** pin, so every
+build of every service applies it, not only builds that happen to unify a
+dependency's feature.
 
 Two deliberate exceptions, both on inbound-only surfaces:
 
@@ -719,13 +667,9 @@ zero** (DIN 1333) — the strategy
 `RoundingStrategy::MidpointAwayFromZero` names, and the one every
 `billing::Amount` operation already applies internally.
 
-The two modes agree everywhere except exact midpoints. That sounds rare and is
-not: a unit price quoted in ct with three decimals against a whole-kWh quantity
-lands on a half-cent routinely, so the wrong mode misstates a cent on a real
-invoice while passing every test written against ordinary numbers. It also
-propagates — a document's stated total and a consumer recomputing it from the
-positions must round the same way, or a correct document fails its own
-conformance check.
+The modes differ only at exact midpoints, which a three-decimal ct price
+against a whole-kWh quantity hits routinely — and a stated total and a consumer
+recomputing it from the positions must round the same way.
 
 ```rust
 dec!(12.345).round_dp(2)   // 12.34 — half to even
@@ -739,15 +683,15 @@ magnitude it booked: `round(-0.005) = -0.01` mirrors `round(0.005) = 0.01`.
 `Decimal::round()` — which rounds to an integer the same way, and is how a EUR
 amount reaches the ledger as cents — and any `RoundingStrategy` other than
 `MidpointAwayFromZero`, workspace-wide, tests included. `f64::round` is half
-away from zero already and is left alone. The billing crates define a local
-`RoundMoney::round_kfm(dp)` over the explicit form; everywhere else states the
-strategy inline.
+away from zero already and is left alone. `grid_billing::RoundMoney::round_kfm(dp)`
+is the one helper over the explicit form — `eeg-billing` and `energy-billing`
+re-export it, and the guard refuses a second definition anywhere; a crate
+outside the billing stack states the strategy inline.
 
 ## Dates and days
 
-Three different things in this domain are called a "day", and confusing any two
-of them is silent — the value looks right, and it is wrong by an hour or by a
-date.
+Three different things are called a "day"; confusing two is off by an hour or a
+date, silently.
 
 | Kind | What it is | Where it comes from |
 |---|---|---|
@@ -761,16 +705,11 @@ hours long, and so is a Gastag.
 
 ### A business date is a Berlin date
 
-`OffsetDateTime::now_utc().date()` answers the **UTC** calendar date, which is
-still yesterday between 23:00 Berlin and midnight (22:00 in summer). SQL
-`current_date` answers the *session* time zone's date, which on a UTC server is
-the same thing. Either one, used for a business date, is off by one for an hour
-every night — dating an invoice into the previous month, starting a Frist a day
-early, or selecting the outgoing Formatversion for an hour after a cutover.
-
-A calendar *component* off the clock is the same mistake, and the form it usually
-hides in: `now_utc().year()` for an Abrechnungsjahr, `now.day()` for the
-day-of-month cohort an Abschlagslauf raises. A binding in between changes nothing.
+`OffsetDateTime::now_utc().date()` — and SQL `current_date` on a UTC session —
+answers the **UTC** date, still yesterday between 23:00 Berlin and midnight
+(22:00 in summer). Used for a business date it dates an invoice into the
+previous month or starts a Frist a day early. A calendar *component* off the
+clock (`now_utc().year()`, `now.day()`) is the same mistake.
 
 `mako-fristen` is the one answer, and every service reads it from there:
 
@@ -804,11 +743,9 @@ Frist. The modules encoding those values are exempt from the check by path;
 nothing else is.
 
 **A library does not read the clock.** `edi-energy` resolves a Formatversion
-against a date the *caller* states — `ParseConfig::with_reference_date`,
-`validate_on_date`, `ProcessContext::for_date` — and disambiguates nothing by
-date when none is given. A Formatversion takes effect at German midnight, so
-„which day is it" decides which profile applies, and a parser is the wrong place
-to decide it. `makod` supplies `mako_fristen::heute()` at its validation gates.
+against a date the caller states — `ParseConfig::with_reference_date`,
+`validate_on_date`, `ProcessContext::for_date` — and `makod` supplies
+`mako_fristen::heute()` at its validation gates.
 
 ### Periods are tiled from Berlin midnights
 
@@ -902,42 +839,31 @@ ALOCAT messages may be sent as initial, corrected, or final allocations:
 
 ## The BO4E gate
 
-BO4E's machine-readable schema constrains almost nothing. Of the 35
-Geschäftsobjekte at v202607.1.0, exactly **two** declare a `required` field —
-`Lastgang` and `Tarif` — and not one declares a `oneOf`, `anyOf` or `not`. A
-payload that satisfies `Marktlokation.json` can be an empty object. Every rule
-the standard actually has lives in prose: in a field description, in a class
-docstring, in a comment above three fields in the reference implementation.
-
-So "it deserialises as a `Marktlokation`" is not validation, and mako does not
-treat it as such. Accepting a BO4E document is four decisions, and
-`mako_markt::bo4e::decode` is all four, once, for every endpoint:
+BO4E's machine-readable schema constrains almost nothing — of the 35
+Geschäftsobjekte at v202607.1.0 only `Lastgang` and `Tarif` declare a
+`required` field — and its rules live in prose. Accepting a BO4E document is
+four decisions, and `mako_markt::bo4e::decode` makes all four for every
+endpoint:
 
 | Stage | Refuses | `code` |
 |---|---|---|
-| 1. **Discriminator** | a `Zaehler` posted to the `Geraet` endpoint. `_typ` is injected when absent — the endpoint already fixes which BO it takes — and read off the type's own `Default`, so it cannot drift from what the type serialises | `bo4e.discriminator` |
+| 1. **Discriminator** | a `Zaehler` posted to the `Geraet` endpoint. `_typ` is injected when absent — the endpoint already fixes which BO it takes — and read off the type's `Bo4eTyped::TYP_WIRE` constant without constructing a value, so it cannot drift from what the type serialises | `bo4e.discriminator` |
 | 2. **Schema** | a value the type cannot hold | `bo4e.schema` |
 | 3. **Strict enums** | `"sparte": "STROMM"`, at any depth, reported by JSON-path (`rubo4e`'s `Bo4eStrict::ensure_known_enums`) | `bo4e.unknown_enum` |
 | 4. **BO4E rules** | a document the standard's prose forbids | `bo4e.rule` |
 
-Stage 3 is the one that most needs to be unmissable, because BO4E's forward
-compatibility cuts both ways. Every BO4E enum carries an `Unknown` catch-all, so
-an unrecognised value decodes rather than failing — and `Unknown` **serialises
-back as the literal string `"UNKNOWN"`**. At an endpoint that stores the
-canonical round-trip rather than the request body, a typo is therefore not
-merely accepted: the value the caller sent is *overwritten* by a marker meaning
-"something this build did not recognise". Eight write paths were missing this
-stage, and the ones that canonicalise are where it did that.
+Stage 3 matters because every BO4E enum carries an `Unknown` catch-all that
+**serialises back as `"UNKNOWN"`**: without it, an endpoint storing the canonical
+round-trip would overwrite a caller's typo with that marker.
 
 ### Stage 4: the rules BO4E states and enforces nowhere
 
-Rules that live only in prose still have to be run. `rubo4e`'s `.validate()`
-descends the whole tree and reports each failure at its path; mako's own module
-holds the **two** it does not check:
+`rubo4e`'s `.validate()` descends the whole tree and reports each failure at
+its path; mako's own module holds the **two** rules it does not check:
 
 | Rule | Source | Checked by |
 |---|---|---|
-| `marktlokation` Ortsangabe | „Es darf immer nur eine Art der Ortsangabe vorhanden sein (entweder eine Adresse oder eine GeoKoordinate oder eine Katasteradresse)" — **at most** one. A location *reference* (a `Marktlokation` embedded in a `Rechnung` to say which location it settles) carries none, and is conformant | `rubo4e` |
+| `marktlokation` Ortsangabe | „Es darf immer nur eine Art der Ortsangabe vorhanden sein" — **at most** one; a location reference carries none | `rubo4e` |
 | `messlokation` Ortsangabe | the same, with `messadresse` | `rubo4e` |
 | `zeitraum` states a period | „Es muss daher eine der drei Möglichkeiten angegeben sein" — dauer, or start/enddatum, or start/enduhrzeit | `rubo4e` |
 | `zeitraum` ordering | both bounds documented **inclusive**, so a one-day period has `start == end` | `rubo4e` |
@@ -948,58 +874,35 @@ holds the **two** it does not check:
 | **`rechnung.gesamtnetto`** | `gesamtnetto`: „Die Summe der Nettobeträge der Rechnungsteile" | **mako** |
 | **`rechnung.storno`** | `istStorno`: „im Falle 'true' findet sich im Attribut 'originalrechnungsnummer' die Nummer der Originalrechnung" | **mako** |
 
-Both sides report in the same shape — `rubo4e`'s own
-`ValidationFailure { path, message }` — so the stage returns one list and a
-caller never has to know which side found what.
-
-**At most one Ortsangabe, not exactly one.** All three fields are optional, and a
-location reference carries none of them by design.
-
-**A rule earns a place only if BO4E asserts it.** The rules apply to documents
-mako *receives*, so enforcing more than the standard does would reject a
-conformant counterparty. Endpoint requirements ("this endpoint needs a
-`sparte`") are a separate layer, stated at the endpoint that has them.
-
+Both report `rubo4e`'s `ValidationFailure { path, message }`, so the stage
+returns one list. A rule is here only if BO4E asserts it — enforcing more would
+reject a conformant counterparty; endpoint requirements are a separate layer.
 Money is compared at the scale of the stated total, with the cent as the floor.
-A position vector carried at six decimals sums to a figure no invoice states;
-demanding exact equality would reject the whole real-world corpus.
 
 ### Received and emitted
 
 Two call sites need something other than all four stages, and each says why:
 
-- **`decode_received`** — a market document from a counterparty. Stages 1–3
-  still refuse, because a document that will not type has nothing to
-  adjudicate. The **rules deliberately do not refuse**: an invoice whose
-  `gesamtbrutto` is not net plus tax is *disputable*, and the market's answer is
-  a REMADV naming the defect (`invoic-checker` stage 3 already produces it).
-  Refusing to parse would replace that answer with silence and a dead letter.
+- **`decode_received`** — a counterparty's market document. Stages 1–3 refuse;
+  the **rules do not**, because an invoice whose `gesamtbrutto` is not net plus
+  tax is *disputable*, and the answer is a REMADV naming the defect.
 - **`ensure_conformant`** — the outbound gate: stages 3 and 4 on a value mako
-  *built* (the first two are the compiler's job there), plus the outbound-only
-  field check. **mako never sends a document it would refuse to receive.** It
-  runs in tests over every shape the billing engines emit, and at runtime at
-  every emission site — the Sammelrechnung and Korrekturrechnung, the VPP and
-  EEG Gutschriften, the self-issued INVOIC 31006, the Redispatch-Kostenblatt.
-  A fixture test covers the *shapes* a builder produces; the gate's rules are
-  arithmetic over the *values* a request supplies.
+  built, plus the outbound-only field check, at every emission site
+  (Sammelrechnung, Korrekturrechnung, VPP and EEG Gutschriften, INVOIC 31006,
+  Redispatch-Kostenblatt). **mako never sends a document it would refuse to
+  receive.**
 
 ### The gate is in the type — `Bo4e<T>`
 
-`decode` is one function call, and the defect it kept producing is that somebody
-did not make it. A request struct declaring
+A request struct declaring
 
 ```rust
 /// Full BO4E `Vertrag` payload.
 pub vertrag: serde_json::Value,
 ```
 
-is a document nothing checks: wrong `_typ`, out-of-schema enums, arbitrary
-nesting depth, none of the rules — and what gets stored is the **request body**,
-not the gate's canonical round-trip. Nothing in the type system distinguishes
-such a field from one whose handler decodes it, and a handler that *does* call
-`decode` can still store the unvalidated body afterwards.
-
-`mako_markt::bo4e::Bo4e<T>` moves the decision into the type:
+is a document nothing checks. `mako_markt::bo4e::Bo4e<T>` moves the gate into
+the type:
 
 ```rust
 #[derive(Deserialize)]
@@ -1011,17 +914,12 @@ pub struct UpsertRequest {
 }
 ```
 
-`serde` runs all four stages while it deserialises the request. There is no
-constructor that skips them — `Deserialize` is the only way in from untrusted
-JSON, and it *is* `decode`. The handler reads `&*field` for the typed BO and
-`field.canonical_json()` for what to store; a value mako built in Rust enters
-through `Bo4e::from_built`, which is honest about being a different thing.
-
-The rejection survives `serde`: a `Deserialize` impl carries a string and
-nothing else, so the impl appends the machine-readable object behind a sentinel
-byte and `mako_service::Json` — the request extractor every handler uses — lifts
-it back into the problem body. A `422` from `Bo4e<T>` renders the same
-`code` / `paths` / `failures` keys as one from a hand-written `decode` call.
+`serde` runs all four stages while it deserialises the request — `Deserialize`
+*is* `decode`. The handler reads `&*field` for the typed BO and
+`field.canonical_json()` for what to store; a value built in Rust enters through
+`Bo4e::from_built`. `mako_service::Json` lifts the rejection into the problem
+body, so a `422` carries the same `code` / `paths` / `failures` keys as a direct
+`decode` call.
 
 `cargo xtask check-request-bodies` refuses a `serde_json::Value` field whose
 name is a BO4E type's own — `vertrag`, `kosten_json`, `standort_adresse`,
@@ -1029,33 +927,20 @@ name is a BO4E type's own — `vertrag`, `kosten_json`, `standort_adresse`,
 
 ### A request body refuses what it cannot store
 
-`serde` ignores a key no field declares, so a request naming a field the API
-does not have succeeds and the value goes nowhere. `demos/o2c` posted a customer
-as `{"vorname": "Erika", "nachname": "Mustermann", "strasse": …}` to an endpoint
-that has none of those fields — it takes a BO4E `geschaeftspartner` — and got a
-`201`. The customer was created with no name and no address, the invoice named
-nobody, and the demo passed.
-
-Every `Json<T>` request body carries `#[serde(deny_unknown_fields)]`, so the
-same mistake is a `422` naming the field. The same guard enforces it, with eight
-documented exemptions, each argued in writing: `IssueDocumentRequest` and
-`RenderApiRequest` carry a `#[serde(flatten)]` field, which serde refuses to
-combine with it; `SmgwTyp2Push` carries a payload BSI TR-03109 defines rather
-than mako; and five BDEW **Energy API** schemas — `IdentificationParameter`,
-`MaloIdentResultPositive` (the `energy-api` model and its client-side mirror),
-`MaloIdentResultNegative` and `ApiRecord` — belong to the BDEW, whose forward
-compatibility is not mako's to redefine by refusing a counterparty's whole
-document over one added field.
+Every `Json<T>` request body carries `#[serde(deny_unknown_fields)]`, so a key no
+field declares is a `422` naming it rather than a value that goes nowhere. The
+same guard enforces it, with eight
+documented exemptions: `IssueDocumentRequest` and `RenderApiRequest` (a
+`#[serde(flatten)]` field), `SmgwTyp2Push` (a BSI TR-03109 payload), and five
+BDEW **Energy API** schemas — `IdentificationParameter`,
+`MaloIdentResultPositive` (model and client mirror), `MaloIdentResultNegative`
+and `ApiRecord` — whose forward compatibility is the BDEW's.
 
 **A nested value is not a third case.** A COM or standalone BO read out of the
 extension map of the object that carried it — `ZeitvariablePreisposition` under
 a `PreisblattMessung`, `Standorteigenschaften` under a `Messlokation` — crosses
-the same `decode`, which injects an absent `_typ` rather than demanding it
-(BO4E marks the field required on no schema). A `_typ` that is present and
-**wrong** is still refused, because nothing downstream catches one:
-`ensure_known_enums` walks a value's *fields* and never reaches `typ` itself, so
-a nested `{"_typ": "MARKTLOKATION"}` would otherwise decode to
-`typ: Some(Unknown)` and go back out as the literal string `"UNKNOWN"`.
+the same `decode`, which injects an absent `_typ` and refuses a **wrong** one
+(`ensure_known_enums` never reaches `typ` itself).
 
 A BO4E `Rechnungsposition` is a **net supply line**: tax lives in
 `steuerbetraege`/`gesamtsteuer` and advances in `vorauszahlungen`/`zuZahlen`, so
@@ -1066,15 +951,9 @@ index.
 
 ### One extra rule, outbound only
 
-`rubo4e::validation::current::quality` holds rules that crate considers sensible
-and BO4E does not state, kept out of `.validate()` so a consumer can assert
-*"this conforms to BO4E"* without also asserting *"…and satisfies rubo4e"*.
-That is right for an inbound gate and backwards for an outbound one, where mako
-controls the document.
-
-`rechnung_totals_are_complete` — state all three invoice totals or none —
-therefore runs in `ensure_conformant` and nowhere else. Every mako engine
-already emits all three, so it pins that rather than requesting it.
+`rubo4e::validation::current::quality` holds rules BO4E does not state.
+`rechnung_totals_are_complete` — all three invoice totals or none — runs in
+`ensure_conformant` only, since mako controls the documents it emits.
 
 ## BO4E extensions: `ZusatzAttribut`
 
@@ -1082,33 +961,18 @@ BO4E cannot model everything mako bills for, and its answer is `ZusatzAttribut`
 — a `{name, wert}` pair on every BO and most COMs. The standard mandates no
 naming convention for it.
 
-mako's is `mako:<snake_case>`, enforced — and `mako` is one of the four
-namespace prefixes `rubo4e` itself registers (`mako`, `hems`, `edmd`, `mabis`),
-so the guard reads the prefix from `rubo4e::zusatz_attribut::Namespace::MAKO`
-rather than writing a literal. A rename or a de-registration upstream then fails
-at the next CI run instead of mako shipping into a collision no schema and no
-counterparty can see.
-
-Without a prefix, `rechnungsart` is
-indistinguishable from a field BO4E might introduce later and from an attribute
-the ERP on the other side already writes — and several crates emit into the same
-document.
-
-`cargo xtask check-bo4e-attributes` (part of `just ci`) refuses any emitted
-attribute that is not namespaced **and** listed in its registry. The registry
-carries a one-line description per attribute and is the discoverable list: a
-consumer cannot learn mako's extensions from the BO4E schema, because not being
-in the schema is the point.
+mako's is `mako:<snake_case>`. `mako` is one of the namespace prefixes
+`rubo4e` registers (`mako`, `hems`, `edmd`, `mabis`), and the guard reads it
+from `rubo4e::zusatz_attribut::Namespace::MAKO`. `cargo xtask
+check-bo4e-attributes` refuses any emitted attribute that is not namespaced
+**and** listed in its registry, which carries a one-line description per
+attribute and is the list a consumer reads mako's extensions from.
 
 ### The gate decodes through `rubo4e`, not `serde_json`
 
-Stage 2 is `T::from_json_value`, which enforces the crate's nesting-depth cap;
-plain `serde_json::from_value` enforces nothing, and the gate is the one place
-mako reads untrusted BO4E.
-
-Not the *hardened* variant with the extension-field count closed to zero: that
-turns an undefined field into a decode error, which is right for a document you
-built and wrong for one a counterparty sent.
+Stage 2 is `T::from_json_value`, which enforces the crate's nesting-depth cap
+(plain `serde_json::from_value` enforces nothing) — not the hardened variant,
+which would refuse a counterparty's undefined field.
 
 ### Out-of-schema fields are refused on the way out
 
@@ -1116,12 +980,9 @@ built and wrong for one a counterparty sent.
 `Bo4eExtensions::ensure_no_extension_data` finds out-of-schema **fields**.
 Neither sees the other's finding, and the outbound gate runs both.
 
-Only outbound: refusing an unknown *field* from a counterparty would throw away
-the forward compatibility the extension map exists for — a sender one BO4E
-release ahead is to be read, not rejected. On a document mako authored an
-undefined field can only be a mistake, and it is the mistake nothing else can
-see: a decode round-trip returns `Ok` for a misspelled key and reads the field
-back as `None`.
+Only outbound: a sender one BO4E release ahead is to be read, not rejected;
+on a document mako authored an undefined field is a misspelt key, which a decode
+round-trip would accept and read back as `None`.
 
 `_additional` is the **counterparty's** extension slot. Everything mako adds
 rides in `zusatzAttribute` — a real BO4E field — under the `mako:` namespace,
@@ -1134,17 +995,9 @@ written by hand — as `typ: Some(BoTyp::X)` beside a `..Default::default()` tha
 already stamps it, as `typ: None` (which serialises to a document carrying no
 discriminant at all), or as a `"_typ": "X"` key in a `json!` literal.
 
-The discriminant is the visible half of the rule; the field names are the
-half that matters. A document assembled as `json!` never meets the typed
-constructor, so nothing checks its keys against the schema — `rubo4e` captures
-unknown keys in `_additional` rather than rejecting them, so a misspelled field
-decodes cleanly, reads back as `None`, and ships with the value missing.
-
-A decode round-trip is not a defence against this: `from_value::<T>(literal)`
-returns `Ok` for a renamed key, because absorbing it is what the extension map
-is for. A struct literal fails to compile instead.
-
-The same trap reaches documentation, because an example is copied.
+A document assembled as `json!` never meets the typed constructor:
+`rubo4e` captures a misspelt key in `_additional`, so it decodes cleanly and
+ships with the value missing. A struct literal fails to compile instead.
 `cargo xtask check-bo4e-examples` decodes every fenced JSON block in the docs
 that carries a `_typ` and reports any field BO4E does not define.
 
@@ -1159,12 +1012,8 @@ Two rules follow:
 - **What mako emits is checked, not just what it receives.** Every `Rechnung`,
   `Angebot` and stored `Tarifpreisblatt` crosses the same gate on the way out
   (`ensure_conformant`, above) — no enum falling through to `Unknown`, and the
-  BO4E-stated rules satisfied. The silent catch-all is `rubo4e`'s own choice,
-  not the market's: go-bo4e returns `invalid <Enum> %q` and declares no
-  catch-all, BO4E-python raises a pydantic `ValidationError`, and both reject
-  the **whole document**. A document that fails the outbound gate is therefore
-  either one a reader silently cannot understand, one they cannot parse at all,
-  or one they openly dispute.
+  BO4E-stated rules satisfied. go-bo4e and BO4E-python reject the **whole
+  document** on an unknown enum value.
 
 ---
 

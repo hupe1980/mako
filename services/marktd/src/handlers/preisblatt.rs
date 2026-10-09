@@ -10,6 +10,7 @@ use axum::{
     response::IntoResponse,
 };
 use mako_markt::bo4e::Bo4e;
+use mako_markt::error::MdmError;
 use mako_markt::{
     cloudevents::MarktEvent,
     repository::{
@@ -189,7 +190,7 @@ pub async fn get_preisblatt(
             format!("No Preisblatt found for NB GLN {nb_mp_id} on {billing_date}"),
         )
             .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => failure(e),
     }
 }
 
@@ -213,7 +214,6 @@ pub async fn get_preisblatt(
         (status = 403, description = "Forbidden"),
     ),
 )]
-#[allow(clippy::too_many_arguments)]
 pub async fn put_preisblatt(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(Tenant(tenant)): Extension<Tenant>,
@@ -311,7 +311,7 @@ pub async fn put_preisblatt(
     // 27003 dispatch to the LFs while the operator still saw 204.
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return failure(e),
     };
 
     if let Err(e) = PgPreisblattRepository::upsert_tx(
@@ -323,7 +323,7 @@ pub async fn put_preisblatt(
     )
     .await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return failure(e);
     }
 
     // `pricat_versions.valid_from` is NOT NULL — an open-started sheet
@@ -346,7 +346,7 @@ pub async fn put_preisblatt(
     .await
     {
         Ok(id) => id,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return failure(e),
     };
 
     // Emit de.markt.pricat.published so ERP webhook subscribers, the obsd
@@ -363,17 +363,49 @@ pub async fn put_preisblatt(
     );
     if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt).await {
         tracing::error!(error = %e, "put_preisblatt: pricat.published enqueue failed");
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return failure(e);
     }
 
     if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return failure(e);
     }
 
     StatusCode::NO_CONTENT.into_response()
 }
 
 // ── Helper ────────────────────────────────────────────────────────────────────
+
+/// A failure, answered with the status [`MdmError`] maps it to.
+///
+/// A database refusal is the caller's to fix — an overlapping validity window
+/// (`*_no_overlap`, SQLSTATE `23P01`) or a broken CHECK is `422` — and only an
+/// outage is `500`. Formatting every error into a `500` tuple throws that
+/// mapping away and tells the operator the server broke when what they need to
+/// change is a date.
+fn failure(e: impl Into<Failure>) -> axum::response::Response {
+    super::MdmErrorResponse(e.into().0).into_response()
+}
+
+/// Every error a Preisblatt handler meets, as the [`MdmError`] it answers.
+struct Failure(MdmError);
+
+impl From<MdmError> for Failure {
+    fn from(e: MdmError) -> Self {
+        Self(e)
+    }
+}
+
+impl From<sqlx::Error> for Failure {
+    fn from(e: sqlx::Error) -> Self {
+        Self(crate::pg::write_error(e))
+    }
+}
+
+impl From<mako_markt::bo4e::Bo4eSerialiseError> for Failure {
+    fn from(e: mako_markt::bo4e::Bo4eSerialiseError) -> Self {
+        Self(MdmError::Internal(e.to_string()))
+    }
+}
 
 /// Today's German calendar date as `"YYYY-MM-DD"` — the day a Preisblatt
 /// validity window is measured against.
@@ -426,7 +458,7 @@ pub struct PreisblattMessungResponse {
     /// Extracted from `data.aufAbschlaege` for explicit typed access.
     /// Contains conditional supplements and discounts on the MSB base price:
     /// - remote-read surcharge (`AufAbschlagstyp::AUFSCHLAG`)
-    /// - §14a Modul 2/3 ToU discount bands (`AufAbschlagstyp::ABSCHLAG`)
+    /// - §14a Modul 3 ToU discount bands (`AufAbschlagstyp::ABSCHLAG`)
     /// - hardware rental add-ons
     ///
     /// An empty list means no supplements/discounts are configured.
@@ -539,7 +571,7 @@ pub async fn get_preisblatt_messung(
             format!("No PreisblattMessung found for MSB MP-ID {msb_mp_id} on {billing_date}"),
         )
             .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => failure(e),
     }
 }
 
@@ -698,7 +730,7 @@ pub async fn put_preisblatt_messung(
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => failure(e),
     }
 }
 
@@ -774,7 +806,7 @@ pub async fn get_preisblatt_ka(
             format!("No PreisblattKonzessionsabgabe for NB {nb_mp_id} on {billing_date}"),
         )
             .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => failure(e),
     }
 }
 
@@ -824,7 +856,7 @@ pub async fn put_preisblatt_ka(
             match req.data.canonical_json() {
                 Ok(v) => v,
                 Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                    return failure(e);
                 }
             },
             &mako_markt::bo4e::schema_version(),
@@ -833,7 +865,7 @@ pub async fn put_preisblatt_ka(
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => failure(e),
     }
 }
 
@@ -890,7 +922,7 @@ pub async fn get_preisblatt_dienstleistung(
             format!("No PreisblattDienstleistung for {msb_mp_id} on {billing_date}"),
         )
             .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => failure(e),
     }
 }
 
@@ -914,7 +946,7 @@ pub async fn put_preisblatt_dienstleistung(
             match req.data.canonical_json() {
                 Ok(v) => v,
                 Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                    return failure(e);
                 }
             },
             &mako_markt::bo4e::schema_version(),
@@ -923,7 +955,7 @@ pub async fn put_preisblatt_dienstleistung(
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => failure(e),
     }
 }
 
@@ -977,7 +1009,7 @@ pub async fn get_preisblatt_hardware(
             format!("No PreisblattHardware for {msb_mp_id} on {billing_date}"),
         )
             .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => failure(e),
     }
 }
 
@@ -1001,7 +1033,7 @@ pub async fn put_preisblatt_hardware(
             match req.data.canonical_json() {
                 Ok(v) => v,
                 Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                    return failure(e);
                 }
             },
             &mako_markt::bo4e::schema_version(),
@@ -1010,6 +1042,6 @@ pub async fn put_preisblatt_hardware(
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => failure(e),
     }
 }

@@ -19,7 +19,7 @@
 //! | Type   | Payload fields consumed                                            |
 //! |--------|--------------------------------------------------------------------|
 //! | UTILMD | `pid`, `sender`, `receiver`, `malo`, `process_date` (`document_date` and `message_ref` are engine-derived when absent) |
-//! | APERAK | `pid`, `sender`, `receiver`, `orig_message_ref`, `error_code`, `reason`, `document_date` |
+//! | APERAK | [`mako_engine::payload::AperakPayload`] — typed |
 //! | CONTRL | `sender`, `receiver`, `interchange_ref`, `accepted`, `message_ref` |
 //! | ORDERS | `pid`, `orders_ref` (sender = `tenant_party_id`, receiver = `msg.recipient`); ESA 17007/17008 additionally `korrelation_ref`, `abonnement`, `ausfuehrungsdatum` |
 //! | REQOTE | `pid`, `sender`, `receiver`, `message_ref`; ESA 35003 additionally `location`, `messprodukt`, `wunschtermin`, `smgw` |
@@ -73,7 +73,7 @@ pub enum RenderError {
     BuilderError(String),
     /// The message should be silently suppressed — no wire EDIFACT should be sent.
     ///
-    /// Used for Gas positive APERAKs: per APERAK AHB 1.0 §2.3, silence = acceptance
+    /// Used for Gas positive APERAKs: per APERAK AHB 1.1 §2.3, silence = acceptance
     /// for Gas processes. The domain outbox entry exists for ERP webhook delivery,
     /// but no wire EDIFACT is emitted over AS4.
     Suppressed { reason: Box<str> },
@@ -110,6 +110,31 @@ impl std::fmt::Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
+/// Read an outbox payload as the typed struct its producer wrote.
+///
+/// A missing field is reported by name ([`RenderError::MissingField`]); any
+/// other shape mismatch is [`RenderError::InsufficientPayload`].
+pub(crate) fn typed_payload<P: mako_engine::payload::OutboundPayload>(
+    p: &serde_json::Value,
+) -> Result<P, RenderError> {
+    P::from_payload(p).map_err(|e| {
+        let text = e.to_string();
+        match text
+            .strip_prefix("missing field `")
+            .and_then(|rest| rest.split_once('`'))
+        {
+            Some((field, _)) => RenderError::MissingField {
+                message_type: P::MESSAGE_TYPE.into(),
+                field: field.into(),
+            },
+            None => RenderError::InsufficientPayload {
+                message_type: P::MESSAGE_TYPE.into(),
+                detail: text.into(),
+            },
+        }
+    })
+}
+
 /// Returns `true` when the render error is due to a missing business-data
 /// payload (intent-only) rather than a schema or registry problem.
 ///
@@ -120,7 +145,7 @@ pub fn is_insufficient_payload(err: &RenderError) -> bool {
 
 /// Returns `true` when the message should be suppressed — no wire EDIFACT sent.
 ///
-/// Used for Gas positive APERAKs (silence = acceptance per APERAK AHB 1.0 §2.3).
+/// Used for Gas positive APERAKs (silence = acceptance per APERAK AHB 1.1 §2.3).
 /// The AS4 sender acknowledges the outbox entry without transmitting.
 /// The ERP webhook sender delivers the domain JSON payload instead.
 pub fn is_suppressed(err: &RenderError) -> bool {
@@ -2182,11 +2207,12 @@ mod envelope_tests {
     fn envelope_identities_match_nad_and_unz_repeats_dar() {
         let msg = outbox_msg(
             "APERAK",
-            serde_json::json!({
-                "sender": "9900123456789",
-                "receiver": "9900987654321",
-                "orig_message_ref": "ABC123",
-            }),
+            serde_json::to_value(mako_engine::payload::AperakPayload::anerkennung(
+                "9900123456789",
+                "9900987654321",
+                "ABC123",
+            ))
+            .expect("serialise"),
         );
         let rendered =
             render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("must render");

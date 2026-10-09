@@ -17,12 +17,12 @@ to do.
 | Run a service in production | [Services](@/docs/services/_index.md) |
 | Parse, validate or build EDIFACT yourself | [Reference](@/docs/reference/_index.md) |
 | Trace a rule back to its Festlegung or § | [Regulatory](@/docs/regulatory/_index.md) |
-| Take on a new annual BDEW release | [Release & compliance](@/docs/compliance/_index.md) |
+| Take on a new BDEW format release | [Release & compliance](@/docs/compliance/_index.md) |
 
 ## Find it by market role
 
 A deployment is scoped to the roles it plays — a role build contains no other
-arm's code (§ 6a EnWG). `makod`, `marktd`, `edmd`, `obsd` and `agentd` are
+role's code, least privilege in support of § 6a EnWG. `makod`, `marktd`, `edmd`, `obsd` and `agentd` are
 role-neutral and run everywhere; the rest are role-specific.
 
 | Role | Also runs | Starts at |
@@ -59,22 +59,22 @@ graph TB
     SVC -->|"CloudEvents"| SVC
 ```
 
-The split is deliberate. The domain layer never sees EDIFACT, and the format
-layer never knows what a Lieferantenwechsel is — so an annual BDEW release is an
-import of new profiles rather than a change to process logic.
+The domain layer never sees EDIFACT and the format layer never knows what a
+Lieferantenwechsel is, so a BDEW format release is an import of new profiles
+rather than a change to process logic.
 
 ## Sections
 
 - **[Guide](@/docs/guide/_index.md)** — install, run the demo stack, submit your first message.
 - **[Architecture](@/docs/architecture/_index.md)** — the domain model, the workflow engine, ERP
-  integration and the API-Webdienste transition.
+  integration and the API-Webdienste beside EDIFACT.
 - **[Services](@/docs/services/_index.md)** — one operator manual per service: endpoints,
   configuration, emitted events, deployment.
 - **[Reference](@/docs/reference/_index.md)** — EDIFACT parsing, validation, builders, the AS4
   profile, process catalogue, and the `makotest` Python toolkit.
 - **[Regulatory](@/docs/regulatory/_index.md)** — BNetzA Festlegungen and the full
   Prüfidentifikator table with the crate and workflow that owns each one.
-- **[Release & compliance](@/docs/compliance/_index.md)** — the annual release workflow, schema
+- **[Release & compliance](@/docs/compliance/_index.md)** — the format-release workflow, schema
   versioning, and licence inventory.
 
 ## Common tasks

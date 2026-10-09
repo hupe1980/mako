@@ -28,9 +28,10 @@
 //! reading with no Messwertstatus, and `SpotPriceEntry` did the same to a
 //! mistyped field of an EPEX bulk load, settling the period against a default
 //! nobody chose. The scan therefore closes over the field types of every body,
-//! transitively, within `services/`, so a type is in scope because something
-//! reachable from a handler signature holds it — not because of how it is
-//! named.
+//! transitively, through `services/` and the workspace crates under `crates/` —
+//! `energy-billing`'s `GridInput` is a `billingd` body field — so a type is in
+//! scope because something reachable from a handler signature holds it, not
+//! because of how it is named or where it is declared.
 //!
 //! ## Rule 2 — a BO4E document in a request body is a `Bo4e<T>`
 //!
@@ -147,6 +148,92 @@ const DENY_EXEMPT: &[(&str, &str, &str)] = &[
         "crates/energy-api/src/models/directory.rs",
         "ApiRecord",
         "BDEW API-Verzeichnis entry — a later minor version may add fields",
+    ),
+    (
+        "crates/energy-api/src/models/electricity.rs",
+        "IdentificationParameterId",
+        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
+         version may add fields",
+    ),
+    (
+        "crates/energy-api/src/models/electricity.rs",
+        "IdentificationParameterAddress",
+        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
+         version may add fields",
+    ),
+    (
+        "crates/energy-api/src/models/electricity.rs",
+        "PersonName",
+        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
+         version may add fields",
+    ),
+    (
+        "crates/energy-api/src/models/electricity.rs",
+        "DataMarketLocation",
+        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
+         version may add fields",
+    ),
+    (
+        "crates/energy-api/src/models/electricity.rs",
+        "TimeSlicedMarketPartner",
+        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
+         version may add fields",
+    ),
+    (
+        "crates/energy-api/src/models/electricity.rs",
+        "MarketLocationProperties",
+        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
+         version may add fields",
+    ),
+    (
+        "crates/energy-api/src/models/electricity.rs",
+        "DataMeterLocation",
+        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
+         version may add fields",
+    ),
+    (
+        "crates/energy-api/src/models/electricity.rs",
+        "DataTechnicalResource",
+        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
+         version may add fields",
+    ),
+    (
+        "crates/energy-api/src/models/electricity.rs",
+        "DataControllableResource",
+        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
+         version may add fields",
+    ),
+    (
+        "crates/energy-api/src/models/electricity.rs",
+        "SrMarketPartner",
+        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
+         version may add fields",
+    ),
+    (
+        "crates/energy-api/src/models/electricity.rs",
+        "DataNetworkLocation",
+        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
+         version may add fields",
+    ),
+    (
+        "crates/energy-api/src/models/electricity.rs",
+        "DataTranche",
+        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
+         version may add fields",
+    ),
+    // The two below are reached from `marktd` bodies and also decoded from the
+    // JSONB column that stores them. Denying there would make a row written by
+    // an older schema fail its own read — `pg/malo.rs` falls back to an empty
+    // list on a decode error, so the assignments would vanish without a word.
+    (
+        "crates/mako-markt/src/repository.rs",
+        "Rollenzuordnung",
+        "decoded from stored JSONB (`marktd` pg/malo.rs) as well as from a body",
+    ),
+    (
+        "crates/mako-markt/src/repository.rs",
+        "LfZuordnung",
+        "decoded from stored JSONB (`marktd` pg/versorgung.rs) as well as from a body",
     ),
 ];
 
@@ -577,13 +664,18 @@ fn disclaims_bo4e(doc: &str) -> bool {
 /// compatibility is the counterparty's property and not mako's.
 fn reachable_body_types(seed: &[String], files: &[(String, String)]) -> Vec<String> {
     use std::collections::{HashMap, HashSet};
+    // A service's own definition wins a name collision, then the workspace
+    // crates': a body field typed from a crate is deserialised from the same
+    // untrusted JSON as the body that holds it.
     let mut defs: HashMap<String, Vec<(String, String)>> = HashMap::new();
-    for (rel, src) in files {
-        if !rel.starts_with("services/") {
-            continue;
-        }
-        for s in structs(src) {
-            defs.entry(s.name).or_insert(s.fields);
+    for tree in ["services/", "crates/"] {
+        for (rel, src) in files {
+            if !rel.starts_with(tree) {
+                continue;
+            }
+            for s in structs(src) {
+                defs.entry(s.name).or_insert(s.fields);
+            }
         }
     }
     let mut seen: HashSet<String> = HashSet::new();
@@ -813,6 +905,33 @@ mod tests {
     use super::{
         has_unicode_escape, json_body_types, names_a_bo4e_type, strip_test_modules, structs,
     };
+
+    /// A body field typed from a workspace crate is reached, so the crate type
+    /// is held to rule 1 too: `GridInput` lives in `energy-billing`, and a
+    /// mistyped grid override in a `billingd` body would otherwise bill no
+    /// Netzentgelt.
+    #[test]
+    fn a_crate_type_held_by_a_service_body_is_reached() {
+        let files = vec![
+            (
+                "services/billingd/src/handlers/calculate.rs".to_owned(),
+                "#[derive(Deserialize)]\npub struct CalculateRequest {\n    pub grid: Option<GridInput>,\n}\n"
+                    .to_owned(),
+            ),
+            (
+                "crates/energy-billing/src/quantities.rs".to_owned(),
+                "#[derive(Deserialize)]\npub struct GridInput {\n    pub nne: Option<Rates>,\n}\n\
+                 #[derive(Deserialize)]\npub struct Rates {\n    pub ap: u32,\n}\n"
+                    .to_owned(),
+            ),
+        ];
+        let reached = super::reachable_body_types(&["CalculateRequest".to_owned()], &files);
+        assert!(reached.contains(&"GridInput".to_owned()), "{reached:?}");
+        assert!(
+            reached.contains(&"Rates".to_owned()),
+            "transitively: {reached:?}"
+        );
+    }
 
     #[test]
     fn a_bo4e_field_name_is_recognised_through_its_noise() {

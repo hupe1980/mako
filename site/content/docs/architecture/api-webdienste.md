@@ -3,10 +3,9 @@ title = "API-Webdienste Strom"
 description = "BDEW API-Webdienste Strom: the REST/JSON iMS channel beside EDIFACT/AS4 — control measures, MaLo-ID queries and the Directory Service, via energy-api."
 weight = 11
 +++
-The German energy market uses **two distinct communication channels** for
-electricity market processes. This document explains both, clarifies which
-processes use which channel, and shows how to integrate both crates in a
-single application.
+Electricity market processes run over **two channels**: EDIFACT over AS4, and
+the REST/JSON API-Webdienste for intelligente Messsysteme. This page maps
+processes to channels and shows both in one application.
 
 ---
 
@@ -43,11 +42,9 @@ graph LR
 | EDIFACT/AS4 | `edi-energy` + `mako-engine` + `makod` | SOAP/SwA, TLS, WS-Security | UTILMD, MSCONS, APERAK, CONTRL, INVOIC, REMADV, ORDERS, ORDRSP, and all other MaKo message types |
 | REST/JSON (API-Webdienste) | `energy-api` | HTTPS, JWS signatures | iMS control measures, MaLo-ID queries, directory service |
 
-The REST channel is a **parallel channel introduced for intelligente Messsysteme
-(iMS) processes** as of 2026-01-29 ([BDEW API-Webdienste Strom, valid from
-2026-01-29](https://www.bdew-mako.de/documents)). It does **not** replace
-EDIFACT for electricity market processes. Both channels are mandatory for market
-participants who are in scope for iMS.
+The REST channel serves intelligente Messsysteme (iMS) processes from
+2026-01-29 ([BDEW API-Webdienste Strom](https://www.bdew-mako.de/documents)). It
+does not replace EDIFACT; participants in scope for iMS need both.
 
 ---
 
@@ -93,7 +90,7 @@ Use this crate for:
 | Zählpunktregistrierung (WiM) | EDIFACT/AS4 | `edi-energy` | UTILMD |
 | Fahrplankommunikation | EDIFACT/AS4 | `edi-energy` | MSCONS |
 | Lastgangkommunikation | EDIFACT/AS4 | `edi-energy` | MSCONS |
-| iMS Steuerbefehl — Konfiguration / initialZustand | REST/JSON | `energy-api` | `ControlMeasuresClient` sends; `ControlMeasuresHandler::on_konfiguration` / `on_initial_zustand` receives |
+| iMS Steuerbefehl — Konfiguration / initialZustand | REST/JSON | `energy-api` | `ControlMeasuresHandler::on_konfiguration` / `on_initial_zustand` receives; `energy-api` has no sending client |
 | iMS Rückmeldungen — vorläufig und endgültig, je positiv und negativ, plus `information` und `informationAnweisung` | REST/JSON | `energy-api` | the six remaining `ControlMeasuresHandler` methods; eight `POST /[Post]/steuerbefehl/…` routes in total |
 | MaLo-ID-Abfrage | REST/JSON | `energy-api` | `MaloIdentClient` → `POST /maloId/request/v1`; `MaloIdentHandler` receives |
 | iMS Universalbestellprozess — Anmeldung (PID 11021, NB → MSB) | REST/JSON | `energy-api` | `WimOrderHandler::on_anmeldung` — `POST /wimBestellung/v1/anmeldung/` |
@@ -130,14 +127,10 @@ sequenceDiagram
     NB_WEB-->>MSB: 200 OK (receipt)
 ```
 
-`DirectoryServiceClient::get_record(provider_id, api_id, major_version)` builds
-that path and returns the record together with the certificate and signature
-headers, so the caller can verify the JWS over the RFC 8785 canonical record
-before trusting the endpoint URL it just learned.
-
-The `/[Post]/` prefix on the Steuerbefehl routes is not a typo: the BDEW
-OpenAPI document carries the HTTP method inside the path template, and
-`energy-api` mirrors the specification verbatim rather than normalising it.
+`DirectoryServiceClient::get_record(provider_id, api_id, major_version)`
+returns the record with its certificate and signature headers, so the caller
+verifies the JWS before trusting the endpoint URL. The `/[Post]/` prefix on the
+Steuerbefehl routes is the BDEW OpenAPI path template, mirrored verbatim.
 
 
 ```rust
@@ -173,10 +166,8 @@ async fn lookup_msb_endpoint() -> Result<(), energy_api::Error> {
 }
 ```
 
-The two channels operate independently: the `edi-energy` crate has no runtime
-dependency on `energy-api` and vice versa. They share no types; the only shared
-concern is the MaLo/MeLo identifier strings that appear in both EDIFACT segments
-and REST payloads.
+The two crates are independent and share no types; only the MaLo/MeLo
+identifiers appear in both channels.
 
 ---
 
@@ -184,33 +175,22 @@ and REST payloads.
 
 | Feature | What it enables |
 |---------|-----------------|
-| `client` | HTTP clients for every API — `ControlMeasuresClient`, `MaloIdentClient`, `DirectoryServiceClient` (reqwest + rustls) and TR-03116-3 content signing |
+| `client` | HTTP clients — `MaloIdentClient`, `DirectoryServiceClient` (reqwest + rustls) and TR-03116-3 content signing |
 | `server` | Axum router factories for `ControlMeasuresHandler`, `MaloIdentHandler`, and `WimOrderHandler` receive handlers |
 | `websocket` | The Verzeichnisdienst subscription client (tokio-tungstenite) |
 
-TR-03116-3 content-layer signing (`DIGEST` / `SIGNATURE` over RFC 8785 canonical
-JSON) and JWS verification are **not** features — they are always compiled.
-Behind a flag they could be absent at the one moment they matter, and the
-absence was silent: with the flag off `with_signing` did not exist, and a
-request went out unsigned with no error and no warning. Whether a request is
-signed is now one question with one answer — whether a signing key is configured
-on the client.
+TR-03116-3 content-layer signing (`DIGEST` / `SIGNATURE` over RFC 8785
+canonical JSON) and JWS verification are always compiled, not features. A
+request is signed exactly when a signing key is configured on the client
+(`with_signing`).
 
 ---
 
 ## Scope boundary: Electricity only (Gas API status)
 
-The `energy-api` crate is scoped to the **BDEW API-Webdienste Strom** (REST/JSON,
-valid from 2026-01-29).  As of the 2026 annual update cycle, **BDEW has not
-published an equivalent Gas API-Webdienste specification**.  Gas iMS processes
-continue to use EDIFACT over AS4 via the `edi-energy` crate.
-
-The feature flags above are therefore Strom-scoped throughout: `energy-api`
-carries no gas surface because there is no gas specification to implement
-against.
-
-Monitor the BDEW document portal at <https://www.bdew-mako.de/documents> for
-Gas API-Webdienste announcements.
+`energy-api` implements the **BDEW API-Webdienste Strom** only. BDEW has
+published no Gas API-Webdienste specification, so Gas iMS processes use EDIFACT
+over AS4 and `energy-api` carries no gas surface.
 
 ---
 
@@ -220,26 +200,34 @@ Every BDEW identifier crossing this boundary is a validated `rubo4e::identifiers
 type. `Deserialize` enforces the check digit, so a malformed MaLo-, MeLo-, NeLo-,
 SR- or TR-ID is rejected with **400** before it reaches a handler.
 
-This matters most for MaLo-Ident: it is the first binding API process in German
-MaKo (mandatory since 06.06.2025, 2-hour deadline) and a precondition for every
-supplier switch, so it is exactly where a bad identifier would enter and
-propagate.
+MaLo-Ident is mandatory since 06.06.2025 with a 2-hour deadline and precedes
+every supplier switch, so it is where a bad identifier would otherwise enter.
 
 `MarketPartnerId` is a string, not an integer — BDEW codes may carry leading
 zeros.
 
 ## Specification versions
 
-`energy-api` implements **1.0.0**.
+`energy-api` implements **1.0.0**, the version in force.
 
-Release 2.0.0 was consulted via Mitteilung Nr. 55 for 01.10.2026 and then
-**excluded** by Mitteilung Nr. 56; only **API Guideline 1.0b** binds on that
-date. A `2.0.0` tag was published on 24.07.2026, and its Änderungshistorie
-applies it *"ab dem 01.10.2027"* — a cycle after FV 2027-04.
-`energy_api::spec_version::RELEASE_2_0_0_SCOPE` carries
-what that release would change — the modularised schema library, six new process
-APIs, and the `identificationParameterId` property renames — so a reader can see
-the delta without going to the branch.
+[BNetzA Mitteilung Nr. 58](https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/835_mitteilungen_datenformate/Mitteilung_58/Mitteilung_Nr_58.html)
+(01.10.2026) publishes no API-Webdienste document for 01.04.2027 and settles the
+channel's scope:
+
+> Die API-Guideline verbleibt daher zunächst auf dem aktuell produktiven Stand.
+> Die bereits produktiv eingesetzten APIs werden beibehalten und
+> weiterentwickelt. Die im Rahmen der Konsultation neu vorgesehenen APIs werden
+> hingegen zurückgezogen.
+
+The API-Webdienste stay limited to the Anwendungsfälle **MaLo-Ident** and
+**Steuern**. The Lokationsbündel and Berechnungsformel APIs are not introduced —
+„Die UTILTS bleibt damit erhalten", and both travel by UTILMD or UTILTS — and the
+Anwendungsfälle of the MaBiS-Hub Festlegung (BK6-24-210-1) are specified in
+EDIFACT, not as new APIs.
+
+`EDI-Energy/api-electricity` carries a `2.0.0` tag that adds new process APIs,
+`locationBundle` and `calculationFormula` among them. No Mitteilung makes it
+binding, and `energy-api` does not implement it.
 
 Note the specs are split across two repositories: `EDI-Energy/api-electricity`
 (electricity APIs) and `EDI-Energy/api-directory-service` (Verzeichnisdienst).

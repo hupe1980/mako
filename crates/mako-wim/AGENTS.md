@@ -37,6 +37,9 @@
   carries `dvgw-edi` instead; `mako-redispatch` and `mako-emob` carry neither.
 - Shared decision and state-machine crates may be depended on: `mako-fristen`,
   `mako-pruefung`, `mako-invoic`. Sibling **workflow** crates may not.
+- A workflow lists every deadline label it registers in `DEADLINE_LABELS`;
+  `on_deadline` and the `TimeoutExpired` arm ask one `window_open` guard. See
+  `crates/mako-engine/AGENTS.md`.
 
 The authoritative PID-ownership and APERAK-Fristen tables are in the
 root `AGENTS.md` under *Domain Rules*.

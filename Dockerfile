@@ -51,9 +51,17 @@
 #    distroless/cc does not ship tzdata. Required zone files are copied from
 #    the builder so time::OffsetDateTime can resolve TZ=Europe/Berlin.
 #
+# Base images are pinned by digest, so a tag moved upstream changes nothing
+# here until the digest in this file changes; `cargo xtask check-action-pins`
+# refuses a `FROM` without one. The compiler is `rust-toolchain.toml`'s channel,
+# installed into the `chef` stage and asserted there.
+#
+# Every binary is built with `cargo auditable`, which embeds its dependency
+# manifest in a `.dep-v0` section. GNU `strip` keeps that section, and each
+# builder stage reads the manifest back from the stripped binary with
+# `rust-audit-info` — a binary without one fails the image build.
+#
 # Build arguments (override with --build-arg)
-#  RUST_VERSION     Rust toolchain channel (default: matches rust-toolchain.toml)
-#  DEBIAN_CODENAME  Debian release for builder base (default: bookworm)
 #  PROFILE          Cargo profile: release (default) or dev
 #  OCI_VERSION      Image version label. Defaults to `dev`, matching
 #                   `docker-bake.hcl`: a plain `docker build` produces an
@@ -65,8 +73,6 @@
 
 # Global ARGs — available in FROM lines; must be re-declared inside a stage
 # to be visible in that stage's RUN commands.
-ARG RUST_VERSION=1.94
-ARG DEBIAN_CODENAME=bookworm
 ARG PROFILE=release
 
 # ╔══════════════════════════════════════════════════════════════════════════════
@@ -75,7 +81,8 @@ ARG PROFILE=release
 # The lukemathwalker/cargo-chef pre-built image ships cargo-chef on top of the
 # official rust image. The tagging scheme is:
 #   latest-rust-<rust-version>-<debian-variant>
-FROM lukemathwalker/cargo-chef:latest-rust-${RUST_VERSION}-${DEBIAN_CODENAME} AS chef
+# The tag is for the reader; the digest is what is pulled.
+FROM lukemathwalker/cargo-chef:latest-rust-1.94-bookworm@sha256:7e550e59b8c14e74aa86ca9e5950b75d937c9d51e7f5a4c840e726a33b4b8455 AS chef
 
 # Native build dependencies required by -sys crates:
 #   pkg-config      openssl-sys build script
@@ -103,6 +110,23 @@ WORKDIR /build
 # CARGO_INCREMENTAL=0 globally; application layers override to 1 with target/ cache.
 ENV OPENSSL_STATIC=1 \
     CARGO_INCREMENTAL=0
+
+# The compiler is `rust-toolchain.toml`'s channel. The base image's default
+# toolchain carries a full version name (`1.94.1`), which rustup does not take
+# for the file's `1.94`, so the file's toolchain is installed here — in a cached
+# layer, rather than by the first `cargo` call after `COPY . .` on every source
+# change. The assertion fails the build when anything (a `RUSTUP_TOOLCHAIN`
+# override, a changed file) makes the active compiler disagree with the file.
+COPY rust-toolchain.toml rust-toolchain.toml
+RUN rustup toolchain install \
+    && want="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)" \
+    && have="$(rustc --version | cut -d' ' -f2)" \
+    && case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;; \
+         *) echo "rustc $have, but rust-toolchain.toml pins $want" >&2; exit 1 ;; esac
+
+# `cargo auditable` embeds each binary's dependency manifest; `rust-audit-info`
+# reads it back. Both pinned, so the builder stages run the tools this file names.
+RUN cargo install --locked cargo-auditable@0.7.7 rust-audit-info@0.5.4
 
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 2 — planner  (generate recipe.json from workspace manifests)
@@ -136,13 +160,15 @@ RUN --mount=type=cache,id=cargo-registry-demo,sharing=locked,target=/usr/local/c
 COPY . .
 RUN --mount=type=cache,id=cargo-registry-demo,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target-demo,sharing=locked,target=/build/target \
-    CARGO_INCREMENTAL=1 mold -run cargo build --profile ${PROFILE} \
+    CARGO_INCREMENTAL=1 mold -run cargo auditable build --profile ${PROFILE} \
                 -p makod -p marktd \
-    && CARGO_INCREMENTAL=1 mold -run cargo build --profile ${PROFILE} -p processd --features integrated \
+    && CARGO_INCREMENTAL=1 mold -run cargo auditable build --profile ${PROFILE} -p processd --features integrated \
     && BIN_DIR="$([ "${PROFILE}" = "release" ] && echo target/release || echo target/debug)" \
-    && cp "${BIN_DIR}/makod"       /usr/local/bin/makod       && strip /usr/local/bin/makod \
-    && cp "${BIN_DIR}/marktd"      /usr/local/bin/marktd      && strip /usr/local/bin/marktd \
-    && cp "${BIN_DIR}/processd"    /usr/local/bin/processd    && strip /usr/local/bin/processd \
+    && for bin in makod marktd processd; do \
+         cp "${BIN_DIR}/${bin}" "/usr/local/bin/${bin}" && strip "/usr/local/bin/${bin}" || exit 1; \
+         rust-audit-info "/usr/local/bin/${bin}" > /dev/null \
+           || { echo "${bin}: no cargo-auditable manifest after strip" >&2; exit 1; }; \
+       done \
     && install -d -o 65532 -g 65532 -m 0700 /var/lib/makod
 
 # ╔══════════════════════════════════════════════════════════════════════════════
@@ -173,29 +199,18 @@ RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/
 COPY . .
 RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target-full,sharing=locked,target=/build/target \
-    CARGO_INCREMENTAL=1 mold -run cargo build --profile ${PROFILE} -p makod -p marktd -p invoicd -p edmd -p obsd \
+    CARGO_INCREMENTAL=1 mold -run cargo auditable build --profile ${PROFILE} -p makod -p marktd -p invoicd -p edmd -p obsd \
                                      -p netzbilanzd -p sperrd -p einsd \
                                      -p productd -p billingd -p outputd -p accountingd \
                                      -p vertragd -p portald -p agentd -p mabis-syncd \
-    && CARGO_INCREMENTAL=1 mold -run cargo build --profile ${PROFILE} -p processd --features integrated \
+    && CARGO_INCREMENTAL=1 mold -run cargo auditable build --profile ${PROFILE} -p processd --features integrated \
     && BIN_DIR="$([ "${PROFILE}" = "release" ] && echo target/release || echo target/debug)" \
-    && cp "${BIN_DIR}/makod"       /usr/local/bin/makod       && strip /usr/local/bin/makod \
-    && cp "${BIN_DIR}/marktd"      /usr/local/bin/marktd      && strip /usr/local/bin/marktd \
-    && cp "${BIN_DIR}/processd"    /usr/local/bin/processd    && strip /usr/local/bin/processd \
-    && cp "${BIN_DIR}/invoicd"     /usr/local/bin/invoicd     && strip /usr/local/bin/invoicd \
-    && cp "${BIN_DIR}/edmd"        /usr/local/bin/edmd        && strip /usr/local/bin/edmd \
-    && cp "${BIN_DIR}/obsd"        /usr/local/bin/obsd        && strip /usr/local/bin/obsd \
-    && cp "${BIN_DIR}/netzbilanzd" /usr/local/bin/netzbilanzd && strip /usr/local/bin/netzbilanzd \
-    && cp "${BIN_DIR}/sperrd"      /usr/local/bin/sperrd      && strip /usr/local/bin/sperrd \
-    && cp "${BIN_DIR}/einsd"       /usr/local/bin/einsd       && strip /usr/local/bin/einsd \
-    && cp "${BIN_DIR}/productd"     /usr/local/bin/productd     && strip /usr/local/bin/productd \
-    && cp "${BIN_DIR}/billingd"    /usr/local/bin/billingd    && strip /usr/local/bin/billingd \
-    && cp "${BIN_DIR}/outputd"     /usr/local/bin/outputd     && strip /usr/local/bin/outputd \
-    && cp "${BIN_DIR}/accountingd" /usr/local/bin/accountingd && strip /usr/local/bin/accountingd \
-    && cp "${BIN_DIR}/vertragd"    /usr/local/bin/vertragd    && strip /usr/local/bin/vertragd \
-    && cp "${BIN_DIR}/portald"     /usr/local/bin/portald     && strip /usr/local/bin/portald \
-    && cp "${BIN_DIR}/agentd"      /usr/local/bin/agentd      && strip /usr/local/bin/agentd \
-    && cp "${BIN_DIR}/mabis-syncd" /usr/local/bin/mabis-syncd && strip /usr/local/bin/mabis-syncd \
+    && for bin in makod marktd processd invoicd edmd obsd netzbilanzd sperrd einsd \
+                  productd billingd outputd accountingd vertragd portald agentd mabis-syncd; do \
+         cp "${BIN_DIR}/${bin}" "/usr/local/bin/${bin}" && strip "/usr/local/bin/${bin}" || exit 1; \
+         rust-audit-info "/usr/local/bin/${bin}" > /dev/null \
+           || { echo "${bin}: no cargo-auditable manifest after strip" >&2; exit 1; }; \
+       done \
     && install -d -o 65532 -g 65532 -m 0700 /var/lib/makod
 
 # ╔══════════════════════════════════════════════════════════════════════════════
@@ -206,7 +221,7 @@ RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/
 #   • ca-certificates (system trust store for TLS)
 #   • No shell, no package manager, no coreutils
 #   • UID/GID 65532 "nonroot" pre-configured
-FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS runtime
 
 # tzdata: distroless/cc does not ship /usr/share/zoneinfo.
 # Copy only the zone data needed for TZ=Europe/Berlin (CET/CEST).
@@ -273,7 +288,7 @@ LABEL org.opencontainers.image.title="makod" \
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 5 — marktd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS marktd-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS marktd-runtime
 
 COPY --from=demo-builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=demo-builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
@@ -312,7 +327,7 @@ LABEL org.opencontainers.image.title="marktd" \
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 6 — processd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS processd-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS processd-runtime
 
 COPY --from=demo-builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=demo-builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
@@ -348,7 +363,7 @@ LABEL org.opencontainers.image.title="processd" \
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 7 — invoicd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS invoicd-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS invoicd-runtime
 
 COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
@@ -384,7 +399,7 @@ LABEL org.opencontainers.image.title="invoicd" \
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 8 — edmd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS edmd-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS edmd-runtime
 
 COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
@@ -420,7 +435,7 @@ LABEL org.opencontainers.image.title="edmd" \
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 9 — obsd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS obsd-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS obsd-runtime
 
 COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
@@ -456,7 +471,7 @@ LABEL org.opencontainers.image.title="obsd" \
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 10 — netzbilanzd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS netzbilanzd-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS netzbilanzd-runtime
 
 COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
@@ -485,7 +500,7 @@ LABEL org.opencontainers.image.title="netzbilanzd" \
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 11 — sperrd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS sperrd-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS sperrd-runtime
 
 COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
@@ -514,7 +529,7 @@ LABEL org.opencontainers.image.title="sperrd" \
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 12 — einsd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS einsd-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS einsd-runtime
 
 COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
@@ -543,7 +558,7 @@ LABEL org.opencontainers.image.title="einsd" \
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 13 — productd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS productd-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS productd-runtime
 
 COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
@@ -572,7 +587,7 @@ LABEL org.opencontainers.image.title="productd" \
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 14 — billingd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS billingd-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS billingd-runtime
 
 COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
@@ -601,7 +616,7 @@ LABEL org.opencontainers.image.title="billingd" \
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 15 — outputd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS outputd-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS outputd-runtime
 
 COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
@@ -630,7 +645,7 @@ LABEL org.opencontainers.image.title="outputd" \
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 16 — accountingd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS accountingd-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS accountingd-runtime
 
 COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
@@ -659,7 +674,7 @@ LABEL org.opencontainers.image.title="accountingd" \
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 17 — vertragd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS vertragd-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS vertragd-runtime
 
 COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
@@ -688,7 +703,7 @@ LABEL org.opencontainers.image.title="vertragd" \
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 18 — portald-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS portald-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS portald-runtime
 
 COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
@@ -717,7 +732,7 @@ LABEL org.opencontainers.image.title="portald" \
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 19 — agentd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS agentd-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS agentd-runtime
 
 COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
@@ -746,7 +761,7 @@ LABEL org.opencontainers.image.title="agentd" \
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 20 — mabis-syncd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS mabis-syncd-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS mabis-syncd-runtime
 
 COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC

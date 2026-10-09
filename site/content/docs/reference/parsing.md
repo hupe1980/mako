@@ -53,7 +53,7 @@ println!("pid:  {}", msg.detect_pruefidentifikator()?.as_u32());
 | `Error::FeatureNotEnabled { .. }` | The type is known, but its Cargo feature is not compiled in |
 | `Error::InterchangeCountMismatch { .. }` | `UNZ` DE 0036 disagrees with the UNH…UNT windows found |
 | `Error::InterchangeRefMismatch { .. }` | `UNZ` DE 0020 ≠ `UNB` DE 0020 |
-| `Error::InterchangePartyMismatch { .. }` | A message's `NAD+MS`/`NAD+MR` MP-ID disagrees with the envelope — Allgemeine Festlegungen V6.1d §2.13, enforced at parse (`crates/edi-energy/src/parse.rs:256`) |
+| `Error::InterchangePartyMismatch { .. }` | A message's `NAD+MS`/`NAD+MR` MP-ID disagrees with the envelope — Allgemeine Festlegungen V6.1d §2.13, enforced at parse (`crates/edi-energy/src/parse.rs`) |
 | `Error::ProfileNotFound { .. }`, `Error::ProfileNotYetActive { .. }` | No profile covers the message's release, or it is not in force at the reference date |
 
 The Prüfidentifikator does **not** live in the same place in every message type:
@@ -102,7 +102,7 @@ let msg = Parser::with_config(config).parse(bytes)?;
 | `max_messages_per_interchange` | 1 000 |
 | `max_segments_per_message` | 500 — a per-UNH ceiling under the interchange-wide `max_segments` |
 
-Source: `ParseConfig::default`, `crates/edi-energy/src/parse.rs:171`.
+Source: `ParseConfig::default`, `crates/edi-energy/src/parse.rs`.
 
 ### Validation date override
 

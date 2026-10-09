@@ -1,9 +1,14 @@
 #![deny(unsafe_code)]
 #![warn(clippy::pedantic)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::missing_errors_doc)]
+#![expect(
+    clippy::module_name_repetitions,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 // German regulatory terms (GPKE, GeLi, MaLo, MaStR, BK…) are not Rust items.
-#![allow(clippy::doc_markdown)]
+#![expect(
+    clippy::doc_markdown,
+    reason = "German regulatory terms (GPKE, GeLi, MaLo, MaStR, BK…) are not Rust items"
+)]
 //! `mako-pruefung` — decides the **Antwortnachricht** a market participant owes.
 //!
 //! Every inbound GPKE or GeLi Gas message that expects an answer has published
@@ -24,7 +29,7 @@
 //! | [`esa`] | MSB (Bestellung) und ESA (Abrechnung) | `E_0252`, `E_0254`, `E_0256`, `E_0257` und `E_0264`–`E_0267` |
 //! | [`rechnung`] | ESA, LF, NB | one invoice walk, three [`rechnung::FAMILIEN`] |
 //! | [`emob`] | NB (VNB), LF | NZR-EMob / Modell 2: `E_0510`–`E_0513` |
-//! | [`mabis`] | NB, LF, BKV | the 28 MaBiS and Redispatch trees (`E_0004`–`E_0104`, `E_0901`, `E_0902`) |
+//! | [`mabis`] | NB, LF, BKV | the 32 MaBiS and Redispatch trees (`E_0004`–`E_0104`, `E_0901`, `E_0902`) |
 //!
 //! The document defines around sixty trees with the LF as prüfende Rolle;
 //! these are its **process** answers, the messages that move a Marktlokation

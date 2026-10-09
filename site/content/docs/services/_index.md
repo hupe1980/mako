@@ -6,25 +6,18 @@ sort_by = "weight"
 template = "section.html"
 page_template = "page.html"
 +++
-mako implements the BDEW **Marktkommunikation** — the regulated message exchange between the
-four German energy-market roles: **LF** (Lieferant, the retail supplier), **NB**
-(Netzbetreiber, the grid operator), **MSB** (Messstellenbetreiber, the metering operator) and
-**BKV** (Bilanzkreisverantwortlicher, who answers for a balancing group). Each service below
-runs as one or more of those roles; see
-[Party Roles](@/docs/architecture/domain-model.md#party-roles-marktrollen) for what each one
-owns.
+mako implements the BDEW **Marktkommunikation** between the four German market
+roles — **LF** (Lieferant), **NB** (Netzbetreiber), **MSB**
+(Messstellenbetreiber) and **BKV** (Bilanzkreisverantwortlicher); see
+[Party Roles](@/docs/architecture/domain-model.md#party-roles-marktrollen).
 
-mako consists of **17 independently deployable services**, each built as a self-contained Docker image with:
-- TOML configuration with `_FILE` suffix for Kubernetes secrets
-- Cedar ABAC authorization
-- OIDC/JWT + API-key authentication  
-- OpenTelemetry traces and metrics
-- MCP server at `/mcp` (Streamable HTTP) on 15 of the 17 services — all except outputd and agentd (the MCP host)
-- Structured health endpoints (`/health`, `/health/ready`)
-
-All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)** — the shared SDK that provides `shutdown::token/serve` (SIGINT+SIGTERM graceful drain), `OidcConfig::build_verifier`, `McpAuth`+`McpAuthConfig`, `init_tracing_from_env`, `DatabaseConfig`, `HttpConfig`, `CedarEnforcer`, the transactional `outbox`, and more. This means zero copy-pasted infrastructure code across the 17 daemons.
-
-`DatabaseConfig::connect(url, service_name)` is the single PostgreSQL pool builder every daemon uses: it applies the configured `pool_size` plus `acquire_timeout_secs` / `idle_timeout_secs` / `max_lifetime_secs` (so a pool never queues unboundedly or pins a connection across a failover) and tags each connection with the service name in `pg_stat_activity`. Tuning lives in one place rather than being re-derived per service.
+mako consists of **17 independently deployable services**, each a self-contained
+Docker image built on the [`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)
+SDK, with TOML configuration (`env:` and `_FILE` secrets), OIDC/JWT and API-key
+authentication, Cedar ABAC, OpenTelemetry, `/health/live` · `/health/ready` ·
+`/metrics`, and an MCP server at `/mcp` (Streamable HTTP) on 15 of the 17 —
+all except outputd and agentd (the MCP host). `just dev <service>` runs one
+against `dev/config/<service>.toml`.
 
 ---
 
@@ -71,7 +64,7 @@ graph TB
     makod <-->|CloudEvents| marktd
     marktd -->|webhook fan-out| processd & invoicd & edmd & obsd & agentd
     makod -->|commands| netzbilanzd & invoicd
-    mabis -->|UTILTS cmd| makod
+    mabis -->|MSCONS 13003 cmd| makod
     billingd -->|de.billing.rechnung.erstellt| accountingd
     billingd -->|render · pin hash| outputd
     vertragd -->|start-supply| processd
@@ -93,7 +86,7 @@ graph TB
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [invoicd](@/docs/services/invoicd.md) | `:8280` | LF | INVOIC plausibility-check — eight stages plus the WiM 31003 send window (incl. ToU band routing via `zaehlzeitregister`), auto-settle/dispute, § 147 AO / GoBD receipts |
-| [netzbilanzd](@/docs/services/netzbilanzd.md) | `:8680` | NB | NNE/KA/MMM/MSB/AWH billing — generates INVOIC 31001/31002/31005/31009/31011, full REMADV lifecycle, §14a Modul 2 ToU, §42b EnWG GGV, Redispatch 2.0 Kostenblatt, 8-tool MCP server |
+| [netzbilanzd](@/docs/services/netzbilanzd.md) | `:8680` | NB | NNE/KA/MMM/MSB/AWH billing — generates INVOIC 31001/31002/31005/31009/31011, full REMADV lifecycle, §14a Modul 3 ToU, §42b EnWG GGV, Redispatch 2.0 Kostenblatt, 8-tool MCP server |
 | [sperrd](@/docs/services/sperrd.md) | `:8780` | NB | Sperrung execution tracking — IFTSTA 21039 auto-dispatch on field confirmation; `GET /api/v1/sperr-orders/stats` compliance snapshot; tenant isolation; 4-tool MCP server |
 
 ## Energy Data & Observability
@@ -133,20 +126,16 @@ with per-channel evidence.
 | [portald](@/docs/services/portald.md) | `:9480` | LF | Customer Portal gateway — stateless aggregation over all LF services plus the §41 EnWG self-service writes (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16) and the document inbox served out of outputd; every route resolves customer ownership through `vertragd`; 8-tool operator MCP server |
 | [agentd](@/docs/services/agentd.md) | `:9580` | All | Multi-agent LLM orchestration — **28 declarative manifests** on the agentplane durable runtime, every effect journaled; read-only by construction, so oversight is a triage worklist |
 
-`agentd`'s manifests are activated through `[bundled_agents]`. One event yields one journaled
-run per subscribing specialist — there is no first-wins mode, because cancelling a loser
-leaves an unknown outcome on the record. No active manifest grants a mutating tool, so a
-finding opens a triage row beside the answer rather than suspending the run in front of it.
-`POST /api/v1/run` is OIDC-authenticated, the inbound webhook is HMAC-verified, and each
-specialist publishes an A2A agent card derived from its manifest.
+`agentd`'s manifests are activated through `[bundled_agents]`; one event yields
+one journaled run per subscribing specialist, and since no manifest grants a
+mutating tool, a finding opens a triage row rather than suspending the run.
 
 ---
 
 ## Shared foundation — the `mako-service` SDK
 
 Every daemon is built on the [`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)
-crate, so the operational surface — health, config, auth, tracing, shutdown, event delivery — is
-identical across all 17. A service's `main` is a single line:
+crate. A service's `main` is a single line:
 
 ```rust
 #[tokio::main]
@@ -185,28 +174,22 @@ What every service gets for free from the runner:
 | **Shutdown** | SIGINT/SIGTERM graceful drain; workers observe `ctx.shutdown` |
 | **Health probe** | `--check` in-container HEALTHCHECK (no shell, no curl) |
 
-Event-emitting services — accountingd, billingd, einsd, mabis-syncd, netzbilanzd and
-vertragd — add the SDK's **transactional outbox**: each outbound CloudEvent is written to
-`event_outbox` *in the same transaction* as the business change and drained by a background
-`OutboxWorker` with retry and a status-column dead-letter queue. (`marktd` keeps its own
-`event_log` outbox ahead of the durable fan-out, and `invoicd` retries its ERP notifications
-from columns on `invoic_receipts` rather than from an `event_outbox`.) Because the event is committed atomically with the data that
-justifies it, a crash between "commit" and "deliver" can never drop or duplicate it —
-persist-before-dispatch. Emission always goes through one builder and one signer
-(`CloudEvent::new` + `post_ce_with_retry`; Standard Webhooks (`webhook-signature`)).
+Event-emitting services — accountingd, billingd, edmd, einsd, mabis-syncd,
+netzbilanzd, sperrd and vertragd — use the SDK's **transactional outbox**: each
+CloudEvent is written to `event_outbox` *in the same transaction* as the
+business change and drained by an `OutboxWorker` with retry and a status-column
+dead-letter queue. `marktd` keeps its own `event_log` outbox ahead of the durable
+fan-out, and `invoicd` retries ERP notifications from columns on
+`invoic_receipts`. Emission always goes through `CloudEvent::new` +
+`post_ce_with_retry`, signed as Standard Webhooks (`webhook-signature`).
 
-Both outboxes wake their worker with a Postgres `NOTIFY`, raised by an
-`AFTER INSERT` trigger on the table rather than by the producer: Postgres holds
-it until the transaction commits, so the worker cannot wake onto a snapshot
-without the event, and every replica hears it. The 30 s poll interval stays the
-fallback — a lost notification delays delivery, never drops it.
+Both outboxes wake their worker from an `AFTER INSERT` trigger's `NOTIFY`, which
+Postgres holds until commit; the 30 s poll is the fallback.
 `cargo xtask check-outbox-notify` holds trigger, channel and listener together.
 
-> `makod`, `marktd` and `agentd` keep bespoke `main`s — `makod`/`marktd` for their non-standard
-> runtimes (SlateDB event store, `marktd`'s durable fan-out worker), `agentd` because it holds no
-> database. All three still use the same SDK building blocks (config, auth, tracing, shutdown,
-> HMAC). `portald` is stateless too and runs on `mako_service::run` — the runner supports a daemon
-> with no `[database]`.
+`makod` alone keeps a bespoke `main` for its SlateDB event store and AS4
+runtime; every other service, the stateless `portald` and `agentd` included,
+runs on `mako_service::run`.
 
 ---
 

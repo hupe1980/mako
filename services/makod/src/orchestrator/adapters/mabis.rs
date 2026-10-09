@@ -604,10 +604,14 @@ pub fn mabis_summenzeitreihe_registry() -> AdapterRegistry<MabisBillingWorkflow>
 
             // Which phase the arrival falls in — the calendar decides, not the
             // message (Kap. 3.10 Tabelle 2).
-            let im_erstaufschlag = bilanzierungsmonat_aus(&document_date).is_some_and(|monat| {
+            let monat = bilanzierungsmonat_aus(&document_date);
+            let im_erstaufschlag = monat.is_some_and(|monat| {
                 monat
                     .phase(zeitreihe, mako_fristen::heute())
                     .ist_erstaufschlag()
+            });
+            let clearing_ende = monat.and_then(|monat| {
+                monat.clearing_ende(zeitreihe, mako_mabis::fristen::Abrechnungslauf::Bka)
             });
 
             Ok(BillingCommand::ReceiveSummenzeitreihe {
@@ -617,6 +621,7 @@ pub fn mabis_summenzeitreihe_registry() -> AdapterRegistry<MabisBillingWorkflow>
                 bilanzierungsmonat,
                 version,
                 im_erstaufschlag,
+                clearing_ende,
                 absender: MarktpartnerCode::new(
                     m.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
                 ),

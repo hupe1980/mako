@@ -38,11 +38,9 @@ pub fn parse_sparte(raw: &str) -> Option<Sparte> {
 /// `event_types` and `sparten` only, so every fan-out edmd is subscribed to
 /// arrives whatever its PID.
 ///
-/// What the set still states is *ownership*: these are the Messwesen
-/// Anwendungsfälle edmd is the process home for, as against
-/// [`REDISPATCH_MSCONS_PIDS`], whose intervals edmd stores for OLAP and audit
-/// while another family routes the message. That distinction is what the table
-/// below documents, and `pid_table_matches_descriptions` keeps it honest.
+/// It states *ownership*, as against [`REDISPATCH_MSCONS_PIDS`], whose
+/// intervals edmd stores for OLAP and audit while another family routes the
+/// message.
 ///
 /// ## Messwesen PIDs
 ///
@@ -62,9 +60,7 @@ pub fn parse_sparte(raw: &str) -> Option<Sparte> {
 ///
 /// **This table and [`mscons_pid_description`] render one source** — the BDEW
 /// *Anwendungsübersicht der Prüfidentifikatoren* 4.0 — and
-/// `pid_table_matches_descriptions` pins them together, because a row naming a
-/// different Anwendungsfall than its PID carries sends a reader to the wrong
-/// AHB section.
+/// `pid_table_matches_descriptions` pins them together.
 ///
 /// ## 13006 is a cancellation, not a reading
 ///
@@ -80,15 +76,9 @@ pub fn parse_sparte(raw: &str) -> Option<Sparte> {
 /// them into a separate, non-billing store — see [`ESA_TYP2_PIDS`], [`Typ2Read`],
 /// and the handler fork.
 ///
-/// ## Note on PIDs 13002–13028
-///
-/// These are **Messwesen-PIDs** (meter data exchange), distinct from PID 13003
-/// (MABIS Bilanzkreisabrechnung). They must not be registered under any MABIS
-/// workflow in `mako-mabis`. They belong exclusively to `edmd` as meter-data receipts.
-///
-/// **Exception**: PID 13013 (Gas MMMA Allokationsliste) is also routed in
-/// `mako-gabi-gas` `gabi-gas-mmma` for workflow state tracking, but the raw
-/// meter-data receipts and interval values are stored here in `edmd`.
+/// None of these is MaBiS (13003 is), so none is registered under `mako-mabis`.
+/// 13013 is also routed by `mako-gabi-gas` `gabi-gas-mmma` for workflow state;
+/// its values are stored here.
 ///
 /// Source: BDEW *Anwendungsübersicht der Prüfidentifikatoren* 4.0; MSCONS AHB.
 pub const MSCONS_PIDS: &[u32] = &[

@@ -126,8 +126,19 @@ pub enum GeliGasDatenabrufState {
     DatenErhalten,
     /// NB/MSB rejected the request (ORDRSP 19103/19104).
     Abgelehnt,
-    /// Deadline expired without a response.
-    DeadlineExpired,
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// No Festlegung states a consequence of the Datenabruf going unanswered. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<GeliGasDatenabrufState>,
+    },
 }
 
 impl GeliGasDatenabrufState {
@@ -139,7 +150,16 @@ impl GeliGasDatenabrufState {
             Self::AnfrageGesendet { .. } => "AnfrageGesendet",
             Self::DatenErhalten => "DatenErhalten",
             Self::Abgelehnt => "Abgelehnt",
-            Self::DeadlineExpired => "DeadlineExpired",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 }
@@ -151,8 +171,9 @@ impl GeliGasDatenabrufState {
 pub enum GeliGasDatenabrufCommand {
     /// ERP instructs the LF to initiate a Gas data request (ORDERS 17103/17104 outbound).
     ///
-    /// Spawns a new `GeliGasDatenabrufWorkflow`, enqueues the outbound ORDERS
-    /// message, and registers the 10-Werktage response deadline.
+    /// Spawns a new `GeliGasDatenabrufWorkflow` and enqueues the outbound
+    /// ORDERS message; the door registers the NB's answer window
+    /// ([`mako_fristen::antwort::brennwert_zustandszahl_due`]).
     ///
     /// Use PID 17103 to request Abrechnungsbrennwert + Zustandszahl.
     InitiateAnfrage {
@@ -164,6 +185,9 @@ pub enum GeliGasDatenabrufCommand {
         receiver: MarktpartnerCode,
         /// EDIFACT message reference (generated at dispatch time).
         message_ref: MessageRef,
+        /// Last day of the Zeitspanne the Brennwert is asked for — it sets the
+        /// earliest day the NB may answer (GeLi Gas 3.0 Kap. 4.2).
+        zeitspanne_bis: time::Date,
     },
     /// Inbound ORDERS data request received.
     ReceiveAnfrage {
@@ -203,12 +227,39 @@ impl CommandPayload for GeliGasDatenabrufCommand {}
 /// GeLi Gas Datenabruf workflow — handles Gas-specific data requests.
 pub struct GeliGasDatenabrufWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// The answer window is open while the Anfrage waits for its answer
+/// (`AnfrageGesendet`).
+fn window_open(label: &str, state: &GeliGasDatenabrufState) -> bool {
+    label == ANTWORT_WINDOW_LABEL && matches!(state, GeliGasDatenabrufState::AnfrageGesendet { .. })
+}
+
 impl Workflow for GeliGasDatenabrufWorkflow {
     type State = GeliGasDatenabrufState;
     type Event = GeliGasDatenabrufEvent;
     type Command = GeliGasDatenabrufCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[ANTWORT_WINDOW_LABEL];
+
+    fn on_deadline(
+        deadline: &mako_engine::deadline::Deadline,
+        state: &Self::State,
+    ) -> Option<Self::Command> {
+        window_open(deadline.label(), state).then(|| GeliGasDatenabrufCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
+    }
+
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            GeliGasDatenabrufState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             GeliGasDatenabrufEvent::AnfrageErhalten { pid, sender, .. } => {
                 if matches!(state, GeliGasDatenabrufState::New) {
@@ -222,16 +273,15 @@ impl Workflow for GeliGasDatenabrufWorkflow {
             }
             GeliGasDatenabrufEvent::AbgelehntErhalten { .. } => GeliGasDatenabrufState::Abgelehnt,
             GeliGasDatenabrufEvent::DatenGeliefert => GeliGasDatenabrufState::DatenErhalten,
-            GeliGasDatenabrufEvent::DeadlineExpired { .. } => {
-                if matches!(
-                    state,
-                    GeliGasDatenabrufState::Abgelehnt | GeliGasDatenabrufState::DatenErhalten
-                ) {
-                    state
-                } else {
-                    GeliGasDatenabrufState::DeadlineExpired
+            GeliGasDatenabrufEvent::DeadlineExpired { label, .. } => match state {
+                GeliGasDatenabrufState::AnfrageGesendet { .. } => {
+                    GeliGasDatenabrufState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
+                    }
                 }
-            }
+                other => other,
+            },
         }
     }
 
@@ -239,12 +289,17 @@ impl Workflow for GeliGasDatenabrufWorkflow {
         state: &Self::State,
         cmd: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match cmd {
             GeliGasDatenabrufCommand::InitiateAnfrage {
                 pid,
                 sender,
                 receiver,
                 message_ref,
+                zeitspanne_bis,
             } => {
                 if !ORDERS_ANFRAGE_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
@@ -269,6 +324,7 @@ impl Workflow for GeliGasDatenabrufWorkflow {
                         "sender":     sender.as_str(),
                         "receiver":   receiver.as_str(),
                         "message_ref": message_ref.as_str(),
+                        "zeitspanne_bis": zeitspanne_bis.to_string(),
                     }),
                 );
                 Ok(mako_engine::workflow::WorkflowOutput::with_outbox(
@@ -328,10 +384,7 @@ impl Workflow for GeliGasDatenabrufWorkflow {
                 }
             }
             GeliGasDatenabrufCommand::TimeoutExpired { deadline_id, label } => {
-                if matches!(
-                    state,
-                    GeliGasDatenabrufState::Abgelehnt | GeliGasDatenabrufState::DatenErhalten
-                ) {
+                if !window_open(&label, lapsed) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![GeliGasDatenabrufEvent::DeadlineExpired { deadline_id, label }].into())

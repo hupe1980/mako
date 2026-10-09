@@ -13,6 +13,136 @@ use sqlx::PgPool;
 use crate::config::EinsdConfig;
 use crate::pg::{AnlageRow, Korrektur, SettleResult};
 
+/// The legal basis a Beihilfevorbehalt refusal or position names.
+pub const BEIHILFEVORBEHALT_GRUNDLAGE: &str = "Beihilfevorbehalt: EEG-2023-Genehmigung befristet bis \
+     31.12.2026; § 104 EEG 2027 (Entwurf, BT-Drs. 21/7867)";
+
+/// A Teil-3 payment for a supply period no recorded state-aid approval covers,
+/// refused under the `verweigern` policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BeihilfevorbehaltOffen {
+    /// The plant.
+    pub tr_id: String,
+    /// The first day of the supply period.
+    pub periodenbeginn: Option<time::Date>,
+}
+
+impl std::fmt::Display for BeihilfevorbehaltOffen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Anlage {}: keine beihilferechtliche Genehmigung deckt den Zeitraum ab {} — \
+             Zahlung nicht angewandt ({BEIHILFEVORBEHALT_GRUNDLAGE}). Eine Genehmigung wird \
+             unter [beihilfevorbehalt] genehmigungen erfasst.",
+            self.tr_id,
+            self.periodenbeginn
+                .map_or_else(|| "unbekannt".to_owned(), |d| d.to_string())
+        )
+    }
+}
+
+impl std::error::Error for BeihilfevorbehaltOffen {}
+
+/// Consult the Beihilfevorbehalt for one plant and month.
+///
+/// `Ok(None)` — covered, settle as usual. `Ok(Some(text))` — uncovered under
+/// the `unter_vorbehalt` policy: settle, stating `text` on the receipt.
+///
+/// A KWKG plant is outside it: the Zuschlag is paid under the KWKG, not under
+/// Teil 3 of the EEG.
+///
+/// # Errors
+///
+/// [`BeihilfevorbehaltOffen`] under the `verweigern` policy.
+pub fn beihilfevorbehalt_pruefen(
+    cfg: &EinsdConfig,
+    anlage: &AnlageRow,
+    year: i16,
+    month: i16,
+) -> Result<Option<String>, BeihilfevorbehaltOffen> {
+    if anlage.settlement_model == crate::models::KWKG_ZUSCHLAG {
+        return Ok(None);
+    }
+    let periodenbeginn = u8::try_from(month)
+        .ok()
+        .and_then(|m| time::Month::try_from(m).ok())
+        .and_then(|m| time::Date::from_calendar_date(i32::from(year), m, 1).ok());
+    if eeg_billing::beihilfevorbehalt(periodenbeginn, &cfg.beihilfevorbehalt.genehmigungen)
+        .anwendbar()
+    {
+        return Ok(None);
+    }
+    match cfg.beihilfevorbehalt.politik {
+        crate::config::BeihilfePolitik::Verweigern => Err(BeihilfevorbehaltOffen {
+            tr_id: anlage.tr_id.clone(),
+            periodenbeginn,
+        }),
+        crate::config::BeihilfePolitik::UnterVorbehalt => Ok(Some(format!(
+            "Zahlung unter Beihilfevorbehalt — keine beihilferechtliche Genehmigung \
+             für den Zeitraum ab {} erfasst",
+            periodenbeginn.map_or_else(|| "unbekannt".to_owned(), |d| d.to_string())
+        ))),
+    }
+}
+
+/// A plant claiming the MiSpeL Pauschaloption (§ 19 Abs. 3c EEG), refused
+/// while the Commission's state-aid approval is outstanding.
+///
+/// BNetzA, MiSpeL (Az. 618-25-02), Tenorziffer 9 b): „Die Tenorziffern 2 und 4
+/// sind frühestens für Netzeinspeisung ab dem ersten Kalendertag des
+/// Kalendermonats anwendbar, der auf die beihilferechtliche Genehmigung der
+/// Europäischen Kommission zu § 19 Abs. 3c EEG im Sinne des
+/// beihilferechtlichen Vorbehalts nach § 101 Abs. 1 EEG folgt." No such
+/// approval exists, so there is no period the option applies to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PauschaloptionNichtAnwendbar {
+    /// The plant.
+    pub tr_id: String,
+}
+
+impl std::fmt::Display for PauschaloptionNichtAnwendbar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Anlage {}: speicher_option PAUSCHAL — die Pauschaloption (§ 19 Abs. 3c EEG) ist \
+             nach MiSpeL Tz. 9 b) (BNetzA, Az. 618-25-02) erst ab dem Monat nach der \
+             beihilferechtlichen Genehmigung der Europäischen Kommission anwendbar, und \
+             diese liegt nicht vor",
+            self.tr_id
+        )
+    }
+}
+
+impl std::error::Error for PauschaloptionNichtAnwendbar {}
+
+/// Refuse a plant on the MiSpeL Pauschaloption.
+///
+/// # Errors
+///
+/// [`PauschaloptionNichtAnwendbar`] for `speicher_option = 'PAUSCHAL'`.
+pub fn pauschaloption_pruefen(anlage: &AnlageRow) -> Result<(), PauschaloptionNichtAnwendbar> {
+    if anlage.speicher_option == "PAUSCHAL" {
+        return Err(PauschaloptionNichtAnwendbar {
+            tr_id: anlage.tr_id.clone(),
+        });
+    }
+    Ok(())
+}
+
+/// The HTTP status a settlement failure is reported with: `422` for a
+/// Beihilfevorbehalt or Pauschaloption refusal — the plant's or the period's
+/// state, not a server fault — `500` for everything else.
+#[must_use]
+pub fn settle_error_status(e: &anyhow::Error) -> axum::http::StatusCode {
+    if e.downcast_ref::<BeihilfevorbehaltOffen>().is_some()
+        || e.downcast_ref::<PauschaloptionNichtAnwendbar>().is_some()
+    {
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    } else {
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
 /// What a caller may override for one settlement run.
 ///
 /// Every field left `None` is resolved from the plant, the market-data store or
@@ -54,6 +184,10 @@ pub async fn settle_plant(
     month: i16,
     req: SettleRequest,
 ) -> anyhow::Result<SettleResult> {
+    // ── State-aid gates — before anything is fetched or written ──────────────
+    pauschaloption_pruefen(anlage)?;
+    let beihilfevorbehalt_hinweis = beihilfevorbehalt_pruefen(cfg, anlage, year, month)?;
+
     // ── Einspeisemenge ───────────────────────────────────────────────────────
     let einspeisemenge_kwh = match req.einspeisemenge_kwh {
         Some(kwh) => Some(kwh),
@@ -144,6 +278,7 @@ pub async fn settle_plant(
             jahresmarktwert_ct_kwh: None,
             sect51_abs3_unreported_days,
             ausfallverguetung,
+            beihilfevorbehalt_hinweis,
         },
     )?;
 

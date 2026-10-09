@@ -229,6 +229,15 @@ pub enum ClearinglisteState {
     },
 }
 
+impl mako_engine::workflow::OccupiesBusinessKey for ClearinglisteState {
+    /// A Clearingliste occupies its key only while it awaits validation; a
+    /// validated or refused list is settled, and the next list for the same key
+    /// is a new process.
+    fn occupies_business_key(&self) -> bool {
+        matches!(self, Self::Erhalten(_))
+    }
+}
+
 impl ClearinglisteState {
     /// Stable string label for the current variant.
     #[must_use]
@@ -293,7 +302,7 @@ impl CommandPayload for ClearinglisteCommand {}
 ///     tenant_id,
 ///     WorkflowId::new("mabis-clearingliste", "FV2025-10-01"),
 /// );
-/// process.execute(ClearinglisteCommand::ReceiveClearingliste { ... }).await?;
+/// process.run(ClearinglisteCommand::ReceiveClearingliste { ... }, RunOptions::new()).await?;
 /// ```
 pub struct MabisClearinglisteWorkflow;
 

@@ -1,0 +1,34 @@
+# processd.toml — local development: `just dev processd` starts processd with this file against
+# the PostgreSQL of dev/docker-compose.yml (`just infra-up`). Authentication is
+# off and the secrets are fixed strings. DO NOT use in production.
+#
+# Every key can be overridden by an environment variable — `PROCESSD_<KEY>`, nested
+# keys joined with `__`. `processd --help` lists the conventions.
+
+allow_insecure_no_auth = true
+
+[http]
+addr = "127.0.0.1:8580"
+
+[database]
+url = "postgres://dev:dev@localhost:5432/processd"
+
+[identity]
+own_mp_id = "9900357000004"
+
+[makod]
+url     = "http://127.0.0.1:8080"
+api_key = "dev-makod-key"
+
+[marktd]
+url     = "http://127.0.0.1:8180"
+api_key = "dev-marktd-key"
+
+[webhook]
+
+# Self-registration with marktd is off, so processd starts without marktd
+# running. With `just dev marktd` up, uncomment it to receive
+# de.mako.process.initiated events.
+[subscription]
+# webhook_url = "http://127.0.0.1:8580/webhook"
+subscriber_id = "processd-dev"

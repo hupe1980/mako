@@ -5,9 +5,11 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
 
+# Every job reads the repository and nothing else unless it says so: `publish`
+# mints OIDC tokens for crates.io, the image jobs push to ghcr.io and attest,
+# and `release` alone writes — it creates the GitHub Release.
 permissions:
-  contents: write   # needed to create GitHub Releases
-  packages: write   # needed to push to ghcr.io
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -35,22 +37,25 @@ jobs:
       # workflow-scoped: `publish` must not deny warnings it does not own.
       RUSTFLAGS: "-D warnings"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - name: Toolchain is rust-toolchain.toml's
+        shell: bash
+        run: |
+          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+          have=$(rustc --version | cut -d' ' -f2)
+          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
+            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
       # command needs an interpreter >= 3.11. `.cargo/config.toml` points
       # PYO3_PYTHON at the developer's `.venv`, which does not exist here — and
       # cargo leaves an already-set variable alone, so naming the runner's
       # interpreter here is what makes the workspace build.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
 
@@ -89,15 +94,14 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Tests
-        # Mirror the CI test-workspace exclusions: edi-energy is covered by its
-        # own feature-matrix job and makod requires runtime-only features.
-        run: cargo test --workspace --all-features --exclude edi-energy --exclude makod
+        # Mirror the CI test-workspace job: makod's suite has a job of its own.
+        run: cargo test --workspace --all-features --exclude makod
 
       - name: Warning gate
-        run: cargo check --all-targets --all-features
+        run: cargo check --workspace --all-targets --all-features
 
   # ── Profile validation ───────────────────────────────────────────────────────
   validate-profiles:
@@ -105,28 +109,63 @@ jobs:
     runs-on: ubuntu-latest
     needs: preflight
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Toolchain is rust-toolchain.toml's
+        shell: bash
+        run: |
+          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+          have=$(rustc --version | cut -d' ' -f2)
+          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
+            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build xtask
         run: cargo build -p xtask
       - name: validate-profiles
         run: cargo xtask validate-profiles
 
   # ── Publish to crates.io ─────────────────────────────────────────────────────
+  #
+  # crates.io Trusted Publishing: no registry token is stored anywhere. Each
+  # `cargo publish` reads a token `rust-lang/crates-io-auth-action` mints from
+  # this job's OIDC identity — trusted on crates.io for repository
+  # `hupe1980/mako`, workflow `release.yml`, environment `crates-io` — and the
+  # action's post step revokes it when the job ends. crates.io issues such a
+  # token for 30 minutes (`ACCESS_TOKEN_LIFETIME`,
+  # `src/controllers/trustpub/tokens/exchange/mod.rs` in the crates.io source),
+  # and 24 verified publishes take longer than that, so every crate mints its
+  # own immediately before it publishes.
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest
     needs: [validate-profiles]
     environment: crates-io
+    permissions:
+      contents: read
+      id-token: write   # the OIDC token crates.io exchanges for a publish token
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0   # semver needs the previous release tag
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Toolchain is rust-toolchain.toml's
+        shell: bash
+        run: |
+          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+          have=$(rustc --version | cut -d' ' -f2)
+          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
+            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
 
       - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: cargo-semver-checks,just
+
+      # A public-API break the new version number does not admit stops the
+      # release before any crate is published.
+      - name: Published API admitted by the version (cargo-semver-checks)
+        run: just semver
 
       # 25 `cargo publish` runs share one target directory, and each verifies by
       # building the packaged crate.
@@ -137,210 +176,328 @@ jobs:
                       /usr/share/dotnet /opt/ghc /usr/local/share/powershell
           df -h /
 
+      # Trusted Publishing can only take over a crate that exists: crates.io
+      # creates a crate on its first publish, and a trusted publisher is
+      # configured per existing crate. A crate added to the list below is
+      # refused here, by name, before anything is uploaded.
+      - name: Every crate already exists on crates.io
+        run: |
+          set -euo pipefail
+          missing=0
+          while read -r crate; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+                     -A 'mako-release (https://github.com/hupe1980/mako)' \
+                     "https://crates.io/api/v1/crates/${crate}")
+            if [ "$code" = 404 ]; then
+              echo "::error::${crate} has never been published — publish it once by hand with a personal token, then configure its trusted publisher (hupe1980/mako, release.yml, environment crates-io) on crates.io"
+              missing=1
+            elif [ "$code" != 200 ]; then
+              echo "::error::crates.io answered ${code} for ${crate}"
+              missing=1
+            fi
+          done < <(grep -oE 'cargo publish -p [a-z0-9_-]+' .github/workflows/release.yml | awk '{print $4}')
+          exit "$missing"
+
+      - name: crates.io token for edi-energy
+        id: auth-edi-energy
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
       - name: Publish edi-energy
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-edi-energy.outputs.token }}
         run: |
           out=$(cargo publish -p edi-energy 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
+
+      - name: crates.io token for energy-api
+        id: auth-energy-api
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish energy-api
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-energy-api.outputs.token }}
         run: |
           out=$(cargo publish -p energy-api 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
+
+      - name: crates.io token for redispatch-xml
+        id: auth-redispatch-xml
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish redispatch-xml
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-redispatch-xml.outputs.token }}
         run: |
           out=$(cargo publish -p redispatch-xml 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
+
+      - name: crates.io token for dvgw-edi
+        id: auth-dvgw-edi
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish dvgw-edi
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-dvgw-edi.outputs.token }}
         run: |
           out=$(cargo publish -p dvgw-edi 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
 
       # Pure calculation libraries with no internal workspace lib deps — publish early.
+      - name: crates.io token for grid-billing
+        id: auth-grid-billing
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
       - name: Publish grid-billing
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-grid-billing.outputs.token }}
         run: |
           out=$(cargo publish -p grid-billing 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
+
+      - name: crates.io token for eeg-billing
+        id: auth-eeg-billing
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish eeg-billing
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-eeg-billing.outputs.token }}
         run: |
           out=$(cargo publish -p eeg-billing 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
+
+      - name: crates.io token for energy-billing
+        id: auth-energy-billing
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish energy-billing
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-energy-billing.outputs.token }}
         run: |
           out=$(cargo publish -p energy-billing 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
       
+      - name: crates.io token for mako-as4
+        id: auth-mako-as4
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
       - name: Publish mako-as4
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-as4.outputs.token }}
         run: |
           out=$(cargo publish -p mako-as4 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
       
       # Leaf crate (no internal deps) — depended on by mako-engine, mako-markt,
       # mako-obs, mako-gabi-gas. Must be published before any of them.
+      - name: crates.io token for mako-events
+        id: auth-mako-events
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
       - name: Publish mako-events
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-events.outputs.token }}
         run: |
           out=$(cargo publish -p mako-events 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
 
       # mako-fristen has no workspace dependency of its own and everything that
       # computes a Frist needs it — publish it before mako-engine.
+      - name: crates.io token for mako-fristen
+        id: auth-mako-fristen
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
       - name: Publish mako-fristen
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-fristen.outputs.token }}
         run: |
           out=$(cargo publish -p mako-fristen 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
 
       # Depends only on `mako-fristen` (published above) and crates.io `rubo4e`.
+      - name: crates.io token for mako-nbw
+        id: auth-mako-nbw
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
       - name: Publish mako-nbw
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-nbw.outputs.token }}
         run: |
           out=$(cargo publish -p mako-nbw 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
+
+      - name: crates.io token for mako-engine
+        id: auth-mako-engine
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish mako-engine
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-engine.outputs.token }}
         run: |
           out=$(cargo publish -p mako-engine 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
+
+      - name: crates.io token for mako-markt
+        id: auth-mako-markt
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish mako-markt
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-markt.outputs.token }}
         run: |
           out=$(cargo publish -p mako-markt 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
 
       # mako-pruefung depends on mako-markt and mako-fristen, and invoic-checker
       # depends on mako-pruefung — so it sits between them.
+      - name: crates.io token for mako-pruefung
+        id: auth-mako-pruefung
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
       - name: Publish mako-pruefung
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-pruefung.outputs.token }}
         run: |
           out=$(cargo publish -p mako-pruefung 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
+
+      - name: crates.io token for invoic-checker
+        id: auth-invoic-checker
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish invoic-checker
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-invoic-checker.outputs.token }}
         run: |
           out=$(cargo publish -p invoic-checker 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
 
+
+      - name: crates.io token for mako-obs
+        id: auth-mako-obs
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish mako-obs
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-obs.outputs.token }}
         run: |
           out=$(cargo publish -p mako-obs 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
 
       # The shared INVOIC settle/dispute state machine. mako-gpke, mako-wim,
       # mako-gabi-gas and mako-geli-gas each register a family against it, so it
       # must be published before all four.
+      - name: crates.io token for mako-invoic
+        id: auth-mako-invoic
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
       - name: Publish mako-invoic
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-invoic.outputs.token }}
         run: |
           out=$(cargo publish -p mako-invoic 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
+
+      - name: crates.io token for mako-gpke
+        id: auth-mako-gpke
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish mako-gpke
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-gpke.outputs.token }}
         run: |
           out=$(cargo publish -p mako-gpke 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
+
+      - name: crates.io token for mako-wim
+        id: auth-mako-wim
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish mako-wim
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-wim.outputs.token }}
         run: |
           out=$(cargo publish -p mako-wim 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
+
+      - name: crates.io token for mako-geli-gas
+        id: auth-mako-geli-gas
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish mako-geli-gas
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-geli-gas.outputs.token }}
         run: |
           out=$(cargo publish -p mako-geli-gas 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
+
+      - name: crates.io token for mako-mabis
+        id: auth-mako-mabis
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish mako-mabis
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-mabis.outputs.token }}
         run: |
           out=$(cargo publish -p mako-mabis 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
+
+      - name: crates.io token for mako-emob
+        id: auth-mako-emob
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish mako-emob
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-emob.outputs.token }}
         run: |
           out=$(cargo publish -p mako-emob 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
+
+      - name: crates.io token for mako-redispatch
+        id: auth-mako-redispatch
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish mako-redispatch
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-redispatch.outputs.token }}
         run: |
           out=$(cargo publish -p mako-redispatch 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
 
       
+      - name: crates.io token for mako-gabi-gas
+        id: auth-mako-gabi-gas
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
       - name: Publish mako-gabi-gas
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-gabi-gas.outputs.token }}
         run: |
           out=$(cargo publish -p mako-gabi-gas 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
 
   # ── Docker build + push ──────────────────────────────────────────────────────
   #
@@ -398,9 +555,15 @@ jobs:
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Toolchain is rust-toolchain.toml's
+        shell: bash
+        run: |
+          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+          have=$(rustc --version | cut -d' ' -f2)
+          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
+            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"   # the abi3 floor
 
@@ -414,14 +577,14 @@ jobs:
       # carry an identical filename, the `merge-multiple` download in
       # `makotest-publish` would silently collapse them into one.
       - name: Build wheel
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           command: build
           target: ${{ matrix.target }}
           args: --release --manifest-path makotest/Cargo.toml --out dist
           manylinux: auto
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: makotest-wheel-${{ matrix.target }}
           path: dist/*.whl
@@ -431,13 +594,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: preflight
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Build sdist
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           command: sdist
           args: --manifest-path makotest/Cargo.toml --out dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: makotest-sdist
           path: dist/*.tar.gz
@@ -452,7 +615,7 @@ jobs:
       # of a long-lived API token. Nothing else in this job needs write access.
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: makotest-*
           merge-multiple: true
@@ -462,7 +625,7 @@ jobs:
         run: ls -l dist
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist
           # The tag may be re-run after a partial failure; skipping files that
@@ -487,10 +650,10 @@ jobs:
             runner: ubuntu-24.04-arm
             tag: linux-arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       # A hosted runner has ~14 GB free and this workspace does not compile into
       # it alongside Docker's layer store. The failure arrives as
@@ -505,7 +668,7 @@ jobs:
           df -h /
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -516,7 +679,7 @@ jobs:
       # fully-compiled builder image via cache-from=type=registry — no Rust
       # recompilation in the runtime stage, even when the GHA cache is evicted.
       - name: Build and push Rust builder stage (${{ matrix.platform }})
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           target: builder
@@ -535,7 +698,7 @@ jobs:
       # The two stages are siblings on `chef`, not a chain, so building
       # `--target builder` never populates the other's cargo layers.
       - name: Build and push demo builder stage (${{ matrix.platform }})
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           target: demo-builder
@@ -568,10 +731,10 @@ jobs:
             runner: ubuntu-24.04-arm
             tag: linux-arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       # A hosted runner has ~14 GB free and this workspace does not compile into
       # it alongside Docker's layer store. The failure arrives as
@@ -586,7 +749,7 @@ jobs:
           df -h /
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -600,7 +763,7 @@ jobs:
       # cache-from=type=registry restores from the pushed builder image — guaranteed hit.
       # --metadata-file captures per-service OCI digests for the manifest job.
       - name: Bake all service images (${{ matrix.platform }})
-        uses: docker/bake-action@v6
+        uses: docker/bake-action@5be5f02ff8819ecd3092ea6b2e6261c31774f2b4 # v6.10.0
         id: bake
         with:
           files: docker-bake.hcl
@@ -675,7 +838,7 @@ jobs:
           echo "PLATFORM_SAFE=${platform_safe}" >> "$GITHUB_ENV"
 
       - name: Upload digest artifacts (${{ matrix.platform }})
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: digests-${{ env.PLATFORM_SAFE }}
           path: /tmp/digests/*
@@ -685,10 +848,12 @@ jobs:
   docker-manifest:
     name: Docker — manifest ${{ matrix.service }}
     runs-on: ubuntu-latest
-    needs: docker-bake
+    needs: [docker-bake, sbom]
     permissions:
       contents: read
-      packages: write
+      packages: write       # the merged index and its attestations go to ghcr.io
+      id-token: write       # Sigstore signs each attestation with this job's identity
+      attestations: write   # and GitHub stores it against the repository
     strategy:
       fail-fast: false
       matrix:
@@ -729,22 +894,22 @@ jobs:
             description: "MaBiS UTILTS synchronisation daemon — ÜNB/NB role, Summenzeitreihe day-3/day-8"
     steps:
       - name: Download amd64 digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: digests-linux-amd64
           path: /tmp/digests/amd64
 
       - name: Download arm64 digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: digests-linux-arm64
           path: /tmp/digests/arm64
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -752,7 +917,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.service }}
           tags: |
@@ -812,3 +977,272 @@ jobs:
             echo "::error::$tag carries $attestations attestation manifest(s) for $platforms platforms — provenance or the SBOM did not survive the merge"
             exit 1
           fi
+
+      # ── Attestations ──────────────────────────────────────────────────────
+      #
+      # GitHub artifact attestations (Sigstore bundles, keyless): a build
+      # provenance and a CycloneDX SBOM for the merged image index, and the
+      # same two for each binary inside it. Provenance says how a thing was
+      # built; an attestation says which workflow at which commit vouches for
+      # it, and `gh attestation verify` checks that offline of this repository.
+      - name: Resolve the merged index digest
+        id: index
+        env:
+          META_JSON: ${{ steps.meta.outputs.json }}
+        run: |
+          tag=$(jq -r '.tags[0]' <<< "$META_JSON")
+          digest=$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest}}' | jq -r .digest)
+          case "$digest" in
+            sha256:*) echo "digest=$digest" >> "$GITHUB_OUTPUT"; echo "$tag -> $digest" ;;
+            *) echo "::error::no index digest for $tag"; exit 1 ;;
+          esac
+
+      - name: Download the CycloneDX SBOMs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sbom
+          path: sbom
+
+      - name: Attest image provenance
+        id: attest-image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.service }}
+          subject-digest: ${{ steps.index.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest image SBOM
+        id: attest-image-sbom
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.service }}
+          subject-digest: ${{ steps.index.outputs.digest }}
+          sbom-path: sbom/${{ matrix.service }}_bin.cdx.json
+          push-to-registry: true
+
+      # The binary an operator copies out of the image is byte-identical to the
+      # one extracted here, so its attestation verifies against that copy.
+      - name: Extract the binaries
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          for arch in amd64 arm64; do
+            digest=$(cat "/tmp/digests/${arch}/${{ matrix.service }}")
+            ctr=$(docker create --platform "linux/${arch}" \
+                    "ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.service }}@sha256:${digest}")
+            docker cp "${ctr}:/usr/local/bin/${{ matrix.service }}" "bin/${{ matrix.service }}-linux-${arch}"
+            docker rm "$ctr" > /dev/null
+          done
+          sha256sum bin/*
+
+      # The builder stage already refuses a binary without its `cargo
+      # auditable` manifest; this reads it again from what was pushed, so a
+      # change to the Dockerfile that bypasses the builder check still fails
+      # the release.
+      - name: Every binary carries its dependency manifest
+        run: |
+          set -euo pipefail
+          cargo install --locked rust-audit-info@0.5.4
+          for f in bin/*; do
+            if ! rust-audit-info "$f" > /dev/null; then
+              echo "::error::$f carries no cargo-auditable dependency manifest"
+              exit 1
+            fi
+            echo "$f: $(rust-audit-info "$f" | jq '.packages | length') packages in the manifest"
+          done
+
+      - name: Attest binary provenance
+        id: attest-bin
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: bin/*
+
+      - name: Attest binary SBOM
+        id: attest-bin-sbom
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: bin/*
+          sbom-path: sbom/${{ matrix.service }}_bin.cdx.json
+
+      - name: Verify the attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.index.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image="oci://ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.service }}@${IMAGE_DIGEST}"
+          gh attestation verify "$image" --repo "${{ github.repository }}"
+          gh attestation verify "$image" --repo "${{ github.repository }}" \
+            --predicate-type https://cyclonedx.org/bom
+          for f in bin/*; do
+            gh attestation verify "$f" --repo "${{ github.repository }}"
+            gh attestation verify "$f" --repo "${{ github.repository }}" \
+              --predicate-type https://cyclonedx.org/bom
+          done
+
+      # One record per service for the evidence pack.
+      - name: Record the attestations
+        env:
+          IMAGE_DIGEST: ${{ steps.index.outputs.digest }}
+          IMAGE_PROVENANCE: ${{ steps.attest-image.outputs.attestation-url }}
+          IMAGE_SBOM: ${{ steps.attest-image-sbom.outputs.attestation-url }}
+          BIN_PROVENANCE: ${{ steps.attest-bin.outputs.attestation-url }}
+          BIN_SBOM: ${{ steps.attest-bin-sbom.outputs.attestation-url }}
+        run: |
+          set -euo pipefail
+          mkdir -p attestations
+          binaries=$(sha256sum bin/* | jq -Rn '[inputs | split("  ") | {file: (.[1] | ltrimstr("bin/")), sha256: .[0]}]')
+          jq -n \
+            --arg service "${{ matrix.service }}" \
+            --arg digest "$IMAGE_DIGEST" \
+            --arg image_provenance "$IMAGE_PROVENANCE" \
+            --arg image_sbom "$IMAGE_SBOM" \
+            --arg bin_provenance "$BIN_PROVENANCE" \
+            --arg bin_sbom "$BIN_SBOM" \
+            --argjson binaries "$binaries" \
+            '{service: $service,
+              image: {digest: $digest, provenance: $image_provenance, sbom: $image_sbom},
+              binaries: {files: $binaries, provenance: $bin_provenance, sbom: $bin_sbom}}' \
+            > "attestations/${{ matrix.service }}.json"
+          cat "attestations/${{ matrix.service }}.json"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: attestations-${{ matrix.service }}
+          path: attestations/${{ matrix.service }}.json
+          if-no-files-found: error
+
+  # ── CycloneDX SBOMs ──────────────────────────────────────────────────────────
+  #
+  # One CycloneDX document per service binary, from the lockfile's resolved
+  # graph — the dependency inventory Regulation (EU) 2024/2847 Annex I Part II
+  # point (1) asks a manufacturer to draw up „in a commonly used and
+  # machine-readable format covering at the very least the top-level
+  # dependencies". Build-time dependencies are left out: they ship in no
+  # binary. `processd` is described with `integrated`, the feature the
+  # Dockerfile builds it with.
+  sbom:
+    name: CycloneDX SBOMs
+    runs-on: ubuntu-latest
+    needs: preflight
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Toolchain is rust-toolchain.toml's
+        shell: bash
+        run: |
+          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+          have=$(rustc --version | cut -d' ' -f2)
+          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
+            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
+
+      - name: Install cargo-cyclonedx
+        run: cargo install --locked cargo-cyclonedx@0.5.9
+
+      - name: One SBOM per service binary
+        run: |
+          set -euo pipefail
+          opts=(--format json --spec-version 1.5 --describe binaries --no-build-deps)
+          cargo cyclonedx "${opts[@]}"
+          cargo cyclonedx --manifest-path services/processd/Cargo.toml -F integrated "${opts[@]}"
+          mkdir -p sbom
+          cp services/*/*_bin.cdx.json sbom/
+          ls -l sbom
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom
+          path: sbom/*.cdx.json
+          if-no-files-found: error
+
+  # ── GitHub Release with the evidence pack ───────────────────────────────────
+  #
+  # The last job: it runs after everything was published and attested, and
+  # creates the GitHub Release carrying what a third party checks the release
+  # by — `evidence-vX.Y.Z.json`, the CycloneDX SBOMs and the VEX document for
+  # the advisories `deny.toml` accepts. `cargo xtask evidence-pack` writes the
+  # pack from the inputs collected below; a section whose producer did not run
+  # reads `not measured`, and `--check` refuses a pack with a section absent
+  # or a guard that failed, so no Release is created from one.
+  release:
+    name: GitHub Release with the evidence pack
+    runs-on: ubuntu-latest
+    needs: [publish, makotest-publish, docker-manifest, sbom]
+    permissions:
+      contents: write       # creates the GitHub Release
+      id-token: write       # attests the evidence pack
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Toolchain is rust-toolchain.toml's
+        shell: bash
+        run: |
+          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+          have=$(rustc --version | cut -d' ' -f2)
+          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
+            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
+
+      - name: Reclaim runner disk
+        run: |
+          df -h /
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
+
+      # The test exits non-zero over budget; its output is kept either way,
+      # and the pack check refuses an over-budget figure.
+      - name: Fidelity, measured
+        run: |
+          mkdir -p evidence
+          cargo test -p edi-energy --test it -- --nocapture --test-threads=1 \
+            extraction_fidelity::condition_damage_stays_within_budget \
+            extraction_fidelity::the_silent_permit_is_measured_per_pruefidentifikator \
+            > evidence/fidelity.log 2>&1 || true
+          grep -E 'distinct conditions|unreadable Voraussetzung' evidence/fidelity.log || true
+
+      # Every `just ci` recipe that is one `cargo xtask` call runs here and
+      # leaves its exit status; the recipes that build the whole workspace ran
+      # as `preflight` and read `not measured` in the pack.
+      - name: Guard verdicts
+        run: |
+          mkdir -p evidence/guards
+          for recipe in $(cargo xtask evidence-pack --xtask-recipes); do
+            just "$recipe" > "evidence/guards/${recipe}.log" 2>&1 && code=0 || code=$?
+            echo "$code" > "evidence/guards/${recipe}.exit"
+            echo "${recipe}: exit $(cat "evidence/guards/${recipe}.exit")"
+          done
+
+      - name: Download the CycloneDX SBOMs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sbom
+          path: evidence/sbom
+
+      - name: Download the attestation records
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: attestations-*
+          merge-multiple: true
+          path: evidence/attestations
+
+      - name: Assemble and check the evidence pack
+        run: |
+          set -euo pipefail
+          cargo xtask evidence-pack --inputs evidence --out "evidence-${GITHUB_REF_NAME}.json"
+          cargo xtask evidence-pack --check "evidence-${GITHUB_REF_NAME}.json"
+
+      - name: Attest the evidence pack
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: evidence-${{ github.ref_name }}.json
+
+      - name: Create the GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          fail_on_unmatched_files: true
+          files: |
+            evidence-${{ github.ref_name }}.json
+            evidence/sbom/*.cdx.json
+            release/vex.json

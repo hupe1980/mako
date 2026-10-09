@@ -1,6 +1,6 @@
 use edifact_rs::OwnedSegment;
 
-use crate::{CustomRulePack, EdiEnergyReport, Error, MessageType, Pruefidentifikator, Release};
+use crate::{EdiEnergyReport, Error, MessageType, Pruefidentifikator, Release};
 
 /// Core abstraction for all EDI@Energy message types.
 ///
@@ -101,22 +101,6 @@ pub trait EdiEnergyMessage: Send + Sync {
     /// the given `(message_type, release)` pair.
     #[must_use = "validation result must be checked for errors"]
     fn validate_against(&self, release: &Release) -> Result<EdiEnergyReport, Error>;
-
-    /// Validate and merge an additional caller-supplied rule pack on top of all
-    /// built-in validation layers (L1–L5).
-    ///
-    /// The `extra` pack runs after the standard semantic rules and can be used
-    /// for application-level business rules, regulatory additions, or test-time
-    /// strictness escalation — without needing to fork the message type.
-    ///
-    /// Use [`CustomRulePack`](crate::CustomRulePack) to construct the rule pack
-    /// without a direct dependency on `edifact-rs`.
-    ///
-    /// # Errors
-    ///
-    /// Same as [`validate`](Self::validate).
-    #[must_use = "validation result must be checked for errors"]
-    fn validate_with_pack(&self, extra: CustomRulePack) -> Result<EdiEnergyReport, Error>;
 
     /// Validate the message for the normative date encoded in `ctx`.
     ///

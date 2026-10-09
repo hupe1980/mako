@@ -1,4 +1,7 @@
-#![allow(async_fn_in_trait)]
+#![expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 
 use time::Date;
 use uuid::Uuid;

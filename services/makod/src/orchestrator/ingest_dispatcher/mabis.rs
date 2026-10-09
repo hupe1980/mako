@@ -29,12 +29,13 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::mabis_clearingliste_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     // No APERAK Frist for pure MABIS data messages.
-                    self.spawn_or_resume::<MabisClearinglisteWorkflow>(
+                    self.spawn_or_resume_guarded::<MabisClearinglisteWorkflow>(
                         malo_id.as_str(),
                         "mabis-clearingliste",
                         cmd,
                         &fv,
                         &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }
@@ -68,12 +69,13 @@ impl EdifactIngestDispatcher {
                     // answering party's, and it is armed on the process the
                     // Anfrage this participant *sends* opens — see
                     // `mako_fristen::antwort::MABIS`.
-                    self.spawn_or_resume::<MabisZpLifecycleWorkflow>(
+                    self.spawn_or_resume_guarded::<MabisZpLifecycleWorkflow>(
                         malo_id.as_str(),
                         "mabis-zp-lifecycle",
                         cmd,
                         &fv,
                         &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 } else if mako_mabis::ist_antwort_pid(pid) {
@@ -119,12 +121,13 @@ impl EdifactIngestDispatcher {
                 if mako_mabis::listenabgleich::familie_for(pid).is_some() {
                     let cmd = adapters::mabis_listenabgleich_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.spawn_or_resume::<MabisListenabgleichWorkflow>(
+                    self.spawn_or_resume_guarded::<MabisListenabgleichWorkflow>(
                         malo_id.as_str(),
                         "mabis-listenabgleich",
                         cmd,
                         &fv,
                         &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 } else {
@@ -144,12 +147,10 @@ impl EdifactIngestDispatcher {
                     let cmd =
                         adapters::mabis_anforderung_ablehnung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.spawn_or_resume::<MabisAnforderungWorkflow>(
+                    self.resume_by_key::<MabisAnforderungWorkflow>(
                         malo_id.as_str(),
                         "mabis-anforderung",
                         cmd,
-                        &fv,
-                        &[],
                     )
                     .await
                 } else if mako_mabis::ANFORDERUNG_PIDS.contains(&pid) {
@@ -157,12 +158,13 @@ impl EdifactIngestDispatcher {
                     let malo_id = extract_malo_from_msg(msg);
                     // No APERAK Frist: BK6-24-174 defines no response window for
                     // the Anforderungen; the requested list is its own process.
-                    self.spawn_or_resume::<MabisAnforderungWorkflow>(
+                    self.spawn_or_resume_guarded::<MabisAnforderungWorkflow>(
                         malo_id.as_str(),
                         "mabis-anforderung",
                         cmd,
                         &fv,
                         &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 } else {
@@ -196,12 +198,13 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::mabis_summenzeitreihe_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     return self
-                        .spawn_or_resume::<MabisBillingWorkflow>(
+                        .spawn_or_resume_guarded::<MabisBillingWorkflow>(
                             malo_id.as_str(),
                             "mabis-billing",
                             cmd,
                             &fv,
                             &[],
+                            mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                         )
                         .await;
                 }
@@ -210,12 +213,13 @@ impl EdifactIngestDispatcher {
                 if inbound {
                     let cmd = adapters::mabis_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.spawn_or_resume::<MabisBillingWorkflow>(
+                    self.spawn_or_resume_guarded::<MabisBillingWorkflow>(
                         malo_id.as_str(),
                         "mabis-billing",
                         cmd,
                         &fv,
                         &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 } else if mako_mabis::IFTSTA_PRUEFMITTEILUNG_PIDS.contains(&pid) {
@@ -235,12 +239,13 @@ impl EdifactIngestDispatcher {
                 if mako_mabis::profil_pids().contains(&pid) {
                     let cmd = adapters::mabis_profil_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.spawn_or_resume::<mako_mabis::MabisProfilWorkflow>(
+                    self.spawn_or_resume_guarded::<mako_mabis::MabisProfilWorkflow>(
                         malo_id.as_str(),
                         "mabis-profile",
                         cmd,
                         &fv,
                         &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 } else {

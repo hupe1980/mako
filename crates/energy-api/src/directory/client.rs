@@ -80,7 +80,7 @@ impl DirectoryServiceClient {
     /// - `signing_cert` is the RFC 9440-encoded `X-BDEW-CERT` header value.
     /// - `signature` is the base64url-encoded `X-BDEW-SIGNATURE` header value.
     ///
-    /// Use `crate::jws` (feature `crypto`) to verify the signature.
+    /// Use `crate::transport::jws` to verify the signature.
     ///
     /// # Errors
     /// - [`Error::NotFound`] if the entry does not exist (404).

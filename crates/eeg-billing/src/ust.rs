@@ -5,11 +5,6 @@
 //! treatment of the **feed-in Gutschrift** (the payout the Netzbetreiber issues
 //! to the Anlagenbetreiber).
 //!
-//! ## Terminology
-//!
-//! "Umsatzsteuer" (USt) is the legal term; "Mehrwertsteuer" (MwSt) is the
-//! colloquial name. This library uses "Umsatzsteuer" throughout.
-//!
 //! ## The feed-in has exactly two VAT treatments
 //!
 //! | Status | Legal basis | EN 16931 category | USt on Vergütung |
@@ -27,12 +22,11 @@
 //! §12 Abs. 3 UStG (the 0 % Nullsteuersatz since 01.01.2023) taxes the **supply
 //! and installation of the PV system itself** — the hardware transaction between
 //! the installer and the operator. It does **not** apply to the operator's
-//! ongoing feed-in of electricity, which is what an EEG settlement bills. Its
-//! practical effect on this module is indirect: because a ≤30 kWp operator buys
-//! the plant at 0 %, there is no input tax to reclaim, so almost all of them stay
-//! **Kleinunternehmer (§19)** rather than opting into Regelbesteuerung. That is
-//! why [`VatStatus::default_for_plant`] suggests `Kleinunternehmer` for a small
-//! post-2023 solar plant — the 0 % on the feed-in comes from §19, never §12 Abs. 3.
+//! ongoing feed-in of electricity, which is what an EEG settlement bills. A
+//! ≤30 kWp operator buying the plant at 0 % has no input tax to reclaim and
+//! usually stays **Kleinunternehmer (§19)**, which is why
+//! [`VatStatus::default_for_plant`] suggests it for a small post-2023 solar
+//! plant — the 0 % on the feed-in comes from §19, never §12 Abs. 3.
 //!
 //! ## §19 UStG Kleinunternehmer
 //!
@@ -81,16 +75,9 @@
 //! assert_eq!(layers.len(), 1);
 //! ```
 //!
-//! ## §100 EEG Übergangsregelung
-//!
-//! Plants commissioned **before 01.01.2023** are governed by the EEG version that
-//! was in force at their commissioning date (§100 Abs. 1 EEG 2023):
-//! "sind die Bestimmungen des EEG in der am 31. Dezember 2022 geltenden Fassung
-//! anzuwenden."
-//!
-//! The Vergütungssatz is fixed at commissioning for the full 20-year Förderdauer.
-//! VAT rules depend on the *current* UStG (not the EEG version) and the operator's
-//! current tax status — these can change independently of the EEG Vergütungssatz.
+//! VAT follows the *current* UStG and the operator's current tax status, not
+//! the EEG version that fixes a pre-2023 plant's Vergütungssatz (§100 Abs. 1
+//! EEG 2023).
 
 use billing::{TaxCategory, TaxLayer, tax::FixedRateTax};
 use rust_decimal::Decimal;

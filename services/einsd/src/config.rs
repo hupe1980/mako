@@ -97,12 +97,52 @@ pub struct EinsdConfig {
     #[serde(default)]
     pub oidc: Option<mako_service::oidc::OidcConfig>,
 
+    /// The Beihilfevorbehalt on EEG Teil-3 payments for supply periods from
+    /// 01.01.2027 — `[beihilfevorbehalt]`.
+    #[serde(default)]
+    pub beihilfevorbehalt: BeihilfevorbehaltConfig,
+
     /// Start without token verification.
     ///
     /// Intended for local development and the demos. Every REST route is then
     /// reachable by any caller that can open a socket.
     #[serde(default)]
     pub allow_insecure_no_auth: bool,
+}
+
+/// `[beihilfevorbehalt]` — what einsd does with a Teil-3 payment no state-aid
+/// approval covers, and the approvals recorded so far.
+///
+/// The Commission's approval of the EEG 2023 „bis zum 31. Dezember 2026
+/// befristet ist" (BT-Drs. 21/7867, Begründung zu § 104), so a payment for a
+/// supply period from 01.01.2027 has none until one is recorded here.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BeihilfevorbehaltConfig {
+    /// What happens to an uncovered payment. Default: `verweigern`.
+    #[serde(default)]
+    pub politik: BeihilfePolitik,
+    /// Each recorded approval: `eingang`, `gilt_ab`, optional `gilt_bis`,
+    /// `bundesanzeiger`, `umfang`.
+    #[serde(default)]
+    pub genehmigungen: Vec<eeg_billing::Beihilfegenehmigung>,
+}
+
+/// What einsd does with a Teil-3 payment no recorded approval covers.
+///
+/// The legal answer is the operator's to give; neither policy is a legal
+/// outcome mako asserts. The default refuses, because paying is the step that
+/// cannot be taken back.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BeihilfePolitik {
+    /// Refuse the settlement, naming the reservation; no receipt is written,
+    /// and the sweep retries the period once an approval is recorded.
+    #[default]
+    Verweigern,
+    /// Settle and pay, with the reservation stated as a zero-euro position on
+    /// the receipt and the Gutschrift.
+    UnterVorbehalt,
 }
 
 impl EinsdConfig {

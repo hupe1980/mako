@@ -64,7 +64,7 @@
 //! Alongside the compliance sweep, a second daily worker
 //! ([`run_smgw_cert_expiry_sweep`]) emits a tiered
 //! `de.messwert.smgw.cert.expiry-warning` at **90 / 30 / 7 days** before each
-//! certificate's `valid_to` (`SMGW_CERT_ABLAUFDATUM`), once per tier per
+//! certificate's `valid_to` in the stored `SmgwSession`, once per tier per
 //! certificate (dedup in `smgw_cert_expiry_alerts`; a renewed cert with a new
 //! `valid_to` gets a fresh set). This is the *advance* warning — an
 //! already-expired cert is the `CERT_EXPIRED` compliance issue above. BSI
@@ -491,8 +491,8 @@ pub async fn run_cls_compliance_sweep(
 
     // ── 1. Fetch the tenant's live gateways ───────────────────────────────────
     // `REPLACED` is excluded: the gateway is a historical record, physically
-    // swapped out. Scanning it reported an expired certificate on a device that
-    // no longer exists, every day, forever. The promoted `gateway_status`
+    // swapped out. Scanning it would report an expired certificate on a device
+    // that no longer exists, every day, forever. The promoted `gateway_status`
     // column exists precisely so this filter is an index lookup rather than a
     // JSONB extraction.
     let rows = match sqlx::query(
@@ -735,7 +735,6 @@ pub async fn run_cls_compliance_sweep(
 ///
 /// Runs at startup and then every `interval_secs` seconds (default: 86400 for daily).
 /// Gracefully stops on `shutdown_token` cancellation.
-#[allow(clippy::too_many_arguments)]
 pub fn spawn_cls_compliance_worker(
     pool: Arc<PgPool>,
     tenant: String,
@@ -1027,9 +1026,10 @@ pub fn spawn_smgw_cert_expiry_worker(
 ///
 /// Register or update a `SmgwSession` for a MaLo.
 ///
-/// The full `metering::SmgwSession` is stored as JSONB.  Callers are typically:
-/// - MSB GWA (Gateway-Administrator) system after a BSI TR-03109-4 Admin session
-/// - `marktd` `de.markt.geraet.konfiguration.updated` webhook handler (automated sync)
+/// The full `metering::SmgwSession` is stored as JSONB. The caller is the MSB's
+/// GWA (Gateway-Administrator) system after a BSI TR-03109-4 Admin session;
+/// edmd subscribes to no `de.markt.*` event, so a Gerätekonfiguration changed
+/// in marktd reaches this table only through such a call.
 ///
 /// Triggers a synchronous compliance check.  Detected issues are logged to
 /// `cls_compliance_issues` immediately and CloudEvents emitted.  This makes the first
@@ -1252,9 +1252,9 @@ pub async fn get_smgw_session(
     let last_contact_at: Option<OffsetDateTime> = row.try_get("last_contact_at").unwrap_or(None);
     let updated_at: OffsetDateTime = row.get("updated_at");
 
-    // What is wrong with this gateway *now*, oldest episode first. This used to
-    // return "the ten most recent log rows", which — with one row written per
-    // issue per daily sweep — was ten copies of yesterday's single problem.
+    // What is wrong with this gateway *now*, oldest episode first — not "the ten
+    // most recent log rows", which, with one row written per issue per daily
+    // sweep, are ten copies of yesterday's single problem.
     let recent_issues = sqlx::query(
         r"SELECT issue_type, severity, cert_serial, days_to_expiry, channel_id,
                  first_detected_at, last_seen_at

@@ -177,6 +177,12 @@ pub fn lieferbeginn_body(
 }
 
 /// The `processd` Lieferende task for one component.
+///
+/// **The dedupe key carries the Lieferende**, as the reading orders' keys carry
+/// `geplant_am`: a Kündigung withdrawn and re-issued to a new date is a new
+/// obligation, and a key without the date makes `ON CONFLICT DO NOTHING` drop
+/// it while the NB hears the withdrawn date. A replay of the same date still
+/// collapses into one task. Enqueue it with [`enqueue_superseding`].
 #[must_use]
 pub fn lieferende(
     komp_id: Uuid,
@@ -201,7 +207,7 @@ pub fn lieferende(
             "lf_mp_id": lf_mp_id,
             "lieferende_datum": lieferende.to_string(),
         }),
-        dedupe_key: format!("LIEFERENDE:{komp_id}"),
+        dedupe_key: format!("LIEFERENDE:{komp_id}:{lieferende}"),
     }
 }
 
@@ -427,7 +433,11 @@ impl OutboundWorker {
     }
 
     /// Claim and perform one task. `false` when the queue is empty.
-    async fn step(&self) -> Result<bool> {
+    ///
+    /// # Errors
+    ///
+    /// Storage errors while claiming or recording the task.
+    pub async fn step(&self) -> Result<bool> {
         // Claim under FOR UPDATE SKIP LOCKED so several replicas can drain the
         // same queue without performing a task twice.
         let mut tx = self.pool.begin().await?;
@@ -468,7 +478,13 @@ impl OutboundWorker {
         };
 
         match self.perform(kind, komp_id, &payload).await {
-            Ok(()) => {
+            Ok(follow_up) => {
+                // The call reached its peer: the task is complete whatever the
+                // local follow-up does next. Completing it only after the
+                // follow-up would let a failing write retry a delivered call —
+                // a second UTILMD 55001 at the NB, a second reading order at
+                // edmd. The follow-up runs in a savepoint of this transaction,
+                // and a failure there is recorded on the completed task.
                 sqlx::query(
                     "UPDATE outbound_tasks
                         SET completed_at = now(), attempts = attempts + 1, last_error = NULL
@@ -477,6 +493,24 @@ impl OutboundWorker {
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
+                let mut savepoint = sqlx::Acquire::begin(&mut *tx).await?;
+                match follow_up.apply(&mut savepoint).await {
+                    Ok(()) => savepoint.commit().await?,
+                    Err(e) => {
+                        savepoint.rollback().await?;
+                        let detail = format!("delivered; follow-up failed: {e:#}");
+                        tracing::error!(
+                            task = %kind_db, %id, ?komp_id, error = %detail,
+                            "vertragd: outbound call delivered but its follow-up write failed — \
+                             not retried, recorded on the task"
+                        );
+                        sqlx::query("UPDATE outbound_tasks SET last_error = $2 WHERE id = $1")
+                            .bind(id)
+                            .bind(&detail)
+                            .execute(&mut *tx)
+                            .await?;
+                    }
+                }
             }
             Err(e) => {
                 let attempts = attempts + 1;
@@ -545,14 +579,67 @@ pub async fn record_failure(
     Ok(())
 }
 
+/// The local write that records a delivered call.
+///
+/// Returned by [`OutboundWorker::perform`] rather than written there, so it
+/// runs after the task is marked complete: a failure here must not make the
+/// worker repeat a call the peer already received.
+enum FollowUp {
+    /// Nothing to record.
+    Nothing,
+    /// The Anmeldung reached `processd`: the component is `ANGEMELDET`.
+    Angemeldet {
+        komp_id: Uuid,
+        process_id: Option<String>,
+    },
+    /// The reading order reached `edmd`: keep the trail from a Schlussrechnung
+    /// back to the reading it was built on.
+    AbleseAuftrag { komp_id: Uuid, order_id: Uuid },
+}
+
+impl FollowUp {
+    async fn apply(self, conn: &mut sqlx::PgConnection) -> Result<()> {
+        match self {
+            Self::Nothing => Ok(()),
+            Self::Angemeldet {
+                komp_id,
+                process_id,
+            } => {
+                crate::pg::update_komponente_status(
+                    &mut *conn,
+                    komp_id,
+                    "ANGEMELDET",
+                    process_id.as_deref(),
+                    None,
+                    None,
+                    None,
+                )
+                .await
+            }
+            Self::AbleseAuftrag { komp_id, order_id } => {
+                sqlx::query(
+                    "UPDATE vertragskomponenten
+                        SET ablese_auftrag_id = $2, updated_at = now()
+                      WHERE id = $1 AND ablese_auftrag_id IS NULL",
+                )
+                .bind(komp_id)
+                .bind(order_id)
+                .execute(&mut *conn)
+                .await?;
+                Ok(())
+            }
+        }
+    }
+}
+
 impl OutboundWorker {
-    /// Perform one task's side effect and its follow-up write.
+    /// Perform one task's call, returning the follow-up write that records it.
     async fn perform(
         &self,
         kind: TaskKind,
         komp_id: Option<Uuid>,
         payload: &serde_json::Value,
-    ) -> Result<()> {
+    ) -> Result<FollowUp> {
         match kind {
             TaskKind::Lieferbeginn => {
                 let endpoint = payload
@@ -569,19 +656,12 @@ impl OutboundWorker {
                     .get("process_id")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned);
-                if let Some(komp_id) = komp_id {
-                    crate::pg::update_komponente_status(
-                        &self.pool,
+                Ok(
+                    komp_id.map_or(FollowUp::Nothing, |komp_id| FollowUp::Angemeldet {
                         komp_id,
-                        "ANGEMELDET",
-                        process_id.as_deref(),
-                        None,
-                        None,
-                        None,
-                    )
-                    .await?;
-                }
-                Ok(())
+                        process_id,
+                    }),
+                )
             }
             TaskKind::Lieferende => {
                 let endpoint = payload
@@ -594,32 +674,28 @@ impl OutboundWorker {
                     self.cfg.processd_api_key.as_deref(),
                 );
                 self.post_json(&processd, endpoint, payload).await?;
-                Ok(())
+                Ok(FollowUp::Nothing)
             }
             TaskKind::AblesungBeginn | TaskKind::AblesungEnde => {
                 let edmd =
                     self.upstream("edmd", &self.cfg.edmd_url, self.cfg.edmd_api_key.as_deref());
                 let body = self.post_json(&edmd, "reading-orders", payload).await?;
-                // Keep the trail from a Schlussrechnung back to the reading it
-                // was built on. edmd's POST is not idempotent, so the id is
-                // recorded here and the dedupe key stops a second order.
-                if let (Some(komp_id), Some(order_id)) = (
-                    komp_id,
-                    body.get("id")
-                        .and_then(serde_json::Value::as_str)
-                        .and_then(|s| s.parse::<Uuid>().ok()),
-                ) {
-                    sqlx::query(
-                        "UPDATE vertragskomponenten
-                            SET ablese_auftrag_id = $2, updated_at = now()
-                          WHERE id = $1 AND ablese_auftrag_id IS NULL",
-                    )
-                    .bind(komp_id)
-                    .bind(order_id)
-                    .execute(&self.pool)
-                    .await?;
-                }
-                Ok(())
+                // edmd's POST is not idempotent: the dedupe key stops a second
+                // *enqueue*, and completing the task before its follow-up stops
+                // a second *call*.
+                Ok(
+                    match (
+                        komp_id,
+                        body.get("id")
+                            .and_then(serde_json::Value::as_str)
+                            .and_then(|s| s.parse::<Uuid>().ok()),
+                    ) {
+                        (Some(komp_id), Some(order_id)) => {
+                            FollowUp::AbleseAuftrag { komp_id, order_id }
+                        }
+                        _ => FollowUp::Nothing,
+                    },
+                )
             }
             TaskKind::Abrechnungskonto => {
                 let accountingd = self.upstream(
@@ -645,9 +721,9 @@ impl OutboundWorker {
                      (malo_id={malo_id}, lf_mp_id={lf_mp_id})",
                 );
                 let path = format!("accounts/{malo_id}?lf_mp_id={lf_mp_id}");
-                self.put_json(&accountingd, &path, &serde_json::json!({}))
+                self.put_no_content(&accountingd, &path, &serde_json::json!({}))
                     .await?;
-                Ok(())
+                Ok(FollowUp::Nothing)
             }
         }
     }
@@ -686,19 +762,23 @@ impl OutboundWorker {
             })
     }
 
-    /// PUT a task's payload to `/api/v1/{path}` on `up`.
+    /// PUT a task's payload to `/api/v1/{path}` on `up`, reading no body.
     ///
-    /// Same rule as [`Self::post_json`]: a `404` is a failure, not absence.
-    async fn put_json(
+    /// `accountingd` answers its upsert `204 No Content`, which is a success
+    /// with nothing to parse — reading it as JSON turned every created account
+    /// into eight retries and a dead-letter. Same rule as [`Self::post_json`]
+    /// otherwise: a `404` is a failure, not absence.
+    async fn put_no_content(
         &self,
         up: &Upstream,
         path: &str,
         body: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<()> {
         let path = format!("/api/v1/{path}");
-        up.json(up.put(&path).json(body))
+        up.send(up.put(&path).json(body))
             .await
             .context("outbound task dispatch")?
+            .map(drop)
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "{} answered 404 for PUT {path} — the obligation stays open rather \
@@ -786,28 +866,22 @@ mod tests {
         );
     }
 
+    /// A replay of one Lieferende collapses into one task; a re-issue to a new
+    /// date is a new task, so `ON CONFLICT DO NOTHING` cannot drop it.
     #[test]
-    fn a_one_shot_registration_keeps_a_single_dedupe_key() {
-        // A replay of the same contract must not enqueue a second UTILMD, so
-        // the key does not vary by anything a replay could change.
+    fn the_lieferende_key_is_the_component_and_its_date() {
         let komp = Uuid::nil();
-        let x = lieferende(
-            komp,
-            "STROM",
-            "51238696012",
-            "NB",
-            "LF",
-            date!(2026 - 12 - 31),
+        let at = |d| lieferende(komp, "STROM", "51238696012", "NB", "LF", d);
+        assert_eq!(
+            at(date!(2026 - 12 - 31)).dedupe_key,
+            at(date!(2026 - 12 - 31)).dedupe_key,
+            "a replay of the same date is one task"
         );
-        let y = lieferende(
-            komp,
-            "STROM",
-            "51238696012",
-            "NB",
-            "LF",
-            date!(2027 - 01 - 31),
+        assert_ne!(
+            at(date!(2026 - 12 - 31)).dedupe_key,
+            at(date!(2027 - 01 - 31)).dedupe_key,
+            "a re-issue to another date is another task"
         );
-        assert_eq!(x.dedupe_key, y.dedupe_key);
     }
 
     #[test]

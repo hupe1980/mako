@@ -75,7 +75,10 @@
 //! - § 7 EnWG: the role features are separate binaries; § 20 EnWG:
 //!   `initiator_is_affiliate` recorded for every decision
 #![deny(unsafe_code)]
-#![allow(clippy::doc_markdown)]
+#![expect(
+    clippy::doc_markdown,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 
 pub mod config;
 pub mod handler;

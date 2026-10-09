@@ -104,9 +104,15 @@ pub struct ListKuendigungenParams {
 #[derive(Clone)]
 pub struct VertragdMcpHandler {
     state: Arc<VertragdMcpState>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     tool_router: ToolRouter<VertragdMcpHandler>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     prompt_router: rmcp::handler::server::router::prompt::PromptRouter<VertragdMcpHandler>,
 }
 
@@ -347,7 +353,7 @@ impl VertragdMcpHandler {
                 "threshold_days": threshold,
                 "alert": !rows.is_empty(),
                 "components": rows,
-                "regulatory_basis": "GPKE §20 EnWG: 5 WT (Strom) / 10 WT (Gas/GeLi Gas)",
+                "note": "threshold_days is an operating threshold, not a Frist: the NB's answer windows are per Prüfidentifikator (mako_fristen::antwort)",
             }))
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None)),
@@ -800,7 +806,7 @@ impl VertragdMcpHandler {
                  not rely on it to restrict an identity.\n\n\
                  **Step 5** — Set Preisgarantie if applicable:\n\
                  `PUT /api/v1/vertraege/{id}/preisgarantie` with BO4E Preisgarantie COM.\n\n\
-                 **Monitoring:** Use `find_stuck_workflows` after 5 Werktage (Strom) / 10 Werktage (Gas) — ANGEMELDET = MaKo not yet confirmed.",
+                 **Monitoring:** Use `find_stuck_workflows` with the operator's own threshold — ANGEMELDET = MaKo not yet confirmed.",
             ),
         ]
     }

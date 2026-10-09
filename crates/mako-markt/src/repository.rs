@@ -1,9 +1,14 @@
-#![allow(clippy::doc_markdown)]
+#![expect(
+    clippy::doc_markdown,
+    reason = "a pedantic style lint this crate does not adopt"
+)]
 //! Repository traits for all `marktd` aggregate types.
 //!
-//! Every trait has exactly two implementations:
-//! - Production: `Pg*Repository` in `services/marktd/src/pg/`
-//! - Testing: `InMemory*` in `crates/mako-markt/src/testing.rs` (feature = "testing")
+//! The production implementation of every trait is the `Pg*Repository` in
+//! `services/marktd/src/pg/`. Two have an in-memory double as well, in
+//! `crates/mako-markt/src/testing.rs` (feature = "testing"):
+//! `VersorgungsStatusRepository` and `NbEnergiemixRepository`. The rest are
+//! exercised against real PostgreSQL only.
 //!
 //! All methods are `async` (AFIT, stable since Rust 1.75).
 //! All methods return `Result<_, MdmError>` annotated `#[must_use]`.
@@ -34,7 +39,10 @@ mod date_iso {
     use time::Date;
     use time::macros::format_description;
 
-    #[expect(clippy::trivially_copy_pass_by_ref)]
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "serde's `serialize_with` fixes the signature to a reference"
+    )]
     pub fn serialize<S: Serializer>(date: &Date, s: S) -> Result<S::Ok, S::Error> {
         let fmt = format_description!("[year]-[month]-[day]");
         s.serialize_str(&date.format(fmt).map_err(serde::ser::Error::custom)?)
@@ -51,7 +59,11 @@ mod date_iso {
         use time::Date;
         use time::macros::format_description;
 
-        #[expect(clippy::trivially_copy_pass_by_ref, clippy::ref_option)]
+        #[expect(
+            clippy::trivially_copy_pass_by_ref,
+            clippy::ref_option,
+            reason = "serde's `serialize_with` fixes the signature to `&Option<T>`"
+        )]
         pub fn serialize<S: Serializer>(date: &Option<Date>, s: S) -> Result<S::Ok, S::Error> {
             match date {
                 Some(d) => {
@@ -402,7 +414,10 @@ pub struct CorrelationFilter {
 // ── Traits ────────────────────────────────────────────────────────────────────
 
 /// Read/write access to `MARKTLOKATION` records.
-#[allow(async_fn_in_trait)]
+#[allow(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 /// Lightweight read model returned by `MarktdClient::get_malo`.
 ///
 /// Contains only the typed fields extracted from the `Marktlokation` JSONB — not
@@ -488,7 +503,10 @@ impl MaloStammdatenPatch {
 }
 
 /// Read/write access to `MARKTLOKATION` records.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait MaloRepository: Send + Sync {
     /// Insert or update a `MARKTLOKATION`.
     ///
@@ -517,7 +535,7 @@ pub trait MaloRepository: Send + Sync {
     /// Called by `marktd` event_ingest when it receives
     /// `de.mako.process.initiated` (PID 55001/44001) carrying
     /// `bilanzierungsmethode` and/or `fallgruppe` extracted from the UTILMD
-    /// `TM+EM` / `TM+Z10` segments by the `makod` adapter (L1/N1).
+    /// `TM+EM` / `TM+Z10` segments by the `makod` adapter.
     ///
     /// No-ops silently when the MaLo row does not yet exist — the values will
     /// be set on the first `PUT /api/v1/malos` call instead.
@@ -571,9 +589,8 @@ pub trait MaloRepository: Send + Sync {
 /// `CCI 7037=ZB3` Zugeordneter Marktpartner, `CAV 7111=Z91` MSB / `Z39`
 /// grundzuständig / `ZF0` gMSB + MP-ID) plus NNE-Abrechnung info. That belongs
 /// on the dated `melo_msb_zuordnungen` timeline, not a typed-column `COALESCE`
-/// patch, and its GPKE-vs-WiM-MSB-Wechsel semantics make auto-applying it a
-/// deliberate follow-up. These fields are retained for robustness /
-/// forward-compatibility but rarely fire in practice.
+/// patch, and its GPKE-vs-WiM-MSB-Wechsel semantics keep it from being
+/// auto-applied here. These fields therefore rarely fire in practice.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MeloStammdatenPatch {
     /// Netzebene at the metering point (generic `netzebene` attribute →
@@ -593,7 +610,10 @@ impl MeloStammdatenPatch {
 }
 
 /// Read/write access to `MESSLOKATION` records.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait MeloRepository: Send + Sync {
     /// Insert or update a `MESSLOKATION`.
     ///
@@ -685,7 +705,10 @@ pub trait SubscriptionRepository: Send + Sync {
 }
 
 /// Read/write access to the process correlation index.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait CorrelationIndex: Send + Sync {
     /// Insert a new correlation entry (idempotent — duplicate `process_id` is a no-op).
     async fn insert(&self, entry: CorrelationEntry) -> Result<(), MdmError>;
@@ -719,7 +742,10 @@ pub trait CorrelationIndex: Send + Sync {
 }
 
 /// Read/write access to the trading-partner directory.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait PartnerRepository: Send + Sync {
     /// Insert or update a trading partner.
     ///
@@ -787,7 +813,10 @@ pub struct PreisblattRecord {
 }
 
 /// Read/write access to NB price sheets.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait PreisblattRepository: Send + Sync {
     /// Upsert a `PreisblattNetznutzung` for the given NB GLN.
     ///
@@ -854,7 +883,10 @@ pub struct PreisblattMessungRecord {
 /// positions 4 (Grundpreis Messung) and 5 (Arbeitspreis Messung).
 ///
 /// Source: WiM AHB BK6-24-174.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait PreisblattMessungRepository: Send + Sync {
     /// Upsert a `PreisblattMessung` for the given MSB MP-ID.
     ///
@@ -909,7 +941,10 @@ pub struct PreisblattKaRecord {
 /// Read/write access to `PreisblattKonzessionsabgabe` records.
 ///
 /// Used by `netzbilanzd` for INVOIC 31001/31002 KA tariff positions.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait PreisblattKaRepository: Send + Sync {
     /// Upsert a `PreisblattKonzessionsabgabe` for the given NB MP-ID.
     ///
@@ -957,7 +992,10 @@ pub struct PreisblattDienstleistungRecord {
 ///
 /// Used by `invoic-checker` for INVOIC 31009 service position validation
 /// and by `mako-wim` REQOTE/QUOTES (PIDs 35001/35002/35004/35005).
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait PreisblattDienstleistungRepository: Send + Sync {
     async fn upsert_dienstleistung(
         &self,
@@ -994,7 +1032,10 @@ pub struct PreisblattHardwareRecord {
 ///
 /// Required for NB → MSB settlement INVOIC 31009 hardware positions.
 /// `invoic-checker` check 5 cannot validate hardware positions without it.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait PreisblattHardwareRepository: Send + Sync {
     async fn upsert_hardware(
         &self,
@@ -1085,7 +1126,10 @@ pub struct PriCatDispatchEntry {
 }
 
 /// Read/write access to versioned PRICAT snapshots and the dispatch audit log.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait PriCatRepository: Send + Sync {
     /// Insert or update a versioned PRICAT snapshot.
     ///
@@ -1093,7 +1137,10 @@ pub trait PriCatRepository: Send + Sync {
     /// the payload and reset `dispatch_done_at` so the new version is re-dispatched.
     ///
     /// Returns the `UUID` of the upserted row.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
     async fn upsert_version(
         &self,
         nb_mp_id: &str,
@@ -1331,7 +1378,10 @@ pub struct NbContractRecord {
 }
 
 /// CRUD repository for NB network contracts.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait NbContractRepository: Send + Sync {
     /// Upsert a NB contract record.  Returns the new version number.
     #[must_use]
@@ -1696,7 +1746,10 @@ pub struct VersorgungsStatusHistoryRecord {
 ///
 /// Every successful `upsert` atomically appends a row to
 /// `versorgungsstatus_history`, enabling point-in-time queries via `find_at`.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait VersorgungsStatusRepository: Send + Sync {
     /// Insert (version 1) or update a `VersorgungsStatus` record.
     ///
@@ -1786,7 +1839,10 @@ pub trait VersorgungsStatusRepository: Send + Sync {
     /// Inserts a new row as `Unbeliefert` if none exists yet for this MaLo.
     /// Appends to `versorgungsstatus_history` on every successful write.
     #[must_use]
-    #[allow(clippy::too_many_arguments)] // one assignment carries its full identity
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one assignment carries its full identity"
+    )]
     async fn announce_lf_next(
         &self,
         malo_id: &MaloId,
@@ -1886,7 +1942,10 @@ pub trait VersorgungsStatusRepository: Send + Sync {
     /// switch ends the fallback supply on confirmation.
     /// Appends to `versorgungsstatus_history` on every successful write.
     #[must_use]
-    #[allow(clippy::too_many_arguments)] // regulatory transition carries its full context
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "regulatory transition carries its full context"
+    )]
     async fn begin_eog_supply(
         &self,
         malo_id: &MaloId,
@@ -1934,7 +1993,10 @@ pub struct GrundversorgerRecord {
 }
 
 /// Repository for the per-Netzgebiet Grundversorger determination (§36 EnWG).
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait GrundversorgerRepository: Send + Sync {
     /// Fetch the Grundversorger for a Netzbetreiber and Sparte.
     async fn find(
@@ -1974,7 +2036,10 @@ pub struct MeloMsbZuordnung {
 }
 
 /// Repository for the per-Messlokation dated MSB timeline (WiM Teil 2 UC 4.1.1).
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait MeloMsbRepository: Send + Sync {
     /// Record a new MSB assignment effective `valid_from`, closing the
     /// previously-open assignment (`valid_to = valid_from`) atomically. A
@@ -2153,7 +2218,10 @@ impl BilanzierungRecord {
 }
 
 /// Repository for the first-class temporal BO4E `Bilanzierung` resource.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait BilanzierungRepository: Send + Sync {
     /// Insert or update the Bilanzierung effective `bilanzierungsbeginn`; the
     /// natural key is `(tenant, malo_id, bilanzierungsbeginn)`.
@@ -2241,7 +2309,10 @@ impl NeloStammdatenPatch {
 ///
 /// One row per `(nelo_id, tenant)`.
 /// Writes use optimistic concurrency via `if_match` (ETag header version).
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait NeLoRepository: Send + Sync {
     /// Insert or update a NeLo record.
     ///
@@ -2349,7 +2420,10 @@ impl TrancheStammdatenPatch {
 /// Read/write access to `Tranche` records.
 ///
 /// One row per `(tranche_id, tenant)`.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait TrancheRepository: Send + Sync {
     /// Insert or update a Tranche record. `if_match` = `None` for unconditional
     /// upsert. Returns the new version number.
@@ -2377,42 +2451,6 @@ pub trait TrancheRepository: Send + Sync {
         tenant: &str,
         patch: &TrancheStammdatenPatch,
     ) -> Result<bool, MdmError>;
-}
-
-/// Convenience bundle of all repositories, passed to handlers via `Arc<AppState<...>>`.
-///
-/// Uses concrete generic parameters (same pattern as `mako-engine`'s `EngineContext`)
-/// so all trait methods are statically dispatched — AFIT is **not** dyn-compatible.
-///
-/// `services/marktd` instantiates this with the Postgres implementations:
-/// ```text
-/// AppState<PgMaloRepo, PgMeloRepo, PgSubscriptionRepo, PgCorrelationIndex, PgPartnerRepo>
-/// ```
-///
-/// `testing` feature instantiates it with InMemory implementations.
-#[derive(Clone)]
-pub struct AppState<Ma, Me, Su, Ci, Pa>
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
-    pub malo_repo: Ma,
-    pub melo_repo: Me,
-    pub subscription_repo: Su,
-    pub correlation_index: Ci,
-    pub partner_repo: Pa,
-    #[cfg(feature = "makod-client")]
-    pub makod_client: std::sync::Arc<crate::makod_client::MakodClient>,
-    /// This deployment's own tenant identifier — the operator's primary market
-    /// code (`makod.toml` `[[party]] primary = true`).
-    ///
-    /// A BDEW- or DVGW-Codenummer, not a GS1 GLN, and validated as neither: it
-    /// is compared against the caller's `mako_tenant` claim and written on
-    /// tenant-scoped rows, never parsed.
-    pub tenant: String,
 }
 
 // ── MaloGridRecord ────────────────────────────────────────────────────────────
@@ -2465,7 +2503,10 @@ pub struct MaloGridRecord {
 ///
 /// One row per `(malo_id, tenant)`.  Written by the NB's NIS adapter
 /// and by manual provisioning; read by `processd` NB module for Anmeldung STP evaluation.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait MaloGridRepository: Send + Sync {
     /// Insert or replace the grid record for a MaLo.
     ///
@@ -2553,10 +2594,16 @@ impl SteuerbareRessourceStammdatenPatch {
 ///
 /// Populated by the WiM iMS Steuerungsauftrag process (PID 55168)
 /// and by operator REST uploads.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait SteuerbareRessourceRepository: Send + Sync {
     /// Upsert a `SteuerbareRessource` for the given `sr_id` + tenant.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
     async fn upsert_sr(
         &self,
         sr_id: &str,
@@ -2662,9 +2709,15 @@ impl TechnischeRessourceStammdatenPatch {
 /// Populated by Redispatch 2.0 registration processes and by operator REST
 /// uploads.  Used by iMS E-mobility `Steuerungsauftrag` routing and flex-market
 /// clearing.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait TechnischeRessourceRepository: Send + Sync {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
     async fn upsert_tr(
         &self,
         tr_id: &str,
@@ -2759,14 +2812,20 @@ pub struct LokationszuordnungEdge {
 /// for "current parent", the graph is the authoritative temporal history, and
 /// the two never contradict. Writers other than the MeLo PUT and the graph API
 /// must not touch `melo.malo_id` directly.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait LokationszuordnungRepository: Send + Sync {
     /// Insert or replace a directed edge.
     ///
     /// For open-ended edges (`valid_from = None`), only one edge per
     /// `(tenant, von_id, nach_id)` pair is kept.  Dated edges
     /// (`valid_from = Some(date)`) allow temporal succession.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
     async fn upsert_edge(
         &self,
         tenant: &str,
@@ -3006,11 +3065,8 @@ impl Lokationsbuendel {
 
     /// Check the bundle against the BDEW *Lokationsbündelstruktur* it declares.
     ///
-    /// `lokationsbuendelcode` was an opaque `Option<String>`: nothing checked
-    /// its BDEW check digit, nothing resolved it to one of the fifteen
-    /// published structures, and `GET /malos/{id}/buendel` could not say which
-    /// structure a bundle was. This resolves it through
-    /// `rubo4e::lokationsbuendel` — EDI@Energy's *Codeliste der
+    /// Checks the `lokationsbuendelcode` check digit and resolves it to one of
+    /// the fifteen published structures through `rubo4e::lokationsbuendel` — EDI@Energy's *Codeliste der
     /// Lokationsbündelstrukturen* (BDEW v1.0, 31.03.2023, applicable from
     /// 01.10.2024) — and reports every disagreement.
     ///
@@ -3022,10 +3078,9 @@ impl Lokationsbuendel {
     /// and not per code. A structure wanting one consuming and one generating
     /// Marktlokation is satisfied here by any two Marktlokationen.
     ///
-    /// `rubo4e`'s `Lokationszuordnung::audit_buendel()` is the per-code check,
-    /// and it needs the BO4E document with its objects inline. That document is
-    /// what an edge's `data` carries, so the finer audit belongs on the write
-    /// path; this is what the *graph* can answer on a read.
+    /// `rubo4e`'s `Lokationszuordnung::audit_buendel()` is the per-code check;
+    /// it needs the BO4E document with its objects inline, which only the write
+    /// path holds.
     ///
     /// **Steuerbare Ressourcen** are not counted at all: chapter 2.1 of the
     /// codelist has no object code for one, so there is no cardinality to hold
@@ -3034,13 +3089,11 @@ impl Lokationsbuendel {
     /// **Marktlokationen cannot be counted here**, and that is *reported*, not
     /// assumed away. [`from_graph`](Self::from_graph) keeps only the root MaLo
     /// — a sibling Marktlokation on an edge is discarded — so the projection
-    /// holds exactly one by construction. For twelve structures that is the
-    /// right answer. For the three **Summenmessung** structures it is not:
-    /// `9992000000125` alone requires a consumption MaLo (`…1016`, exactly one)
-    /// *and* at least one generating MaLo (`…1115`), summing to a minimum of
-    /// two. Passing such a bundle silently would be a wrong answer, so
+    /// holds exactly one by construction — right for twelve structures, wrong
+    /// for the three **Summenmessung** structures (`9992000000125` requires a
+    /// consumption MaLo *and* at least one generating MaLo). For those,
     /// [`Buendelbefund::MarktlokationenNichtPruefbar`] says the graph cannot
-    /// decide it and names `audit_buendel` as what can.
+    /// decide and names `audit_buendel` as what can.
     ///
     /// A report, never a refusal: BDEW requires none of this of a stored
     /// record, and a bundle is legitimately incomplete mid-Einzug.
@@ -3228,12 +3281,13 @@ pub enum Konfigurationsparameter {
     ClsFaehig,
     /// BSI TR-03109-3 SMGW TLS certificate SHA-256 fingerprint (64 lowercase hex chars).
     ///
-    /// Used by the `edmd` certificate-expiry background worker to emit
-    /// `de.messwert.cls.compliance-issue` before expiry.
+    /// Master data only: `edmd`'s certificate-expiry worker reads the
+    /// `SmgwSession` it stores itself, not this Konfiguration.
     SmgwTlsCertFingerprint,
     /// SMGW TLS certificate expiry date (`YYYY-MM-DD`).
     ///
-    /// The `edmd` worker alerts when `SmgwCertAblaufdatum ≤ today + 30 days`.
+    /// Master data only, like [`Self::SmgwTlsCertFingerprint`]: the expiry
+    /// alert `edmd` raises reads its own `SmgwSession`.
     SmgwCertAblaufdatum,
     /// CLS channel identifier for §14a Steuerungsauftrag routing (opaque string).
     ClsKanalId,
@@ -3306,10 +3360,12 @@ pub struct GeraetRecord {
 /// and operator REST uploads.
 ///
 /// Source: WiM AHB BK6-24-174; BO4E Zaehler/Geraet schemas.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait DeviceRepository: Send + Sync {
     /// Upsert a `Zaehler` record.
-    #[allow(clippy::too_many_arguments)]
     /// `zaehler_typ` and `eichung_bis` are **derived from `data`**
     /// ([`ZaehlerShadowColumns`](crate::bo4e::ZaehlerShadowColumns)), not passed
     /// alongside it: `Zaehler` declares both, and asking for them twice let the
@@ -3570,7 +3626,10 @@ pub mod wall_clock {
 ///
 /// Allows `edmd` to correctly classify MSCONS reads by tariff zone
 /// (HT vs NT) for iMSys smart meters without relying on the OBIS code alone.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait ZaehlzeitRepository: Send + Sync {
     /// Upsert a `ZaehlzeitRegister`.
     async fn upsert_register(&self, rec: &ZaehlzeitRegisterRecord) -> Result<(), MdmError>;
@@ -3629,7 +3688,10 @@ pub struct MmmaPreisGasRecord {
 ///
 /// `netzbilanzd` fetches these instead of requiring manual ERP input per billing run.
 /// `invoicd` uses them for MMM position plausibility check.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait MmmaPreisGasRepository: Send + Sync {
     /// Upsert the Gas MMM price pair for a billing month + Marktgebiet.
     async fn upsert_gas(
@@ -3681,7 +3743,10 @@ pub struct MmmPreisStromRecord {
 }
 
 /// Read/write access to the Strom Mehr-/Mindermengenpreise.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait MmmPreisStromRepository: Send + Sync {
     async fn upsert_strom(
         &self,
@@ -3722,7 +3787,10 @@ pub struct NbEnergiemixRecord {
 }
 
 /// Read/write access to NB annual grid-area Energiemix (§42 EnWG).
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait NbEnergiemixRepository: Send + Sync {
     /// Upsert the annual Energiemix for an NB.
     ///
@@ -4004,7 +4072,10 @@ impl ConsentDecision {
 
 /// Registry of ESA consents and framework agreements (`esa_einwilligungen`,
 /// `esa_framework_agreements`).
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait EinwilligungRepository: Send + Sync {
     /// Grant a consent, superseding any active consent for the same
     /// `(tenant, esa, Anschlussnutzer)`. Returns the new consent id.
@@ -4406,7 +4477,10 @@ pub struct MabisZpRecord {
 }
 
 /// Read/write access to the Bilanzierungsgebiet → MaBiS-Zählpunkt assignments.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
+)]
 pub trait MabisZpRepository: Send + Sync {
     /// Insert or replace the assignment for a Bilanzierungsgebiet.
     ///

@@ -75,7 +75,7 @@
 //! - **§36 / §38 / §38a EnWG**, **§§2–3 StromGVV**
 //! - **GPKE Teil 2 Kap. 2.3 (BK6-24-174)** — Beginn der Ersatz-/Grundversorgung
 //! - **UTILMD AHB Strom S2.1/S2.2 Kap. 8.6**, **EBD E_0615**
-//! - **APERAK AHB 1.0 §2.4.1** — Strom UTILMD 45-min APERAK Frist
+//! - **APERAK AHB 1.1 §2.4.1** — Strom UTILMD 45-min APERAK Frist
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -401,11 +401,26 @@ pub enum EogState {
         /// Human-readable reason.
         reason: String,
     },
+    /// A window lapsed while the process still waited in `offen`, and no
+    /// Festlegung gives that lapse an outcome.
+    ///
+    /// GPKE Teil 2 Kap. 2.3.2.2 gives the E/G-Lieferant its answer window and no consequence of the E/G missing it; the NB then assigns on its own (Schritt 3), which reaches this process as the NB's message. The lapse is a Frist breach for the operator to act on,
+    /// not a rejection: every command `offen` accepts is still accepted — a
+    /// late answer is still an answer — and the next event moves the process
+    /// on from `offen`.
+    FristAbgelaufen {
+        /// Label of the lapsed window.
+        label: String,
+        /// The state the process was waiting in.
+        offen: Box<EogState>,
+    },
 }
 
 impl mako_engine::workflow::OccupiesBusinessKey for EogState {
     fn occupies_business_key(&self) -> bool {
         match self {
+            // A lapsed window leaves the Vorgang open.
+            Self::FristAbgelaufen { offen, .. } => offen.occupies_business_key(),
             // Initiator side: awaiting the E/G, or the Zuordnung is effective
             // and the supply relationship is live.
             Self::Angemeldet(_) | Self::Zugeordnet { .. } => true,
@@ -432,6 +447,16 @@ impl EogState {
             Self::ValidationPassed(_) => "ValidationPassed",
             Self::AntwortGesendet { .. } => "AntwortGesendet",
             Self::Rejected { .. } => "Rejected",
+            Self::FristAbgelaufen { .. } => "FristAbgelaufen",
+        }
+    }
+
+    /// The state the process is waiting in — itself, unless a window lapsed.
+    #[must_use]
+    pub fn offen(&self) -> &Self {
+        match self {
+            Self::FristAbgelaufen { offen, .. } => offen.offen(),
+            other => other,
         }
     }
 
@@ -439,6 +464,7 @@ impl EogState {
     #[must_use]
     pub fn data(&self) -> Option<&EogData> {
         match self {
+            Self::FristAbgelaufen { offen, .. } => offen.data(),
             Self::Angemeldet(d) | Self::Eingegangen(d) | Self::ValidationPassed(d) => Some(d),
             Self::Zugeordnet { data, .. } | Self::AntwortGesendet { data, .. } => Some(data),
             Self::New | Self::Abgelehnt { .. } | Self::Rejected { .. } => None,
@@ -584,25 +610,42 @@ fn process_completed_outbox(
 /// GPKE Ersatz-/Grundversorgung workflow (PIDs 55013–55015).
 pub struct GpkeEogWorkflow;
 
+/// The one guard a fired deadline passes: is the window `label` names still
+/// open in `state`?
+///
+/// [`EOG_RESPONSE_WINDOW_LABEL`] is open while an answer is owed — by the E/G
+/// (`Eingegangen`, `ValidationPassed`) or to the NB that sent the Anmeldung
+/// (`Angemeldet`). The APERAK delivery window riding beside it is not this
+/// workflow's to decide.
+fn window_open(label: &str, state: &EogState) -> bool {
+    label == EOG_RESPONSE_WINDOW_LABEL
+        && matches!(
+            state,
+            EogState::Angemeldet(_) | EogState::Eingegangen(_) | EogState::ValidationPassed(_)
+        )
+}
+
 impl Workflow for GpkeEogWorkflow {
     type State = EogState;
     type Event = EogEvent;
     type Command = EogCommand;
 
+    const DEADLINE_LABELS: &'static [&'static str] = &[EOG_RESPONSE_WINDOW_LABEL];
+
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (
-                EOG_RESPONSE_WINDOW_LABEL | APERAK_STROM_WINDOW_LABEL,
-                EogState::Angemeldet(_) | EogState::Eingegangen(_) | EogState::ValidationPassed(_),
-            ) => Some(EogCommand::TimeoutExpired {
-                deadline_id: deadline.deadline_id(),
-                label: deadline.label().into(),
-            }),
-            _ => None,
-        }
+        window_open(deadline.label(), state).then(|| EogCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+        // A lapsed window leaves the process waiting where it was; the next
+        // event moves it on from there.
+        let state = match state {
+            EogState::FristAbgelaufen { offen, .. } => *offen,
+            other => other,
+        };
         match event {
             EogEvent::Angemeldet {
                 location_id,
@@ -694,15 +737,15 @@ impl Workflow for GpkeEogWorkflow {
             EogEvent::Rejected { reason } => EogState::Rejected {
                 reason: reason.clone(),
             },
-            EogEvent::DeadlineExpired { label, .. } => {
-                if state.is_terminal() {
-                    state
-                } else {
-                    EogState::Rejected {
-                        reason: format!("deadline expired: {label}"),
+            EogEvent::DeadlineExpired { label, .. } => match state {
+                EogState::Eingegangen(_) | EogState::ValidationPassed(_) => {
+                    EogState::FristAbgelaufen {
+                        label: label.to_string(),
+                        offen: Box::new(state),
                     }
                 }
-            }
+                other => other,
+            },
         }
     }
 
@@ -710,6 +753,10 @@ impl Workflow for GpkeEogWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // A lapsed window changes nothing about what the process accepts; only
+        // the timeout itself asks about the lapse.
+        let lapsed = state;
+        let state = state.offen();
         match command {
             // ── NB initiator ─────────────────────────────────────────────────
             EogCommand::Anmelden {
@@ -865,7 +912,7 @@ impl Workflow for GpkeEogWorkflow {
                         message_ref: message_ref.clone(),
                     });
                     // APERAK BGM+312 (Anerkennung) — Strom UTILMD 45-min Frist
-                    // (APERAK AHB 1.0 §2.4.1).
+                    // (APERAK AHB 1.1 §2.4.1).
                     let outbox = vec![
                         // The business notification. Without it `processd`'s LF
                         // module never sees the Zuordnung: `makod` delivers a
@@ -995,17 +1042,15 @@ impl Workflow for GpkeEogWorkflow {
                 ))
             }
 
-            EogCommand::TimeoutExpired { deadline_id, label } => match state {
+            EogCommand::TimeoutExpired { deadline_id, label } => match lapsed {
+                _ if !window_open(&label, lapsed) => Ok(vec![].into()),
                 // Initiator: silence never blocks the statutory fallback —
                 // assign with the pre-deposited default Bilanzkreis
                 // (GPKE Teil 2 Kap. 2.3 SD Schritt 3).
-                EogState::Angemeldet(data) if label.as_ref() == EOG_RESPONSE_WINDOW_LABEL => {
-                    Ok(WorkflowOutput::with_outbox(
-                        vec![EogEvent::ZugeordnetOhneAntwort { deadline_id }],
-                        vec![process_completed_outbox(data, None, None, true)],
-                    ))
-                }
-                s if s.is_terminal() => Ok(vec![].into()),
+                EogState::Angemeldet(data) => Ok(WorkflowOutput::with_outbox(
+                    vec![EogEvent::ZugeordnetOhneAntwort { deadline_id }],
+                    vec![process_completed_outbox(data, None, None, true)],
+                )),
                 _ => Ok(vec![EogEvent::DeadlineExpired { deadline_id, label }].into()),
             },
         }
@@ -1317,8 +1362,10 @@ mod tests {
         assert!(matches!(state, EogState::Rejected { .. }));
     }
 
+    /// The E/G's own answer window lapsing is a Frist breach, not a
+    /// rejection — and the APERAK delivery window beside it decides nothing.
     #[test]
-    fn responder_timeout_rejects() {
+    fn responder_timeout_is_a_frist_breach() {
         let out = GpkeEogWorkflow::handle(&EogState::New, receive_anmeldung_cmd(true)).unwrap();
         let state = apply_all(EogState::New, &out.events);
         let out = GpkeEogWorkflow::handle(
@@ -1329,8 +1376,18 @@ mod tests {
             },
         )
         .unwrap();
-        let state = apply_all(state, &out.events);
-        assert!(matches!(state, EogState::Rejected { .. }));
+        let lapsed = apply_all(state.clone(), &out.events);
+        assert!(matches!(lapsed, EogState::FristAbgelaufen { .. }));
+
+        let aperak = GpkeEogWorkflow::handle(
+            &state,
+            EogCommand::TimeoutExpired {
+                deadline_id: DeadlineId::new(),
+                label: APERAK_STROM_WINDOW_LABEL.into(),
+            },
+        )
+        .unwrap();
+        assert!(aperak.events.is_empty());
     }
 
     // ── Versorgungsart codes ──────────────────────────────────────────────────

@@ -379,6 +379,20 @@ impl BillingPosition {
         )
     }
 
+    /// This position with `net_eur` rounded to the cent (kaufmännisch).
+    ///
+    /// The line amount an invoice states. [`Invoice::from_positions`] applies
+    /// it to every position, once; `quantity` and `unit_price_eur` keep their
+    /// full precision, because they are the calculation the line is the result
+    /// of.
+    ///
+    /// [`Invoice::from_positions`]: crate::Invoice::from_positions
+    #[must_use]
+    pub fn rounded_to_cents(mut self) -> Self {
+        self.net_eur = self.net_eur.round_kfm(2);
+        self
+    }
+
     /// Construct a debit position (customer owes the amount).
     ///
     /// `net_eur` is automatically computed as `quantity × unit_price_eur`.

@@ -1,25 +1,11 @@
 //! Delivery surveillance — noticing the measuring points that stopped.
 //!
-//! # Why this exists
-//!
-//! Every other quality mechanism in `edmd` judges **data that arrived**. The
-//! V-rules run on an ingest batch; the Hampel scorer grades one; the § 60 Abs. 1
-//! confirmation loop chases estimates that were already written. All of them are
-//! triggered by a delivery.
-//!
-//! Silence triggers nothing. A head-end that breaks, a gateway that loses its
-//! WAN, a Kafka producer that is redeployed with the wrong topic — none of these
-//! produce an ingest, so none produce a validation, a grade, or an event. The
-//! measuring point simply stops appearing, and nothing in the service is looking
-//! for an absence.
-//!
-//! That failure surfaces at settlement: the Summenzeitreihe is short, the
-//! Bilanzkreis carries the difference, and the Mehr-/Mindermengensaldo lands on
-//! someone. By then the window in which the values could still have been re-read
-//! or substituted under § 60 Abs. 1 MsbG has usually closed.
-//!
-//! So this worker asks the complementary question — *which points have not
-//! delivered?* — and answers it on a cadence short enough to act on.
+//! Every other quality mechanism in `edmd` — V-rules, Hampel grading, the § 60
+//! Abs. 1 confirmation loop — is triggered by a delivery, and silence triggers
+//! nothing. A broken head-end or a gateway without WAN otherwise surfaces only
+//! at settlement, when the Summenzeitreihe is short and the window to re-read
+//! or substitute under § 60 Abs. 1 MsbG has usually closed. This worker asks
+//! *which points have not delivered?* on a cadence short enough to act on.
 //!
 //! # What it reports
 //!
@@ -468,7 +454,6 @@ pub async fn run_surveillance_sweep(
 }
 
 /// Spawn the delivery-surveillance worker. Runs until `shutdown` is cancelled.
-#[allow(clippy::too_many_arguments)] // one argument per collaborator
 pub fn spawn_surveillance_worker(
     repo: MeterStoreTimeSeriesRepository,
     typ2: Option<crate::store::MeterStoreTyp2Repository>,

@@ -914,7 +914,6 @@ pub async fn store_angebot_bo4e(
 }
 
 /// Insert a new Angebot.
-#[allow(clippy::too_many_arguments)]
 /// Look up an existing Angebot by its ERP-supplied idempotency key.
 ///
 /// `erp_angebot_id` is a tenant-scoped idempotency handle: an ERP that retries
@@ -942,7 +941,10 @@ pub async fn fetch_angebot_id_by_erp_id(
     }))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
 pub async fn insert_angebot(
     pool: &PgPool,
     tenant: &str,

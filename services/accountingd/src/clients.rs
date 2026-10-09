@@ -114,10 +114,10 @@ pub struct PostalAddress {
 impl PostalAddress {
     /// Build one only when every part is present.
     ///
-    /// The `Mahnung` path used to build `Some({"line1":null,…})` regardless and
-    /// then decide the `POST` channel from a *separate* `post_code && city`
-    /// test — two answers to one question, and the one `outputd` acted on was
-    /// the wrong one.
+    /// The address and the `POST` channel decision must come from this one
+    /// check: building `Some({"line1":null,…})` and deciding the channel from a
+    /// *separate* `post_code && city` test gives two answers to one question,
+    /// and `outputd` acts on the wrong one.
     #[must_use]
     pub fn complete(
         line1: Option<&str>,

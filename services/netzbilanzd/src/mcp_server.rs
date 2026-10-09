@@ -130,9 +130,15 @@ pub struct StaleParams {
 #[derive(Clone)]
 pub struct NetzbilanzMcpHandler {
     state: Arc<NetzbilanzMcpState>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     tool_router: ToolRouter<NetzbilanzMcpHandler>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "reached only in some feature or target combinations"
+    )]
     prompt_router: PromptRouter<NetzbilanzMcpHandler>,
 }
 
@@ -585,9 +591,10 @@ impl NetzbilanzMcpHandler {
                  window and `arbeitspreis_eur_per_kwh`.\n\n\
                  The energy comes from the `edmd` Lastgang summed over the exact activation \
                  window. Check `dispatch_source` on the result: `lastgang_sum` is the intended \
-                 path, `billing_period` means the monthly aggregate was used because no Lastgang \
-                 existed — for a 15-minute activation that is wrong by three orders of \
-                 magnitude and should be replaced with a verified `dispatch_kwh_override`.\n\n\
+                 path, `einspeisung_tag` means the delivery day's Einspeisung was used because the \
+                 activation window carried none — for a 15-minute activation that is wrong by \
+                 up to two orders of magnitude and should be replaced with a verified \
+                 `dispatch_kwh_override`.\n\n\
                  **3. Review** — `list_pending_kostenblatt`.\n\n\
                  **4. Submit** — `POST /api/v1/redispatch/kostenblatt/submit/{year}/{month}`. \
                  The response carries the aggregate and the per-activation breakdown; \

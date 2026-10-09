@@ -70,10 +70,10 @@ pub async fn get_record(
 /// rendered from it until the calculation is re-run.
 pub async fn record_with_model(
     pool: &PgPool,
-    tenant: &str,
+    cfg: &crate::config::BillingdConfig,
     id: Uuid,
 ) -> BillingResult<(crate::pg::BillingRecordRow, en16931::Invoice)> {
-    let row = fetch_billing_record(pool, tenant, id)
+    let row = fetch_billing_record(pool, &cfg.tenant, id)
         .await?
         .ok_or_else(|| BillingError::not_found("RECORD_NOT_FOUND", "billing record not found"))?;
     let model = row
@@ -83,18 +83,50 @@ pub async fn record_with_model(
         .ok_or_else(|| match row.en16931_blocked.as_deref() {
             // The invoice *cannot* have one, and the record says why. Telling
             // the operator to re-run would produce the same refusal.
-            Some(reason) => BillingError::unprocessable(
-                "MODEL_NOT_REPRESENTABLE",
-                format!(
-                    "this document has no valid EN 16931 representation and can only be                      issued on paper: {reason}"
-                ),
-            ),
+            Some(reason) => papier_oder_verweigerung(&row, cfg, reason),
             None => BillingError::unprocessable(
                 "MODEL_MISSING",
                 "record has no EN 16931 model — re-run the billing calculation",
             ),
         })?;
     Ok((row, model))
+}
+
+/// The answer for a record with no EN 16931 model: paper, where § 27 Abs. 38
+/// UStG still admits it for this recipient and supply, or a refusal naming
+/// why it does not.
+///
+/// Evaluated against today's Berlin date, because the paper document would be
+/// übermittelt now; the supply is dated by the record's last day.
+fn papier_oder_verweigerung(
+    row: &crate::pg::BillingRecordRow,
+    cfg: &crate::config::BillingdConfig,
+    reason: &str,
+) -> BillingError {
+    use energy_billing::e_rechnung::{SonstigeRechnungFall, sonstige_rechnung_zulaessig};
+    let fall = SonstigeRechnungFall {
+        ausgefuehrt: row.period_to,
+        uebermittelt: mako_fristen::heute(),
+        empfaenger_unternehmer: row.empfaenger_unternehmer,
+        gesamtumsatz_vorjahr_eur: cfg.e_rechnung.gesamtumsatz_im(row.period_to.year() - 1),
+    };
+    match sonstige_rechnung_zulaessig(fall) {
+        Ok(grund) => BillingError::unprocessable(
+            "MODEL_NOT_REPRESENTABLE",
+            format!(
+                "this document has no valid EN 16931 representation and can only be issued \
+                 on paper ({}): {reason}",
+                grund.grundlage()
+            ),
+        ),
+        Err(nicht) => BillingError::unprocessable(
+            "PAPIER_UNZULAESSIG",
+            format!(
+                "this document has no valid EN 16931 representation ({reason}), and paper is \
+                 not admissible: {nicht}"
+            ),
+        ),
+    }
 }
 
 /// `GET /api/v1/billing/{id}/xrechnung` — ZUGFeRD 2.3 / XRechnung 3.0 CII XML.
@@ -109,7 +141,7 @@ pub async fn get_xrechnung(
     authorize(&cedar, &claims, "read-billing", &cfg.tenant)?;
     // Render from the stored EN 16931 semantic model (per-line VAT intact) via
     // `en16931-formats`.
-    let (_, model) = record_with_model(&pool, &cfg.tenant, id).await?;
+    let (_, model) = record_with_model(&pool, cfg, id).await?;
     Ok(xml_download(
         crate::einvoice::render_cii(&model),
         format!("xrechnung-{id}.xml"),
@@ -362,7 +394,7 @@ pub async fn get_invoice_pdf(
 ) -> BillingResult<axum::response::Response> {
     let cfg = &deps.cfg;
     authorize(&cedar, &claims, "read-billing", &cfg.tenant)?;
-    let (row, model) = record_with_model(&pool, &cfg.tenant, id).await?;
+    let (row, model) = record_with_model(&pool, cfg, id).await?;
 
     // The identity of the bytes: this record, rendered by this template. Only a
     // pinned record has one — a draft's appearance can still change.
@@ -457,7 +489,7 @@ pub async fn post_invoice_versenden(
     // The act that puts a document in front of a customer, so it is gated like
     // issuing one — not like reading it.
     authorize(&cedar, &claims, "issue-billing", &cfg.tenant)?;
-    let (row, model) = record_with_model(&pool, &cfg.tenant, id).await?;
+    let (row, model) = record_with_model(&pool, cfg, id).await?;
     if row.outcome != "dispatched" {
         return Err(BillingError::conflict(
             "NOT_YET_ISSUED",

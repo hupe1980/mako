@@ -1114,7 +1114,10 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
     }
 
     /// `SG12 NAD` with an address: `NAD+Z04+++Name:::::Z01+Straße+Ort++PLZ+DE`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+    )]
     pub fn anschrift(
         mut self,
         party_qualifier: impl Into<String>,

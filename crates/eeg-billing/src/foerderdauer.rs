@@ -19,7 +19,7 @@
 //! has no calendar Förderende: it stops when its kWh counter reaches
 //! `kwk_max_kwh = leistung_kW_el × Vollbenutzungsstunden`.
 
-use crate::rounding::RoundMoney;
+use grid_billing::RoundMoney;
 use rust_decimal::Decimal;
 use time::Date;
 use time::error::ComponentRange;

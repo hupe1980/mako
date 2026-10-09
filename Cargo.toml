@@ -1,5 +1,8 @@
 [workspace]
-resolver = "2"
+# `3` is the edition-2024 resolver: on a lockfile update it prefers versions
+# whose `rust-version` the pinned toolchain satisfies, so a transitive bump does
+# not demand a newer compiler than `rust-toolchain.toml` holds.
+resolver = "3"
 members = [
     "crates/edi-energy",
     "makotest",
@@ -47,6 +50,62 @@ members = [
     "xtask",
 ]
 exclude = ["fuzz"]
+# What a bare `cargo build` / `cargo test` at the root builds: every member but
+# `makotest`, whose PyO3 build needs a Python ≥ 3.11 interpreter. The `just`
+# gate recipes pass `--workspace`, so `makotest` is still checked, linted and
+# tested there.
+default-members = [
+    "crates/edi-energy",
+    "crates/energy-api",
+    "crates/mako-engine",
+    "crates/mako-gpke",
+    "crates/mako-wim",
+    "crates/mako-geli-gas",
+    "crates/mako-fristen",
+    "crates/mako-mabis",
+    "crates/mako-as4",
+    "crates/mako-redispatch",
+    "crates/redispatch-xml",
+    "crates/dvgw-edi",
+    "crates/mako-gabi-gas",
+    "crates/mako-emob",
+    "crates/mako-nbw",
+    "crates/mako-markt",
+    "crates/mako-events",
+    "crates/mako-obs",
+    "crates/mako-service",
+    "crates/invoic-checker",
+    "crates/mako-invoic",
+    "crates/mako-pruefung",
+    "crates/grid-billing",
+    "crates/eeg-billing",
+    "crates/energy-billing",
+    "services/invoicd",
+    "services/makod",
+    "services/marktd",
+    "services/edmd",
+    "services/obsd",
+    "services/processd",
+    "services/netzbilanzd",
+    "services/sperrd",
+    "services/einsd",
+    "services/productd",
+    "services/agentd",
+    "services/billingd",
+    "services/outputd",
+    "services/accountingd",
+    "services/portald",
+    "services/vertragd",
+    "services/mabis-syncd",
+    "xtask",
+]
+
+# Lint levels every member inherits through `[lints] workspace = true`.
+[workspace.lints.clippy]
+# A suppression states why it exists. `#[expect]` also fails when the lint
+# stops firing; `#[allow]` is kept where a lint fires only in some feature or
+# target combinations, where an expectation would be unfulfilled in the others.
+allow_attributes_without_reason = "deny"
 
 [workspace.package]
 version     = "0.22.0"
@@ -190,6 +249,23 @@ testcontainers   = { version = "0.23", features = ["blocking"] }
 testcontainers-modules = { version = "0.11", features = ["postgres"] }
 
 # ── Release profile ─────────────────────────────────────────────────────────
+# Line tables keep `file:line` in a backtrace — what a failing settlement test
+# needs — without the full DWARF that makes every one of the workspace's linked
+# test executables hundreds of megabytes. Dependencies carry none: a backtrace
+# frame inside `tokio` or `sqlx` is read by symbol name. Build scripts and proc
+# macros run on every build, so they are compiled optimised.
+#
+# `split-debuginfo` is left at the platform default, which on macOS is already
+# `unpacked` (no `dsymutil` pass at link time).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.dev.build-override]
+opt-level = 3
+
 [profile.release]
 opt-level     = 3
 lto           = "thin"

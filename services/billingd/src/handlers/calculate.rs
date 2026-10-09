@@ -15,8 +15,8 @@ pub struct CalculateRequest {
     pub lf_mp_id: String,
     /// §41 Abs. 1 Nr. 5 EnWG — Netzbetreiber identification on the invoice.
     ///
-    /// When set, propagated to `BillingContext.nb_mp_id`. When absent, `billingd`
-    /// looks up the NB from `marktd` via the MaLo's grid assignment.
+    /// Propagated to `BillingContext.nb_mp_id`. `billingd` does not look the NB
+    /// up from `marktd` when it is absent.
     #[serde(default)]
     pub nb_mp_id: Option<String>,
     pub period_from: String,
@@ -25,7 +25,8 @@ pub struct CalculateRequest {
     pub tariff: Option<Product>,
     /// Override: supply Strom meter data directly (skip edmd lookup).
     pub meter: Option<MeterInput>,
-    /// Override: supply grid pass-through data directly (skip marktd lookup).
+    /// Grid pass-through data. `billingd` does not fetch it from `marktd`; the
+    /// caller supplies it.
     pub grid: Option<GridInput>,
     /// EEG Gutschrift EUR for STROM/WAERMEPUMPE/WALLBOX (from `einsd`).
     pub eeg_gutschrift_eur: Option<Decimal>,
@@ -115,7 +116,7 @@ pub struct CalculateRequest {
 /// 1. Parse + validate period
 /// 2. Fetch `Product` from `productd` (or use request override)
 /// 3. Fetch consumption from `edmd` (or use request override)
-/// 4. Fetch grid pass-through from `marktd` (or use request override)
+/// 4. Take grid pass-through from the request's `grid` (nothing fetches it from `marktd`)
 /// 5. Dispatch to category-specific pure calculator
 /// 6. Persist `billing_records` (idempotent on same malo+period+product)
 /// 7. Emit `de.billing.rechnung.erstellt` CloudEvent
@@ -169,19 +170,18 @@ pub async fn post_calculate(
     // are the ones in force when the document is issued and the ones an anomaly
     // in the total would be measured against.
     let last_leg = legs.last().expect("resolve_legs yields at least one leg");
-    let mut rates = cfg.try_regulatory_rates_for_period(
+    let nehs = fetch_nehs_price(
         last_leg.tariff.category_str(),
         last_leg.from,
-        last_leg.to,
-    )?;
-    apply_nehs_market_price(
-        &mut rates,
-        last_leg.tariff.category_str(),
-        last_leg.from,
-        &cfg,
         &deps.productd,
     )
     .await;
+    let rates = cfg.try_regulatory_rates_for_period(
+        last_leg.tariff.category_str(),
+        last_leg.from,
+        last_leg.to,
+        nehs,
+    )?;
 
     // Deterministic risk gate: scored read-only *before* the outbox tx, because
     // a HELD band withholds the dispatch enqueue. The record it scores does not
@@ -241,7 +241,7 @@ pub async fn post_calculate(
     persist_risk(&mut *tx, record_id, assessment.as_ref()).await?;
     // Attach the EN 16931 semantic model (the XRechnung/CII/UBL render source),
     // mapped from the invoice with full per-line VAT — not from BO4E.
-    crate::einvoice::store(&mut *tx, record_id, &result, &cfg, &malo_id).await?;
+    crate::einvoice::store(&mut tx, record_id, &result, &cfg, &malo_id).await?;
     tx.commit().await?;
 
     Ok((
@@ -267,9 +267,8 @@ pub async fn post_calculate(
 /// A period that already carries an issued document is a `409` **naming that
 /// document**, not a `500` with a database string: a client retrying a request
 /// whose response it lost reconciles against the record id, and an operator
-/// reading the message knows which invoice to storno. The refusal used to
-/// surface as an internal error, which reads as "try again" for something that
-/// can never succeed.
+/// reading the message knows which invoice to storno. An internal error would
+/// read as "try again" for something that can never succeed.
 pub(crate) async fn period_conflict(
     pool: &PgPool,
     tenant: &str,
@@ -314,7 +313,6 @@ pub(crate) async fn period_conflict(
 /// rather than failing the billing run — a broken history query must not block
 /// invoice creation. Persist the returned assessment with [`persist_risk`]
 /// **inside** the business transaction.
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn assess_risk(
     pool: &PgPool,
     cfg: &BillingdConfig,
