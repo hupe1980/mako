@@ -3,9 +3,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-// Quality scoring (`metering::score_intervals`) and Gas conversion are
-// provided by the `metering` crate.
-// Tests for the Hampel filter logic live in the external `metering` crate.
+// Validation, Ersatzwertbildung and gas conversion are provided by the
+// `metering` crate; `crate::domain::vee` bridges edmd's windows onto it.
 
 use axum::{
     Extension, Router,
@@ -177,7 +176,7 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/lastgang/{malo_id}/resampled",
             get(get_lastgang_resampled),
         )
-        // Virtual meter — compute derived time series from AggregationRule
+        // Virtual meter — compute derived time series from a VirtualMeterRule
         .route(
             "/api/v1/virtual/{virtual_malo_id}/lastgang",
             get(get_virtual_lastgang),
@@ -414,6 +413,8 @@ pub struct RunConfig {
     pub database_url: SecretString,
     pub marktd_url: String,
     pub marktd_api_key: secrecy::SecretString,
+    /// The deployment's own MSB MP-ID, the operator of self-produced readings.
+    pub own_mp_id: Option<String>,
     pub subscriber_id: String,
     pub webhook_url: String,
     pub webhook_secret: Option<SecretString>,
@@ -558,19 +559,20 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
                 .map_or(3_600, |a| a.maintenance_interval_secs),
         ));
         vec![
-            reads_store.maintenance().interval(period).spawn(),
-            typ2_store.maintenance().interval(period).spawn(),
+            reads_store.admin().maintenance().interval(period).spawn(),
+            typ2_store.admin().maintenance().interval(period).spawn(),
             // The Zählerstandsgang tiers too: a quarter-hourly ZSG is the same
             // volume as the Lastgang it produces, and settling one while the
             // other grows unbounded in the hot tier is not a decision anyone
             // made.
-            zsg_store.maintenance().interval(period).spawn(),
+            zsg_store.admin().maintenance().interval(period).spawn(),
         ]
     } else {
         Vec::new()
     };
 
-    let repo = MeterStoreTimeSeriesRepository::new(reads_store, zsg_store, pool.clone());
+    let repo = MeterStoreTimeSeriesRepository::new(reads_store, zsg_store, pool.clone())
+        .with_own_operator(cfg.own_mp_id.as_deref())?;
     // The surveillance worker reads the resolved series across both tiers, so it
     // needs the store handle, not just the business-table pool.
     let repo_for_surveillance = repo.clone();
@@ -589,7 +591,8 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
         ),
     });
 
-    let typ2_repo = MeterStoreTyp2Repository::new(typ2_store);
+    let typ2_repo =
+        MeterStoreTyp2Repository::new(typ2_store).with_own_operator(cfg.own_mp_id.as_deref())?;
     // The surveillance worker watches the Typ-2 store on its own thresholds.
     let typ2_for_surveillance = typ2_repo.clone();
     // Clone the webhook URL/secret and tenant before they are moved into HandlerState.

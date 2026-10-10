@@ -123,56 +123,38 @@ fn superseded_column_names_are_gone() {
     }
 }
 
-/// `rule_type` must match `metering::aggregation_rule::AggregationRule`.
+/// `rule_type` must match `VirtualMeterRule::KINDS`.
 ///
 /// `edmd` deserialises `rule_json` into that enum, so a `rule_type` the enum
-/// does not know is an unreadable row. The old CHECK allowed `'GgvAllocation'`,
-/// which is not a variant.
+/// does not know is an unreadable row.
 #[test]
-fn rule_type_check_matches_the_aggregation_rule_enum() {
+fn rule_type_check_matches_the_virtual_meter_rule() {
     let ddl = ddl_of(&migration(), "virtual_meter_configs");
-
-    // Internally-tagged serde: the JSON `kind` field is `VirtualMeterKind::as_str`,
-    // and the column stores the same string. Derived from the enum, so a new
-    // variant fails here rather than becoming an unreadable row.
-    let variants: Vec<&'static str> = metering::VirtualMeterKind::ALL
-        .iter()
-        .map(|k| k.as_str())
-        .collect();
-
-    for v in &variants {
-        assert!(
-            ddl.contains(&format!("'{v}'")),
-            "AggregationRule {v} is missing from the rule_type CHECK"
-        );
-    }
-
-    assert!(
-        !ddl.contains("'GgvAllocation'"),
-        "'GgvAllocation' is not an AggregationRule variant"
-    );
-
-    // Scope the count to the rule_type list itself — the surrounding DDL has
-    // apostrophes in prose, so the count is scoped to the CHECK list.
-    let anchor = "CHECK (rule_type IN (";
-    let start = ddl.find(anchor).expect("rule_type CHECK not found") + anchor.len();
-    let end = start
-        + ddl[start..]
-            .find("))")
-            .expect("unterminated rule_type CHECK");
-    let listed: Vec<&str> = ddl[start..end]
-        .split(',')
-        .filter_map(|t| {
-            t.trim()
-                .strip_prefix('\'')
-                .and_then(|t| t.strip_suffix('\''))
-        })
-        .collect();
-
+    let listed = check_list(&ddl, "rule_type");
     assert_eq!(
-        listed.len(),
-        variants.len(),
-        "rule_type CHECK lists {listed:?}, AggregationRule has {variants:?}"
+        listed,
+        edmd::domain::virtual_meter::VirtualMeterRule::KINDS
+            .iter()
+            .map(|k| (*k).to_owned())
+            .collect::<Vec<_>>(),
+        "rule_type CHECK lists {listed:?}"
+    );
+}
+
+/// `substitute_value_log.method` is `metering::vee::substitute::Method::as_str`:
+/// the audit row names the method that ran, and a method the CHECK omits fails
+/// the insert that would record it.
+#[test]
+fn substitute_method_check_matches_the_method_enum() {
+    let ddl = ddl_of(&migration(), "substitute_value_log");
+    let listed = check_list(&ddl, "method");
+    assert_eq!(
+        listed,
+        metering::vee::substitute::Method::ALL
+            .iter()
+            .map(|m| m.as_str().to_owned())
+            .collect::<Vec<_>>(),
+        "substitute_value_log.method CHECK lists {listed:?}"
     );
 }
 
@@ -268,31 +250,6 @@ fn ablese_auftraege_auftraggeber_rolle_admits_esa() {
             "auftraggeber_rolle CHECK must admit {role}; got {listed:?}"
         );
     }
-}
-
-/// A round-trip proving the stored `rule_type` is the tag inside `rule_json`.
-///
-/// `AggregationRule` is internally tagged, so the document carries its own
-/// discriminator in `kind`. If the column and the document ever disagreed, a
-/// query filtering on `rule_type` would return rows whose rule says otherwise.
-#[test]
-fn the_rule_type_column_is_the_tag_inside_the_rule_json() {
-    use metering::aggregation_rule::AggregationRule;
-
-    let rule = AggregationRule::Sum {
-        source_malo_ids: vec!["51238696781".to_owned()],
-    };
-    let json = serde_json::to_value(&rule).expect("AggregationRule must serialise");
-    assert_eq!(
-        json.get("kind").and_then(|k| k.as_str()),
-        Some("SUM"),
-        "expected an internally-tagged `kind`, got {json}"
-    );
-    assert_eq!(
-        json["kind"].as_str(),
-        Some(rule.kind().as_str()),
-        "the document's tag and `AggregationRule::kind` must be the same string"
-    );
 }
 
 /// Every TEXT `quality` column enforces the full 8-value `QualityFlag` vocabulary

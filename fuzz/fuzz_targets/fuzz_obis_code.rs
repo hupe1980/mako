@@ -1,7 +1,7 @@
 //! Fuzz target: `fuzz_obis_code`
 //!
 //! Verifies that:
-//! 1. `ObisCode::parse` never panics on arbitrary byte input.
+//! 1. Parsing an `ObisCode` never panics on arbitrary byte input.
 //! 2. When parse succeeds, `to_string()` round-trips (parses back to the same code).
 //! 3. All predicate methods (`is_electricity`, `is_import`, `is_reactive`, etc.)
 //!    never panic on any valid `ObisCode`.
@@ -22,15 +22,23 @@ use libfuzzer_sys::fuzz_target;
 use metering::ObisCode;
 
 fuzz_target!(|data: &[u8]| {
-    let Ok(s) = std::str::from_utf8(data) else { return };
+    let Ok(s) = std::str::from_utf8(data) else {
+        return;
+    };
 
     // 1. Parse must never panic
-    let Ok(code) = s.parse::<ObisCode>() else { return };
+    let Ok(code) = s.parse::<ObisCode>() else {
+        return;
+    };
 
     // 2. Round-trip: serialised form must re-parse to the same code
     let serialised = code.to_string();
     if let Ok(reparsed) = serialised.parse::<ObisCode>() {
-        assert_eq!(code, reparsed, "OBIS round-trip failed for {:?}", serialised);
+        assert_eq!(
+            code, reparsed,
+            "OBIS round-trip failed for {:?}",
+            serialised
+        );
     }
 
     // 3. All predicate methods must not panic
@@ -47,15 +55,19 @@ fuzz_target!(|data: &[u8]| {
     let _ = code.is_maximum();
     let _ = code.is_zaehlerstand();
     let _ = code.is_vorschub();
-    let _ = code.is_ht();
-    let _ = code.is_nt();
+    let _ = code.unit();
+    let _ = code.default_resolution();
+    let _ = code.as_lastgang();
     let _ = code.is_total_register();
     let _ = code.is_fehlerregister();
-    let _ = code.tariff_register();
+    let _ = code.tariff();
 
     // 4. `is_import`/`is_export` are derived from `direction()`: at most one of
     //    them holds, and neither holds where the channel has no direction.
-    assert!(!(code.is_import() && code.is_export()), "code {serialised} counts both ways");
+    assert!(
+        !(code.is_import() && code.is_export()),
+        "code {serialised} counts both ways"
+    );
     assert_eq!(
         code.direction().is_some(),
         code.is_import() || code.is_export(),
@@ -64,13 +76,13 @@ fuzz_target!(|data: &[u8]| {
 
     // 5. The Fehlerregister is not a tariff, and neither is the total register.
     assert!(
-        !(code.is_fehlerregister() && code.tariff_register().is_some()),
+        !(code.is_fehlerregister() && code.tariff().is_some()),
         "Fehlerregister reported as tariff {:?}",
-        code.tariff_register()
+        code.tariff()
     );
     assert!(
-        !(code.is_total_register() && code.tariff_register().is_some()),
+        !(code.is_total_register() && code.tariff().is_some()),
         "total register reported as tariff {:?}",
-        code.tariff_register()
+        code.tariff()
     );
 });

@@ -24,8 +24,8 @@ pub(crate) const FORECAST_LEGAL_BASIS: &str =
 /// `GET /api/v1/forecast/{malo_id}?from=&to=`
 ///
 /// Projects a year's consumption from the meter reads in the given window,
-/// with a prior-year seasonal correction when the same window one year earlier
-/// has data.
+/// with a prior-year seasonal correction when the year before carries the
+/// shifted window and enough of its own year to form a seasonal factor.
 ///
 /// ## What this is, legally
 ///
@@ -56,8 +56,6 @@ pub(crate) async fn get_annual_forecast(
     Path(malo_id): Path<String>,
     Query(params): Query<SimpleTimeParams>,
 ) -> impl IntoResponse {
-    use metering::project_annual_consumption;
-
     if let Err(e) = enforcer.check(
         &claims.principal(),
         "read-timeseries",
@@ -74,91 +72,124 @@ pub(crate) async fn get_annual_forecast(
         Ok(w) => w,
         Err(refusal) => return refusal.into_response(),
     };
-    let q = TimeSeriesQuery {
-        malo_id: malo_id.clone(),
+    match annual_forecast(&state.repo, &state.tenant, &malo_id, from, to).await {
+        Ok(body) => Json(body).into_response(),
+        Err((status, error)) => {
+            (status, Json(serde_json::json!({ "error": error }))).into_response()
+        }
+    }
+}
+
+/// The § 40a Abs. 2 EnWG Jahresprognose for one MaLo over `[from, to)` —
+/// the one computation the REST endpoint and the MCP tool both answer with.
+///
+/// The consumption is the canonical Bezug projection, built into one series
+/// and handed to `metering::billing::forecast::project_annual_consumption`.
+/// The seasonal factor is the prior year's rate over the shifted window
+/// divided by its rate over its whole span, so the prior series is the full
+/// year ending where the shifted window ends — over the shifted window alone
+/// the two rates coincide and the factor is 1.
+///
+/// # Errors
+///
+/// `(status, message)`: `404` without readings, `422` for a window the
+/// projection refuses, `500` for a failed read.
+pub(crate) async fn annual_forecast(
+    repo: &MeterStoreTimeSeriesRepository,
+    tenant: &str,
+    malo_id: &str,
+    from: OffsetDateTime,
+    to: OffsetDateTime,
+) -> Result<serde_json::Value, (StatusCode, String)> {
+    use metering::billing::forecast::project_annual_consumption;
+
+    let query = |from, to| TimeSeriesQuery {
+        malo_id: malo_id.to_owned(),
         from,
         to,
         sparte: None,
-        tenant: state.tenant.clone(),
+        tenant: tenant.to_owned(),
     };
-    let reads = match state.repo.query(&q).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(error = %e, malo_id, "edmd: forecast query failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-
+    let reads = repo.query(&query(from, to)).await.map_err(|e| {
+        tracing::warn!(error = %e, malo_id, "edmd: forecast query failed");
+        (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?;
     if reads.is_empty() {
-        return (
+        return Err((
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "no meter reads for this MaLo in requested window"
-            })),
-        )
-            .into_response();
+            "no meter reads for this MaLo in requested window".to_owned(),
+        ));
     }
 
     // A Jahresprognose is about the consumption, so the reads go through the
     // canonical Bezug projection: projecting a series that still carried the
     // measuring point's Einspeisung, its Blindarbeit and its HT/NT split beside
     // the total forecast a year of energy the customer will never draw.
+    let sparte = reads.first().map_or(EdmSparte::Strom, |r| r.sparte);
     let intervals = crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
+    let series = crate::domain::vee::energy_series(sparte, &intervals).map_err(|defect| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("the consumption series cannot be projected: {defect}"),
+        )
+    })?;
 
-    // Same window one year earlier: with prior-year data the projection
-    // applies the seasonal correction factor (a winter-only observation no
-    // longer over-projects the year). Passing `None` here made the seasonal
-    // branch unreachable — every API forecast was the naive daily × 365.
-    let prior_q = TimeSeriesQuery {
-        malo_id: malo_id.clone(),
-        from: from - time::Duration::days(365),
-        to: to - time::Duration::days(365),
-        sparte: None,
-        tenant: state.tenant.clone(),
-    };
-    let prior_intervals: Vec<metering::MeterInterval> = match state.repo.query(&prior_q).await {
-        // The seasonal factor compares two windows, so both must be the same
-        // projection — comparing a raw prior year against a projected current one
-        // would scale the forecast by the register mix rather than the season.
-        Ok(prior) => crate::domain::energy_intervals(&prior, crate::domain::EnergyDirection::Bezug),
+    // The observation on its own first: a window too short or too thinly
+    // covered is refused for what it is, not for a prior year that happened to
+    // be missing as well.
+    let plain = project_annual_consumption(&series, None).map_err(|e| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("insufficient data for an annual forecast: {e}"),
+        )
+    })?;
+
+    // Both years go through the same projection — comparing a raw prior year
+    // against a projected current one would scale the forecast by the register
+    // mix rather than the season.
+    let one_year = time::Duration::days(365);
+    let prior = match repo
+        .query(&query(to - one_year - one_year, to - one_year))
+        .await
+    {
+        Ok(prior) => {
+            let projected =
+                crate::domain::energy_intervals(&prior, crate::domain::EnergyDirection::Bezug);
+            crate::domain::vee::energy_series(sparte, &projected).ok()
+        }
         Err(e) => {
-            tracing::debug!(error = %e, malo_id, "edmd: no prior-year window for seasonal correction");
-            Vec::new()
+            tracing::debug!(error = %e, malo_id, "edmd: no prior year for seasonal correction");
+            None
         }
     };
-    let prior = (!prior_intervals.is_empty()).then_some(prior_intervals.as_slice());
+    // A prior year that cannot support a factor leaves the projection
+    // uncorrected, and says why.
+    let (forecast, seasonal_note) = match prior.as_ref() {
+        Some(prior) => match project_annual_consumption(&series, Some(prior)) {
+            Ok(corrected) => (corrected, None),
+            Err(e) => (plain, Some(e.to_string())),
+        },
+        None => (plain, Some("no prior-year series".to_owned())),
+    };
 
-    // `malo_id` is the caller's, not the forecast's: `metering` 0.17 dropped it
-    // from `AnnualForecast`, correctly — a projection is arithmetic over a
-    // series and does not know whose series it is. The endpoint already has it.
-    match project_annual_consumption(&intervals, prior) {
-        Some(forecast) => Json(serde_json::json!({
-            "malo_id": malo_id,
-            "observation_from": forecast.observation_from,
-            "observation_to": forecast.observation_to,
-            "observed_kwh": forecast.observed,
-            "observed_days": forecast.observed_days,
-            "target_year_days": forecast.target_year_days,
-            "projected_annual_kwh": forecast.projected_annual,
-            "seasonal_correction_applied": forecast.seasonal_correction_applied,
-            "seasonal_factor": forecast.seasonal_factor,
-            // A 95 % prediction interval over the observed daily sums. `None`
-            // when fewer than two whole days were observed — a projection with
-            // no spread stated is one a caller cannot judge.
-            "confidence_lower_kwh": forecast.confidence_lower,
-            "confidence_upper_kwh": forecast.confidence_upper,
-            "prediction_interval_note": metering::AnnualForecast::prediction_interval_note(),
-            "legal_basis": FORECAST_LEGAL_BASIS,
-        }))
-        .into_response(),
-        None => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "insufficient data for annual forecast (minimum 7 days required)"
-            })),
-        )
-            .into_response(),
-    }
+    Ok(serde_json::json!({
+        "malo_id": malo_id,
+        "first_day": forecast.first_day.to_string(),
+        "last_day": forecast.last_day.to_string(),
+        "observed_kwh": forecast.observed_kwh.to_string(),
+        "observed_days": forecast.observed_days,
+        "billable_slots": forecast.billable_slots,
+        "expected_slots": forecast.expected_slots,
+        "daily_average_kwh": forecast.daily_average_kwh.to_string(),
+        "target_year_days": forecast.target_year_days,
+        "projected_annual_kwh": forecast.projected_annual_kwh.to_string(),
+        // Divided out of the projection: a factor above 1 is a heavy window,
+        // which scales the year down.
+        "seasonal_factor": forecast.seasonal_factor.map(|f| f.to_string()),
+        "seasonal_correction_applied": forecast.seasonal_factor.is_some(),
+        "seasonal_correction_skipped": seasonal_note,
+        "legal_basis": FORECAST_LEGAL_BASIS,
+    }))
 }
 
 // ── Netzverlust (§22 EnWG) ────────────────────────────────────────────────────
@@ -286,14 +317,23 @@ pub(crate) async fn get_netzverlust(
                     dec(row, "einsp_tariff")
                 };
             }
-            let losses = metering::network_losses(einspeisung, entnahme);
+            let Some(losses) = metering::billing::losses::NetworkLosses::new(einspeisung, entnahme)
+            else {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": "the loss balance leaves the decimal range",
+                    })),
+                )
+                    .into_response();
+            };
             Json(serde_json::json!({
                 "from": from.format(&Rfc3339).unwrap_or_default(),
                 "to": to.format(&Rfc3339).unwrap_or_default(),
-                "einspeisung_kwh": losses.einspeisung_kwh,
-                "entnahme_kwh": losses.entnahme_kwh,
-                "verlust_kwh": losses.verlust_kwh,
-                "verlust_prozent": losses.verlust_prozent,
+                "einspeisung_kwh": losses.einspeisung_kwh(),
+                "entnahme_kwh": losses.entnahme_kwh(),
+                "verlust_kwh": losses.verlust_kwh(),
+                "verlust_prozent": losses.verlust_prozent(),
                 "legal_basis": "§22 Abs. 1 EnWG (Verlustenergie)",
                 "hinweis": "Indikative Kennzahl — Genauigkeit hängt von der \
                             Messabdeckung ab; keine abrechnungsfähige Größe.",

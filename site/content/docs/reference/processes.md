@@ -448,10 +448,11 @@ connected suppliers, who store them for billing and pass them to the ERP.
 
 **§42b EnWG — GGV allocation formulas (CCI+ZG6):** UTILTS 25001 also carries the
 Gemeinschaftliche Gebäudeversorgung allocation fractions (§42b Abs. 5 EnWG);
-`CCI+ZG6` (Aufteilungsfaktor Energiemenge) carries the fraction per tenant MaLo. `edmd` evaluates these formulas via the
-`metering::AggregationRule::GgvConstantAllocation` and
-`metering::AggregationRule::GgvProportionalAllocation` variants — see the
-[edmd operator guide](@/docs/services/edmd.md#virtual-meters-ss42b-enwg-ggv-solarpaket-i) for details
+`CCI+ZG6` (Aufteilungsfaktor Energiemenge) carries the fraction per tenant MaLo. `edmd` evaluates such a
+formula as a `FORMULA` virtual meter (`metering::allocation::formula::Formula`, the UTILTS step graph
+with its Z69/Z70/Z80–Z83 operators and Z16/ZB2/ZG6 factors) and a community as `COMMUNITY_SHARE`
+rules (`metering::allocation::community::allocate`) — see the
+[edmd operator guide](@/docs/services/edmd.md#virtual-meters) for details
 on the computation and the §42b Abs. 5 `Pos()` cap.
 
 ---

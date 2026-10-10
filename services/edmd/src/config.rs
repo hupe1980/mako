@@ -379,6 +379,12 @@ pub use mako_service::config::DatabaseConfig;
 pub struct IdentityConfig {
     /// Tenant identifier written to every DB row and used in Cedar resource checks.
     pub tenant: String,
+    /// This deployment's own Messstellenbetreiber MP-ID (BDEW-Codenummer). It is
+    /// the version-scope operator of readings edmd produces itself — Zählerstände,
+    /// completed Ablesungen, SMGW Typ-2 pushes — which carry no `sender_mp_id`.
+    /// Unset, such a reading is refused; the tenant never stands in for it.
+    #[serde(default)]
+    pub own_mp_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

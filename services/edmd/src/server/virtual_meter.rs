@@ -1,4 +1,5 @@
-//! Virtual meter endpoints — derived time series from `AggregationRule`.
+//! Virtual meter endpoints — derived time series from a stored
+//! [`VirtualMeterRule`](crate::domain::virtual_meter::VirtualMeterRule).
 
 #[allow(
     unused_imports,
@@ -6,71 +7,129 @@
 )]
 use super::*;
 
+use crate::domain::virtual_meter::VirtualMeterRule;
+
 // ── Virtual meter endpoints ──────────────────────────────────────────────
 
-/// Project one source's resolved reads onto the register that matches its role
-/// in the aggregation.
+/// One Messlokation register as a series, read from the Marktlokation its
+/// readings are filed under.
 ///
-/// A MaLo/MeLo delivers *all* its OBIS registers (1.8.x Bezug, 2.8.x
-/// Einspeisung, HT/NT splits), but `metering`'s virtual-meter engine indexes
-/// each source by interval start alone — feeding it every register makes
-/// same-slot registers collide and an arbitrary one win. So each source is put
-/// through the canonical projection in [`crate::domain::register`], which is the
-/// same one every aggregate uses: non-billable qualities dropped, the wrong
-/// direction dropped, reactive and fault registers refused, and the total
-/// register preferred over its own HT/NT decomposition.
+/// A Marktlokation delivers *all* its OBIS registers (1.8.x Bezug, 2.8.x
+/// Einspeisung, HT/NT splits), and a formula operand names one register by its
+/// Energieflussrichtung. So the MaLo's readings are put through the canonical
+/// projection in [`crate::domain::register`] — non-billable qualities dropped,
+/// the other direction dropped, reactive and fault registers refused, the total
+/// register preferred over its own HT/NT decomposition — the one every
+/// aggregate uses.
 ///
-/// Keeping **one** register per slot instead would discard the NT consumption
-/// of a dual-tariff source reporting only HT and NT — with no total register to
-/// prefer — and every derived series would run low by that amount.
-pub(crate) fn source_intervals(
-    reads: &[MeterRead],
-    generation: bool,
-) -> Vec<metering::MeterInterval> {
-    let direction = if generation {
-        crate::domain::EnergyDirection::Einspeisung
-    } else {
-        crate::domain::EnergyDirection::Bezug
-    };
-    crate::domain::energy_intervals(reads, direction)
+/// Readings that name a **different** Messlokation are left out; readings that
+/// name none are the MaLo's own and stay.
+///
+/// # Errors
+///
+/// A ready response: `503` when the read failed — a read that failed is not a
+/// source that is missing — and `422` when the Messlokation has no series in
+/// the window, which a formula cannot be evaluated without.
+pub(crate) async fn melo_series(
+    state: &HandlerState,
+    malo_id: &metering::MaloId,
+    melo_id: &metering::MeloId,
+    direction: metering::Direction,
+    from: OffsetDateTime,
+    to: OffsetDateTime,
+) -> Result<metering::Series, axum::response::Response> {
+    let reads = state
+        .repo
+        .query(&TimeSeriesQuery {
+            malo_id: malo_id.as_str().to_owned(),
+            from,
+            to,
+            sparte: None,
+            tenant: state.tenant.clone(),
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, malo = %malo_id, "edmd: virtual meter source query failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": format!("source series {malo_id} could not be read: {e}"),
+                })),
+            )
+                .into_response()
+        })?;
+    let reads: Vec<MeterRead> = reads
+        .into_iter()
+        .filter(|r| r.melo_id.as_deref().is_none_or(|m| m == melo_id.as_str()))
+        .collect();
+    let sparte = reads.first().map_or(EdmSparte::Strom, |r| r.sparte);
+    let projected = crate::domain::energy_intervals(
+        &reads,
+        match direction {
+            metering::Direction::Export => crate::domain::EnergyDirection::Einspeisung,
+            _ => crate::domain::EnergyDirection::Bezug,
+        },
+    );
+    crate::domain::vee::energy_series(sparte, &projected).map_err(|defect| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!(
+                    "Messlokation {melo_id} ({} via MaLo {malo_id}) has no series in the window: {defect}",
+                    direction.as_str()
+                ),
+            })),
+        )
+            .into_response()
+    })
 }
 
-/// The source IDs that carry generation (Einspeisung) in this rule; every other
-/// source is a consumption series.
-///
-/// `Residual` is the one judgement call: the crate documents it as arithmetic
-/// ("which series to subtract from which is the contract's to say"), and its
-/// stated common application is building load minus PV, so the subtrahends are
-/// read as generation.
-pub(crate) fn generation_source_ids(rule: &metering::AggregationRule) -> Vec<&str> {
-    use metering::AggregationRule as R;
-    match rule {
-        R::Sum { .. } => Vec::new(),
-        R::Residual {
-            subtract_malo_ids, ..
-        } => subtract_malo_ids.iter().map(String::as_str).collect(),
-        R::PvSelfConsumption {
-            generation_malo_id, ..
-        } => vec![generation_malo_id.as_str()],
-        R::GgvConstantAllocation { plant_melo_id, .. }
-        | R::GgvProportionalAllocation { plant_melo_id, .. } => vec![plant_melo_id.as_str()],
-    }
-}
-
-/// The `rule_type` discriminator for a rule, matching the DDL's CHECK list.
-///
-/// `AggregationRule` is internally tagged, so `kind()` is the same string the
-/// stored `rule_json` carries in its `kind` field — the column and the document
-/// cannot disagree.
-pub(crate) fn rule_type_of(rule: &metering::AggregationRule) -> &'static str {
-    rule.kind().as_str()
+/// Load a stored rule.
+async fn load_rule(
+    state: &HandlerState,
+    virtual_malo_id: &str,
+) -> Result<VirtualMeterRule, axum::response::Response> {
+    let row = sqlx::query(
+        "SELECT rule_json FROM virtual_meter_configs WHERE virtual_malo_id = $1 AND tenant = $2 LIMIT 1",
+    )
+    .bind(virtual_malo_id)
+    .bind(&state.tenant)
+    .fetch_optional(state.repo.pool())
+    .await
+    .map_err(|e| {
+        tracing::warn!(error = %e, virtual_malo_id, "edmd: virtual meter config query failed");
+        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+    })?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("virtual meter {virtual_malo_id:?} not found")
+            })),
+        )
+            .into_response()
+    })?;
+    let rule_json: serde_json::Value = sqlx::Row::try_get(&row, "rule_json").map_err(|e| {
+        tracing::warn!(error = %e, "edmd: failed to decode virtual meter rule_json");
+        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+    })?;
+    // A stored rule that no longer deserialises is a row edmd did not write.
+    VirtualMeterRule::from_json(&rule_json).map_err(|e| {
+        tracing::warn!(error = %e, "edmd: failed to deserialise VirtualMeterRule");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("invalid rule_json: {e}") })),
+        )
+            .into_response()
+    })
 }
 
 /// `GET /api/v1/virtual/{virtual_malo_id}/lastgang`
 ///
-/// Computes the virtual meter time series by fetching all source MaLo time
-/// series and applying the stored `AggregationRule`. The result is NOT stored
-/// in `meter_reads` — it is computed on demand.
+/// Computes the virtual meter time series from the stored rule: a
+/// Berechnungsformel is evaluated over its Messlokationen, a community share is
+/// the tenant's grid draw after the community allocation. The result is NOT
+/// stored in `meter_reads` — it is computed on demand.
 ///
 /// Use `?from=` / `?to=` (RFC3339 UTC) to bound the query window.
 pub(crate) async fn get_virtual_lastgang(
@@ -80,9 +139,6 @@ pub(crate) async fn get_virtual_lastgang(
     Path(virtual_malo_id): Path<String>,
     Query(params): Query<SimpleTimeParams>,
 ) -> impl IntoResponse {
-    use metering::{AggregationRule, compute_virtual_meter};
-    use std::collections::HashMap;
-
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
         return (
@@ -92,117 +148,96 @@ pub(crate) async fn get_virtual_lastgang(
             .into_response();
     }
 
-    // Load virtual meter config from DB
-    let config_row = match sqlx::query(
-        "SELECT rule_type, rule_json FROM virtual_meter_configs WHERE virtual_malo_id = $1 AND tenant = $2 LIMIT 1"
-    )
-    .bind(&virtual_malo_id)
-    .bind(&state.tenant)
-    .fetch_optional(state.repo.pool())
-    .await {
-        Ok(Some(r)) => r,
-        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-            "error": format!("virtual meter {virtual_malo_id:?} not found")
-        }))).into_response(),
-        Err(e) => {
-            tracing::warn!(error = %e, virtual_malo_id, "edmd: virtual meter config query failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
+    let rule = match load_rule(&state, &virtual_malo_id).await {
+        Ok(rule) => rule,
+        Err(response) => return response,
     };
-
-    let rule_json: serde_json::Value = match sqlx::Row::try_get(&config_row, "rule_json") {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(error = %e, "edmd: failed to decode virtual meter rule_json");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-
-    let rule: AggregationRule = match serde_json::from_value(rule_json) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(error = %e, "edmd: failed to deserialise AggregationRule");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": format!("invalid rule_json: {e}")
-                })),
-            )
-                .into_response();
-        }
-    };
-
     let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
         Ok(w) => w,
         Err(refusal) => return refusal.into_response(),
     };
-    // Fetch source series for all referenced MaLos, projected per source onto
-    // the register matching its role in the rule (see `source_intervals`).
-    let generation_ids = generation_source_ids(&rule);
-    let mut sources: HashMap<String, Vec<metering::MeterInterval>> = HashMap::new();
-    for malo_id in rule.source_malo_ids() {
-        let q = TimeSeriesQuery {
-            malo_id: malo_id.to_owned(),
-            from,
-            to,
-            sparte: None,
-            tenant: state.tenant.clone(),
-        };
-        match state.repo.query(&q).await {
-            Ok(reads) => {
-                let intervals = source_intervals(&reads, generation_ids.contains(&malo_id));
-                sources.insert(malo_id.to_owned(), intervals);
-            }
-            // A read that failed is not a source that is missing. Dropping it
-            // and carrying on left `compute_virtual_meter` to report
-            // `MissingSource` as a 422 — a configuration error the operator
-            // would have gone looking for in the rule, when the rule was fine
-            // and the database was not. Worse, for a rule whose arithmetic
-            // tolerates an absent series it would have produced a number: a §42b
-            // allocation computed without the plant's generation bills the
-            // tenant their whole consumption.
-            Err(e) => {
-                tracing::error!(error = %e, malo_id, "edmd: virtual meter source query failed");
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    Json(serde_json::json!({
-                        "error": format!("source series {malo_id} could not be read: {e}"),
-                        "virtual_malo_id": virtual_malo_id,
-                    })),
-                )
-                    .into_response();
-            }
-        }
-    }
 
-    match compute_virtual_meter(&rule, &sources) {
-        Ok(intervals) => {
-            let result: Vec<serde_json::Value> = intervals
-                .iter()
-                .map(|iv| {
-                    serde_json::json!({
-                        "from": iv.from, "to": iv.to,
-                        "value": iv.value,
-                        "quality": format!("{:?}", iv.quality),
-                    })
-                })
-                .collect();
-            Json(serde_json::json!({
-                "virtual_malo_id": virtual_malo_id,
-                "from": from, "to": to,
-                "interval_count": result.len(),
-                "intervals": result,
-            }))
-            .into_response()
-        }
-        Err(e) => (
+    let unprocessable = |error: String| {
+        (
             StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": e.to_string()
-            })),
+            Json(serde_json::json!({ "error": error, "virtual_malo_id": virtual_malo_id })),
         )
-            .into_response(),
-    }
+            .into_response()
+    };
+    let series = match &rule {
+        VirtualMeterRule::Formula { formula, sources } => {
+            // Each input register read once, then evaluated in one pass.
+            let mut inputs: BTreeMap<(metering::MeloId, metering::Direction), metering::Series> =
+                BTreeMap::new();
+            for (melo, flow) in formula.inputs() {
+                let Some(malo) = sources.get(&melo) else {
+                    return unprocessable(format!(
+                        "the rule names no MaLo for Messlokation {melo}"
+                    ));
+                };
+                let direction = flow.direction();
+                match melo_series(&state, malo, &melo, direction, from, to).await {
+                    Ok(series) => {
+                        inputs.insert((melo, direction), series);
+                    }
+                    Err(response) => return response,
+                }
+            }
+            match formula.eval(|melo, direction| inputs.get(&(*melo, direction))) {
+                Ok(evaluation) => evaluation.series,
+                Err(e) => return unprocessable(e.to_string()),
+            }
+        }
+        VirtualMeterRule::CommunityShare { plant, tenant, .. } => {
+            match community_allocation(&state, plant, from, to).await {
+                Ok(community) => {
+                    let draw: Vec<metering::MeterInterval> = community
+                        .rows
+                        .iter()
+                        .filter_map(|row| {
+                            let share = row.share(tenant)?;
+                            metering::MeterInterval::new(
+                                row.from,
+                                row.to,
+                                share.net_grid_draw(),
+                                row.quality,
+                            )
+                            .ok()
+                        })
+                        .collect();
+                    match metering::Series::new(
+                        community.plant.resolution(),
+                        community.plant.boundary(),
+                        draw,
+                    ) {
+                        Ok(series) => series,
+                        Err(e) => return unprocessable(e.to_string()),
+                    }
+                }
+                Err(response) => return response,
+            }
+        }
+    };
+
+    let result: Vec<serde_json::Value> = series
+        .iter()
+        .map(|iv| {
+            serde_json::json!({
+                "from": iv.from(), "to": iv.to(),
+                "value": iv.value(),
+                "quality": crate::store::quality_to_str(iv.quality()),
+            })
+        })
+        .collect();
+    Json(serde_json::json!({
+        "virtual_malo_id": virtual_malo_id,
+        "rule_type": rule.kind(),
+        "from": from, "to": to,
+        "resolution": series.resolution().to_string(),
+        "interval_count": result.len(),
+        "intervals": result,
+    }))
+    .into_response()
 }
 
 /// `GET /api/v1/virtual` — list all virtual meter configurations for this tenant.
@@ -268,15 +303,11 @@ pub(crate) async fn create_virtual_meter(
             .into_response();
     }
     // `rule_type` is **derived** from the rule, never taken from the caller
-    // beside it. Two fields describing the same thing drift: a body claiming
-    // `rule_type: "Sum"` while `rule_json` held a `GgvConstantAllocation` was
-    // accepted, and then `/virtual/{id}/lastgang` (which reads `rule_json`)
-    // computed a GGV allocation while `/sharing/{id}/allocation` (which filters
-    // on `rule_type`) could not find the community at all.
-    let rule: metering::AggregationRule = match serde_json::from_value(
-        body.get("rule_json")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null),
+    // beside it. Two fields describing the same thing drift: a body claiming one
+    // kind while `rule_json` held another would be evaluated as one and found by
+    // the community endpoint (which filters on `rule_type`) as the other.
+    let rule = match VirtualMeterRule::from_json(
+        body.get("rule_json").unwrap_or(&serde_json::Value::Null),
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -289,7 +320,18 @@ pub(crate) async fn create_virtual_meter(
                 .into_response();
         }
     };
-    let rule_type = rule_type_of(&rule);
+    if let Some(melo) = rule.unsourced() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!(
+                    "rule_json reads Messlokation {melo} but names no MaLo for it in `sources`"
+                )
+            })),
+        )
+            .into_response();
+    }
+    let rule_type = rule.kind();
     let virtual_malo_id = body
         .get("virtual_malo_id")
         .and_then(|v| v.as_str())
@@ -302,10 +344,14 @@ pub(crate) async fn create_virtual_meter(
         .get("sparte")
         .and_then(|v| v.as_str())
         .unwrap_or("STROM");
-    let rule_json = body
-        .get("rule_json")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
+    // The normalised document, so the stored JSON is the one edmd reads back.
+    let rule_json = match serde_json::to_value(&rule) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "edmd: could not serialise a VirtualMeterRule");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
     let legal_basis: Option<&str> = body.get("legal_basis").and_then(|v| v.as_str());
 
     if virtual_malo_id.is_empty() {
@@ -445,7 +491,7 @@ mod tests {
             pid: 13025,
             sparte: Sparte::Strom,
             obis_code: Some(obis.to_owned()),
-            tenant: "9910000000001".to_owned(),
+            tenant: "9910000000002".to_owned(),
             source: IngestionSource::Mscons,
             push_session: None,
             quality_warnings: None,
@@ -456,11 +502,14 @@ mod tests {
         }
     }
 
-    /// A MeLo carrying both directions is the ordinary prosumer case, and
-    /// `metering`'s virtual-meter engine keys its sources by interval start
-    /// alone — so handing it both registers made the two collide and let
-    /// whichever sorted last win. A tenant's "consumption" could silently be
-    /// its export series.
+    fn bezug(reads: &[MeterRead]) -> Vec<metering::MeterInterval> {
+        crate::domain::energy_intervals(reads, crate::domain::EnergyDirection::Bezug)
+    }
+
+    /// A MeLo carrying both directions is the ordinary prosumer case. An
+    /// operand names one register by its Energieflussrichtung, so the source
+    /// is projected onto that direction — a tenant's "consumption" must never
+    /// be its export series.
     #[test]
     fn a_bidirectional_melo_projects_onto_the_register_its_role_needs() {
         let slot = datetime!(2026-07-01 10:00 UTC);
@@ -469,18 +518,19 @@ mod tests {
             read(slot, "3.0", "1-0:2.8.0", QualityFlag::Measured),
         ];
 
-        let consumption = source_intervals(&reads, false);
+        let consumption = bezug(&reads);
         assert_eq!(consumption.len(), 1, "one slot, one value");
         assert_eq!(
-            consumption[0].value.to_string(),
+            consumption[0].value().to_string(),
             "5.0",
             "a consumption source must read Bezug (1.8.x), never Einspeisung"
         );
 
-        let generation = source_intervals(&reads, true);
+        let generation =
+            crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Einspeisung);
         assert_eq!(generation.len(), 1);
         assert_eq!(
-            generation[0].value.to_string(),
+            generation[0].value().to_string(),
             "3.0",
             "a generation source must read Einspeisung (2.8.x), never Bezug"
         );
@@ -500,13 +550,15 @@ mod tests {
             read(later, "7.0", "1-0:1.8.0", QualityFlag::Faulty),
         ];
 
-        let out = source_intervals(&reads, false);
+        let out = bezug(&reads);
         assert_eq!(out.len(), 1, "the faulty slot must not contribute: {out:?}");
         assert_eq!(
-            out[0].value.to_string(),
+            out[0].value().to_string(),
             "10.0",
             "the total register must win over its HT split, and Blindarbeit \
              must not be summed as Wirkarbeit"
         );
+        let series = crate::domain::vee::energy_series(Sparte::Strom, &out).expect("one series");
+        assert_eq!(series.len(), 1);
     }
 }

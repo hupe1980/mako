@@ -168,6 +168,11 @@ fi
 echo
 info "[3/6] Push 96 × 15-min Einspeisemenge to edmd (${BILLING_YEAR}-0${BILLING_MONTH}-01, 1 kWh per slot = 96 kWh/day)"
 
+# The delivering MSB. Its Codenummer keys meterstore's version scope and must
+# carry a valid check digit (BDEW or GS1 procedure) — the store refuses any
+# other, the tenant included.
+MSB_MP_ID="9900000000003"
+
 # Build 96 intervals for 2026-06-01 (15 min each = 1 full day)
 READS="["
 for i in $(seq 0 95); do
@@ -187,7 +192,7 @@ READS="${READS}]"
 HTTP=$(curl -s -w '\n%{http_code}' -X POST "${EDMD_URL}/api/v1/meter-reads/rlm/${MALO_ID}" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer demo-secret-change-me" \
-    -d "{\"intervals\":${READS},\"source\":\"DIRECT_PUSH\",\"obis_code\":\"${OBIS_EINSPEISUNG}\"}" 2>/dev/null || printf "\n000")
+    -d "{\"intervals\":${READS},\"source\":\"DIRECT_PUSH\",\"obis_code\":\"${OBIS_EINSPEISUNG}\",\"sender_mp_id\":\"${MSB_MP_ID}\"}" 2>/dev/null || printf "\n000")
 CODE=$(echo "$HTTP" | tail -1)
 BODY=$(echo "$HTTP" | sed '$d')
 STORED=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('intervals_accepted',d.get('stored_count',0)))" 2>/dev/null || echo "?")
@@ -215,7 +220,7 @@ DAILY_READS="${DAILY_READS}]"
 HTTP=$(curl -s -w '\n%{http_code}' -X POST "${EDMD_URL}/api/v1/meter-reads/rlm/${MALO_ID}" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer demo-secret-change-me" \
-    -d "{\"intervals\":${DAILY_READS},\"source\":\"DIRECT_PUSH\",\"obis_code\":\"${OBIS_EINSPEISUNG}\"}" 2>/dev/null || printf "\n000")
+    -d "{\"intervals\":${DAILY_READS},\"source\":\"DIRECT_PUSH\",\"obis_code\":\"${OBIS_EINSPEISUNG}\",\"sender_mp_id\":\"${MSB_MP_ID}\"}" 2>/dev/null || printf "\n000")
 CODE=$(echo "$HTTP" | tail -1)
 if [[ "$CODE" == "200" || "$CODE" == "201" ]]; then
     pass "POST /api/v1/meter-reads/rlm/${MALO_ID} → ${CODE}  (29 daily buckets, 2784 kWh)"

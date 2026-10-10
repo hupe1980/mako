@@ -22,9 +22,10 @@
 //!   erasing the mapping unlinks it (pseudonymisation).
 //! - **Tenant scoping** — the same MaLo under two tenants stays isolated on read,
 //!   never merged.
-//! - **§ 60 Abs. 1 MsbG Ersatzwertbildung** — a substitute reproduces the same
-//!   quarter-hour one week earlier (not a degraded fallback), never overwrites a
-//!   real measurement, and leaves one § 60 Abs. 6 audit row per substituted slot.
+//! - **§ 60 Abs. 1 MsbG Ersatzwertbildung** — a long gap takes the Vergleichswert
+//!   of comparable days and a short one is interpolated between its real
+//!   brackets (not a degraded fallback); a substitute never overwrites a real
+//!   measurement and leaves one § 60 Abs. 6 audit row per substituted slot.
 //! - **A FAULTY slot is a gap** — the case Ersatzwertbildung exists for. The
 //!   substitute displaces the faulty reading rather than coexisting with it,
 //!   which only holds while the Ersatzwert inherits the reporting operator that
@@ -69,7 +70,7 @@ async fn boot() -> (sqlx::PgPool, String, String, PgContainer, tempfile::TempDir
         .get_host_port_ipv4(5432)
         .await
         .expect("postgres port");
-    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres?sslmode=disable");
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
@@ -122,7 +123,9 @@ async fn setup() -> (
     .expect("build meterstore tiers");
 
     (
-        MeterStoreTimeSeriesRepository::new(reads_store, zsg_store, pool.clone()),
+        MeterStoreTimeSeriesRepository::new(reads_store, zsg_store, pool.clone())
+            .with_own_operator(Some(OWN_MSB))
+            .expect("own MSB"),
         pool,
         container,
         warehouse,
@@ -160,11 +163,11 @@ fn read(malo: &str, from: OffsetDateTime, value: &str, sparte: Sparte, obis: &st
         pid: 13025,
         sparte,
         obis_code: Some(obis.to_owned()),
-        tenant: "9910000000001".to_owned(),
+        tenant: "9910000000010".to_owned(),
         source: IngestionSource::Mscons,
         push_session: None,
         quality_warnings: None,
-        sender_mp_id: Some("9900000000001".to_owned()),
+        sender_mp_id: Some("9900000000003".to_owned()),
         allocation_version: "INITIAL".to_owned(),
         valid_from_tx: None,
         mscons_version: None,
@@ -177,9 +180,12 @@ fn window(malo: &str, around: OffsetDateTime) -> TimeSeriesQuery {
         from: around - Duration::hours(1),
         to: around + Duration::hours(1),
         sparte: None,
-        tenant: "9910000000001".to_owned(),
+        tenant: "9910000000010".to_owned(),
     }
 }
+
+/// The deployment's own MSB — the operator of readings edmd produces itself.
+const OWN_MSB: &str = "9900000000003";
 
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
@@ -258,8 +264,12 @@ async fn reads_and_typ2_share_a_catalog_but_stay_isolated() {
     )
     .await
     .expect("build meterstore tiers");
-    let reads = MeterStoreTimeSeriesRepository::new(reads_store, zsg_store, pool.clone());
-    let typ2 = MeterStoreTyp2Repository::new(typ2_store);
+    let reads = MeterStoreTimeSeriesRepository::new(reads_store, zsg_store, pool.clone())
+        .with_own_operator(Some(OWN_MSB))
+        .expect("own MSB");
+    let typ2 = MeterStoreTyp2Repository::new(typ2_store)
+        .with_own_operator(Some(OWN_MSB))
+        .expect("own MSB");
 
     let t = OffsetDateTime::now_utc() - Duration::days(1);
     reads
@@ -282,7 +292,7 @@ async fn reads_and_typ2_share_a_catalog_but_stay_isolated() {
         pid: 13027,
         sparte: Sparte::Strom,
         obis_code: Some("1-0:1.8.0".to_owned()),
-        tenant: "9910000000001".to_owned(),
+        tenant: "9910000000010".to_owned(),
         delivery_path: Typ2DeliveryPath::default(),
         sender_mp_id: None,
         bestellung_ref: Some("ESABE0000000001".to_owned()),
@@ -359,7 +369,7 @@ async fn ingest_roundtrip_preserves_provenance() {
 
     let mut r = read("51238696012", t, "7.0", Sparte::Strom, "1-0:1.8.0");
     r.source = IngestionSource::DirectPush;
-    r.sender_mp_id = Some("9988888888888".to_owned());
+    r.sender_mp_id = Some("9988888888883".to_owned());
     r.allocation_version = "ESA-42".to_owned();
     repo.store_reads(validated(vec![r]))
         .await
@@ -374,7 +384,7 @@ async fn ingest_roundtrip_preserves_provenance() {
     );
     assert_eq!(
         reads[0].sender_mp_id.as_deref(),
-        Some("9988888888888"),
+        Some("9988888888883"),
         "the reporting operator MP-ID survives the round-trip"
     );
     assert_eq!(
@@ -409,7 +419,7 @@ async fn billable_filter_excludes_faulty_from_aggregates() {
     // belongs to is its *local* one — `t.date()` disagrees for anything in the
     // last one or two UTC hours of a day and would make this test's outcome
     // depend on the hour it runs at.
-    let day = metering::calendar::local_day(t);
+    let day = mako_fristen::berlin_date(t);
     // 4.0 kWh was allocated to the Bilanzkreis from the profile; 3.5 kWh was
     // actually measured (the FAULTY 9.0 does not count). Under-consumption
     // against the profile is a **Mehr**menge, which the network operator
@@ -420,7 +430,7 @@ async fn billable_filter_excludes_faulty_from_aggregates() {
             "51238696012",
             day,
             day,
-            "9910000000001",
+            "9910000000010",
             Sparte::Strom,
             kwh("4.0"),
         )
@@ -452,7 +462,7 @@ async fn billable_filter_excludes_faulty_from_aggregates() {
             "51238696012",
             day,
             day,
-            "9910000000001",
+            "9910000000010",
             Sparte::Strom,
             kwh("3.0"),
         )
@@ -571,7 +581,7 @@ async fn latest_read_returns_the_newest_interval() {
     .expect("store reads");
 
     let latest = repo
-        .latest_read("51238696012", "9910000000001")
+        .latest_read("51238696012", "9910000000010")
         .await
         .expect("latest_read")
         .expect("a reading exists");
@@ -608,7 +618,7 @@ async fn correction_supersedes_value_and_writes_audit_row() {
             corrected_by: Some("ops-1".to_owned()),
             process_id: None,
             pid: None,
-            tenant: "9910000000001".to_owned(),
+            tenant: "9910000000010".to_owned(),
         }])
         .await
         .expect("store correction");
@@ -694,7 +704,7 @@ async fn gdpr_erasure_unlinks_the_ingest_registered_subject() {
 
     // The subject is qualified by tenant, so one tenant's erasure cannot unlink
     // another tenant's reading of the same MaLo.
-    let natural = edmd::store::subject_natural_id("9910000000001", "51238696012");
+    let natural = edmd::store::subject_natural_id("9910000000010", "51238696012");
 
     // Ingest registered the MaLo as an erasure subject.
     let subject = registry
@@ -705,7 +715,9 @@ async fn gdpr_erasure_unlinks_the_ingest_registered_subject() {
 
     // Art. 17: destroying the mapping leaves the readings unattributable.
     repo.store()
-        .erase_subject(
+        .subject_registry()
+        .expect("registry")
+        .erase(
             &subject,
             "Art. 17 request",
             "dpo",
@@ -737,7 +749,7 @@ async fn erasure_unlinks_every_retention_epoch_of_one_identifier() {
         .subject_registry()
         .expect("authoritative store has a subject registry")
         .clone();
-    let natural = edmd::store::subject_natural_id("9910000000001", "51238696012");
+    let natural = edmd::store::subject_natural_id("9910000000010", "51238696012");
 
     for epoch in [2023, 2024, 2025] {
         registry
@@ -753,7 +765,9 @@ async fn erasure_unlinks_every_retention_epoch_of_one_identifier() {
 
     let erased = repo
         .store()
-        .erase_subject_by_id(
+        .subject_registry()
+        .expect("registry")
+        .erase_all(
             &natural,
             "Art. 17 request",
             "dpo",
@@ -782,15 +796,19 @@ async fn erasure_unlinks_every_retention_epoch_of_one_identifier() {
 async fn an_erased_identifier_cannot_be_registered_again() {
     let (repo, _pool, _pg, _wh) = setup().await;
     let store = repo.store();
-    let natural = edmd::store::subject_natural_id("9910000000001", "51238696012");
+    let natural = edmd::store::subject_natural_id("9910000000010", "51238696012");
     let t = OffsetDateTime::now_utc() - Duration::days(1);
 
     store
-        .register_subject(&natural, t, Sparte::Strom)
+        .subject_registry()
+        .expect("registry")
+        .register(&natural, t, Sparte::Strom)
         .await
         .expect("register the subject");
     store
-        .erase_subject_by_id(
+        .subject_registry()
+        .expect("registry")
+        .erase_all(
             &natural,
             "Art. 17 request",
             "dpo",
@@ -801,13 +819,17 @@ async fn an_erased_identifier_cannot_be_registered_again() {
 
     assert!(
         store
-            .is_subject_suppressed(&natural)
+            .subject_registry()
+            .expect("registry")
+            .is_suppressed(&natural)
             .await
             .expect("suppression check"),
         "the erasure must record a tombstone the deployment can recognise"
     );
     store
-        .register_subject(&natural, t, Sparte::Strom)
+        .subject_registry()
+        .expect("registry")
+        .register(&natural, t, Sparte::Strom)
         .await
         .expect_err("a replaying pipeline must not resurrect an erased linkage");
 }
@@ -820,7 +842,7 @@ async fn reads_are_scoped_to_their_tenant() {
 
     // The SAME MaLo under two tenants, one interval each.
     let mut alpha = read("51238696012", t, "3.5", Sparte::Strom, "1-0:1.8.0");
-    alpha.tenant = "9910000000001".to_owned();
+    alpha.tenant = "9910000000010".to_owned();
     let mut beta = read("51238696012", t, "9.9", Sparte::Strom, "1-0:1.8.0");
     beta.tenant = "9920000000002".to_owned();
     repo.store_reads(validated(vec![alpha]))
@@ -838,7 +860,7 @@ async fn reads_are_scoped_to_their_tenant() {
         tenant: tenant.to_owned(),
     };
 
-    let a = repo.query(&q("9910000000001")).await.expect("query alpha");
+    let a = repo.query(&q("9910000000010")).await.expect("query alpha");
     assert_eq!(
         a.len(),
         1,
@@ -857,26 +879,27 @@ async fn reads_are_scoped_to_their_tenant() {
 
 /// § 60 Abs. 1 MsbG Ersatzwertbildung, end to end against a real database.
 ///
-/// The regulated artefact is the *number* a substitute carries, and the method
-/// that has to produce it — Vergleichstag, the same slot one week earlier — is
-/// the same shape as the seasonal-forecast defect this service already hit
-/// once, where the handler passed no reference window and every result
-/// silently degraded to a naive fallback. A degraded substitute is
+/// The regulated artefact is the *number* a substitute carries. A gap longer
+/// than two hours takes the **Vergleichswert** (MeteringCode 2006 A8.2.2.2,
+/// `ZJ2` for electricity): the mean of the same wall-clock slot on the previous
+/// three days of the gap's day class. A degraded substitute is
 /// indistinguishable from a correct one in the response body, so the assertion
 /// has to be on the value.
 ///
-/// The fixture gives every quarter-hour of the prior week a distinct value, so
-/// "same slot one week earlier" is the only rule that reproduces it: an average,
-/// a carry-forward and a zero-fill all land somewhere else.
+/// The gap is on Neujahr 2026, a statutory holiday and so a Sonn-/Feiertag. The
+/// previous three days of that class in the reference week are Sunday
+/// 28.12., and the two Weihnachtstage 26.12. and 25.12. — four, six and seven
+/// days back. Every quarter-hour of the reference week carries a distinct
+/// value (`i + 1.5` at index `i`), so the mean of those three days is the only
+/// rule that reproduces `129.5 + n` at gap slot `n`: the same slot one week
+/// earlier, an ordinary-weekday mean and an interpolation all land elsewhere.
 ///
-/// Both missing runs are deliberately **longer than the short-gap threshold**
-/// (3 intervals): runs of at most three slots are linearly interpolated
-/// whatever method was requested — the VDE-AR-N 4400 hierarchy, pinned by
-/// `a_short_gap_interpolates_between_its_real_brackets` below — so a fixture
-/// with short runs would (correctly) never see the reference week at all.
+/// Both missing runs are deliberately **longer than two hours**: a run of up to
+/// two hours between measured values is interpolated (`Z92`), pinned by
+/// `a_short_gap_interpolates_between_its_real_brackets` below.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
-async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
+async fn a_long_gap_takes_the_vergleichswert_of_comparable_days() {
     use edmd::server::{SubstituteRequest, run_substitute_values};
     use time::format_description::well_known::Rfc3339;
 
@@ -884,13 +907,12 @@ async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
     let malo = "51238696012";
     let obis = "1-0:1.8.0";
 
-    // A gap well in the past, so V08 (future timestamp) cannot fire on the
-    // reference data, and slot-aligned so the week-earlier slot exists.
+    // A gap well in the past, so `FUTURE` cannot fire on the reference data,
+    // and slot-aligned so the comparable-day slots exist.
     let gap_from = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");
-    // Ten quarter-hours: with the measurement at slot 4, the missing runs are
-    // 4 and 5 slots — both past the short-gap threshold, so the requested
-    // Vergleichstag method is what runs.
-    let gap_to = gap_from + Duration::minutes(150);
+    // Twenty quarter-hours: with the measurement at slot 10, the missing runs
+    // are 10 and 9 slots — both past two hours, so the Vergleichswert runs.
+    let gap_to = gap_from + Duration::minutes(300);
     let week = Duration::days(7);
 
     // 672 quarter-hours covering exactly [gap_from - 7d, gap_from), each with a
@@ -908,7 +930,7 @@ async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
     // One real measurement inside the gap: the § 60 Abs. 1 MsbG Aufbereitung is
     // discharged by the measurement where one exists, so this slot must survive
     // untouched.
-    let measured_slot = gap_from + Duration::minutes(60);
+    let measured_slot = gap_from + Duration::minutes(150);
     repo.store_reads(validated(vec![read(
         malo,
         measured_slot,
@@ -922,15 +944,16 @@ async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
     let req = SubstituteRequest {
         gap_from: gap_from.format(&Rfc3339).expect("rfc3339"),
         gap_to: gap_to.format(&Rfc3339).expect("rfc3339"),
-        interval_secs: Some(900),
-        method: Some("PriorPeriodAverage".to_owned()),
         prior_days: Some(7),
+        bundesland: "BE".to_owned(),
+        hold: false,
+        confirmed_outage: false,
         operator_id: Some("TEST-OPERATOR".to_owned()),
         sparte: Some("STROM".to_owned()),
         reason: "NO_ACCESS".to_owned(),
         obis_code: Some(obis.to_owned()),
     };
-    let status = run_substitute_values(&repo, "9910000000001", malo, &req)
+    let status = run_substitute_values(&repo, "9910000000010", malo, &req)
         .await
         .status();
     assert_eq!(
@@ -945,14 +968,12 @@ async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
             from: gap_from,
             to: gap_to,
             sparte: None,
-            tenant: "9910000000001".to_owned(),
+            tenant: "9910000000010".to_owned(),
         })
         .await
         .expect("read the gap window back");
 
-    // Gap slot `n` starts at `gap_from + 15n min`; one week earlier that is
-    // `gap_from - 7d + 15n min`, which is prior index `n` — value `n + 1` .5.
-    for (n, slot) in (0..10).map(|n| (n, gap_from + Duration::minutes(15 * n))) {
+    for (n, slot) in (0..20).map(|n| (n, gap_from + Duration::minutes(15 * n))) {
         let row = stored
             .iter()
             .find(|r| r.dtm_from == slot)
@@ -972,11 +993,11 @@ async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
             continue;
         }
 
-        let expected = kwh(&format!("{}.5", n + 1));
+        let expected = kwh("129.5") + Decimal::from(n);
         assert_eq!(
             row.quantity_kwh, expected,
-            "gap slot {n} must reproduce the value from the same slot one week \
-             earlier ({expected}), not a degraded fallback"
+            "gap slot {n} must be the mean of the same slot on 28.12., 26.12. and \
+             25.12. ({expected}), not a degraded fallback"
         );
         assert_eq!(
             row.quality,
@@ -993,19 +1014,19 @@ async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
           WHERE malo_id = $1 AND tenant = $2 ORDER BY dtm_from",
     )
     .bind(malo)
-    .bind("9910000000001")
+    .bind("9910000000010")
     .fetch_all(&pool)
     .await
     .expect("read the substitute audit log");
 
     assert_eq!(
         logged.len(),
-        9,
-        "nine substituted slots must each leave an audit row, and the measured \
+        19,
+        "nineteen substituted slots must each leave an audit row, and the measured \
          slot none — got {logged:?}"
     );
     assert!(
-        logged.iter().all(|(_, m)| m == "PriorPeriodAverage"),
+        logged.iter().all(|(_, m)| m == "VERGLEICHSWERT"),
         "the audit row must name the method that actually ran: {logged:?}"
     );
     assert!(
@@ -1014,17 +1035,17 @@ async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
     );
 }
 
-/// A run of at most three missing slots is linearly interpolated between its
-/// real neighbours — the VDE-AR-N 4400 short-gap rule — even when those
-/// neighbours lie *outside* the requested gap window.
+/// A gap of up to two hours between measured values is linearly interpolated
+/// (MeteringCode 2006 A8.2.2.1, `Z92`) — even when those values lie *outside*
+/// the requested gap window.
 ///
-/// This pins the bracket plumbing: the engine derives a gap's opening bracket
-/// only from slots its walk has visited, so the handler must start the fill at
-/// the last billable reading before the gap. Before it did, a leading short
-/// gap had no left bracket and "interpolation" silently produced a flat copy
-/// of the closing value — a degraded number indistinguishable from a correct
-/// one in the response body. The audit row must also name what actually ran
-/// (`LinearInterpolation`), not what was requested.
+/// This pins the bracket plumbing: the series handed to the substitution spans
+/// the whole queried window, so the measured values either side of the gap are
+/// its brackets. Clipped to the gap window, a leading gap would have no left
+/// bracket and a flat copy or a Vergleichswert would stand in for an
+/// interpolation — a degraded number indistinguishable from a correct one in
+/// the response body. The audit row must name what actually ran
+/// (`INTERPOLATION`).
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn a_short_gap_interpolates_between_its_real_brackets() {
@@ -1056,17 +1077,16 @@ async fn a_short_gap_interpolates_between_its_real_brackets() {
     let req = SubstituteRequest {
         gap_from: gap_from.format(&Rfc3339).expect("rfc3339"),
         gap_to: gap_to.format(&Rfc3339).expect("rfc3339"),
-        interval_secs: Some(900),
-        // Deliberately *not* interpolation: the short-gap rule must override
-        // the requested method, and the audit trail must say so.
-        method: Some("PriorPeriodAverage".to_owned()),
         prior_days: Some(7),
+        bundesland: "BE".to_owned(),
+        hold: false,
+        confirmed_outage: false,
         operator_id: Some("TEST-OPERATOR".to_owned()),
         sparte: Some("STROM".to_owned()),
         reason: "NO_ACCESS".to_owned(),
         obis_code: Some(obis.to_owned()),
     };
-    let status = run_substitute_values(&repo, "9910000000001", malo, &req)
+    let status = run_substitute_values(&repo, "9910000000010", malo, &req)
         .await
         .status();
     assert_eq!(status.as_u16(), 201, "the substitute run must succeed");
@@ -1077,7 +1097,7 @@ async fn a_short_gap_interpolates_between_its_real_brackets() {
             from: gap_from,
             to: gap_to,
             sparte: None,
-            tenant: "9910000000001".to_owned(),
+            tenant: "9910000000010".to_owned(),
         })
         .await
         .expect("read the gap window back");
@@ -1108,7 +1128,7 @@ async fn a_short_gap_interpolates_between_its_real_brackets() {
           WHERE malo_id = $1 AND tenant = $2 ORDER BY dtm_from",
     )
     .bind(malo)
-    .bind("9910000000001")
+    .bind("9910000000010")
     .fetch_all(&pool)
     .await
     .expect("read the substitute audit log");
@@ -1118,9 +1138,8 @@ async fn a_short_gap_interpolates_between_its_real_brackets() {
         "exactly the two requested slots leave audit rows — got {logged:?}"
     );
     assert!(
-        logged.iter().all(|(_, m)| m == "LinearInterpolation"),
-        "the audit row must name the method that actually ran, not the one \
-         requested: {logged:?}"
+        logged.iter().all(|(_, m)| m == "INTERPOLATION"),
+        "the audit row must name the method that actually ran: {logged:?}"
     );
 }
 
@@ -1186,7 +1205,7 @@ async fn a_billing_period_is_a_berlin_month_not_a_utc_one() {
             malo_id: malo.to_owned(),
             period_from: date!(2026 - 07 - 01),
             period_to: date!(2026 - 07 - 31),
-            tenant: "9910000000001".to_owned(),
+            tenant: "9910000000010".to_owned(),
         })
         .await
         .expect("billing period")
@@ -1243,7 +1262,7 @@ async fn a_periods_quality_is_its_worst_contributor_by_severity_rank() {
             malo_id: malo.to_owned(),
             period_from: date!(2026 - 07 - 01),
             period_to: date!(2026 - 07 - 31),
-            tenant: "9910000000001".to_owned(),
+            tenant: "9910000000010".to_owned(),
         })
         .await
         .expect("billing period")
@@ -1264,8 +1283,8 @@ async fn a_periods_quality_is_its_worst_contributor_by_severity_rank() {
 /// A FAULTY interval is deliberately stored — ingest annotates and never
 /// rejects — so a substitute flow that treats "a row exists" as "a measurement
 /// exists" generates nothing for exactly the case the duty is about, and
-/// answers `generated_count: 0`. The reference series must therefore be
-/// filtered to billable qualities: a FAULTY slot is a gap.
+/// answers `generated_count: 0`. A FAULTY value is a `NON_BILLABLE` error
+/// finding: it is replaced, and it is never reference data.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn a_faulty_slot_is_a_gap_a_substitute_may_fill() {
@@ -1280,7 +1299,7 @@ async fn a_faulty_slot_is_a_gap_a_substitute_may_fill() {
     let gap_to = gap_from + Duration::minutes(150);
     let week = Duration::days(7);
 
-    // A full, distinct reference week, so the Vergleichstag value is checkable.
+    // A full, distinct reference week, so the Vergleichswert is checkable.
     let prior: Vec<MeterRead> = (0..672)
         .map(|i| {
             let start = gap_from - week + Duration::minutes(15 * i);
@@ -1313,15 +1332,16 @@ async fn a_faulty_slot_is_a_gap_a_substitute_may_fill() {
     let req = SubstituteRequest {
         gap_from: gap_from.format(&Rfc3339).expect("rfc3339"),
         gap_to: gap_to.format(&Rfc3339).expect("rfc3339"),
-        interval_secs: Some(900),
-        method: Some("PriorPeriodAverage".to_owned()),
         prior_days: Some(7),
+        bundesland: "BE".to_owned(),
+        hold: false,
+        confirmed_outage: false,
         operator_id: Some("TEST-OPERATOR".to_owned()),
         sparte: None,
         reason: "METERING_EQUIPMENT_FAULT".to_owned(),
         obis_code: Some(obis.to_owned()),
     };
-    let status = run_substitute_values(&repo, "9910000000001", malo, &req)
+    let status = run_substitute_values(&repo, "9910000000010", malo, &req)
         .await
         .status();
     assert_eq!(
@@ -1337,7 +1357,7 @@ async fn a_faulty_slot_is_a_gap_a_substitute_may_fill() {
             from: gap_from,
             to: gap_to,
             sparte: None,
-            tenant: "9910000000001".to_owned(),
+            tenant: "9910000000010".to_owned(),
         })
         .await
         .expect("read the gap window back");
@@ -1365,11 +1385,13 @@ async fn a_faulty_slot_is_a_gap_a_substitute_may_fill() {
             QualityFlag::Substituted,
             "slot {n} must have been replaced by an Ersatzwert, not left FAULTY"
         );
+        // Neujahr is a Sonn-/Feiertag: the mean of the same slot on 28.12.,
+        // 26.12. and 25.12. (see `a_long_gap_takes_the_vergleichswert_of_comparable_days`).
         assert_eq!(
             row.quantity_kwh,
-            kwh(&format!("{}.5", n + 1)),
-            "the Ersatzwert must be the same slot one week earlier, and the \
-             FAULTY 0.0 must not have been used as reference data"
+            kwh("129.5") + Decimal::from(n),
+            "the Ersatzwert must be the Vergleichswert of the comparable days, \
+             and the FAULTY 0.0 must not have been used as reference data"
         );
     }
 
@@ -1384,7 +1406,7 @@ async fn a_faulty_slot_is_a_gap_a_substitute_may_fill() {
         "SELECT count(*) FROM substitute_value_log WHERE malo_id = $1 AND tenant = $2",
     )
     .bind(malo)
-    .bind("9910000000001")
+    .bind("9910000000010")
     .fetch_one(&pool)
     .await
     .expect("read the substitute audit log");
@@ -1407,7 +1429,7 @@ async fn a_correction_invalidates_the_cached_billing_period() {
 
     let (repo, pool, _pg, _wh) = setup().await;
     let t = OffsetDateTime::now_utc() - Duration::days(2);
-    let day = metering::calendar::local_day(t);
+    let day = mako_fristen::berlin_date(t);
 
     repo.store_reads(validated(vec![read(
         "51238696012",
@@ -1423,7 +1445,7 @@ async fn a_correction_invalidates_the_cached_billing_period() {
         malo_id: "51238696012".to_owned(),
         period_from: day,
         period_to: day,
-        tenant: "9910000000001".to_owned(),
+        tenant: "9910000000010".to_owned(),
         sparte: Sparte::Strom,
     };
 
@@ -1452,7 +1474,7 @@ async fn a_correction_invalidates_the_cached_billing_period() {
         corrected_by: Some("dispatcher@nb.example".to_owned()),
         process_id: None,
         pid: None,
-        tenant: "9910000000001".to_owned(),
+        tenant: "9910000000010".to_owned(),
     }])
     .await
     .expect("store correction");
@@ -1488,7 +1510,7 @@ async fn a_gas_quality_delivery_is_recorded_and_reads_back() {
     let (repo, pool, _pg, _wh) = setup().await;
 
     repo.record_gas_quality(&GasQualityRecord {
-        tenant: "9910000000001".to_owned(),
+        tenant: "9910000000010".to_owned(),
         malo_id: "51238696012".to_owned(),
         period_from: date!(2026 - 07 - 01),
         period_to: date!(2026 - 07 - 31),
@@ -1505,7 +1527,7 @@ async fn a_gas_quality_delivery_is_recorded_and_reads_back() {
            FROM gas_quality_data WHERE malo_id = $1 AND tenant = $2",
     )
     .bind("51238696012")
-    .bind("9910000000001")
+    .bind("9910000000010")
     .fetch_one(&pool)
     .await
     .expect("gas quality reads back");
@@ -1515,7 +1537,7 @@ async fn a_gas_quality_delivery_is_recorded_and_reads_back() {
 
     // A re-delivery for the same period supersedes rather than duplicating.
     repo.record_gas_quality(&GasQualityRecord {
-        tenant: "9910000000001".to_owned(),
+        tenant: "9910000000010".to_owned(),
         malo_id: "51238696012".to_owned(),
         period_from: date!(2026 - 07 - 01),
         period_to: date!(2026 - 07 - 31),
@@ -1555,7 +1577,7 @@ async fn a_push_session_id_is_private_to_its_tenant() {
     let (_repo, pool, _pg, _wh) = setup().await;
 
     for (tenant, malo, count) in [
-        ("9910000000001", "51238696012", 96),
+        ("9910000000010", "51238696012", 96),
         ("9910000000002", "51238696781", 42),
     ] {
         sqlx::query(
@@ -1580,8 +1602,8 @@ async fn a_push_session_id_is_private_to_its_tenant() {
     .await
     .expect("query");
     assert_eq!(rows.len(), 2, "one row per tenant, not one shared row");
-    assert_eq!(rows[0], ("9910000000001".into(), "51238696012".into(), 96));
-    assert_eq!(rows[1], ("9910000000002".into(), "51238696781".into(), 42));
+    assert_eq!(rows[0], ("9910000000002".into(), "51238696781".into(), 42));
+    assert_eq!(rows[1], ("9910000000010".into(), "51238696012".into(), 96));
 }
 
 /// The push-session key is claimed before the work, not written after it.
@@ -1750,7 +1772,7 @@ async fn a_silent_measuring_point_is_found_reported_once_and_closed_on_return() 
         .expect("store fresh reads");
 
     // ── First sweep: the stale point is opened ────────────────────────────────
-    let first = run_surveillance_sweep(&repo, &cfg, "9910000000001").await;
+    let first = run_surveillance_sweep(&repo, &cfg, "9910000000010").await;
     let silent: Vec<_> = first
         .findings
         .iter()
@@ -1770,7 +1792,7 @@ async fn a_silent_measuring_point_is_found_reported_once_and_closed_on_return() 
     );
 
     // ── Second sweep, nothing changed: silent, not re-announced ───────────────
-    let second = run_surveillance_sweep(&repo, &cfg, "9910000000001").await;
+    let second = run_surveillance_sweep(&repo, &cfg, "9910000000010").await;
     assert_eq!(
         second.findings.len(),
         1,
@@ -1786,7 +1808,7 @@ async fn a_silent_measuring_point_is_found_reported_once_and_closed_on_return() 
     let rows: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM delivery_surveillance WHERE tenant = $1 AND malo_id = $2",
     )
-    .bind("9910000000001")
+    .bind("9910000000010")
     .bind("51238696012")
     .fetch_one(&pool)
     .await
@@ -1803,12 +1825,12 @@ async fn a_silent_measuring_point_is_found_reported_once_and_closed_on_return() 
         .await
         .expect("store the backfill");
 
-    let third = run_surveillance_sweep(&repo, &cfg, "9910000000001").await;
+    let third = run_surveillance_sweep(&repo, &cfg, "9910000000010").await;
     assert_eq!(third.resumed, 1, "the recovered point is closed");
     let resolved: Option<OffsetDateTime> = sqlx::query_scalar(
         "SELECT resolved_at FROM delivery_surveillance WHERE tenant = $1 AND malo_id = $2",
     )
-    .bind("9910000000001")
+    .bind("9910000000010")
     .bind("51238696012")
     .fetch_one(&pool)
     .await
@@ -1839,7 +1861,7 @@ async fn surveillance_does_not_cross_tenants() {
         .await
         .expect("store other tenant's stale read");
 
-    let report = run_surveillance_sweep(&repo, &cfg, "9910000000001").await;
+    let report = run_surveillance_sweep(&repo, &cfg, "9910000000010").await;
     assert!(
         report.findings.is_empty(),
         "another tenant's silent point is not this tenant's finding: {:?}",
@@ -1864,12 +1886,12 @@ async fn a_standing_compliance_fault_is_announced_once_and_closed_when_fixed() {
     use time::macros::date;
 
     let (_repo, pool, _pg, _wh) = setup().await;
-    let tenant = "9910000000001";
+    let tenant = "9910000000010";
 
     let session = |valid_to: time::Date, status: GatewayStatus| SmgwSession {
         device_id: "SMGW-0001".to_owned(),
         firmware_version: "1.2.3".to_owned(),
-        msb_mp_id: "9900000000001".to_owned(),
+        msb_mp_id: "9900000000003".to_owned(),
         malo_id: "51238696012".to_owned(),
         status,
         certificates: vec![GatewayCertificate {
@@ -1975,12 +1997,12 @@ async fn a_replaced_gateway_is_not_swept() {
     use time::macros::date;
 
     let (_repo, pool, _pg, _wh) = setup().await;
-    let tenant = "9910000000001";
+    let tenant = "9910000000010";
 
     let session = SmgwSession {
         device_id: "SMGW-OLD".to_owned(),
         firmware_version: "1.0.0".to_owned(),
-        msb_mp_id: "9900000000001".to_owned(),
+        msb_mp_id: "9900000000003".to_owned(),
         malo_id: "51238696012".to_owned(),
         status: GatewayStatus::Replaced,
         certificates: vec![GatewayCertificate {
@@ -2055,7 +2077,7 @@ async fn a_correction_supersedes_a_reading_that_carried_an_mscons_version() {
         corrected_by: Some("ops-1".to_owned()),
         process_id: None,
         pid: None,
-        tenant: "9910000000001".to_owned(),
+        tenant: "9910000000010".to_owned(),
     }])
     .await
     .expect("store correction");
@@ -2139,13 +2161,13 @@ async fn a_billing_period_does_not_add_the_total_register_to_its_own_tariff_spli
     .await
     .expect("store registers");
 
-    let day = metering::calendar::local_day(t);
+    let day = mako_fristen::berlin_date(t);
     let period = repo
         .billing_period(&BillingPeriodQuery {
             malo_id: "51238696012".to_owned(),
             period_from: day,
             period_to: day,
-            tenant: "9910000000001".to_owned(),
+            tenant: "9910000000010".to_owned(),
             sparte: Sparte::Strom,
         })
         .await
@@ -2221,15 +2243,16 @@ async fn a_feed_in_reading_does_not_block_substituting_the_consumption_register(
     let req = SubstituteRequest {
         gap_from: gap_from.format(&Rfc3339).expect("rfc3339"),
         gap_to: gap_to.format(&Rfc3339).expect("rfc3339"),
-        interval_secs: Some(900),
-        method: Some("PriorPeriodAverage".to_owned()),
         prior_days: Some(7),
+        bundesland: "BE".to_owned(),
+        hold: false,
+        confirmed_outage: false,
         operator_id: Some("TEST-OPERATOR".to_owned()),
         sparte: None,
         reason: "METERING_EQUIPMENT_FAULT".to_owned(),
         obis_code: Some(bezug.to_owned()),
     };
-    let status = run_substitute_values(&repo, "9910000000001", malo, &req)
+    let status = run_substitute_values(&repo, "9910000000010", malo, &req)
         .await
         .status();
     assert_eq!(
@@ -2245,7 +2268,7 @@ async fn a_feed_in_reading_does_not_block_substituting_the_consumption_register(
             from: gap_from,
             to: gap_to,
             sparte: None,
-            tenant: "9910000000001".to_owned(),
+            tenant: "9910000000010".to_owned(),
         })
         .await
         .expect("read the gap window back");
@@ -2276,30 +2299,44 @@ async fn a_feed_in_reading_does_not_block_substituting_the_consumption_register(
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn erasure_removes_virtual_meter_configs_naming_the_subject() {
     let (pool, _url, _wh_uri, _pg, _wh) = boot().await;
-    let tenant = "9910000000001";
+    let tenant = "9910000000010";
     let erased = "51238696012";
     let other = "51238696129";
 
     // Three configs: one whose own virtual MaLo is the subject, one that draws on
-    // the subject as a *source* inside `rule_json`, and one unrelated.
+    // the subject as a *source* inside `rule_json`, and one unrelated. Each
+    // Messlokation is filed under a MaLo in `sources`; the formula sums them.
     let unrelated = "51238696450";
+    let melo = |n: u8| -> metering::MeloId {
+        format!("DE00012345678900000000000000000{n:02}")
+            .parse()
+            .expect("a MeLo")
+    };
+    let rule = |sources: &[(u8, &str)]| -> serde_json::Value {
+        use metering::allocation::formula::{FlowDirection, Formula, MeloOperand};
+        let formula = Formula::sum(
+            sources
+                .iter()
+                .map(|(n, _)| MeloOperand::new(melo(*n), FlowDirection::Verbrauch)),
+        )
+        .expect("a formula");
+        serde_json::to_value(edmd::domain::virtual_meter::VirtualMeterRule::Formula {
+            formula,
+            sources: sources
+                .iter()
+                .map(|(n, malo)| (melo(*n), malo.parse().expect("a MaLo")))
+                .collect(),
+        })
+        .expect("a rule serialises")
+    };
     for (vmalo, rule) in [
-        (
-            erased,
-            serde_json::json!({"kind": "SUM", "source_malo_ids": [other]}),
-        ),
-        (
-            other,
-            serde_json::json!({"kind": "SUM", "source_malo_ids": [erased, other]}),
-        ),
-        (
-            unrelated,
-            serde_json::json!({"kind": "SUM", "source_malo_ids": [unrelated]}),
-        ),
+        (erased, rule(&[(1, other)])),
+        (other, rule(&[(2, erased), (3, other)])),
+        (unrelated, rule(&[(4, unrelated)])),
     ] {
         sqlx::query(
             "INSERT INTO virtual_meter_configs (virtual_malo_id, rule_type, rule_json, tenant)
-             VALUES ($1, 'SUM', $2, $3)",
+             VALUES ($1, 'FORMULA', $2, $3)",
         )
         .bind(vmalo)
         .bind(&rule)
@@ -2373,7 +2410,7 @@ async fn a_substitute_is_filed_under_the_register_it_fills() {
     let malo = "51238696129";
     let ht = "1-0:1.8.1";
     let nt = "1-0:1.8.2";
-    let tenant = "9910000000001";
+    let tenant = "9910000000010";
 
     let gap_from = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");
     let gap_to = gap_from + Duration::minutes(150);
@@ -2415,9 +2452,10 @@ async fn a_substitute_is_filed_under_the_register_it_fills() {
     let req = SubstituteRequest {
         gap_from: gap_from.format(&Rfc3339).expect("rfc3339"),
         gap_to: gap_to.format(&Rfc3339).expect("rfc3339"),
-        interval_secs: None,
-        method: Some("PriorPeriodAverage".to_owned()),
         prior_days: Some(7),
+        bundesland: "BE".to_owned(),
+        hold: false,
+        confirmed_outage: false,
         operator_id: Some("TEST-OPERATOR".to_owned()),
         sparte: None,
         reason: "METERING_EQUIPMENT_FAULT".to_owned(),
@@ -2491,8 +2529,10 @@ async fn erasure_unlinks_the_esa_typ2_store_as_well() {
     )
     .await
     .expect("build meterstore tiers");
-    let typ2 = MeterStoreTyp2Repository::new(typ2_store);
-    let tenant = "9910000000001";
+    let typ2 = MeterStoreTyp2Repository::new(typ2_store)
+        .with_own_operator(Some(OWN_MSB))
+        .expect("own MSB");
+    let tenant = "9910000000010";
     let malo = "51238696012";
 
     let t = OffsetDateTime::now_utc() - Duration::days(1);
@@ -2561,7 +2601,7 @@ async fn erasure_unlinks_the_esa_typ2_store_as_well() {
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn a_zaehlerstandsgang_differences_into_a_lastgang() {
     let (repo, _pool, _pg, _wh) = setup().await;
-    let tenant = "9910000000001";
+    let tenant = "9910000000010";
     let malo = "51238696129";
     let base = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");
 
@@ -2583,7 +2623,7 @@ async fn a_zaehlerstandsgang_differences_into_a_lastgang() {
         melo_id: Some(TEST_MELO.to_owned()),
         tenant: tenant.to_owned(),
         source: IngestionSource::DirectPush,
-        sender_mp_id: Some("9900000000001".to_owned()),
+        sender_mp_id: Some("9900000000003".to_owned()),
         push_session: Some("ZSG-TEST-1".to_owned()),
     })
     .collect();
@@ -2623,7 +2663,7 @@ async fn a_zaehlerstandsgang_differences_into_a_lastgang() {
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn a_billing_period_reports_its_opening_and_closing_zaehlerstand() {
     let (repo, _pool, _pg, _wh) = setup().await;
-    let tenant = "9910000000001";
+    let tenant = "9910000000010";
     let malo = "51238696129";
     // A Berlin January, so the aggregate's window and the readings agree.
     let day = time::Date::from_calendar_date(2026, time::Month::January, 15).expect("date");
@@ -2707,7 +2747,7 @@ async fn a_billing_period_reports_its_opening_and_closing_zaehlerstand() {
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn erasure_unlinks_the_zaehlerstandsgang() {
     let (repo, _pool, _pg, _wh) = setup().await;
-    let tenant = "9910000000001";
+    let tenant = "9910000000010";
     let malo = "51238696129";
     let at = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");
 
@@ -2739,7 +2779,9 @@ async fn erasure_unlinks_the_zaehlerstandsgang() {
         .expect("storing a Zählerstand registers the MaLo as a subject");
 
     repo.zsg_store()
-        .erase_subject(
+        .subject_registry()
+        .expect("registry")
+        .erase(
             &subject,
             "Art. 17 request",
             "dpo",
@@ -2775,7 +2817,7 @@ async fn erasure_unlinks_the_zaehlerstandsgang() {
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn a_completed_ablesung_reaches_the_reading_store() {
     let (repo, pool, _pg, _wh) = setup().await;
-    let tenant = "9910000000001";
+    let tenant = "9910000000010";
     let malo = "51238696129";
 
     // A year apart, as a Jahresablesung is.
@@ -2835,13 +2877,18 @@ async fn a_completed_ablesung_reaches_the_reading_store() {
     assert_eq!(stored.len(), 2, "both Ablesungen reached the reading store");
 
     // The SLP billing path: the difference between two annual readings.
-    let start =
-        metering::reading::MeterReading::measured(stored[0].read_at, stored[0].zaehlerstand);
-    let end = metering::reading::MeterReading::measured(stored[1].read_at, stored[1].zaehlerstand);
-    let consumption = metering::reading::consumption_between(
+    let start = metering::series::reading::MeterReading::measured(
+        stored[0].read_at,
+        stored[0].zaehlerstand,
+    );
+    let end = metering::series::reading::MeterReading::measured(
+        stored[1].read_at,
+        stored[1].zaehlerstand,
+    );
+    let consumption = metering::series::reading::consumption_between(
         &start,
         &end,
-        &metering::reading::LastgangConfig::default(),
+        &metering::series::reading::LastgangConfig::default(),
     )
     .expect("two clean readings difference cleanly");
     assert_eq!(
@@ -2853,57 +2900,68 @@ async fn a_completed_ablesung_reaches_the_reading_store() {
 
 /// §42c Energy Sharing: the allocation endpoint resolves a community by plant.
 ///
-/// A GGV rule is written *per tenant*, so a community is the set of rules
-/// sharing a `plant_melo_id`, and that is what the lookup matches. Reaching for
-/// `rule_json["source_malo_ids"]` instead — a key a serialised `AggregationRule`
-/// carries under no variant — yields an empty list and a 422 on every
-/// allocation.
+/// A `COMMUNITY_SHARE` rule is written *per participant*, so a community is the
+/// set of rules naming one `plant` Messlokation, and that is what the lookup
+/// matches — a whole-value comparison on the rule's `plant` key, so one
+/// Messlokation cannot match as a substring of another and pull a stranger's
+/// community in.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn a_sharing_community_is_the_set_of_rules_sharing_a_plant() {
+    use edmd::domain::virtual_meter::VirtualMeterRule;
+    use metering::allocation::community::AllocationKey;
+
     let (repo, pool, _pg, _wh) = setup().await;
-    let tenant = "9910000000001";
-    let plant = "51238696129";
-    let tenant_a = "51238696012";
-    let tenant_b = "51238696293";
+    let tenant = "9910000000010";
+    let melo = |n: u8| -> metering::MeloId {
+        format!("DE00012345678900000000000000000{n:02}")
+            .parse()
+            .expect("a MeLo")
+    };
+    let malo = |id: &str| -> metering::MaloId { id.parse().expect("a MaLo") };
+    let plant = melo(1);
+    let other_plant = melo(11);
 
     // Two participants on one plant, plus a decoy on a different plant.
     for (vid, tenant_melo, plant_melo) in [
-        ("VIRT-A", tenant_a, plant),
-        ("VIRT-B", tenant_b, plant),
-        ("VIRT-OTHER", tenant_a, "51238696137"),
+        ("VIRT-A", melo(2), plant),
+        ("VIRT-B", melo(3), plant),
+        ("VIRT-OTHER", melo(2), other_plant),
     ] {
-        let rule = serde_json::json!({
-            "kind": "GGV_CONSTANT_ALLOCATION",
-            "plant_melo_id": plant_melo,
-            "tenant_melo_id": tenant_melo,
-            "fraction": "0.5",
-        });
+        let rule = VirtualMeterRule::CommunityShare {
+            plant: plant_melo,
+            tenant: tenant_melo,
+            key: AllocationKey::Proportional,
+            sources: [
+                (plant_melo, malo("51238696129")),
+                (tenant_melo, malo("51238696012")),
+            ]
+            .into_iter()
+            .collect(),
+        };
         sqlx::query(
             "INSERT INTO virtual_meter_configs
                (virtual_malo_id, display_name, rule_type, rule_json, sparte, valid_from, tenant)
-             VALUES ($1,$1,'GGV_CONSTANT_ALLOCATION',$2,'STROM',heute(),$3)",
+             VALUES ($1,$1,$2,$3,'STROM',heute(),$4)",
         )
         .bind(vid)
-        .bind(&rule)
+        .bind(rule.kind())
+        .bind(serde_json::to_value(&rule).expect("a rule serialises"))
         .bind(tenant)
         .execute(&pool)
         .await
         .expect("insert the rule");
     }
 
-    // The lookup the handler runs: variant-agnostic, whole-value, bound.
+    // The lookup the handler runs.
     let found: Vec<String> = sqlx::query_scalar(
         r"SELECT virtual_malo_id FROM virtual_meter_configs
           WHERE tenant = $2
-            AND rule_type IN ('GGV_CONSTANT_ALLOCATION','GGV_PROPORTIONAL_ALLOCATION')
-            AND jsonb_path_exists(
-                    rule_json,
-                    '$.**.plant_melo_id ? (@ == $p)',
-                    jsonb_build_object('p', $1::text))
+            AND rule_type = 'COMMUNITY_SHARE'
+            AND rule_json->'COMMUNITY_SHARE'->>'plant' = $1
           ORDER BY virtual_malo_id",
     )
-    .bind(plant)
+    .bind(plant.as_str())
     .bind(tenant)
     .fetch_all(&pool)
     .await
@@ -2913,19 +2971,6 @@ async fn a_sharing_community_is_the_set_of_rules_sharing_a_plant() {
         found,
         vec!["VIRT-A".to_owned(), "VIRT-B".to_owned()],
         "the community is exactly the rules naming this plant — not the one on another"
-    );
-
-    // And the tempting key is not in the stored rule at all.
-    let raw: serde_json::Value = sqlx::query_scalar(
-        "SELECT rule_json FROM virtual_meter_configs WHERE virtual_malo_id='VIRT-A' AND tenant=$1",
-    )
-    .bind(tenant)
-    .fetch_one(&pool)
-    .await
-    .expect("read the rule back");
-    assert!(
-        raw.get("source_malo_ids").is_none(),
-        "`AggregationRule` is externally tagged and carries no `source_malo_ids`: {raw}"
     );
     let _ = &repo;
 }
@@ -2940,7 +2985,7 @@ async fn a_sharing_community_is_the_set_of_rules_sharing_a_plant() {
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn the_portfolio_aggregate_does_not_double_count_a_dual_tariff_prosumer() {
     let (repo, _pool, _pg, _wh) = setup().await;
-    let tenant = "9910000000001";
+    let tenant = "9910000000010";
     let malo = "51238696129";
     let base = OffsetDateTime::now_utc() - Duration::days(2);
 
@@ -3002,18 +3047,24 @@ async fn the_portfolio_aggregate_does_not_double_count_a_dual_tariff_prosumer() 
     // Projected: only the total Bezug register, 4 × 2.5 kWh.
     let registers: Vec<metering::MeterInterval> = rows
         .iter()
-        .map(|r| metering::MeterInterval {
-            from: base,
-            to: base + Duration::hours(1),
-            value: value_of(r),
-            quality: QualityFlag::Measured,
-            obis_code: r["obis_code"].as_str().and_then(|s| s.parse().ok()),
+        .map(|r| {
+            let iv = metering::MeterInterval::new(
+                base,
+                base + Duration::hours(1),
+                value_of(r),
+                QualityFlag::Measured,
+            )
+            .expect("an hour");
+            match r["obis_code"].as_str().and_then(|s| s.parse().ok()) {
+                Some(code) => iv.with_obis(code),
+                None => iv,
+            }
         })
         .collect();
     let projected: Decimal =
         edmd::domain::energy_intervals_from(registers, edmd::domain::EnergyDirection::Bezug)
             .iter()
-            .map(|iv| iv.value)
+            .map(|iv| iv.value())
             .sum();
     assert_eq!(
         projected,
@@ -3034,7 +3085,7 @@ async fn the_portfolio_aggregate_does_not_double_count_a_dual_tariff_prosumer() 
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn a_gas_zaehlerstand_round_trips_unconverted() {
     let (repo, _pool, _pg, _wh) = setup().await;
-    let tenant = "9910000000001";
+    let tenant = "9910000000010";
     let malo = "51238696129";
     let at = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");
 
@@ -3098,7 +3149,9 @@ async fn both_kapitel_46_delivery_paths_reach_the_typ2_store() {
     )
     .await
     .expect("build meterstore tiers");
-    let typ2 = MeterStoreTyp2Repository::new(typ2_store);
+    let typ2 = MeterStoreTyp2Repository::new(typ2_store)
+        .with_own_operator(Some(OWN_MSB))
+        .expect("own MSB");
 
     let t = OffsetDateTime::now_utc() - Duration::days(1);
     let typ2_read = |path: Typ2DeliveryPath, obis: &str, order: &str, kwh: &str| Typ2Read {
@@ -3111,9 +3164,9 @@ async fn both_kapitel_46_delivery_paths_reach_the_typ2_store() {
         pid: 13027,
         sparte: Sparte::Strom,
         obis_code: Some(obis.to_owned()),
-        tenant: "9910000000001".to_owned(),
+        tenant: "9910000000010".to_owned(),
         delivery_path: path,
-        sender_mp_id: Some("9900357000004".to_owned()),
+        sender_mp_id: Some("9900357000003".to_owned()),
         bestellung_ref: Some(order.to_owned()),
         received_at: None,
     };
@@ -3236,7 +3289,7 @@ async fn query_as_of_describes_every_register_of_a_prosumer() {
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_overdue_confirmation_sweep_records_its_notice_in_the_same_transaction() {
     let (pool, _url, _warehouse, _container, _tmp) = boot().await;
-    let tenant = "9910000000001";
+    let tenant = "9910000000010";
 
     // One estimated reading, already past an eight-week deadline.
     sqlx::query(
@@ -3292,7 +3345,7 @@ async fn a_queued_cloud_event_survives_without_a_configured_webhook() {
     let (pool, _url, _warehouse, _container, _tmp) = boot().await;
 
     let ce = mako_service::CloudEvent::new(
-        mako_service::source("edmd", "9910000000001"),
+        mako_service::source("edmd", "9910000000010"),
         mako_events::messwert::READING_DIRECT_STORED,
         "51238696012",
         serde_json::json!({ "malo_id": "51238696012" }),

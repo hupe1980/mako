@@ -249,7 +249,7 @@ pub(crate) async fn get_reading_order(
 /// Nr. 6 EnWG (the invoice's opening and closing Zählerstand), and it cannot be
 /// differenced against the previous year's reading — which for an **SLP**
 /// delivery point, with no interval metering at all, is the entire billing path
-/// (`metering::reading::consumption_between`).
+/// (`metering::series::reading::consumption_between`).
 ///
 /// The order row keeps its copy: it is the record of what this Auftrag returned,
 /// which is a different fact from what the register held at an instant.
@@ -318,13 +318,11 @@ pub(crate) async fn complete_reading_order(
     // gas or water meter; `zaehlerstand_kwh` is an energy register. Reporting
     // the one that does not match the order's Sparte is a decode fault, not a
     // reading, so it is refused rather than filed in the wrong dimension.
-    let value = match sparte.measured_unit() {
-        metering::MeasurementUnit::CubicMetre => req.zaehlerstand_qm3,
-        metering::MeasurementUnit::KiloWattHour => req.zaehlerstand_kwh,
-    };
-    let mismatched = match sparte.measured_unit() {
-        metering::MeasurementUnit::CubicMetre => req.zaehlerstand_kwh.is_some(),
-        metering::MeasurementUnit::KiloWattHour => req.zaehlerstand_qm3.is_some(),
+    let (value, mismatched) = match sparte.measured_unit() {
+        metering::Unit::CubicMetre => (req.zaehlerstand_qm3, req.zaehlerstand_kwh.is_some()),
+        // Energy registers — and any unit a register does not count, which no
+        // Zählerstand field can carry.
+        _ => (req.zaehlerstand_kwh, req.zaehlerstand_qm3.is_some()),
     };
     if mismatched {
         return (

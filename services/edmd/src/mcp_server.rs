@@ -11,13 +11,13 @@
 //! | `get_imbalance`              | Mehr-/Mindermengen imbalance report |
 //! | `get_billing_period`         | MeterBillingPeriod summary (arbeitsmenge, spitzenleistung, brennwert) |
 //! | `get_device_history`         | RAG: comprehensive device history for LanceDB indexing |
-//! | `get_quality_warnings`       | Hampel quality warnings (grade A/B/C/F) |
+//! | `get_quality_warnings`       | Quality verdict over a window (grade A/B/C/F) |
 //! | `list_reading_orders`        | List Ablesesteuerung reading orders for a MaLo |
 //! | `list_overdue_reading_orders`| Reading orders past `ausfuehrt_bis` (§ 40b Abs. 1 EnWG compliance) |
 //! | `trigger_jahresablesung`     | Launch Jahresablesung campaign for a NB grid area |
 //! | `trigger_substitution`       | Generate + store § 60 Abs. 1 MsbG Ersatzwerte for a gap window |
 //! | `get_correction_history`     | § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit: list corrections for a MaLo |
-//! | `validate_timeseries`        | Run the metering validation rules (V01–V09/V11/V12) on meter reads |
+//! | `validate_timeseries`        | Run the metering validation rules on meter reads, per register |
 //! | `get_quality_assessments`    | Per-batch quality history (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD)) |
 //! | `get_summenzeitreihe`        | Monthly aggregated kWh for MaBiS |
 //! | `get_annual_forecast`        | § 40a Abs. 2 EnWG Verbrauchsschätzung · § 13 Abs. 1 StromGVV Abschlagshöhe |
@@ -29,7 +29,7 @@
 //! |---|---|
 //! | `analyze-consumption`      | Step-by-step consumption analysis |
 //! | `submit-mscons`            | Step-by-step MSCONS ingestion guide |
-//! | `quality-assessment`       | Hampel quality assessment guide |
+//! | `quality-assessment`       | Quality assessment guide |
 //! | `jahresablesung-workflow`  | § 40b Abs. 1 EnWG Jahresablesung campaign guide |
 //! | `reading-order-lifecycle`  | Reading order lifecycle: OFFEN → AUSGEFUEHRT |
 
@@ -137,7 +137,7 @@ pub struct GetDeviceHistoryParams {
 
 // ── Quality warnings ───────────────────────────────────────────────────────
 
-/// Parameters for `get_quality_warnings` MCP tool (Hampel filter quality scoring).
+/// Parameters for `get_quality_warnings` MCP tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetQualityWarningsParams {
     /// 11-digit Marktlokations-ID.
@@ -179,22 +179,26 @@ pub struct TriggerSubstitutionParams {
     pub gap_from: String,
     /// Gap end (UTC, RFC3339).
     pub gap_to: String,
-    /// `PriorPeriodAverage` (default) · `LinearInterpolation` · `ZeroFill` ·
-    /// `LastValueCarryForward`.
-    pub method: Option<String>,
-    /// Interval length in seconds (default 900; use 3600 for hourly gas).
-    pub interval_secs: Option<u32>,
-    /// Reference read window in days (default 7). `PriorPeriodAverage` averages
-    /// the matching slot over the 7 days before the gap and ignores anything
-    /// past that; a larger value only widens the search for the bracketing
-    /// values the other methods use.
+    /// Reference read window in days (default 7). The Vergleichswert averages
+    /// the same slot on the previous three days of the gap's day class, so the
+    /// window has to hold three of them.
     pub prior_days: Option<u32>,
+    /// **Required** — the Bundesland whose holidays decide the day class
+    /// (`BE`, `NW`, `DE-BY`, …).
+    pub bundesland: String,
+    /// Fill gaps longer than 2 h with the last measured value (`Z93`). Gas only.
+    #[serde(default)]
+    pub hold: bool,
+    /// The whole gap window is a confirmed supply interruption, filled with
+    /// zeros. Only for an outage that was established.
+    #[serde(default)]
+    pub confirmed_outage: bool,
     /// OBIS register the gap belongs to (part of the reading identity).
     pub obis_code: Option<String>,
     /// `STROM` (default) · `GAS` · `WAERME` · `WASSER`.
     pub sparte: Option<String>,
     /// **Required** — the `STS+Z40` Grund der Ersatzwertbildung (MSCONS MIG
-    /// 2.4c), by name (`NO_ACCESS`, `METERING_EQUIPMENT_FAULT`,
+    /// 2.5), by name (`NO_ACCESS`, `METERING_EQUIPMENT_FAULT`,
     /// `COMMUNICATION_FAILURE`, …) or by market code (`Z74`, `Z81`, `Z75`, …).
     /// The list is closed and has no catch-all, so an unstated reason is a
     /// refusal rather than a default: it would put an invented one into the
@@ -240,8 +244,8 @@ pub struct ValidateTimeseriesParams {
     pub to: String,
     /// Physical capacity ceiling of the metered plant, in kW.
     ///
-    /// Supply it and **V12** (`ImplausiblePower`) checks each interval's average
-    /// power against it. Omit it and V12 stays off — edmd holds no master data
+    /// Supply it and **`CAPACITY`** checks each interval's average power
+    /// against it. Omit it and the rule stays off — edmd holds no master data
     /// of its own and will not invent a ceiling.
     pub max_plant_power_kw: Option<rust_decimal::Decimal>,
 }
@@ -370,7 +374,8 @@ impl EdmdMcpHandler {
     /// Read the Mehr-/Mindermengensaldo for a MaLo and month.
     ///
     /// One implementation, shared with `GET /api/v1/imbalance/…`: the
-    /// arithmetic and the sign convention are `metering::compute_imbalance`\'s.
+    /// arithmetic and the sign convention are
+    /// `metering::billing::imbalance::ImbalanceSaldo`\'s.
     /// "Mehr = the positive intervals, Minder = the absolute value of the
     /// negative ones" is a series split by sign, not the
     /// Mehr-/Mindermengensaldo, and must never feed the INVOIC 31006 amount.
@@ -489,8 +494,16 @@ impl EdmdMcpHandler {
         // A billing period is a Berlin calendar period (Liefermonat), so its UTC
         // window comes from the calendar — naive UTC midnight is 1–2 h off at
         // every month edge and the wrong length across a DST transition.
-        let from_ts = metering::calendar::day_start_utc(period_from);
-        let to_ts = metering::calendar::day_end_utc(period_to);
+        let (Some(first), Some(last)) = (
+            metering::DayBoundary::Strom.day(period_from),
+            metering::DayBoundary::Strom.day(period_to),
+        ) else {
+            return Err(McpError::invalid_params(
+                "the period lies outside the supported calendar",
+                None,
+            ));
+        };
+        let (from_ts, to_ts) = (first.start(), last.end());
 
         // Query pre-aggregated billing periods first, fall back to raw aggregation.
         let pre = sqlx::query(
@@ -569,18 +582,13 @@ impl EdmdMcpHandler {
             // dual-tariff meter's consumption counted twice (`domain::register`).
             let intervals =
                 crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
-            let total_kwh: rust_decimal::Decimal = intervals.iter().map(|iv| iv.value).sum();
+            let total_kwh: rust_decimal::Decimal =
+                intervals.iter().map(metering::MeterInterval::value).sum();
             // Peak demand is the interval's energy over its own length in hours,
             // so an hourly series reports one instead of none.
             let spitzenleistung_kw: Option<rust_decimal::Decimal> = intervals
                 .iter()
-                .filter_map(|iv| {
-                    let minutes = rust_decimal::Decimal::from(
-                        (iv.to - iv.from).whole_minutes().unsigned_abs(),
-                    );
-                    (minutes > rust_decimal::Decimal::ZERO)
-                        .then(|| iv.value * rust_decimal::Decimal::from(60) / minutes)
-                })
+                .filter_map(metering::MeterInterval::demand_kw)
                 .max();
             let count = intervals.len();
 
@@ -808,17 +816,15 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
-    /// `get_quality_warnings` — query Hampel-filter quality warnings for a MaLo.
-    ///
-    /// Returns `meter_reads` rows where `quality_warnings->>'has_warnings' = 'true'`
-    /// in the given time range, structured by the Hampel-k3-t3 algorithm.
+    /// `get_quality_warnings` — the quality verdict for a MaLo over a window,
+    /// recomputed from the version-resolved series.
     #[allow(
         dead_code,
         reason = "reached only in some feature or target combinations"
     )]
     #[tool(
-        description = "Query Hampel-filter quality warnings for a MaLo in a time range. \
-Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %.",
+        description = "Query quality warnings for a MaLo in a time range. \
+Returns grade (A/B/C/F), outlier/capacity timestamps, gaps detected, and coverage %.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_quality_warnings(
@@ -839,7 +845,7 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
                 .unwrap_or(now);
 
         // There is no stored per-interval `quality_warnings` column —
-        // meterstore owns the readings. Recompute the Hampel/gap verdict on the
+        // meterstore owns the readings. Recompute the validation verdict on the
         // fly from the version-resolved series — the same scorer the ingest and
         // rescore paths use — so the tool reports a fresh grade for the window.
         let reads = self
@@ -855,24 +861,12 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let intervals: Vec<MeterInterval> = reads
-            .iter()
-            .map(|r| MeterInterval {
-                from: r.dtm_from,
-                to: r.dtm_to,
-                value: r.quantity_kwh,
-                quality: r.quality,
-                obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
-            })
-            .collect();
+        let intervals: Vec<MeterInterval> =
+            reads.iter().filter_map(|r| r.interval().ok()).collect();
 
-        // The **same** scorer the REST surface runs, not a second one.
-        // Calling `score_intervals` directly with `QualityConfig::default()`
-        // diverges three ways at once: electricity thresholds applied to every
-        // commodity (a summer gas profile grades as a stuck meter), an assumed
-        // 900 s cadence instead of the observed one, and a fixed `hampel_k3_t3`
-        // label naming parameters that were not used. An agent and an operator
-        // asking the same question would get different answers.
+        // The **same** scorer the REST surface runs, not a second one: the
+        // Sparte's preset, the observed grid and the requested window. An agent
+        // and an operator asking the same question get the same answer.
         let sparte = reads.first().map_or(metering::Sparte::Strom, |r| r.sparte);
         let report = crate::server::compute_quality(&intervals, sparte, from_dt, to_dt);
 
@@ -1128,7 +1122,7 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
     }
 
     #[tool(
-        description = "Generate and store § 60 Abs. 1 MsbG Ersatzwerte (substitute values) for a gap window. Methods: PriorPeriodAverage (default), LinearInterpolation, ZeroFill, LastValueCarryForward. Never overwrites a billable reading; every substitute is logged to substitute_value_log (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit trail). Runs the same core as POST /api/v1/meter-reads/{malo_id}/substitute.",
+        description = "Generate and store § 60 Abs. 1 MsbG Ersatzwerte (substitute values) for a gap window. The method follows MeteringCode 2006: gaps up to 2 h are interpolated (Z92), longer ones take the Vergleichswert of the same slot on comparable days (ZJ2 Strom, Z95 Gas); `hold` (gas only, Z93) and `confirmed_outage` (zeros) are opt-in. A slot no rule can fill is refused, never invented. Requires `reason` (STS+Z40) and `bundesland` (holidays decide the day class). Never overwrites a billable reading; every substitute is logged to substitute_value_log (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit trail). Runs the same core as POST /api/v1/meter-reads/{malo_id}/substitute.",
         annotations(
             destructive_hint = true,
             idempotent_hint = true,
@@ -1142,9 +1136,10 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
         let req = crate::server::SubstituteRequest {
             gap_from: p.gap_from,
             gap_to: p.gap_to,
-            interval_secs: p.interval_secs,
-            method: p.method,
             prior_days: p.prior_days,
+            bundesland: p.bundesland,
+            hold: p.hold,
+            confirmed_outage: p.confirmed_outage,
             operator_id: Some("mcp-agent".to_owned()),
             sparte: p.sparte,
             reason: p.reason,
@@ -1267,26 +1262,23 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
 
     /// `validate_timeseries` — run the metering validation engine on a MaLo's time-series.
     ///
-    /// Applies the metering validation rules to the stored meter reads: gap
-    /// detection, overlap detection, negative energy, statistical outliers, zero
-    /// runs, interval-length consistency, DST ambiguity, future timestamps,
-    /// non-billable quality flags, unordered input and implausible power.
-    ///
-    /// There is no V10. It was a "register rollover" rule that compared
-    /// consecutive interval energies, which is meaningless for a series of
-    /// per-interval quantities rather than cumulative Zählerstände — it could
-    /// only fire on a quarter-hour carrying 50 MWh. `metering` removed it and
-    /// left the number unused so a stored `V10` finding cannot be reinterpreted.
+    /// Builds each register into a series — a slot delivered twice, overlapping
+    /// spans or a span off the grid is a structural finding — and applies
+    /// `metering::vee::validation`'s content rules to it: gaps, non-billable
+    /// quality, negative energy, implausible power, future slots, zero runs,
+    /// frozen values and statistical outliers.
     #[tool(
         name = "validate_timeseries",
-        description = "Run the metering validation engine (rules V01–V09/V11/V12) on stored meter reads \
-                       for a MaLo. Identifies gaps (V01), overlaps (V02), negative energy (V03), \
-                       statistical outliers (V04), zero-runs (V05), inconsistent intervals (V06), \
-                       DST ambiguity (V07), future timestamps (V08), non-billable quality (V09), \
-                       unordered input (V11) and implausible power (V12). There is no V10. \
-                       `rules_evaluated` / `rules_skipped` say which of them actually ran: a \
+        description = "Run the metering validation rules on stored meter reads for a MaLo, \
+                       one series per register: GAP (missing slots), NON_BILLABLE, NEGATIVE, \
+                       CAPACITY (average power above the plant capacity), FUTURE, ZERO_RUN, \
+                       STALE (a frozen value), SPIKE (Hampel outlier) and the rest of \
+                       metering's set. A register whose intervals are not one series reports \
+                       a structural finding (DUPLICATE, OVERLAP, MISALIGNED, EMPTY_SPAN, \
+                       NO_GRID) instead, and no content rule runs on it. \
+                       `rules_evaluated` / `rules_skipped` say which rules actually ran: a \
                        rule the configuration or the data left inert found nothing, so a clean \
-                       result is only as strong as the rules behind it. V12 needs \
+                       result is only as strong as the rules behind it. CAPACITY needs \
                        `max_plant_power_kw`. \
                        Use before billing to detect intervals requiring § 60 Abs. 1 MsbG \
                        substitute values (§ 40a Abs. 2 EnWG: an undeterminable consumption \
@@ -1306,8 +1298,8 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
         let malo_id = p.malo_id;
 
         // Fetch reads through the repository. `query` does NOT filter quality, so
-        // the validation engine sees Faulty/Unknown intervals too — which V09
-        // (non-billable quality) needs to fire.
+        // the validation sees Faulty/Unknown intervals too — which NON_BILLABLE
+        // needs to fire.
         let reads = self
             .state
             .repo
@@ -1321,39 +1313,31 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        // The **same** pass the ingest doors run: split by register — V01 gap and
-        // V02 overlap are statements about a single series, and a MaLo delivers
-        // several at once, so flattened they made every prosumer's same-slot
-        // import/export pair an `Error`-severity overlap — with thresholds from
-        // each series' own Sparte and the cadence observed rather than assumed.
-        //
-        // A bare `ValidationConfig::default()` here — electricity thresholds, an
-        // assumed 900 s grid — would call an ordinary hourly gas series broken
-        // while the ingest door that stored it called it clean. An MCP tool that
-        // disagrees with its REST twin is worse than one that does not exist: it
-        // is consulted exactly when nobody is checking.
+        // The **same** pass the ingest doors run: split by register — a series is
+        // one channel, and a MaLo delivers several at once — with each series'
+        // own Sparte preset and its observed grid. An MCP tool that disagrees
+        // with its REST twin is worse than one that does not exist: it is
+        // consulted exactly when nobody is checking.
         let (found, evaluated) =
             crate::domain::validation::findings_with_coverage(&reads, p.max_plant_power_kw);
         let register_count = crate::domain::register_groups(&reads).len();
-        let billing_block_count = found.iter().filter(|f| f.issue.blocks_billing()).count();
+        let billing_block_count = found.iter().filter(|f| f.blocks_billing()).count();
         let has_errors = billing_block_count > 0;
         let is_clean = found.is_empty();
 
         let issues_json: Vec<serde_json::Value> = found
             .iter()
             .map(|f| {
-                let i = &f.issue;
                 serde_json::json!({
-                    "rule": i.rule_id.to_string(),
-                    "severity": format!("{:?}", i.severity),
-                    "message": i.message,
-                    // Which register the finding is about: an index into one
-                    // group means nothing without it.
+                    "rule": f.code,
+                    "severity": f.severity.as_str(),
+                    "message": f.message,
+                    // Which register the finding is about.
                     "obis_code": f.obis_code.map(|c| c.to_string()),
-                    "interval_index": i.interval_index,
-                    "affected_from": i.affected_from.map(|t| t.format(&Rfc3339).ok()),
-                    "affected_value_kwh": i.affected_value,
-                    "blocks_billing": i.blocks_billing(),
+                    "affected_from": f.span.and_then(|(from, _)| from.format(&Rfc3339).ok()),
+                    "affected_to": f.span.and_then(|(_, to)| to.format(&Rfc3339).ok()),
+                    "interval_count": f.rows.len(),
+                    "blocks_billing": f.blocks_billing(),
                 })
             })
             .collect();
@@ -1366,15 +1350,16 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
             "is_clean": is_clean,
             // What `is_clean` is a statement about. A rule that never ran found
             // nothing, and without this an agent reads a spotless report as a
-            // guarantee no rule stands behind — V12 is inert unless the caller
-            // supplies `max_plant_power_kw`, which edmd holds no master data for.
+            // guarantee no rule stands behind — CAPACITY is inert unless the
+            // caller supplies `max_plant_power_kw`, which edmd holds no master
+            // data for.
             "rules_evaluated": evaluated
                 .iter()
                 .map(|r| r.as_str())
                 .collect::<Vec<_>>(),
-            "rules_skipped": evaluated
-                .complement()
+            "rules_skipped": metering::vee::validation::Rule::ALL
                 .iter()
+                .filter(|r| !evaluated.contains(r))
                 .map(|r| r.as_str())
                 .collect::<Vec<_>>(),
             "has_errors": has_errors,
@@ -1506,33 +1491,28 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        // Bucket through the shared `metering::resample`, exactly as the REST
-        // `GET /api/v1/summenzeitreihe/{malo_id}` handler does — a MaBiS figure
-        // must not depend on which surface asked for it. Hand-rolling a UTC
-        // month-start here diverged from resample's DST-aware Berlin months at
-        // every month boundary.
-        // …including the register projection and the billable-quality filter.
-        // Mapping every read straight through would answer a Bezug question
-        // with the Einspeisung and the Faulty intervals summed in as well.
+        // Bucket through the shared helper the REST
+        // `GET /api/v1/summenzeitreihe/{malo_id}` handler uses — a MaBiS figure
+        // must not depend on which surface asked for it — including the
+        // register projection and the billable-quality filter. A month missing
+        // any slot is absent rather than reported short.
+        let sparte = reads
+            .first()
+            .map_or(crate::domain::Sparte::Strom, |r| r.sparte);
         let intervals =
             crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
-        let buckets = metering::resample(&intervals, &metering::ResampleConfig::to_monthly());
-        let total_kwh: rust_decimal::Decimal = buckets.iter().map(|b| b.total).sum();
-
-        let months: Vec<serde_json::Value> = buckets
+        let months =
+            crate::server::resampled_buckets(sparte, &intervals, metering::Resolution::Month)
+                .map_err(|e| McpError::invalid_params(e, None))?;
+        let total_kwh: rust_decimal::Decimal = months
             .iter()
-            .map(|b| {
-                serde_json::json!({
-                    "from": b.from,
-                    "to": b.to,
-                    "total_kwh": b.total.to_string(),
-                    "peak_kw": b.peak_kw,
-                    "coverage_pct": b.coverage_pct(),
-                    "has_missing_data": b.has_missing_data(),
-                    "quality": format!("{:?}", b.quality),
-                })
+            .filter_map(|m| {
+                m["total_kwh"]
+                    .as_str()?
+                    .parse::<rust_decimal::Decimal>()
+                    .ok()
             })
-            .collect();
+            .sum();
 
         serde_json::to_string_pretty(&serde_json::json!({
             "malo_id": p.malo_id,
@@ -1556,8 +1536,8 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
         name = "get_annual_forecast",
         description = "Compute the § 40a Abs. 2 EnWG annual energy consumption forecast (Jahresprognose) \
                        for a MaLo from available meter reads. Returns projected_annual_kwh, \
-                       observed_kwh, observed_days, seasonal_correction_applied. \
-                       Minimum 7 days of data required. \
+                       observed_kwh, observed_days, seasonal_factor. \
+                       Minimum 7 days of data and 90 % billable coverage required. \
                        Params: malo_id (required), from / to (ISO 8601 UTC, optional).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -1580,72 +1560,24 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
                 .map_err(|e| McpError::invalid_params(format!("invalid to: {e}"), None))?
                 .unwrap_or_else(time::OffsetDateTime::now_utc);
 
-        // Mirror the REST `get_annual_forecast` exactly: read the window via the
-        // repository, then project onto the canonical Bezug registers. Quality is
-        // filtered by both — the projection drops non-billable readings, and
-        // `project_annual_consumption` filters them again internally — so the two
-        // surfaces agree by construction rather than by coincidence.
-        let reads = self
-            .state
-            .repo
-            .query(&TimeSeriesQuery {
-                malo_id: p.malo_id.clone(),
-                from,
-                to,
-                sparte: None,
-                tenant: self.state.tenant.clone(),
-            })
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        // The canonical Bezug projection, as the REST forecast uses: a projection
-        // over every register would forecast a year of energy nobody draws.
-        let intervals =
-            crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
-
-        // Prior-year window enables the seasonal correction branch — without it
-        // every forecast is the naive daily × 365 projection. A missing prior-year
-        // window is not an error (seasonal correction is optional), so its read
-        // degrades to empty rather than failing the forecast.
-        let prior_reads = self
-            .state
-            .repo
-            .query(&TimeSeriesQuery {
-                malo_id: p.malo_id.clone(),
-                from: from - time::Duration::days(365),
-                to: to - time::Duration::days(365),
-                sparte: None,
-                tenant: self.state.tenant.clone(),
-            })
-            .await
-            .unwrap_or_default();
-        let prior_intervals =
-            crate::domain::energy_intervals(&prior_reads, crate::domain::EnergyDirection::Bezug);
-        let prior = (!prior_intervals.is_empty()).then_some(prior_intervals.as_slice());
-
-        match metering::project_annual_consumption(&intervals, prior) {
-            Some(forecast) => serde_json::to_string_pretty(&serde_json::json!({
-                // The caller's MaLo, not the forecast's: a projection is
-                // arithmetic over a series and does not know whose it is.
-                "malo_id": p.malo_id,
-                "observation_from": forecast.observation_from,
-                "observation_to": forecast.observation_to,
-                "observed_kwh": forecast.observed.to_string(),
-                "observed_days": forecast.observed_days,
-                "target_year_days": forecast.target_year_days,
-                "projected_annual_kwh": forecast.projected_annual.to_string(),
-                "seasonal_correction_applied": forecast.seasonal_correction_applied,
-                "seasonal_factor": forecast.seasonal_factor.to_string(),
-                // A projection an agent cannot judge the spread of is one it
-                // should not bill on, so the prediction interval travels with it.
-                "confidence_lower_kwh": forecast.confidence_lower.map(|d| d.to_string()),
-                "confidence_upper_kwh": forecast.confidence_upper.map(|d| d.to_string()),
-                "prediction_interval_note": metering::AnnualForecast::prediction_interval_note(),
-                "legal_basis": "§ 40a Abs. 2 EnWG (Verbrauchsschätzung) · § 13 Abs. 1 StromGVV (Abschlagshöhe)",
-            }))
-            .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
-            .map_err(|e| McpError::internal_error(e.to_string(), None)),
-            None => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                "Insufficient data for annual forecast of {}: minimum 7 days of readings required.",
+        // The same computation the REST `get_annual_forecast` answers with.
+        match crate::server::annual_forecast(
+            &self.state.repo,
+            &self.state.tenant,
+            &p.malo_id,
+            from,
+            to,
+        )
+        .await
+        {
+            Ok(body) => serde_json::to_string_pretty(&body)
+                .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
+                .map_err(|e| McpError::internal_error(e.to_string(), None)),
+            Err((status, error)) if status.is_server_error() => {
+                Err(McpError::internal_error(error, None))
+            }
+            Err((_, error)) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "No annual forecast for {}: {error}",
                 p.malo_id
             ))])),
         }
@@ -1762,7 +1694,7 @@ impl EdmdMcpHandler {
 
     #[prompt(
         name = "quality-assessment",
-        description = "Step-by-step: assess meter read quality for a MaLo using the Hampel filter"
+        description = "Step-by-step: assess meter read quality for a MaLo"
     )]
     async fn quality_assessment_prompt(&self) -> Vec<PromptMessage> {
         vec![
@@ -1772,19 +1704,20 @@ impl EdmdMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "Quality scoring uses the **Hampel filter** (window k=3, threshold t=3.0 robust sigma) — \n\
-                 sliding-window median/MAD outlier detection robust to the outliers it detects.\n\n\
+                "Quality scoring runs metering's validation rules with the preset for the series' Sparte, \n\
+                 over the window you ask about. Outliers are its SPIKE rule — a Hampel test \n\
+                 (sliding-window median/MAD), robust to the outliers it detects.\n\n\
                  ## Steps\n\
                  1. Call `get_quality_warnings(malo_id, from, to)` to see existing quality issues.\n\
                  2. Check `grade` field: A (clean) | B (minor) | C (significant) | F (unusable).\n\
                  3. If you suspect historical data was stored without quality scoring (pre-M7), \n\
                     retroactively rescore: `POST /api/v1/quality-score/{malo_id}?from=&to=`.\n\
                  4. Investigate:\n\
-                    - `outlier_intervals` — Hampel-flagged timestamps (robust to contamination)\n\
-                    - `spike_intervals` — values > 10× window median (decimal-point errors)\n\
-                    - `gaps_detected` — discontinuities (missing intervals)\n\
-                    - `zero_run_length` — consecutive zero reads (meter fault / firmware bug)\n\
-                    - `intervals_consistent` — mixed interval lengths (SLP/RLM mix-up)\n\
+                    - `outlier_intervals` — SPIKE/SEASONAL timestamps (robust to contamination)\n\
+                    - `spike_intervals` — CAPACITY timestamps (average power above the plant capacity)\n\
+                    - `gaps_detected` — missing slots inside the window\n\
+                    - `zero_run_length` — the longest reported run of zeros, in slots\n\
+                    - `intervals_consistent` — false when a register is not one series on one grid\n\
                     - `coverage_pct` — < 95% signals incomplete MSCONS delivery\n\n\
                  ## Why Hampel?\n\
                  Global 3-sigma is contaminated by the very outliers it tries to detect.\n\
@@ -1794,9 +1727,9 @@ impl EdmdMcpHandler {
                  | Grade | Billing action |\n\
                  |---|---|\n\
                  | A | Normal billing run |\n\
-                 | B | Proceed with note in INVOIC |\n\
-                 | C | Manual review before billing |\n\
-                 | F | Block billing — data unusable |",
+                 | B | Warnings only — bill and note it |\n\
+                 | C | Errors — substitute the affected slots before billing |\n\
+                 | F | Blocking — the window needs clarifying before billing |",
             ),
         ]
     }
@@ -1921,20 +1854,20 @@ impl ServerHandler for EdmdMcpHandler {
              \n\
              Stores MSCONS meter data, iMSys direct push (15-min RLM), virtual meters, \
              quality assessments, Gas quality data, and manages reading orders.\n\
-             Quality scoring uses the Hampel filter + the V01–V09/V11/V12 validation engine.\n\
+             Quality scoring runs metering's validation rules per register over the requested window.\n\
              \n\
              ## Tools (15)\n\
              - `get_timeseries` — read meter reads for a MaLo in a time range\n\
              - `get_imbalance` — Mehr-/Mindermengen imbalance report (GPKE (BK6-24-174) Teil 1 Kap. 8.4)\n\
              - `get_billing_period` — MeterBillingPeriod (arbeitsmenge_kwh, brennwert, spitzenleistung)\n\
              - `get_device_history` — M9 RAG: comprehensive device history for LanceDB indexing\n\
-             - `get_quality_warnings` — Hampel quality warnings (grade A/B/C/F)\n\
+             - `get_quality_warnings` — quality verdict over a window (grade A/B/C/F)\n\
              - `list_reading_orders` — Ablesesteuerung reading orders for a MaLo\n\
              - `list_overdue_reading_orders` — overdue reading orders (§ 40b Abs. 1 EnWG compliance)\n\
              - `trigger_jahresablesung` — launch annual SLP reading campaign\n\
              - `trigger_substitution` — generate + store § 60 Abs. 1 MsbG Ersatzwerte for a gap window\n\
              - `get_correction_history` — § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) bitemporal correction audit trail\n\
-             - `validate_timeseries` — V01–V09/V11/V12 validation (gaps, overlaps, outliers, DST, quality)\n\
+             - `validate_timeseries` — per-register validation (gaps, duplicates, outliers, quality)\n\
              - `get_quality_assessments` — per-batch quality history (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD))\n\
              - `get_summenzeitreihe` — monthly aggregated kWh for MaBiS / GPKE Teil 1 Kap. 8.4\n\
              - `get_annual_forecast` — § 40a Abs. 2 EnWG Jahresprognose from available reads\n\

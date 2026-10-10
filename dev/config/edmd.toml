@@ -11,10 +11,16 @@ allow_insecure_no_auth = true
 addr = "127.0.0.1:8380"
 
 [database]
-url = "postgres://dev:dev@localhost:5432/edmd"
+# `sslmode=disable`: the dev PostgreSQL speaks plaintext on localhost. meterstore
+# reads this URL for its Iceberg catalog and connects with `verify-full` when
+# the URL names no mode — the production default, against a server whose
+# certificate the client can verify.
+url = "postgres://dev:dev@localhost:5432/edmd?sslmode=disable"
 
 [identity]
 tenant = "9900357000004"
+# Operator of readings edmd produces itself (Zählerstände, Ablesungen, Typ-2).
+own_mp_id = "9900000000003"
 
 [marktd]
 url     = "http://127.0.0.1:8180"

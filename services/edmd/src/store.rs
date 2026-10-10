@@ -28,9 +28,8 @@ use rust_decimal::Decimal;
 use sqlx::{PgPool, Row};
 use time::{Date, OffsetDateTime};
 
-use metering::interval::{MeasurementUnit, MeterInterval};
-use metering::measurement_series::{MeasurementSeries, MeasurementSource};
-use metering::obis::ObisCode;
+use metering::{MeterInterval, ObisCode, Unit};
+use meterstore::delivery::{MeasurementSeries, MeasurementSource};
 use meterstore::encode::StoredSeries;
 use meterstore::{
     MeterCatalog, MeterStore, MeterStoreBuilder, PostgresHot, ScopedVersion, SubjectRegistry,
@@ -121,6 +120,27 @@ fn operator_code(id: &str) -> Result<metering::ids::BdewCode, EdmError> {
         })
 }
 
+/// The operator that assigned a reading's version: its `sender_mp_id`, or
+/// for a reading edmd produced itself, the deployment's own MSB.
+///
+/// The tenant is a data-isolation key, not a Marktpartner-ID, so it never
+/// stands in for a missing operator; a reading that names none is refused.
+fn reading_operator(
+    sender_mp_id: Option<&str>,
+    own_operator: Option<&metering::ids::BdewCode>,
+) -> Result<metering::ids::BdewCode, EdmError> {
+    match (sender_mp_id, own_operator) {
+        (Some(id), _) => operator_code(id),
+        (None, Some(own)) => Ok(*own),
+        (None, None) => Err(EdmError::Rejected {
+            detail: "sender_mp_id is required, or [identity] own_mp_id for readings edmd \
+                     produces itself: the version scope is the operator's BDEW-Codenummer"
+                .to_owned(),
+            constraint: None,
+        }),
+    }
+}
+
 /// Parse a MaLo-ID at the store boundary.
 ///
 /// `metering::MaloId` enforces the BDEW Bildungsvorschrift — eleven digits, a
@@ -146,20 +166,39 @@ fn malo(id: &str) -> Result<metering::MaloId, EdmError> {
 /// every day, not only across a DST transition. Electricity balances on the
 /// calendar day.
 ///
-/// Both boundaries come from `metering::calendar`, which resolves them through
-/// the Berlin zone rather than a fixed offset, so a period containing a DST
-/// transition is 23 or 25 hours long as it should be.
-fn period_window(sparte: Sparte, from: Date, to: Date) -> (OffsetDateTime, OffsetDateTime) {
-    match sparte {
-        Sparte::Gas => (
-            metering::calendar::gas_day_start_utc(from),
-            metering::calendar::gas_day_end_utc(to),
-        ),
-        _ => (
-            metering::calendar::day_start_utc(from),
-            metering::calendar::day_end_utc(to),
-        ),
+/// Both boundaries come from `metering`'s [`DayBoundary`](metering::DayBoundary),
+/// which resolves them through the Berlin zone rather than a fixed offset, so a
+/// period containing a DST transition is 23 or 25 hours long as it should be.
+///
+/// # Errors
+///
+/// [`EdmError::Rejected`] for a date outside the calendar's supported years —
+/// a period that has no balancing day has nothing to aggregate over.
+fn period_window(
+    sparte: Sparte,
+    from: Date,
+    to: Date,
+) -> Result<(OffsetDateTime, OffsetDateTime), EdmError> {
+    let boundary = crate::domain::vee::day_boundary(sparte);
+    match (boundary.day(from), boundary.day(to)) {
+        (Some(first), Some(last)) => Ok((first.start(), last.end())),
+        _ => Err(input_err(format!(
+            "{from} – {to} lies outside the years the calendar covers"
+        ))),
     }
+}
+
+/// The deployment's subject registry, or the configuration fault that left it
+/// without one. Every edmd table is built with the registry, so a store without
+/// it is a construction error, never a reading to store unattributed.
+fn registry(store: &MeterStore) -> Result<&SubjectRegistry, EdmError> {
+    store.subject_registry().ok_or_else(|| {
+        EdmError::Internal(
+            "the meter store carries no subject registry: an Art. 17 erasure could \
+             not reach what it would store"
+                .to_owned(),
+        )
+    })
 }
 
 /// The identity column every store is keyed on. A reading is unique only *within*
@@ -484,6 +523,7 @@ async fn table_builder(
         table_name,
         &config.extra_columns(),
         &config.identity_column_names(),
+        &config.maintenance_policy(),
     )
     .await?;
     let provider = cold.table_provider(table_name).await?;
@@ -509,6 +549,8 @@ pub struct MeterStoreTimeSeriesRepository {
     /// The Zählerstandsgang table — a **point** store, keyed by Messlokation.
     zsg: MeterStore,
     pool: PgPool,
+    /// The deployment's own MSB, operator of readings that name no sender.
+    own_operator: Option<metering::ids::BdewCode>,
 }
 
 impl MeterStoreTimeSeriesRepository {
@@ -516,7 +558,23 @@ impl MeterStoreTimeSeriesRepository {
     /// business-table pool.
     #[must_use]
     pub fn new(store: MeterStore, zsg: MeterStore, pool: PgPool) -> Self {
-        Self { store, zsg, pool }
+        Self {
+            store,
+            zsg,
+            pool,
+            own_operator: None,
+        }
+    }
+
+    /// Name the deployment's own MSB MP-ID as the operator of readings that
+    /// carry no `sender_mp_id`; `None` leaves such readings refused.
+    ///
+    /// # Errors
+    ///
+    /// When `own_mp_id` is not a BDEW-Codenummer.
+    pub fn with_own_operator(mut self, own_mp_id: Option<&str>) -> Result<Self, EdmError> {
+        self.own_operator = own_mp_id.map(operator_code).transpose()?;
+        Ok(self)
     }
 
     /// The Zählerstandsgang store (register values at instants).
@@ -596,7 +654,7 @@ impl MeterStoreTimeSeriesRepository {
         read: &MeterRead,
         subject: &str,
     ) -> Result<Option<meterstore::session::Displacement>, EdmError> {
-        let stored = read_to_stored(read)?
+        let stored = read_to_stored(read, self.own_operator.as_ref())?
             .with_extra("subject_ref", ScalarValue::Utf8(Some(subject.to_owned())));
         let outcome = self
             .store
@@ -621,7 +679,7 @@ impl MeterStoreTimeSeriesRepository {
     ) -> Result<Option<MeterBillingPeriod>, EdmError> {
         // On-the-fly aggregation from the resolved series, over the commodity's
         // own balancing period (Gastag for Gas).
-        let (from_ts, to_ts) = period_window(q.sparte, q.period_from, q.period_to);
+        let (from_ts, to_ts) = period_window(q.sparte, q.period_from, q.period_to)?;
         // Billable qualities only (§ 40a Abs. 2 EnWG), pushed into the scan.
         let reads: Vec<MeterRead> =
             read_all_channels(&self.store, &q.malo_id, &q.tenant, from_ts, to_ts, true).await?;
@@ -634,28 +692,31 @@ impl MeterStoreTimeSeriesRepository {
         // Einspeisung or a dual-tariff meter's HT/NT split beside its total would
         // otherwise be summed into the invoiced figure (`domain::register`).
         let intervals = crate::domain::energy_intervals(&reads, EnergyDirection::Bezug);
-        let total_kwh: Decimal = intervals.iter().map(|iv| iv.value).sum();
+        let total_kwh: Decimal = intervals.iter().map(MeterInterval::value).sum();
         // The tariff split, reported when the meter actually delivers one. It is
         // read off the HT/NT registers rather than the total, so it stays `None`
         // for a single-tariff meter instead of claiming a zero NT quantity.
-        let tariff_sum = |stage: fn(&metering::obis::ObisCode) -> bool| -> Option<Decimal> {
+        // Tarifstufe 1 is HT, 2 is NT (`ObisCode::tariff`).
+        let tariff_sum = |stage: u8| -> Option<Decimal> {
             let sum: Decimal = reads
                 .iter()
                 .filter(|r| r.quality.is_billable())
                 .filter_map(|r| {
-                    let c: metering::obis::ObisCode = r.obis_code.as_deref()?.parse().ok()?;
-                    (c.is_import() && crate::domain::register::is_energy_register(c) && stage(&c))
-                        .then_some(r.quantity_kwh)
+                    let c: metering::ObisCode = r.obis_code.as_deref()?.parse().ok()?;
+                    (c.is_import()
+                        && crate::domain::register::is_energy_register(c)
+                        && c.tariff() == Some(stage))
+                    .then_some(r.quantity_kwh)
                 })
                 .sum();
             (sum != Decimal::ZERO).then_some(sum)
         };
-        let arbeitsmenge_ht_kwh = tariff_sum(metering::obis::ObisCode::is_ht);
-        let arbeitsmenge_nt_kwh = tariff_sum(metering::obis::ObisCode::is_nt);
+        let arbeitsmenge_ht_kwh = tariff_sum(1);
+        let arbeitsmenge_nt_kwh = tariff_sum(2);
         let sparte = reads.first().map_or(Sparte::Strom, |r| r.sparte);
         let first_interval_min = intervals
             .first()
-            .map(|iv| (iv.to - iv.from).whole_minutes().unsigned_abs());
+            .map(|iv| iv.duration().whole_minutes().unsigned_abs());
         // Two facts decide the Messtyp, and the interval length is only one of
         // them. An RLM meter and an intelligentes Messsystem both deliver a
         // quarter-hour series, so length alone can never name the iMSys — and
@@ -681,13 +742,7 @@ impl MeterStoreTimeSeriesRepository {
         // hourly RLM series — legitimate, and the norm for Gas — reported no
         // Leistungsmaximum at all, because no interval matched the filter.
         let spitzenleistung_kw = if messtyp == Messtyp::Rlm && sparte == Sparte::Strom {
-            intervals
-                .iter()
-                .filter_map(|iv| {
-                    let minutes = Decimal::from((iv.to - iv.from).whole_minutes().unsigned_abs());
-                    (minutes > Decimal::ZERO).then(|| iv.value * Decimal::from(60) / minutes)
-                })
-                .max()
+            intervals.iter().filter_map(MeterInterval::demand_kw).max()
         } else {
             None
         };
@@ -696,23 +751,22 @@ impl MeterStoreTimeSeriesRepository {
         // How much of the period the billable readings actually cover, measured
         // against the requested window rather than against the extent of the
         // data — measured against the data, a month whose last week never
-        // arrived reports 100 %. `metering::aggregate` owns the arithmetic
-        // (a duration ratio, so it is right at every resolution and on both DST
-        // days); edmd only decides what window it is measured against.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "a coverage percentage, not money: metering computes it as an f64 duration ratio, and it is rounded to two places right here"
-        )]
+        // arrived reports 100 %. A duration ratio in exact arithmetic, so it is
+        // right at every resolution and on both DST days. The projection folds
+        // tariff registers and so spans more than one channel, which is why it
+        // is measured here rather than through `metering::aggregate`, whose
+        // input is one channel's series.
         let coverage_pct = {
-            let agg = metering::aggregation::aggregate(
-                &intervals,
-                &metering::aggregation::AggregationConfig {
-                    include_spitzenleistung: false,
-                    period: Some((from_ts, to_ts)),
-                },
-            );
-            Decimal::from_f64_retain(agg.coverage_pct)
-                .unwrap_or(Decimal::ZERO)
+            let covered: i64 = intervals
+                .iter()
+                .map(|iv| {
+                    (iv.to().min(to_ts) - iv.from().max(from_ts))
+                        .whole_seconds()
+                        .max(0)
+                })
+                .sum();
+            let expected = (to_ts - from_ts).whole_seconds().max(1);
+            (Decimal::from(covered) * Decimal::ONE_HUNDRED / Decimal::from(expected))
                 .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
                 .clamp(Decimal::ZERO, Decimal::ONE_HUNDRED)
         };
@@ -857,8 +911,7 @@ impl MeterStoreTimeSeriesRepository {
 /// Map a stored [`MeterRead`] to a meterstore [`StoredSeries`] (one interval).
 ///
 /// **Version scope carries the network operator (BDEW Codenummer), never the
-/// tenant / forwarding MP-ID** — `sender_mp_id`, falling back to the tenant only
-/// when the reading carries no operator. The scope is derived from the
+/// tenant** — `sender_mp_id`; a reading without one is refused. The scope is derived from the
 /// *interval* (`VersionScope::for_interval`), so a July reading corrected in
 /// August still lands in July's scope.
 /// The meterstore version a delivery resolves under.
@@ -951,12 +1004,15 @@ async fn read_all_channels(
 /// and anything reading the cold tier through the Iceberg facade. Water is the
 /// one Sparte whose measured and billed unit coincide (m³), so it is unaffected;
 /// heat registers kWh_th on-device and needs no conversion either.
-fn stored_unit(sparte: Sparte) -> MeasurementUnit {
+fn stored_unit(sparte: Sparte) -> Unit {
     sparte.billing_unit()
 }
 
-fn read_to_stored(r: &MeterRead) -> Result<StoredSeries, EdmError> {
-    read_to_stored_at(r, None)
+fn read_to_stored(
+    r: &MeterRead,
+    own: Option<&metering::ids::BdewCode>,
+) -> Result<StoredSeries, EdmError> {
+    read_to_stored_at(r, None, own)
 }
 
 /// [`read_to_stored`], optionally overriding the version the delivery resolves
@@ -965,18 +1021,18 @@ fn read_to_stored(r: &MeterRead) -> Result<StoredSeries, EdmError> {
 /// The override exists for values **edmd itself authors** — an operator
 /// correction and a § 60 Abs. 1 Ersatzwert — which must supersede whatever
 /// currently holds. See [`MeterStoreTimeSeriesRepository::append_superseding`].
-fn read_to_stored_at(r: &MeterRead, version: Option<Version>) -> Result<StoredSeries, EdmError> {
-    let obis: Option<ObisCode> = r.obis_code.as_deref().and_then(|s| ObisCode::parse(s).ok());
-    let interval = MeterInterval {
-        from: r.dtm_from,
-        to: r.dtm_to,
-        value: r.quantity_kwh,
-        quality: r.quality,
-        obis_code: obis,
-    };
+fn read_to_stored_at(
+    r: &MeterRead,
+    version: Option<Version>,
+    own: Option<&metering::ids::BdewCode>,
+) -> Result<StoredSeries, EdmError> {
+    // An empty or reversed span carries no energy over time and is refused at
+    // the boundary, before it can enter either tier.
+    let interval = r.interval().map_err(input_err)?;
+    let obis: Option<ObisCode> = interval.obis();
     // The operator that assigned the MSCONS version — the BDEW Codenummer of the
     // reporting NB/MSB, not the tenant.
-    let operator = operator_code(r.sender_mp_id.as_deref().unwrap_or(&r.tenant))?;
+    let operator = reading_operator(r.sender_mp_id.as_deref(), own)?;
     // The Bilanzierungsmonat the version scope names is Sparte-dependent: gas
     // balances on the Gastag, so 01.02. 03:00 still belongs to January.
     let scope = VersionScope::for_interval(operator, r.dtm_from, r.sparte).map_err(store_err)?;
@@ -1078,9 +1134,8 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             let subject = match subjects.get(&key) {
                 Some(s) => s.clone(),
                 None => {
-                    let s = self
-                        .store
-                        .register_subject(&natural, r.dtm_from, r.sparte)
+                    let s = registry(&self.store)?
+                        .register(&natural, r.dtm_from, r.sparte)
                         .await
                         .map_err(store_err)?
                         .as_str()
@@ -1090,7 +1145,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 }
             };
             stored.push(
-                read_to_stored(r)?
+                read_to_stored(r, self.own_operator.as_ref())?
                     .with_extra("subject_ref", ScalarValue::Utf8(Some(subject.clone()))),
             );
             refs.push(subject);
@@ -1270,8 +1325,8 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             .bind(&malo_id)
             // Period bounds are Berlin calendar dates, so the reads' overlap
             // window must be expressed in Berlin days too.
-            .bind(metering::calendar::local_day(from))
-            .bind(metering::calendar::local_day(to))
+            .bind(mako_fristen::berlin_date(from))
+            .bind(mako_fristen::berlin_date(to))
             .execute(&self.pool)
             .await
             {
@@ -1323,7 +1378,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         // Aggregate over the tier-split resolved series. The window is the
         // commodity's balancing period: calendar days for Strom, the
         // 06:00–06:00 Gastag for Gas.
-        let (from_ts, to_ts) = period_window(sparte, from, to);
+        let (from_ts, to_ts) = period_window(sparte, from, to)?;
         // Only billable qualities enter the saldo — the FAULTY/UNKNOWN filter is
         // pushed into the scan rather than applied after materialising the
         // series.
@@ -1341,10 +1396,15 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         // those together would settle a prosumer's Bezug plus its Einspeisung,
         // or a dual-tariff meter's consumption twice over (`domain::register`).
         let intervals = crate::domain::energy_intervals(&reads, EnergyDirection::Bezug);
-        let gemessen: Decimal = intervals.iter().map(|iv| iv.value).sum();
+        let gemessen: Decimal = intervals.iter().map(MeterInterval::value).sum();
         // The GPKE Kap. 8.4 arithmetic and its sign convention come from
         // `metering`, not from a second implementation here.
-        let saldo = metering::compute_imbalance(gemessen, bilanziert_kwh);
+        let saldo = metering::billing::imbalance::ImbalanceSaldo::new(gemessen, bilanziert_kwh)
+            .ok_or_else(|| {
+                input_err(format!(
+                    "the saldo of {gemessen} kWh against {bilanziert_kwh} kWh leaves the decimal range"
+                ))
+            })?;
         // The worst quality that actually contributed, not a fixed `UNKNOWN` —
         // a saldo built partly from Ersatzwerte is a different fact from one
         // built entirely from measurements, and the settlement side must see it.
@@ -1354,11 +1414,11 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             period_from: from,
             period_to: to,
             sparte,
-            gemessen_kwh: saldo.actual_kwh,
-            bilanziert_kwh: saldo.contracted_kwh,
-            mehrmenge_kwh: saldo.mehr_kwh,
-            mindermenge_kwh: saldo.minder_kwh,
-            delta_kwh: saldo.delta_kwh,
+            gemessen_kwh: saldo.actual_kwh(),
+            bilanziert_kwh: saldo.bilanziert_kwh(),
+            mehrmenge_kwh: saldo.mehr_kwh(),
+            mindermenge_kwh: saldo.minder_kwh(),
+            delta_kwh: saldo.delta_kwh(),
             delta_pct: saldo.delta_pct(),
             quality,
             interval_count: intervals.len(),
@@ -1641,9 +1701,8 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             };
             // A correction is another write to the subject store, so it carries
             // the same pseudonymous reference; `register` returns the existing one.
-            let subject = self
-                .store
-                .register_subject(
+            let subject = registry(&self.store)?
+                .register(
                     &subject_natural_id(&rec.tenant, &rec.malo_id),
                     rec.dtm_from,
                     sparte,
@@ -1696,8 +1755,8 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             )
             .bind(tenant)
             .bind(malo_id)
-            .bind(metering::calendar::local_day(*from))
-            .bind(metering::calendar::local_day(*to))
+            .bind(mako_fristen::berlin_date(*from))
+            .bind(mako_fristen::berlin_date(*to))
             .execute(&mut *tx)
             .await
             .map_err(pg_err)?;
@@ -1744,9 +1803,9 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                     first.obis_code
                 ))
             })?;
-            let values: Vec<metering::reading::MeterReading> = rows
+            let values: Vec<metering::series::reading::MeterReading> = rows
                 .iter()
-                .map(|r| metering::reading::MeterReading {
+                .map(|r| metering::series::reading::MeterReading {
                     at: r.read_at,
                     value: r.zaehlerstand,
                     quality: r.quality,
@@ -1755,19 +1814,16 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 .collect();
 
             let natural = subject_natural_id(&first.tenant, &first.malo_id);
-            let subject = self
-                .zsg
-                .register_subject(&natural, first.read_at, first.sparte)
+            let subject = registry(&self.zsg)?
+                .register(&natural, first.read_at, first.sparte)
                 .await
                 .map_err(store_err)?
                 .as_str()
                 .to_owned();
 
-            let operator = first
-                .sender_mp_id
-                .clone()
-                .unwrap_or_else(|| first.tenant.clone());
-            let scope = VersionScope::for_interval(operator.as_str(), first.read_at, first.sparte)
+            let operator =
+                reading_operator(first.sender_mp_id.as_deref(), self.own_operator.as_ref())?;
+            let scope = VersionScope::for_interval(operator, first.read_at, first.sparte)
                 .map_err(store_err)?;
             let recorded_at = OffsetDateTime::now_utc();
 
@@ -1791,8 +1847,9 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                     _ => MeasurementSource::Mscons {
                         pid: 0,
                         message_ref: first.push_session.clone(),
-                        sender_mp_id: operator_code(
-                            first.sender_mp_id.as_deref().unwrap_or(&first.tenant),
+                        sender_mp_id: reading_operator(
+                            first.sender_mp_id.as_deref(),
+                            self.own_operator.as_ref(),
                         )?,
                     },
                 },
@@ -1815,7 +1872,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             // than assumed — § 2 Satz 1 Nr. 27 MsbG names a quarter-hourly Strom
             // and an hourly Gas cadence, and completeness asks "how many values a
             // day should there be".
-            if let Some(cadence) = metering::reading::detect_reading_cadence(&values) {
+            if let Some(cadence) = metering::series::reading::detect_reading_cadence(&values) {
                 stored = stored.at_cadence(cadence);
             }
             if let Some(mp) = &first.sender_mp_id {
@@ -1957,13 +2014,29 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
 #[derive(Clone)]
 pub struct MeterStoreTyp2Repository {
     store: MeterStore,
+    /// The deployment's own MSB, operator of every Typ-2 push.
+    own_operator: Option<metering::ids::BdewCode>,
 }
 
 impl MeterStoreTyp2Repository {
     /// Wrap the Typ-2 meterstore table.
     #[must_use]
     pub fn new(store: MeterStore) -> Self {
-        Self { store }
+        Self {
+            store,
+            own_operator: None,
+        }
+    }
+
+    /// Name the deployment's own MSB MP-ID as the operator of Typ-2 values that
+    /// carry no `sender_mp_id`; `None` leaves them refused.
+    ///
+    /// # Errors
+    ///
+    /// When `own_mp_id` is not a BDEW-Codenummer.
+    pub fn with_own_operator(mut self, own_mp_id: Option<&str>) -> Result<Self, EdmError> {
+        self.own_operator = own_mp_id.map(operator_code).transpose()?;
+        Ok(self)
     }
 
     /// The underlying store.
@@ -1973,16 +2046,17 @@ impl MeterStoreTyp2Repository {
     }
 }
 
-fn typ2_to_stored(r: &Typ2Read) -> Result<StoredSeries, EdmError> {
-    let obis: Option<ObisCode> = r.obis_code.as_deref().and_then(|s| ObisCode::parse(s).ok());
-    let interval = MeterInterval {
-        from: r.dtm_from,
-        to: r.dtm_to,
-        value: r.quantity_kwh,
-        quality: r.quality,
-        obis_code: obis,
-    };
-    let operator = operator_code(r.sender_mp_id.as_deref().unwrap_or(&r.tenant))?;
+fn typ2_to_stored(
+    r: &Typ2Read,
+    own: Option<&metering::ids::BdewCode>,
+) -> Result<StoredSeries, EdmError> {
+    let obis: Option<ObisCode> = r.obis_code.as_deref().and_then(|s| s.parse().ok());
+    let mut interval =
+        MeterInterval::new(r.dtm_from, r.dtm_to, r.quantity_kwh, r.quality).map_err(input_err)?;
+    if let Some(code) = obis {
+        interval = interval.with_obis(code);
+    }
+    let operator = reading_operator(r.sender_mp_id.as_deref(), own)?;
     let scope = VersionScope::for_interval(operator, r.dtm_from, r.sparte).map_err(store_err)?;
     let recorded_at = r.received_at.unwrap_or_else(OffsetDateTime::now_utc);
     // Typ-2 values are stored as delivered and never corrected, so arrival order
@@ -2051,9 +2125,8 @@ impl Typ2Repository for MeterStoreTyp2Repository {
             let subject = match subjects.get(&key) {
                 Some(s) => s.clone(),
                 None => {
-                    let s = self
-                        .store
-                        .register_subject(&natural, r.dtm_from, r.sparte)
+                    let s = registry(&self.store)?
+                        .register(&natural, r.dtm_from, r.sparte)
                         .await
                         .map_err(store_err)?
                         .as_str()
@@ -2063,7 +2136,8 @@ impl Typ2Repository for MeterStoreTyp2Repository {
                 }
             };
             stored.push(
-                typ2_to_stored(r)?.with_extra("subject_ref", ScalarValue::Utf8(Some(subject))),
+                typ2_to_stored(r, self.own_operator.as_ref())?
+                    .with_extra("subject_ref", ScalarValue::Utf8(Some(subject))),
             );
         }
         self.store.append(&stored).await.map_err(store_err)?;
@@ -2173,13 +2247,13 @@ fn series_to_reads(resolved: &meterstore::ResolvedSeries, tenant: &str) -> Vec<M
         .map(|iv| MeterRead {
             malo_id: series.malo_id.to_string(),
             melo_id: series.melo_id.as_ref().map(ToString::to_string),
-            dtm_from: iv.from,
-            dtm_to: iv.to,
-            quantity_kwh: iv.value,
-            quality: iv.quality,
+            dtm_from: iv.from(),
+            dtm_to: iv.to(),
+            quantity_kwh: iv.value(),
+            quality: iv.quality(),
             pid,
             sparte: resolved.sparte,
-            obis_code: iv.obis_code.map(|o| o.to_string()),
+            obis_code: iv.obis().map(|o| o.to_string()),
             tenant: tenant.to_string(),
             source,
             push_session: None,
@@ -2210,13 +2284,13 @@ fn series_to_typ2(resolved: &meterstore::ResolvedSeries, tenant: &str) -> Vec<Ty
         .map(|iv| Typ2Read {
             malo_id: series.malo_id.to_string(),
             melo_id: series.melo_id.as_ref().map(ToString::to_string),
-            dtm_from: iv.from,
-            dtm_to: iv.to,
-            quantity_kwh: iv.value,
-            quality: iv.quality,
+            dtm_from: iv.from(),
+            dtm_to: iv.to(),
+            quantity_kwh: iv.value(),
+            quality: iv.quality(),
             pid,
             sparte: resolved.sparte,
-            obis_code: iv.obis_code.map(|o| o.to_string()),
+            obis_code: iv.obis().map(|o| o.to_string()),
             tenant: tenant.to_string(),
             delivery_path,
             sender_mp_id: sender_mp_id.clone(),
@@ -2354,18 +2428,18 @@ mod tests {
     fn a_stored_quantity_is_labelled_in_the_unit_it_is_stored_in() {
         assert_eq!(
             stored_unit(Sparte::Gas),
-            MeasurementUnit::KiloWattHour,
+            Unit::KiloWattHour,
             "gas is converted at ingest (§ 25 Nr. 4 MessEV) and stored as energy"
         );
-        assert_eq!(stored_unit(Sparte::Strom), MeasurementUnit::KiloWattHour);
+        assert_eq!(stored_unit(Sparte::Strom), Unit::KiloWattHour);
         assert_eq!(
             stored_unit(Sparte::Waerme),
-            MeasurementUnit::KiloWattHour,
+            Unit::KiloWattHour,
             "a heat meter integrates on-device and registers kWh_th"
         );
         assert_eq!(
             stored_unit(Sparte::Wasser),
-            MeasurementUnit::CubicMetre,
+            Unit::CubicMetre,
             "water is the one Sparte measured and billed in the same unit"
         );
         for sparte in Sparte::ALL {
@@ -2390,7 +2464,7 @@ mod tests {
 
         let day = date!(2026 - 01 - 15);
 
-        let (from, to) = period_window(Sparte::Strom, day, day);
+        let (from, to) = period_window(Sparte::Strom, day, day).expect("in the calendar");
         assert_eq!(
             from,
             datetime!(2026-01-14 23:00 UTC),
@@ -2398,7 +2472,7 @@ mod tests {
         );
         assert_eq!(to, datetime!(2026-01-15 23:00 UTC));
 
-        let (from, to) = period_window(Sparte::Gas, day, day);
+        let (from, to) = period_window(Sparte::Gas, day, day).expect("in the calendar");
         assert_eq!(
             from,
             datetime!(2026-01-15 5:00 UTC),
@@ -2407,11 +2481,9 @@ mod tests {
         assert_eq!(to, datetime!(2026-01-16 5:00 UTC));
 
         // Six hours apart, which is the whole point.
-        assert_eq!(
-            (metering::calendar::gas_day_start_utc(day) - metering::calendar::day_start_utc(day))
-                .whole_hours(),
-            6
-        );
+        let strom = period_window(Sparte::Strom, day, day).expect("in the calendar");
+        let gas = period_window(Sparte::Gas, day, day).expect("in the calendar");
+        assert_eq!((gas.0 - strom.0).whole_hours(), 6);
     }
 
     /// The long Gastag is the one named after the **Saturday**.
@@ -2427,18 +2499,18 @@ mod tests {
         let saturday = date!(2026 - 10 - 24);
         let sunday = date!(2026 - 10 - 25);
 
-        let (from, to) = period_window(Sparte::Gas, saturday, saturday);
+        let (from, to) = period_window(Sparte::Gas, saturday, saturday).expect("in the calendar");
         assert_eq!(
             (to - from).whole_hours(),
             25,
             "Saturday's Gastag is 25 hours"
         );
 
-        let (from, to) = period_window(Sparte::Gas, sunday, sunday);
+        let (from, to) = period_window(Sparte::Gas, sunday, sunday).expect("in the calendar");
         assert_eq!((to - from).whole_hours(), 24, "Sunday's is an ordinary day");
 
         // Electricity's long day *is* the Sunday — the two calendars differ.
-        let (from, to) = period_window(Sparte::Strom, sunday, sunday);
+        let (from, to) = period_window(Sparte::Strom, sunday, sunday).expect("in the calendar");
         assert_eq!((to - from).whole_hours(), 25);
     }
 }

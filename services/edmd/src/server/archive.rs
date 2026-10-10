@@ -156,7 +156,8 @@ pub(crate) async fn get_archive_olap(
                 series.intervals,
                 crate::domain::EnergyDirection::Bezug,
             );
-            let total: rust_decimal::Decimal = intervals.iter().map(|i| i.value).sum();
+            let total: rust_decimal::Decimal =
+                intervals.iter().map(metering::MeterInterval::value).sum();
             Json(serde_json::json!({
                 "malo_id": malo_id,
                 "total_kwh": total.to_string(),
@@ -333,17 +334,20 @@ pub(crate) async fn get_archive_portfolio(
             .get("read_count")
             .and_then(serde_json::Value::as_i64)
             .unwrap_or(0);
+        // The scan already excluded the non-billable qualities, so every
+        // register that reaches here is billable. The synthetic interval
+        // carries the flag that says so rather than one it did not measure.
+        let Ok(mut synthetic) =
+            MeterInterval::new(span_from, span_to, value, QualityFlag::Measured)
+        else {
+            // A register whose coverage is a single instant spans no time.
+            continue;
+        };
+        if let Some(code) = obis {
+            synthetic = synthetic.with_obis(code);
+        }
         let entry = per_point.entry(malo_id.to_owned()).or_default();
-        entry.0.push(MeterInterval {
-            from: span_from,
-            to: span_to,
-            value,
-            // The scan already excluded the non-billable qualities, so every
-            // register that reaches here is billable. The synthetic interval
-            // carries the flag that says so rather than one it did not measure.
-            quality: QualityFlag::Measured,
-            obis_code: obis,
-        });
+        entry.0.push(synthetic);
         entry.1 += count;
     }
 
@@ -354,7 +358,7 @@ pub(crate) async fn get_archive_portfolio(
                 registers,
                 crate::domain::EnergyDirection::Bezug,
             );
-            let total: Decimal = projected.iter().map(|iv| iv.value).sum();
+            let total: Decimal = projected.iter().map(MeterInterval::value).sum();
             (malo_id, total, count)
         })
         .collect();
@@ -509,11 +513,11 @@ pub(crate) async fn get_archive_timeseries(
                 .iter()
                 .map(|i| {
                     serde_json::json!({
-                        "dtm_from": i.from.to_string(),
-                        "dtm_to": i.to.to_string(),
-                        "quantity_kwh": i.value.to_string(),
-                        "quality": i.quality.as_str(),
-                        "obis_code": i.obis_code.map(|o| o.to_string()),
+                        "dtm_from": i.from().to_string(),
+                        "dtm_to": i.to().to_string(),
+                        "quantity_kwh": i.value().to_string(),
+                        "quality": i.quality().as_str(),
+                        "obis_code": i.obis().map(|o| o.to_string()),
                     })
                 })
                 .collect();

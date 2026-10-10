@@ -700,7 +700,7 @@ pub fn heute() -> Date {
 /// **Not the Gastag.** Gas balances on a day running 06:00 → 06:00 Berlin
 /// (Art. 3 Nr. 6 VO (EU) 312/2014, KoV), which is a different boundary and a
 /// different date for the six hours before it opens. Use
-/// `mako_gabi_gas::GasDay` — or `metering::calendar::gas_day_start_utc` — for
+/// `mako_gabi_gas::GasDay` — or `metering::DayBoundary::Gas` — for
 /// anything settled on a gas day; this function is the electricity and
 /// calendar-date answer only.
 ///

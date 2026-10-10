@@ -1603,7 +1603,7 @@ pub struct SharingEligibilityEvidence {
 /// This endpoint reports **capability**, not delivery. A point can be capable
 /// while no quarter-hour series is actually arriving; `edmd`'s readiness report
 /// (`GET /api/v1/sharing/readiness`) joins observed intervals to close that gap.
-/// The decision logic itself is `metering::sharing`, shared by both services.
+/// The decision logic itself is `metering::allocation::sharing`, shared by both services.
 #[utoipa::path(
     get,
     path = "/api/v1/melos/{melo_id}/sharing-eligibility",
@@ -1612,6 +1612,7 @@ pub struct SharingEligibilityEvidence {
         (status = 200, description = "Capability verdict", body = SharingEligibilityResponse),
         (status = 403, description = "Cedar denied"),
         (status = 404, description = "MeLo not found"),
+        (status = 422, description = "Contradictory master data — e.g. a moderne Messeinrichtung balanced as RLM"),
     ),
     tag = "melo"
 )]
@@ -1626,8 +1627,8 @@ pub struct SharingEligibilityEvidence {
 /// is `Conventional` — Drehstrom-, Wechselstrom- and Ferrariszähler differ in
 /// ways § 42c does not turn on. `None` only for an *absent* value, which is a
 /// different finding (`ZaehlertypMissing`) from "some other meter".
-fn parse_zaehlertyp(raw: &str) -> Option<metering::Zaehlertyp> {
-    use metering::Zaehlertyp as Z;
+fn parse_zaehlertyp(raw: &str) -> Option<metering::allocation::sharing::Zaehlertyp> {
+    use metering::allocation::sharing::Zaehlertyp as Z;
     match raw.trim().to_ascii_uppercase().as_str() {
         "" => None,
         "INTELLIGENTES_MESSSYSTEM" => Some(Z::IntelligentesMesssystem),
@@ -1642,8 +1643,10 @@ fn parse_zaehlertyp(raw: &str) -> Option<metering::Zaehlertyp> {
 /// `TLP_TAGESPARAMETER` and friends, and every one of them is Gas — which
 /// § 42c, being Strom-only, can never qualify. An unrecognised value is `None`
 /// rather than a guess, so it surfaces as `BilanzierungsmethodeMissing`.
-fn parse_bilanzierungsmethode(raw: &str) -> Option<metering::Bilanzierungsmethode> {
-    use metering::Bilanzierungsmethode as B;
+fn parse_bilanzierungsmethode(
+    raw: &str,
+) -> Option<metering::allocation::sharing::Bilanzierungsmethode> {
+    use metering::allocation::sharing::Bilanzierungsmethode as B;
     let v = raw.trim().to_ascii_uppercase();
     match v.as_str() {
         "RLM" => Some(B::Rlm),
@@ -1662,7 +1665,7 @@ pub async fn get_sharing_eligibility(
     claims: Claims,
     Path(melo_id): Path<String>,
 ) -> impl IntoResponse {
-    use metering::sharing::{Capability, MeteringCapabilityInput, assess_capability};
+    use metering::allocation::sharing::{Capability, MeteringCapabilityInput, assess_capability};
 
     if enforcer
         .check(&claims.principal(), "read-sharing-eligibility", &tenant)
@@ -1729,7 +1732,19 @@ pub async fn get_sharing_eligibility(
         // marktd holds no SMGW session state; edmd owns that signal.
         smgw_operational: None,
     };
-    let (capability, findings) = assess_capability(&input);
+    // Master data that cannot all be true (a moderne Messeinrichtung balanced
+    // as RLM, a conventional meter as IMS) is refused rather than assessed:
+    // any verdict over it would be a guess.
+    let (capability, findings) = match assess_capability(&input) {
+        Ok(verdict) => verdict,
+        Err(contradiction) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("MeLo {melo_id}: contradictory master data — {contradiction}"),
+            )
+                .into_response();
+        }
+    };
 
     // `assess_capability` returns typed `Finding`s, each with a stable wire code
     // — `Debug` formatting would put a Rust variant name on the API. marktd's

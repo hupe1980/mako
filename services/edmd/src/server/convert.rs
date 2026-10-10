@@ -16,6 +16,9 @@ pub(crate) fn edm_sparte_to_bo4e(s: EdmSparte) -> Bo4eSparte {
         // distinction, and Fernwaerme is the billing-relevant default.
         EdmSparte::Waerme => Bo4eSparte::Fernwaerme,
         EdmSparte::Wasser => Bo4eSparte::Wasser,
+        // `Sparte` is `#[non_exhaustive]`: a commodity this build does not know
+        // is reported as unknown rather than as a guess.
+        _ => Bo4eSparte::Unknown,
     }
 }
 
@@ -29,7 +32,7 @@ pub(crate) fn edm_sparte_to_medium(s: EdmSparte) -> Medium {
         // Wärmemengenzähler has no faithful mapping. `Dampf` would be wrong —
         // district heat is hot water, not steam — so this reports Unknown rather
         // than asserting something false in an exported Zeitreihe.
-        EdmSparte::Waerme => Medium::Unknown,
+        _ => Medium::Unknown,
     }
 }
 
@@ -42,9 +45,9 @@ pub(crate) fn edm_sparte_to_medium(s: EdmSparte) -> Medium {
 /// understated an exported Energiemenge by the Brennwert factor, roughly
 /// tenfold.
 pub(crate) fn edm_sparte_to_einheit(s: EdmSparte) -> Mengeneinheit {
-    match s {
-        EdmSparte::Wasser => Mengeneinheit::Kubikmeter,
-        EdmSparte::Strom | EdmSparte::Gas | EdmSparte::Waerme => Mengeneinheit::Kwh,
+    match s.billing_unit() {
+        metering::Unit::CubicMetre => Mengeneinheit::Kubikmeter,
+        _ => Mengeneinheit::Kwh,
     }
 }
 
@@ -61,7 +64,7 @@ pub(crate) fn edm_sparte_to_einheit(s: EdmSparte) -> Mengeneinheit {
 /// | `Substituted` | `Ersatzwert` | — |
 /// | `Calculated` | `Energiemengesummiert` | Derived from other readings (Residuallast = Bezug − Einspeisung), not provisional. |
 /// | `Faulty` | `NichtVerwendbar` | The one status that says "do not bill this". `Unknown` is BO4E's forward-compatibility catch-all and says nothing about the reading. |
-/// | `Unknown` | `Unknown` | The quality is not known — the one case where the catch-all is honest. |
+/// | `Unknown`, a flag this build does not know | `Unknown` | The quality is not known — the one case where the catch-all is honest. |
 pub(crate) fn quality_to_messwertstatus(q: QualityFlag) -> Messwertstatus {
     match q {
         QualityFlag::Measured | QualityFlag::Corrected => Messwertstatus::Abgelesen,
@@ -70,7 +73,9 @@ pub(crate) fn quality_to_messwertstatus(q: QualityFlag) -> Messwertstatus {
         QualityFlag::Calculated => Messwertstatus::Energiemengesummiert,
         QualityFlag::Preliminary => Messwertstatus::Vorlaeufigerwert,
         QualityFlag::Faulty => Messwertstatus::NichtVerwendbar,
-        QualityFlag::Unknown => Messwertstatus::Unknown,
+        // `QualityFlag` is `#[non_exhaustive]`; a flag this build does not know
+        // says nothing it could assert about the reading.
+        _ => Messwertstatus::Unknown,
     }
 }
 

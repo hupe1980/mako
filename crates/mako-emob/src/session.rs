@@ -22,7 +22,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use time::{Date, Duration, OffsetDateTime};
 
-use metering::allocation::{AllocationBasis, AllocationPart, allocate};
+use metering::allocation::session::{MeterSample, SessionSplitConfig, split_session};
 
 use crate::error::EmobError;
 use crate::ids::{SessionId, TokenRef, VirtualMaloId};
@@ -169,14 +169,15 @@ pub struct SessionSplit {
     pub slots: Vec<SlotEnergie>,
     /// Energy the split could not place, in kWh.
     ///
-    /// **Not an error and not silent.** A proportional split cuts each share to
-    /// six decimal places toward zero (`metering::allocation::ALLOCATION_DP`),
-    /// so a session spanning many slots can leave a millionth of a kWh
-    /// unplaced. That energy was really drawn, so it does not vanish: it stays
-    /// out of every supplier's Bilanzkreis and lands in the Deltamenge, which
-    /// Anlage 6 §IV.2 books to the LPB's own Bilanzkreis at its cost. Reported
-    /// here so an operator can see the magnitude rather than discover it in a
-    /// yearly reconciliation.
+    /// **Not an error and not silent.** A session with energy but no duration
+    /// touches no quarter hour, so its whole energy is reported here. A session
+    /// with a duration places all of it: the split forms each slot as the
+    /// difference of two cumulatives cut to six decimal places toward zero
+    /// (`metering::precision::ALLOCATION_DP`), so the slots sum to the session
+    /// energy exactly. Unplaced energy was really drawn, so it does not vanish:
+    /// it stays out of every supplier's Bilanzkreis and lands in the
+    /// Deltamenge, which Anlage 6 §IV.2 books to the LPB's own Bilanzkreis at
+    /// its cost.
     pub nicht_zugeordnet_kwh: Decimal,
 }
 
@@ -227,10 +228,12 @@ impl Ladevorgang {
     /// Split [`Self::energie_kwh`] across those quarter hours, pro rata by
     /// overlap.
     ///
-    /// The arithmetic is `metering::allocation::allocate` with the overlap in
-    /// seconds as the weight, which is what guarantees
-    /// `Σ slots + nicht_zugeordnet = energie_kwh` **exactly** rather than
-    /// approximately.
+    /// The arithmetic is `metering::allocation::session::split_session` over
+    /// the two register readings the session implies — zero at `beginn`, the
+    /// energy at `ende`. Each slot is the difference of two cumulatives, each
+    /// formed by multiplying before dividing and cut to six decimal places
+    /// toward zero, which is what guarantees `Σ slots = energie_kwh`
+    /// **exactly** rather than approximately.
     ///
     /// A session already delivered as clock-aligned meter values should not go
     /// through here at all — it is already per-slot. Passing one anyway keeps
@@ -259,31 +262,36 @@ impl Ladevorgang {
             });
         }
 
-        let parts: Vec<AllocationPart> = slots
+        let samples = [
+            MeterSample::new(self.beginn, Decimal::ZERO),
+            MeterSample::new(self.ende, self.energie_kwh),
+        ];
+        let series = split_session(&samples, &SessionSplitConfig::quarter_hourly())
+            .map_err(|e| EmobError::Allocation(format!("session {}: {e}", self.id)))?;
+
+        let placed: Vec<SlotEnergie> = series
             .iter()
-            .map(|s| {
-                AllocationPart::new(
-                    s.start().unix_timestamp().to_string(),
-                    Decimal::from(s.overlap_secs(self.beginn, self.ende)),
-                )
-            })
-            .collect();
-
-        let row = allocate(self.energie_kwh, parts, AllocationBasis::Proportional)?;
-
-        let placed = slots
-            .into_iter()
-            .zip(row.parts.iter())
-            .map(|(slot, part)| SlotEnergie {
-                slot,
-                kwh: part.allocated,
+            .map(|iv| SlotEnergie {
+                slot: Viertelstunde::containing(iv.from()),
+                kwh: iv.value(),
                 provenance: self.provenance,
             })
             .collect();
+        // The split lays out the same quarter hours `viertelstunden` walks; a
+        // disagreement is a defect in this crate, never a caller condition.
+        if placed.iter().map(|p| p.slot).ne(slots.iter().copied()) {
+            return Err(EmobError::Allocation(format!(
+                "session {}: the split placed {} slots where the grid holds {}",
+                self.id,
+                placed.len(),
+                slots.len()
+            )));
+        }
+        let placed_kwh: Decimal = placed.iter().map(|p| p.kwh).sum();
 
         Ok(SessionSplit {
             slots: placed,
-            nicht_zugeordnet_kwh: row.residual,
+            nicht_zugeordnet_kwh: self.energie_kwh - placed_kwh,
         })
     }
 }
@@ -379,8 +387,11 @@ mod tests {
         );
         let split = s.in_viertelstunden().unwrap();
         let sum: Decimal = split.slots.iter().map(|s| s.kwh).sum();
-        assert_eq!(sum + split.nicht_zugeordnet_kwh, dec!(10));
-        assert!(split.nicht_zugeordnet_kwh >= Decimal::ZERO);
+        // FR-006: the slots alone sum to the session energy; nothing is cut.
+        assert_eq!(sum, dec!(10));
+        assert_eq!(split.nicht_zugeordnet_kwh, Decimal::ZERO);
+        assert_eq!(split.slots[0].kwh, dec!(3.333333));
+        assert_eq!(split.slots[2].kwh, dec!(3.333334));
     }
 
     /// A long session across a whole day still conserves.
@@ -394,7 +405,8 @@ mod tests {
         let split = s.in_viertelstunden().unwrap();
         assert_eq!(split.slots.len(), 96);
         let sum: Decimal = split.slots.iter().map(|s| s.kwh).sum();
-        assert_eq!(sum + split.nicht_zugeordnet_kwh, dec!(77.77));
+        assert_eq!(sum, dec!(77.77));
+        assert_eq!(split.nicht_zugeordnet_kwh, Decimal::ZERO);
     }
 
     /// The clocks change and the day is 23 or 25 hours long; nothing special

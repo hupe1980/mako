@@ -9,6 +9,9 @@
 //! - [`repository`] — the `TimeSeriesRepository` + `Typ2Repository` traits.
 //! - [`validation`] — the one V-rule pass every ingest door, the MCP tool and
 //!   the § 60 Abs. 1 substitute path share.
+//! - [`vee`] — one register's readings as a `metering` series, validated over
+//!   the window a caller asked about.
+//! - [`virtual_meter`] — what a virtual Marktlokation is computed from.
 //! - [`error`] — `EdmError`.
 
 pub mod error;
@@ -16,6 +19,8 @@ pub mod model;
 pub mod register;
 pub mod repository;
 pub mod validation;
+pub mod vee;
+pub mod virtual_meter;
 
 pub use error::EdmError;
 pub use model::*;

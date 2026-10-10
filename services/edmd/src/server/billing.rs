@@ -401,8 +401,17 @@ pub(crate) async fn list_billing_periods(
     };
 
     let limit = params.limit.unwrap_or(1000).clamp(1, 5000);
-    let from_ts = metering::calendar::day_start_utc(from_date);
-    let to_ts = metering::calendar::day_end_utc(to_date);
+    let (Some(first), Some(last)) = (
+        metering::DayBoundary::Strom.day(from_date),
+        metering::DayBoundary::Strom.day(to_date),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "the window lies outside the supported calendar" })),
+        )
+            .into_response();
+    };
+    let (from_ts, to_ts) = (first.start(), last.end());
 
     // Cross-MaLo discovery over the version-resolved relation. `from` is a SQL
     // reserved word, hence quoted; the bounds and the tenant travel as bound

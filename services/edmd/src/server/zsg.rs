@@ -34,8 +34,8 @@
 //! # Nothing is invented
 //!
 //! Where a difference cannot be taken honestly — a backwards step no register
-//! width explains, a jump beyond the connection's capacity — `metering::reading`
-//! emits **no interval** and records why. The hole then shows up as a V01 gap in
+//! width explains, a jump beyond the connection's capacity — `metering::series::reading`
+//! emits **no interval** and records why. The hole then shows up as a `GAP` in
 //! validation and is filled, with its own audit row, by the § 60 Abs. 1 MsbG
 //! substitute path. Guessing here would bury the problem inside a value that
 //! looks measured, and the two audit logs together say "this quarter-hour is an
@@ -54,7 +54,7 @@
 )]
 use super::*;
 
-use metering::reading::{LastgangConfig, MeterReading as Zaehlerstand, to_lastgang};
+use metering::series::reading::{LastgangConfig, MeterReading as Zaehlerstand, to_lastgang};
 
 /// One register reading in a Zählerstandsgang push.
 #[derive(Debug, serde::Deserialize)]
@@ -123,7 +123,7 @@ pub struct ZsgPushRequest {
     ///
     /// A backwards step has two explanations — a register wrap and a meter
     /// exchange — and this is what tells them apart: a wrap implying more energy
-    /// than the connection can pass is refused. It is the same ceiling V12
+    /// than the connection can pass is refused. It is the same ceiling `CAPACITY`
     /// applies to the resulting Lastgang, but here it can prevent a bad value
     /// rather than merely flag one.
     pub max_plant_power_kw: Option<Decimal>,
@@ -285,7 +285,7 @@ pub async fn post_zaehlerstandsgang(
     // ── Parse the readings ───────────────────────────────────────────────────
     let mut zsg: Vec<Zaehlerstand> = Vec::with_capacity(req.readings.len());
     let mut rejected: Vec<String> = Vec::new();
-    let register: Option<metering::obis::ObisCode> =
+    let register: Option<metering::ObisCode> =
         req.obis_code.as_deref().and_then(|s| s.parse().ok());
     for r in &req.readings {
         // A register counts upward from zero; a negative Zählerstand is a decode
@@ -334,15 +334,15 @@ pub async fn post_zaehlerstandsgang(
     // result — and edmd's register projection keys on exactly these codes.
     let mut config = LastgangConfig::default();
     if let Some(code) = lastgang_code(register) {
-        config = config.labelled(code);
+        config = config.label(code);
     }
     if let Some(digits) = req.register_digits {
-        config = config.with_register_digits(digits);
+        config = config.register_digits(digits);
     }
     // The plausibility ceiling, expressed for the *reading interval* rather than
     // per hour, from the observed cadence of this very Zählerstandsgang.
     //
-    // **In the register's own unit.** `with_capacity_kw` derives
+    // **In the register's own unit.** `capacity_kw` derives
     // `max_delta = kW × hours`, which is kWh — and the differences being capped
     // are whatever the register counts. For electricity and heat those agree;
     // for a gas register counting m³ they do not, and comparing an m³ difference
@@ -365,7 +365,7 @@ pub async fn post_zaehlerstandsgang(
             Some(max_delta_kwh)
         };
         if let Some(max_delta) = max_delta {
-            config = config.with_max_delta(max_delta);
+            config = config.max_delta(max_delta);
         } else {
             tracing::warn!(
                 malo_id,
@@ -375,7 +375,11 @@ pub async fn post_zaehlerstandsgang(
             );
         }
     }
-    let lastgang = to_lastgang(&zsg, &config);
+    // Every reading carries the request's one register, so the difference is
+    // one Lastgang.
+    let Some(lastgang) = to_lastgang(&zsg, &config).into_iter().next() else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
 
     // ── Persist the readings — the primary record ────────────────────────────
     let obis_for_readings = req.obis_code.clone();
@@ -449,27 +453,39 @@ pub async fn post_zaehlerstandsgang(
     }
 
     // ── Store the derived Lastgang through the ordinary validated path ───────
-    let batch: Vec<MeterRead> = lastgang
-        .intervals
-        .iter()
-        .map(|iv| MeterRead {
+    let mut batch: Vec<MeterRead> = Vec::with_capacity(lastgang.intervals.len());
+    for iv in &lastgang.intervals {
+        // Gas registers m³ and settles in kWh_Hs. The conversion is applied to
+        // the **difference**, which is the quantity § 25 Nr. 4 MessEV is about —
+        // the register value itself stays as the meter displays it.
+        let quantity = match req.brennwert_kwh_per_m3 {
+            Some(hs) if sparte.requires_conversion() => {
+                metering::gas::conversion::gas_m3_to_kwh_hs(iv.value(), hs, z)
+            }
+            _ => Some(iv.value()),
+        };
+        let Some(quantity_kwh) = quantity else {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": format!(
+                        "the difference at {} leaves the decimal range once converted",
+                        iv.from()
+                    ),
+                })),
+            )
+                .into_response();
+        };
+        batch.push(MeterRead {
             malo_id: malo_id.clone(),
             melo_id: req.melo_id.clone(),
-            dtm_from: iv.from,
-            dtm_to: iv.to,
-            // Gas registers m³ and settles in kWh_Hs. The conversion is applied
-            // to the **difference**, which is the quantity § 25 Nr. 4 MessEV is
-            // about — the register value itself stays as the meter displays it.
-            quantity_kwh: match req.brennwert_kwh_per_m3 {
-                Some(hs) if sparte.requires_conversion() => {
-                    metering::gas_m3_to_kwh_hs(iv.value, hs, z)
-                }
-                _ => iv.value,
-            },
-            quality: iv.quality,
+            dtm_from: iv.from(),
+            dtm_to: iv.to(),
+            quantity_kwh,
+            quality: iv.quality(),
             pid: 0,
             sparte,
-            obis_code: iv.obis_code.map(|c| c.to_string()),
+            obis_code: iv.obis().map(|c| c.to_string()),
             tenant: tenant.clone(),
             source: ingestion_source,
             push_session: Some(session_id.clone()),
@@ -478,20 +494,19 @@ pub async fn post_zaehlerstandsgang(
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: Some(OffsetDateTime::now_utc()),
             mscons_version: req.mscons_version,
-        })
-        .collect();
+        });
+    }
 
-    // V12 checks the **stored** quantity, which is kWh for every Sparte that
+    // `CAPACITY` checks the **stored** quantity, which is kWh for every Sparte that
     // settles in energy — the gas conversion has already been applied above — so
     // the ceiling goes in as stated, unconverted. Water settles in m³ and has no
     // kW ceiling to speak of, so it is not offered one.
-    let capacity_for_v12 = req
+    let capacity = req
         .max_plant_power_kw
-        .filter(|_| sparte.billing_unit() == metering::MeasurementUnit::KiloWattHour);
+        .filter(|_| sparte.billing_unit() == metering::Unit::KiloWattHour);
     let (validated, validation) = crate::domain::ValidatedReads::validate(
         batch,
-        crate::domain::IngestContext::new("ZSG_VALIDATION", &malo_id)
-            .with_capacity_kw(capacity_for_v12),
+        crate::domain::IngestContext::new("ZSG_VALIDATION", &malo_id).with_capacity_kw(capacity),
     );
     let (period_from, period_to) = crate::domain::batch_period(validated.as_slice());
     let hampel = crate::server::score_batch(validated.as_slice());
@@ -677,8 +692,8 @@ pub(crate) async fn get_zaehlerstandsgang(
 /// `None` for anything that is not an electricity import/export register: the
 /// mapping is only defined where the Messart axis is, and inventing one for a
 /// gas Messgröße would relabel the series with a code that means something else.
-fn lastgang_code(code: Option<metering::obis::ObisCode>) -> Option<metering::obis::ObisCode> {
-    use metering::obis::ObisCode;
+fn lastgang_code(code: Option<metering::ObisCode>) -> Option<metering::ObisCode> {
+    use metering::ObisCode;
     let c = code?;
     if !c.is_electricity() {
         return None;
@@ -704,11 +719,10 @@ fn lastgang_code(code: Option<metering::obis::ObisCode>) -> Option<metering::obi
 /// Unlike an interval series, a Zählerstandsgang carries no durations to take a
 /// median of — a reading is a point — so this measures the gaps between points.
 fn observed_cadence_secs(readings: &[Zaehlerstand], sparte: crate::domain::Sparte) -> u32 {
-    let fallback = || {
-        metering::QualityConfig::for_sparte(sparte)
-            .validation
-            .expected_interval_secs
-            .unwrap_or(900)
+    // § 2 Satz 1 Nr. 27 MsbG: quarter-hourly for electricity, hourly for gas.
+    let fallback = || match sparte {
+        crate::domain::Sparte::Gas => 3600,
+        _ => 900,
     };
     let mut ats: Vec<OffsetDateTime> = readings.iter().map(|r| r.at).collect();
     ats.sort_unstable();
@@ -727,7 +741,7 @@ fn observed_cadence_secs(readings: &[Zaehlerstand], sparte: crate::domain::Spart
 #[cfg(test)]
 mod tests {
     use super::*;
-    use metering::obis::ObisCode;
+    use metering::ObisCode;
 
     #[test]
     fn a_derived_lastgang_is_labelled_as_a_lastgang() {
@@ -777,8 +791,8 @@ mod tests {
 
         // And the conversion is the exact inverse of the one the difference gets.
         assert_eq!(
-            metering::gas_m3_to_kwh_hs(max_delta_m3, hs, z),
-            max_delta_kwh,
+            metering::gas::conversion::gas_m3_to_kwh_hs(max_delta_m3, hs, z),
+            Some(max_delta_kwh),
             "converting the ceiling into m³ and the value into kWh must agree"
         );
     }

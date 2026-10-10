@@ -33,13 +33,12 @@
 //! genuinely double-count — direction, tariff stage, and the unit — are.
 //!
 //! The one D-based exclusion that *is* safe is the maximum register (`D = 6`):
-//! [`ObisCode::register_unit`] types it `kW`, so it is refused on the unit axis
+//! [`ObisCode::unit`] types it `kW`, so it is refused on the unit axis
 //! below rather than on the Messart axis.
 
 use std::collections::BTreeMap;
 
-use metering::MeterInterval;
-use metering::obis::{ObisCode, RegisterUnit};
+use metering::{MeterInterval, ObisCode, Unit};
 use time::OffsetDateTime;
 
 use super::{MeterRead, QualityFlag};
@@ -108,16 +107,16 @@ impl EnergyDirection {
 ///   Jahreshöchstleistung priced under § 17 Abs. 2 StromNEV, and adding it to an
 ///   Arbeitsmenge bills a peak as if it were energy.
 ///
-/// The last two are one test: [`RegisterUnit::is_cumulative`] is false exactly
+/// The last two are one test: [`Unit::is_cumulative`] is false exactly
 /// for the power units, and `KiloVarHour` names the reactive energy.
 #[must_use]
 pub fn is_energy_register(code: ObisCode) -> bool {
     if code.is_fehlerregister() {
         return false;
     }
-    match code.register_unit() {
+    match code.unit() {
         // kW / kvar are powers; kvarh is reactive energy.
-        Some(u) => u.is_cumulative() && u != RegisterUnit::KiloVarHour,
+        Some(u) => u.is_cumulative() && u != Unit::KiloVarHour,
         // Medium 0 (abstract) and 4 (Heizkostenverteiler, dimensionless
         // Verbrauchseinheiten) name no physical energy quantity.
         None => false,
@@ -192,16 +191,9 @@ enum Stage {
 /// timestamp with it and would otherwise be added to its own decomposition.
 #[must_use]
 pub fn energy_intervals(reads: &[MeterRead], direction: EnergyDirection) -> Vec<MeterInterval> {
-    energy_intervals_from(
-        reads.iter().map(|r| MeterInterval {
-            from: r.dtm_from,
-            to: r.dtm_to,
-            value: r.quantity_kwh,
-            quality: r.quality,
-            obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
-        }),
-        direction,
-    )
+    // A read with an empty span cannot reach here from the store, which
+    // refuses one at the boundary; it has no time to carry energy over.
+    energy_intervals_from(reads.iter().filter_map(|r| r.interval().ok()), direction)
 }
 
 /// [`energy_intervals`] over intervals that are already typed.
@@ -218,8 +210,11 @@ pub fn energy_intervals_from(
     let mut total: BTreeMap<OffsetDateTime, MeterInterval> = BTreeMap::new();
     let mut tariff: BTreeMap<OffsetDateTime, MeterInterval> = BTreeMap::new();
 
-    for iv in intervals.into_iter().filter(|iv| iv.quality.is_billable()) {
-        let code = iv.obis_code;
+    for iv in intervals
+        .into_iter()
+        .filter(|iv| iv.quality().is_billable())
+    {
+        let code = iv.obis();
         if !direction.matches(code) {
             continue;
         }
@@ -247,31 +242,34 @@ pub fn energy_intervals_from(
         match stage {
             // Two total registers on one slot cannot both be right; the labelled
             // one is the more specific claim, so it wins over an unlabelled read.
-            Stage::Total => match total.entry(iv.from) {
+            Stage::Total => match total.entry(iv.from()) {
                 std::collections::btree_map::Entry::Vacant(e) => {
                     e.insert(iv);
                 }
                 std::collections::btree_map::Entry::Occupied(mut e) => {
-                    if e.get().obis_code.is_none() && code.is_some() {
+                    if e.get().obis().is_none() && code.is_some() {
                         e.insert(iv);
                     }
                 }
             },
             // Tariff stages are disjoint slices of one consumption and add up.
-            Stage::Tariff => match tariff.entry(iv.from) {
+            Stage::Tariff => match tariff.entry(iv.from()) {
                 std::collections::btree_map::Entry::Vacant(e) => {
                     e.insert(iv);
                 }
                 std::collections::btree_map::Entry::Occupied(mut e) => {
-                    let held = e.get_mut();
-                    held.value += iv.value;
-                    held.to = held.to.max(iv.to);
-                    // A sum is only as good as its worst contributor.
-                    if iv.quality.severity_rank() > held.quality.severity_rank() {
-                        held.quality = iv.quality;
-                    }
-                    // The sum is no longer any one register.
-                    held.obis_code = None;
+                    let held = e.get();
+                    // A sum is only as good as its worst contributor, and it is
+                    // no longer any one register, so it carries no OBIS code.
+                    // The span only grows, so it stays non-empty.
+                    let summed = MeterInterval::new(
+                        held.from(),
+                        held.to().max(iv.to()),
+                        held.value() + iv.value(),
+                        held.quality().worse_of(iv.quality()),
+                    )
+                    .expect("a span that only grows stays non-empty");
+                    e.insert(summed);
                 }
             },
         }
@@ -286,10 +284,10 @@ pub fn energy_intervals_from(
     out.extend(
         tariff
             .into_values()
-            .filter(|iv| !covered.overlaps(iv.from, iv.to)),
+            .filter(|iv| !covered.overlaps(iv.from(), iv.to())),
     );
     out.extend(total.into_values());
-    out.sort_by_key(|iv| iv.from);
+    out.sort_by_key(MeterInterval::from);
     out
 }
 
@@ -318,8 +316,8 @@ impl TotalCoverage {
         let starts = total
             .values()
             .map(|iv| {
-                max_end = max_end.max(iv.to);
-                (iv.from, max_end)
+                max_end = max_end.max(iv.to());
+                (iv.from(), max_end)
             })
             .collect();
         Self { starts }
@@ -372,17 +370,11 @@ pub fn register_groups(reads: &[MeterRead]) -> Vec<RegisterGroup> {
                 intervals: Vec::new(),
             })
             .intervals
-            .push(MeterInterval {
-                from: r.dtm_from,
-                to: r.dtm_to,
-                value: r.quantity_kwh,
-                quality: r.quality,
-                obis_code: code,
-            });
+            .extend(r.interval().ok());
     }
     let mut out: Vec<RegisterGroup> = groups.into_values().collect();
     for g in &mut out {
-        g.intervals.sort_by_key(|iv| iv.from);
+        g.intervals.sort_by_key(MeterInterval::from);
     }
     out
 }
@@ -434,7 +426,7 @@ pub fn billable_share_pct(reads: &[MeterRead], direction: EnergyDirection) -> Op
 /// reaches the same verdict.
 #[must_use]
 pub fn worst_quality(intervals: &[MeterInterval]) -> QualityFlag {
-    QualityFlag::worst_of(intervals.iter().map(|iv| iv.quality))
+    QualityFlag::worst_of(intervals.iter().map(MeterInterval::quality))
 }
 
 #[cfg(test)]
@@ -471,7 +463,7 @@ mod tests {
     }
 
     fn sum(intervals: &[MeterInterval]) -> Decimal {
-        intervals.iter().map(|iv| iv.value).sum()
+        intervals.iter().map(|iv| iv.value()).sum()
     }
 
     #[test]
@@ -563,8 +555,8 @@ mod tests {
         ];
         let picked = energy_intervals(&reads, EnergyDirection::Bezug);
         assert_eq!(picked.len(), 1);
-        assert_eq!(picked[0].value, Decimal::from(10));
-        assert_eq!(picked[0].quality, QualityFlag::Substituted);
+        assert_eq!(picked[0].value(), Decimal::from(10));
+        assert_eq!(picked[0].quality(), QualityFlag::Substituted);
     }
 
     #[test]
@@ -649,7 +641,7 @@ mod tests {
         assert_eq!(sum(&picked), Decimal::from(40));
         assert_eq!(picked.len(), 4);
         assert!(
-            picked.windows(2).all(|w| w[0].from <= w[1].from),
+            picked.windows(2).all(|w| w[0].from() <= w[1].from()),
             "the projection is ascending by interval start"
         );
     }

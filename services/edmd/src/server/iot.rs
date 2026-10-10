@@ -78,8 +78,8 @@ pub(crate) struct IotPushRequest {
     zustandszahl: Option<rust_decimal::Decimal>,
     /// Physical capacity ceiling of the metered plant, in kW.
     ///
-    /// Supply it and **V12** (`ImplausiblePower`) checks each interval's average
-    /// power against it. Omit it and V12 stays off — edmd holds no master data
+    /// Supply it and **`CAPACITY`** checks each interval's average power
+    /// against it. Omit it and the rule stays off — edmd holds no master data
     /// of its own and will not invent a ceiling.
     #[serde(default)]
     max_plant_power_kw: Option<rust_decimal::Decimal>,
@@ -130,7 +130,7 @@ pub(crate) async fn post_iot_reads(
     Path(malo_id): Path<String>,
     Json(req): Json<IotPushRequest>,
 ) -> impl IntoResponse {
-    use metering::interval::MeasurementUnit;
+    use metering::Unit;
     use time::format_description::well_known::Rfc3339;
 
     let resource_tenant = state.tenant.as_str();
@@ -177,7 +177,7 @@ pub(crate) async fn post_iot_reads(
     // EN 1434-1 cl. 6.3.1 permits heat registers in Joules or Watt-hours and any
     // decimal multiple; water submeters commonly report litres. The scale is an
     // exact rational, so GJ→kWh (2500/9) stays exact.
-    let Some(scale) = MeasurementUnit::parse_scaled(&req.unit) else {
+    let Some(scale) = Unit::parse_scaled(&req.unit) else {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(serde_json::json!({
@@ -189,7 +189,7 @@ pub(crate) async fn post_iot_reads(
         )
             .into_response();
     };
-    let unit = scale.unit;
+    let unit = scale.unit();
 
     // A reading may arrive in the unit the meter registers, or already converted
     // to the settlement unit. Anything else is a decode error.
@@ -226,6 +226,16 @@ pub(crate) async fn post_iot_reads(
         Some((hs, req.zustandszahl.unwrap_or(rust_decimal::Decimal::ONE)))
     } else {
         None
+    };
+
+    // The settlement quantity a submitted value is stored as: rescaled into the
+    // canonical unit, gas converted to kWh_Hs. `None` when the arithmetic
+    // leaves the decimal range.
+    let stored_quantity = |value: rust_decimal::Decimal| {
+        scale.apply(value).and_then(|rescaled| match conversion {
+            Some((hs, z)) => metering::gas::conversion::gas_m3_to_kwh_hs(rescaled, hs, z),
+            None => Some(rescaled),
+        })
     };
 
     let pool = state.repo.pool();
@@ -280,44 +290,42 @@ pub(crate) async fn post_iot_reads(
     // OBIS normalisation happens once, inside `store_reads` — it feeds the
     // primary key, so a second implementation here could drift from it.
 
-    // Hampel-filter quality scoring with media-aware thresholds: heat and water
-    // profiles contain long legitimate zero runs.
-    // Typed intervals: `metering` 0.17's `score_intervals` takes the same
-    // `MeterInterval` the rest of the pipeline already speaks, so the values
-    // keep their `Decimal` precision instead of being flattened to `f64` and
-    // the timestamps stay instants instead of bare nanosecond counts.
+    // Quality scoring with the Sparte's own preset: heat and water profiles
+    // contain long legitimate zero runs. Typed intervals keep their `Decimal`
+    // precision and their instants.
+    let obis: Option<metering::ObisCode> = req.obis_code.as_deref().and_then(|s| s.parse().ok());
     let mut samples: Vec<metering::MeterInterval> = req
         .intervals
         .iter()
         .filter_map(|iv| {
             let from = time::OffsetDateTime::parse(&iv.from, &Rfc3339).ok()?;
             let to = time::OffsetDateTime::parse(&iv.to, &Rfc3339).ok()?;
-            let rescaled = scale.apply(iv.value);
-            let converted = conversion.map_or(rescaled, |(hs, z)| {
-                metering::gas_m3_to_kwh_hs(rescaled, hs, z)
-            });
-            Some(metering::MeterInterval {
+            let interval = metering::MeterInterval::new(
                 from,
                 to,
-                value: converted,
-                quality: metering::QualityFlag::Measured,
-                // The register the batch names, so the scorer's own
-                // energy-register filter (`domain::register`) sees what the
-                // stored rows carry. Left `None`, a Heizkostenverteiler batch —
-                // dimensionless Verbrauchseinheiten, not energy — was scored as
-                // though it were a kWh series.
-                obis_code: req.obis_code.as_deref().and_then(|s| s.parse().ok()),
+                stored_quantity(iv.value)?,
+                metering::QualityFlag::Measured,
+            )
+            .ok()?;
+            // The register the batch names, so the scorer's own energy-register
+            // filter (`domain::register`) sees what the stored rows carry. Left
+            // unlabelled, a Heizkostenverteiler batch — dimensionless
+            // Verbrauchseinheiten, not energy — would be scored as though it
+            // were a kWh series.
+            Some(match obis {
+                Some(code) => interval.with_obis(code),
+                None => interval,
             })
         })
         .collect();
-    samples.sort_by_key(|iv| iv.from);
+    samples.sort_by_key(metering::MeterInterval::from);
 
     // The same scorer every other door runs, so the grade a reading gets does
     // not depend on which door it came in by. A pushed batch declares its own
     // span, so that is the period coverage is measured against.
     let quality = match (samples.len() >= 3, samples.first(), samples.last()) {
         (true, Some(first), Some(last)) => {
-            Some(compute_quality(&samples, sparte, first.from, last.to))
+            Some(compute_quality(&samples, sparte, first.from(), last.to()))
         }
         _ => None,
     };
@@ -336,7 +344,7 @@ pub(crate) async fn post_iot_reads(
                         .or_else(|| {
                             samples
                                 .iter()
-                                .map(|iv| iv.from)
+                                .map(metering::MeterInterval::from)
                                 .find(|f| f.to_string() == *t)
                         })
                 })
@@ -380,10 +388,13 @@ pub(crate) async fn post_iot_reads(
 
         // `meter_reads.quantity_kwh` holds the settlement quantity, so gas is
         // converted before it lands.
-        let rescaled = scale.apply(iv.value);
-        let quantity = conversion.map_or(rescaled, |(hs, z)| {
-            metering::gas_m3_to_kwh_hs(rescaled, hs, z)
-        });
+        let Some(quantity) = stored_quantity(iv.value) else {
+            rejected.push(format!(
+                "value {} at {from} leaves the decimal range once converted",
+                iv.value
+            ));
+            continue;
+        };
 
         // Rows are accumulated and written in one batched `unnest` statement
         // below, so the whole push lands or none of it does.

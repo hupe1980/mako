@@ -76,48 +76,44 @@ pub(crate) async fn list_quality_assessments(
 /// `quality_assessments` (meterstore owns the readings and has no per-interval
 /// `quality_warnings` column).
 ///
-/// Outlier detection uses the **Hampel filter** (sliding-window median/MAD)
-/// rather than a global 3-sigma rule: the median and MAD are robust to the
-/// outliers being detected, and the sliding window captures local behaviour.
-/// `sigma = 1.4826 × MAD` converts MAD to the equivalent Gaussian σ;
-/// `x[i]` is flagged when `|x[i] − window_median| > threshold × sigma`.
-///
-/// The window and threshold are `metering`\'s, per commodity
-/// ([`metering::QualityConfig::for_sparte`]), and are reported in
-/// [`Self::algorithm`] rather than named in prose — a hardcoded label drifts
-/// from the numbers actually used.
+/// The verdict is `metering::vee::validation`'s, run with the preset for the
+/// series' Sparte over the window the caller asked about
+/// ([`crate::domain::vee::validate_window`]). Outliers are its `SPIKE` rule —
+/// a Hampel test over a sliding window, robust to the outliers it is looking
+/// for — and its `SEASONAL` rule where one runs.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct QualityReport {
     pub intervals_accepted: usize,
     pub intervals_rejected: usize,
+    /// Slots of the window no interval delivered.
     pub gaps_detected: usize,
+    /// The longest run of zeros the `ZERO_RUN` rule reported, in slots.
     pub zero_run_length: usize,
-    /// Instants flagged as statistical outliers (V04).
+    /// Instants flagged as statistical outliers (`SPIKE`, `SEASONAL`).
     pub outlier_intervals: Vec<String>,
-    /// Instants whose average power exceeds the plant\'s physical capacity
-    /// (V12). Not a statistical judgement — an impossibility.
+    /// Instants whose average power exceeds the plant's physical capacity
+    /// (`CAPACITY`). Not a statistical judgement — an impossibility.
     pub spike_intervals: Vec<String>,
-    /// All intervals have the same duration (seconds).  False = mixed interval lengths.
+    /// The register's intervals form one series on one grid. `false` names a
+    /// structural defect — a slot delivered twice, a span off the grid — that
+    /// kept the content rules from running at all.
     pub intervals_consistent: bool,
     pub has_warnings: bool,
-    pub coverage_pct: f64,
-    /// Quality grade: "A" (clean) | "B" (minor) | "C" (significant) | "F" (unusable).
+    /// Delivered time inside the window over the window's length, in percent.
+    pub coverage_pct: rust_decimal::Decimal,
+    /// Quality grade: "A" (clean) | "B" (warnings) | "C" (errors a substitute
+    /// repairs) | "F" (blocking).
     pub grade: &'static str,
-    /// Observed cadence of the series, in seconds, when it has one.
+    /// Observed grid of the series, in seconds, when it is a fixed one.
     pub interval_secs: Option<u32>,
-    /// How many intervals the requested period should hold at that cadence —
-    /// the denominator `coverage_pct` alone cannot supply. `None` when the
-    /// series is too short to have an observable cadence.
+    /// How many slots the requested window holds on that grid — the
+    /// denominator `coverage_pct` alone cannot supply. `None` when the series
+    /// has no observable grid.
     pub expected_intervals: Option<u32>,
-    /// The scorer and its actual parameters, e.g. `hampel(window=12,sigma=6)`.
+    /// The validation that produced the verdict, e.g. `vee::validation(STROM)`.
     pub algorithm: String,
 }
 
-/// Compute quality metrics for a set of accepted intervals over a window.
-///
-/// `metering::score_intervals` over typed `MeterInterval`s, with the window
-/// passed via `over_period` so `coverage_pct` measures coverage of what the
-/// caller asked about rather than of whatever data happened to arrive.
 /// Persist a quality verdict to `quality_assessments`.
 ///
 /// Every scoring path records one, so the table is a history of how a MaLo's
@@ -170,9 +166,10 @@ pub(crate) async fn record_quality_assessment(
     .bind(i32::try_from(q.gaps_detected).unwrap_or(i32::MAX))
     .bind(i32::try_from(q.zero_run_length).unwrap_or(i32::MAX))
     .bind(outliers)
-    .bind(rust_decimal::Decimal::try_from(q.coverage_pct).unwrap_or_default())
-    // Only grade F blocks billing (`metering::QualityGrade::blocks_billing`);
-    // C is significant but still billable.
+    .bind(q.coverage_pct)
+    // Grade F is a blocking finding — not repairable by a substitute, so the
+    // window as a whole needs clarifying before it is billed. C names errors a
+    // substitute repairs slot by slot.
     .bind(q.grade == "F")
     .bind(source)
     .bind(tenant)
@@ -246,18 +243,13 @@ pub(crate) fn score_batch(reads: &[MeterRead]) -> Option<BatchQuality> {
     };
     // The commodity is the batch's own — every door builds a batch for one
     // Sparte, and scoring a gas delivery with electricity thresholds is the
-    // defect `QualityConfig::for_sparte` exists to prevent.
+    // defect the Sparte presets of `metering::vee::validation::Rules` exist to
+    // prevent.
     let sparte = reads.first().map_or(metering::Sparte::Strom, |r| r.sparte);
-    let samples: Vec<metering::MeterInterval> = reads
-        .iter()
-        .map(|r| metering::MeterInterval {
-            from: r.dtm_from,
-            to: r.dtm_to,
-            value: r.quantity_kwh,
-            quality: r.quality,
-            obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
-        })
-        .collect();
+    // A read with no span is refused by the store and named by the validation
+    // pass; it has no time to cover here.
+    let samples: Vec<metering::MeterInterval> =
+        reads.iter().filter_map(|r| r.interval().ok()).collect();
     Some(BatchQuality {
         report: compute_quality(&samples, sparte, period_from, period_to),
         period_from,
@@ -292,29 +284,26 @@ pub(crate) fn hampel_summary(q: &QualityReport) -> serde_json::Value {
 /// quality flags survive: a caller that hands over `FAULTY` readings must not
 /// have them graded as if they were measured.
 ///
-/// Three things are commodity- and cadence-dependent, and all three come from
+/// Three things are commodity- and grid-dependent, and all three come from
 /// the series rather than from a constant:
 ///
-/// - **Thresholds** are [`metering::QualityConfig::for_sparte`]. The electricity
-///   defaults tolerate four consecutive zeros, which flags every quiet water and
+/// - **Thresholds** are `metering`'s preset for the Sparte. The electricity
+///   preset reports a zero run of an hour, which flags every quiet water and
 ///   heat profile as a stuck meter.
-/// - **Cadence** is observed (`detect_interval_length`). Assuming 900 s makes
-///   every interval of an hourly gas series a V06 finding and divides real gaps
-///   by the wrong grid.
-/// - **Coverage** is measured against `over_period(period_start, period_end)` —
-///   the window the caller asked about. Without it the crate measures against
-///   the extent of the data itself, and its own docs say what follows: "a
-///   truncated delivery reads as 100 %".
+/// - **The grid** is observed ([`crate::domain::vee::observed_resolution`]).
+///   Assuming 900 s divides the gaps of an hourly gas series by the wrong step.
+/// - **Coverage** is measured against `[period_start, period_end)` — the
+///   window the caller asked about. Measured against the extent of the data
+///   itself, a truncated delivery reads as 100 %.
 pub(crate) fn compute_quality(
     samples: &[metering::MeterInterval],
     sparte: metering::Sparte,
     period_start: OffsetDateTime,
     period_end: OffsetDateTime,
 ) -> QualityReport {
-    // Cadence, gaps, overlaps and the Hampel filter are all statements about a
+    // Gaps, duplicates and the Hampel test are all statements about a
     // **single** series, and a MaLo delivers several registers at once. Scored
-    // flat, the observed cadence is a median across registers rather than the
-    // series' own, every same-slot pair reads as an overlap, and coverage is
+    // flat, every same-slot pair reads as a duplicate and coverage is
     // multiplied by the number of registers. So each register is scored on its
     // own and the verdicts folded conservatively.
     //
@@ -325,13 +314,13 @@ pub(crate) fn compute_quality(
     let mut by_register: BTreeMap<Option<String>, Vec<metering::MeterInterval>> = BTreeMap::new();
     for iv in samples {
         let energy = iv
-            .obis_code
+            .obis()
             .is_none_or(crate::domain::register::is_energy_register);
         if !energy {
             continue;
         }
         by_register
-            .entry(iv.obis_code.map(|c| c.to_string()))
+            .entry(iv.obis().map(|c| c.to_string()))
             .or_default()
             .push(iv.clone());
     }
@@ -350,7 +339,7 @@ pub(crate) fn compute_quality(
         })
         .collect();
     // The dominant register — the one carrying the most intervals — supplies the
-    // cadence and the algorithm label; the rest is folded worst-first.
+    // grid and the algorithm label; the rest is folded worst-first.
     reports.sort_by_key(|(n, _)| std::cmp::Reverse(*n));
     let mut folded = reports
         .first()
@@ -396,65 +385,90 @@ fn score_one_register(
     period_start: OffsetDateTime,
     period_end: OffsetDateTime,
 ) -> QualityReport {
-    use metering::validation::ValidationRuleId;
+    use metering::vee::validation::Rule;
 
-    let mut sorted: Vec<metering::MeterInterval> = samples.to_vec();
-    sorted.sort_by_key(|iv| iv.from);
+    let algorithm = format!("vee::validation({})", sparte.as_str());
+    let intervals_accepted = samples.len();
+    // A register whose intervals are not one series, or a window outside the
+    // calendar, cannot be graded by the content rules at all. That is a
+    // blocking verdict, not a clean one.
+    let unusable = |algorithm: String| QualityReport {
+        intervals_accepted,
+        intervals_rejected: 0,
+        gaps_detected: 0,
+        zero_run_length: 0,
+        outlier_intervals: Vec::new(),
+        spike_intervals: Vec::new(),
+        intervals_consistent: false,
+        has_warnings: true,
+        coverage_pct: rust_decimal::Decimal::ZERO,
+        grade: "F",
+        interval_secs: None,
+        expected_intervals: None,
+        algorithm,
+    };
+    let series = match crate::domain::vee::series_of(sparte, samples.to_vec()) {
+        Ok(series) => series,
+        Err(defect) => return unusable(format!("{algorithm}; {}", defect.code())),
+    };
+    let Some(report) = crate::domain::vee::validate_window(
+        &series,
+        sparte,
+        period_start,
+        period_end,
+        OffsetDateTime::now_utc(),
+        None,
+    ) else {
+        return unusable(format!("{algorithm}; OUT_OF_RANGE"));
+    };
 
-    let resolution = metering::classification::detect_interval_length(&sorted);
-    let interval_secs = resolution.map(|r| r.nominal_seconds());
-
-    let mut config = metering::QualityConfig::for_sparte(sparte);
-    if let Some(secs) = interval_secs {
-        config.validation.expected_interval_secs = Some(secs);
-    }
-    let config = config.over_period(period_start, period_end);
-    let algorithm = format!(
-        "hampel(window={},sigma={},min_sigma={})",
-        config.validation.outlier_window,
-        config.validation.outlier_sigma.unwrap_or(0.0),
-        config.validation.outlier_min_sigma,
-    );
-
-    let report = metering::score_intervals(&sorted, &config);
-
-    // The report counts anomalies; the API also names when they happened. Both
-    // come from `issues`, filtered by the rule that raised them.
-    let at = |rule: ValidationRuleId| -> Vec<String> {
+    // The report counts findings; the API also names when they happened.
+    let at = |rules: &[Rule]| -> Vec<String> {
         report
-            .issues
-            .iter()
-            .filter(|i| i.rule_id == rule)
-            .filter_map(|i| i.affected_from)
-            .map(|t| t.to_string())
+            .findings()
+            .filter(|f| rules.contains(&f.rule))
+            .map(|f| f.from.to_string())
             .collect()
     };
-    let outlier_intervals = at(ValidationRuleId::StatisticalOutlier);
-    let spike_intervals = at(ValidationRuleId::ImplausiblePower);
-
-    // The honest denominator: how many intervals the requested window holds at
-    // the observed cadence. Deriving it as `span / (span / count)` is `count`
-    // again, so `expected_count` would equal `interval_count` and could never
-    // show that anything is missing.
-    let expected_intervals = interval_secs.filter(|s| *s > 0).map(|secs| {
-        let span = (period_end - period_start).whole_seconds().max(0);
-        u32::try_from(span / i64::from(secs)).unwrap_or(u32::MAX)
-    });
+    let outlier_intervals = at(&[Rule::Spike, Rule::Seasonal]);
+    let spike_intervals = at(&[Rule::Capacity]);
+    let slot_secs = series.resolution().fixed_seconds();
+    let slots_of = |from: OffsetDateTime, to: OffsetDateTime| -> usize {
+        slot_secs.map_or(1, |secs| {
+            usize::try_from((to - from).whole_seconds() / i64::from(secs.max(1))).unwrap_or(0)
+        })
+    };
+    let gaps_detected = report
+        .findings()
+        .filter(|f| f.rule == Rule::Gap)
+        .map(|f| {
+            f.reference
+                .and_then(|n| rust_decimal::prelude::ToPrimitive::to_usize(&n))
+                .unwrap_or(0)
+        })
+        .sum();
+    let zero_run_length = report
+        .findings()
+        .filter(|f| f.rule == Rule::ZeroRun)
+        .map(|f| slots_of(f.from, f.to))
+        .max()
+        .unwrap_or(0);
 
     let total_anomalies = outlier_intervals.len() + spike_intervals.len();
+    let grade = report.grade().as_str();
     QualityReport {
-        intervals_accepted: report.intervals_analysed,
+        intervals_accepted,
         intervals_rejected: total_anomalies,
-        gaps_detected: report.gaps_detected,
-        zero_run_length: report.max_zero_run,
+        gaps_detected,
+        zero_run_length,
         outlier_intervals,
         spike_intervals,
-        intervals_consistent: report.intervals_consistent,
-        has_warnings: report.has_warnings(),
-        coverage_pct: report.coverage_pct,
-        grade: report.grade.as_str(),
-        interval_secs,
-        expected_intervals,
+        intervals_consistent: true,
+        has_warnings: grade != "A",
+        coverage_pct: report.coverage_pct(),
+        grade,
+        interval_secs: slot_secs,
+        expected_intervals: Some(report.expected_slots()),
         algorithm,
     }
 }
@@ -473,11 +487,11 @@ pub struct QualityRescoreQuery {
 /// `POST /api/v1/quality-score/{malo_id}[?from=&to=]`
 ///
 /// Retroactively re-scores **all** `meter_reads` for `malo_id` in the given
-/// date window using the Hampel filter.
+/// date window with the same validation every ingest door runs.
 ///
 /// This is useful when:
 /// - MSCONS-ingested historical data was stored without quality scoring
-/// - The quality algorithm was upgraded (e.g. from 3-sigma to Hampel)
+/// - The validation rules changed
 /// - A billing dispute requires re-verification of read quality
 ///
 /// The handler re-runs `compute_quality()` over the window's version-resolved
@@ -568,20 +582,11 @@ pub async fn post_quality_rescore(
     }
 
     // Re-score the window as stored. The reads go in with their own quality
-    // flags: routing them through a `DirectInterval` with `quality: None`
-    // presented every one of them to the scorer as `MEASURED`, so V09 could
-    // never fire and a window full of FAULTY readings re-graded clean — the
-    // exact question a rescore is usually asked to settle.
-    let samples: Vec<metering::MeterInterval> = reads
-        .iter()
-        .map(|r| metering::MeterInterval {
-            from: r.dtm_from,
-            to: r.dtm_to,
-            value: r.quantity_kwh,
-            quality: r.quality,
-            obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
-        })
-        .collect();
+    // flags: presented as `MEASURED`, `NON_BILLABLE` could never fire and a
+    // window full of FAULTY readings would re-grade clean — the exact question
+    // a rescore is usually asked to settle.
+    let samples: Vec<metering::MeterInterval> =
+        reads.iter().filter_map(|r| r.interval().ok()).collect();
     let sparte = reads.first().map_or(metering::Sparte::Strom, |r| r.sparte);
 
     let mut quality = compute_quality(&samples, sparte, from_dt, to_dt);
@@ -660,13 +665,17 @@ mod quality_tests {
     use time::macros::datetime;
 
     fn make_interval(from: OffsetDateTime, value_str: &str) -> metering::MeterInterval {
-        metering::MeterInterval {
+        metering::MeterInterval::quarter_hour(
             from,
-            to: from + time::Duration::minutes(15),
-            value: Decimal::from_str_exact(value_str).unwrap(),
-            quality: metering::QualityFlag::Measured,
-            obis_code: None,
-        }
+            Decimal::from_str_exact(value_str).unwrap(),
+            metering::QualityFlag::Measured,
+        )
+        .unwrap()
+    }
+
+    /// A ramp, so no run of equal values reads as a frozen register.
+    fn ramp(i: i64) -> String {
+        format!("2.{:03}", i)
     }
 
     fn score(
@@ -678,130 +687,94 @@ mod quality_tests {
     }
 
     /// Coverage is measured against the *requested* window, not the data's own
-    /// span.
-    ///
-    /// Pins the regression the metering-0.17 migration introduced: the period
-    /// bounds were dropped from the scoring call, and the crate then measures
-    /// coverage against the extent of the data itself — its docs say it
-    /// plainly, "a truncated delivery reads as 100 %". Half a window of data
-    /// graded as fully covered, A-grade, billable.
+    /// span: measured against the data, a truncated delivery reads as 100 %.
     #[test]
     fn coverage_is_against_the_requested_window() {
         let base = datetime!(2026-07-01 00:00:00 UTC);
         // 24 quarter-hours delivered of a 48-quarter-hour window.
         let intervals: Vec<metering::MeterInterval> = (0..24)
-            .map(|i| make_interval(base + time::Duration::minutes(15 * i), "2.0"))
+            .map(|i| make_interval(base + time::Duration::minutes(15 * i), &ramp(i)))
             .collect();
         let report = score(&intervals, base, base + time::Duration::hours(12));
-        assert!(
-            report.coverage_pct < 60.0,
-            "half-empty window must not read as covered: {}",
-            report.coverage_pct,
-        );
+        assert_eq!(report.coverage_pct, Decimal::from(50));
+        assert_eq!(report.gaps_detected, 24);
+        assert_eq!(report.expected_intervals, Some(48));
         assert_ne!(
             report.grade, "A",
             "a half-delivered window is not clean data"
         );
     }
 
-    /// Hampel filter must flag an obvious spike surrounded by stable neighbours.
-    #[test]
-    fn hampel_filter_flags_spike() {
-        // 9 values: 1.0 × 8 readings, then a spike of 50.0 at position 4
-        let mut values = vec![1.0f64; 9];
-        values[4] = 50.0;
-        let outliers = metering::hampel_filter(&values, 3, 3.0);
-        assert!(
-            outliers.contains(&4),
-            "Hampel must flag position 4 (spike=50.0 vs median=1.0): {outliers:?}"
-        );
-        // Surrounding stable reads must NOT be flagged
-        assert!(!outliers.contains(&0));
-        assert!(!outliers.contains(&8));
-    }
-
-    /// Hampel must NOT flag clean data with no outliers.
-    #[test]
-    fn hampel_filter_clean_data_no_flags() {
-        // Small variations around 2.0 — all within 3 robust sigma
-        let values = vec![1.98, 2.01, 2.03, 1.99, 2.02, 1.97, 2.04, 2.00, 1.96];
-        let outliers = metering::hampel_filter(&values, 3, 3.0);
-        assert!(
-            outliers.is_empty(),
-            "Hampel must not flag clean data: {outliers:?}"
-        );
-    }
-
-    /// compute_quality grades clean 96-interval day as A.
+    /// A clean day is graded A.
     #[test]
     fn quality_grade_a_for_clean_data() {
-        let base = datetime!(2026-07-01 00:00:00 UTC);
+        let base = datetime!(2026-06-30 22:00:00 UTC);
         let intervals: Vec<metering::MeterInterval> = (0..96)
-            .map(|i| make_interval(base + time::Duration::minutes(15 * i), "2.345"))
+            .map(|i| make_interval(base + time::Duration::minutes(15 * i), &ramp(i)))
             .collect();
         let period_end = base + time::Duration::hours(24);
         let report = score(&intervals, base, period_end);
-        assert_eq!(report.grade, "A", "Clean 96-interval day must be grade A");
+        assert_eq!(
+            report.grade, "A",
+            "Clean 96-interval day must be grade A: {report:?}"
+        );
         assert!(!report.has_warnings);
-        assert!(report.coverage_pct >= 99.0);
+        assert_eq!(report.coverage_pct, Decimal::from(100));
         assert_eq!(report.gaps_detected, 0);
         assert!(report.outlier_intervals.is_empty());
     }
 
-    /// compute_quality grades data with gaps as C or F.
+    /// Missing slots are counted and graded as errors a substitute repairs.
     #[test]
     fn quality_grade_c_for_gaps() {
         let base = datetime!(2026-07-01 00:00:00 UTC);
         // 20 intervals with a 2-interval gap in the middle
         let mut intervals: Vec<metering::MeterInterval> = (0..10)
-            .map(|i| make_interval(base + time::Duration::minutes(15 * i), "2.345"))
+            .map(|i| make_interval(base + time::Duration::minutes(15 * i), &ramp(i)))
             .collect();
-        // Skip 2 intervals (gap), then resume from i=12
         intervals.extend(
-            (12..22).map(|i| make_interval(base + time::Duration::minutes(15 * i), "2.345")),
+            (12..22).map(|i| make_interval(base + time::Duration::minutes(15 * i), &ramp(i))),
         );
-        let period_end = base + time::Duration::hours(24);
+        let period_end = base + time::Duration::minutes(15 * 22);
         let report = score(&intervals, base, period_end);
-        assert!(report.gaps_detected > 0, "Must detect gaps");
+        assert_eq!(report.gaps_detected, 2, "Must count the missing slots");
+        assert_eq!(report.grade, "C");
         assert!(report.has_warnings);
     }
 
     /// A spike in a series long enough to assess is flagged.
     ///
-    /// **Long enough is a real constraint.** The Hampel filter runs a window of
-    /// `outlier_window` (12) either side of each point, and `metering` 0.17
-    /// refuses to run it at all on a series of `2 × window` or fewer — with
-    /// twelve neighbours to draw on and ten points to draw from, every point is
-    /// its own median and nothing can deviate from it. This test used ten
-    /// intervals and passed under 0.16, which scored short series anyway; the
-    /// upgrade turned it red, and the crate is right. Detection on a ten-point
-    /// series was a claim the statistics could not support.
-    ///
-    /// So the series is 30 intervals — a length a quarter-hour profile reaches
-    /// in under eight hours, and below which edmd now reports no outliers.
+    /// The Hampel test judges each value against twelve neighbours either side,
+    /// so the series is long enough to give it a window.
     #[test]
     fn quality_spike_detection() {
         let base = datetime!(2026-07-01 00:00:00 UTC);
-        // 30 stable intervals at 2.0 kWh, one spike at 200.0 (100× the median).
         let mut intervals: Vec<metering::MeterInterval> = (0..30)
-            .map(|i| make_interval(base + time::Duration::minutes(15 * i), "2.0"))
+            .map(|i| make_interval(base + time::Duration::minutes(15 * i), &ramp(i)))
             .collect();
-        intervals[5] = {
-            let mut iv = make_interval(base + time::Duration::minutes(15 * 5), "200.0");
-            iv.to = iv.from + time::Duration::minutes(15);
-            iv
-        };
+        intervals[15] = make_interval(base + time::Duration::minutes(15 * 15), "200.0");
         let period_end = base + time::Duration::minutes(15 * 30);
         let report = score(&intervals, base, period_end);
-        // Either Hampel or spike detection should flag position 5
-        let flagged_ts = intervals[5].from.to_string();
+        let flagged_ts = intervals[15].from().to_string();
         assert!(
-            report.outlier_intervals.contains(&flagged_ts)
-                || report.spike_intervals.contains(&flagged_ts),
-            "Spike at index 5 must be detected. outliers={:?} spikes={:?}",
+            report.outlier_intervals.contains(&flagged_ts),
+            "Spike at index 15 must be detected. outliers={:?}",
             report.outlier_intervals,
-            report.spike_intervals
         );
         assert!(report.has_warnings);
+    }
+
+    /// One slot delivered twice is not a series; the register is graded F
+    /// rather than scored as if it were clean.
+    #[test]
+    fn a_duplicate_slot_grades_the_register_unusable() {
+        let base = datetime!(2026-07-01 00:00:00 UTC);
+        let mut intervals: Vec<metering::MeterInterval> = (0..4)
+            .map(|i| make_interval(base + time::Duration::minutes(15 * i), &ramp(i)))
+            .collect();
+        intervals.push(make_interval(base, "9.0"));
+        let report = score(&intervals, base, base + time::Duration::hours(1));
+        assert_eq!(report.grade, "F");
+        assert!(!report.intervals_consistent);
     }
 }

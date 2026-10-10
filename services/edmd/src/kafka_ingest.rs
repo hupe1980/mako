@@ -32,8 +32,8 @@
 //! pill must not wedge the partition); records that fail to store abort the
 //! poll loop iteration without committing, so they are redelivered.
 //!
-//! Every batch runs the same V01–V09/V11/V12 `ValidatedReads::validate` pass and
-//! the same Hampel grading as the REST ingest doors, and records the verdict in
+//! Every batch runs the same `ValidatedReads::validate` pass and the same quality
+//! grading as the REST ingest doors, and records the verdict in
 //! `quality_assessments` — a "trusted" transport does not skip validation, and a
 //! head-end feed is the least supervised door there is. An unrecognised `sparte`
 //! or `source` is refused for the same reason: coercing them stored a gas batch
@@ -90,8 +90,8 @@ struct WireBatch {
     /// Present, it decides resolution; absent, arrival order does.
     #[serde(default)]
     mscons_version: Option<u128>,
-    /// Physical capacity ceiling of the metered plant, in kW, enabling **V12**
-    /// (`ImplausiblePower`). Absent, the rule stays off.
+    /// Physical capacity ceiling of the metered plant, in kW, enabling
+    /// **`CAPACITY`**. Absent, the rule stays off.
     #[serde(default)]
     max_plant_power_kw: Option<Decimal>,
     intervals: Vec<WireInterval>,
@@ -369,7 +369,7 @@ async fn store_batch(
         return Ok(0);
     }
 
-    // Same V-rule pass — and the same Hampel grade — as every REST ingest path.
+    // Same validation pass — and the same quality grade — as every REST ingest path.
     let malo_id = reads[0].malo_id.clone();
     let (validated, validation) = crate::domain::ValidatedReads::validate(
         reads,

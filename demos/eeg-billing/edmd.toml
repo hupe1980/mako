@@ -13,7 +13,9 @@ allow_insecure_no_auth = true
 addr = "0.0.0.0:8380"
 
 [database]
-url = "postgres://demo:demo-secret@postgres/edmd"
+# `sslmode=disable`: the demo PostgreSQL speaks plaintext inside the compose
+# network. Without a mode meterstore connects with `verify-full`.
+url = "postgres://demo:demo-secret@postgres/edmd?sslmode=disable"
 
 [identity]
 tenant = "9900357000004"

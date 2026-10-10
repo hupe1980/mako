@@ -170,8 +170,8 @@ pub use zusammenfassung::{
 // degression: §49 semi-annual solar AW degression — degressionsstufen, abgesenkter_wert
 // direktverm: §§20–22 Veräußerungsformen — Direktvermarktungspflicht (§21 Abs.1 S.1 Nr.1),
 //   Ausschreibungspflicht (§22 Abs.2–5), Zuordnung und Wechsel (§21b/§21c)
-// (Metering topology, Eigenverbrauch/Überschuss split and §42b EnWG GGV allocation live in the
-//  external `metering` crate — AggregationRule, compute_virtual_meter, MeasurementPoint, Messtyp.)
+// (The Eigenverbrauch/Überschuss split and the §42b EnWG GGV allocation live in the external
+//  `metering` crate — allocation::formula::Formula, allocation::community::allocate — evaluated by edmd.)
 // reductions: §52 Pflichtzahlungen — apply_sect52_netting, ReductionPipeline (euro level)
 // aw_reductions: §§53b–54 — cuts to the anzulegender Wert, applied before the formula
 // zusammenfassung: §24 Abs. 1 — sind_eine_anlage, the full Sätze 1–5 decision

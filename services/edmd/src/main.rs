@@ -116,6 +116,7 @@ impl Daemon for Edmd {
             database_url,
             marktd_url: cfg.marktd.url.clone(),
             marktd_api_key,
+            own_mp_id: cfg.identity.own_mp_id.clone(),
             subscriber_id: cfg.subscription.subscriber_id.clone(),
             webhook_url: cfg.subscription.webhook_url.clone(),
             webhook_secret: inbound_secret.clone(),
@@ -168,7 +169,7 @@ mod startup_test {
             return;
         };
         let port = pg.get_host_port_ipv4(5432).await.expect("port");
-        let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres?sslmode=disable");
         let pool = sqlx::PgPool::connect(&url).await.expect("connect");
 
         let mut cfg: toml::Value =

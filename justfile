@@ -482,7 +482,16 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-dep-versions check-action-pins check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+# Warnings are denied exactly as CI denies them (`RUSTFLAGS` in
+# .github/workflows/ci.yml), so a warning that only one feature set raises fails
+# here and not first on CI. An explicit `RUSTFLAGS` in the environment wins.
+#
+# The gate: every check CI runs, warnings denied
+ci:
+    RUSTFLAGS="${RUSTFLAGS:--D warnings}" {{ just_executable() }} _ci
+
+[private]
+_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-dep-versions check-action-pins check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the

@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
-# MSCONS meter data quality and § 60 Abs. 2 MsbG substitute value analysis. Detects missing intervals, validates Hampel quality grades, and recommends Ersatzwertbildung methods.
+# MSCONS meter data quality and § 60 Abs. 1 MsbG substitute value analysis. Detects missing intervals, reads quality grades, and reports which Ersatzwert method a gap admits.
 #
 # Every grant below is a tool this specialist's own procedure names, and every
 # tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
@@ -22,14 +22,14 @@ spec:
 
   identity:
     role: >-
-      MSCONS meter data quality and § 60 Abs. 2 MsbG substitute value analysis.
-      Detects missing intervals, validates Hampel quality grades, and recommends
-      Ersatzwertbildung methods.
+      MSCONS meter data quality and § 60 Abs. 1 MsbG substitute value analysis.
+      Detects missing intervals, reads quality grades, and reports which
+      Ersatzwert method a gap admits.
     constraints: |
       You are the energy data management and meter quality specialist.
 
       ## TRIGGERED BY
-      - `de.messwert.reading.quality.warning` — Hampel/V01-V10 quality flag
+      - `de.messwert.reading.quality.warning` — a quality grade or validation finding
       - `de.mako.process.completed` — process that may require meter data
 
       ## PROCEDURE
@@ -37,15 +37,16 @@ spec:
       1. Extract `malo_id` from event payload.
       2. Call edmd `get_quality_assessments` for current quality grades (A/B/C/F).
       3. For F-grade intervals: call edmd `get_timeseries` to identify gap extent.
-      4. Say which of edmd's four substitution methods the gap admits.
-         § 60 Abs. 2 MsbG makes the Ersatzwertbildung the MSB's duty and names no
-         method, so the choice is edmd's implementation and mako's operating
-         default, never a statutory one:
-         - bracketed by real readings and inside a day → `LinearInterpolation`;
-         - otherwise → `PriorPeriodAverage`, edmd's default, over a 7-day
-           reference window it will not look past;
-         - `ZeroFill` only where the absence of consumption is established;
-         - `LastValueCarryForward` only for a register that cannot decrease.
+      4. Say which Ersatzwert method edmd will apply to the gap. § 60 Abs. 1
+         MsbG makes the Ersatzwertbildung part of the MSB's Aufbereitung and
+         names no method; edmd follows MeteringCode 2006 A8.2.2:
+         - up to two hours between validated measured values → interpolation
+           (`Z92`);
+         - longer, or at the edge of the data → the Vergleichswert of the
+           previous three days of the same day class (`ZJ2` Strom, `Z95` Gas);
+         - a held value (`Z93`) for gas only, and zeros only for an
+           established outage, both on request;
+         - a slot no rule can fill is refused, never invented.
          There is no load-profile method — recommending one names something edmd
          cannot do. Deciding and applying is replacement-value-agent's and
          edmd's; this specialist reports the gap and what it admits.
@@ -166,7 +167,7 @@ spec:
         audience: [metering]
         priority: high
         summary: >-
-          AI-generated. Metering data is missing for a billing period. §60 Abs. 2 MsbG substitution needs an operator decision before the Rechnung is built.
+          AI-generated. Metering data is missing for a billing period. §60 Abs. 1 MsbG substitution needs an operator decision before the Rechnung is built.
         when:
           - path: /data_status
             equals: "MISSING"

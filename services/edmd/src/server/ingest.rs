@@ -21,7 +21,7 @@ pub struct DirectInterval {
     /// Energy quantity, expressed in [`Self::unit`].
     pub value: Decimal,
     /// Physical unit the meter registered, parsed by
-    /// [`metering::interval::MeasurementUnit::parse_scaled`]: `kWh`/`MWh`/`GJ`/
+    /// [`metering::Unit::parse_scaled`]: `kWh`/`MWh`/`GJ`/
     /// `MJ`/`Wh` for energy, `m3`/`m³`/`l` for volume. It must be either the
     /// unit the Sparte is measured in or the one it is billed in; anything else
     /// is rejected rather than stored under a guessed interpretation.
@@ -103,11 +103,11 @@ pub struct DirectPushRequest {
 
     /// Physical capacity ceiling of the metered plant, in kW.
     ///
-    /// Nameplate capacity or Anschlussleistung. Supply it and **V12**
-    /// (`ImplausiblePower`) checks each interval's average power against it: a
-    /// value above the ceiling is not unusual, it is impossible, so it is an
-    /// `Error` and blocks billing. Omit it and V12 stays off — edmd holds no
-    /// master data of its own and will not invent a ceiling.
+    /// Nameplate capacity or Anschlussleistung. Supply it and **`CAPACITY`**
+    /// checks each interval's average power against it: a value above the
+    /// ceiling is not unusual, it is impossible, so it is an error and blocks
+    /// billing. Omit it and the rule stays off — edmd holds no master data of
+    /// its own and will not invent a ceiling.
     #[serde(default)]
     pub max_plant_power_kw: Option<Decimal>,
 }
@@ -297,18 +297,21 @@ pub(crate) async fn post_direct_reads_inner(
     }
 
     // ── Interval validation + kWh conversion ────────────────────────────────
-    // Gas m³ → kWh_Hs via metering::gas_m3_to_kwh_hs (§25 Nr. 4 MessEV / DVGW G 685)
-    // Units are parsed by the same `metering` machinery as the IoT path, so the
-    // ingest families share one unit contract. A string compare against `"m3"`
-    // missed the superscript `"m³"` that `MeasurementUnit` accepts, and the
-    // electricity endpoint never checked the unit against the Sparte at all.
+    // Gas m³ → kWh_Hs via `metering::gas::conversion::gas_m3_to_kwh_hs`
+    // (§25 Nr. 4 MessEV / DVGW G 685). Units are parsed by the same `metering`
+    // machinery as the IoT path, so the ingest families share one unit contract.
+    // A string compare against `"m3"` would miss the superscript `"m³"` that
+    // `Unit::parse_scaled` accepts.
     let msparte = match sparte_str {
-        "GAS" => metering::interval::Sparte::Gas,
-        _ => metering::interval::Sparte::Strom,
+        "GAS" => metering::Sparte::Gas,
+        _ => metering::Sparte::Strom,
     };
     let z = req.zustandszahl.unwrap_or(Decimal::ONE);
 
-    let mut accepted: Vec<&DirectInterval> = Vec::new();
+    // Each accepted interval with the value it is stored as — the unit
+    // rescaled and gas converted to kWh_Hs — so the scorer and the store see
+    // the same number.
+    let mut accepted: Vec<(&DirectInterval, Decimal)> = Vec::new();
     let mut rejected_count = 0usize;
     let mut validation_errors: Vec<String> = Vec::new();
 
@@ -338,7 +341,7 @@ pub(crate) async fn post_direct_reads_inner(
             rejected_count += 1;
             continue;
         }
-        let Some(scale) = metering::interval::MeasurementUnit::parse_scaled(&iv.unit) else {
+        let Some(scale) = metering::Unit::parse_scaled(&iv.unit) else {
             validation_errors.push(format!(
                 "interval from={}: unknown unit `{}`; expected kWh/MWh/GJ/MJ/Wh (energy) \
                  or m³/l (volume)",
@@ -347,12 +350,12 @@ pub(crate) async fn post_direct_reads_inner(
             rejected_count += 1;
             continue;
         };
-        if scale.unit != msparte.measured_unit() && scale.unit != msparte.billing_unit() {
+        if scale.unit() != msparte.measured_unit() && scale.unit() != msparte.billing_unit() {
             validation_errors.push(format!(
                 "interval from={}: unit {} is not valid for sparte {} — expected {} (as measured) \
                  or {} (as billed)",
                 iv.from,
-                scale.unit.as_str(),
+                scale.unit().as_str(),
                 msparte.as_str(),
                 msparte.measured_unit().as_str(),
                 msparte.billing_unit().as_str()
@@ -360,10 +363,8 @@ pub(crate) async fn post_direct_reads_inner(
             rejected_count += 1;
             continue;
         }
-        if msparte.requires_conversion()
-            && scale.unit == msparte.measured_unit()
-            && req.brennwert_kwh_per_m3.is_none()
-        {
+        let converts = msparte.requires_conversion() && scale.unit() == msparte.measured_unit();
+        if converts && req.brennwert_kwh_per_m3.is_none() {
             validation_errors.push(format!(
                 "interval from={}: brennwert_kwh_per_m3 is required when submitting gas in m³ \
                  (§25 Nr. 4 MessEV); submit unit=kWh to supply pre-converted values",
@@ -383,7 +384,27 @@ pub(crate) async fn post_direct_reads_inner(
             rejected_count += 1;
             continue;
         }
-        accepted.push(iv);
+        // m³ → kWh_Hs for Gas (§25 Nr. 4 MessEV / DVGW G 685) with the Brennwert
+        // required rather than defaulted, since it varies by supply area and
+        // month and a national average would systematically mis-bill an L-Gas
+        // network.
+        let stored = scale
+            .apply(iv.value)
+            .and_then(|rescaled| match req.brennwert_kwh_per_m3 {
+                Some(hs) if converts => {
+                    metering::gas::conversion::gas_m3_to_kwh_hs(rescaled, hs, z)
+                }
+                _ => Some(rescaled),
+            });
+        let Some(stored) = stored else {
+            validation_errors.push(format!(
+                "interval from={}: value {} {} leaves the decimal range once converted",
+                iv.from, iv.value, iv.unit
+            ));
+            rejected_count += 1;
+            continue;
+        };
+        accepted.push((iv, stored));
     }
 
     if accepted.is_empty() {
@@ -398,16 +419,13 @@ pub(crate) async fn post_direct_reads_inner(
     }
 
     // ── Quality scoring ─────────────────────────────────────────────────────
-    let period_start = accepted.iter().map(|iv| iv.from).min().unwrap();
-    let period_end = accepted.iter().map(|iv| iv.to).max().unwrap();
+    let period_start = accepted.iter().map(|(iv, _)| iv.from).min().unwrap();
+    let period_end = accepted.iter().map(|(iv, _)| iv.to).max().unwrap();
 
-    // Score the values **as they will be stored**, not as they were submitted.
-    // Every accepted interval parsed in the loop above, so the unit is known and
-    // valid for this Sparte; m³ → kWh_Hs for Gas (§25 Nr. 4 MessEV / DVGW G 685)
-    // with the Brennwert required rather than defaulted, since it varies by
-    // supply area and month and a national average would systematically mis-bill
-    // an L-Gas network. Scoring the raw submission instead ran the media-aware
-    // absolute sigma floor against m³ magnitudes for a series held in kWh.
+    // Score the values **as they will be stored**, not as they were submitted:
+    // the accept loop rescaled the unit and converted gas to kWh_Hs. Scoring
+    // the raw submission would run the media-aware floor against m³ magnitudes
+    // for a series held in kWh.
     let quality_flag_of = |iv: &DirectInterval| {
         // Unrecognised flags are rejected in the accept loop, so the fallback
         // only covers an omitted one. A direct push carries a register reading,
@@ -419,27 +437,17 @@ pub(crate) async fn post_direct_reads_inner(
             .and_then(quality_flag_from_wire)
             .unwrap_or(QualityFlag::Measured)
     };
-    let stored_value_of = |iv: &DirectInterval| {
-        let scale = metering::interval::MeasurementUnit::parse_scaled(&iv.unit)
-            .expect("unit validated in the accept loop");
-        let rescaled = scale.apply(iv.value);
-        if msparte.requires_conversion() && scale.unit == msparte.measured_unit() {
-            let hs = req
-                .brennwert_kwh_per_m3
-                .expect("brennwert presence validated in the accept loop");
-            metering::gas_m3_to_kwh_hs(rescaled, hs, z)
-        } else {
-            rescaled
-        }
-    };
+    let obis: Option<metering::ObisCode> = req.obis_code.as_deref().and_then(|s| s.parse().ok());
     let samples: Vec<metering::MeterInterval> = accepted
         .iter()
-        .map(|iv| metering::MeterInterval {
-            from: iv.from,
-            to: iv.to,
-            value: stored_value_of(iv),
-            quality: quality_flag_of(iv),
-            obis_code: req.obis_code.as_deref().and_then(|s| s.parse().ok()),
+        .filter_map(|(iv, stored)| {
+            // `from < to` was checked in the accept loop.
+            let interval =
+                metering::MeterInterval::new(iv.from, iv.to, *stored, quality_flag_of(iv)).ok()?;
+            Some(match obis {
+                Some(code) => interval.with_obis(code),
+                None => interval,
+            })
         })
         .collect();
 
@@ -476,18 +484,18 @@ pub(crate) async fn post_direct_reads_inner(
         .map(|iv| MeterRead {
             malo_id: malo_id.to_owned(),
             melo_id: melo_id.map(str::to_owned),
-            dtm_from: iv.from,
-            dtm_to: iv.to,
-            quantity_kwh: iv.value,
-            quality: iv.quality,
+            dtm_from: iv.from(),
+            dtm_to: iv.to(),
+            quantity_kwh: iv.value(),
+            quality: iv.quality(),
             pid: 0, // no MSCONS process behind a direct push
             sparte: sparte_enum,
             obis_code: obis_code.map(str::to_owned),
             tenant: state.tenant.clone(),
             source: ingestion_source,
             push_session: Some(session_id.clone()),
-            // Session-level Hampel scoring. `ValidatedReads::validate` adds the
-            // per-interval V-rule findings under a `validation` key.
+            // Session-level quality scoring. `ValidatedReads::validate` adds
+            // the per-interval findings under a `validation` key.
             quality_warnings: quality.has_warnings.then(|| quality_json.clone()),
             sender_mp_id: req.sender_mp_id.clone(),
             allocation_version: "INITIAL".to_owned(),
@@ -564,8 +572,8 @@ pub(crate) async fn post_direct_reads_inner(
         correlation_id: &correlation_id,
         causation_id: &session_id,
         sparte: Some(sparte_str),
-        period_from: accepted.first().map(|r| r.from),
-        period_to: accepted.last().map(|r| r.to),
+        period_from: accepted.first().map(|(r, _)| r.from),
+        period_to: accepted.last().map(|(r, _)| r.to),
         validation: &validation,
         hampel: Some(quality_json.clone()),
     };
@@ -654,9 +662,10 @@ mod ingest_contract_tests {
     // The failure this guards is a *silent* one. A head-end that emits local
     // wall-clock timestamps collapses the repeated 02:00 hour on the fall-back
     // day, so an hour of energy simply disappears — the series still parses,
-    // still validates against every other rule, and bills low. V07 exists to
-    // catch exactly that, and these tests prove edmd's own wrapper surfaces it
-    // rather than only the upstream `metering` rule doing so in isolation.
+    // still validates against every other rule, and bills low. It surfaces as a
+    // `GAP` inside the batch whose message names the repeated hour, and these
+    // tests prove edmd's own wrapper surfaces it rather than only the upstream
+    // `metering` rule doing so in isolation.
 
     /// Build `count` consecutive quarter-hour reads starting at `start` (UTC).
     fn quarter_hours(start: OffsetDateTime, count: usize) -> Vec<MeterRead> {
@@ -686,15 +695,15 @@ mod ingest_contract_tests {
             .collect()
     }
 
-    /// Drive V07 through the public seam — the same call the ingest handlers
-    /// make, so a change to the validation entry point breaks these tests
-    /// rather than silently bypassing them.
-    fn raised_v07(batch: Vec<MeterRead>) -> bool {
-        let (_, report) = crate::domain::ValidatedReads::validate(
-            batch,
-            crate::domain::IngestContext::new("TEST", "51238696012"),
-        );
-        report.rules.iter().any(|r: &String| r.contains("V07"))
+    /// The `GAP` findings of a batch, through the public seam — the same pass
+    /// the ingest handlers run, so a change to the validation entry point
+    /// breaks these tests rather than silently bypassing them.
+    fn gaps(batch: &[MeterRead]) -> Vec<String> {
+        crate::domain::validation::findings(batch, None)
+            .into_iter()
+            .filter(|f| f.code == "GAP")
+            .map(|f| f.message)
+            .collect()
     }
 
     /// 2026-10-25 is 25 hours long: 00:00 CEST is 2026-10-24T22:00Z and the day
@@ -709,25 +718,19 @@ mod ingest_contract_tests {
             "100 quarter-hours from 00:00 CEST must land on 00:00 CET the next day"
         );
         assert!(
-            !raised_v07(batch),
-            "a full 25-hour day is correct and must not raise V07"
+            gaps(&batch).is_empty(),
+            "a full 25-hour day is correct and has no gap"
         );
     }
 
-    /// A day that omits the *repeated hour itself* — an hour of energy is gone,
-    /// and the surviving intervals are ambiguous between the two passes.
+    /// A day that omits the *repeated hour itself* — an hour of energy is gone.
     ///
     /// The fixture drops the four quarter-hours covering 01:00–02:00 UTC, which
     /// is the second pass of local 02:00–03:00. That is what a collapsed
-    /// fall-back day looks like on the wire.
-    ///
-    /// "Any 96-interval day" is not that shape. V07 inspects the two-hour
-    /// window around the transition rather than counting a day's intervals,
-    /// because an interval count "cannot tell a collapsed hour from an ordinary
-    /// gap": 96 contiguous quarter-hours from 22:00 UTC cover the repeated hour
-    /// and simply stop an hour early.
+    /// fall-back day looks like on the wire: 96 intervals, and a gap that only
+    /// the UTC grid can see.
     #[test]
-    fn a_collapsed_fall_back_day_raises_v07_through_edmds_own_wrapper() {
+    fn a_collapsed_fall_back_day_is_a_gap_naming_the_repeated_hour() {
         let start = datetime!(2026-10-24 22:00:00 UTC);
         let repeated_from = datetime!(2026-10-25 01:00:00 UTC);
         let repeated_to = datetime!(2026-10-25 02:00:00 UTC);
@@ -740,26 +743,27 @@ mod ingest_contract_tests {
             96,
             "the repeated hour is the part that is gone"
         );
+        let found = gaps(&batch);
+        assert_eq!(found.len(), 1, "one gap of four slots: {found:?}");
         assert!(
-            raised_v07(batch),
+            found[0].contains("4 slot(s)") && found[0].contains("repeated hour"),
             "a fall-back day missing the repeated hour bills an hour short, and \
-             no other rule can tell — V07 must fire"
+             the finding must say which hour: {found:?}"
         );
     }
 
-    /// A day that is merely *short* is not reported as a collapsed hour.
+    /// A day that is merely *short* is not reported as a gap.
     ///
-    /// Pinned from mako's side, because the distinction is the point: a
-    /// truncated read is a truncated read, and reporting it as "the repeated
-    /// hour was collapsed" names a cause that did not happen.
+    /// A pushed batch declares its own span, so a series that stops an hour
+    /// before the local day ends is a short delivery, not one with a hole.
     #[test]
-    fn a_fall_back_day_that_is_merely_truncated_is_not_reported_as_collapsed() {
+    fn a_fall_back_day_that_is_merely_truncated_has_no_gap() {
         let start = datetime!(2026-10-24 22:00:00 UTC);
         // 96 contiguous quarter-hours: the repeated hour is present, the day
         // just stops an hour before the local day ends.
         assert!(
-            !raised_v07(quarter_hours(start, 96)),
-            "a complete-but-short series is not an ambiguous one"
+            gaps(&quarter_hours(start, 96)).is_empty(),
+            "a complete-but-short series has no hole"
         );
     }
 
@@ -775,8 +779,8 @@ mod ingest_contract_tests {
             "92 quarter-hours from 00:00 CET must land on 00:00 CEST the next day"
         );
         assert!(
-            !raised_v07(batch),
-            "a 23-hour day is correct and must not raise V07"
+            gaps(&batch).is_empty(),
+            "a 23-hour day is correct and has no gap"
         );
     }
 
@@ -826,12 +830,12 @@ mod ingest_contract_tests {
     fn the_superscript_cubic_metre_is_recognised_as_a_volume_unit() {
         // A string compare against "m3" missed this spelling, so gas submitted
         // as m³ was stored unconverted — roughly a tenfold under-count.
-        use metering::interval::{MeasurementUnit, Sparte};
+        use metering::{Sparte, Unit};
         for spelling in ["m3", "m³", "M3"] {
-            let scale = MeasurementUnit::parse_scaled(spelling)
+            let scale = Unit::parse_scaled(spelling)
                 .unwrap_or_else(|| panic!("`{spelling}` must parse as a volume unit"));
-            assert_eq!(scale.unit, MeasurementUnit::CubicMetre);
-            assert_eq!(scale.unit, Sparte::Gas.measured_unit());
+            assert_eq!(scale.unit(), Unit::CubicMetre);
+            assert_eq!(scale.unit(), Sparte::Gas.measured_unit());
         }
     }
 
@@ -839,8 +843,8 @@ mod ingest_contract_tests {
     fn cubic_metres_are_not_a_valid_unit_for_electricity() {
         // The electricity endpoint had no unit check, so a value labelled "m3"
         // was multiplied by the gas Brennwert and stored as STROM.
-        use metering::interval::{MeasurementUnit, Sparte};
-        let m3 = MeasurementUnit::CubicMetre;
+        use metering::{Sparte, Unit};
+        let m3 = Unit::CubicMetre;
         assert_ne!(m3, Sparte::Strom.measured_unit());
         assert_ne!(m3, Sparte::Strom.billing_unit());
     }
@@ -936,9 +940,9 @@ pub async fn post_corrections(
             )
                 .into_response();
         }
-        // The same V06/V08-class boundary checks the ingest paths run: a
-        // corrected interval must still be a valid interval, and a correction
-        // cannot claim energy for time that has not happened yet.
+        // The boundary checks the ingest paths run: a corrected interval must
+        // still be a valid interval, and a correction cannot claim energy for
+        // time that has not happened yet.
         if rec.dtm_from >= rec.dtm_to {
             return (
                 axum::http::StatusCode::BAD_REQUEST,
@@ -953,7 +957,7 @@ pub async fn post_corrections(
             return (
                 axum::http::StatusCode::BAD_REQUEST,
                 format!(
-                    "correction[{}]: dtm_from {} lies in the future (V08)",
+                    "correction[{}]: dtm_from {} lies in the future",
                     i, rec.dtm_from
                 ),
             )
@@ -997,9 +1001,10 @@ pub async fn post_corrections(
 ///
 /// ## Validation
 ///
-/// The batch is validated with [`metering::validate_intervals`] before it is
-/// stored, and the resulting issues are written to `quality_warnings` on the
-/// intervals they name, in the same statement as the readings themselves.
+/// The batch is validated with `metering::vee::validation` (per register,
+/// through [`crate::domain::ValidatedReads`]) before it is stored, and the
+/// findings are written to `quality_warnings` on the intervals they name, in
+/// the same statement as the readings themselves.
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BulkReadRequest {
@@ -1030,11 +1035,11 @@ pub struct BulkReadRequest {
 
     /// Physical capacity ceiling of the metered plant, in kW.
     ///
-    /// Nameplate capacity or Anschlussleistung. Supply it and **V12**
-    /// (`ImplausiblePower`) checks each interval's average power against it: a
-    /// value above the ceiling is not unusual, it is impossible, so it is an
-    /// `Error` and blocks billing. Omit it and V12 stays off — edmd holds no
-    /// master data of its own and will not invent a ceiling.
+    /// Nameplate capacity or Anschlussleistung. Supply it and **`CAPACITY`**
+    /// checks each interval's average power against it: a value above the
+    /// ceiling is not unusual, it is impossible, so it is an error and blocks
+    /// billing. Omit it and the rule stays off — edmd holds no master data of
+    /// its own and will not invent a ceiling.
     #[serde(default)]
     pub max_plant_power_kw: Option<Decimal>,
 
@@ -1069,7 +1074,7 @@ pub struct BulkReadEntry {
 ///
 /// Batch ingestion endpoint. Accepts up to 50 000 intervals per request.
 ///
-/// The whole batch is validated (V01–V09/V11/V12) and then written in one statement, so
+/// The whole batch is validated, register by register, and then written in one statement, so
 /// `stored_count` reflects rows that actually committed and a failure leaves
 /// nothing behind for the caller to reconcile.
 ///
@@ -1253,11 +1258,8 @@ pub async fn post_bulk_reads(
     }
 
     // Validation runs before the write so its findings can be stored with the
-    // rows they describe. The batch is **not** pre-sorted: V11
-    // (`UnorderedSeries`) is the engine's report that a caller's file arrived
-    // shuffled, which on a bulk import usually means a broken merge, and sorting
-    // first would delete that signal while changing nothing else — the adjacency
-    // rules already evaluate in timestamp order.
+    // rows they describe. Delivery order is no finding: each register is built
+    // into a series, which orders it.
     let (validated, validation) = crate::domain::ValidatedReads::validate(
         batch,
         crate::domain::IngestContext::new("BULK_IMPORT_VALIDATION", &malo_id)

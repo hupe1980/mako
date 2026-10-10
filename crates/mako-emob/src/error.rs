@@ -154,9 +154,3 @@ pub enum EmobError {
     #[error("allocation failed: {0}")]
     Allocation(String),
 }
-
-impl From<metering::allocation::AllocationError> for EmobError {
-    fn from(e: metering::allocation::AllocationError) -> Self {
-        Self::Allocation(e.to_string())
-    }
-}

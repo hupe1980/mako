@@ -192,10 +192,10 @@ pub const GAS_QUALITY_PIDS: &[u32] = &[13007];
 /// Metering / balancing classification of a Marktlokation.
 ///
 /// Re-exported from `metering` (`Slp` / `Rlm` / `IMsys`) — the single source of
-/// truth for the Messtyp. `metering::Messtyp` has no `Display`/`FromStr` (the
-/// orphan rule would forbid us adding them here anyway), so the DB-string
-/// conversions live as the free helpers [`messtyp_as_str`] / [`messtyp_from_str`].
-pub use metering::Messtyp;
+/// truth for the Messtyp. Its own codes spell the iMSys `I_MSYS`, a spelling
+/// nothing in the market or in this workspace reads, so edmd's DB strings live
+/// in the free helpers [`messtyp_as_str`] / [`messtyp_from_str`].
+pub use metering::vee::classification::Messtyp;
 
 /// The DB / wire string for a [`Messtyp`] (`SLP` / `RLM` / `IMSYS`).
 ///
@@ -209,6 +209,10 @@ pub fn messtyp_as_str(m: Messtyp) -> &'static str {
         Messtyp::Slp => "SLP",
         Messtyp::Rlm => "RLM",
         Messtyp::IMsys => "IMSYS",
+        // `Messtyp` is `#[non_exhaustive]`. A type this build does not know is
+        // written in metering's own spelling, which `messtyp_from_str` and the
+        // DB `CHECK` refuse — loudly, rather than as a guessed classification.
+        other => other.as_str(),
     }
 }
 
@@ -599,7 +603,7 @@ pub struct MeterReading {
 ///   conversion added the register capacity to the difference on the strength of
 ///   a configured device width;
 /// - an **anomaly**, where no honest difference could be taken and the interval
-///   is therefore absent. It surfaces downstream as a V01 gap and is filled by
+///   is therefore absent. It surfaces downstream as a `GAP` and is filled by
 ///   the § 60 Abs. 1 MsbG substitute path, which writes its own audit row.
 ///
 /// Together the two logs say "this quarter-hour is an Ersatzwert *because* the
@@ -636,12 +640,12 @@ pub const ZSG_OUTCOME_ROLLOVER: &str = "ROLLOVER";
 /// kind added upstream fails the build rather than an insert at runtime — and
 /// the insert is where an audit row would otherwise go missing with a warning.
 ///
-/// [`AnomalyKind`]: metering::reading::AnomalyKind
+/// [`AnomalyKind`]: metering::series::reading::AnomalyKind
 #[must_use]
 pub fn zsg_outcomes() -> Vec<&'static str> {
     std::iter::once(ZSG_OUTCOME_ROLLOVER)
         .chain(
-            metering::reading::AnomalyKind::ALL
+            metering::series::reading::AnomalyKind::ALL
                 .iter()
                 .copied()
                 .map(anomaly_outcome),
@@ -657,8 +661,8 @@ pub fn zsg_outcomes() -> Vec<&'static str> {
 /// know falls back to the label that says a difference was refused without
 /// claiming to know why.
 #[must_use]
-pub fn anomaly_outcome(kind: metering::reading::AnomalyKind) -> &'static str {
-    use metering::reading::AnomalyKind as K;
+pub fn anomaly_outcome(kind: metering::series::reading::AnomalyKind) -> &'static str {
+    use metering::series::reading::AnomalyKind as K;
     match kind {
         K::BackwardsWithoutRegisterWidth => "BACKWARDS_WITHOUT_REGISTER_WIDTH",
         K::ImplausibleRollover => "IMPLAUSIBLE_ROLLOVER",
@@ -778,6 +782,35 @@ pub struct MeterRead {
     pub mscons_version: Option<u128>,
 }
 
+impl MeterRead {
+    /// The read as a typed `metering` interval on its own register.
+    ///
+    /// The OBIS code is carried when it parses; an unparseable one leaves the
+    /// interval unlabelled, the way the projections in [`crate::domain::register`]
+    /// treat it.
+    ///
+    /// # Errors
+    ///
+    /// An empty or reversed span. The store refuses such a read at the boundary
+    /// (`read_to_stored`), so a read that came back from the store always has one.
+    pub fn interval(
+        &self,
+    ) -> Result<metering::MeterInterval, metering::series::interval::IntervalError> {
+        let iv = metering::MeterInterval::new(
+            self.dtm_from,
+            self.dtm_to,
+            self.quantity_kwh,
+            self.quality,
+        )?;
+        Ok(
+            match self.obis_code.as_deref().and_then(|s| s.parse().ok()) {
+                Some(code) => iv.with_obis(code),
+                None => iv,
+            },
+        )
+    }
+}
+
 /// Query parameters for time-series reads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeSeriesQuery {
@@ -815,8 +848,8 @@ pub struct TimeSeriesQuery {
 /// *less* than the profile leaves surplus energy the NB absorbed, and that
 /// surplus is the **Mehrmenge**, which the NB credits. Consuming more is the
 /// **Mindermenge**, which the NB invoices. Only one of the two is ever positive.
-/// The arithmetic is [`metering::compute_imbalance`]'s, so the convention lives
-/// in one place.
+/// The arithmetic is [`metering::billing::imbalance::ImbalanceSaldo`]'s, so the
+/// convention lives in one place.
 ///
 /// ## Legal basis
 ///
@@ -1030,6 +1063,7 @@ pub enum CorrectionSource {
 /// Stored in `meter_read_corrections` without modifying the original row —
 /// enabling full § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit-trail reconstruction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CorrectionRecord {
     /// MaLo for the corrected interval.
     pub malo_id: String,

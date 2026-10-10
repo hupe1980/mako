@@ -5,13 +5,12 @@
 //!
 //! ## What this catches
 //!
-//! - Overflow/underflow in gap duration arithmetic
-//! - Panic in the robust-sigma outlier test with extreme values
-//! - DST boundary edge cases in the interval-length check
-//! - Register rollover detection with degenerate `Decimal` inputs
-//! - A `ValidationResult` whose `issues` do not partition across the three
-//!   severities — a caller that triages by severity would silently drop a
-//!   finding that blocks billing
+//! - Overflow/underflow in gap and run arithmetic
+//! - Panic in the Hampel outlier test with extreme values
+//! - DST boundary edge cases in the day's slot grid
+//! - A `Report` whose findings do not partition across the three severities —
+//!   a caller that triages by severity would silently drop a finding that
+//!   blocks billing — or whose grade disagrees with its findings
 //!
 //! ## Run locally
 //!
@@ -23,7 +22,8 @@
 #![deny(unsafe_code)]
 
 use libfuzzer_sys::{Corpus, fuzz_target};
-use metering::{MeterInterval, QualityFlag, ValidationConfig, validate_intervals};
+use metering::vee::validation::{Grade, Rules, Severity, validate};
+use metering::{DayBoundary, MeterInterval, QualityFlag, Resolution, Series};
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
 
@@ -52,14 +52,14 @@ fuzz_target!(|data: &[u8]| -> Corpus {
         _ => QualityFlag::Unknown,
     };
 
-    // Build a sequence of intervals starting from a fuzz-controlled base time
-    let base_ts = OffsetDateTime::UNIX_EPOCH
-        .saturating_add(time::Duration::seconds(base_seconds.abs() % (50 * 365 * 86400)));
+    // A quarter-hour-aligned base time under fuzz control.
+    let base_ts = OffsetDateTime::UNIX_EPOCH.saturating_add(time::Duration::minutes(
+        15 * ((base_seconds.abs() % (50 * 365 * 86400)) / 900),
+    ));
 
     let intervals: Vec<MeterInterval> = (0..interval_count)
         .filter_map(|i| {
             let from = base_ts.checked_add(time::Duration::minutes(i as i64 * 15))?;
-            let to = from.checked_add(time::Duration::minutes(15))?;
             // Use fuzz bytes for value; default to 0 if not enough bytes
             let val_bytes = data
                 .get(6 + i * 4..6 + i * 4 + 4)
@@ -67,41 +67,44 @@ fuzz_target!(|data: &[u8]| -> Corpus {
                 .map(u32::from_le_bytes)
                 .unwrap_or(0);
             let value = Decimal::new(i64::from(val_bytes), 3); // 0.000 .. 4294967.295
-            Some(MeterInterval {
-                from,
-                to,
-                value,
-                quality,
-                obis_code: None,
-            })
+            MeterInterval::quarter_hour(from, value, quality).ok()
         })
         .collect();
 
-    if intervals.is_empty() {
+    let Ok(series) = Series::new(Resolution::QUARTER_HOUR, DayBoundary::Strom, intervals) else {
         return Corpus::Reject;
-    }
+    };
+    let Some(day) = DayBoundary::Strom
+        .day_of(base_ts)
+        .and_then(|d| DayBoundary::Strom.day(d))
+    else {
+        return Corpus::Reject;
+    };
 
     // Run validation — must never panic regardless of input
-    let config = ValidationConfig {
-        now: Some(OffsetDateTime::now_utc()),
-        ..ValidationConfig::default()
-    };
-    let result = validate_intervals(&intervals, &config);
+    let report = validate(&series, &Rules::strom(day, OffsetDateTime::now_utc(), None));
 
-    // Every issue carries exactly one of the three severities: the per-severity
-    // counts must add up to the whole finding set.
-    assert_eq!(
-        result.issues.len(),
-        result
-            .by_severity(metering::ValidationSeverity::Error)
-            .count()
-            + result
-                .by_severity(metering::ValidationSeverity::Warning)
+    // Every finding carries exactly one of the three severities: the
+    // per-severity counts must add up to the whole finding set.
+    let per_severity: usize = Severity::ALL
+        .iter()
+        .map(|s| {
+            report
+                .findings
+                .iter()
+                .filter(|f| f.severity() == *s)
                 .count()
-            + result
-                .by_severity(metering::ValidationSeverity::Info)
-                .count(),
-        "issue count inconsistency"
+        })
+        .sum();
+    assert_eq!(
+        report.findings.len(),
+        per_severity,
+        "finding count inconsistency"
+    );
+    assert_eq!(
+        report.grade(),
+        Grade::of(&report.findings),
+        "the grade is a function of the findings"
     );
 
     Corpus::Keep

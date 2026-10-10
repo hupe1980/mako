@@ -658,8 +658,8 @@ pub struct GridInput {
 /// §42c EnWG Energy Sharing — metered allocation for one community participant.
 ///
 /// Populated by `billingd` from the participant's virtual meter (Summenzeitreihe)
-/// computed by `edmd` using the community's `AggregationRule::GgvConstantAllocation`
-/// or `GgvProportionalAllocation` (same infrastructure as §42b EnWG GGV).
+/// computed by `edmd` from the community's `COMMUNITY_SHARE` rules, a constant or
+/// consumption-proportional key (same infrastructure as §42b EnWG GGV).
 ///
 /// ## §42c EnWG vs §42b EnWG GGV
 ///
@@ -682,7 +682,7 @@ pub struct EnergyShareMeterInput {
     /// kWh allocated from the community energy pool to this participant.
     ///
     /// Computed from the community's total generation and this participant's
-    /// allocation fraction (`GgvConstantAllocation.fraction` or proportional ratio).
+    /// allocation key (a constant Aufteilungsfaktor or the proportional ratio).
     /// Limited to the participant's actual consumption (§42c cap clause).
     pub allocated_kwh: Decimal,
 
@@ -1069,8 +1069,8 @@ pub struct Quantities {
     /// ## Data source
     ///
     /// Populated by `billingd` after querying the sharing community's allocation
-    /// data from `edmd` (virtual meter with `GgvConstantAllocation` or
-    /// `GgvProportionalAllocation` rule — same infrastructure as §42b EnWG GGV).
+    /// data from `edmd` (`GET /api/v1/sharing/{plant}/allocation` over the
+    /// participants' `COMMUNITY_SHARE` rules — same infrastructure as §42b EnWG GGV).
     pub energy_share: Option<EnergyShareMeterInput>,
 }
 

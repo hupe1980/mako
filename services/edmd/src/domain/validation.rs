@@ -2,40 +2,40 @@
 //!
 //! `TimeSeriesRepository::store_reads` accepts [`ValidatedReads`] rather than a
 //! bare slice, so a new ingest path cannot persist meter data without running
-//! the V-rules first: the only way to obtain the type is to call
+//! the validation first: the only way to obtain the type is to call
 //! [`ValidatedReads::validate`], and its field is private to this module.
 //!
 //! The failure is silent otherwise: an unvalidated path stores rows
-//! indistinguishable from validated ones, and V03 (negative energy), V04
-//! (statistical outlier) and V09 (non-billable quality) never fire for that
-//! source.
+//! indistinguishable from validated ones, and `NEGATIVE`, `SPIKE` and
+//! `NON_BILLABLE` never fire for that source.
 //!
-//! ## One configuration, one register split, every caller
+//! ## One register split, every caller
 //!
-//! [`findings`] is the single V-rule pass. It splits by `(Sparte, register)`,
-//! configures each group from [`config_for`], and returns the issues tagged with
-//! the register they are about. Ingest annotation ([`ValidatedReads::validate`]),
-//! the MCP `validate_timeseries` tool and the § 60 Abs. 1 substitute path all go
-//! through it. A per-surface `ValidationConfig::default()` — electricity
-//! thresholds, an assumed 900 s grid — would disagree with the ingest door about
-//! whether an ordinary hourly gas delivery is clean.
+//! [`findings`] is the single validation pass. It splits by `(Sparte, register)`,
+//! builds each group into a `metering` series on its observed grid, and returns
+//! the findings tagged with the register and the rows they are about. Ingest
+//! annotation ([`ValidatedReads::validate`]), the MCP `validate_timeseries`
+//! tool and the § 60 Abs. 1 substitute path all go through it, so they cannot
+//! disagree about whether an ordinary hourly gas delivery is clean.
 //!
-//! ## The rule set is `metering`'s, not a fixed V01–V10
+//! ## The rule set is `metering`'s
 //!
-//! `metering` runs **V01–V09, V11 and V12**. There is no V10: a register
-//! rollover is meaningless over a [`MeterInterval`](metering::MeterInterval),
-//! which carries the energy *in* an interval and not a cumulative Zählerstand.
-//! The number stays unused so a stored `V10` finding cannot be silently
-//! reinterpreted. V11 reports an
-//! unordered input series and V12 an average power above the plant's physical
-//! capacity. Nothing here enumerates the rules: the set is whatever the crate
-//! runs, and the findings are stored by their own `rule_id`.
+//! The content rules are `metering::vee::validation`'s — `GAP`,
+//! `NON_BILLABLE`, `NEGATIVE`, `CAPACITY`, `FUTURE`, `ZERO_RUN`, `STALE`,
+//! `SPIKE` and the rest — with the thresholds its preset for the batch's
+//! Sparte carries. Before they can run, a register's intervals have to form a
+//! series: a slot delivered twice, overlapping spans, a span off the grid or a
+//! read with no span at all is a **structural** finding
+//! ([`SeriesDefect`](crate::domain::vee::SeriesDefect)) and the content rules
+//! are reported as not run for that register. Nothing here enumerates the
+//! rules: the findings are stored by their own code.
 
 use std::collections::BTreeMap;
 
 use crate::domain::model::MeterRead;
-use metering::obis::ObisCode;
-use metering::validation::{ValidationConfig, ValidationIssue};
+use crate::domain::vee;
+use metering::ObisCode;
+use metering::vee::validation::{Rule, Severity};
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
 
@@ -52,22 +52,20 @@ pub struct IngestContext<'a> {
     pub source: &'a str,
     /// The measuring point the batch is about.
     pub malo_id: &'a str,
-    /// Physical capacity ceiling in kW for **V12** (`ImplausiblePower`).
+    /// Physical capacity ceiling in kW for **`CAPACITY`**.
     ///
     /// Nameplate capacity or Anschlussleistung. A value whose average power over
     /// its own interval exceeds it is not unusual, it is impossible — which is
-    /// why V12 is an `Error` and V04 a `Warning`.
+    /// why `CAPACITY` is an error and `SPIKE` a warning.
     ///
-    /// `None` disables the rule, and that was the *only* state edmd could reach:
-    /// no ingest door accepted a ceiling and `QualityConfig::for_sparte` sets
-    /// none, so V12 was documented, surfaced as `spike_intervals`, and unable to
-    /// fire. edmd holds no master data of its own, so the ceiling comes from the
-    /// caller that does — the head-end, the MSB's push, the bulk import.
+    /// `None` switches the rule off, and the report says so. edmd holds no
+    /// master data of its own, so the ceiling comes from the caller that does —
+    /// the head-end, the MSB's push, the bulk import.
     pub max_plant_power_kw: Option<Decimal>,
 }
 
 impl<'a> IngestContext<'a> {
-    /// A context with no capacity ceiling — V12 stays off.
+    /// A context with no capacity ceiling — `CAPACITY` stays off.
     #[must_use]
     pub fn new(source: &'a str, malo_id: &'a str) -> Self {
         Self {
@@ -77,7 +75,7 @@ impl<'a> IngestContext<'a> {
         }
     }
 
-    /// Declare the metered plant's physical capacity, enabling V12.
+    /// Declare the metered plant's physical capacity, enabling `CAPACITY`.
     #[must_use]
     pub fn with_capacity_kw(mut self, kw: Option<Decimal>) -> Self {
         self.max_plant_power_kw = kw.filter(|v| *v > Decimal::ZERO);
@@ -88,9 +86,8 @@ impl<'a> IngestContext<'a> {
 /// The window a batch actually covers, as `(earliest start, latest end)`.
 ///
 /// Taken as min/max rather than off the first and last row: a batch is not
-/// required to arrive sorted — V11 exists to say when it did not — and reading
-/// the extent off the ends of an unsorted slice reports a period the delivery
-/// does not have. That period is the denominator of the quality score and the
+/// required to arrive sorted, and reading the extent off the ends of an
+/// unsorted slice reports a period the delivery does not have. That period is the denominator of the quality score and the
 /// window named in the `de.messwert.reading.quality.warning` event.
 #[must_use]
 pub fn batch_period(reads: &[MeterRead]) -> (Option<OffsetDateTime>, Option<OffsetDateTime>) {
@@ -144,13 +141,13 @@ pub struct BatchValidation {
     pub issue_count: usize,
     pub billing_block_count: usize,
     pub rules: Vec<String>,
-    /// Rules that did **not** run on this batch, as their `Vnn` codes.
+    /// Rules that did **not** run on this batch, as their codes.
     ///
     /// Without this a caller cannot tell "the rule ran and found nothing" from
-    /// "the rule never ran". V12 is the live case: it needs the metered plant's
-    /// capacity, which edmd holds no master data for, so it is inert on every
-    /// door that is not told one — and a batch would otherwise report a clean
-    /// bill of health that no implausible-power check stands behind.
+    /// "the rule never ran". `CAPACITY` is the live case: it needs the metered
+    /// plant's capacity, which edmd holds no master data for, so it is inert on
+    /// every door that is not told one — and a batch would otherwise report a
+    /// clean bill of health that no implausible-power check stands behind.
     pub skipped_rules: Vec<String>,
 }
 
@@ -161,72 +158,47 @@ impl BatchValidation {
     }
 }
 
-/// One V-rule finding, with the series it is about.
-///
-/// `interval_index` inside a `ValidationIssue` points into *one register's*
-/// slice, so it means nothing on its own — the register has to travel with it.
+/// One finding, with the register and the rows it is about.
 #[derive(Debug, Clone)]
 pub struct RegisterFinding {
     /// The register the finding is about, `None` for unlabelled reads.
     pub obis_code: Option<ObisCode>,
-    /// Which row of the caller's batch it names, when it names one.
-    pub batch_index: Option<usize>,
-    /// The finding itself.
-    pub issue: ValidationIssue,
+    /// The rows of the caller's batch it covers. Empty for a `GAP`, which is
+    /// about slots no row delivered.
+    pub rows: Vec<usize>,
+    /// The rule's code, or the structural defect's.
+    pub code: &'static str,
+    /// How serious it is.
+    pub severity: Severity,
+    /// A sentence for a human.
+    pub message: String,
+    /// The span it concerns, when it names one.
+    pub span: Option<(OffsetDateTime, OffsetDateTime)>,
 }
 
-/// The rule configuration a series of this commodity and cadence should be
-/// judged against.
-///
-/// Two things make `ValidationConfig::default()` the wrong judge of an
-/// arbitrary batch:
-///
-/// - **The default is electricity.** It allows four consecutive zeros before V05
-///   calls the meter stuck. A gas heating profile is near zero for a summer
-///   week and a vacant flat's water meter reads exactly zero for months, so
-///   every heat, water and gas delivery arrived pre-flagged.
-///   [`metering::QualityConfig::for_sparte`] exists for precisely this and
-///   carries the media-specific zero-run tolerance and sigma floor.
-/// - **The default cadence is 900 s.** V06 fires on every interval of an hourly
-///   gas series, and V01 divides a real gap by the wrong grid — a one-hour hole
-///   in an hourly series is reported as "4 missing intervals". The cadence is
-///   observable, so it is measured (`detect_interval_length`) rather than
-///   assumed, and only falls back to the Sparte default when the series is too
-///   short to have one.
-///
-/// `period` stays `None`: a pushed batch declares its own span, so leading and
-/// trailing gaps are not findings here. Coverage against a *requested* window is
-/// the quality scorer's job (`QualityConfig::over_period`), not the ingest
-/// validator's.
-#[must_use]
-pub fn config_for(
-    sparte: metering::Sparte,
-    series: &[metering::MeterInterval],
-    max_plant_power_kw: Option<Decimal>,
-) -> ValidationConfig {
-    let mut config = metering::QualityConfig::for_sparte(sparte).validation;
-    if let Some(resolution) = metering::classification::detect_interval_length(series) {
-        config.expected_interval_secs = Some(resolution.nominal_seconds());
+impl RegisterFinding {
+    /// `true` when the slots it covers must not be billed as they are.
+    #[must_use]
+    pub fn blocks_billing(&self) -> bool {
+        vee::blocks_billing(self.severity)
     }
-    config.now = Some(OffsetDateTime::now_utc());
-    config.max_plant_power_kw = max_plant_power_kw;
-    config
 }
 
-/// Run the V-rule engine over a batch, one series per register.
+/// Run the validation over a batch, one series per register.
 ///
 /// The single pass every caller shares. The batch is split by
-/// `(Sparte, OBIS register)` and each group validated on its own, because the
-/// adjacency rules — V01 gap, V02 overlap — are statements about a *single*
-/// series and a MaLo routinely delivers several at once: import beside export on
-/// a prosumer MeLo, HT beside NT on a dual-tariff meter. Validated as one flat
-/// list, those registers share every timestamp, so V02 reported each same-slot
-/// pair as an overlapping interval — severity `Error`, which blocks billing. A
-/// bidirectional delivery could not be ingested cleanly at all.
+/// `(Sparte, OBIS register)` and each group validated on its own, because a
+/// series is one channel and a MaLo routinely delivers several at once: import
+/// beside export on a prosumer MeLo, HT beside NT on a dual-tariff meter.
+/// Validated as one flat list, those registers share every timestamp and would
+/// read as the same slot delivered twice.
 ///
-/// Findings come back tagged with their register and with the index of the row
-/// in `batch` they name, so a caller can attach each to the interval it is
-/// actually about.
+/// Each register is validated over **its own span**: a pushed batch declares
+/// the window it covers, so its leading and trailing slots are not gaps.
+///
+/// Findings come back tagged with their register and with the rows of `batch`
+/// they cover, so a caller can attach each to the intervals it is actually
+/// about.
 #[must_use]
 pub fn findings(batch: &[MeterRead], max_plant_power_kw: Option<Decimal>) -> Vec<RegisterFinding> {
     findings_with_coverage(batch, max_plant_power_kw).0
@@ -235,11 +207,10 @@ pub fn findings(batch: &[MeterRead], max_plant_power_kw: Option<Decimal>) -> Vec
 /// [`findings`], plus the rules that actually ran.
 ///
 /// A clean result means "these rules found nothing", not "nothing is wrong". A
-/// rule can be inert because the config gave it nothing to work with — V12
-/// needs a plant capacity edmd does not hold as master data — or because the
-/// data was too thin for it. Either way the caller has to be able to say so:
-/// reporting a spotless batch while V12 never ran is the shape of defect this
-/// exists to prevent.
+/// rule can be inert because nothing switched it on — `CAPACITY` needs a plant
+/// capacity edmd does not hold as master data — or because a register's
+/// intervals were not a series it could run on. Either way the caller has to be
+/// able to say so.
 ///
 /// The set is the **intersection** across registers, so a rule counts as
 /// evaluated only where it ran for every series in the batch.
@@ -247,10 +218,11 @@ pub fn findings(batch: &[MeterRead], max_plant_power_kw: Option<Decimal>) -> Vec
 pub fn findings_with_coverage(
     batch: &[MeterRead],
     max_plant_power_kw: Option<Decimal>,
-) -> (Vec<RegisterFinding>, metering::validation::RuleSet) {
+) -> (Vec<RegisterFinding>, Vec<Rule>) {
     if batch.is_empty() {
-        return (Vec::new(), metering::validation::RuleSet::EMPTY);
+        return (Vec::new(), Vec::new());
     }
+    let now = OffsetDateTime::now_utc();
 
     // Group the batch's positions by the series each belongs to, preserving the
     // caller's indices so a finding can be attached to the row it is about.
@@ -268,60 +240,97 @@ pub fn findings_with_coverage(
     }
 
     let mut out: Vec<RegisterFinding> = Vec::new();
-    let mut evaluated: Option<metering::validation::RuleSet> = None;
+    let mut evaluated: Option<Vec<Rule>> = None;
+    let mut narrow = |ran: Vec<Rule>| {
+        evaluated = Some(match evaluated.take() {
+            Some(acc) => acc.into_iter().filter(|r| ran.contains(r)).collect(),
+            None => ran,
+        });
+    };
     for positions in groups.values() {
         let sparte = batch[positions[0]].sparte;
-        // Handed in the caller's order, deliberately. `validate_intervals`
-        // evaluates the adjacency rules in timestamp order internally while
-        // still reporting the caller's indices, and V11 (`UnorderedSeries`) is
-        // its statement that the input arrived shuffled — usually a broken merge
-        // upstream. Sorting here would make every batch look ordered and delete
-        // that signal for nothing: the findings are already order-correct.
-        let series: Vec<metering::MeterInterval> = positions
-            .iter()
-            .map(|&i| {
-                let r = &batch[i];
-                metering::MeterInterval {
-                    from: r.dtm_from,
-                    to: r.dtm_to,
-                    value: r.quantity_kwh,
-                    // The read's actual quality flag — hardcoding `Measured`
-                    // here made V09 (non-billable quality) unfireable on every
-                    // ingest path: a batch arriving as FAULTY/UNKNOWN validated
-                    // as if it were clean.
-                    quality: r.quality,
-                    obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
-                }
-            })
-            .collect();
-        let obis_code = series.first().and_then(|iv| iv.obis_code);
+        let obis_code: Option<ObisCode> = batch[positions[0]]
+            .obis_code
+            .as_deref()
+            .and_then(|s| s.parse().ok());
+        let structural = |code: &'static str, rows: Vec<usize>, message: String| RegisterFinding {
+            obis_code,
+            rows,
+            code,
+            severity: Severity::Blocking,
+            message,
+            span: None,
+        };
 
-        let report = metering::validation::validate_intervals(
-            &series,
-            &config_for(sparte, &series, max_plant_power_kw),
-        );
-        evaluated = Some(match evaluated {
-            Some(acc) => acc.intersection(report.evaluated),
-            None => report.evaluated,
-        });
-        for issue in report.issues {
-            // `interval_index` points into this group's slice; map it back onto
-            // the caller's batch so the annotation lands on the right row.
-            let batch_index = issue.interval_index.and_then(|i| positions.get(i).copied());
+        // A read with no span carries no energy over time and cannot join a
+        // series; it is a finding of its own.
+        let mut intervals = Vec::with_capacity(positions.len());
+        let mut rows = Vec::with_capacity(positions.len());
+        for &i in positions {
+            match batch[i].interval() {
+                Ok(iv) => {
+                    intervals.push(iv);
+                    rows.push(i);
+                }
+                Err(e) => out.push(structural("EMPTY_SPAN", vec![i], e.to_string())),
+            }
+        }
+        let (Some(from), Some(to)) = (
+            intervals.iter().map(metering::MeterInterval::from).min(),
+            intervals.iter().map(metering::MeterInterval::to).max(),
+        ) else {
+            narrow(Vec::new());
+            continue;
+        };
+
+        let series = match vee::series_of(sparte, intervals) {
+            Ok(series) => series,
+            Err(defect) => {
+                let instants = defect.instants();
+                let named = rows
+                    .iter()
+                    .copied()
+                    .filter(|&i| instants.contains(&batch[i].dtm_from))
+                    .collect();
+                out.push(structural(defect.code(), named, defect.to_string()));
+                narrow(Vec::new());
+                continue;
+            }
+        };
+        let Some(report) = vee::validate_window(&series, sparte, from, to, now, max_plant_power_kw)
+        else {
+            out.push(structural(
+                "OUT_OF_RANGE",
+                rows,
+                format!("{from} – {to} lies outside the supported calendar"),
+            ));
+            narrow(Vec::new());
+            continue;
+        };
+        narrow(report.evaluated());
+        for f in report.findings() {
+            let covered = if f.rule == Rule::Gap {
+                Vec::new()
+            } else {
+                rows.iter()
+                    .copied()
+                    .filter(|&i| batch[i].dtm_from < f.to && batch[i].dtm_to > f.from)
+                    .collect()
+            };
             out.push(RegisterFinding {
                 obis_code,
-                batch_index,
-                issue,
+                rows: covered,
+                code: f.rule.as_str(),
+                severity: f.severity(),
+                message: f.message.clone(),
+                span: Some((f.from, f.to)),
             });
         }
     }
-    (
-        out,
-        evaluated.unwrap_or(metering::validation::RuleSet::EMPTY),
-    )
+    (out, evaluated.unwrap_or_default())
 }
 
-/// Run the V-rule engine over an ingest batch and annotate the rows each issue
+/// Validate an ingest batch and annotate the rows each finding
 /// describes.
 ///
 /// Every ingest family routes through here so a reading lands with the same
@@ -343,10 +352,10 @@ fn validate_and_annotate(batch: &mut [MeterRead], ctx: IngestContext<'_>) -> Bat
     let (found, evaluated) = findings_with_coverage(batch, ctx.max_plant_power_kw);
 
     let issue_count = found.len();
-    let billing_block_count = found.iter().filter(|f| f.issue.blocks_billing()).count();
-    let skipped_rules: Vec<String> = evaluated
-        .complement()
-        .iter()
+    let billing_block_count = found.iter().filter(|f| f.blocks_billing()).count();
+    let skipped_rules: Vec<String> = Rule::ALL
+        .into_iter()
+        .filter(|r| !evaluated.contains(r))
         .map(|r| r.as_str().to_owned())
         .collect();
     if !skipped_rules.is_empty() {
@@ -362,7 +371,7 @@ fn validate_and_annotate(batch: &mut [MeterRead], ctx: IngestContext<'_>) -> Bat
         billing_block_count,
         rules: found
             .iter()
-            .map(|f| f.issue.rule_id.to_string())
+            .map(|f| f.code.to_owned())
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect(),
@@ -383,13 +392,15 @@ fn validate_and_annotate(batch: &mut [MeterRead], ctx: IngestContext<'_>) -> Bat
 
     let mut per_row: BTreeMap<usize, Vec<serde_json::Value>> = BTreeMap::new();
     for f in &found {
-        let Some(idx) = f.batch_index else { continue };
-        per_row.entry(idx).or_default().push(serde_json::json!({
-            "rule": f.issue.rule_id.to_string(),
-            "message": f.issue.message,
-            "obis_code": f.obis_code.map(|c| c.to_string()),
-            "blocks_billing": f.issue.blocks_billing(),
-        }));
+        for &idx in &f.rows {
+            per_row.entry(idx).or_default().push(serde_json::json!({
+                "rule": f.code,
+                "severity": f.severity.as_str(),
+                "message": f.message,
+                "obis_code": f.obis_code.map(|c| c.to_string()),
+                "blocks_billing": f.blocks_billing(),
+            }));
+        }
     }
 
     for (idx, issues) in per_row {
@@ -412,7 +423,7 @@ fn validate_and_annotate(batch: &mut [MeterRead], ctx: IngestContext<'_>) -> Bat
                 "billing_block_count": billing_block_count,
             },
         });
-        // A row may already carry a session-level quality summary from Hampel
+        // A row may already carry a session-level quality summary from batch
         // scoring. The two describe different things, so the rule findings are
         // added alongside it rather than replacing it.
         let read = &mut batch[idx];
@@ -474,42 +485,53 @@ mod tests {
 
     /// A prosumer MeLo delivers import and export for the same quarter-hour.
     ///
-    /// Validated as one flat list they share every timestamp, so V02 called each
-    /// pair an overlap — an `Error`, which blocks billing. Every bidirectional
-    /// delivery was unbillable on arrival.
+    /// Validated as one flat list they share every timestamp and would read as
+    /// one slot delivered twice — a structural defect that stops every content
+    /// rule. Two registers are two series.
     #[test]
-    fn two_registers_at_the_same_slot_are_not_an_overlap() {
+    fn two_registers_at_the_same_slot_are_not_a_duplicate() {
         let slot = datetime!(2026-07-01 10:00 UTC);
         let batch = vec![
             read(slot, 15, "5.0", Sparte::Strom, Some("1-0:1.8.0")),
             read(slot, 15, "3.0", Sparte::Strom, Some("1-0:2.8.0")),
         ];
+        let rules = rules_of(batch);
         assert!(
-            !rules_of(batch).contains(&"V02".to_owned()),
-            "import and export are two series, not one series overlapping itself"
+            !rules.contains(&"DUPLICATE".to_owned()),
+            "import and export are two series, not one series delivered twice: {rules:?}"
         );
     }
 
-    /// The same register twice at one slot still is an overlap.
+    /// The same register twice at one slot is a duplicate delivery.
     #[test]
-    fn one_register_delivered_twice_for_a_slot_is_still_an_overlap() {
+    fn one_register_delivered_twice_for_a_slot_is_a_duplicate() {
         let slot = datetime!(2026-07-01 10:00 UTC);
         let batch = vec![
             read(slot, 15, "5.0", Sparte::Strom, Some("1-0:1.8.0")),
             read(slot, 15, "6.0", Sparte::Strom, Some("1-0:1.8.0*255")),
         ];
+        let (validated, summary) = ValidatedReads::validate(batch, ctx());
         assert!(
-            rules_of(batch).contains(&"V02".to_owned()),
+            summary.rules.contains(&"DUPLICATE".to_owned()),
             "`*255` is the same register, so this is a genuine duplicate delivery"
+        );
+        assert!(summary.billing_block_count > 0);
+        assert!(
+            validated
+                .as_slice()
+                .iter()
+                .all(|r| r.quality_warnings.is_some()),
+            "the defect names both rows"
         );
     }
 
     /// An hourly gas series is not a broken quarter-hour one.
     ///
-    /// With the hardcoded 900 s grid every gas interval tripped V06, and any
-    /// real gap was divided by the wrong step.
+    /// The grid is observed, not assumed: an hourly gas delivery is a series on
+    /// an hourly grid with no gaps.
     #[test]
-    fn an_hourly_gas_series_does_not_trip_the_interval_length_rule() {
+    fn an_hourly_gas_series_is_validated_on_its_own_grid() {
+        // 05:00 UTC is 07:00 Berlin, inside the Gastag.
         let base = datetime!(2026-07-01 04:00 UTC);
         let batch: Vec<MeterRead> = (0..24)
             .map(|i| {
@@ -523,17 +545,13 @@ mod tests {
             })
             .collect();
         let rules = rules_of(batch);
-        assert!(
-            !rules.contains(&"V06".to_owned()),
-            "the cadence is observed, not assumed: {rules:?}"
-        );
-        assert!(!rules.contains(&"V01".to_owned()), "no gaps: {rules:?}");
+        assert!(rules.is_empty(), "a clean hourly gas day: {rules:?}");
     }
 
     /// A vacant flat's water meter reads zero for weeks; that is not a fault.
     ///
-    /// The electricity default tolerates four consecutive zeros, so every quiet
-    /// water and heat series arrived pre-flagged as a stuck meter.
+    /// The electricity preset reports a zero run of an hour, which would flag
+    /// every quiet water and heat series as a stuck meter.
     #[test]
     fn a_long_zero_run_on_a_water_meter_is_not_a_stuck_meter() {
         let base = datetime!(2026-07-01 00:00 UTC);
@@ -550,7 +568,7 @@ mod tests {
             .collect();
         let rules = rules_of(batch);
         assert!(
-            !rules.contains(&"V05".to_owned()),
+            !rules.contains(&"ZERO_RUN".to_owned()),
             "water has no standby floor — a zero run is ordinary: {rules:?}"
         );
 
@@ -567,12 +585,12 @@ mod tests {
                 )
             })
             .collect();
-        assert!(rules_of(strom).contains(&"V05".to_owned()));
+        assert!(rules_of(strom).contains(&"ZERO_RUN".to_owned()));
     }
 
-    /// A genuine gap is still reported, and the annotation lands on a real row.
+    /// A genuine gap is reported, blocks billing, and drops no row.
     #[test]
-    fn a_gap_is_still_detected_and_annotated() {
+    fn a_gap_is_detected_and_blocks_billing() {
         let base = datetime!(2026-07-01 00:00 UTC);
         let mut batch: Vec<MeterRead> = (0..8)
             .map(|i| {
@@ -595,13 +613,13 @@ mod tests {
             )
         }));
         let (validated, summary) = ValidatedReads::validate(batch, ctx());
-        assert!(summary.rules.contains(&"V01".to_owned()));
+        assert!(summary.rules.contains(&"GAP".to_owned()));
         assert!(summary.billing_block_count > 0, "a gap blocks billing");
         assert_eq!(validated.len(), 16, "validation annotates, never drops");
     }
 
-    /// V12 fires only when the caller states the plant's capacity — and it must
-    /// actually fire when they do.
+    /// `CAPACITY` fires only when the caller states the plant's capacity — and
+    /// it must actually fire when they do.
     #[test]
     fn implausible_power_needs_a_declared_capacity() {
         let base = datetime!(2026-07-01 00:00 UTC);
@@ -620,7 +638,7 @@ mod tests {
 
         let silent = ValidatedReads::validate(batch.clone(), ctx()).1.rules;
         assert!(
-            !silent.contains(&"V12".to_owned()),
+            !silent.contains(&"CAPACITY".to_owned()),
             "no ceiling was declared, so there is nothing to be implausible against"
         );
 
@@ -629,7 +647,7 @@ mod tests {
                 .1
                 .rules;
         assert!(
-            with_ceiling.contains(&"V12".to_owned()),
+            with_ceiling.contains(&"CAPACITY".to_owned()),
             "400 kW average through a 30 kW connection is impossible: {with_ceiling:?}"
         );
     }
@@ -649,12 +667,12 @@ mod tests {
                 )
             })
             .collect();
-        // A second register with a gap of its own, so the batch carries findings
+        // A second register with a negative value, so the batch carries findings
         // about two different series.
         batch.push(read(base, 15, "-1.0", Sparte::Strom, Some("1-0:2.8.0")));
 
         let (validated, summary) = ValidatedReads::validate(batch, ctx());
-        assert!(summary.rules.contains(&"V03".to_owned()));
+        assert!(summary.rules.contains(&"NEGATIVE".to_owned()));
 
         let annotated = validated
             .as_slice()
@@ -673,16 +691,17 @@ mod tests {
         );
     }
 
-    /// Findings survive an unsorted input, and V11 says the input was unsorted.
+    /// Delivery order is not a finding: a reversed complete series validates
+    /// exactly as the sorted one does.
     #[test]
-    fn an_unordered_batch_is_reported_and_still_validated_in_order() {
+    fn an_unordered_batch_validates_like_the_sorted_one() {
         let base = datetime!(2026-07-01 00:00 UTC);
         let mut batch: Vec<MeterRead> = (0..8)
             .map(|i| {
                 read(
                     base + time::Duration::minutes(15 * i),
                     15,
-                    "2.0",
+                    &format!("2.{i}"),
                     Sparte::Strom,
                     Some("1-0:1.8.0"),
                 )
@@ -690,50 +709,67 @@ mod tests {
             .collect();
         batch.reverse();
         let rules = rules_of(batch);
-        assert!(rules.contains(&"V11".to_owned()), "{rules:?}");
         assert!(
-            !rules.contains(&"V01".to_owned()),
-            "a reversed complete series has no gaps: {rules:?}"
+            rules.is_empty(),
+            "a reversed complete series is clean: {rules:?}"
         );
+    }
+
+    /// A read with no span is refused as a finding of its own, and the rest of
+    /// the register is still validated.
+    #[test]
+    fn a_read_without_a_span_is_a_structural_finding() {
+        let base = datetime!(2026-07-01 00:00 UTC);
+        let mut batch: Vec<MeterRead> = (0..4)
+            .map(|i| {
+                read(
+                    base + time::Duration::minutes(15 * i),
+                    15,
+                    &format!("2.{i}"),
+                    Sparte::Strom,
+                    Some("1-0:1.8.0"),
+                )
+            })
+            .collect();
+        batch.push(read(base, 0, "2.0", Sparte::Strom, Some("1-0:1.8.0")));
+        let rules = rules_of(batch);
+        assert_eq!(rules, vec!["EMPTY_SPAN".to_owned()]);
     }
 
     /// A clean batch says which rules stood behind that verdict.
     ///
-    /// V12 needs the metered plant's capacity, and edmd holds none as master
-    /// data — so on every door that is not told one, the rule is inert. A report
-    /// that could not distinguish "no implausible power" from "nobody looked"
-    /// let an Error-severity rule sit switched off while the docs, the API and
-    /// the operator guide all described it as active.
+    /// `CAPACITY` needs the metered plant's capacity, and edmd holds none as
+    /// master data — so on every door that is not told one, the rule is inert.
+    /// A report that could not distinguish "no implausible power" from "nobody
+    /// looked" would let an error-severity rule sit switched off unannounced.
     #[test]
     fn a_clean_batch_names_the_rules_that_did_not_run() {
-        use metering::validation::ValidationRuleId;
-
-        let base = datetime!(2026 - 07 - 01 00:00 UTC);
+        let base = datetime!(2026-07-01 00:00 UTC);
         let batch: Vec<MeterRead> = (0..8)
             .map(|i| {
                 read(
                     base + time::Duration::minutes(15 * i),
                     15,
-                    "2.0",
+                    &format!("2.{i}"),
                     Sparte::Strom,
                     Some("1-0:1.8.0"),
                 )
             })
             .collect();
 
-        // No ceiling supplied — V12 cannot fire.
+        // No ceiling supplied — CAPACITY cannot fire.
         let (found, evaluated) = findings_with_coverage(&batch, None);
         assert!(found.is_empty(), "this batch is clean: {found:?}");
         assert!(
-            !evaluated.contains(ValidationRuleId::ImplausiblePower),
-            "without a capacity ceiling V12 must be reported as skipped"
+            !evaluated.contains(&Rule::Capacity),
+            "without a capacity ceiling CAPACITY must be reported as skipped"
         );
 
-        // Supplied — V12 runs, and the same clean batch now says so.
+        // Supplied — CAPACITY runs, and the same clean batch now says so.
         let (_, evaluated) = findings_with_coverage(&batch, Some(Decimal::from(30)));
         assert!(
-            evaluated.contains(ValidationRuleId::ImplausiblePower),
-            "a capacity ceiling must bring V12 into the evaluated set"
+            evaluated.contains(&Rule::Capacity),
+            "a capacity ceiling must bring CAPACITY into the evaluated set"
         );
     }
 }

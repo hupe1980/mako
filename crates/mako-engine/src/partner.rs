@@ -93,6 +93,7 @@ use crate::{error::EngineError, ids::TenantId, marktrolle::Marktrolle, types::Ma
 /// > `AW` is a project-internal qualifier used to store the API-Webdienste
 /// > Strom base URL discovered from the BDEW Verzeichnisdienst.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CommunicationChannel {
     /// DE 3155 communication qualifier (`EM`, `TE`, `FX`, `AK`, …).
     pub qualifier: Box<str>,
@@ -140,6 +141,7 @@ impl CommunicationChannel {
 ///
 /// Corresponds to the *Ansprechpartner* group in PARTIN AHB 1.0f.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContactPerson {
     /// Full name or department name.
     pub name: Box<str>,

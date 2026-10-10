@@ -35,7 +35,7 @@ metering  = { workspace = true, features = ["serde"] }
 # meterstore's S3/GCS/Azure cold-tier backends: meterstore owns the whole Iceberg
 # catalog stack now, so edmd links none of it directly (see below). `file://` and
 # `memory://` warehouses need none of them and reach `iceberg`'s own factories.
-meterstore = { version = "0.13", default-features = false, features = ["catalog-facade", "object-store-all", "sql-catalog"] }
+meterstore = { version = "0.15", default-features = false, features = ["catalog-facade", "object-store-all", "sql-catalog"] }
 rubo4e     = { workspace = true }
 
 anyhow             = { workspace = true }

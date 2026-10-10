@@ -167,15 +167,22 @@ impl Summenzeitreihe {
         self.missing_slot_count() == 0
     }
 
-    /// Convert to monthly resampled buckets using the `metering` crate.
+    /// Sum the series into Europe/Berlin calendar months with
+    /// [`metering::series::resample::resample`].
     ///
-    /// This is the canonical output for MABIS § 13 StromNZV monthly summaries.
-    /// Each bucket = one calendar month. Reporting only — the filed message
-    /// carries the quarter-hourly slots.
-    #[must_use]
-    pub fn monthly_totals(&self) -> Vec<metering::ResampledBucket> {
-        use metering::{MeterInterval, QualityFlag, ResampleConfig, resample};
-        let intervals: Vec<MeterInterval> = self
+    /// Reporting only — the filed message carries the quarter-hourly slots. A
+    /// month missing any quarter-hour is left out of the result rather than
+    /// reported short, so a partial month is visible as an absent bucket and
+    /// never as a total that understates the month.
+    ///
+    /// # Errors
+    ///
+    /// [`MonthlyTotalsError`] when an interval is empty or reversed, the
+    /// intervals do not form a quarter-hourly series on the Berlin day, or a
+    /// monthly total overflows.
+    pub fn monthly_totals(&self) -> Result<metering::Series, MonthlyTotalsError> {
+        use metering::{DayBoundary, MeterInterval, QualityFlag, Resolution, Series};
+        let intervals = self
             .intervals
             .iter()
             .map(|iv| {
@@ -184,17 +191,29 @@ impl Summenzeitreihe {
                 } else {
                     QualityFlag::Measured
                 };
-                MeterInterval {
-                    from: iv.from,
-                    to: iv.to,
-                    value: iv.quantity_kwh,
-                    quality,
-                    obis_code: None,
-                }
+                MeterInterval::new(iv.from, iv.to, iv.quantity_kwh, quality)
             })
-            .collect();
-        resample(&intervals, &ResampleConfig::to_monthly())
+            .collect::<Result<Vec<_>, _>>()?;
+        let series = Series::new(Resolution::QUARTER_HOUR, DayBoundary::Strom, intervals)?;
+        Ok(metering::series::resample::resample(
+            &series,
+            Resolution::Month,
+        )?)
     }
+}
+
+/// Why [`Summenzeitreihe::monthly_totals`] could not sum the series.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum MonthlyTotalsError {
+    /// An interval is empty or reversed.
+    #[error(transparent)]
+    Interval(#[from] metering::series::interval::IntervalError),
+    /// The intervals are not a quarter-hourly series on the Berlin day.
+    #[error(transparent)]
+    Series(#[from] metering::series::SeriesError),
+    /// A monthly total overflows.
+    #[error(transparent)]
+    Resample(#[from] metering::series::resample::ResampleError),
 }
 
 // ── Builder ───────────────────────────────────────────────────────────────────
@@ -312,24 +331,27 @@ impl SummenzeitreiheBuilder {
         intervals: &[metering::MeterInterval],
     ) -> Result<(), SlotResolutionError> {
         for iv in intervals {
-            let actual = iv.to - iv.from;
+            let actual = iv.to() - iv.from();
             if actual != self.slot_length {
                 return Err(SlotResolutionError {
-                    from: iv.from,
-                    to: iv.to,
+                    from: iv.from(),
+                    to: iv.to(),
                     actual_minutes: actual.whole_minutes(),
                     expected_minutes: self.slot_length.whole_minutes(),
                 });
             }
         }
         for iv in intervals {
-            let key = (iv.from.unix_timestamp_nanos(), iv.to.unix_timestamp_nanos());
+            let key = (
+                iv.from().unix_timestamp_nanos(),
+                iv.to().unix_timestamp_nanos(),
+            );
             let is_substituted = !matches!(
-                iv.quality,
+                iv.quality(),
                 metering::QualityFlag::Measured | metering::QualityFlag::Calculated
             );
             let entry = self.slots.entry(key).or_insert((Decimal::ZERO, 0, 0));
-            entry.0 += iv.value;
+            entry.0 += iv.value();
             entry.1 += 1;
             if is_substituted {
                 entry.2 += 1;
@@ -404,13 +426,7 @@ mod tests {
         kwh: rust_decimal::Decimal,
         quality: QualityFlag,
     ) -> MeterInterval {
-        MeterInterval {
-            from,
-            to: from + Duration::minutes(15),
-            value: kwh,
-            quality,
-            obis_code: None,
-        }
+        MeterInterval::quarter_hour(from, kwh, quality).expect("a quarter-hour")
     }
 
     #[test]
@@ -483,13 +499,9 @@ mod tests {
         // Before-period interval: from = 23:45, to = 00:00 — to == period_from, so excluded
         builder
             .add_malo(&[
-                MeterInterval {
-                    from: before_period,
-                    to: from, // to == period_from → excluded (not strictly inside)
-                    value: dec!(10.0),
-                    quality: QualityFlag::Measured,
-                    obis_code: None,
-                },
+                // to == period_from → excluded (not strictly inside)
+                MeterInterval::new(before_period, from, dec!(10.0), QualityFlag::Measured)
+                    .expect("a quarter-hour"),
                 make_iv(in_period, dec!(5.0), QualityFlag::Measured),
             ])
             .unwrap();
@@ -530,7 +542,39 @@ mod tests {
     }
 
     #[test]
-    fn monthly_totals_uses_resample() {
+    fn monthly_totals_sum_a_complete_berlin_month() {
+        let june = metering::DayBoundary::Strom
+            .month(2026, time::Month::June)
+            .expect("June 2026 is in the calendar");
+        let mut builder = SummenzeitreiheBuilder::new(
+            bg("11YMAKO-MONTHL-Q"),
+            MabisZaehlpunktId::new("DE0004030099000000000000000012345").unwrap(),
+            june.start(),
+            june.end(),
+            datetime!(2026-07-08 05:00 UTC),
+            "SENDER",
+            "BIKO",
+            MABIS_SLOT,
+        );
+        let slots: Vec<MeterInterval> = (0..30 * 96)
+            .map(|i| {
+                make_iv(
+                    june.start() + Duration::minutes(15 * i),
+                    dec!(0.5),
+                    QualityFlag::Measured,
+                )
+            })
+            .collect();
+        builder.add_malo(&slots).unwrap();
+
+        let monthly = builder.build().monthly_totals().unwrap();
+        assert_eq!(monthly.len(), 1, "one Berlin month, one bucket");
+        assert_eq!(monthly.as_slice()[0].value(), dec!(1440.0));
+        assert_eq!(monthly.as_slice()[0].from(), june.start());
+    }
+
+    #[test]
+    fn a_month_missing_a_slot_is_absent_rather_than_short() {
         let (from, to) = period();
         let mut builder = SummenzeitreiheBuilder::new(
             bg("11YMAKO-MONTHL-Q"),
@@ -542,7 +586,6 @@ mod tests {
             "BIKO",
             MABIS_SLOT,
         );
-        // Add one interval in June
         builder
             .add_malo(&[make_iv(
                 datetime!(2026-06-15 10:00 UTC),
@@ -551,14 +594,11 @@ mod tests {
             )])
             .unwrap();
 
-        let series = builder.build();
-        let monthly = series.monthly_totals();
-        assert_eq!(
-            monthly.len(),
-            1,
-            "all intervals in June should produce one bucket"
+        let monthly = builder.build().monthly_totals().unwrap();
+        assert!(
+            monthly.is_empty(),
+            "a partial month must not report a total"
         );
-        assert_eq!(monthly[0].total, dec!(2.0));
     }
 
     #[test]
@@ -578,13 +618,10 @@ mod tests {
         // One bucket spanning the whole settlement month, as a resampled
         // endpoint would return it.
         let err = builder
-            .add_malo(&[MeterInterval {
-                from,
-                to,
-                value: dec!(1234.5),
-                quality: QualityFlag::Measured,
-                obis_code: None,
-            }])
+            .add_malo(&[
+                MeterInterval::new(from, to, dec!(1234.5), QualityFlag::Measured)
+                    .expect("a non-empty span"),
+            ])
             .expect_err("a month-long bucket is not a quarter-hourly slot");
 
         assert_eq!(err.expected_minutes, 15);

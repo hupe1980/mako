@@ -15,7 +15,7 @@
 #   marktd:      postgres://dev:dev@localhost:5432/marktd
 #   processd:    postgres://dev:dev@localhost:5432/processd
 #   invoicd:     postgres://dev:dev@localhost:5432/invoicd
-#   edmd:        postgres://dev:dev@localhost:5432/edmd
+#   edmd:        postgres://dev:dev@localhost:5432/edmd?sslmode=disable
 #   obsd:        postgres://dev:dev@localhost:5432/obsd
 #   netzbilanzd: postgres://dev:dev@localhost:5432/netzbilanzd
 #   sperrd:      postgres://dev:dev@localhost:5432/sperrd

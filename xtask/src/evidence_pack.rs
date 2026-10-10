@@ -277,12 +277,23 @@ fn opaque(inputs: &Path, file: &str) -> Value {
     }
 }
 
-/// The recipes `just ci` depends on, in the order the recipe names them.
+/// The recipes `just ci` runs, in the order the recipe names them: the
+/// dependencies of the private `_ci` recipe `ci` delegates to, or of `ci`
+/// itself where it lists them directly.
 pub fn ci_recipes(justfile: &str) -> Vec<String> {
-    justfile
-        .lines()
-        .find_map(|l| l.strip_prefix("ci:"))
-        .map(|deps| deps.split_whitespace().map(str::to_string).collect())
+    let deps_of = |name: &str| {
+        justfile
+            .lines()
+            .find_map(|l| l.strip_prefix(name))
+            .map(|deps| {
+                deps.split_whitespace()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|d| !d.is_empty())
+    };
+    deps_of("_ci:")
+        .or_else(|| deps_of("ci:"))
         .unwrap_or_default()
 }
 
@@ -463,6 +474,13 @@ pub fn check(pack: &Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ci_recipes_follow_the_private_gate() {
+        let j = "ci:\n    RUSTFLAGS=x just _ci\n\n_ci: check check-vex\n";
+        assert_eq!(ci_recipes(j), ["check", "check-vex"]);
+        assert_eq!(ci_recipes("ci: check deny\n"), ["check", "deny"]);
+    }
 
     const SRC: &str =
         "const DAMAGE_BUDGET: usize = 46;\nconst SILENT_PERMIT_BUDGET: usize = 2203;\n";

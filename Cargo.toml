@@ -219,7 +219,7 @@ mako-emob        = { path = "crates/mako-emob",        version = "0.22" }
 mako-mabis       = { path = "crates/mako-mabis",       version = "0.22" }
 energy-billing   = { path = "crates/energy-billing",   version = "0.22" }
 dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.22" }
-metering         = { version = "0.23" }
+metering         = { version = "0.25" }
 sepa             = { version = "0.7" }
 # Immutable, tamper-evident double-entry ledger kernel (sibling repo). accountingd's
 # storage/accounting base. Domain-neutral by design — the BillingDocument→Entry and

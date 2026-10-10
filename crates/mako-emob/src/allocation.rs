@@ -24,8 +24,11 @@
 //! | claims **under** the NGZ | every claim is met in full | `NGZ − Σ claims` |
 //! | claims **over** the NGZ | every claim is cut back in proportion | zero up to the six-decimal cut, [`Ueberdeckung`] recorded |
 //!
-//! Both come out of one `metering::allocation::allocate` with each part capped
-//! at its own claim. Over-claim is real — generation behind the Netzanschluss
+//! Both come out of one split in this crate: under the NGZ each part is its
+//! claim; over it each part is `Anspruch × NGZ ÷ Σ Ansprüche`, multiplied
+//! before it is divided and cut to six decimal places toward zero
+//! (`metering::precision::ALLOCATION_DP`), so a split that divides evenly is
+//! exact and the parts never exceed the NGZ. Over-claim is real — generation behind the Netzanschluss
 //! feeds the charge points — and neither Anlage 6 nor the AWH resolves it;
 //! proportional cut-back is the default, recorded on the row because routine
 //! over-claim is a metering fault, not a rounding one.
@@ -41,7 +44,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use metering::allocation::{AllocationBasis, AllocationPart, allocate};
+use metering::precision::ALLOCATION_DP;
 
 use crate::error::EmobError;
 use crate::ids::VirtualMaloId;
@@ -225,26 +228,21 @@ impl QuarterHourAllocation {
 
         let anspruch_sum: Decimal = ansprueche.iter().map(|a| a.kwh).sum();
 
-        let parts: Vec<AllocationPart> = ansprueche
-            .iter()
-            .map(|a| AllocationPart::new(a.malo.as_str(), a.kwh).capped_at(a.kwh))
-            .collect();
-
-        let row = allocate(ngz_kwh, parts, AllocationBasis::Proportional)?;
+        let zugeteilt = zuteilen(ngz_kwh, anspruch_sum, ansprueche)?;
 
         let zuordnungen: Vec<Zuordnung> = ansprueche
             .iter()
-            .zip(row.parts.iter())
-            .map(|(a, p)| Zuordnung {
+            .zip(zugeteilt)
+            .map(|(a, kwh)| Zuordnung {
                 malo: a.malo.clone(),
                 kind: a.kind,
                 anspruch_kwh: a.kwh,
-                kwh: p.allocated,
+                kwh,
             })
             .collect();
 
         let zugeordnet_kwh: Decimal = zuordnungen.iter().map(|z| z.kwh).sum();
-        let delta_kwh = row.residual;
+        let delta_kwh = ngz_kwh - zugeordnet_kwh;
 
         let proof = ConservationProof {
             ngz_kwh,
@@ -285,6 +283,39 @@ impl QuarterHourAllocation {
             .map(|z| z.kwh)
             .sum()
     }
+}
+
+/// Each claim's share of `ngz_kwh`, in input order.
+///
+/// Under the NGZ every claim is met in full. Over it every claim is cut back
+/// in proportion — `Anspruch × NGZ ÷ Σ Ansprüche`, the product formed before
+/// the one division, then cut to [`ALLOCATION_DP`] places toward zero. Dividing
+/// first would turn three claims of 4 kWh against 9 kWh into 2.999997 each;
+/// multiplying first gives 3 exactly. The cut never rounds up, so the parts
+/// cannot exceed the NGZ, and each part stays at or below its own claim.
+fn zuteilen(
+    ngz_kwh: Decimal,
+    anspruch_sum: Decimal,
+    ansprueche: &[Anspruch],
+) -> Result<Vec<Decimal>, EmobError> {
+    if anspruch_sum <= ngz_kwh {
+        return Ok(ansprueche.iter().map(|a| a.kwh).collect());
+    }
+    ansprueche
+        .iter()
+        .map(|a| {
+            a.kwh
+                .checked_mul(ngz_kwh)
+                .and_then(|p| p.checked_div(anspruch_sum))
+                .map(|q| q.trunc_with_scale(ALLOCATION_DP).min(a.kwh))
+                .ok_or_else(|| {
+                    EmobError::Allocation(format!(
+                        "the share of {} overflows the decimal range",
+                        a.malo
+                    ))
+                })
+        })
+        .collect()
 }
 
 /// One filing of an allocation, versioned the way MaBiS versions everything.
@@ -499,6 +530,47 @@ mod tests {
         let u = r.ueberdeckung.expect("recorded, never silent");
         assert_eq!(u.ueberhang_kwh(), dec!(10));
         assert!(r.zuordnungen.iter().all(Zuordnung::gekuerzt));
+        assert!(r.proof.haelt());
+    }
+
+    /// FR-006: a split that divides evenly is exact. Three claims of 4 kWh
+    /// against 9 kWh are 3 kWh each; dividing before multiplying would give
+    /// 2.999997 and push 0.000009 kWh into the Deltamenge.
+    #[test]
+    fn a_three_way_cut_back_multiplies_before_it_divides() {
+        let r = QuarterHourAllocation::allocate(
+            slot(),
+            Richtung::Bezug,
+            dec!(9),
+            &[
+                a("veh-1", MaloKind::Vehicle, dec!(4)),
+                a("veh-2", MaloKind::Vehicle, dec!(4)),
+                a("veh-3", MaloKind::Vehicle, dec!(4)),
+            ],
+        )
+        .unwrap();
+        assert!(r.zuordnungen.iter().all(|z| z.kwh == dec!(3)));
+        assert_eq!(r.delta_kwh, Decimal::ZERO);
+        assert!(r.proof.haelt());
+    }
+
+    /// A cut that does not divide evenly truncates; the Deltamenge takes the
+    /// remainder and no part exceeds its share.
+    #[test]
+    fn an_uneven_cut_back_truncates_into_the_delta() {
+        let r = QuarterHourAllocation::allocate(
+            slot(),
+            Richtung::Bezug,
+            dec!(10),
+            &[
+                a("veh-1", MaloKind::Vehicle, dec!(5)),
+                a("veh-2", MaloKind::Vehicle, dec!(5)),
+                a("veh-3", MaloKind::Vehicle, dec!(5)),
+            ],
+        )
+        .unwrap();
+        assert!(r.zuordnungen.iter().all(|z| z.kwh == dec!(3.333333)));
+        assert_eq!(r.delta_kwh, dec!(0.000001));
         assert!(r.proof.haelt());
     }
 

@@ -40,7 +40,7 @@ graph TB
     end
 
     subgraph data ["Energy Data & Observability"]
-        edmd[":8380 edmd<br/>MSCONS · iMSys direct push<br/>Hampel · V01–V09/V11/V12 · virtual"]
+        edmd[":8380 edmd<br/>MSCONS · iMSys direct push<br/>validation · Ersatzwerte · virtual"]
         obsd[":8480 obsd<br/>process projections · KPI<br/>§7a Abs. 5 EnWG parity report"]
         mabis[":8880 mabis-syncd<br/>MaBiS Summenzeitreihe<br/>MSCONS 13003 · 10. Werktag · MCP"]
         einsd[":9180 einsd<br/>EEG/KWKG settlement<br/>10 schemes · §14 UStG Gutschrift"]
@@ -98,8 +98,9 @@ graph TB
 | [einsd](@/docs/services/einsd.md) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes; issues the **§14 UStG Gutschrift** (Gutschriftverfahren) per billable settlement as a BO4E `Rechnung` with per-rate USt breakdown; 19-tool MCP server |
 | [obsd](@/docs/services/obsd.md) | `:8480` | All | Business-process observability — per-PID KPIs with the APERAK and Antwortfrist clocks reported separately, deadlines read from `mako-fristen` (never computed here), `completed_at` cycle-time tracking, `GET /api/v1/audit/gleichbehandlung` for the § 7a Abs. 5 EnWG filing, 6-tool MCP server |
 
-`edmd`'s quality layer is Hampel scoring plus the V01–V09/V11/V12 validation rules; its
-derived products are virtual meters (§ 42b EnWG GGV), the § 40a Abs. 2 EnWG
+`edmd`'s quality layer is `metering`'s validation rules, run per register with an A/B/C/F
+grade, and its Ersatzwertbildung; its derived products are virtual meters (UTILTS
+Berechnungsformel, § 42b EnWG GGV), the § 40a Abs. 2 EnWG
 Verbrauchsschätzung, Resampling and Ablesesteuerung (INSRPT auto-order). `meterstore` tiers
 hot PostgreSQL against cold Apache Iceberg with cross-tier OLAP and a read-only Iceberg REST
 catalog, and every Cedar write action is role-gated to MSB/NB/admin.

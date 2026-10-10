@@ -177,7 +177,7 @@ HTTP client or serialisation — `mako_service::CloudEvent` is the envelope,
 graph TD
     subgraph pure ["Pure calculation crates (zero I/O)"]
         billing["billing 0.15 (crates.io)<br/>PricingModel · RateSchedule · TimeOfUsePricing<br/>EN 16931 line items — BG-23 VAT breakdown · BG-27/28 line<br/>allowances · BG-29 price detail · BT-130 unit code<br/>AmountScale · AdvancePayment · integer-cent money"]
-        metering["metering<br/>MeterInterval · fill_gaps (§17)<br/>Hampel quality · gas_m3_to_kwh_hs"]
+        metering["metering 0.25 (crates.io)<br/>Series · vee validate / substitute<br/>Formula · community allocate · G 685"]
         eeg["eeg-billing<br/>10 EEG/KWKG schemes · §51/§52/§36h<br/>§14 UStG Gutschrift → BO4E Rechnung (bo4e)"]
         grid["grid-billing<br/>NNE · KA · MMM · MSB · §13a<br/>CalculationTrace · into_rechnung (bo4e)"]
         energy["energy-billing<br/>Product (13 typed variants)<br/>BillingEngine · §41a guard · Invoice.warnings<br/>to_rechnung (bo4e)"]
@@ -194,7 +194,6 @@ graph TD
     billing --> eeg
     billing --> energy
     billing --> grid
-    metering --> energy
     eeg --> energy
     eeg --> einsd
     grid --> netzbilanzd
@@ -242,8 +241,8 @@ Pass 5  Cancellation sign reversal   (Stornorechnung)
 | [`en16931`](https://crates.io/crates/en16931) | `0.7` | EN 16931 semantic invoice model and business-rule validation |
 | [`en16931-formats`](https://crates.io/crates/en16931-formats) | `0.7` | EN 16931 renderers — XRechnung/CII, PEPPOL UBL and the ZUGFeRD carrier |
 | [`sepa`](https://crates.io/crates/sepa) | `0.7` | IBAN/BIC validation, pain.001/008/007 generation, camt.05x and pain.002 parsing |
-| [`metering`](https://crates.io/crates/metering) | `0.23` | German energy metering domain — intervals, aggregation, gap filling, quality scoring, GGV allocation |
-| [`meterstore`](https://crates.io/crates/meterstore) | `0.13` | Metering time-series store beneath `edmd` — hot PostgreSQL window, settled Iceberg V2 history, version resolution |
+| [`metering`](https://crates.io/crates/metering) | `0.25` | German energy metering quantities over a validated `Series` — validation and Ersatzwertbildung (`vee`), aggregation and resampling, the UTILTS Berechnungsformel and the § 42b/§ 42c community allocation, session splits, gas conversion |
+| [`meterstore`](https://crates.io/crates/meterstore) | `0.15` | Metering time-series store beneath `edmd` — hot PostgreSQL window over TLS (`verify-full` unless the URL names a `sslmode`), settled Iceberg V2 history, version resolution, the delivery and provenance types |
 | [`doubleentry`](https://crates.io/crates/doubleentry) | `0.7` | Double-entry ledger — append-only BLAKE3 Merkle log, inclusion and consistency proofs, period seals |
 | [`rubo4e`](https://crates.io/crates/rubo4e) | `0.14` | BO4E business-object types — the `rubo4e::current` versioned schema with validation |
 | [`agentplane`](https://crates.io/crates/agentplane) | `0.29` | Durable agent runtime behind `agentd` — journaled effects, typed manifests, human triage |
@@ -403,11 +402,11 @@ across single-purpose daemons around one metered-data spine (`edmd`):
 
 | EDM reference layer | Home | Notes |
 |---|---|---|
-| Data acquisition | `edmd` — MSCONS via marktd, direct iMSys/RLM/Gas push, IoT push, bulk, optional Kafka | All paths run the same V01–V09/V11/V12 validation |
+| Data acquisition | `edmd` — MSCONS via marktd, direct iMSys/RLM/Gas push, IoT push, bulk, optional Kafka | All paths run the same per-register validation |
 | Time-series database | `edmd` over `meterstore` — PostgreSQL hot window + Iceberg settled history | `?as_of=` reconstruction; `allocation_version` INITIAL/CORRECTION/FINAL |
-| Validation engine (VEE) | `metering::validation`, on every ingest path | Annotate-only: suspect readings are stored with `quality_warnings`, never discarded |
-| Substitute values (§ 60 Abs. 1 MsbG) | `metering::substitute` + `edmd` REST/MCP | Interpolation, prior-period average, carry-forward, zero-fill; `substitute_value_log` audit |
-| Calculation engine | `metering`: aggregation, HT/NT, Spitzenleistung, G685 gas conversion, virtual meters, Mehr-/Mindermengen | Fixed typed rules, no free-form formula editor |
+| Validation engine (VEE) | `metering::vee::validation`, on every ingest path | Annotate-only: suspect readings are stored with `quality_warnings`, never discarded |
+| Substitute values (§ 60 Abs. 1 MsbG) | `metering::vee::substitute` + `edmd` REST/MCP | Interpolation up to two hours, else the Vergleichswert of comparable days (MeteringCode 2006 A8.2.2); refused, never invented; `substitute_value_log` audit |
+| Calculation engine | `metering`: aggregation, HT/NT, Spitzenleistung, G685 gas conversion, the UTILTS Berechnungsformel, the § 42b/§ 42c allocation, Mehr-/Mindermengen | Typed rules; a virtual meter's formula is the UTILTS step graph |
 | Forecasting | `edmd /forecast` — § 40a Abs. 2 EnWG Verbrauchsschätzung | No ML runtime in-core |
 | Balancing / settlement | `mabis-syncd` (Summenzeitreihen, PID 13003), `netzbilanzd`, `mako-gabi-gas` in makod | edmd serves `/summenzeitreihe` and `/billing-period` |
 | Market communication | `makod` — 17 EDIFACT message types, deadline scheduler, CONTRL/APERAK | Business state lives in the daemons |

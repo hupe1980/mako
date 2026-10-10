@@ -377,18 +377,19 @@ CREATE INDEX        gqd_tenant      ON gas_quality_data (tenant);
 -- `virtual_malo_id` — a virtual meter *is* a Marktlokation, addressed by its own
 -- MaLo-ID, which is why the column is not a bare `virtual_id`.
 --
--- `rule_type` must match `metering::VirtualMeterKind::as_str` exactly. It is the
--- same string the internally-tagged `rule_json` carries in its `kind` field, so
--- the column and the document cannot disagree; `edmd` deserialises `rule_json`
--- into `AggregationRule`, and a value here the enum does not know is an
--- unreadable row. `rule_type_check_matches_the_aggregation_rule_enum` pins the
--- list.
+-- `rule_type` must match `edmd::domain::virtual_meter::VirtualMeterRule::KINDS`
+-- exactly. It is the variant the externally-tagged `rule_json` is keyed by
+-- (`{"FORMULA": {…}}`), so the column and the document cannot disagree; `edmd`
+-- deserialises `rule_json` into `VirtualMeterRule`, and a value here the enum
+-- does not know is an unreadable row. `rule_type_check_matches_the_virtual_meter_rule`
+-- pins the list.
 --
--- §42c Energy Sharing reuses `GgvProportionalAllocation`: the allocation
--- arithmetic is identical, and the two regimes are distinguished by
--- `legal_basis` (§42b = in-building, no grid transit; §42c = via the public
--- grid). Should BNetzA's §42c Festlegung — due end-2026 — mandate different
--- arithmetic, that will need its own variant rather than an overloaded one.
+-- `FORMULA` is a UTILTS Berechnungsformel over Messlokationen
+-- (`metering::allocation::formula::Formula`). `COMMUNITY_SHARE` is one
+-- participant of a community supplied from a shared plant
+-- (`metering::allocation::community`): § 42b Abs. 5 EnWG in a building, § 42c
+-- EnWG via the public grid, told apart by `legal_basis` (BNetzA Mitteilung
+-- Nr. 73, BK6-06-009) — the arithmetic is the same.
 
 CREATE TABLE virtual_meter_configs (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -396,14 +397,12 @@ CREATE TABLE virtual_meter_configs (
     display_name    TEXT,
     rule_type       TEXT        NOT NULL
                         CHECK (rule_type IN (
-                            'SUM',
-                            'RESIDUAL',
-                            'PV_SELF_CONSUMPTION',
-                            'GGV_CONSTANT_ALLOCATION',
-                            'GGV_PROPORTIONAL_ALLOCATION'
+                            'FORMULA',
+                            'COMMUNITY_SHARE'
                         )),
-    -- Serialised `AggregationRule`, including its source MaLo-IDs.
-    rule_json       JSONB,
+    -- Serialised `VirtualMeterRule`, including the MaLo each Messlokation's
+    -- readings are filed under (`sources`).
+    rule_json       JSONB       NOT NULL,
     -- Statutory citation, e.g. '§42b EnWG' or '§42c EnWG'. Free text: it records
     -- which regime a community operates under, which `rule_type` cannot express.
     legal_basis     TEXT,
@@ -483,10 +482,12 @@ CREATE TABLE substitute_value_log (
     dtm_to          TIMESTAMPTZ   NOT NULL,
     original_kwh    NUMERIC(18,5),
     substitute_kwh  NUMERIC(18,5) NOT NULL,
+    -- `metering::vee::substitute::Method::as_str`, exactly: the method that
+    -- ran, chosen by the gap's length and the data (MeteringCode 2006
+    -- A8.2.2). `schema_code_guard` pins the list against the enum.
     method          TEXT          NOT NULL
                         CHECK (method IN (
-                            'LinearInterpolation','PriorPeriodAverage',
-                            'ZeroFill','LastValueCarryForward','ManualEntry'
+                            'INTERPOLATION','VERGLEICHSWERT','HOLD','ZERO'
                         )),
     reason          TEXT,
     -- Operator who authorised the Ersatzwert (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) attributability).

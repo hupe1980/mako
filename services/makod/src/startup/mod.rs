@@ -215,6 +215,10 @@ pub(crate) fn lock_data_dir(
     reason = "the pushes are #[cfg]-gated and cannot be merged into a vec![] literal"
 )]
 pub fn production_modules() -> Vec<Box<dyn mako_engine::builder::EngineModule>> {
+    #[allow(
+        unused_mut,
+        reason = "a build with no role feature pushes no module; it is refused by the panic below"
+    )]
     let mut m: Vec<Box<dyn mako_engine::builder::EngineModule>> = Vec::new();
 
     // GpkeModule — GPKE 55001–55018/55022–55024/55555/55600–55609 +

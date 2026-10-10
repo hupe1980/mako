@@ -505,7 +505,7 @@ pub async fn handle_webhook(
 
         // ── Typed MSCONS interval ingest ──────────────────────────────────
         // The reads carried by a ProcessCompleted event are the primary source
-        // of metered data in German MaKo. They are validated (V01–V09/V11/V12) and then
+        // of metered data in German MaKo. They are validated (per register) and then
         // stored through the same batched path as every other ingest family, so
         // a MSCONS reading lands with the same key, unit and quality record as
         // one that arrived by direct push.
@@ -544,7 +544,7 @@ pub async fn handle_webhook(
                 });
 
             // The metered plant's physical capacity, when the decode carried it
-            // up. It is what makes V12 (`ImplausiblePower`) fireable: without a
+            // up. It is what makes `CAPACITY` fireable: without a
             // ceiling there is nothing for an average power to be impossible
             // against, and the rule is inert.
             let max_plant_power_kw = data.get("max_plant_power_kw").and_then(json_decimal);
@@ -676,7 +676,7 @@ pub async fn handle_webhook(
             let stored = validated.len();
             // Captured before the batch moves into the store, for the alert below.
             let (period_from, period_to) = crate::domain::batch_period(validated.as_slice());
-            // The Hampel grade and its `quality_assessments` row, as on every
+            // The quality grade and its `quality_assessments` row, as on every
             // other door: the § 147 AO history is only as complete as its
             // least-covered path. Graded from the borrow, recorded once the
             // readings are stored.

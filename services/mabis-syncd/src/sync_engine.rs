@@ -532,13 +532,14 @@ impl SyncEngine {
                 match self.fetch_lastgang(malo_id, from_ts, to_ts, as_of).await {
                     Ok(intervals) => {
                         let interval_count = intervals.len() as i32;
-                        let total_kwh: Decimal = intervals.iter().map(|iv| iv.value).sum();
+                        let total_kwh: Decimal =
+                            intervals.iter().map(metering::MeterInterval::value).sum();
                         let has_gaps = intervals.is_empty();
                         let substituted_count = intervals
                             .iter()
                             .filter(|iv| {
                                 matches!(
-                                    iv.quality,
+                                    iv.quality(),
                                     metering::QualityFlag::Substituted
                                         | metering::QualityFlag::Estimated
                                         | metering::QualityFlag::Preliminary
@@ -935,18 +936,19 @@ impl SyncEngine {
             let Some(value) = Self::parse_decimal(&iv["kwh"]) else {
                 continue;
             };
-            intervals.push(metering::MeterInterval {
-                from,
-                to,
-                value,
-                quality: iv["quality"]
-                    .as_str()
-                    .and_then(|q| q.parse().ok())
-                    .unwrap_or(metering::QualityFlag::Unknown),
-                obis_code: None,
-            });
+            let quality = iv["quality"]
+                .as_str()
+                .and_then(|q| q.parse().ok())
+                .unwrap_or(metering::QualityFlag::Unknown);
+            // An empty or reversed span is a defective series, not a slot to
+            // skip: dropping it would short the territory by its energy.
+            intervals.push(
+                metering::MeterInterval::new(from, to, value, quality).with_context(|| {
+                    format!("edmd /energy/{malo_id} carried a defective interval")
+                })?,
+            );
         }
-        intervals.sort_by_key(|iv| iv.from);
+        intervals.sort_by_key(metering::MeterInterval::from);
 
         if intervals.is_empty() {
             anyhow::bail!(
@@ -1535,10 +1537,10 @@ mod lastgang_tests {
         ]));
         let intervals = SyncEngine::parse_energy_series("50123456789", &data).expect("parses");
         assert_eq!(intervals.len(), 2);
-        assert_eq!(intervals[0].value, Decimal::new(125, 1));
-        assert_eq!(intervals[0].quality, metering::QualityFlag::Measured);
+        assert_eq!(intervals[0].value(), Decimal::new(125, 1));
+        assert_eq!(intervals[0].quality(), metering::QualityFlag::Measured);
         assert_eq!(
-            intervals[0].to,
+            intervals[0].to(),
             time::macros::datetime!(2026-06-01 00:15:00 UTC),
             "the interval's own end, not an assumed grid"
         );

@@ -468,5 +468,5 @@ The aggregation is `mako_mabis::SummenzeitreiheBuilder`, constructed per
 Bilanzierungsgebiet with its `MabisZaehlpunktId`, the period, the version,
 sender and receiver MP-IDs and `MABIS_SLOT`; `add_malo` refuses a wrong-shaped
 interval, and the built `Summenzeitreihe` offers `validate_identifiers`,
-`is_complete` / `missing_slot_count` and `monthly_totals` (reporting only).
+`is_complete` / `missing_slot_count` and `monthly_totals` (reporting only; a Berlin month missing a quarter-hour is absent rather than reported short).
 `BilanzierungsgebietId` and `BilanzkreisId` are `mako-mabis`'s canonical types.

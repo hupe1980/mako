@@ -99,7 +99,7 @@ spec:
       | SM-PKI: certificate **runtimes** | BSI TR-03109-4 |
       | The SM-PKI trust root the gateway certificates chain to | § 28 MsbG |
       | The Konfigurationsprodukt a CLS channel needs before a DSO may steer | BK6-22-300 |
-      | Plausibilisierung und Ersatzwertbildung when a gateway goes silent | § 60 Abs. 2 MsbG |
+      | Plausibilisierung und Ersatzwertbildung when a gateway goes silent | § 60 Abs. 1 MsbG |
 
       **The 90/30/7-day expiry ladder is edmd's operational warning schedule, not
       a deadline anybody published.** TR-03109-4 binds certificate *runtimes*; the

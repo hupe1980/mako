@@ -2,9 +2,9 @@
 //!
 //! # Why this is shared rather than per-handler
 //!
-//! A batch can fail two independent ways: the **Hampel scorer** flags a session
-//! as grade C/F, and the **V-rule engine** annotates individual intervals
-//! (V03 negative energy, V04 impossible spike, V09 non-billable quality).
+//! A batch can fail two independent ways: the **quality grade** of the session
+//! is C/F, and the **validation pass** annotates individual intervals
+//! (`NEGATIVE`, `CAPACITY`, `NON_BILLABLE`).
 //! Either must raise the event, on every ingest door — otherwise a `FAULTY`
 //! reading with an unremarkable statistical profile, or any reading arriving
 //! over IoT push, bulk import or Kafka, is annotated in `quality_warnings` and
@@ -35,9 +35,9 @@ pub(crate) struct QualityAlert<'a> {
     pub sparte: Option<&'a str>,
     pub period_from: Option<OffsetDateTime>,
     pub period_to: Option<OffsetDateTime>,
-    /// V-rule outcome for the batch.
+    /// Validation outcome for the batch.
     pub validation: &'a BatchValidation,
-    /// The Hampel session summary, where the door computes one.
+    /// The session's quality summary, where the door computes one.
     pub hampel: Option<serde_json::Value>,
 }
 
@@ -114,7 +114,7 @@ mod tests {
             rules: if issues == 0 {
                 Vec::new()
             } else {
-                vec!["V09".to_owned()]
+                vec!["NON_BILLABLE".to_owned()]
             },
             skipped_rules: Vec::new(),
         }
@@ -141,8 +141,8 @@ mod tests {
         assert!(!alert(&v, None).is_warning());
     }
 
-    /// The defect this module exists to close: V09 fires on a batch whose
-    /// statistical profile is unremarkable, so the Hampel summary says nothing.
+    /// The defect this module exists to close: `NON_BILLABLE` fires on a batch
+    /// whose statistical profile is unremarkable, so the grade says nothing.
     #[test]
     fn a_validation_finding_alone_raises_the_warning() {
         let v = validation(1, 1);

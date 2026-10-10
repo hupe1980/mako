@@ -4187,8 +4187,8 @@ fn s41_wasserkraft_modernisierung_settlement_path() {
 ///
 /// A solar plant serves multiple building tenants. The plant operator receives
 /// payment for the total Einspeisemenge at the §48 Abs. 2 rate — the multi-tenant
-/// allocation is handled by the metering layer (the external `metering` crate's
-/// `AggregationRule::GgvProportionalAllocation` in edmd).
+/// allocation is handled by the metering layer (`edmd`'s `COMMUNITY_SHARE` rule
+/// over the external `metering` crate's `allocation::community::allocate`).
 /// The NB-to-plant-operator settlement uses `FeedInTariff` with the §48a Zuschlag
 /// incorporated into the rate by the plant registry.
 ///

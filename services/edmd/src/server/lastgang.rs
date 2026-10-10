@@ -15,7 +15,7 @@ use super::*;
 /// under a single `Lastgang` with `obis_kennzahl = null`.
 ///
 /// The interval length (`zeit_intervall_laenge`) is the register's **observed**
-/// cadence (`metering::classification::detect_interval_length`), not the spacing
+/// grid (`crate::domain::vee::observed_resolution`), not the spacing
 /// of whichever two readings happen to come first — a series whose window opens
 /// on a gap reported the gap as its resolution:
 /// - 15 min → `Mengeneinheit::ViertelStunde`
@@ -286,15 +286,15 @@ pub(crate) async fn get_energy_series(
         .iter()
         .map(|iv| {
             serde_json::json!({
-                "start": iv.from.format(&Rfc3339).unwrap_or_default(),
+                "start": iv.from().format(&Rfc3339).unwrap_or_default(),
                 // The interval's own end, so a consumer building a
                 // `MeterInterval` need not assume a grid.
-                "end": iv.to.format(&Rfc3339).unwrap_or_default(),
-                "kwh": iv.value.to_string(),
+                "end": iv.to().format(&Rfc3339).unwrap_or_default(),
+                "kwh": iv.value().to_string(),
                 // The projection admits only billable qualities, so every
                 // interval here is one — but Estimated/Substituted are among
                 // them, so the flag is reported rather than assumed.
-                "quality": crate::store::quality_to_str(iv.quality),
+                "quality": crate::store::quality_to_str(iv.quality()),
             })
         })
         .collect();
@@ -305,7 +305,7 @@ pub(crate) async fn get_energy_series(
     // hourly series as 25 % covered.
     let covered: i64 = selected
         .iter()
-        .map(|iv| (iv.to - iv.from).whole_seconds().max(0))
+        .map(|iv| iv.duration().whole_seconds().max(0))
         .sum();
     let window = (to - from).whole_seconds().max(1);
     #[expect(
@@ -313,8 +313,8 @@ pub(crate) async fn get_energy_series(
         reason = "a count or ratio reported as a float, never a money amount"
     )]
     let coverage_pct = (covered as f64 / window as f64 * 100.0).clamp(0.0, 100.0);
-    let resolution_min = metering::classification::detect_interval_length(&selected)
-        .map(|r| r.nominal_seconds() / 60);
+    let resolution_min =
+        crate::domain::vee::observed_resolution(&selected).map(|r| r.nominal_seconds() / 60);
 
     Json(serde_json::json!({
         "malo_id": malo_id,
@@ -419,22 +419,14 @@ fn register_key(r: &MeterRead) -> String {
 
 /// The observed cadence of one register's readings, in minutes.
 ///
-/// `detect_interval_length` is the shared cadence detector — it takes the modal
-/// spacing rather than the first one it finds, so a gap in the middle of a month
-/// does not become the series' resolution. Falls back to each reading's own
-/// declared length, and finally to a quarter-hour.
+/// [`crate::domain::vee::observed_resolution`] is the shared grid detector — it
+/// takes the median interval length rather than the first one it finds, so one
+/// odd span does not become the series' resolution. Falls back to the first
+/// reading's own declared length, and finally to a quarter-hour.
 fn observed_interval_minutes(group: &[&MeterRead]) -> u32 {
-    let intervals: Vec<metering::MeterInterval> = group
-        .iter()
-        .map(|r| metering::MeterInterval {
-            from: r.dtm_from,
-            to: r.dtm_to,
-            value: r.quantity_kwh,
-            quality: r.quality,
-            obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
-        })
-        .collect();
-    metering::classification::detect_interval_length(&intervals)
+    let intervals: Vec<metering::MeterInterval> =
+        group.iter().filter_map(|r| r.interval().ok()).collect();
+    crate::domain::vee::observed_resolution(&intervals)
         .map(|r| r.nominal_seconds() / 60)
         .or_else(|| {
             group
@@ -988,11 +980,13 @@ pub(crate) struct ResampledParams {
 /// | `MONTH` | Monthly totals for MMM / GPKE Teil 1 Kap. 8.4 |
 /// | `YEAR` | Annual settlement |
 ///
-/// Each bucket carries:
+/// The sum is `metering::series::resample::resample`'s: **a bucket missing any
+/// source slot is left out**, so it surfaces as an absent bucket rather than a
+/// short total — substitute first, then resample. Each bucket carries:
 /// - `total_kwh` — summed energy
-/// - `peak_kw` — maximum 15-min demand kW (RLM Strom)
-/// - `coverage_pct` — completeness indicator
-/// - `has_missing_data` — `true` when source intervals are missing
+/// - `peak_kw` — the highest average demand of one source interval in the
+///   bucket, on a grid of an hour or finer
+/// - `quality` — the worst quality of the bucket's slots
 pub(crate) async fn get_lastgang_resampled(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1000,8 +994,6 @@ pub(crate) async fn get_lastgang_resampled(
     Path(malo_id): Path<String>,
     Query(params): Query<ResampledParams>,
 ) -> impl IntoResponse {
-    use metering::{ResampleConfig, resample};
-
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
         return (
@@ -1015,17 +1007,17 @@ pub(crate) async fn get_lastgang_resampled(
         Ok(w) => w,
         Err(refusal) => return refusal.into_response(),
     };
-    let config = match params
+    let target = match params
         .resolution
         .as_deref()
         .unwrap_or("HOUR")
         .to_uppercase()
         .as_str()
     {
-        "HOUR" => ResampleConfig::to_hourly(),
-        "DAY" => ResampleConfig::to_daily(),
-        "MONTH" => ResampleConfig::to_monthly(),
-        "YEAR" => ResampleConfig::to_yearly(),
+        "HOUR" => metering::Resolution::Hour,
+        "DAY" => metering::Resolution::Day,
+        "MONTH" => metering::Resolution::Month,
+        "YEAR" => metering::Resolution::Year,
         other => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -1068,26 +1060,18 @@ pub(crate) async fn get_lastgang_resampled(
     // from all of them adds a prosumer's Einspeisung to its Bezug and counts a
     // dual-tariff meter's consumption twice (`domain::register`). Non-billable
     // qualities are dropped by the same projection (§ 40a Abs. 2 EnWG).
+    let sparte = reads.first().map_or(EdmSparte::Strom, |r| r.sparte);
     let intervals = crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
-
-    let buckets = resample(&intervals, &config);
-
-    let response: Vec<serde_json::Value> = buckets
-        .iter()
-        .map(|b| {
-            serde_json::json!({
-                "from": b.from,
-                "to": b.to,
-                "total_kwh": b.total,
-                "peak_kw": b.peak_kw,
-                "interval_count": b.interval_count,
-                "expected_count": b.expected_count,
-                "coverage_pct": b.coverage_pct(),
-                "has_missing_data": b.has_missing_data(),
-                "quality": format!("{:?}", b.quality),
-            })
-        })
-        .collect();
+    let response = match resampled_buckets(sparte, &intervals, target) {
+        Ok(buckets) => buckets,
+        Err(error) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
 
     Json(serde_json::json!({
         "malo_id": malo_id,
@@ -1098,6 +1082,50 @@ pub(crate) async fn get_lastgang_resampled(
         "buckets": response,
     }))
     .into_response()
+}
+
+/// A projected energy series summed onto `target`, one JSON bucket per
+/// **complete** bucket.
+///
+/// `metering::series::resample::resample` leaves out a bucket missing any
+/// source slot, so a partial month is absent rather than reported short. The
+/// peak is `metering::billing::aggregation::aggregate`'s Spitzenleistung over
+/// the bucket's source intervals.
+///
+/// # Errors
+///
+/// Why the buckets cannot be formed — answered `422`: the projection is not
+/// one series, or `target` does not nest its grid (a daily series asked for
+/// hours).
+pub(crate) fn resampled_buckets(
+    sparte: EdmSparte,
+    intervals: &[metering::MeterInterval],
+    target: metering::Resolution,
+) -> Result<Vec<serde_json::Value>, String> {
+    if intervals.is_empty() {
+        return Ok(Vec::new());
+    }
+    let series = crate::domain::vee::energy_series(sparte, intervals)
+        .map_err(|e| format!("the consumption series is not one series: {e}"))?;
+    let buckets =
+        metering::series::resample::resample(&series, target).map_err(|e| e.to_string())?;
+    Ok(buckets
+        .iter()
+        .map(|b| {
+            let peak_kw = series
+                .boundary()
+                .bucket(b.from(), target)
+                .and_then(|period| metering::billing::aggregation::aggregate(&series, period).ok())
+                .and_then(|agg| agg.spitzenleistung_kw);
+            serde_json::json!({
+                "from": b.from(),
+                "to": b.to(),
+                "total_kwh": b.value().to_string(),
+                "peak_kw": peak_kw.map(|kw| kw.to_string()),
+                "quality": crate::store::quality_to_str(b.quality()),
+            })
+        })
+        .collect())
 }
 
 // ── Summenzeitreihe ─────────────────────────────────────────────────────
@@ -1119,8 +1147,6 @@ pub(crate) async fn get_summenzeitreihe(
     Path(malo_id): Path<String>,
     Query(params): Query<SimpleTimeParams>,
 ) -> impl IntoResponse {
-    use metering::{ResampleConfig, resample};
-
     if let Err(e) = enforcer.check(
         &claims.principal(),
         "read-timeseries",
@@ -1154,26 +1180,29 @@ pub(crate) async fn get_summenzeitreihe(
     // The Summenzeitreihe feeds MaBiS and the Mehr-/Mindermengensaldo, so it is
     // the **Bezug**, projected onto one canonical register set: billable
     // qualities only (§ 40a Abs. 2 EnWG), no Einspeisung folded in, and no total
-    // register added to its own HT/NT split (`domain::register`).
+    // register added to its own HT/NT split (`domain::register`). A month
+    // missing any slot is absent rather than reported short.
+    let sparte = reads.first().map_or(EdmSparte::Strom, |r| r.sparte);
     let intervals = crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
-
-    let buckets = resample(&intervals, &ResampleConfig::to_monthly());
-    let total_kwh: rust_decimal::Decimal = buckets.iter().map(|b| b.total).sum();
-
-    let months: Vec<serde_json::Value> = buckets
+    let months = match resampled_buckets(sparte, &intervals, metering::Resolution::Month) {
+        Ok(buckets) => buckets,
+        Err(error) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
+    let total_kwh: rust_decimal::Decimal = months
         .iter()
-        .map(|b| {
-            serde_json::json!({
-                "from": b.from,
-                "to": b.to,
-                "total_kwh": b.total,
-                "peak_kw": b.peak_kw,
-                "coverage_pct": b.coverage_pct(),
-                "has_missing_data": b.has_missing_data(),
-                "quality": format!("{:?}", b.quality),
-            })
+        .filter_map(|m| {
+            m["total_kwh"]
+                .as_str()?
+                .parse::<rust_decimal::Decimal>()
+                .ok()
         })
-        .collect();
+        .sum();
 
     Json(serde_json::json!({
         "malo_id": malo_id,

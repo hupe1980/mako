@@ -664,18 +664,15 @@ fn disclaims_bo4e(doc: &str) -> bool {
 /// compatibility is the counterparty's property and not mako's.
 fn reachable_body_types(seed: &[String], files: &[(String, String)]) -> Vec<String> {
     use std::collections::{HashMap, HashSet};
-    // A service's own definition wins a name collision, then the workspace
-    // crates': a body field typed from a crate is deserialised from the same
-    // untrusted JSON as the body that holds it.
+    // Every definition of a name is followed, not the first one found: which
+    // file comes first is the filesystem's `read_dir` order, so picking one
+    // would make the verdict differ between macOS and Linux (`PartnerRecord` exists
+    // in both `mako-engine` and `mako-markt`). Following all of them errs in
+    // the conservative direction, as the attribute check below already does.
     let mut defs: HashMap<String, Vec<(String, String)>> = HashMap::new();
-    for tree in ["services/", "crates/"] {
-        for (rel, src) in files {
-            if !rel.starts_with(tree) {
-                continue;
-            }
-            for s in structs(src) {
-                defs.entry(s.name).or_insert(s.fields);
-            }
+    for (_, src) in files {
+        for s in structs(src) {
+            defs.entry(s.name).or_default().extend(s.fields);
         }
     }
     let mut seen: HashSet<String> = HashSet::new();
@@ -931,6 +928,27 @@ mod tests {
             reached.contains(&"Rates".to_owned()),
             "transitively: {reached:?}"
         );
+    }
+
+    /// Two crates defining the same name: both definitions are followed, in
+    /// either file order, so the verdict cannot depend on `read_dir`.
+    #[test]
+    fn every_same_named_definition_is_followed_in_any_order() {
+        let a = (
+            "crates/mako-markt/src/repository.rs".to_owned(),
+            "#[derive(Deserialize)]\npub struct PartnerRecord {\n    pub notes: String,\n}\n"
+                .to_owned(),
+        );
+        let b = (
+            "crates/mako-engine/src/partner.rs".to_owned(),
+            "#[derive(Deserialize)]\npub struct PartnerRecord {\n    pub contacts: Vec<ContactPerson>,\n}\n\
+             #[derive(Deserialize)]\npub struct ContactPerson {\n    pub name: String,\n}\n"
+                .to_owned(),
+        );
+        for files in [vec![a.clone(), b.clone()], vec![b, a]] {
+            let reached = super::reachable_body_types(&["PartnerRecord".to_owned()], &files);
+            assert!(reached.contains(&"ContactPerson".to_owned()), "{reached:?}");
+        }
     }
 
     #[test]
