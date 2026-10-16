@@ -43,12 +43,12 @@
 //!
 //! ## Regulatory basis
 //!
-//! - **BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2 Prozessschritt 2** — the
+//! - **BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 / 3.5.2.2 Prozessschritt 2** — the
 //!   NB answers the Sperr-/Entsperrauftrag „unverzüglich, jedoch spätester ÜT
 //!   ist der 1. WT nach dem ÜT". The ORDERS/ORDRSP AHBs quantify nothing; the
 //!   Festlegung is the only source, and it is a Werktag, not 24 wall-clock
 //!   hours.
-//! - **GPKE Teil 2 § 3.5** also bounds the rest of the process: execution
+//! - **GPKE Teil 2 Kap. 3.5** also bounds the rest of the process: execution
 //!   within 6 WT nach dem frühestmöglichen Sperrtermin, the IFTSTA 1 WT nach
 //!   Abschluss, the MSB's answer to an Anfrage Sperrung in 3 WT with silence
 //!   counting as consent, and at most **two** Sperrversuche per Auftrag.

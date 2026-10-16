@@ -9,7 +9,7 @@
 //! These run without a database: the pricing takes the product's stored JSON
 //! and the position, and nothing else.
 
-use productd::handlers::{PricingContext, compute_cost_breakdown, grund};
+use productd::handlers::{PricingContext, behg_gas_fuer_stichtag, compute_cost_breakdown, grund};
 use productd::pg::AngebotPositionInput;
 use rust_decimal::{Decimal, dec};
 
@@ -68,7 +68,7 @@ fn position(sparte: &str, jahresverbrauch_kwh: Decimal) -> AngebotPositionInput 
 
 /// No CO₂ price and no reverse charge — the default a Strom quotation runs in.
 const PLAIN: PricingContext = PricingContext {
-    behg_gas_ct_per_kwh: None,
+    behg_gas_ct_per_kwh: Err(String::new()),
     reverse_charge_13b: false,
 };
 
@@ -259,7 +259,7 @@ fn the_default_rate_is_the_standard_rate() {
 fn a_reverse_charge_quotation_states_no_umsatzsteuer() {
     let data = produkt(serde_json::json!([flat("ARBEITSPREIS_EINTARIF", "20")]));
     let ctx = PricingContext {
-        behg_gas_ct_per_kwh: None,
+        behg_gas_ct_per_kwh: Err(String::new()),
         reverse_charge_13b: true,
     };
     let bd =
@@ -304,7 +304,7 @@ fn a_gas_position_needs_a_certificate_price() {
 
     // 55 EUR/t against the EBeV Erdgas factor of 0,18139464 kg CO₂/kWh_Hs.
     let ctx = PricingContext {
-        behg_gas_ct_per_kwh: Some(dec!(0.99767)),
+        behg_gas_ct_per_kwh: Ok(dec!(0.99767)),
         reverse_charge_13b: false,
     };
     let bd = compute_cost_breakdown(&data, &position("GAS", dec!(1000)), None, &ctx)
@@ -313,6 +313,76 @@ fn a_gas_position_needs_a_certificate_price() {
         bd.levies_eur,
         dec!(15.48),
         "§ 2 Abs. 3 Satz 1 Nr. 4 EnergieStG 0,55 ct + BEHG 0,99767 ct, × 1 000 kWh"
+    );
+}
+
+/// A quotation with Lieferbeginn 01.01.2027 and only a 2026 auction point is
+/// refused: a 2026 point never prices 2027, and § 10 BEHG fixes no 2027 price,
+/// so without a 2027 price set under the configured regime there is none.
+#[test]
+fn a_2027_lieferbeginn_is_not_priced_at_the_last_2026_auction_point() {
+    use energy_billing::BehgRegime;
+    let stichtag = time::macros::date!(2027 - 01 - 01);
+    let punkt_2026 = Some((time::macros::date!(2026 - 12 - 16), dec!(65)));
+    let behg = behg_gas_fuer_stichtag(stichtag, punkt_2026, BehgRegime::RvoBezugspreis);
+    assert!(behg.is_err(), "{behg:?}");
+
+    let data = produkt(serde_json::json!([flat("ARBEITSPREIS_EINTARIF", "5")]));
+    let ctx = PricingContext {
+        behg_gas_ct_per_kwh: behg,
+        reverse_charge_13b: false,
+    };
+    let err = compute_cost_breakdown(&data, &position("GAS", dec!(1000)), None, &ctx)
+        .expect_err("no 2027 CO₂ price");
+    assert_eq!(err.grund, grund::BEHG_PREIS_FEHLT);
+    assert!(err.detail.contains("2027"), "{}", err.detail);
+}
+
+/// A 2027 auction point is taken only through the configured regime: under the
+/// corridor of BT-Drs. 21/7869 a price inside 55–65 EUR/t prices the position
+/// at the year's EBeV factor, one outside is refused.
+#[test]
+fn a_2027_point_is_checked_against_the_configured_regime() {
+    use energy_billing::BehgRegime;
+    let stichtag = time::macros::date!(2027 - 03 - 01);
+    let ok = behg_gas_fuer_stichtag(
+        stichtag,
+        Some((time::macros::date!(2027 - 02 - 10), dec!(60))),
+        BehgRegime::Korridor,
+    )
+    .expect("inside the corridor");
+    let faktor = energy_billing::rates::erdgas_emissionsfaktor_kg_per_kwh(2027).unwrap();
+    assert_eq!(ok, dec!(60) * faktor / dec!(10));
+
+    assert!(
+        behg_gas_fuer_stichtag(
+            stichtag,
+            Some((time::macros::date!(2027 - 02 - 10), dec!(70))),
+            BehgRegime::Korridor,
+        )
+        .is_err()
+    );
+}
+
+/// In a year § 10 BEHG prices, the series point of that year wins, and without
+/// one the table prices it.
+#[test]
+fn a_tabled_year_takes_its_own_point_or_the_table() {
+    use energy_billing::BehgRegime;
+    let r = BehgRegime::RvoBezugspreis;
+    let d2026 = time::macros::date!(2026 - 09 - 01);
+    let faktor = energy_billing::rates::erdgas_emissionsfaktor_kg_per_kwh(2026).unwrap();
+    assert_eq!(
+        behg_gas_fuer_stichtag(
+            d2026,
+            Some((time::macros::date!(2026 - 08 - 26), dec!(63))),
+            r
+        ),
+        Ok(dec!(63) * faktor / dec!(10))
+    );
+    assert_eq!(
+        behg_gas_fuer_stichtag(time::macros::date!(2025 - 06 - 01), None, r),
+        Ok(energy_billing::behg_ct_per_kwh_for_year(2025).unwrap())
     );
 }
 

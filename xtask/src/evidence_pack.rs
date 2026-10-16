@@ -297,9 +297,28 @@ pub fn ci_recipes(justfile: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The `ci` recipes whose whole body is one `cargo xtask` call — the ones a
-/// release job can run without building the workspace.
-pub fn xtask_recipes(justfile: &str) -> Vec<String> {
+/// The xtask arguments of one recipe-body line, in any form that runs the
+/// `xtask` binary: `cargo xtask <args>` (the `.cargo/config.toml` alias),
+/// `cargo run [flags] -p xtask -- <args>` or `--package xtask`.
+pub fn xtask_invocation(line: &str) -> Option<&str> {
+    let line = line.trim();
+    if let Some(args) = line.strip_prefix("cargo xtask ") {
+        return Some(args.trim()).filter(|a| !a.is_empty());
+    }
+    let rest = line.strip_prefix("cargo run ")?;
+    let (flags, args) = rest.split_once(" -- ")?;
+    let flags: Vec<&str> = flags.split_whitespace().collect();
+    let names_xtask = flags
+        .windows(2)
+        .any(|w| matches!(w[0], "-p" | "--package") && w[1] == "xtask")
+        || flags
+            .iter()
+            .any(|f| *f == "--package=xtask" || *f == "-pxtask");
+    names_xtask.then_some(args.trim()).filter(|a| !a.is_empty())
+}
+
+/// Every recipe body in the justfile: name → its non-comment lines.
+pub fn recipe_bodies(justfile: &str) -> BTreeMap<String, Vec<String>> {
     let mut bodies: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut current: Option<String> = None;
     for line in justfile.lines() {
@@ -323,12 +342,19 @@ pub fn xtask_recipes(justfile: &str) -> Vec<String> {
             })
             .map(|(name, _)| name.to_string());
     }
+    bodies
+}
+
+/// The `ci` recipes whose whole body is one call of the `xtask` binary — the
+/// ones a job can run without building the workspace.
+pub fn xtask_recipes(justfile: &str) -> Vec<String> {
+    let bodies = recipe_bodies(justfile);
     ci_recipes(justfile)
         .into_iter()
         .filter(|r| {
             bodies
                 .get(r)
-                .is_some_and(|b| b.len() == 1 && b[0].starts_with("cargo xtask "))
+                .is_some_and(|b| b.len() == 1 && xtask_invocation(&b[0]).is_some())
         })
         .collect()
 }
@@ -625,5 +651,46 @@ binding places gated by an unreadable Voraussetzung: 2100 of 24000, in 300 of th
     #[test]
     fn only_single_xtask_call_recipes_are_offered_to_the_release_job() {
         assert_eq!(xtask_recipes(JUSTFILE), ["check-vex", "check-licenses"]);
+    }
+
+    #[test]
+    fn every_form_of_an_xtask_call_is_an_xtask_recipe() {
+        let j = "\
+_ci: a b c d e
+
+a:
+    cargo run -q -p xtask -- check-answer-commands
+
+b:
+    cargo run --package xtask -- check-vex
+
+c:
+    cargo run -q -p other -- check-vex
+
+d:
+    cargo xtask sync-regulatories --offline
+
+e:
+    cargo xtask check-vex
+    cargo test
+";
+        assert_eq!(xtask_recipes(j), ["a", "b", "d"]);
+        assert_eq!(
+            xtask_invocation("cargo run -q -p xtask -- check-answer-commands"),
+            Some("check-answer-commands")
+        );
+        assert_eq!(xtask_invocation("cargo xtask"), None);
+    }
+
+    #[test]
+    fn every_xtask_recipe_of_the_real_justfile_gets_a_verdict() {
+        let justfile =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../justfile"))
+                .unwrap();
+        let recipes = xtask_recipes(&justfile);
+        assert!(
+            recipes.iter().any(|r| r == "check-answer-commands"),
+            "{recipes:?}"
+        );
     }
 }

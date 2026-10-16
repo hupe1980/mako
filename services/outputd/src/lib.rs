@@ -24,7 +24,7 @@
 //!
 //! `POST /render/{kind}` produces bytes and forgets them — the right shape for a
 //! preview, a re-print, or a caller with its own archive.
-//! `POST /documents/{kind}` is the same render **recorded and queued**, which is
+//! `POST /documents/issue/{kind}` is the same render **recorded and queued**, which is
 //! what makes two regulated questions answerable: reproduce the invoice exactly
 //! as issued (§ 14 Abs. 1 UStG, § 147 AO — eight years, unverändert), and show
 //! that the § 41f EnWG notice actually reached the customer. See `delivery`.

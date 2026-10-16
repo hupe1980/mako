@@ -108,8 +108,6 @@ pub async fn handle_webhook(
         .unwrap_or("")
         .to_owned();
 
-    let family = derive_family(&workflow_name, pid);
-
     let malo_id = data["malo_id"]
         .as_str()
         .or_else(|| data["location_id"].as_str())
@@ -122,6 +120,12 @@ pub async fn handle_webhook(
         .map(str::to_owned);
 
     let mdm_role = event["marktrole"].as_str().map(str::to_owned);
+
+    let family = derive_family(
+        &workflow_name,
+        pid,
+        event_sparte(data, partner_mp_id.as_deref()),
+    );
 
     let erc_code = event["makoerc"]
         .as_str()
@@ -256,39 +260,106 @@ fn is_nb_answered_lieferanten_process(pid: u32) -> bool {
     })
 }
 
+/// Every family `derive_family` can return, in the order the MCP schema
+/// lists them.
+///
+/// The MCP `family` parameter is generated from this list, and
+/// `every_derived_family_is_listed` sweeps the PID space and every workflow
+/// prefix against it, so a family the projection writes cannot be missing
+/// from the schema an agent filters by.
+pub const FAMILIES: [&str; 10] = [
+    "gpke",
+    "wim",
+    "geli-gas",
+    "wim-gas",
+    "gabi-gas",
+    "mabis",
+    "emob",
+    "redispatch",
+    "invoic-storno",
+    "unknown",
+];
+
+/// The Sparte an event names, or the one its counterparty's MP-ID implies.
+///
+/// An explicit `data.sparte` (`STROM` / `GAS`) wins. Otherwise the coding
+/// authority of the counterparty's MP-ID decides: a BDEW-Codenummer (NAD
+/// DE3055 `293`) is a Strom market partner, a DVGW-Codenummer (`332`) a Gas
+/// one (BDEW-AWH Identifikatoren V1.2 §2.2: „Für jede Sparte (Gas bzw. Strom)
+/// und jede Rolle hat ein Marktteilnehmer genau eine MP-ID"). A GS1 GLN names
+/// no Sparte, and neither does an absent or malformed MP-ID.
+fn event_sparte(
+    data: &serde_json::Value,
+    counterparty_mp_id: Option<&str>,
+) -> Option<mako_markt::domain::Sparte> {
+    use mako_markt::domain::{MarktpartnerId, Sparte};
+    match data["sparte"]
+        .as_str()
+        .map(str::to_ascii_uppercase)
+        .as_deref()
+    {
+        Some("STROM") => return Some(Sparte::Strom),
+        Some("GAS") => return Some(Sparte::Gas),
+        _ => {}
+    }
+    let id = MarktpartnerId::new(counterparty_mp_id?).ok()?;
+    match id.nad_agency_code() {
+        "293" => Some(Sparte::Strom),
+        "332" => Some(Sparte::Gas),
+        _ => None,
+    }
+}
+
 /// Derive the process family for a projection row.
 ///
-/// Three sources, in order of authority:
+/// Four sources, in order of authority:
 ///
 /// 1. **The Antwortfrist table** — when a PID carries a published window, the
 ///    Festlegung that states it *is* the family. One fact, not a second guess.
-/// 2. **The workflow name** `makod` put on the event, for PIDs with no window.
-/// 3. **A PID range**, for events that carry neither.
+/// 2. **The Sparte**, for a WiM PID that exists in both Sparten and carries no
+///    window: the INSRPT Störungsmeldungen and the 31003 WiM-Rechnung.
+/// 3. **The workflow name** `makod` put on the event, for PIDs with no window.
+/// 4. **A PID range**, for events that carry neither.
 ///
 /// The ranges are the weakest source and are kept only because billing, PARTIN
 /// and INSRPT PIDs have no Antwortfrist and often no workflow name.
-fn derive_family(workflow_name: &str, pid: u32) -> String {
-    if let Some(f) = mako_fristen::antwort::antwort_obligation(pid) {
-        return f.family.as_str().to_owned();
+fn derive_family(
+    workflow_name: &str,
+    pid: u32,
+    sparte: Option<mako_markt::domain::Sparte>,
+) -> String {
+    use mako_markt::domain::Sparte;
+    if let Some(f) = antwortfrist_family(pid) {
+        return f.to_owned();
     }
-    // The Gas-only Prüfidentifikatoren outrank the workflow name.
-    //
-    // WiM runs one workflow for both Sparten — `wim-device-change` carries the
-    // Strom 55039/55042/55051/55168 and the Gas 44039/44042/44051/44168 alike —
-    // so the name says „wim" for a process the BNetzA reports under Gas. The
-    // PID is what carries the Sparte, and where it does it is the better
-    // source. (Both Sparten' MSB-Wechsel PIDs have an Antwortfrist, so they are
-    // already answered above; this covers the two INSRPT PIDs that have none.)
-    //
-    // 31003 is **not** in this set: the WiM-Rechnung über Dienstleistungen im
-    // Messwesen exists in both Sparten (WiM Strom Teil 1 Kap. 3.7, AWH WiM Gas
-    // 2.0 Kap. 4.7), so bucketing it as Gas mislabels every Strom invoice.
-    if matches!(pid, 23_005 | 23_009) {
-        return "wim-gas".to_owned();
+    // WiM runs one workflow for both Sparten — `wim-insrpt` carries the Strom
+    // and the Gas Störungsmeldungen alike — so neither its name nor the PID
+    // says which Sparte a process is in. Every INSRPT PID exists in both
+    // (23005/23009: Strom MSB (Messlokation) → MSB (Marktlokation), WiM Strom
+    // Teil 2; Gas MSB → NB, AWH WiM Gas 2.0 — PID-Übersicht 4.0, Lfd. Nr.
+    // 31350/31400 Strom, 39730/39760 Gas), and so does the 31003 WiM-Rechnung
+    // über Dienstleistungen im Messwesen (WiM Strom Teil 1 Kap. 3.7, AWH WiM
+    // Gas 2.0 Kap. 4.7). The Sparte the event carries decides; without one the
+    // workflow name and then the PID table answer `wim`.
+    if is_wim_pid_of_both_sparten(pid) {
+        match sparte {
+            Some(Sparte::Gas) => return "wim-gas".to_owned(),
+            Some(Sparte::Strom) => return "wim".to_owned(),
+            None => {}
+        }
     }
     if !workflow_name.is_empty() {
         // Longest prefix first: `wim-gas` must not be swallowed by `wim`.
-        for prefix in ["gpke", "geli-gas", "wim-gas", "wim", "gabi-gas", "mabis"] {
+        for prefix in [
+            "gpke",
+            "geli-gas",
+            "wim-gas",
+            "wim",
+            "gabi-gas",
+            "mabis",
+            "emob",
+            "redispatch",
+        ] {
             if workflow_name.starts_with(prefix) {
                 return prefix.to_owned();
             }
@@ -302,13 +373,15 @@ fn derive_family(workflow_name: &str, pid: u32) -> String {
         19001 | 19002 => "gpke", // ORDRSP Konfiguration / Geräteübernahme (multi-domain, gpke bucket)
         37000..=37006 => "gpke", // PARTIN Strom Kommunikationsdaten
         31001 | 31002 | 31005 | 31006 => "gpke", // INVOIC NNE/MMM/selbst ausgest. Strom
-        // ── WiM — Messstellenbetrieb Strom (BK6-24-174) ───────────────────────
+        // ── WiM — Messstellenbetrieb (BK6-24-174; AWH WiM Gas 2.0) ────────────
         55039..=55044 | 55051..=55053 | 55168..=55170 => "wim",
         17001..=17011 => "wim", // ORDERS Geräteübernahme (nMSB)
-        23001 | 23003 | 23004 | 23008 | 23011 | 23012 => "wim", // INSRPT, beide Sparten
-        27001..=27003 => "wim", // PRICAT Preisliste
-        31009 => "wim",         // INVOIC MSB-Rechnung (Strom)
-        31003 => "wim",         // INVOIC WiM-Rechnung Dienstleistungen, beide Sparten
+        // INSRPT and the WiM-Rechnung, beide Sparten — reached only when the
+        // event names no Sparte; see `is_wim_pid_of_both_sparten`.
+        23001 | 23003 | 23004 | 23005 | 23008 | 23009 | 23011 | 23012 => "wim",
+        31003 => "wim",
+        27001..=27003 => "wim",                 // PRICAT Preisliste
+        31009 => "wim",                         // INVOIC MSB-Rechnung (Strom)
         35001..=35005 | 15001..=15005 => "wim", // REQOTE/QUOTES Preisanfrage
         // ── GeLi Gas — Lieferbeginn/-ende Gas (BK7-24-01-009) ─────────────────
         44001..=44024 => "geli-gas", // UTILMD G incl. 44022-44024 role-conditional
@@ -316,7 +389,6 @@ fn derive_family(workflow_name: &str, pid: u32) -> String {
         31011 => "geli-gas",         // INVOIC AWH Sperrprozesse Gas (GNB→LFG)
         // ── WiM Gas — Messstellenbetrieb Gas (AWH WiM Gas 2.0) ───────────────
         44039..=44053 | 44168 | 44169 | 44183 => "wim-gas",
-        23005 | 23009 => "wim-gas", // INSRPT Gas-only variants
         31004 => "invoic-storno", // INVOIC Stornorechnung — Sparte-neutral, cross-process (AHB §3.1.2)
         // ── GaBi Gas — Bilanzierung Gas (BK7-24-01-008) ──────────────────────────
         31007 | 31008 | 31010 => "gabi-gas", // INVOIC MMM-Rechnung / Kapazitätsrechnung
@@ -324,9 +396,27 @@ fn derive_family(workflow_name: &str, pid: u32) -> String {
         17110 | 19110 => "gabi-gas",         // ORDERS/ORDRSP Allokationsliste Gas
         // ── MABIS — Bilanzkreisabrechnung Strom (BK6-24-174) ──────────────────
         13003 => "mabis",
+        // ── NZR-EMob / Modell 2 (`mako-emob`) ────────────────────────────────
+        55238..=55243 => "emob",
+        // ── Redispatch 2.0 (`mako-redispatch`) — MSCONS 13021/13022 only;
+        //    13020 and 13023 are MaBiS Summenzeitreihen ──────────────────────
+        13021 | 13022 => "redispatch",
         _ => "unknown",
     }
     .into()
+}
+
+/// The family the Antwortfrist table names for `pid`, if it publishes a window.
+fn antwortfrist_family(pid: u32) -> Option<&'static str> {
+    mako_fristen::antwort::antwort_obligation(pid).map(|o| o.family.as_str())
+}
+
+/// WiM PIDs published in both Sparten that carry no Antwortfrist.
+fn is_wim_pid_of_both_sparten(pid: u32) -> bool {
+    matches!(
+        pid,
+        23_001 | 23_003 | 23_004 | 23_005 | 23_008 | 23_009 | 23_011 | 23_012 | 31_003
+    )
 }
 
 /// The regulatory answer deadline for a process, and the citation behind it.
@@ -373,38 +463,128 @@ mod tests {
     /// states it — one fact, not a second guess beside the first.
     #[test]
     fn a_pid_with_a_published_frist_takes_its_family_from_the_table() {
-        assert_eq!(derive_family("", 55_001), "gpke");
-        assert_eq!(derive_family("", 44_001), "geli-gas");
-        assert_eq!(derive_family("", 55_039), "wim");
-        assert_eq!(derive_family("", 44_042), "wim-gas");
+        assert_eq!(derive_family("", 55_001, None), "gpke");
+        assert_eq!(derive_family("", 44_001, None), "geli-gas");
+        assert_eq!(derive_family("", 55_039, None), "wim");
+        assert_eq!(derive_family("", 44_042, None), "wim-gas");
         // …even when the event's workflow name says otherwise.
-        assert_eq!(derive_family("geli-gas-lieferbeginn", 55_001), "gpke");
+        assert_eq!(derive_family("geli-gas-lieferbeginn", 55_001, None), "gpke");
     }
 
     #[test]
     fn the_workflow_name_decides_when_no_frist_is_published() {
-        assert_eq!(derive_family("gpke-supplier-change", 31_001), "gpke");
-        assert_eq!(derive_family("mabis-billing", 13_003), "mabis");
+        assert_eq!(derive_family("gpke-supplier-change", 31_001, None), "gpke");
+        assert_eq!(derive_family("mabis-billing", 13_003, None), "mabis");
     }
 
     /// `wim-gas` must not be swallowed by the shorter `wim` prefix.
     #[test]
     fn the_longer_workflow_prefix_wins() {
-        assert_eq!(derive_family("wim-gas-anmeldung", 23_005), "wim-gas");
+        assert_eq!(derive_family("wim-gas-anmeldung", 23_005, None), "wim-gas");
         // 31003 exists in both Sparten and must not be bucketed as Gas.
-        assert_eq!(derive_family("", 31_003), "wim");
-        assert_eq!(derive_family("wim-insrpt", 23_001), "wim");
+        assert_eq!(derive_family("", 31_003, None), "wim");
+        assert_eq!(derive_family("wim-insrpt", 23_001, None), "wim");
+    }
+
+    /// INSRPT 23005/23009 exist in both Sparten (PID-Übersicht 4.0, Lfd. Nr.
+    /// 31350/31400 Strom, 39730/39760 Gas): the Sparte the event carries decides
+    /// the family, never the PID alone.
+    #[test]
+    fn a_strom_insrpt_is_filed_under_wim_and_a_gas_one_under_wim_gas() {
+        use mako_markt::domain::Sparte;
+        for pid in [23_005, 23_009, 23_001, 31_003] {
+            assert_eq!(derive_family("wim-insrpt", pid, Some(Sparte::Strom)), "wim");
+            assert_eq!(
+                derive_family("wim-insrpt", pid, Some(Sparte::Gas)),
+                "wim-gas"
+            );
+            // Neither Sparte nor a Gas workflow name: the WiM family.
+            assert_eq!(derive_family("", pid, None), "wim", "PID {pid}");
+        }
+    }
+
+    /// The counterparty's coding authority names the Sparte: a BDEW-Codenummer
+    /// (`99…`, NAD `293`) is Strom, a DVGW-Codenummer (`98…`, NAD `332`) Gas.
+    #[test]
+    fn the_counterparty_mp_id_names_the_sparte() {
+        use mako_markt::domain::Sparte;
+        let none = serde_json::json!({});
+        assert_eq!(
+            event_sparte(&none, Some("9900357000004")),
+            Some(Sparte::Strom)
+        );
+        assert_eq!(
+            event_sparte(&none, Some("9800000000003")),
+            Some(Sparte::Gas)
+        );
+        assert_eq!(event_sparte(&none, Some("4000000000000")), None);
+        assert_eq!(event_sparte(&none, None), None);
+        // An explicit Sparte outranks the MP-ID.
+        let gas = serde_json::json!({ "sparte": "GAS" });
+        assert_eq!(event_sparte(&gas, Some("9900357000004")), Some(Sparte::Gas));
+    }
+
+    #[test]
+    fn emob_and_redispatch_have_their_own_family() {
+        assert_eq!(derive_family("emob-anmeldung", 0, None), "emob");
+        assert_eq!(
+            derive_family("redispatch-aktivierung", 0, None),
+            "redispatch"
+        );
+        assert_eq!(derive_family("", 13_021, None), "redispatch");
+        assert_eq!(derive_family("", 13_022, None), "redispatch");
+        // 13020/13023 are MaBiS Summenzeitreihen, not Redispatch.
+        assert_ne!(derive_family("", 13_020, None), "redispatch");
+        assert_ne!(derive_family("", 13_023, None), "redispatch");
+        for pid in mako_emob_modellwechsel_pids() {
+            assert_eq!(derive_family("", pid, None), "emob", "PID {pid}");
+        }
+    }
+
+    /// The Modellwechsel PIDs `mako-emob` registers (BK6-20-160 Anlage 6).
+    fn mako_emob_modellwechsel_pids() -> [u32; 6] {
+        [55_238, 55_239, 55_240, 55_241, 55_242, 55_243]
+    }
+
+    /// Every family the projection can write is in [`FAMILIES`], which the MCP
+    /// schema is generated from.
+    #[test]
+    fn every_derived_family_is_listed() {
+        use mako_markt::domain::Sparte;
+        let workflows = [
+            "",
+            "gpke-x",
+            "geli-gas-x",
+            "wim-gas-x",
+            "wim-x",
+            "gabi-gas-x",
+            "mabis-x",
+            "emob-x",
+            "redispatch-x",
+            "other",
+        ];
+        for pid in 0..=99_999_u32 {
+            for wf in workflows {
+                for sparte in [None, Some(Sparte::Strom), Some(Sparte::Gas)] {
+                    let f = derive_family(wf, pid, sparte);
+                    assert!(
+                        FAMILIES.contains(&f.as_str()),
+                        "derive_family({wf:?}, {pid}, {sparte:?}) = {f:?} is not in FAMILIES"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
     fn the_pid_range_is_the_last_resort() {
-        assert_eq!(derive_family("", 31_009), "wim"); // MSB-Rechnung
-        assert_eq!(derive_family("", 37_008), "geli-gas"); // PARTIN Gas
-        assert_eq!(derive_family("", 31_011), "geli-gas"); // AWH Sperrprozesse Gas
-        assert_eq!(derive_family("", 13_013), "gabi-gas"); // MSCONS MMMA
-        assert_eq!(derive_family("", 31_004), "invoic-storno");
-        assert_eq!(derive_family("", 99_999), "unknown");
-        assert_eq!(derive_family("", 0), "unknown");
+        assert_eq!(derive_family("", 31_009, None), "wim"); // MSB-Rechnung
+        assert_eq!(derive_family("", 37_008, None), "geli-gas"); // PARTIN Gas
+        assert_eq!(derive_family("", 31_011, None), "geli-gas"); // AWH Sperrprozesse Gas
+        assert_eq!(derive_family("", 13_013, None), "gabi-gas"); // MSCONS MMMA
+        assert_eq!(derive_family("", 31_004, None), "invoic-storno");
+        assert_eq!(derive_family("", 99_999, None), "unknown");
+        assert_eq!(derive_family("", 0, None), "unknown");
     }
 
     // ── The Antwortfrist ──────────────────────────────────────────────────────
@@ -481,7 +661,7 @@ mod tests {
                 "PID {pid} draws its window from WiM Teil 2, got {:?}",
                 f.source
             );
-            assert_eq!(derive_family("", pid), "wim", "PID {pid}");
+            assert_eq!(derive_family("", pid, None), "wim", "PID {pid}");
         }
     }
 

@@ -355,7 +355,7 @@ impl AccountingdConfig {
                 "[oidc] — without it every REST route is admitted with dev claims: the SEPA \
                  mandate register and its IBANs, customer balances and the full Kontokorrent \
                  history, the aging list for the whole book, generated pain.001 payout XML, \
-                 and the § 17 DSGVO erasure route"
+                 and the Art. 17 DSGVO erasure route"
                     .to_owned(),
             );
         }

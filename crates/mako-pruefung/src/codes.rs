@@ -1127,7 +1127,7 @@ pub const E_0607_CODES: &[AntwortCode] = &[
 // ── E_0608 — Anmeldung einer Zuordnung / Neuanlage (55600/55601 → 55602–55605) ─
 
 /// EBD id of „Anmeldung einer Zuordnung" — the NB's tree on a **Neuanlage**
-/// (GPKE Teil 2 § 2.2), where the Lieferant registers a Marktlokation that is
+/// (GPKE Teil 2 Kap. 2.2), where the Lieferant registers a Marktlokation that is
 /// being commissioned for the first time.
 ///
 /// Prüfschritte 110 and 590 are the tree's own loop: an Anmeldung whose
@@ -1423,8 +1423,8 @@ pub const E_3019_CODES: &[AntwortCode] = &[
 // ── E_0595 — Bestellung prüfen (55156/55220/55673 → IFTSTA 21047) ────────────
 
 /// EBD id of „Bestellung prüfen" — the NB's answer to a Bestellung einer
-/// Änderung von Abrechnungsdaten (GPKE Teil 2 § 3.1.3) and to a Bestellung zur
-/// Stammdatenänderung (Teil 4 § 1.5).
+/// Änderung von Abrechnungsdaten (GPKE Teil 2 Kap. 3.1.3) and to a Bestellung zur
+/// Stammdatenänderung (Teil 4 Kap. 1.5).
 ///
 /// **Its clusters are not Zustimmung and Ablehnung.** The BDEW prints „Änderung
 /// der Daten" / „keine Änderung der Daten", and the Hinweis spells out what that

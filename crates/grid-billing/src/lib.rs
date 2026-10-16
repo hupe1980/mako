@@ -48,7 +48,7 @@
 //!     malo_id: "51238696012".into(),
 //!     nb_mp_id: "9900357000004".into(),
 //!     lf_mp_id: "9900012345678".into(),
-//!     period: SettlementPeriod::new(date!(2025-01-01), date!(2025-01-31))?,
+//!     period: SettlementPeriod::new(date!(2026-01-01), date!(2026-01-31))?,
 //!     // One value, not twelve loose fields: flat rate and the three §14a
 //!     // modules are mutually exclusive by construction.
 //!     arbeitspreis: ArbeitspreisModell::Einheitlich(MengePreis {
@@ -151,7 +151,10 @@ pub use redispatch::{
 pub use regulatory::{
     // Which rules were in force for the delivery period — resolved once, at
     // the edge, and recorded on every SettlementResult.
+    EntgeltAchse,
     EntgeltRegime,
+    GASNEV_LETZTER_TAG,
+    GasEntgeltRegime,
     NetzzugangRegime,
     RegulatoryRegime,
     SECT19_ABS3_LETZTER_TAG,

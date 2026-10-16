@@ -55,6 +55,14 @@ pub struct ProductdConfig {
     /// posture should have chosen it.
     #[serde(default)]
     pub allow_insecure_no_auth: bool,
+
+    /// Which law prices nEHS certificates in a year § 10 BEHG fixes no price
+    /// for — `rvo_bezugspreis` (default, the law in force) or `korridor`
+    /// (55–65 EUR/t, BT-Drs. 21/7869). A Gas quotation for such a year takes a
+    /// series price only through this regime, the same one `billingd` bills
+    /// under.
+    #[serde(default)]
+    pub behg_regime: energy_billing::BehgRegime,
 }
 
 impl ProductdConfig {

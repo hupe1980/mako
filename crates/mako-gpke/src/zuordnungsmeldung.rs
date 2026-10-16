@@ -24,7 +24,7 @@
 //!
 //! # The branch that decides whether they are owed
 //!
-//! GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4: „Ist die
+//! GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4: „Ist die
 //! Marktlokation bzw. Tranche zum Zuordnungsbeginn einem LF zugeordnet, fährt
 //! der NB mit Prozessschritt 2 fort, ansonsten mit Prozessschritt 5." So 55036
 //! is owed exactly when an LFA exists — the same condition that makes the 55010

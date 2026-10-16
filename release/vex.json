@@ -76,6 +76,13 @@
       "status": "not_affected",
       "justification": "vulnerable_code_not_in_execute_path",
       "impact_statement": "The Marvin timing side channel leaks a private key through private-key operations. rsa is reached through jsonwebtoken in mako-service, which verifies RS256/RS384/RS512 OIDC tokens against the identity provider's public JWKS; no release binary holds an RSA private key or decrypts or signs with one. AS4 cryptography runs on OpenSSL through asx-rs, not on this crate."
+    },
+    {
+      "vulnerability": { "name": "RUSTSEC-2024-0449" },
+      "products": [{ "@id": "pkg:github/hupe1980/mako", "subcomponents": [{ "@id": "pkg:cargo/unsafe-libyaml@0.2.11" }] }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Informational advisory (unmaintained), no vulnerability. slatedb 0.14 enables figment's yaml feature, which pulls serde_yaml 0.9 and unsafe-libyaml; the YAML parser runs only when slatedb::config::Settings loads a settings file, and no crate in this workspace calls those loaders."
     }
   ]
 }

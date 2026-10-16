@@ -24,7 +24,7 @@
 //! code: see [`Bilanzkreisart`] for which one the Anwendungsfall calls for.
 //!
 //! Source: BDEW *Entscheidungsbaum-Diagramme und Codelisten* 4.3, Kap. 6.50–6.53;
-//! BK6-24-174 GPKE Teil 2 § 2.4.
+//! BK6-24-174 GPKE Teil 2 Kap. 2.4.
 
 use crate::codes::{AntwortCode, E_0603_CODES, E_0604_CODES, E_0605_CODES, E_0606_CODES};
 use crate::lf::types::{LfAnfrage, LfEntscheidung};
@@ -60,7 +60,7 @@ pub enum ZuordnungsFall {
 /// Zuordnungsermächtigung „je ZRT, BG, BK und LF", so for one Zeitreihentyp in
 /// one Bilanzierungsgebiet a supplier may have more than one admissible BK.
 ///
-/// What is *not* free is the regime. GPKE Teil 2 § 2.4.2.2 Nr. 2 prescribes the
+/// What is *not* free is the regime. GPKE Teil 2 Kap. 2.4.2.2 Nr. 2 prescribes the
 /// EEG-BK for an EEG-Marktlokation and the KWKG-BK for a KWKG one; directly
 /// marketed and Nicht-EEG-/Nicht-KWKG generation carries no regime BK and goes
 /// into an ordinary one. This enum is that prescribed *kind* — the concrete BK
@@ -173,7 +173,7 @@ pub struct ZuordnungsLage {
     /// the key the Zuordnungsermächtigung is granted on — and for the
     /// [`Bilanzkreisart`] the Anwendungsfall prescribes.
     ///
-    /// `None` escalates: GPKE Teil 2 § 2.4.2.2 Nr. 2 makes naming it part of
+    /// `None` escalates: GPKE Teil 2 Kap. 2.4.2.2 Nr. 2 makes naming it part of
     /// the Zustimmung, and a Bestätigung without one assigns generation to no
     /// balancing circle at all.
     pub bilanzkreis: Option<String>,
@@ -211,7 +211,7 @@ pub fn pruefe_zuordnung(
                  Anwendungsfall (SG4 STS+7 DE 9013, Element 3 — ZW8/ZW9/ZX0/ZX1 für \
                  Fall 1–4), und die Antwort muss den zugehörigen Entscheidungsbaum in \
                  SG4 STS+E01 DE 1131 nennen (E_0603…E_0606). Ohne Antwort {} ordnet \
-                 der NB den LF selbst zu (GPKE Teil 2 § 2.4.2.2 Nr. 3).",
+                 der NB den LF selbst zu (GPKE Teil 2 Kap. 2.4.2.2 Nr. 3).",
                 anfrage.malo_id,
                 mako_fristen::antwort::antwort_obligation(55_607)
                     .map_or_else(String::new, |o| o.frist.beschreibung())
@@ -232,13 +232,13 @@ pub fn pruefe_zuordnung(
     }
 
     // Prüfschritt 10, nein-Kante — but a Zustimmung is only an answer if it
-    // names the Bilanzkreis (GPKE Teil 2 § 2.4.2.2 Nr. 2).
+    // names the Bilanzkreis (GPKE Teil 2 Kap. 2.4.2.2 Nr. 2).
     let Some(bilanzkreis) = &lage.bilanzkreis else {
         return LfEntscheidung::eskalation(
             10,
             format!(
                 "Zuordnung des LF zu MaLo {} ({}): der Bilanzkreis ist nicht bekannt, die \
-                 Zustimmung muss ihn aber nennen (GPKE Teil 2 § 2.4.2.2 Nr. 2). Ohne Antwort \
+                 Zustimmung muss ihn aber nennen (GPKE Teil 2 Kap. 2.4.2.2 Nr. 2). Ohne Antwort \
                  ordnet der NB nach Ablauf der Frist selbst zu (Prozessschritt 3).",
                 anfrage.malo_id,
                 fall.ebd()

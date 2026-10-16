@@ -37,9 +37,10 @@ neither is restated here. This file is what an agent needs before touching code.
   plausible one is the most expensive mistake available here; see the
   known-wrong citations in *Domain Rules* below.
 - **A defect class becomes a guard.** When something is found, the deliverable is
-  the check that makes it unrepresentable — which is why `just ci` runs 46
-  `cargo xtask` guards (49 guard recipes in all) and the list grows with the
-  defect list, not the feature list. `check-sql` needs a database and runs in
+  the check that makes it unrepresentable — which is why `just ci` runs a
+  `cargo xtask` guard per defect class (`cargo xtask evidence-pack
+  --xtask-recipes` lists them) and the list grows with the defect list, not the
+  feature list. `check-sql` needs a database and runs in
   `just test-db`.
 
 ## Build and test
@@ -50,7 +51,7 @@ section.
 
 ```bash
 just check      # cargo check --workspace --all-targets --all-features — the minimum
-just ci         # the gate: test, doctests, clippy, deny, machete, each feature alone, 46 xtask guards
+just ci         # the gate: test, doctests, clippy, deny, machete, each feature alone, every xtask guard
 just dev <svc>  # one service with dev/config/<svc>.toml against the dev PostgreSQL (Docker)
 just check-site # mermaid + link + zola checks; NOT part of `just ci`
 just test-db    # schema-per-test suites against real PostgreSQL (needs Docker)

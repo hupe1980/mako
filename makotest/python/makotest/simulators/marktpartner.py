@@ -12,6 +12,10 @@ dictionary answer could not be fed back into the system under test.
 **It picks the right acknowledgement.** A CONTRL reports a *syntax* failure and
 an APERAK an *application* one — different messages, telling the counterparty to
 retry different things. The choice comes from the validation layer that fired.
+A sound interchange earns a positive CONTRL only in Gas: „In der Sparte Strom
+hat der Empfänger nur dann auf eine eingehende Übertragungsdatei eine CONTRL in
+der Ausprägung Syntaxfehlermeldung zu versenden, wenn diese syntaktisch falsch
+ist" (CONTRL AHB 1.0 Kap. 1.2), so a Strom partner acknowledges nothing.
 
 **It answers every message it was sent.** An interchange routinely carries
 several, each a separate Vorgang with its own Prüfidentifikator; answering only
@@ -547,6 +551,7 @@ class MarktpartnerSim:
         rolle: str,
         reference_date: str,
         strict: bool = True,
+        sparte: Literal["strom", "gas"] | None = None,
     ) -> None:
         """
         `reference_date` is the date the exchange happens. It selects the format
@@ -558,8 +563,14 @@ class MarktpartnerSim:
         it `False` and the partner acknowledges and answers anyway, which is how
         a platform is tested against a counterparty that processed a message it
         should have rejected.
+
+        `sparte` decides whether a sound interchange is acknowledged with a
+        positive CONTRL (Gas) or with nothing (Strom). It defaults from the
+        MP-ID: a DVGW-Codenummer (`98…`) is Gas, anything else Strom — pass it
+        for a GS1 number, which names no Sparte.
         """
         self.mp_id = mp_id
+        self.sparte = sparte or ("gas" if mp_id.startswith("98") else "strom")
         self.rolle = rolle
         self.reference_date = reference_date
         self.strict = strict
@@ -680,14 +691,20 @@ class MarktpartnerSim:
         if not report.is_valid and self.strict:
             return self._record(pids, False, self._refuse(raw, report, sender), checked)
 
-        # A conformant partner acknowledges before it answers.
-        ack = self._wrap(
-            build_contrl_for(raw, on=self.reference_date, accept=True), to=sender
+        # A conformant Gas partner acknowledges before it answers; a Strom one
+        # sends a CONTRL only on a syntax error (CONTRL AHB 1.0 Kap. 1.2).
+        ack = (
+            self._wrap(
+                build_contrl_for(raw, on=self.reference_date, accept=True), to=sender
+            )
+            if self.sparte == "gas"
+            else None
         )
+        ack_kind = "CONTRL" if ack is not None else None
         answered = [(i, a) for i, _, a in bindings if a is not None]
         if not answered:
             return self._record(
-                pids, report.is_valid, Reply(ack=ack, ack_kind="CONTRL"), checked
+                pids, report.is_valid, Reply(ack=ack, ack_kind=ack_kind), checked
             )
 
         messages = [
@@ -714,7 +731,7 @@ class MarktpartnerSim:
             report.is_valid,
             Reply(
                 ack=ack,
-                ack_kind="CONTRL",
+                ack_kind=ack_kind,
                 business=self._wrap_all(messages, to=sender),
                 pids=tuple(a.pid for _, a in answered if a.pid is not None),
                 modi=tuple(a.modus for _, a in answered),

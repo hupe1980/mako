@@ -60,7 +60,7 @@ async fn assert_reaches_resume(workflow: &str, pid: u32) {
     let msg = edi_energy::parse(iftsta(pid).as_bytes())
         .unwrap_or_else(|e| panic!("parse IFTSTA {pid} failed: {e:?}"));
     let outcome = dispatcher
-        .dispatch(&msg, workflow, pid)
+        .dispatch(&msg, workflow, pid, time::OffsetDateTime::now_utc())
         .await
         .unwrap_or_else(|e| panic!("dispatch {pid} failed: {e:?}"));
     match outcome {
@@ -103,7 +103,7 @@ async fn the_ersteinbau_vorabinformation_spawns_the_vorgang() {
     let pid = 21029u32;
     let msg = edi_energy::parse(iftsta(pid).as_bytes()).expect("parse IFTSTA 21029");
     let outcome = dispatcher
-        .dispatch(&msg, "wim-ersteinbau", pid)
+        .dispatch(&msg, "wim-ersteinbau", pid, time::OffsetDateTime::now_utc())
         .await
         .expect("dispatch 21029");
     assert!(

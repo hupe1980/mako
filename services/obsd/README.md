@@ -21,7 +21,7 @@ just dev obsd          # dev/config/obsd.toml against the dev PostgreSQL
 |---|---|
 | Database | PostgreSQL 15+, one table: `process_projections` (`migrations/0001_schema.sql`) |
 | Inbound | `de.mako.*` from `marktd` at `POST /webhook` (Standard Webhooks), six types by default, widened with `[subscription] event_types` |
-| Deadlines | from `mako-fristen` only. The APERAK Frist (`de.mako.aperak.timeout`) and the business Antwortfrist (`deadline_at`, with `deadline_source`) are separate fields; a PID with no published window has `deadline_risk = unknown`, never `green` |
+| Deadlines | from `mako-fristen` only. The business Antwortfrist is `deadline_at`, with `deadline_source`; `state = aperak_timeout` is the GPKE / GeLi Gas supplier-change workflow reporting its own Antwortfrist lapse (`de.mako.aperak.timeout`), and no APERAK delivery window reaches obsd; a PID with no published window has `deadline_risk = unknown`, never `green` |
 | Reporting periods | keyed on `started_at` read as a Europe/Berlin date |
 | Auth | OIDC + Cedar `policies/obsd.cedar` on REST and MCP; startup refuses without `[oidc]` unless `allow_insecure_no_auth` |
 | MCP | 6 tools + 2 prompts at `/mcp` |

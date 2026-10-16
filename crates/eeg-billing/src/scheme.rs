@@ -360,7 +360,9 @@ impl TariffSource {
 /// This data is needed because auction plants have special rules:
 ///
 /// - The AW is the `award_ct`, NOT the statutory rate from §48 EEG.
-/// - A second tender is required when the first award expires (§33 EEG 2023).
+/// - An award erlischt for want of timely commissioning, under the
+///   technology's own rule: § 36e (Wind an Land), § 37e (Solaranlagen des
+///   ersten Segments), § 39e (Biomasseanlagen) EEG 2023.
 /// - Bürgerenergiegesellschaften have reduced requirements (§22b EEG 2023).
 /// - Innovationsausschreibungen (§39n EEG 2023) pay a fixed rather than a
 ///   sliding market premium.
@@ -374,7 +376,8 @@ pub struct AusschreibungMetadata {
     pub award_ct: Option<Decimal>,
     /// Date of the BNetzA tender award notification.
     pub award_date: Option<Date>,
-    /// Whether the award has expired (§33 EEG 2023: unbuilt plant after N years).
+    /// Whether the award has erloschen — § 36e (Wind an Land), § 37e
+    /// (Solaranlagen des ersten Segments) or § 39e (Biomasseanlagen) EEG 2023.
     pub award_expired: bool,
     /// Innovationsausschreibung (§39n EEG 2023) — fixed market premium instead of
     /// the sliding one, awarded for combinations of installation and storage.
@@ -582,6 +585,60 @@ pub enum CorrectionReason {
     Other,
 }
 
+// ── The Monatsmarktwert of an Energieträger (Anlage 1 Nr. 3.2 / 3.3) ─────────
+
+/// Which figure is the Monatsmarktwert „MW" of a plant's Energieträger.
+///
+/// EEG 2023 Anlage 1 (Arbeitsausgabe 23.12.2025, pp. 220–221): Nr. 3.2 makes
+/// „MW" for Wasserkraft, Deponiegas, Klärgas, Grubengas, Biomasse und
+/// Geothermie „der tatsächliche Monatsmittelwert des Spotmarktpreises"; Nr.
+/// 3.3.1 makes it for Wind an Land, Wind auf See and Solar the
+/// energieträgerspezifische value — „der tatsächliche Monatsmittelwert des
+/// Marktwerts von Strom aus …", weighted by that Energieträger's
+/// Online-Hochrechnung quarter-hour by quarter-hour (Nr. 3.3.2–3.3.4). The
+/// plain spot mean is therefore never the MW of a wind or solar plant: it
+/// overstates the MW in a month whose generation fell in low-price hours, and
+/// so underpays the Marktprämie.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Monatsmarktwertart {
+    /// Nr. 3.2 — the Monatsmittelwert des Spotmarktpreises.
+    Spotmonatsmittel,
+    /// Nr. 3.3.2 — „MW Wind an Land".
+    WindAnLand,
+    /// Nr. 3.3.3 — „MW Wind auf See".
+    WindAufSee,
+    /// Nr. 3.3.4 — „MW Solar".
+    Solar,
+}
+
+impl Monatsmarktwertart {
+    /// The Monatsmarktwert of `art`, or `None` for a KWK plant, which the EEG
+    /// Marktprämie does not reach.
+    ///
+    /// Gezeiten is Wasserkraft: § 3 Nr. 21 lit. a EEG 2023 names „Wasserkraft
+    /// einschließlich der Wellen-, Gezeiten-, Salzgradienten- und
+    /// Strömungsenergie".
+    #[must_use]
+    pub fn fuer(art: crate::technology::ErzeugungsArt) -> Option<Self> {
+        use crate::technology::ErzeugungsArt as A;
+        Some(match art {
+            A::WindOnshore => Self::WindAnLand,
+            A::WindOffshore => Self::WindAufSee,
+            a if a.is_solar() => Self::Solar,
+            A::Kwk => return None,
+            _ => Self::Spotmonatsmittel,
+        })
+    }
+
+    /// Whether the plain monthly spot mean may stand as this MW — only under
+    /// Nr. 3.2. For Wind and Solar a missing energieträgerspezifische figure is
+    /// a missing price, never the spot mean or a generic row.
+    #[must_use]
+    pub const fn spotmittel_zulaessig(self) -> bool {
+        matches!(self, Self::Spotmonatsmittel)
+    }
+}
+
 // ── Marktwertserie (Anlage 1 Nr. 2) ──────────────────────────────────────────
 
 /// Which of the two Marktwert series Anlage 1 Nr. 2 EEG 2023 gives a plant.
@@ -717,4 +774,29 @@ pub enum MarktpreisKategorie {
     Sonstige,
     /// EPEX Day-Ahead monthly average (used for PostEEG ausgeförderte Anlagen).
     EpexDayAhead,
+}
+
+#[cfg(test)]
+mod monatsmarktwert_tests {
+    use super::Monatsmarktwertart as M;
+    use crate::technology::ErzeugungsArt as A;
+
+    /// Anlage 1 Nr. 3.3.1: Wind and Solar take their energieträgerspezifische
+    /// MW, never the spot mean; Nr. 3.2's Energieträger take the spot mean.
+    #[test]
+    fn only_nr_3_2_energietraeger_take_the_spot_mean() {
+        for a in A::ALL {
+            let m = M::fuer(a);
+            if a.is_wind() || a.is_solar() {
+                assert!(!m.expect("EEG").spotmittel_zulaessig(), "{a:?}");
+            } else if a == A::Kwk {
+                assert_eq!(m, None);
+            } else {
+                assert!(m.expect("EEG").spotmittel_zulaessig(), "{a:?}");
+            }
+        }
+        assert_eq!(M::fuer(A::WindOffshore), Some(M::WindAufSee));
+        assert_eq!(M::fuer(A::SolarFreiflaeche), Some(M::Solar));
+        assert_eq!(M::fuer(A::Biogas), Some(M::Spotmonatsmittel));
+    }
 }

@@ -300,14 +300,14 @@ bill).
 | `waerme_co2_kosten_ct_per_kwh` → CO₂ line + § 3 Abs. 1 statement | CO2KostAufG § 3 |
 | `settlement_form` → Endrechnung (BT-113 paid) or Restrechnung | § 14 Abs. 5 Satz 2 UStG; BMF 15.10.2024 Rn. 48 |
 | `en16931_blocked` → paper or refusal | EN 16931 BR-O-11 ff.; § 27 Abs. 38 UStG |
-| Statutory `Info` disclosures → BT-22 notes | CO2KostAufG § 3 · § 53a EnergieStG · § 40 Abs. 2 Nr. 6 EnWG · § 14 WPG · § 41a Abs. 6 EnWG |
+| Statutory `Info` disclosures → BT-22 notes | CO2KostAufG § 3 · § 53a EnergieStG · § 40 Abs. 2 Nr. 6 EnWG · § 14 WPG |
 | `ablesungsart` beside the readings | § 40 Abs. 2 Nr. 6 EnWG |
 | `ZWEITARIF_OHNE_HT_NT_AUFTEILUNG` / `HT_NT_SUMME_WEICHT_AB` refused | § 41 EnWG |
 | `preisgarantie_bis` disclosed | § 41 Abs. 1 Nr. 4 EnWG |
 | `MeteringMode` (SLP/RLM/iMSys) | § 29 Abs. 1 Nr. 1 MsbG |
 | `is_estimated` → hervorgehobener Hinweis | § 40a Abs. 2 Satz 3 EnWG |
 | `zaehler_replaced` → Zählerwechsel notice | § 41 EnWG |
-| `Sect41aAnnualComparison` | § 41a Abs. 6 EnWG |
+| `Sect41aAnnualComparison` → informational note, no legal basis of its own (§ 41a Abs. 6 EnWG is a duty to inform about costs, advantages and risks, not an annual comparison) | — |
 
 ### A product that cannot price its commodity is refused
 
@@ -607,6 +607,10 @@ jahr = 2026
 eur  = "…"
 ```
 
+One figure per calendar year: a list naming a year twice, or a negative figure,
+refuses startup, so a corrected figure replaces the old entry rather than
+sitting beside it unread.
+
 The EDI grace of Nr. 3 belongs to the INVOIC issuers, not this path.
 
 ### The PDF and sending it
@@ -623,7 +627,7 @@ pinned document answers `ETag` + `Cache-Control: immutable`. A draft pins
 nothing.
 
 `POST …/{id}/versenden` issues the invoice: outputd's
-`POST /api/v1/documents/INVOICE` renders inside the call that stores the bytes
+`POST /api/v1/documents/issue/INVOICE` renders inside the call that stores the bytes
 (§ 147 Abs. 1 Nr. 2–3 AO, eight years) and queues them on the customer's
 channels. Idempotent on the Rechnungsnummer; a held draft is `409`.
 

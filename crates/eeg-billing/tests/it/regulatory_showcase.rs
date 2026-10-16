@@ -5259,3 +5259,91 @@ fn a_reduction_in_a_period_with_no_tabled_fassung_is_refused() {
     assert_eq!(out.status, SettlementStatus::FassungNichtTabelliert);
     assert_eq!(out.settlement_eur, None);
 }
+
+// ── § 101 Abs. 1 EEG 2023 — the § 100 Abs. 47 opt-in waits on its approval ──
+
+/// § 101 Abs. 1 S. 1 EEG 2023 reserves „§ 100 Absatz 35 und 47" until „der
+/// beihilferechtlichen Genehmigung durch die Europäische Kommission"
+/// (Arbeitsausgabe 23.12.2025, p. 218). Without a recorded approval an
+/// opted-in plant is paid no 0,6 ct/kWh uplift and keeps its own Fassung's
+/// negative-price rule.
+#[test]
+fn an_opted_in_plant_without_approval_gets_no_uplift_and_keeps_its_rule() {
+    let input = SettleInput {
+        scheme: SettlementScheme::MarketPremium {
+            direktverm_aw_ct: d("6.2"),
+            wind_korrekturfaktor: None,
+            wind_standort: None,
+        },
+        einspeisemenge_kwh: Some(d("100000")),
+        marktwert_ct_kwh: Some(d("4.8")),
+        inbetriebnahme: Some(date!(2019 - 06 - 01)),
+        sect51_optin_wirksam_ab: Some(date!(2026 - 01 - 01)),
+        billing_date: Some(date!(2026 - 06 - 01)),
+        ..SettleInput::default()
+    };
+    let out = calculate_settlement(&input);
+    assert_eq!(out.status, SettlementStatus::Calculated);
+    // (6,2 − 4,8) ct × 100 000 kWh = 1 400 EUR; the uplift would add 600 EUR.
+    assert_eq!(out.settlement_eur, Some(d("1400.00")));
+    assert_eq!(
+        input.negativpreis_regime(),
+        eeg_billing::NegativpreisRegime::Eeg2017,
+        "without the approval the declaration does not move the plant to §§ 51/51a"
+    );
+}
+
+// ── A plant commissioned from 2027 has no tabled EEG Fassung ─────────────────
+
+/// The EEG 2027 (BT-Drs. 21/7867) is not verkündet, so no Fassung governs a
+/// plant commissioned from 01.01.2027 — not even under a recorded Genehmigung.
+/// Its settlement is refused rather than computed on EEG 2023 arithmetic.
+#[test]
+fn a_2027_commissioned_plant_is_refused_until_its_fassung_is_tabled() {
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::MarketPremium {
+            direktverm_aw_ct: d("6.2"),
+            wind_korrekturfaktor: None,
+            wind_standort: None,
+        },
+        einspeisemenge_kwh: Some(d("100000")),
+        marktwert_ct_kwh: Some(d("4.8")),
+        inbetriebnahme: Some(date!(2027 - 02 - 01)),
+        billing_date: Some(date!(2027 - 03 - 01)),
+        ..SettleInput::default()
+    });
+    assert_eq!(out.status, SettlementStatus::FassungNichtTabelliert);
+    assert_eq!(out.settlement_eur, None);
+    assert!(
+        out.positions[0].description.contains("2027"),
+        "{}",
+        out.positions[0].description
+    );
+
+    // A 2023 plant's 2027 period stays under its own Fassung.
+    let bestand = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::MarketPremium {
+            direktverm_aw_ct: d("6.2"),
+            wind_korrekturfaktor: None,
+            wind_standort: None,
+        },
+        einspeisemenge_kwh: Some(d("100000")),
+        marktwert_ct_kwh: Some(d("4.8")),
+        inbetriebnahme: Some(date!(2023 - 05 - 01)),
+        billing_date: Some(date!(2027 - 03 - 01)),
+        ..SettleInput::default()
+    });
+    assert_eq!(bestand.status, SettlementStatus::Calculated);
+    assert_eq!(bestand.settlement_eur, Some(d("1400.00")));
+}
+
+/// The vintage lookup tables no law for a 2027 commissioning year.
+#[test]
+fn no_vintage_is_inferred_for_a_2027_commissioning_year() {
+    assert_eq!(
+        eeg_billing::EegGesetz::from_inbetriebnahme_year(2026),
+        Some(eeg_billing::EegGesetz::Eeg2023)
+    );
+    assert_eq!(eeg_billing::EegGesetz::from_inbetriebnahme_year(2027), None);
+    assert!(eeg_billing::EegGesetz::from_db_year(2027).is_err());
+}

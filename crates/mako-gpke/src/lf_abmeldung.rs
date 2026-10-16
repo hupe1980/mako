@@ -1,6 +1,6 @@
 //! GPKE NB-initiated Lieferende — Kündigung by the Netzbetreiber.
 //!
-//! Covers GPKE Teil 2 §2.5: the Netzbetreiber proactively terminates a supply
+//! Covers GPKE Teil 2 Kap. 2.5: the Netzbetreiber proactively terminates a supply
 //! relationship (e.g., for non-payment under §41 EnWG or after judicial order).
 //! This is distinct from the Abmeldung (PID 55004) where the **Lieferant** initiates.
 //!
@@ -28,12 +28,12 @@
 //! PIDs 55007–55009 are **present in UTILMD AHB Strom 2.1 (FV2025-10-01)** and
 //! in the BDEW Anwendungsübersicht 3.3 / 4.0. LFW24 (BK6-24-174) redesigned
 //! only the LF-initiated Lieferbeginn/Abmeldung (55001/55004); the NB-initiated
-//! Lieferende is a separate process under GPKE Teil 2 § 2.5, answered by the LF
+//! Lieferende is a separate process under GPKE Teil 2 Kap. 2.5, answered by the LF
 //! at **05:00 Uhr des 1. Werktags nach dem ÜT**.
 //!
 //! # Regulatory basis
 //!
-//! - **BDEW GPKE Teil 2 §2.5** — NB-seitiges Lieferende
+//! - **BDEW GPKE Teil 2 Kap. 2.5** — NB-seitiges Lieferende
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format
 //! - **APERAK AHB 1.1 § 2.4.1** — technical acknowledgement, **45 Minuten** on a
 //!   weekday for a UTILMD. A separate clock from the business answer window,
@@ -63,7 +63,7 @@ pub const WORKFLOW_NAME: &str = "gpke-lf-abmeldung";
 pub const LF_ABMELDUNG_PIDS: &[u32] = &[55007];
 
 /// Deadline label for the **business** answer window — 05:00 Uhr des 1. WT nach
-/// dem ÜT (GPKE Teil 2 § 2.5.2.2), resolved by `mako_fristen::antwort`.
+/// dem ÜT (GPKE Teil 2 Kap. 2.5.2.2), resolved by `mako_fristen::antwort`.
 ///
 /// Not the APERAK clock: that is 45 Minuten for a UTILMD (APERAK AHB 1.1
 /// § 2.4.1) and rides `mako_fristen::APERAK_STROM_WINDOW_LABEL`.

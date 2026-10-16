@@ -96,7 +96,7 @@ async fn dispatch(edi: &str, workflow: &str, pid: u32) -> IngestOutcome {
         .unwrap_or_else(|e| panic!("test interchange for {pid} does not parse: {e}"));
     dispatcher()
         .await
-        .dispatch(&msg, workflow, pid)
+        .dispatch(&msg, workflow, pid, time::OffsetDateTime::now_utc())
         .await
         .unwrap_or_else(|e| panic!("dispatch of {pid} errored: {e}"))
 }
@@ -131,7 +131,12 @@ async fn a_shared_anfrage_pid_without_its_series_is_refused() {
     let msg = edi_energy::parse(utilmd(55062).as_bytes()).expect("parses");
     let err = dispatcher()
         .await
-        .dispatch(&msg, "mabis-zp-lifecycle", 55062)
+        .dispatch(
+            &msg,
+            "mabis-zp-lifecycle",
+            55062,
+            time::OffsetDateTime::now_utc(),
+        )
         .await
         .expect_err("55062 alone does not say what was activated");
     assert!(
@@ -274,7 +279,12 @@ async fn the_aauez_answer_trees_resolve_and_an_unpublished_code_does_not() {
         edi_energy::parse(utilmd_antwort(55_207, "A13", "E_0072").as_bytes()).expect("parses");
     let err = dispatcher()
         .await
-        .dispatch(&msg, "mabis-zp-lifecycle", 55_207)
+        .dispatch(
+            &msg,
+            "mabis-zp-lifecycle",
+            55_207,
+            time::OffsetDateTime::now_utc(),
+        )
         .await
         .expect_err("a code the tree does not publish must not be guessed");
     let text = format!("{err}");

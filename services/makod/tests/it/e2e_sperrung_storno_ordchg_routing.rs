@@ -98,7 +98,12 @@ async fn gpke_sperrung_ordchg_39000_resumes_by_order_ref() {
     // The LF's LOC-less ORDCHG 39000 must resume that process by RFF+ON.
     let msg = edi_energy::parse(ordchg_39000(ORDER_REF).as_bytes()).expect("parse ORDCHG 39000");
     let outcome = dispatcher
-        .dispatch(&msg, "gpke-sperrung", 39000)
+        .dispatch(
+            &msg,
+            "gpke-sperrung",
+            39000,
+            time::OffsetDateTime::now_utc(),
+        )
         .await
         .expect("dispatch 39000");
     match outcome {
@@ -147,7 +152,12 @@ async fn geli_gas_sperrung_nb_ordchg_39000_resumes_by_order_ref() {
 
     let msg = edi_energy::parse(ordchg_39000(ORDER_REF).as_bytes()).expect("parse ORDCHG 39000");
     let outcome = dispatcher
-        .dispatch(&msg, "geli-gas-sperrung-nb", 39000)
+        .dispatch(
+            &msg,
+            "geli-gas-sperrung-nb",
+            39000,
+            time::OffsetDateTime::now_utc(),
+        )
         .await
         .expect("dispatch 39000");
     match outcome {

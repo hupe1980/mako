@@ -22,6 +22,7 @@ impl EdifactIngestDispatcher {
         msg: &AnyMessage,
         workflow_name: &str,
         pid: u32,
+        received_at: OffsetDateTime,
     ) -> Result<IngestOutcome, EngineError> {
         let fv = detect_format_version(msg);
         let raw: &dyn Any = msg;
@@ -34,11 +35,8 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::geli_gas_sperrung_nb_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     // APERAK Frist: 10 Werktage (BK7-24-01-009 §5).
-                    let due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
-                        10,
-                        HolidayCalendar::BdewMaKo,
-                    );
+                    let due_at =
+                        fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);
                     // Index under the Sperrauftrag's Belegnummer so a later ORDCHG
                     // 39000 Stornierung (LOC-less) resumes it by RFF+ON order ref.
                     self.spawn_or_resume_keyed::<GeliGasSperrungNbWorkflow>(
@@ -128,7 +126,7 @@ impl EdifactIngestDispatcher {
                     // it is not a regulatory Frist. It must not fall back to
                     // 10 Werktage: that would give an unquantified process a
                     // longer window than any quantified one in the family.
-                    let received = OffsetDateTime::now_utc();
+                    let received = received_at;
                     let due_at = antwort_due_at(pid, received);
                     self.spawn_or_resume_guarded::<GeliGasSupplierChangeWorkflow>(
                         malo_id.as_str(),
@@ -237,11 +235,8 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::geli_gas_stornierung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     // APERAK Frist: 10 Werktage (BK7-24-01-009).
-                    let due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
-                        10,
-                        HolidayCalendar::BdewMaKo,
-                    );
+                    let due_at =
+                        fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);
                     self.spawn_or_resume::<GeliGasStornierungWorkflow>(
                         malo_id.as_str(),
                         "geli-gas-stornierung",
@@ -264,11 +259,8 @@ impl EdifactIngestDispatcher {
                         adapters::geli_gas_sperrprozesse_invoic_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_invoic(msg);
                     // Settlement deadline: 10 Werktage (BK7-24-01-009).
-                    let due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
-                        10,
-                        HolidayCalendar::BdewMaKo,
-                    );
+                    let due_at =
+                        fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);
                     self.spawn_or_resume_guarded::<GeliGasSperrprozesseInvoicWorkflow>(
                         malo_id.as_str(),
                         "geli-gas-sperrprozesse-invoic",
@@ -364,11 +356,8 @@ impl EdifactIngestDispatcher {
                     let cmd =
                         adapters::geli_gas_datenabruf_receive_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    let due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
-                        10,
-                        HolidayCalendar::BdewMaKo,
-                    );
+                    let due_at =
+                        fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);
                     self.spawn_or_resume::<GeliGasDatenabrufWorkflow>(
                         malo_id.as_str(),
                         mako_geli_gas::GELI_GAS_DATENABRUF_WORKFLOW_NAME,

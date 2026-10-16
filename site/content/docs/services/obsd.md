@@ -38,20 +38,26 @@ graph TB
 
 ## Two deadline clocks
 
-Every MaKo process carries **two independent deadlines**, reported as two
-numbers:
+Every MaKo process carries **two independent deadlines**. obsd measures the
+second; the first never reaches it.
 
 | Clock | Window | A breach means | Where it shows |
 |---|---|---|---|
-| **APERAK Frist** | Strom UTILMD/ORDERS 45 min (Samstag: Sonntag 12:00), other Strom next Werktag 12:00; Gas Folgeprozess next Werktag 12:00, Initialprozess end of the 3. Werktag (APERAK AHB 1.1 §§ 2.3.1 / 2.4.1) | the counterparty's acknowledgement of a message did not arrive — a transport or validation fault | `state = aperak_timeout`, from `de.mako.aperak.timeout` |
+| **APERAK Frist** | Strom UTILMD/ORDERS 45 min (Samstag: Sonntag 12:00), other Strom next Werktag 12:00; Gas Folgeprozess next Werktag 12:00, Initialprozess end of the 3. Werktag (APERAK AHB 1.1 §§ 2.3.1 / 2.4.1) | the counterparty's acknowledgement of a message did not arrive — a transport or validation fault | nowhere in obsd: makod raises the delivery-window alert and keeps the message in its outbox |
 | **Antwortfrist** | per PID — see below | the *business answer* is owed and has not been sent | `deadline_at`, computed on `process.initiated` |
 
+`state = aperak_timeout` is set by `de.mako.aperak.timeout`, which
+`gpke-supplier-change` and `geli-gas-supplier-change` emit when **their
+Antwortfrist** lapses unanswered. Despite the name it is an Antwortfrist
+signal, raised by the workflow rather than computed by obsd.
+
 `total_aperak_timeout` and `total_frist_breached` are separate fields on every
-report. `total_aperak_timeout` counts processes whose **current** state is
-`aperak_timeout` — the acknowledgement lapsed and no later event has moved the
-process on; one that later completes, is rejected or fails leaves the count.
-`aperak_timeout` is not terminal, so those processes stay in the Antwortfrist
-sweep.
+report. `total_frist_breached` is obsd's own measure against `deadline_at`, for
+every PID with a published window. `total_aperak_timeout` counts processes
+whose **current** state is `aperak_timeout` — only those two workflows' PIDs
+can reach it, and one that later completes, is rejected or fails leaves the
+count. `aperak_timeout` is not terminal, so those processes stay in the
+Antwortfrist sweep.
 
 ---
 
@@ -96,7 +102,7 @@ caller-supplied value. `POST /webhook` is authenticated by the HMAC in
 |-------|-------------|
 | `process_id` | UUID — the CloudEvent `subject` |
 | `pid` | BDEW Prüfidentifikator (e.g. 55001) |
-| `family` | `gpke`, `geli-gas`, `wim`, `wim-gas`, `gabi-gas`, `mabis`, `invoic-storno`, `unknown`. `wim-gas` is a reporting label for the Gas-only PIDs; Sparte-neutral ones (INSRPT, INVOIC 31003) report under `wim` |
+| `family` | `gpke`, `wim`, `geli-gas`, `wim-gas`, `gabi-gas`, `mabis`, `emob`, `redispatch`, `invoic-storno`, `unknown`. A PID with a published Antwortfrist takes the family of its Festlegung. The WiM PIDs of both Sparten (INSRPT, INVOIC 31003) take `wim` or `wim-gas` from the event's `data.sparte`, else from the counterparty's coding authority (BDEW-Codenummer `293` Strom, DVGW-Codenummer `332` Gas), else `wim`. Then the workflow-name prefix, then the PID table |
 | `workflow_name` | From the `makoworkflow` CE extension |
 | `state` | `initiated` \| `running` \| `aperak_timeout` \| `completed` \| `rejected` \| `failed` |
 | `malo_id` | 11-digit Marktlokations-ID |
@@ -336,7 +342,9 @@ them, not a silently dropped filter.
 }
 ```
 
-- `total_aperak_timeout` and `total_frist_breached` are **different clocks**.
+- `total_frist_breached` is obsd's measure against `deadline_at`;
+  `total_aperak_timeout` is the supplier-change workflows' own report of a
+  lapsed Antwortfrist. Neither is an APERAK delivery window.
 - Check `total_with_frist` before quoting `frist_compliance_rate`: a small
   denominator means the bucket is mostly *unmeasured*, not compliant.
 - A `null` rate means nothing measurable in the bucket. It is not `0`, and it is
@@ -373,7 +381,7 @@ returns business data requires OIDC and Cedar. There is no Alertmanager bridge.
 | `get_kpi_report(pid, period)` | Per-PID KPIs for a `YYYY-MM` month, both clocks separately |
 | `get_parity_report(days)` | § 7a Abs. 5 parity; `gap_pp` = affiliate − third_party |
 | `get_stp_rate(days)` | Completions over processes that **ended** |
-| `list_processes_by_family(family, state, limit)` | Drill into one family |
+| `list_processes_by_family(family, state, limit)` | Drill into one family; `family` and `state` are enumerated in the tool schema from the family list and `ProcessState`, and an unknown value of either is refused |
 
 ### Prompts (2)
 

@@ -624,6 +624,7 @@ A slot no rule can fill is **refused**, never invented, and listed in
 | `obis_code` | The register filled; default the point's dominant energy register. Name it on a multi-register point — an unlabelled reading is the total register |
 | `reason` | **Required**: one of the 28 `STS+Z40` Gründe der Ersatzwertbildung of MSCONS MIG 2.5, by name (`NO_ACCESS`, `METERING_EQUIPMENT_FAULT`, `COMMUNICATION_FAILURE`, …) or code (`Z74`, `Z81`, `Z75`, …); otherwise `422` listing them |
 | `bundesland` | **Required** — `BE`, `NW`, `DE-BY`, …; its statutory holidays decide the day class. edmd holds no address for a Marktlokation |
+| `sparte` | Taken from the register's stored reads; the request's `STROM` · `GAS` · `WAERME` · `WASSER` is read only when there are none, and with neither the request is `422` |
 | `prior_days` | The reference window, default 7 — it has to hold three days of the gap's class |
 | `hold` | Gas only (`Z93` is coded for gas alone); refused for any other Sparte |
 | `confirmed_outage` | The whole window is an established supply interruption |
@@ -633,7 +634,8 @@ The response reports per interval the `method`, its `code`, the `reason`, the
 and the `obis_code` used. Generated values run the same validation pass with
 the batch's Sparte preset, and the substitute and its § 147 Abs. 1 AO / § 146
 Abs. 4 AO audit row commit in one transaction; `substitute_value_log.method`
-holds the method that ran.
+holds the method that ran and `substitute_value_log.bundesland` the Land whose
+holidays decided the day class.
 
 The authority is **§ 60 Abs. 1 MsbG** (Aufbereitung includes Plausibilisierung
 and Ersatzwertbildung). § 60 Abs. 2 is a *Soll*-rule about *where* that runs —
@@ -1136,7 +1138,10 @@ nothing — `billingd` reads the Zählerstand from the billing period.
   past `ausfuehrt_bis` stays in MCP `list_overdue_reading_orders`.
 - **The campaign** enumerates the NB's SLP MaLos from `marktd` and raises one
   `JAHRESABLESUNG` per MaLo with its `sparte`, in one
-  `INSERT … SELECT unnest(…) ON CONFLICT DO NOTHING`.
+  `INSERT … SELECT unnest(…) ON CONFLICT DO NOTHING`. A MaLo whose `sparte`
+  marktd leaves absent or names outside edmd's set is ordered nothing and listed
+  in `refused_unknown_sparte` — the Sparte decides whether the reading is kWh or
+  m³, so it is never assumed to be Strom.
 - **The § 40b report** breaks orders into `AUSGEFUEHRT` (discharged),
   `STORNIERT`, `FEHLGESCHLAGEN` (with `fehlschlag_gruende`) and late.
   `ablesequote` is over orders raised, not the SLP population — cross-check the
@@ -1413,7 +1418,7 @@ pool (the registry shares the database):
 
 | Treatment | Tables |
 |---|---|
-| `malo_id` → subject reference (Buchungsbelege: § 147 Abs. 1 AO; Art. 17 Abs. 3 lit. b DSGVO) | `zsg_conversion_log`, `meter_read_corrections`, `substitute_value_log`, `meter_data_receipts`, `ablese_auftraege`, `gas_quality_data` |
+| `malo_id` → subject reference (Buchungsbelege: § 147 Abs. 1 Nr. 4, Abs. 3 AO, eight years; Art. 17 Abs. 3 lit. b DSGVO). A MaLo with no mapping gets a freshly minted reference recorded nowhere else, so these rows are never deleted | `zsg_conversion_log`, `meter_read_corrections`, `substitute_value_log`, `meter_data_receipts`, `ablese_auftraege`, `gas_quality_data` |
 | deleted (derived, operational, device) | `meter_billing_periods`, `quality_assessments`, `estimated_read_confirmations`, `direct_push_sessions`, `smgw_sessions`, `cls_compliance_issues`, `delivery_surveillance`, `smgw_cert_expiry_alerts` |
 | deleted where it names the MaLo as `virtual_malo_id` or as a source in `rule_json` (bound JSON path variable) | `virtual_meter_configs` |
 
@@ -1437,7 +1442,8 @@ curl -X DELETE "http://edmd:8380/api/v1/gdpr/erasure/51238696012" \
 ```
 
 `subject_unlinked` is `false` when the MaLo had no mapping (never stored or
-already erased) — recorded, not an error.
+already erased) — recorded, not an error. Its Buchungsbelege are pseudonymised
+all the same.
 
 ### Erasure suppression (`[privacy]`) {#erasure-suppression-privacy}
 

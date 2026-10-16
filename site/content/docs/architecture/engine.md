@@ -292,8 +292,8 @@ after receipt stays retryable:
 | Call | Meaning |
 |---|---|
 | `claim(key)` | Takes the key atomically and says whether it is new, in flight, or a duplicate. An unsettled claim carries a lease (`CLAIM_LEASE`) |
-| `accept(key)` | Settles it once the message is durably handled — dispatched, persisted or dead-lettered. Every retransmission is then a duplicate |
-| `abandon(key)` | Releases it when nothing durable recorded the message, so the retransmission is treated as first-seen |
+| `accept(key)` | Settles it once the message is durably handled — dispatched, persisted or dead-lettered with the `DeadLetterSink::reject` write awaited. Every retransmission is then a duplicate |
+| `abandon(key)` | Releases it when nothing durable recorded the message — a dead letter whose write failed included — so the retransmission is treated as first-seen |
 
 The key is the sender plus the message reference (`inbox_key`).
 
@@ -327,7 +327,7 @@ PID, for callers that need the number rather than a resolved instant.
 
 **Saturday is not a Werktag.** GPKE (BK6-24-174) Teil 1 Kap. 7: *"alle Tage ..., die kein Samstag, Sonntag oder gesetzlicher Feiertag sind"*. A holiday in any single Bundesland counts nationwide; 24.12. and 31.12. count as holidays.
 
-**The count starts on the day of receipt, whatever weekday it is.** The Übertragungstag is *"der Tag des Empfangs der Übertragungsdatei ... aus der AS4-Zustellquittung"*, and counts *"nur ..., sofern es sich um eine positive Zustellquittung bzw. Response-Nachricht handelt"* — a negative acknowledgement starts no Frist.
+**The count starts on the day of receipt, whatever weekday it is.** The Übertragungstag is *"der Tag des Empfangs der Übertragungsdatei ... aus der AS4-Zustellquittung"*, and counts *"nur ..., sofern es sich um eine positive Zustellquittung bzw. Response-Nachricht handelt"* — a negative acknowledgement starts no Frist. In `makod` the door records that instant once — the AS4 handler when it takes the message it answers with the receipt, `POST /edifact` when the request arrives, the loopback when it delivers — and `EdifactIngestDispatcher::dispatch` resolves every arrival-anchored window of the message (the Antwortfrist and the APERAK window) against it, never against the instant the message reaches its dispatch arm.
 
 A Werktage Frist runs to the end of the due Werktag in `Europe/Berlin`; a clock-time Frist runs to that clock time in Berlin; the day of receipt is a Berlin calendar date. See [Dates and days](@/docs/architecture/domain-model.md#dates-and-days).
 

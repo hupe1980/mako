@@ -88,7 +88,8 @@ async fn concurrent_initiating_messages_spawn_one_process() {
         handles.push(tokio::spawn(async move {
             let msg = edi_energy::parse(edi.as_bytes()).expect("fixture parses");
             gate.wait().await;
-            d.dispatch(&msg, WORKFLOW, PID).await
+            d.dispatch(&msg, WORKFLOW, PID, time::OffsetDateTime::now_utc())
+                .await
         }));
     }
 

@@ -674,7 +674,7 @@ pub struct RenderedDocument {
 }
 
 /// Render `req` with the tenant's stored template — the body both
-/// `POST /render/{kind}` and `POST /documents/{kind}` run.
+/// `POST /render/{kind}` and `POST /documents/issue/{kind}` run.
 ///
 /// One implementation, because issuing a document is rendering one plus
 /// recording it: a second copy of the resolution, admission and stamping rules
@@ -803,11 +803,11 @@ pub async fn render_with_stored_template(
 // ── The document API ──────────────────────────────────────────────────────────
 //
 // `POST /render/{kind}` produces bytes and forgets them — right for a preview,
-// a re-print, or a caller with its own archive. `POST /documents/{kind}` is the
+// a re-print, or a caller with its own archive. `POST /documents/issue/{kind}` is the
 // same render, recorded and queued, which is what makes "did the customer get
 // this?" a question with an answer.
 
-/// `POST /api/v1/documents/{kind}` body — a render plus who it goes to.
+/// `POST /api/v1/documents/issue/{kind}` body — a render plus who it goes to.
 #[derive(Debug, Deserialize)]
 pub struct IssueDocumentRequest {
     /// Everything `POST /render/{kind}` takes.
@@ -836,9 +836,79 @@ pub struct IssueDocumentRequest {
     /// § 126b BGB asks for, and the one that needs no external adapter.
     #[serde(default)]
     pub channels: Option<Vec<crate::delivery::Channel>>,
+    /// Whether the invoice recipient is an Unternehmer receiving for his
+    /// Unternehmen (§ 14 Abs. 2 Satz 2 Nr. 1 UStG). Read only for an `INVOICE`
+    /// sent by `POST` alone, where `None` refuses the paper path.
+    #[serde(default)]
+    pub empfaenger_unternehmer: Option<bool>,
+    /// When the invoiced Umsatz was ausgeführt — for a supply period, its last
+    /// day. Read only for a `POST`-only `INVOICE` to an Unternehmer.
+    #[serde(default)]
+    pub leistung_ausgefuehrt: Option<time::Date>,
+    /// The issuer's Gesamtumsatz (§ 19 Abs. 2 UStG) in the calendar year
+    /// before the supply, EUR. Read only where § 27 Abs. 38 Nr. 2 UStG decides.
+    #[serde(default)]
+    pub gesamtumsatz_vorjahr_eur: Option<rust_decimal::Decimal>,
 }
 
-/// `POST /api/v1/documents/{kind}` — render, record, and queue for delivery.
+/// Refuse an `INVOICE` that would reach an Unternehmer on paper alone where
+/// § 27 Abs. 38 UStG does not admit paper.
+///
+/// An E-Rechnung is owed „für eine Leistung an einen anderen Unternehmer für
+/// dessen Unternehmen" (§ 14 Abs. 2 Satz 2 Nr. 1 UStG); the paper graces of
+/// § 27 Abs. 38 Nr. 1/2 are decided by
+/// [`energy_billing::e_rechnung::sonstige_rechnung_zulaessig`], the decision
+/// billingd's paper path takes. A `POST` beside an electronic channel is a copy
+/// of a document that also went out electronically, and passes. A missing fact
+/// never admits paper.
+///
+/// # Errors
+///
+/// `422 PAPIER_UNZULAESSIG`, naming the provision or the missing fact.
+pub fn pruefe_papierweg(
+    kind: TemplateKind,
+    channels: &[crate::delivery::Channel],
+    req: &IssueDocumentRequest,
+    uebermittelt: time::Date,
+) -> OutputResult<()> {
+    use crate::delivery::Channel;
+    use energy_billing::e_rechnung::{SonstigeRechnungFall, sonstige_rechnung_zulaessig};
+    if kind != TemplateKind::Invoice || !channels.iter().all(|c| *c == Channel::Post) {
+        return Ok(());
+    }
+    let refuse = |why: String| {
+        OutputError::unprocessable(
+            "PAPIER_UNZULAESSIG",
+            format!(
+                "an INVOICE sent by POST alone is a sonstige Rechnung, and § 27 Abs. 38 UStG \
+                 does not admit it here: {why} — send it on an electronic channel"
+            ),
+        )
+    };
+    if req.empfaenger_unternehmer == Some(false) {
+        return Ok(());
+    }
+    let ausgefuehrt = match (req.empfaenger_unternehmer, req.leistung_ausgefuehrt) {
+        (Some(true), Some(d)) => d,
+        (Some(true), None) => {
+            return Err(refuse(
+                "leistung_ausgefuehrt is not stated, so no grace can be tested".to_owned(),
+            ));
+        }
+        // `None` reaches the decision, which refuses an unrecorded recipient.
+        (_, d) => d.unwrap_or(uebermittelt),
+    };
+    sonstige_rechnung_zulaessig(SonstigeRechnungFall {
+        ausgefuehrt,
+        uebermittelt,
+        empfaenger_unternehmer: req.empfaenger_unternehmer,
+        gesamtumsatz_vorjahr_eur: req.gesamtumsatz_vorjahr_eur,
+    })
+    .map(|_| ())
+    .map_err(|e| refuse(e.to_string()))
+}
+
+/// `POST /api/v1/documents/issue/{kind}` — render, record, and queue for delivery.
 ///
 /// `201` for a document that was issued now, `200` for one this
 /// `(kind, subject_ref)` already has. Both answer the same body, so a caller
@@ -871,6 +941,8 @@ pub async fn post_document(
              omit the field for the portal inbox, or name the channels",
         ));
     }
+    // The paper is übermittelt now, so the grace is tested on today's Berlin date.
+    pruefe_papierweg(kind, &channels, &req, mako_fristen::heute())?;
 
     // Before the render: discovering a retry afterwards costs twenty seconds of
     // Typst and, if the template has moved since, produces bytes that differ
@@ -1129,4 +1201,111 @@ pub async fn get_spool(
 #[derive(Debug, Deserialize)]
 pub struct SpoolQuery {
     pub limit: Option<i64>,
+}
+
+#[cfg(test)]
+mod papierweg_tests {
+    use super::*;
+    use crate::delivery::Channel;
+    use time::macros::date;
+
+    /// A request as a caller sends it, with the § 27 Abs. 38 facts set.
+    fn request(unternehmer: Option<bool>, ausgefuehrt: Option<&str>) -> IssueDocumentRequest {
+        let mut v = serde_json::json!({
+            "view": {},
+            "date": "2026-10-15",
+            "ident": "R-1",
+            "subject_ref": "R-2026-0001",
+        });
+        if let Some(u) = unternehmer {
+            v["empfaenger_unternehmer"] = serde_json::json!(u);
+        }
+        if let Some(d) = ausgefuehrt {
+            v["leistung_ausgefuehrt"] = serde_json::json!(d);
+        }
+        serde_json::from_value(v).expect("request parses")
+    }
+
+    /// From 2028 every B2B invoice is an E-Rechnung: a POST-only INVOICE for
+    /// an Unternehmer whose supply was executed in 2028 is refused.
+    #[test]
+    fn a_post_only_invoice_to_an_unternehmer_for_2028_is_refused() {
+        let req = request(Some(true), Some("2028-01-31"));
+        let err = pruefe_papierweg(
+            TemplateKind::Invoice,
+            &[Channel::Post],
+            &req,
+            date!(2028 - 02 - 05),
+        )
+        .expect_err("no paper grace for a 2028 supply");
+        assert!(
+            matches!(
+                err,
+                OutputError::Unprocessable {
+                    code: "PAPIER_UNZULAESSIG",
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    /// A POST beside an electronic channel is a copy and is queued.
+    #[test]
+    fn a_post_copy_beside_email_is_queued() {
+        let req = request(Some(true), Some("2028-01-31"));
+        pruefe_papierweg(
+            TemplateKind::Invoice,
+            &[Channel::Email, Channel::Post],
+            &req,
+            date!(2028 - 02 - 05),
+        )
+        .expect("the EMAIL carries the E-Rechnung");
+    }
+
+    /// A recipient who is no Unternehmer is outside the duty; one whose status
+    /// is not stated never gets the paper grace.
+    #[test]
+    fn the_recipient_status_decides_and_its_absence_refuses() {
+        let b2c = request(Some(false), None);
+        pruefe_papierweg(
+            TemplateKind::Invoice,
+            &[Channel::Post],
+            &b2c,
+            date!(2028 - 02 - 05),
+        )
+        .expect("B2C paper stays lawful");
+        let unbekannt = request(None, Some("2028-01-31"));
+        assert!(
+            pruefe_papierweg(
+                TemplateKind::Invoice,
+                &[Channel::Post],
+                &unbekannt,
+                date!(2028 - 02 - 05)
+            )
+            .is_err()
+        );
+        // Nr. 1: a 2026 supply übermittelt in 2026 may still go on paper.
+        let nr1 = request(Some(true), Some("2026-09-30"));
+        pruefe_papierweg(
+            TemplateKind::Invoice,
+            &[Channel::Post],
+            &nr1,
+            date!(2026 - 10 - 15),
+        )
+        .expect("§ 27 Abs. 38 Nr. 1");
+    }
+
+    /// Only an INVOICE is an invoice: a Mahnung by POST is not tested.
+    #[test]
+    fn a_mahnung_by_post_is_not_an_invoice() {
+        let req = request(None, None);
+        pruefe_papierweg(
+            TemplateKind::Mahnung,
+            &[Channel::Post],
+            &req,
+            date!(2028 - 02 - 05),
+        )
+        .expect("not an invoice");
+    }
 }

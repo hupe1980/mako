@@ -269,30 +269,6 @@ jobs:
       - uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
       - run: just smoke-dev
 
-  # ── Regulatory mirror ───────────────────────────────────────────────────────
-  #
-  # The PDFs are not in the repository (400 MB of third-party copyright), but
-  # `regulatories/bdew-mako/manifest.json` is. Offline this checks the manifest
-  # parses and that no *present* file has drifted from its recorded hash;
-  # absence is the normal state here. The manifest is also what the
-  # `validate-profiles` citation guard reads — untracked, that guard would find
-  # no mirror and silently pass.
-  regulatories:
-    name: Regulatory mirror (offline)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo xtask sync-regulatories --offline
-
-
   # ── SQL against a real schema ───────────────────────────────────────────────
   #
   # mako uses `sqlx::query`, which prepares at run time. Nothing in the build or
@@ -477,6 +453,13 @@ jobs:
         with:
           command: check
           arguments: --all-features
+      # `fuzz/` is outside the workspace and locks its own graph; the run above
+      # never reads `fuzz/Cargo.lock`. Same `deny.toml`, advisories only.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: fuzz/Cargo.toml
+          command: check advisories
+          arguments: --all-features
 
   # ── xtask smoke ─────────────────────────────────────────────────────────────
   xtask:
@@ -495,62 +478,28 @@ jobs:
       - uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
       - run: cargo build -p xtask
       - run: cargo run -p xtask -- help
-      # axum 0.7 `/:param` route literals panic at startup under 0.8, and no
-      # test builds those routers — so this is the only thing that catches them.
-      - run: cargo run -p xtask -- check-routes
-      # A read grant declared mutating stops for a human on every call; a
-      # mutating one declared read-only is dispatched unattended.
-      - run: cargo run -p xtask -- check-tool-grants
-      # A PID routed to a command makod never registered fails only when a real
-      # invoice arrives — the check runs, the verdict is persisted, the dispatch
-      # 404s, and the Antwortfrist expires on a process that looked healthy.
-      - run: cargo run -p xtask -- check-answer-commands
-
-      # The rest of the guard set `just ci` runs. Each is a source scan that
-      # costs seconds; leaving them out of the pull-request gate is what lets a
-      # violation reach `main` and be found by whoever next runs `just ci`.
-      - run: cargo run -p xtask -- check-bo4e-coverage
-      - run: cargo run -p xtask -- check-bo4e-discriminants
-      - run: cargo run -p xtask -- check-bo4e-examples
-      - run: cargo run -p xtask -- check-bo4e-attributes
-      # serde drops a key no field declares, so a request naming a field the API
-      # does not have gets a 2xx and the value goes nowhere; and a BO4E document
-      # typed `serde_json::Value` is one nothing gated.
-      - run: cargo run -p xtask -- check-request-bodies
-      # A `time` value serialised into JSON reaches the client as a component
-      # array, not an RFC 3339 string.
-      - run: cargo run -p xtask -- check-wire-timestamps
-      # A business date read in UTC is the wrong day for two hours every day.
-      - run: cargo run -p xtask -- check-business-dates
-      # Money rounds kaufmännisch (DIN 1333); banker's rounding is off by a
-      # cent on exactly the half-way cases an invoice is full of.
-      - run: cargo run -p xtask -- check-rounding
-      # A MaLo-ID literal whose BDEW check digit is wrong names no location.
-      - run: cargo run -p xtask -- check-malo-ids
-      # A procedure step naming a tool the agent cannot reach stalls the run.
-      - run: cargo run -p xtask -- check-prompt-tools
-      # A publish order that precedes its own dependencies fails at the tag.
-      - run: cargo run -p xtask -- check-publish-order
-      # Documented dependency versions against the manifests.
-      - run: cargo run -p xtask -- check-dep-versions
-      # The licence governance page against deny.toml's allow list.
-      - run: cargo run -p xtask -- check-licenses
-      # `#![deny(unsafe_code)]` is a crate attribute and cannot be inherited, so
-      # a new crate root is outside the lint until this says so.
-      - run: cargo run -p xtask -- check-crate-lints
-      # A container suite that is not `#[ignore]`d prints `ok` on a runner with
-      # no Docker daemon, having returned early from every test; one no recipe
-      # names is run by nothing at all.
-      - run: cargo run -p xtask -- check-db-suites
-      # Without `ExpectedTenant` a token signed by the same realm for another
-      # operator extracts cleanly, leaving the tenant comparison to every rule.
-      - run: cargo run -p xtask -- check-expected-tenant
-      # A daemon registering a route the runner already mounts panics
-      # `Router::merge` at startup, before the listener binds.
-      - run: cargo run -p xtask -- check-runner-routes
-      # A Festlegung cited in a form the Beschlusskammer does not publish names
-      # no document.
-      - run: cargo run -p xtask -- check-citations
+      # Every `just ci` recipe whose body is one xtask call, read out of the
+      # justfile's `_ci` prerequisites rather than restated here: a guard added
+      # to `just ci` is in the pull-request gate the moment it is added, and
+      # `check-ci-guards` (one of them) refuses this workflow without this
+      # step. Each is a source scan that costs seconds, so one job runs them
+      # all; every recipe runs, and the step fails naming each one that failed.
+      - name: Every xtask guard among the `_ci` prerequisites
+        run: |
+          set -uo pipefail
+          recipes=$(cargo xtask evidence-pack --xtask-recipes)
+          test -n "$recipes" || { echo "::error::no xtask recipe found in the justfile's _ci"; exit 1; }
+          failed=""
+          for recipe in $recipes; do
+            echo "::group::just $recipe"
+            just "$recipe" || failed="$failed $recipe"
+            echo "::endgroup::"
+          done
+          echo "$(echo "$recipes" | wc -w | tr -d ' ') xtask recipes run"
+          if [ -n "$failed" ]; then
+            for recipe in $failed; do echo "::error::just $recipe failed"; done
+            exit 1
+          fi
       # `rubo4e::v202xyy::` pins a BO4E version alias; `rubo4e::current::` is
       # the one that moves with the crate.
       - name: No hardcoded rubo4e version alias
@@ -561,8 +510,7 @@ jobs:
   # *tagged*. They are two hand-maintained service lists (three, counting the
   # digest-export loop), and nothing links them — a service added to the bake
   # group and forgotten in the release workflow is pushed to ghcr.io by digest
-  # and then never given a name anyone can pull. `outputd` shipped that way: in
-  # the bake file, absent from both release lists, no image.
+  # and then never given a name anyone can pull.
   #
   # The failure is silent by construction — the bake succeeds, the manifest job
   # simply does not exist for that service — so it cannot be caught by anything
@@ -673,10 +621,14 @@ jobs:
 
       # `hypothesis` is an optional extra, but the strategy tests
       # `importorskip` it — without it installed they would silently skip and
-      # the property-based surface would go untested in CI.
+      # the property-based surface would go untested in CI. Every package from
+      # the index is pinned by hash (`--require-hashes`); the wheel is the one
+      # built above and is installed alone (`--no-deps`), so nothing else is
+      # resolved from PyPI.
       - name: Install the wheel and run the Python suite
         run: |
-          pip install pytest hypothesis ruff dist/*.whl
+          pip install --require-hashes -r .github/requirements/makotest-ci.txt
+          pip install --no-deps dist/*.whl
           cd makotest && pytest -q
           python -c "import makotest.strategies"   # the extra really is importable
 
@@ -704,9 +656,13 @@ jobs:
         # script must not fail the check.
         env:
           RUSTFLAGS: ""
+        # The build backend (maturin) is installed from a hash-pinned file and
+        # the sdist is built against it without build isolation, so pip fetches
+        # nothing unpinned to build it.
         run: |
           python -m venv /tmp/sdist-venv
-          /tmp/sdist-venv/bin/pip install --no-binary :all: sdist-out/*.tar.gz
+          /tmp/sdist-venv/bin/pip install --require-hashes -r .github/requirements/makotest-sdist.txt
+          /tmp/sdist-venv/bin/pip install --no-deps --no-build-isolation --no-binary :all: sdist-out/*.tar.gz
           /tmp/sdist-venv/bin/python -c "
           import makotest
           assert makotest.malo_from_base('5123869601') == '51238696012'
@@ -714,51 +670,6 @@ jobs:
           assert makotest.antwort_obligation(55001).clock_time == '11:00'
           print('sdist OK', makotest.__version__)
           "
-
-  validate-profiles:
-    name: Validate profiles
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo xtask validate-profiles
-      # Every committed profile against its source PDF. `regulatories/` is
-      # gitignored and not mirrored here, so this SKIPs on CI; it is a real
-      # gate for a developer with the mirror and poppler.
-      - run: cargo xtask import-profiles --check
-      # Holds every Antwortcode against the published Entscheidungsbaum PDF —
-      # tree, code and Cluster. `regulatories/` is gitignored and not mirrored
-      # here, so this SKIPS on CI and is a real gate only for a developer who has
-      # run `cargo xtask sync-regulatories --download`. It is wired in so the
-      # step exists the moment the mirror is available to a runner.
-      - run: cargo xtask validate-ebd-codes
-      # How much of the published Prüfidentifikator inventory the profiles
-      # carry. Unlike the step above this is a real gate here: the inventory is
-      # extracted into `crates/edi-energy/profiles/pid-overview.json`, so the
-      # check needs the repository and nothing else.
-      - run: cargo xtask check-pid-coverage
-
-  check-release-coverage:
-    name: Release coverage check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo xtask check-release-coverage
 
   # ── Publishability ──────────────────────────────────────────────────────────
   # Every other job builds `--all-features`; `cargo publish` builds the crate's

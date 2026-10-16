@@ -70,9 +70,9 @@ __pycache__/
 *.egg-info/
 .venv/
 
-# Node tooling for the docs site (site/tools/check-mermaid.mjs)
+# Node tooling for the docs site (site/tools/check-mermaid.mjs). The lockfile
+# is tracked: the site workflow installs with `npm ci` against it.
 node_modules/
-site/package-lock.json
 
 # maturin leaves the debug-symbol bundle beside the built extension.
 *.dSYM/

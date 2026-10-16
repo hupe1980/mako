@@ -169,6 +169,13 @@ fn assert_per_message(wire: &str) {
         uci.ends_with("+4"),
         "UCI DE 0083 = 4 and no DE 0085 in the „in der Nachricht\" column: {uci}"
     );
+    // CONTRL MIG 2.0b, UCI Bemerkung (S. 7): S002 / S003 copy the received
+    // UNB DE 0004 / DE 0010 — the counterparty first, although the CONTRL
+    // itself travels from us to it.
+    assert!(
+        uci.starts_with(&format!("UCI+IC9+{COUNTERPARTY}:")),
+        "S002 is the acknowledged interchange's sender: {uci}"
+    );
     assert!(
         wire.contains("'UCM+2+UTILMD:D:11A:UN:"),
         "SG1 UCM names the broken message: {wire}"

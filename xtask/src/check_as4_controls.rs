@@ -228,11 +228,23 @@ fn undead_lettered_refusals(src: &str) -> Vec<usize> {
         }
         let from = i.saturating_sub(DEAD_LETTER_WINDOW).max(start);
         let window = lines[from..i].join("\n");
-        if !(window.contains("dl_sink") && window.contains("reject(")) {
+        if !(window.contains("dl_sink") && awaited_reject(&window)) {
             out.push(i + 1);
         }
     }
     out
+}
+
+/// Whether the window's last `reject(` is awaited before the refusal.
+///
+/// The sink returns once the dead letter is durable; a `reject(…)` that is not
+/// awaited is a future dropped on the floor, so the claim is accepted with
+/// nothing recorded. Whitespace is stripped first, because rustfmt wraps the
+/// argument list over several lines.
+fn awaited_reject(window: &str) -> bool {
+    let flat: String = window.chars().filter(|c| !c.is_whitespace()).collect();
+    flat.rfind("reject(")
+        .is_some_and(|at| flat[at..].contains(".await"))
 }
 
 /// How far back a dead letter may sit from the refusal it belongs to.
@@ -310,7 +322,7 @@ mod tests {
                 &p,
                 "match receive_push_with_dedup_async(&self.session, &bus, req, dedup).await {}\n\
                  async fn handle_first_seen(&self) -> HandlerOutcome {\n\
-                 self.ingest.dl_sink.reject(&reason);\n\
+                 self.ingest.dl_sink.reject(&reason).await?;\n\
                  HandlerOutcome::bad_request(\"refused\")\n}\n",
             )
             .unwrap();
@@ -336,7 +348,7 @@ mod tests {
                 &p,
                 "receive_push(&self.session, &bus, push).await\n\
                  async fn handle_first_seen(&self) -> HandlerOutcome {\n\
-                 self.ingest.dl_sink.reject(&reason);\n\
+                 self.ingest.dl_sink.reject(&reason).await?;\n\
                  HandlerOutcome::bad_request(\"refused\")\n}\n",
             )
             .unwrap();
@@ -358,7 +370,21 @@ mod tests {
     /// A refusal that dead-letters first passes.
     #[test]
     fn a_refusal_that_records_first_passes() {
-        let src = "async fn handle_first_seen(&self) -> HandlerOutcome {\n                   self.ingest.dl_sink.reject(&reason);\n                   HandlerOutcome::bad_request(\"recorded\")\n}\n";
+        let src = "async fn handle_first_seen(&self) -> HandlerOutcome {\n                   self.ingest.dl_sink.reject(&reason).await?;\n                   HandlerOutcome::bad_request(\"recorded\")\n}\n";
+        assert!(undead_lettered_refusals(src).is_empty());
+    }
+
+    /// A dead letter that is not awaited records nothing, so it is refused.
+    #[test]
+    fn an_unawaited_dead_letter_is_refused() {
+        let src = "async fn handle_first_seen(&self) -> HandlerOutcome {\n                   let _ = self.ingest.dl_sink.reject(&reason);\n                   HandlerOutcome::bad_request(\"dropped\")\n}\n";
+        assert_eq!(undead_lettered_refusals(src).len(), 1);
+    }
+
+    /// A dead letter whose arguments rustfmt wrapped still counts once awaited.
+    #[test]
+    fn a_wrapped_awaited_dead_letter_passes() {
+        let src = "async fn handle_first_seen(&self) -> HandlerOutcome {\n    self.ingest\n        .dl_sink\n        .reject(&DeadLetterReason::ProcessingError {\n            message: m(),\n        })\n        .await?;\n    HandlerOutcome::bad_request(\"recorded\")\n}\n";
         assert!(undead_lettered_refusals(src).is_empty());
     }
 

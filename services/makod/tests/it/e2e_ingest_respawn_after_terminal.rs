@@ -53,7 +53,12 @@ async fn ingest(dispatcher: &EdifactIngestDispatcher, control_ref: &str) -> Inge
     let wire = orders_17115(control_ref);
     let msg = edi_energy::parse(wire.as_bytes()).expect("ORDERS 17115 fixture parses");
     dispatcher
-        .dispatch(&msg, "gpke-sperrung", 17115)
+        .dispatch(
+            &msg,
+            "gpke-sperrung",
+            17115,
+            time::OffsetDateTime::now_utc(),
+        )
         .await
         .expect("ingest must not fail")
 }
@@ -233,7 +238,14 @@ async fn a_running_process_still_owns_the_malo() {
 
     let wire = orders_17115("SPERR-002");
     let msg = edi_energy::parse(wire.as_bytes()).expect("fixture parses");
-    let repeat = dispatcher.dispatch(&msg, "gpke-sperrung", 17115).await;
+    let repeat = dispatcher
+        .dispatch(
+            &msg,
+            "gpke-sperrung",
+            17115,
+            time::OffsetDateTime::now_utc(),
+        )
+        .await;
     assert!(
         repeat.is_err() || matches!(repeat, Ok(IngestOutcome::Dispatched { .. })),
         "a repeat Sperrauftrag must reach the running process, not spawn a second one: {repeat:?}"

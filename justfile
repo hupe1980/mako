@@ -242,11 +242,15 @@ fmt:
 fmt-check:
     cargo fmt --all -- --check
 
-# Dependency audit: licenses + advisories
-# cargo deny does not accept --all-features; it always resolves the full
-# workspace graph from Cargo.lock.
+# Dependency audit: licenses, bans, sources and advisories over the workspace
+# graph with every feature on — an optional dependency is still in a build that
+# turns its feature on. `fuzz/` is outside the workspace and carries its own
+# `Cargo.lock`, so its advisories are checked by a run of their own under the
+# same `deny.toml` (cargo-deny finds it in the parent directory); the VEX
+# statements cover both locks (`check-vex`).
 deny:
-    cargo deny check
+    cargo deny --all-features check
+    cargo deny --manifest-path fuzz/Cargo.toml --all-features check advisories
 
 # Guard: no hardcoded rubo4e schema-version aliases in business logic.
 # Domain code must use rubo4e::current:: or rubo4e::identifiers:: — never
@@ -491,7 +495,7 @@ ci:
     RUSTFLAGS="${RUSTFLAGS:--D warnings}" {{ just_executable() }} _ci
 
 [private]
-_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-dep-versions check-action-pins check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-dep-versions check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -893,9 +897,14 @@ check-licenses:
 check-dep-versions:
     cargo xtask check-dep-versions
 
-# Refuse an action not pinned by commit SHA, a `FROM` without a digest, and workflow-wide write permissions
+# Refuse an action not pinned by commit SHA, a `FROM` without a digest, workflow-wide write permissions, and an unpinned pip/npm install
 check-action-pins:
     cargo xtask check-action-pins
+
+# Refuse a `just ci` xtask recipe no `ci.yml` job runs — the pull-request gate
+# runs the list `evidence-pack --xtask-recipes` derives from `_ci`, never a copy
+check-ci-guards:
+    cargo xtask check-ci-guards
 
 # A ban whose path stopped resolving is ignored by clippy in silence.
 #
@@ -989,7 +998,7 @@ check-tool-grants:
 # is persisted, the dispatch 404s, and the Antwortfrist expires on a process that
 # looked healthy the whole way.
 check-answer-commands:
-    cargo run -q -p xtask -- check-answer-commands
+    cargo xtask check-answer-commands
 
 # ── Docs ──────────────────────────────────────────────────────────────────────
 

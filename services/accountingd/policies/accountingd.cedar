@@ -4,6 +4,8 @@
 //   context.principal_tenant  — mako_tenant JWT claim
 //   context.principal_roles   — mako_roles JWT claim
 //   context.resource_tenant   — owning tenant of the target data row
+//   context.principal_advisory — true for an advisory (agent) key; see the
+//                                `advisory-is-read-only` forbid at the end
 //
 // Authentication says who is calling; this says what they may do with the most
 // sensitive data the platform holds. Reads are split three ways because a
@@ -45,20 +47,12 @@
 //
 // The MCP surface
 // ---------------
-// It used to carry none either, exempted as "read-only by construction". It is
-// not: `post_manual_booking` posts a Buchung to a customer's Kontokorrent,
-// `run_abschlag_cycle` raises an Abschlagsforderung against every account due
-// that day, `import_payments` books a ZAHLUNG per CAMT.054 entry,
-// `update_abschlag` rewrites the monthly advance and the SEPA billing day, and
-// `run_sepa_collection` emits a bank-submittable pain.008 carrying every
-// mandate's IBAN. Five of thirteen tools, reachable with any token the verifier
-// accepted — or, before this, with none at all, since `McpAuth` was built
-// without a verifier and without this policy.
-//
-// The exemption is gone rather than made true. Deleting the five tools would
-// have been the other way to honour the comment, but they are the automation
-// the surface exists for, and a claim that has to be re-proved every time a
-// tool is added is the wrong shape of guarantee.
+// It is not read-only by construction: `post_manual_booking` posts a Buchung to
+// a customer's Kontokorrent, `run_abschlag_cycle` raises an Abschlagsforderung
+// against every account due that day, `import_payments` books a ZAHLUNG per
+// CAMT.054 entry, `update_abschlag` rewrites the monthly advance and the SEPA
+// billing day, and `run_sepa_collection` emits a bank-submittable pain.008
+// carrying every mandate's IBAN — five of thirteen tools.
 //
 // `mcp_server::tool_action` therefore maps every tool to the action its REST
 // twin enforces, `mcp_server::mcp_auth_middleware` checks it before the frame
@@ -157,7 +151,7 @@ permit(
 // ── GDPR Art. 17 erasure ──────────────────────────────────────────────────────
 // Irreversible destruction of personal data, deliberately narrower than the other
 // writes: it is a data-protection act, not an accounting one, and the financial
-// records it leaves behind must survive it (§ 238 HGB).
+// records it leaves behind must survive it (§ 257 Abs. 1, 4 HGB).
 permit(
     principal,
     action == Action::"erase-pii",
@@ -186,3 +180,33 @@ permit(
 // The platform's JWTs carry market roles, and inventing a second vocabulary this
 // service alone understands would put an authorization decision behind a claim
 // nothing else issues. Finer separation of duties belongs in the IdP.
+
+// ── An advisory principal reads and never writes ──────────────────────────────
+// The roles that may read the bank details and the books (`LF`, `MSB`) are the
+// roles that hold every write above, so a key that serves an advisory agent —
+// one granted `list_sepa_collections` to reconcile payments — would otherwise
+// hold every money-moving write as well. A `forbid` overrides every `permit`,
+// so whatever roles such a key carries, it is refused each mutating action and
+// keeps the reads its roles grant.
+//
+// The action list is every action of this file except the reads
+// (`read-account`, `read-banking`, `read-books`) and `use-mcp`;
+// `the_advisory_forbid_names_every_mutating_action` pins it to the actions the
+// handlers check.
+@id("advisory-is-read-only")
+forbid(
+    principal,
+    action in [
+        Action::"write-account",
+        Action::"post-entry",
+        Action::"manage-dunning",
+        Action::"manage-sepa",
+        Action::"import-payments",
+        Action::"run-payout",
+        Action::"close-period",
+        Action::"erase-pii"
+    ],
+    resource
+) when {
+    context.principal_advisory
+};

@@ -20,6 +20,7 @@ impl EdifactIngestDispatcher {
         msg: &AnyMessage,
         workflow_name: &str,
         pid: u32,
+        received_at: OffsetDateTime,
     ) -> Result<IngestOutcome, EngineError> {
         let fv = detect_format_version(msg);
         let raw: &dyn Any = msg;
@@ -182,7 +183,7 @@ impl EdifactIngestDispatcher {
                     // the Zahlungsziel itself, already baked into that date.
                     let zahlungsziel = faelligkeitsdatum_from_invoic(msg).unwrap_or_else(|| {
                         fristen::deadline_at_werktage(
-                            OffsetDateTime::now_utc(),
+                            received_at,
                             fristen::vorlauf::ZAHLUNGSZIEL_MINDEST_WT,
                             HolidayCalendar::BdewMaKo,
                         )
@@ -291,11 +292,11 @@ impl EdifactIngestDispatcher {
                     // 1 WT nach dem ÜZ" (GPKE Teil 4 § 3.2 Nr. 2). The APERAK
                     // runs beside it on 45 minutes (APERAK AHB 1.1 §2.4.1).
                     let process_due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
+                        received_at,
                         fristen::antwort::GESCHAEFTSDATENANFRAGE_WERKTAGE,
                         HolidayCalendar::BdewMaKo,
                     );
-                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
+                    let aperak_due_at = fristen::aperak_strom_due_at(received_at);
                     self.spawn_or_resume_guarded::<WimStammdatenWorkflow>(
                         &melo_id,
                         "wim-stammdaten",
@@ -357,11 +358,10 @@ impl EdifactIngestDispatcher {
                     let subscription_key =
                         mako_wim::esa::business_key(malo_id.as_str(), &messprodukt);
                     // UC 4.1 Nr. 2: "spätester ÜT ist der 5. WT nach dem ÜT von
-                    // Nr. 1". makod issues its positive AS4 Receipt for this
-                    // message in the same request, so the dispatch instant is
-                    // the ÜT the Frist counts from.
+                    // Nr. 1". The ÜT is the receipt instant the door recorded,
+                    // not the dispatch instant.
                     let due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
+                        received_at,
                         mako_wim::wertebestellung::ANGEBOT_FRIST_WT,
                         HolidayCalendar::BdewMaKo,
                     );
@@ -390,7 +390,7 @@ impl EdifactIngestDispatcher {
                     let key = esa_korrelation_key(msg, pid);
                     let cmd = self.gate_esa_consent(msg, cmd, None).await;
                     let due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
+                        received_at,
                         mako_wim::wertebestellung::ANTWORT_FRIST_WT,
                         HolidayCalendar::BdewMaKo,
                     );
@@ -422,7 +422,7 @@ impl EdifactIngestDispatcher {
                     let cmd = self.gate_esa_consent(msg, cmd, location.as_deref()).await;
                     // UC 4.1 Nr. 4 / Nr. 6 and UC 4.3 Nr. 2: 2 WT nach dem ÜT.
                     let due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
+                        received_at,
                         mako_wim::wertebestellung::ANTWORT_FRIST_WT,
                         HolidayCalendar::BdewMaKo,
                     );
@@ -507,7 +507,7 @@ impl EdifactIngestDispatcher {
                         (
                             mako_wim::preisanfrage::PREISANFRAGE_DEADLINE_LABEL,
                             fristen::deadline_at_werktage(
-                                OffsetDateTime::now_utc(),
+                                received_at,
                                 wt,
                                 HolidayCalendar::BdewMaKo,
                             ),
@@ -557,7 +557,7 @@ impl EdifactIngestDispatcher {
                         vec![(
                             mako_wim::RECHNUNGSABWICKLUNG_DEADLINE_LABEL,
                             fristen::deadline_at_werktage(
-                                OffsetDateTime::now_utc(),
+                                received_at,
                                 fristen::antwort::RECHNUNGSABWICKLUNG_WERKTAGE,
                                 HolidayCalendar::BdewMaKo,
                             ),
@@ -655,16 +655,11 @@ impl EdifactIngestDispatcher {
                     let melo_id = extract_melo_from_orders(msg);
                     // One Werktag, from the same table `processd` sizes its
                     // operator queue by and `obsd` raises the breach against.
-                    let process_due_at =
-                        mako_fristen::antwort::antwort_deadline(pid, OffsetDateTime::now_utc())
-                            .unwrap_or_else(|| {
-                                fristen::deadline_at_werktage(
-                                    OffsetDateTime::now_utc(),
-                                    1,
-                                    HolidayCalendar::BdewMaKo,
-                                )
-                            });
-                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
+                    let process_due_at = mako_fristen::antwort::antwort_deadline(pid, received_at)
+                        .unwrap_or_else(|| {
+                            fristen::deadline_at_werktage(received_at, 1, HolidayCalendar::BdewMaKo)
+                        });
+                    let aperak_due_at = fristen::aperak_strom_due_at(received_at);
                     self.spawn_or_resume_guarded::<WimWeiterverpflichtungWorkflow>(
                         &melo_id,
                         mako_wim::weiterverpflichtung::WORKFLOW_NAME,
@@ -702,15 +697,14 @@ impl EdifactIngestDispatcher {
                     let melo_id = extract_malo_from_msg(msg);
                     // Three Werktage, from the same table `processd` sizes its
                     // operator queue by and `obsd` raises the breach against.
-                    let process_due_at =
-                        mako_fristen::antwort::antwort_deadline(pid, OffsetDateTime::now_utc())
-                            .unwrap_or_else(|| {
-                                fristen::deadline_at_werktage(
-                                    OffsetDateTime::now_utc(),
-                                    mako_fristen::antwort::ERSTEINBAU_ANTWORT_WERKTAGE,
-                                    HolidayCalendar::BdewMaKo,
-                                )
-                            });
+                    let process_due_at = mako_fristen::antwort::antwort_deadline(pid, received_at)
+                        .unwrap_or_else(|| {
+                            fristen::deadline_at_werktage(
+                                received_at,
+                                mako_fristen::antwort::ERSTEINBAU_ANTWORT_WERKTAGE,
+                                HolidayCalendar::BdewMaKo,
+                            )
+                        });
                     self.spawn_or_resume_guarded::<mako_wim::ersteinbau::WimErsteinbauWorkflow>(
                         melo_id.as_str(),
                         mako_wim::ersteinbau::WORKFLOW_NAME,

@@ -2901,6 +2901,7 @@ mod korrektur_grund_tests {
             )
             .expect("valid period"),
             regime: crate::regulatory::RegulatoryRegime::for_period(
+                Sparte::Strom,
                 time::macros::date!(2026 - 01 - 01),
                 time::macros::date!(2026 - 01 - 31),
             ),

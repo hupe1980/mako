@@ -374,7 +374,7 @@ pub struct LfAntwort {
     ///
     /// `E_0603`–`E_0606` publish a single Prüfschritt, so the substance of the
     /// answer is not the code — it is which balancing circle the generation is
-    /// booked into (GPKE Teil 2 § 2.4.2.2 Nr. 2). On the wire it is a
+    /// booked into (GPKE Teil 2 Kap. 2.4.2.2 Nr. 2). On the wire it is a
     /// Produktpaket, `SG8 SEQ+Z79` / `PIA+5` with the Produkteigenschaft in
     /// `SG10 CCI+Z66` / `CAV+ZH9` / `CAV+ZV4` (UTILMD AHB Strom 2.2, Codeliste
     /// der Konfigurationen Kap. 6.1), never a Bemerkung.

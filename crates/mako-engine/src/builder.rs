@@ -885,8 +885,12 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                         window_secs  = self.max_retry_window.as_secs(),
                         "outbox worker: retry budget exhausted; dead-lettering message",
                     );
-                    self.dead_letter_sink.reject(
-                        &crate::dead_letter::DeadLetterReason::OutboxExhausted {
+                    // The entry is deleted only once its dead letter is
+                    // written: acknowledging first would leave nothing of the
+                    // message if the record then failed.
+                    if let Err(e) = self
+                        .dead_letter_sink
+                        .reject(&crate::dead_letter::DeadLetterReason::OutboxExhausted {
                             message_id: msg.message_id,
                             message_type: msg.message_type.to_string(),
                             recipient: msg.recipient.to_string(),
@@ -895,8 +899,17 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                                 msg.attempt_count
                             ),
                             attempts: msg.attempt_count,
-                        },
-                    );
+                        })
+                        .await
+                    {
+                        tracing::error!(
+                            message_id = %msg.message_id,
+                            error = %e,
+                            "outbox worker: dead letter not written; the message stays in the \
+                             outbox and is dead-lettered on the next poll",
+                        );
+                        continue;
+                    }
                     if let Err(e) = self.store.acknowledge(msg.message_id).await {
                         tracing::error!(
                             message_id = %msg.message_id,
@@ -947,15 +960,25 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                             error        = %e,
                             "outbox worker: permanent send failure; dead-lettering without retry",
                         );
-                        self.dead_letter_sink.reject(
-                            &crate::dead_letter::DeadLetterReason::OutboxExhausted {
+                        if let Err(de) = self
+                            .dead_letter_sink
+                            .reject(&crate::dead_letter::DeadLetterReason::OutboxExhausted {
                                 message_id: msg.message_id,
                                 message_type: msg.message_type.to_string(),
                                 recipient: msg.recipient.to_string(),
                                 last_error: e.to_string(),
                                 attempts: msg.attempt_count,
-                            },
-                        );
+                            })
+                            .await
+                        {
+                            tracing::error!(
+                                message_id = %msg.message_id,
+                                error = %de,
+                                "outbox worker: dead letter not written; the message stays in \
+                                 the outbox and is dead-lettered on the next poll",
+                            );
+                            continue;
+                        }
                         if let Err(re) = self.store.acknowledge(msg.message_id).await {
                             tracing::error!(
                                 message_id = %msg.message_id,
@@ -2833,13 +2856,17 @@ mod tests {
     #[derive(Default)]
     struct RecordingSink(std::sync::Mutex<Vec<u32>>);
     impl crate::dead_letter::DeadLetterSink for std::sync::Arc<RecordingSink> {
-        fn reject(&self, reason: &crate::dead_letter::DeadLetterReason) {
+        fn reject<'a>(
+            &'a self,
+            reason: &'a crate::dead_letter::DeadLetterReason,
+        ) -> crate::dead_letter::RejectFuture<'a> {
             if let crate::dead_letter::DeadLetterReason::OutboxExhausted { attempts, .. } = reason {
                 self.0
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push(*attempts);
             }
+            Box::pin(std::future::ready(Ok(())))
         }
     }
 

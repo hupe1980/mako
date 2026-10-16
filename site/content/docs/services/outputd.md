@@ -60,6 +60,17 @@ What "about" means depends on the kind:
 keeps one implementation of `en16931::Invoice → DocumentView` — the one the
 publish gate proves templates against.
 
+An `INVOICE` sent by `POST` alone is a sonstige Rechnung, which § 14 Abs. 2
+Satz 2 Nr. 1 UStG does not admit for a Leistung „an einen anderen Unternehmer
+für dessen Unternehmen" outside the graces of § 27 Abs. 38 UStG. Such a request
+states `empfaenger_unternehmer`, and for an Unternehmer `leistung_ausgefuehrt`
+(the supply's last day) and, where Nr. 2 decides, `gesamtumsatz_vorjahr_eur`;
+outputd applies the decision billingd's paper path takes, on today's Berlin
+date as the übermittelt date, and answers **`422 PAPIER_UNZULAESSIG`** where
+paper is not admitted or a fact is missing. A `POST` beside `PORTAL`, `EMAIL`
+or `ERP` is a copy of a document that also went out electronically and is
+queued.
+
 Admission is checked before rendering, each refusal a `422` naming the fix: a
 pinned hash must belong to **this kind**, the subject must match the kind, an
 `INVOICE` render **requires** the attachment, and a Textform render must not

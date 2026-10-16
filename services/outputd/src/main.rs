@@ -15,7 +15,7 @@
 //! | Method | Path | Description |
 //! |---|---|---|
 //! | `POST` | `/api/v1/render/{kind}` | Render a view with the current or a pinned template; `X-Mako-Template-Hash` names the layout used. Stores nothing |
-//! | `POST` | `/api/v1/documents/{kind}` | Render, **record** and queue for delivery; idempotent on `subject_ref` |
+//! | `POST` | `/api/v1/documents/issue/{kind}` | Render, **record** and queue for delivery; idempotent on `subject_ref` |
 //! | `GET` | `/api/v1/documents` | A customer's documents (`?malo_id=` or `?kunden_nr=`, `&kind=`) — the portal inbox |
 //! | `GET` | `/api/v1/documents/{id}` | One document with every delivery track |
 //! | `GET` | `/api/v1/documents/{id}/content` | The bytes as issued (§ 147 AO reproduction, never a re-render) |

@@ -90,8 +90,11 @@ Commands:
   import-pid-overview    Extract that inventory from the BDEW Anwendungsübersicht .xlsx
   check-dep-versions     Documented dependency versions must match the manifests
   check-action-pins      Every `uses:` pinned to a commit SHA with its tag in a comment, every
-                        Dockerfile `FROM` to a digest, every workflow defaulting to `contents: read`
-  check-vex              release/vex.json carries one OpenVEX statement per advisory deny.toml ignores
+                        Dockerfile `FROM` to a digest, every workflow defaulting to `contents: read`,
+                        every pip install hash-pinned and every npm install an `npm ci`
+  check-vex              release/vex.json carries one OpenVEX statement per advisory deny.toml ignores,
+                        each versioned subcomponent locked in Cargo.lock or fuzz/Cargo.lock
+  check-ci-guards        Every `just ci` recipe that is one xtask call is run by a ci.yml job
   evidence-pack          Assemble (--inputs <dir> --out <file>) or verify (--check <file>) the
                         release evidence pack; a section without its input reads `not measured`
   check-licenses         The licence governance page must state deny.toml's allow list
@@ -131,6 +134,7 @@ mod check_bo4e_discriminants;
 mod check_bo4e_examples;
 mod check_business_dates;
 mod check_cedar_roles;
+mod check_ci_guards;
 mod check_citations;
 mod check_clippy_bans;
 mod check_command_constructors;
@@ -217,6 +221,7 @@ fn main() {
             }
         }
         Some("check-action-pins") => root_task(check_action_pins::run),
+        Some("check-ci-guards") => root_task(check_ci_guards::run),
         Some("check-vex") => root_task(check_vex::run),
         Some("evidence-pack") => evidence_pack(),
         Some("check-licenses") => check_licenses(),

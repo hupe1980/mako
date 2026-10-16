@@ -56,17 +56,18 @@ class TestMarktpartnerSim:
         reply = nb.receive(anmeldung)
 
         assert reply.pid == 55002, "Bestätigung Anmeldung is 55002"
-        assert_edifact_valid(reply.ack, on=ON)
+        assert reply.ack is None, "a sound Strom interchange earns no CONTRL"
         answer = assert_edifact_valid(reply.business, on=ON)
         assert answer.pruefidentifikator == 55002
         assert answer.envelope.sender_id == NB_ID, "the parties swap"
         assert answer.envelope.receiver_id == LF_ID
 
-    def test_a_conformant_partner_acknowledges_before_it_answers(self, nb, anmeldung):
+    def test_a_strom_partner_sends_no_positive_contrl(self, nb, anmeldung):
+        """Strom sends a CONTRL only on a syntax error (CONTRL AHB 1.0 Kap. 1.2)."""
         nb.on(55001).bestaetigung()
         reply = nb.receive(anmeldung)
-        assert reply.ack_kind == "CONTRL"
-        assert reply.ack_positive
+        assert reply.ack is None and reply.ack_kind is None
+        assert reply.business is not None
 
     def test_the_ablehnung_uses_the_ahb_answer_pid(self, nb, anmeldung):
         nb.on(55001).ablehnung(antwort_code="A06", process_dates=[("Z07", "20260501")])
@@ -145,7 +146,7 @@ class TestMarktpartnerSim:
         """Forgetting to bind an answer must not fabricate one."""
         reply = nb.receive(anmeldung)
         assert reply.business is None
-        assert reply.ack is not None, "it still acknowledges what it received"
+        assert reply.ack is None, "a sound Strom interchange earns no CONTRL"
 
     def test_the_reply_carries_the_published_frist(self, nb, anmeldung):
         """GPKE 55001: 11:00 on the 1. Werktag after the Übertragungstag."""
@@ -201,10 +202,13 @@ class TestInterchangeIdentity:
     like a replay of the first cannot be run against a platform that checks.
     """
 
-    def test_every_reply_carries_its_own_datenaustauschreferenz(self, nb):
-        nb.on(55001).bestaetigung()
-        first = nb.receive(utilmd_interchange(dar="REQ1"))
-        second = nb.receive(utilmd_interchange(dar="REQ2"))
+    def test_every_reply_carries_its_own_datenaustauschreferenz(self):
+        # A Gas partner sends both an acknowledgement and an answer, so each
+        # exchange produces two interchanges.
+        sim = MarktpartnerSim(mp_id=NB_ID, rolle="NB", reference_date=ON, sparte="gas")
+        sim.on(55001).bestaetigung()
+        first = sim.receive(utilmd_interchange(dar="REQ1"))
+        second = sim.receive(utilmd_interchange(dar="REQ2"))
         refs = {
             validate_edifact(wire, ON).envelope.control_ref
             for wire in (first.ack, first.business, second.ack, second.business)
@@ -361,7 +365,7 @@ class TestAcknowledgementChoice:
         reply = lenient.receive(utilmd_interchange(lokation="NOTAMELO"))
 
         assert reply, "a lax partner answers rather than going quiet"
-        assert reply.ack_kind == "CONTRL" and reply.ack_positive
+        assert reply.ack is None, "it processed the request as if it were sound"
         assert reply.pid == 55002
         # The request was still invalid, and the exchange log says so.
         assert not lenient.exchanges[-1].request_valid

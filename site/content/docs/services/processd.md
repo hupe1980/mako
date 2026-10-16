@@ -236,8 +236,13 @@ identify is re-checked **daily for 60 Werktage** and only then refused `A07` /
 | `PUT /api/v1/neuanlage/{id}/identifikation` | The MaLo-ID the NB matched from its NIS/GIS; the next pass walks the tree with it |
 
 The branches share no code (`A01`–`A09` verbrauchend, `A10`–`A19` erzeugend).
-The Vorlauffrist is measured against the Übertragungstag, so a re-evaluation on
-day 40 reaches the verdict of day one.
+The Vorlauffrist is measured against the Übertragungstag (GPKE Teil 1 Kap. 7
+„Fristenberechnung", S. 27) — processd reads it as the Berlin day of the
+CloudEvent `time`, which `makod` stamps when it records the process in the
+request that received the message — and never against the moment processd
+evaluates. An Anmeldung received at 23:40 and evaluated after
+midnight keeps its Werktag, the Abmeldung (`E_0607`) is judged the same way,
+and a re-evaluation on day 40 reaches the verdict of day one.
 
 ### `mako_pruefung::nb::evaluate_abmeldung` — the Abmeldung, `E_0607` / `E_3019`
 

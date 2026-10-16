@@ -336,7 +336,7 @@ is a `422` naming the stage in `code`:
 | `GET/PUT` | `/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen` | `read-device` / `write-device` | Replace `GeraetKonfiguration` entries; emits `de.markt.geraet.konfiguration.updated` |
 | `GET/PUT` | `/api/v1/zaehler/{zaehler_id}/register` | `read-device` / `write-device` | TOU registers |
 | `GET/PUT` | `/api/v1/zaehler-register/{register_id}/saisons` | `read-device` / `write-device` | Seasonal windows |
-| `GET` | `/api/v1/zaehler/{zaehler_id}/tariff-zone` | `read-device` | HT/NT/EINZEL at `?datetime=` |
+| `GET` | `/api/v1/zaehler/{zaehler_id}/tariff-zone` | `read-device` | HT/NT/EINZEL at `?datetime=`; `422` when no Zählzeit window covers the instant |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/zaehlzeitdefinitionen` | `read-device` | BO4E `Zaehlzeitdefinition`; `?valid_only=true` |
 | `PUT` | `/api/v1/geraete/{geraet_id}` | `write-device` | Upsert a Gerät through the gate |
 | `GET/PUT` | `/api/v1/nb-contracts/{id}` | `read-nb-contract` / `write-nb-contract` | NB contract as `Vertrag`; PUT emits `de.markt.nb-contract.updated` |
@@ -1027,6 +1027,8 @@ registered with edmd, not `SMGW_CERT_ABLAUFDATUM`.
 `zeit_bis` exclusive, German local time) describe iMSys TOU bands.
 `GET …/tariff-zone?datetime=` resolves one local datetime in a single JOIN;
 `GET …/zaehlzeitdefinitionen` assembles them into a BO4E `Zaehlzeitdefinition`.
+A single-rate meter answers `EINZEL` from its own window; an instant no window
+covers is a `422`, never a defaulted `EINZEL`.
 
 Both `PUT` bodies are the stored record, so every field is required:
 `zaehler_id`, `tenant` and `register_id` are overwritten from the path and the

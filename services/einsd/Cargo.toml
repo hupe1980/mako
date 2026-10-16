@@ -44,6 +44,8 @@ secrecy      = { version = "0.10" }
 
 
 [dev-dependencies]
+# `build_for_test`: the startup test builds the router as the runner mounts it.
+mako-service = { workspace = true, features = ["testing"] }
 # Test-only: pins that the Veräußerungsform wire codes einsd emits are the
 # ones the NB-side reader parses. No production path reads an Entscheidungsbaum.
 mako-pruefung = { workspace = true, features = ["role-nb"] }

@@ -801,7 +801,7 @@ fn zp_vorgang_for_pid(pid: u32) -> Option<ZpVorgang> {
 /// Resolve which Summenzeitreihe a MaBiS-ZP lifecycle UTILMD is about.
 ///
 /// For the codes that carry their own series (55071/55072 Zuordnungsermächtigung,
-/// 55197–55214 AAÜZ/LF-AASZR) the PID is unambiguous and the `SG10` pair is not
+/// 55197–55200 · 55203–55214 AAÜZ/LF-AASZR) the PID is unambiguous and the `SG10` pair is not
 /// needed. For the **generic** 55062/55063 it is the only discriminator there
 /// is, and a missing or unknown one is refused rather than defaulted: eleven
 /// series share the code and five of them owe no answer, so a wrong guess either

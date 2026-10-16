@@ -59,7 +59,7 @@ pub struct LfAntwort {
     ///
     /// `E_0603`–`E_0606` publish one Prüfschritt each, so the substance of a
     /// 55608 is not the code: it is which balancing circle the generation is
-    /// booked into (GPKE Teil 2 § 2.4.2.2 Nr. 2). The Codeliste der
+    /// booked into (GPKE Teil 2 Kap. 2.4.2.2 Nr. 2). The Codeliste der
     /// Konfigurationen 1.4 Kap. 6.1.1 makes the Bilanzkreis product
     /// (`9991000002082`) unconditional in the Produktpaket.
     #[serde(default, skip_serializing_if = "Option::is_none")]

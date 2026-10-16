@@ -13,8 +13,13 @@ struct ContrlBuilderInner {
     release: Release,
     message_ref: String,
     interchange_ref: String,
+    /// This CONTRL's own sender — the party acknowledging.
     sender_id: Option<String>,
+    /// This CONTRL's own recipient — the sender of the acknowledged interchange.
     receiver_id: Option<String>,
+    /// `UCI` S002 / S003: the acknowledged interchange's `UNB` DE 0004 and DE
+    /// 0010, when they are not the swap of this CONTRL's own pair.
+    subject: Option<(String, String)>,
     action_code: String,
     /// `UCI` DE 0085, on a Syntaxfehlermeldung.
     syntax_error: Option<String>,
@@ -24,6 +29,21 @@ struct ContrlBuilderInner {
 ///
 /// CONTRL is the UN/EDIFACT acknowledgement message — it reports whether
 /// a received interchange was accepted or rejected.
+///
+/// # `UCI` S002 / S003 echo the acknowledged interchange
+///
+/// CONTRL MIG 2.0b, `UCI` Bemerkung (S. 7): „In den Datenelementgruppen S002
+/// und S003 werden die Marktpartner-IDs aus der Übertragungsdatei übernommen";
+/// the interchange is identified „durch das Kopieren der Datenelemente zum
+/// Absender der Übertragungsdatei, zum Empfänger der Übertragungsdatei und zur
+/// Datenaustauschreferenz in die identischen Datenelemente dieses Segmentes".
+/// S002 is therefore the **received** `UNB` DE 0004 and S003 the received DE
+/// 0010 — not this CONTRL's own direction. [`sender`](ContrlBuilder::sender)
+/// and [`receiver`](ContrlBuilder::receiver) name this CONTRL's own parties,
+/// so by default S002 is the receiver and S003 the sender;
+/// [`for_interchange`](ContrlBuilder::for_interchange) and
+/// [`answering`](ContrlBuilder::answering) copy the received pair verbatim,
+/// which matters when the received DE 0010 is not the MP-ID that answers.
 ///
 /// # Type-state
 ///
@@ -65,6 +85,7 @@ impl ContrlBuilder<Unset, Unset> {
                 interchange_ref: String::new(),
                 sender_id: None,
                 receiver_id: None,
+                subject: None,
                 action_code: "7".to_owned(),
                 syntax_error: None,
             },
@@ -104,8 +125,19 @@ impl<S, R> ContrlBuilder<S, R> {
     ) -> ContrlBuilder<Set, Set> {
         self.inner.sender_id = Some(header.receiver_id.to_string());
         self.inner.receiver_id = Some(header.sender_id.to_string());
+        self.inner.subject = Some((header.sender_id.to_string(), header.receiver_id.to_string()));
         self.inner.interchange_ref = header.control_ref.to_string();
         self.transition()
+    }
+
+    /// Echo the acknowledged interchange's `UNB` DE 0004 (`sender`) and DE 0010
+    /// (`receiver`) in `UCI` S002 / S003, verbatim.
+    ///
+    /// Needed only when they are not the swap of this CONTRL's own parties —
+    /// an interchange addressed to an MP-ID other than the one answering.
+    pub fn answering(mut self, sender: impl Into<String>, receiver: impl Into<String>) -> Self {
+        self.inner.subject = Some((sender.into(), receiver.into()));
+        self
     }
 
     fn transition<S2, R2>(self) -> ContrlBuilder<S2, R2> {
@@ -115,13 +147,15 @@ impl<S, R> ContrlBuilder<S, R> {
         }
     }
 
-    /// Set the sender identification (UCI element 1 / DE 0004).
+    /// Set this CONTRL's sender — the party acknowledging, which is the
+    /// recipient of the acknowledged interchange (`UCI` S003 by default).
     pub fn sender(mut self, id: impl Into<String>) -> ContrlBuilder<Set, R> {
         self.inner.sender_id = Some(id.into());
         self.transition()
     }
 
-    /// Set the recipient identification (UCI element 2 / DE 0010).
+    /// Set this CONTRL's recipient — the sender of the acknowledged interchange
+    /// (`UCI` S002 by default).
     pub fn receiver(mut self, id: impl Into<String>) -> ContrlBuilder<S, Set> {
         self.inner.receiver_id = Some(id.into());
         self.transition()
@@ -167,8 +201,15 @@ impl<S, R> ContrlBuilder<S, R> {
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        let sender = self.inner.sender_id.as_deref().unwrap_or("");
-        let receiver = self.inner.receiver_id.as_deref().unwrap_or("");
+        // `UCI` S002 / S003 are the acknowledged interchange's DE 0004 / DE
+        // 0010: this CONTRL's recipient and sender, unless stated verbatim.
+        let (sender, receiver) = match &self.inner.subject {
+            Some((s, r)) => (s.as_str(), r.as_str()),
+            None => (
+                self.inner.receiver_id.as_deref().unwrap_or(""),
+                self.inner.sender_id.as_deref().unwrap_or(""),
+            ),
+        };
 
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);

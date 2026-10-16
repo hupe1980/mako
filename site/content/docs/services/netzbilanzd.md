@@ -132,8 +132,15 @@ supply it via `offshore_umlage_ct_per_kwh` / `kwkg_umlage_ct_per_kwh`.
 B′ and C′ apply „für Strommengen über 1 000 000 kWh" at one Entnahmestelle, so the year's first
 GWh carries A′. Supply `enfg_jahresvorverbrauch_kwh` (kWh consumed there earlier in the year); a
 period straddling the boundary bills **two** §19 positions. Omitted, the period is billed as if
-it opened the year, with `ENFG_VORVERBRAUCH_MISSING`. A levy with no published rate for the
-delivery year is omitted with a warning, never billed at zero silently.
+it opened the year, with `ENFG_VORVERBRAUCH_MISSING`.
+
+Each calendar year of a period is priced at its own year's rates: a period crossing 1 January
+carries every levy as one position per year, the quantity split by days, and the new year's
+1-GWh threshold opens at zero. A levy with neither a tabled rate nor an override for a year of
+the period refuses the settlement, naming each missing levy and year — the ÜNB publish the next
+year's rates „bis zum 25. Oktober eines Kalenderjahres" (§ 11 EnFG), and until a year is tabled
+its rates are supplied as overrides. An override is one rate, so a period crossing 1 January
+that carries one is refused and has to be split at the year boundary.
 
 ### The §30 MsbG Preisobergrenze is derived, not asserted
 

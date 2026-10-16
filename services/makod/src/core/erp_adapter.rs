@@ -401,16 +401,39 @@ where
     }
 
     /// Record a permanently failed ERP delivery in the dead-letter sink.
-    fn dead_letter(&self, msg: &mako_engine::outbox::OutboxMessage, last_error: &str) {
-        if let Some(sink) = &self.dl_sink {
-            use mako_engine::dead_letter::DeadLetterReason;
-            sink.reject(&DeadLetterReason::OutboxExhausted {
+    ///
+    /// Returns `false` when the record could not be written. The caller then
+    /// keeps the message in the outbox: acknowledging it would delete the only
+    /// trace of a delivery the ERP never received.
+    async fn dead_letter(
+        &self,
+        msg: &mako_engine::outbox::OutboxMessage,
+        last_error: &str,
+    ) -> bool {
+        let Some(sink) = &self.dl_sink else {
+            return true;
+        };
+        use mako_engine::dead_letter::DeadLetterReason;
+        match sink
+            .reject(&DeadLetterReason::OutboxExhausted {
                 message_id: msg.message_id,
                 message_type: msg.message_type.to_string(),
                 recipient: msg.recipient.to_string(),
                 last_error: last_error.to_owned(),
                 attempts: msg.attempt_count,
-            });
+            })
+            .await
+        {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::error!(
+                    message_id = %msg.message_id,
+                    error = %e,
+                    "OutboxErpWorker: dead letter not written; the message stays in the outbox \
+                     and is dead-lettered on the next poll",
+                );
+                false
+            }
         }
     }
 
@@ -577,7 +600,9 @@ where
                                 error         = %e,
                                 "OutboxErpWorker: max delivery attempts reached; dead-lettering",
                             );
-                            self.dead_letter(&msg, &e.to_string());
+                            if !self.dead_letter(&msg, &e.to_string()).await {
+                                continue;
+                            }
                             // The acknowledge is what actually removes the
                             // message; `pending_now` neither leases nor counts,
                             // so a lost one means this exact message comes back
@@ -586,11 +611,9 @@ where
                             // `reschedule` ever raises it. The ERP itself is
                             // safe (the event carries `idempotency_key =
                             // message_id`), but every cycle appends another
-                            // record to the dead-letter sink, which neither
-                            // deduplicates nor is unbounded: enough of them and
-                            // its buffer overflows and starts dropping other
-                            // services' rejections. Nothing above can act on
-                            // this, so it is logged loudly enough to be found.
+                            // record to the dead-letter sink, which does not
+                            // deduplicate. Nothing above can act on this, so it
+                            // is logged loudly enough to be found.
                             if let Err(ack) = self.store.acknowledge(msg.message_id).await {
                                 tracing::error!(
                                     message_id   = %msg.message_id,
@@ -639,7 +662,9 @@ where
                         // The order matters and stays: acknowledging first and
                         // crashing would lose the audit record entirely, whereas
                         // this way the worst case is a duplicate one.
-                        self.dead_letter(&msg, &e.to_string());
+                        if !self.dead_letter(&msg, &e.to_string()).await {
+                            continue;
+                        }
                         // Same reasoning as the exhausted-budget branch above:
                         // without the acknowledge the message is redelivered
                         // indefinitely, re-POSTing to an ERP that has already

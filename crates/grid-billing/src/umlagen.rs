@@ -8,8 +8,13 @@
 //! | Offshore-Netzumlage | §17f EnWG, EnFG | offshore connection cost and compensation |
 //! | KWKG-Umlage | §26 KWKG, EnFG | the KWK-Zuschlag paid to CHP operators |
 //!
-//! All three are set annually by the Übertragungsnetzbetreiber and published by
-//! 25 October for the following calendar year.
+//! All three are set annually by the Übertragungsnetzbetreiber and published
+//! „bis zum 25. Oktober eines Kalenderjahres" for the following one (§ 11
+//! EnFG). Every tabled row names the publication it is read from.
+//!
+//! A year with no row has no rate: [`crate::settle_nne`] refuses a Strom
+//! period whose levy is neither tabled nor overridden, and prices a period
+//! crossing 1 January at each year's own rate.
 //!
 //! ## Why the rates are tabled by year rather than configured once
 //!
@@ -64,13 +69,6 @@ pub enum Letztverbrauchergruppe {
     Befreit,
 }
 
-/// The first delivery year the tabled series covers.
-///
-/// Below this the tables claim nothing, so a caller billing an earlier period is
-/// expected to supply the rate rather than be warned about a gap this crate
-/// never undertook to fill.
-pub const ERSTES_ERFASSTES_JAHR: i32 = 2026;
-
 /// The threshold separating A′ from B′/C′, per Entnahmestelle and year.
 ///
 /// The reduced rate is published for quantities *über* this figure, so the
@@ -119,20 +117,86 @@ pub fn aufteilung(
     }
 }
 
+/// The publication the 2026 rows are read from.
+///
+/// The Übertragungsnetzbetreiber publish the following year's Umlagen on their
+/// joint platform „bis zum 25. Oktober eines Kalenderjahres" (§ 11 EnFG).
+const UENB_2026: &str = "Übertragungsnetzbetreiber, Netzentgeltumlagen 2026 \
+                         (netztransparenz.de, Veröffentlichung nach § 11 EnFG im Oktober 2025)";
+
+/// One year of the §19 StromNEV-Umlage, A′/B′/C′ in ct/kWh, with its source.
+#[derive(Debug, Clone, Copy)]
+struct Sect19Zeile {
+    jahr: i32,
+    a: Decimal,
+    b: Decimal,
+    c: Decimal,
+    quelle: &'static str,
+}
+
+/// One year of a levy published only at the non-privileged rate, in ct/kWh,
+/// with its source.
+#[derive(Debug, Clone, Copy)]
+struct UmlageZeile {
+    jahr: i32,
+    satz: Decimal,
+    quelle: &'static str,
+}
+
 /// §19 StromNEV-Umlage by year and Letztverbrauchergruppe, in ct/kWh.
 ///
 /// Published as an explicit A′/B′/C′ schedule, which is why this levy is tabled
 /// per group while the other two are not.
-const SECT19_STROMNEV: &[(i32, Decimal, Decimal, Decimal)] = &[
-    // year, A′, B′, C′
-    (2026, dec!(1.559), dec!(0.050), dec!(0.025)),
-];
+const SECT19_STROMNEV: &[Sect19Zeile] = &[Sect19Zeile {
+    jahr: 2026,
+    a: dec!(1.559),
+    b: dec!(0.050),
+    c: dec!(0.025),
+    quelle: UENB_2026,
+}];
 
 /// Offshore-Netzumlage (§17f EnWG) by year, non-privileged, in ct/kWh.
-const OFFSHORE_NETZUMLAGE: &[(i32, Decimal)] = &[(2026, dec!(0.941))];
+const OFFSHORE_NETZUMLAGE: &[UmlageZeile] = &[UmlageZeile {
+    jahr: 2026,
+    satz: dec!(0.941),
+    quelle: UENB_2026,
+}];
 
 /// KWKG-Umlage (§26 KWKG) by year, non-privileged, in ct/kWh.
-const KWKG_UMLAGE: &[(i32, Decimal)] = &[(2026, dec!(0.446))];
+const KWKG_UMLAGE: &[UmlageZeile] = &[UmlageZeile {
+    jahr: 2026,
+    satz: dec!(0.446),
+    quelle: UENB_2026,
+}];
+
+/// The publication a tabled year of the §19 StromNEV-Umlage is read from.
+///
+/// `None` for a year the series does not cover.
+#[must_use]
+pub fn sect19_stromnev_quelle(year: i32) -> Option<&'static str> {
+    SECT19_STROMNEV
+        .iter()
+        .find(|z| z.jahr == year)
+        .map(|z| z.quelle)
+}
+
+/// The publication a tabled year of the Offshore-Netzumlage is read from.
+#[must_use]
+pub fn offshore_netzumlage_quelle(year: i32) -> Option<&'static str> {
+    OFFSHORE_NETZUMLAGE
+        .iter()
+        .find(|z| z.jahr == year)
+        .map(|z| z.quelle)
+}
+
+/// The publication a tabled year of the KWKG-Umlage is read from.
+#[must_use]
+pub fn kwkg_umlage_quelle(year: i32) -> Option<&'static str> {
+    KWKG_UMLAGE
+        .iter()
+        .find(|z| z.jahr == year)
+        .map(|z| z.quelle)
+}
 
 /// The §19 StromNEV-Umlage for a year and group, in ct/kWh.
 ///
@@ -145,11 +209,11 @@ pub fn sect19_stromnev_ct_per_kwh(year: i32, gruppe: Letztverbrauchergruppe) -> 
     }
     SECT19_STROMNEV
         .iter()
-        .find(|(y, ..)| *y == year)
-        .map(|(_, a, b, c)| match gruppe {
-            Letztverbrauchergruppe::A => *a,
-            Letztverbrauchergruppe::B => *b,
-            Letztverbrauchergruppe::C => *c,
+        .find(|z| z.jahr == year)
+        .map(|z| match gruppe {
+            Letztverbrauchergruppe::A => z.a,
+            Letztverbrauchergruppe::B => z.b,
+            Letztverbrauchergruppe::C => z.c,
             Letztverbrauchergruppe::Befreit => Decimal::ZERO,
         })
 }
@@ -168,8 +232,8 @@ pub fn offshore_netzumlage_ct_per_kwh(
     }
     OFFSHORE_NETZUMLAGE
         .iter()
-        .find(|(y, _)| *y == year)
-        .map(|(_, r)| *r)
+        .find(|z| z.jahr == year)
+        .map(|z| z.satz)
 }
 
 /// The KWKG-Umlage for a year, in ct/kWh.
@@ -181,10 +245,7 @@ pub fn kwkg_umlage_ct_per_kwh(year: i32, gruppe: Letztverbrauchergruppe) -> Opti
     if gruppe == Letztverbrauchergruppe::Befreit {
         return Some(Decimal::ZERO);
     }
-    KWKG_UMLAGE
-        .iter()
-        .find(|(y, _)| *y == year)
-        .map(|(_, r)| *r)
+    KWKG_UMLAGE.iter().find(|z| z.jahr == year).map(|z| z.satz)
 }
 
 #[cfg(test)]
@@ -203,6 +264,39 @@ mod tests {
             Some(dec!(0.941))
         );
         assert_eq!(kwkg_umlage_ct_per_kwh(2026, G::A), Some(dec!(0.446)));
+    }
+
+    /// Every tabled row names the publication it is read from: a rate without a
+    /// source cannot be checked against the ÜNB figure, and a mistyped one would
+    /// bill every Strom period of its year wrong.
+    #[test]
+    fn every_tabled_row_names_its_publication() {
+        let jahre = SECT19_STROMNEV
+            .iter()
+            .map(|z| (z.jahr, z.quelle))
+            .chain(OFFSHORE_NETZUMLAGE.iter().map(|z| (z.jahr, z.quelle)))
+            .chain(KWKG_UMLAGE.iter().map(|z| (z.jahr, z.quelle)));
+        for (jahr, quelle) in jahre {
+            assert!(
+                !quelle.trim().is_empty(),
+                "the {jahr} Umlage row names no publication"
+            );
+        }
+        assert!(sect19_stromnev_quelle(2026).is_some());
+        assert!(offshore_netzumlage_quelle(2026).is_some());
+        assert!(kwkg_umlage_quelle(2026).is_some());
+        assert_eq!(kwkg_umlage_quelle(2027), None);
+    }
+
+    /// Each levy is tabled for the same years, so a period never finds one
+    /// levy's year and misses another's.
+    #[test]
+    fn the_three_tables_cover_the_same_years() {
+        let s19: Vec<i32> = SECT19_STROMNEV.iter().map(|z| z.jahr).collect();
+        let off: Vec<i32> = OFFSHORE_NETZUMLAGE.iter().map(|z| z.jahr).collect();
+        let kwk: Vec<i32> = KWKG_UMLAGE.iter().map(|z| z.jahr).collect();
+        assert_eq!(s19, off);
+        assert_eq!(s19, kwk);
     }
 
     /// §21 EnFG exempts rather than reduces, for every levy and every year.

@@ -56,7 +56,7 @@ impl Marktlokationsart {
 /// „Gesetzliche Kategorie").
 ///
 /// The Vorlauffrist of an Anmeldung erzeugender Marktlokation is decided by the
-/// **pair** (bestehende, angemeldete) — GPKE Teil 2 § 2.1.1 „Fristen für die
+/// **pair** (bestehende, angemeldete) — GPKE Teil 2 Kap. 2.1.1 „Fristen für die
 /// Anmeldung bei EEG-Marktlokationen". A switch into or out of the Marktprämie
 /// is a Veräußerungsformwechsel and takes the Monatserster plus a month of
 /// lead; staying in the same form does not.
@@ -107,7 +107,7 @@ impl Veraeusserungsform {
     }
 }
 
-/// GPKE Teil 2 § 2.1.1 Geschäftsvorfall of a Lieferbeginn an einer erzeugenden
+/// GPKE Teil 2 Kap. 2.1.1 Geschäftsvorfall of a Lieferbeginn an einer erzeugenden
 /// Marktlokation. `E_0622` Prüfschritte 300 / 310 branch on it, and each
 /// branch has its own Antwortcodes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -286,7 +286,7 @@ pub struct AnmeldungAnfrage {
     /// The state of the **Abmeldeanfrage** leg — what `E_0623` Prüfschritte
     /// 20–50 / 410–440 read.
     ///
-    /// GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4 decides whether
+    /// GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4 decides whether
     /// the NB may confirm at all or must first ask the incumbent LFA to release
     /// the Marktlokation (55010, Nr. 3). Defaults to
     /// [`Abmeldeanfrage::NichtErforderlich`], which is the correct value for an
@@ -344,7 +344,7 @@ pub enum LfaAntwort {
         /// Antwort mit"). Verbrauchende Marktlokationen only, and it must lie
         /// „mindestens 1 WT nach dem ÜT der Anmeldung"; otherwise the
         /// Zuordnungsende stays the Zuordnungsbeginn der Anmeldung
-        /// (GPKE Teil 2 § 2.1.2 Nr. 10).
+        /// (GPKE Teil 2 Kap. 2.1.2 Nr. 10).
         #[serde(default, with = "crate::nb::types::date_opt")]
         zuordnungsende: Option<Date>,
     },
@@ -392,7 +392,7 @@ pub(crate) mod date_opt {
 /// the Anfrage zur Beendigung der Zuordnung.
 ///
 /// A tranchierte Marktlokation is held by several LFA at once, so the NB sends
-/// the Anfrage „im Fall von Geschäftsvorfall 3 allen LFA" (GPKE Teil 2 § 2.1.2
+/// the Anfrage „im Fall von Geschäftsvorfall 3 allen LFA" (GPKE Teil 2 Kap. 2.1.2
 /// SD Lieferbeginn Nr. 3) and gets one answer per Tranche.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TranchenAntwort {
@@ -401,7 +401,7 @@ pub struct TranchenAntwort {
     /// The share this Tranche carries, in percent — the Aufteilungsfaktor of
     /// the Tranchengröße product (`9991000002090`).
     pub prozent: Decimal,
-    /// The LFA's answer. `None` is **silence**, which GPKE Teil 2 § 2.1.2 makes
+    /// The LFA's answer. `None` is **silence**, which GPKE Teil 2 Kap. 2.1.2 makes
     /// a Zustimmung: „Verstreicht die Frist, ohne dass eine Antwort beim NB
     /// eingeht, gilt dies als Bestätigung nach Fall a)."
     pub antwort: Option<LfaAntwort>,
@@ -617,7 +617,7 @@ pub enum NbEntscheidung {
         reason: String,
     },
     /// `E_0622` passed, but the Marktlokation is assigned at the
-    /// Zuordnungsbeginn — GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1
+    /// Zuordnungsbeginn — GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 1
     /// **Prüfschritt 4** sends the NB to Prozessschritt 3 first.
     ///
     /// **Not an error and not an escalation.** Send the Anfrage zur Beendigung

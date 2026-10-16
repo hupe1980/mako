@@ -16,6 +16,7 @@ impl EdifactIngestDispatcher {
         msg: &AnyMessage,
         workflow_name: &str,
         pid: u32,
+        received_at: OffsetDateTime,
     ) -> Result<IngestOutcome, EngineError> {
         let fv = detect_format_version(msg);
         let raw: &dyn Any = msg;
@@ -33,11 +34,8 @@ impl EdifactIngestDispatcher {
                 31010 | 31007 | 31008 => {
                     let cmd = adapters::gabi_gas_invoic_registry().dispatch(raw, &fv)?;
                     let invoice_ref = extract_malo_from_invoic(msg);
-                    let due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
-                        10,
-                        HolidayCalendar::BdewMaKo,
-                    );
+                    let due_at =
+                        fristen::deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo);
                     self.spawn_or_resume_guarded::<GaBiGasInvoicWorkflow>(
                         &invoice_ref,
                         "gabi-gas-invoic",

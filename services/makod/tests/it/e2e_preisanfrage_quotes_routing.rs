@@ -56,7 +56,12 @@ async fn wim_preisanfrage_dispatches_quotes_angebot() {
         let msg = edi_energy::parse(quotes(pid).as_bytes())
             .unwrap_or_else(|e| panic!("parse QUOTES {pid} failed: {e:?}"));
         let outcome = dispatcher
-            .dispatch(&msg, "wim-preisanfrage", pid)
+            .dispatch(
+                &msg,
+                "wim-preisanfrage",
+                pid,
+                time::OffsetDateTime::now_utc(),
+            )
             .await
             .unwrap_or_else(|e| panic!("dispatch {pid} failed: {e:?}"));
         match outcome {

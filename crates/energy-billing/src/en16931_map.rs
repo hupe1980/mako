@@ -211,10 +211,10 @@ impl Invoice {
 
         // ── BG-1 notes: the statutory statements that are not billable lines ──
         //
-        // An `Info` position carries a disclosure the law requires *auf der
-        // Rechnung* — the CO2KostAufG § 3 figures, the § 53a EnergieStG
-        // Entlastungshinweis, the § 40 Abs. 2 Nr. 6 Energieträgermix, the § 14
-        // WPG renewable share, the § 41a Abs. 6 price comparison. It charges
+        // An `Info` position carries a statement for the invoice — the
+        // CO2KostAufG § 3 figures, the § 53a EnergieStG Entlastungshinweis, the
+        // § 40 Abs. 2 Nr. 6 Energieträgermix, the § 14 WPG renewable share, and
+        // the Lieferant's own dynamic-tariff comparison. It charges
         // nothing, so it is not a BG-25 line and is skipped by the loop below —
         // but dropping it here would mean the electronic invoice states less
         // than the rendered one, and it is the electronic invoice a B2G or B2B

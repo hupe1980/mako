@@ -118,16 +118,21 @@ impl EegGesetz {
     ///
     /// Plants commissioned **before 2016-01-01** → `Eeg2012`.
     /// Plants commissioned from **2016-01-01** → `Eeg2017`.
-    pub fn from_inbetriebnahme_year(year: i32) -> Self {
-        match year {
+    ///
+    /// `None` for a commissioning year after
+    /// [`LETZTE_TABELLIERTE_INBETRIEBNAHME`]: no Fassung is tabled for it.
+    #[must_use]
+    pub fn from_inbetriebnahme_year(year: i32) -> Option<Self> {
+        Some(match year {
             ..=2004 => Self::Eeg2000,
             2005..=2008 => Self::Eeg2004,
             2009..=2011 => Self::Eeg2009,
             2012..=2015 => Self::Eeg2012, // §100 Abs. 1 Satz 4 EEG 2017
             2016..=2020 => Self::Eeg2017,
             2021..=2022 => Self::Eeg2021,
-            _ => Self::Eeg2023,
-        }
+            y if y <= LETZTE_TABELLIERTE_INBETRIEBNAHME.year() => Self::Eeg2023,
+            _ => return None,
+        })
     }
 
     // ── DB round-trip ─────────────────────────────────────────────────────────
@@ -146,9 +151,10 @@ impl EegGesetz {
     /// | 2012–2015 | `Eeg2012` | EEG 2012 + 2014 amendment |
     /// | 2016–2020 | `Eeg2017` | §100 Abs. 1 Satz 4 EEG 2017 |
     /// | 2021–2022 | `Eeg2021` | §100 EEG 2023: old plants use EEG 2021 |
-    /// | 2023 + | `Eeg2023` | Current law |
+    /// | 2023–2026 | `Eeg2023` | Current law |
     ///
-    /// Returns `Err` for a non-positive year (`<= 0`).
+    /// Returns `Err` for a non-positive year (`<= 0`), and for a year after
+    /// [`LETZTE_TABELLIERTE_INBETRIEBNAHME`], for which no Fassung is tabled.
     ///
     /// # Example
     ///
@@ -182,8 +188,8 @@ impl EegGesetz {
             2012..=2015 => Ok(Self::Eeg2012),
             2016..=2020 => Ok(Self::Eeg2017),
             2021..=2022 => Ok(Self::Eeg2021),
-            2023.. => Ok(Self::Eeg2023),
-            _ => Err(InvalidEegGesetz(y)), // negative values
+            2023..=2026 => Ok(Self::Eeg2023),
+            _ => Err(InvalidEegGesetz(y)), // negative values, untabled vintages
         }
     }
 
@@ -207,6 +213,52 @@ impl Default for EegGesetz {
     fn default() -> Self {
         Self::Eeg2023
     }
+}
+
+/// The last commissioning day a tabled EEG Fassung governs: **31 December 2026**.
+///
+/// A plant keeps the EEG in force at its commissioning. Its successor, the
+/// EEG 2027 (BT-Drs. 21/7867), is not verkündet, so no Fassung is tabled for a
+/// plant commissioned later: [`EegGesetz::from_inbetriebnahme_year`] answers
+/// `None`, and [`crate::calculate_settlement`] refuses its settlement as
+/// [`crate::SettlementStatus::FassungNichtTabelliert`] rather than computing it
+/// on EEG 2023 arithmetic. A plant commissioned on or before this day keeps its
+/// own Fassung in every later period.
+pub const LETZTE_TABELLIERTE_INBETRIEBNAHME: time::Date = time::macros::date!(2026 - 12 - 31);
+
+// ── § 101 Abs. 1 EEG 2023 — § 100 Abs. 47 under the Genehmigungsvorbehalt ────
+
+/// The day the European Commission's state-aid approval made **§ 100 Abs. 47
+/// EEG 2023** applicable — `None` until it is given.
+///
+/// § 101 Abs. 1 Satz 1 EEG 2023 reserves „§ 100 Absatz 35 und 47" until „der
+/// beihilferechtlichen Genehmigung durch die Europäische Kommission"
+/// (Arbeitsausgabe 23.12.2025, p. 218). Abs. 47 is the opt-in of a
+/// Bestandsanlage into §§ 51 and 51a with the 0,6 ct/kWh uplift
+/// ([`crate::negativpreis::SECT51_OPTIN_ZUSCHLAG_CT_KWH`]); without the
+/// approval a declaration neither earns the uplift nor moves the plant off its
+/// own Fassung's negative-price rule.
+pub const SECT100_ABS47_GENEHMIGT_AB: Option<time::Date> = None;
+
+/// Whether § 100 Abs. 47 EEG 2023 may be applied to the period starting
+/// `periodenbeginn`, given the approval date `genehmigt_ab`.
+///
+/// Keyed on the supply period like [`sect51b_anwendbar`]; an unknown period or
+/// an absent approval is `false`.
+#[must_use]
+pub fn sect100_abs47_anwendbar_ab(
+    genehmigt_ab: Option<time::Date>,
+    periodenbeginn: Option<time::Date>,
+) -> bool {
+    matches!((genehmigt_ab, periodenbeginn), (Some(ab), Some(d)) if d >= ab)
+}
+
+/// Whether § 100 Abs. 47 EEG 2023 may be applied to the period starting
+/// `periodenbeginn` — [`sect100_abs47_anwendbar_ab`] at
+/// [`SECT100_ABS47_GENEHMIGT_AB`].
+#[must_use]
+pub fn sect100_abs47_anwendbar(periodenbeginn: Option<time::Date>) -> bool {
+    sect100_abs47_anwendbar_ab(SECT100_ABS47_GENEHMIGT_AB, periodenbeginn)
 }
 
 // ── Error type ────────────────────────────────────────────────────────────────

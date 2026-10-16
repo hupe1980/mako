@@ -205,7 +205,7 @@ environment and the container spec.
 | `as4.signing_key_pem` · `signing_cert_pem` · `decryption_key_pem` · `trust_anchor_pem` | the same key with `_file` |
 | `as4.partner_certs` · `as4.partner_signing_certs` | `as4.partner_cert_files` · `as4.partner_signing_cert_files` |
 | `as4.client_tls_cert_pem` · `client_tls_key_pem` | the same key with `_file` |
-| `webdienste.client_cert_pem` · `client_key_pem` · `signing_key_pem` | the same key with `_file` |
+| `webdienste.client_cert_pem` · `client_key_pem` · `signing_key_pem` · `signing_cert_pem` | the same key with `_file` |
 | `http.auth_keys` | `http.auth_keys_file` |
 | `erp.webhook_secret` | `erp.webhook_secret_file` |
 | `marktd.api_key` | `marktd.api_key_file` |
@@ -521,17 +521,21 @@ API-Webdienste.
 | `client_cert_pem` / `_file` | `MAKOD_WEBDIENSTE_CLIENT_CERT_PEM` | `--webdienste-client-cert-pem` | Outbound mTLS chain (EMT.API, BSI SM-PKI) |
 | `client_key_pem` / `_file` | `MAKOD_WEBDIENSTE_CLIENT_KEY_PEM` | `--webdienste-client-key-pem` | Its PKCS#8 key |
 | `client_root_ca_pem_files` | `MAKOD_WEBDIENSTE_ROOT_CA_PEM` | `--webdienste-root-ca-pem` | SM-PKI roots to trust when calling out |
-| `signing_key_pem` / `_file` | `MAKOD_WEBDIENSTE_SIGNING_KEY_PEM` | `--webdienste-signing-key-pem` | EMT.API key for TR-03116-3 content signing |
+| `signing_key_pem` / `_file` | `MAKOD_WEBDIENSTE_SIGNING_KEY_PEM` | `--webdienste-signing-key-pem` | EMT.API key for content signing |
+| `signing_cert_pem` / `_file` | `MAKOD_WEBDIENSTE_SIGNING_CERT_PEM` | `--webdienste-signing-cert-pem` | Its certificate, sent as `X-BDEW-CERT`; required with the key, and the boot refuses a pair that does not belong together |
 | `allow_unauthenticated_client` | `MAKOD_ALLOW_UNAUTHENTICATED_WEBDIENSTE_CLIENT` | `--allow-unauthenticated-webdienste-client` | **Dev/test:** call out without identity or signing key |
 
 - **Outbound identity is required.** The API-Webdienste authenticate callers by
   mTLS with an EMT.API certificate; without one the call fails at the
   counterparty. makod refuses to start when `--verzeichnisdienst-url` or
   `--maloid-partner` is set without a client identity.
-- **Content signing is a second layer.** TR-03116-3 signs the URI, the RFC 8785
-  canonical body, `creationDateTime` and `transactionId` into `DIGEST` /
-  `SIGNATURE` headers (Regelungen zum Übertragungsweg für API-Webdienste 1.2,
-  Kap. 3.3: „Jede API-Interaktion und der übertragene Payload wird signiert.").
+- **Content signing is a second layer.** Regelungen zum Übertragungsweg für
+  API-Webdienste 1.2, Kap. 3.3 („Jede API-Interaktion und der übertragene
+  Payload wird signiert.") signs the URI, the RFC 8785 canonical body,
+  `creationDateTime`, `transactionId` and — when present —
+  `initialTransactionId`, with the algorithms of TR-03116-3; the digest travels
+  in `X-BDEW-DIGEST`, the signature in `X-BDEW-SIGNATURE` and the certificate in
+  `X-BDEW-CERT`.
   It applies to Control Measures and MaLo Identification; the Verzeichnisdienst
   uses JWS. Without a signing key, makod refuses to start when `addr`,
   `--maloid-partner` or `--verzeichnisdienst-url` is set.
@@ -539,9 +543,9 @@ API-Webdienste.
   `X-BDEW-DIGEST` / `X-BDEW-CERT` (Kap. 3.3; certificate in RFC 9440 encoding)
   is checked against the named certificate's key over
   `https://{Host}{path?query}`, the canonical body and the `creationDateTime` /
-  `transactionId` headers before any handler runs. A mismatch, a partial or
-  repeated header set, or an `initialTransactionId` header is `401`; an unsigned
-  request passes with a warning. The proxy, not makod, validates the SM-PKI chain.
+  `transactionId` / `initialTransactionId` headers before any handler runs. A
+  mismatch or a partial or repeated header set is `401`; an unsigned request
+  passes with a warning. The proxy, not makod, validates the SM-PKI chain.
 - **mTLS is the proxy's job.** makod does not terminate TLS; front `:8090` with a
   proxy (Nginx, Envoy, ALB) enforcing mTLS against the BDEW PKI CA. By default
   every `:8090` route also requires bearer/OIDC and Cedar `UseWebdienste`.
@@ -728,7 +732,9 @@ UNH+...
 
 `200` when at least one message was accepted, `422` when none was, `400` for an
 empty body, `415` for a Content-Type other than `text/plain`,
-`application/edifact` or `application/octet-stream`.
+`application/edifact` or `application/octet-stream`, and `500` when a dead
+letter the request owed could not be written — the refusal has no record, so
+resubmit it.
 
 | `status` | Meaning | Counted as |
 |---|---|---|
@@ -744,6 +750,13 @@ empty body, `415` for a Content-Type other than `text/plain`,
   AS4: none of its messages is dispatched, each is dead-lettered, and the sender
   gets the CONTRL Syntaxfehlermeldung (CONTRL AHB 1.0 Kap. 1.2; see
   [CONTRL](#contrl)).
+- **A dead letter is written before the door answers.** Every `reject` awaits
+  the `dr/` write; there is no in-memory buffer to overflow or drain on
+  shutdown. On AS4 the dedup claim is accepted only after that write: when it
+  fails, the claim is abandoned and the request answered `500` without a
+  receipt, so the counterparty's retransmission is processed as first-seen
+  rather than answered as a duplicate. The outbox workers likewise delete an
+  exhausted entry only once its dead letter is written.
 - **`dispatch_failed` is a rejection** so the gateway redelivers. A routed PID
   with no dispatch arm is dead-lettered as `not_dispatchable` — a coverage bug on
   this side. A reply to a closed process, or one with nothing to correlate on, is

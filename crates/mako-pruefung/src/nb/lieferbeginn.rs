@@ -8,7 +8,7 @@
 //!
 //! # The step between the two trees
 //!
-//! GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1 **Prüfschritt 4** sits between
+//! GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 1 **Prüfschritt 4** sits between
 //! them: „Ist die Marktlokation bzw. Tranche zum Zuordnungsbeginn einem LF
 //! zugeordnet, fährt der NB mit Prozessschritt 2 fort, ansonsten mit
 //! Prozessschritt 5." Prozessschritt 2 is the Information über existierende
@@ -63,7 +63,7 @@
 //!
 //! - Entscheidungsbaum-Diagramme und Codelisten **4.3** Kap. 6.6.4 (`E_0623`),
 //!   13.6.4 (`E_3007` / `G_0011` `Z35`)
-//! - BK6-24-174 GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4, Nr. 3, Nr. 4
+//! - BK6-24-174 GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4, Nr. 3, Nr. 4
 
 use mako_markt::domain::Sparte;
 
@@ -87,7 +87,7 @@ pub const BEREITS_ABGEMELDET_TRANCHE: &str = "A41";
 /// The `E_0623` codes that oblige the NB to **restate the LFA's own ground**.
 ///
 /// `A50` (Prüfschritt 50) and `A57` (440) both mean „der LFA hat der Anfrage zur
-/// Beendigung der Zuordnung widersprochen", and GPKE Teil 2 § 2.1.2 Nr. 6 adds:
+/// Beendigung der Zuordnung widersprochen", and GPKE Teil 2 Kap. 2.1.2 Nr. 6 adds:
 /// „Der NB gibt zusätzlich den Grund der Ablehnung des LFA an, sofern dieser in
 /// Prozessschritt 4 die Anfrage abgelehnt hat."
 ///
@@ -440,7 +440,7 @@ fn widerspruch_detail(
     format!(
         "MaLo {}: the LFA refused the Anfrage zur Beendigung der Zuordnung with \
          {}:E_0624 ({bedeutung}){} — and not with {bereits_abgemeldet}, the one Widerspruch \
-         E_0623 lets the Anmeldung through on. GPKE Teil 2 § 2.1.2 Nr. 6 requires the NB to \
+         E_0623 lets the Anmeldung through on. GPKE Teil 2 Kap. 2.1.2 Nr. 6 requires the NB to \
          state the LFA's Grund alongside its own: it rides `SG4 STS+Z35`, „Status der Antwort \
          des dritten Marktbeteiligten\".",
         anfrage.malo_id,

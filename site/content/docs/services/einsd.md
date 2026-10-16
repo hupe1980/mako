@@ -276,6 +276,12 @@ reduction as § 53b. Only the EEG 2023 is tabled, for supply periods 01.01.2023
 to 31.12.2026. A period outside it with a recorded reduction settles as
 `fassung_nicht_tabelliert` — nothing paid, retried by the sweep.
 
+**A plant keeps the Fassung of its commissioning.** A plant commissioned on or
+before 31.12.2026 settles every later period under its own Fassung. For one
+commissioned later no Fassung is tabled — the EEG 2027 (BT-Drs. 21/7867) is not
+verkündet — so its settlement is `fassung_nicht_tabelliert` too, even under a
+recorded Genehmigung, rather than computed on EEG 2023 arithmetic.
+
 ---
 
 ## Plant lifecycle
@@ -504,7 +510,12 @@ Pilotwindenergieanlagen (§ 3 Nr. 37 EEG 2023) are exempt under every version
 it runs at the earliest from the end of the calendar year in which the plant got
 an iMSys, and from then the plant is paid 0,6 ct/kWh more on its AW outside
 negative prices. Record `sect51_optin_erklaert_am` and `imesys_rollout_datum`;
-einsd picks the regime per period.
+einsd picks the regime per period. § 100 Abs. 47 EEG 2023 is reserved by § 101
+Abs. 1 Satz 1 until „der beihilferechtlichen Genehmigung durch die Europäische
+Kommission" (Arbeitsausgabe 23.12.2025, p. 218), and no approval date is
+recorded (`eeg_billing::SECT100_ABS47_GENEHMIGT_AB` is `None`): until it is, an
+effective declaration earns no uplift and the plant keeps its own Fassung's
+negative-price rule.
 
 **Inputs.** The settle request may carry `kwh_during_negative_epex` (§ 51) and
 `negative_price_quarter_hours` (§ 51a):
@@ -781,7 +792,7 @@ Re-running overwrites the initial receipt (after snapshotting it to
 | `jahreskontingent_erschoepft` | § 8 Abs. 4 KWKG annual hours used up; resumes in January |
 | `sanctioned` | § 52 Abs. 1 EEG ≤ 2021 — EUR 0 |
 | `kein_anspruch` | No § 19 Abs. 1 claim: § 21 Abs. 1 Satz 1 Nr. 1 (> 100 kW on the Einspeisevergütung) or § 39i Abs. 1 (biogas over its Getreide-/Mais-Höchstanteil). Terminal on the same facts |
-| `fassung_nicht_tabelliert` | A recorded reduction under an EEG Fassung not tabled; retried |
+| `fassung_nicht_tabelliert` | A recorded reduction under an EEG Fassung not tabled, or a plant commissioned after 31.12.2026, for which no Fassung is tabled; retried |
 
 **Partial months (§ 25).** `billing_days_fraction` is derived when `null`: from a
 mid-month commissioning `(days_in_month − day + 1) / days_in_month`, to a

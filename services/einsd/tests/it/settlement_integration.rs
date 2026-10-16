@@ -3748,6 +3748,99 @@ async fn corrections_do_not_duplicate_the_untouched_original_in_the_audit_trail(
     assert_eq!(initial, dec!(1100));
 }
 
+/// An expired award overwrites the month's receipt through the same write as
+/// every other outcome: the receipt it replaces is kept in
+/// `settlement_receipt_history`, and the period's accrual drops to zero.
+///
+/// Without both, a month settled first and expired later loses its original
+/// calculation from the § 147 AO trail, and its §51a quarter-hours stay in the
+/// plant's running total beside a receipt that pays nothing.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_award_expiry_over_a_settled_month_is_snapshotted_and_accrues_nothing() {
+    use rust_decimal::dec;
+    let Some((pool, _pg)) = test_pool("award_expiry_history").await else {
+        return;
+    };
+    seed_plant(&pool, "TR-EXPIRY", TENANT, "", "").await;
+
+    let settle = |award_expired: bool| {
+        let pool = pool.clone();
+        async move {
+            let anlage = einsd::pg::fetch_anlage(&pool, TENANT, "TR-EXPIRY")
+                .await
+                .expect("fetch")
+                .expect("plant exists");
+            let mut input = einsd::pg::build_settle_input(
+                TENANT,
+                &anlage,
+                &regelbesteuert(),
+                2026,
+                6,
+                einsd::pg::SettleOverrides {
+                    einspeisemenge_kwh: Some(dec!(1000)),
+                    negative_price_quarter_hours: Some(96),
+                    kwh_during_negative_epex: Some(dec!(10)),
+                    ..Default::default()
+                },
+            )
+            .expect("build settle input");
+            input.award_expired = award_expired;
+            let mut tx = pool.begin().await.expect("begin");
+            let res = einsd::pg::run_settlement(&mut tx, input)
+                .await
+                .expect("settle");
+            tx.commit().await.expect("commit");
+            res
+        }
+    };
+
+    let first = settle(false).await;
+    assert_ne!(first.status, "foerderung_beendet");
+
+    let expired = settle(true).await;
+    assert_eq!(expired.status, "foerderung_beendet");
+    assert_eq!(
+        expired.id, first.id,
+        "the upsert keeps the receipt's id, and the caller must be told the real one"
+    );
+
+    let history: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM settlement_receipt_history WHERE tr_id = 'TR-EXPIRY'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count history");
+    assert_eq!(history, 1, "the overwritten calculation is kept");
+
+    let (accrued_qh, accrued_biogas, accrued_kwk): (
+        i64,
+        rust_decimal::Decimal,
+        rust_decimal::Decimal,
+    ) = sqlx::query_as(
+        "SELECT negative_price_qh, biogas_kwh, kwk_kwh FROM settlement_period_accruals
+              WHERE tr_id = 'TR-EXPIRY' AND billing_year = 2026 AND billing_month = 6",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read period accrual");
+    assert_eq!(
+        (accrued_qh, accrued_biogas, accrued_kwk),
+        (0, rust_decimal::Decimal::ZERO, rust_decimal::Decimal::ZERO),
+        "a period without Förderung contributes nothing"
+    );
+    let qh_total: i64 =
+        sqlx::query_scalar("SELECT negative_price_qh_gesamt FROM eeg_anlagen WHERE tr_id = $1")
+            .bind("TR-EXPIRY")
+            .fetch_one(&pool)
+            .await
+            .expect("read counter");
+    assert_eq!(
+        qh_total, 0,
+        "the first settle's §51a quarter-hours are given back"
+    );
+}
+
 // ── GET /settlements?year=&month= actually filters ───────────────────────────
 
 /// `SettlementsQuery` accepted `limit` alone, so `?year=2025&month=3` was

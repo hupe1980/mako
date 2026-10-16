@@ -31,17 +31,17 @@
 //!
 //! # Vorlauffristen
 //!
-//! **Strom, verbrauchende / ruhende Marktlokation** (GPKE Teil 2 § 2.1.1
-//! Prozessschritt 1): „Unverzüglich nach Vorliegen des Anmeldegrundes, jedoch
+//! **Strom, verbrauchende / ruhende Marktlokation** (GPKE Teil 2 Kap. 2.1.2
+//! Nr. 1, S. 18): „Unverzüglich nach Vorliegen des Anmeldegrundes, jedoch
 //! spätester ÜT ist der Tag vor dem letzten WT vor dem Zuordnungsbeginn."
-//! Retroactive Anmeldungen were abolished with LFW24 for **every**
+//! The rule names no exception, so no Anmeldung is retroactive, whatever its
 //! Transaktionsgrund. Operationally: at least one full Werktag must lie
 //! strictly between the receipt day and the Zuordnungsbeginn. There is no
 //! time-of-day cutoff. Violation → `A07` (Prüfschritt 15).
 //!
 //! **Strom, erzeugende Marktlokation**: six published Fristen, chosen by
 //! Geschäftsvorfall and by the pair (bestehende, angemeldete)
-//! Veräußerungsform — GPKE Teil 2 § 2.1.1 „Fristen für die Anmeldung
+//! Veräußerungsform — GPKE Teil 2 Kap. 2.1.1 (S. 15) „Fristen für die Anmeldung
 //! (Prozessschritt 1) bei EEG-Marktlokationen und Tranchen von
 //! EEG-Marktlokationen", walked as `E_0622` Prüfschritte 300–830:
 //!
@@ -77,7 +77,7 @@
 //!
 //! # Regulatory sources
 //!
-//! - BK6-24-174 GPKE Teil 2 § 2.1 (UC/SD Lieferbeginn) und § 2.1.1 Fristentabelle
+//! - BK6-24-174 GPKE Teil 2 Kap. 2.1 (UC/SD Lieferbeginn) und Kap. 2.1.1 Fristentabelle (S. 15), Kap. 2.1.2 Nr. 1 (S. 18)
 //! - Entscheidungsbaum-Diagramme und Codelisten **4.3** (01.04.2026),
 //!   Kap. 6.6.1 (`E_0622`), 6.6.4 (`E_0623`), 13.6.1 (`E_3005` / `G_0011`),
 //!   13.6.4 (`E_3007` / `G_0012`)
@@ -115,13 +115,13 @@ pub use mako_fristen::vorlauf::{
 };
 
 /// The Vorlauffrist of an EEG-Veräußerungsformwechsel, in whole months
-/// (§ 21c EEG 2023; GPKE Teil 2 § 2.1.1 „Spätester ÜT liegt 1 Monat vor dem
+/// (§ 21c EEG 2023; GPKE Teil 2 Kap. 2.1.1, S. 15: „Spätester ÜT liegt 1 Monat vor dem
 /// Zuordnungsbeginn"). Override via
 /// [`NetzCheckConfig::eeg_zuordnung_vorlauf_monate`].
 pub const EEG_ZUORDNUNG_VORLAUF_MONATE_DEFAULT: u32 = 1;
 
 /// The **verkürzte** Vorlauffrist, in Werktage, for a plant leaving the
-/// Ausfallvergütung (§ 21 Abs. 1 Satz 1 Nr. 3 EEG 2023) — GPKE Teil 2 § 2.1.1 letzte
+/// Ausfallvergütung (§ 21 Abs. 1 Satz 1 Nr. 3 EEG 2023) — GPKE Teil 2 Kap. 2.1.1 (S. 15), Fristentabelle, letzte
 /// Zeile, `E_0622` Prüfschritt 440 („Vorgabe nach EEG: 5 WT vor
 /// Zuordnungsbeginn").
 pub const EEG_VERKUERZTER_WECHSEL_WT: u32 = 5;
@@ -310,10 +310,10 @@ fn e_0622_verbrauchend(
             15,
             format!(
                 "Vorlauffrist not met: requested Zuordnungsbeginn {} vs receipt day {today}. \
-                 GPKE Teil 2 § 2.1.1 Prozessschritt 1: spätester ÜT ist der Tag vor dem \
+                 GPKE Teil 2 Kap. 2.1.2 Nr. 1 (S. 18): spätester ÜT ist der Tag vor dem \
                  letzten WT vor dem Zuordnungsbeginn — at least one full Werktag must lie \
-                 between receipt and Lieferbeginn; retroactive Anmeldungen are not permitted \
-                 under LFW24 for any Transaktionsgrund.",
+                 between receipt and Lieferbeginn; no Anmeldung is retroactive, whatever \
+                 its Transaktionsgrund.",
                 anfrage.process_date
             ),
         );
@@ -421,7 +421,7 @@ fn e_0622_erzeugend(
     // *bestehende* Veräußerungsform — the NB's own register, not the message.
     // Without it the Monatserster check of Prüfschritt 410 / 620 would refuse an
     // untermonatlichen Wechsel innerhalb derselben Veräußerungsform, which GPKE
-    // Teil 2 § 2.1.1 permits. Geschäftsvorfall 3 does not ask the question.
+    // Teil 2 Kap. 2.1.1 permits. Geschäftsvorfall 3 does not ask the question.
     if matches!(
         erz.geschaeftsvorfall,
         Geschaeftsvorfall::Eins | Geschaeftsvorfall::Zwei
@@ -495,7 +495,7 @@ fn gv1(
                      {earliest_ut} ({EEG_VERKUERZTER_WECHSEL_WT} WT vor dem \
                      Zuordnungsbeginn), receipt {today}. The plant leaves the \
                      Ausfallvergütung (§ 21 Abs. 1 Satz 1 Nr. 3 EEG 2023), for which GPKE Teil 2 \
-                     § 2.1.1 fixes the verkürzte Frist.",
+                     Kap. 2.1.1 fixes the verkürzte Frist.",
                     anfrage.process_date
                 ),
             ));
@@ -629,7 +629,7 @@ fn untermonatlich_erlaubt(
         reason: format!(
             "MaLo {}: untermonatlicher Zuordnungsbeginn {} without a Veräußerungsformwechsel \
              (bestehende und angemeldete Veräußerungsform sind beide {}). The published \
-             sources disagree — GPKE Teil 2 § 2.1.1 permits it („Der Zuordnungsbeginn darf \
+             sources disagree — GPKE Teil 2 Kap. 2.1.1 (S. 15) permits it („Der Zuordnungsbeginn darf \
              ein Monatserster oder untermonatlich sein\" / „Spätester ÜT ist der Tag vor dem \
              letzten WT\"), while EBD 4.3 E_0622 Prüfschritt {pruefschritt} would refuse it. \
              mako does not auto-reject against the Festlegung's own Fristentabelle \
@@ -658,7 +658,7 @@ fn monatsfrist(
             pruefschritt,
             format!(
                 "Vorlauffrist not met ({fall}): Zuordnungsbeginn {}, latest ÜT {latest_ut} \
-                 ({monate} month(s) ahead per GPKE Teil 2 § 2.1.1 and § 21c EEG 2023), \
+                 ({monate} month(s) ahead per GPKE Teil 2 Kap. 2.1.1 and § 21c EEG 2023), \
                  receipt {today}.",
                 anfrage.process_date
             ),
@@ -674,7 +674,7 @@ fn monatserster_detail(
     format!(
         "Zuordnungsbeginn {} is not the first of a calendar month ({fall}, angemeldete \
          Veräußerungsform {}). A Wechsel der Veräußerungsform is only possible zum ersten \
-         Kalendertag eines Monats (§ 21b Abs. 1 EEG 2023; GPKE Teil 2 § 2.1.1).",
+         Kalendertag eines Monats (§ 21b Abs. 1 EEG 2023; GPKE Teil 2 Kap. 2.1.1).",
         anfrage.process_date,
         erz.angemeldete_veraeusserungsform.wire_code(),
     )
@@ -1080,7 +1080,7 @@ mod tests {
         evaluate(anfrage, Some(vs), Some(&make_grid()), true, now, &cfg())
     }
 
-    // ── Strom LFW24 date rule (Prüfschritt 15, A07) ──────────────────────────
+    // ── Strom Vorlauffrist (Prüfschritt 15, A07) ─────────────────────────────
 
     #[test]
     fn strom_accept_full_werktag_between() {
@@ -1114,7 +1114,8 @@ mod tests {
 
     #[test]
     fn strom_reject_past_date_even_for_einzug() {
-        // LFW24 abolished retroactive Anmeldungen for ALL Transaktionsgründe.
+        // No Anmeldung is retroactive, whatever its Transaktionsgrund
+        // (GPKE Teil 2 Kap. 2.1.2 Nr. 1).
         let mut anfrage = make_anfrage(55001, d(2026, Month::July, 7));
         anfrage.transaktionsgrund = Some("E01".to_owned());
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
@@ -1374,7 +1375,7 @@ mod tests {
 
     /// Without the bestehende Veräußerungsform, `E_0622` Prüfschritt 400 / 600
     /// cannot be answered — and the Monatserster check behind it would refuse an
-    /// untermonatlichen Wechsel that GPKE Teil 2 § 2.1.1 permits.
+    /// untermonatlichen Wechsel that GPKE Teil 2 Kap. 2.1.1 permits.
     #[test]
     fn an_unknown_bestehende_veraeusserungsform_escalates_in_gv1_and_gv2() {
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);

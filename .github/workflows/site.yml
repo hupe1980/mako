@@ -57,7 +57,7 @@ jobs:
       - name: Check Mermaid diagrams
         working-directory: site
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           npm run check:mermaid
 
       # `zola check` resolves `@/docs/…` links and their `#anchor` fragments;

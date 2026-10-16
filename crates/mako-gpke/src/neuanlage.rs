@@ -29,7 +29,7 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BNetzA BK6-24-174 Anlage 1b** — GPKE Teil 2 §2.2 Neuanlage
+//! - **BNetzA BK6-24-174 Anlage 1b** — GPKE Teil 2 Kap. 2.2 Neuanlage
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format
 //! - **APERAK AHB 1.1 § 2.4.1** — technical acknowledgement, **45 Minuten** on a
 //!   weekday for a UTILMD. A separate clock from the business answer window,
@@ -63,7 +63,7 @@ pub const WORKFLOW_NAME: &str = "gpke-neuanlage";
 pub const NEUANLAGE_PIDS: &[u32] = &[55600, 55601];
 
 /// Deadline label for the **business** answer window — „spätester ÜZ ist 00:00
-/// Uhr des 61. WT nach dem ÜT" (GPKE Teil 2 § 2.2.2), resolved by
+/// Uhr des 61. WT nach dem ÜT" (GPKE Teil 2 Kap. 2.2.2), resolved by
 /// `mako_fristen::antwort`: `E_0608` Prüfschritte 110/590 make identifying a
 /// newly commissioned Marktlokation a daily re-check for up to 60 Werktage.
 ///
@@ -317,7 +317,7 @@ pub enum NeuanlageCommand {
     /// - 55601 → 55603 (accepted) / 55605 (rejected)
     ///
     /// The Neuanlage answer window is **00:00 Uhr des 61. Werktags nach dem
-    /// ÜT** (BK6-24-174 GPKE Teil 2 § 2.2.2): `E_0608` Prüfschritte 110 und 590
+    /// ÜT** (BK6-24-174 GPKE Teil 2 Kap. 2.2.2): `E_0608` Prüfschritte 110 und 590
     /// give the NB 60 Werktage of daily re-identification before it may refuse a
     /// newly commissioned Marktlokation. A 24-hour deadline on this process
     /// manufactures a rejection roughly three months early.

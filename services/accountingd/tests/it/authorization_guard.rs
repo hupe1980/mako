@@ -385,3 +385,65 @@ fn the_mcp_surface_is_built_with_the_verifier_and_the_policy() {
          the frame — `use-mcp` alone is then the whole check"
     );
 }
+
+/// The `advisory-is-read-only` forbid's action list.
+fn actions_forbidden_to_an_advisory_principal() -> BTreeSet<String> {
+    let start = POLICY
+        .find("@id(\"advisory-is-read-only\")")
+        .expect("the policy carries the advisory forbid");
+    let block = &POLICY[start..];
+    let block = &block[..block.find("};").expect("the forbid is terminated")];
+    assert!(
+        block.contains("forbid(") && block.contains("context.principal_advisory"),
+        "the advisory block must be a forbid conditioned on principal_advisory: {block}"
+    );
+    let mut found = BTreeSet::new();
+    let mut rest = block;
+    while let Some(idx) = rest.find("Action::\"") {
+        rest = &rest[idx + "Action::\"".len()..];
+        let Some(close) = rest.find('"') else { break };
+        found.insert(rest[..close].to_owned());
+        rest = &rest[close..];
+    }
+    found
+}
+
+/// The reads an advisory principal keeps.
+const READS: [&str; 4] = ["read-account", "read-banking", "read-books", "use-mcp"];
+
+/// Every action the handlers check that is not a read is forbidden to an
+/// advisory principal, and no read is.
+///
+/// The roles that read the bank details and the books are the roles that hold
+/// every money-moving write, so a write missing from the list is a write an
+/// advisory agent's key can perform.
+#[test]
+fn the_advisory_forbid_names_every_mutating_action() {
+    let mutating: BTreeSet<String> = actions_used_in_code()
+        .into_iter()
+        .filter(|a| !READS.contains(&a.as_str()))
+        .collect();
+    assert!(
+        !mutating.is_empty(),
+        "the extractor found no mutating action"
+    );
+    assert_eq!(actions_forbidden_to_an_advisory_principal(), mutating);
+}
+
+/// A principal that is not advisory is decided by the permits alone: the
+/// forbid adds no refusal to today's keys.
+#[test]
+fn a_non_advisory_principal_keeps_its_permits() {
+    let enforcer = mako_service::cedar::CedarEnforcer::from_policy_str(POLICY).expect("parses");
+    let lf = mako_service::cedar::CedarPrincipal {
+        sub: "lf-operator".to_owned(),
+        tenant: "9900357000004".to_owned(),
+        roles: vec!["LF".to_owned()],
+    };
+    for action in actions_used_in_code() {
+        assert!(
+            enforcer.check(&lf, &action, "9900357000004").is_ok(),
+            "an LF principal must keep {action}"
+        );
+    }
+}

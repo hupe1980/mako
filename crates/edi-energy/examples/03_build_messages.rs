@@ -196,10 +196,14 @@ fn build_aperak() -> Result<(), Box<dyn std::error::Error>> {
 // ── CONTRL ───────────────────────────────────────────────────────────────────
 
 fn build_contrl() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== CONTRL Empfangsbestätigung (UCI action 7) ===");
+    println!("=== CONTRL Empfangsbestätigung (UCI action 7), Sparte Gas ===");
 
+    // A positive Empfangsbestätigung is a Gas answer: in Strom the receiver
+    // sends a CONTRL only on a syntax error (CONTRL AHB 1.0 Kap. 1.2), and the
+    // Prüfschablone admits DE 0007 14 or 502 — not 500 — for the Empfänger
+    // of the acknowledged file in that column (Kap. 3.1).
     let bytes = ContrlBuilder::new(releases::contrl_fv20260101().clone())
-        .sender(NB_STROM)
+        .sender(NB_GAS)
         .receiver(LF)
         .interchange_ref("INTER-2026-001")
         .message_ref("MSG-004")

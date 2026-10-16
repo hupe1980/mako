@@ -355,7 +355,7 @@ pub(crate) async fn reject_broken_interchange(
     edifact: &[u8],
     results: &[Result<AnyMessage, edi_energy::Error>],
     msg_id: &str,
-) {
+) -> Result<(), mako_engine::error::EngineError> {
     use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
     // The `UNB` is read off the bytes: the parser refuses the whole file once a
     // message in it does not tokenize, and the CONTRL still needs its parties.
@@ -389,10 +389,13 @@ pub(crate) async fn reject_broken_interchange(
                     .unwrap_or_default(),
             ),
         };
-        state.dl_sink.reject(&DeadLetterReason::ProcessingError {
-            message,
-            context: context().with_message_type(message_type.as_str()),
-        });
+        state
+            .dl_sink
+            .reject(&DeadLetterReason::ProcessingError {
+                message,
+                context: context().with_message_type(message_type.as_str()),
+            })
+            .await?;
     }
     tracing::warn!(
         message_ref = %msg_id,
@@ -404,7 +407,7 @@ pub(crate) async fn reject_broken_interchange(
 
     let (Some(contrl_svc), Some((sender, receiver, control_ref))) = (contrl_ack, header.as_ref())
     else {
-        return;
+        return Ok(());
     };
     let sent = match crate::contrl_ack::syntaxpruefung(edifact, results) {
         crate::contrl_ack::Syntaxpruefung::Nachrichten(fehler) => {
@@ -420,11 +423,15 @@ pub(crate) async fn reject_broken_interchange(
         crate::contrl_ack::Syntaxpruefung::Fehlerfrei => Ok(()),
     };
     if let Err(e) = sent {
-        state.dl_sink.reject(&DeadLetterReason::ProcessingError {
-            message: format!("contrl_syntaxfehler_failed: {e}"),
-            context: context().with_message_type("CONTRL"),
-        });
+        state
+            .dl_sink
+            .reject(&DeadLetterReason::ProcessingError {
+                message: format!("contrl_syntaxfehler_failed: {e}"),
+                context: context().with_message_type("CONTRL"),
+            })
+            .await?;
     }
+    Ok(())
 }
 
 /// Record a Phase-2 dispatch failure as a dead letter (§ 147 AO / GoBD).
@@ -434,16 +441,21 @@ pub(crate) async fn reject_broken_interchange(
 /// come back as duplicates, and on `/edifact` nothing else records the message.
 /// Without this entry it is simply gone — the same reason the parse-error and
 /// unknown-PID paths dead-letter.
-pub(crate) fn dead_letter_dispatch_failure(
+///
+/// # Errors
+///
+/// The sink's error when the record could not be written.
+pub(crate) async fn dead_letter_dispatch_failure(
     sink: &dyn DeadLetterSink,
     context: AuditContext,
     workflow: &str,
     error: &mako_engine::error::EngineError,
-) {
+) -> Result<(), mako_engine::error::EngineError> {
     sink.reject(&DeadLetterReason::ProcessingError {
         message: format!("dispatch_failed: workflow {workflow}: {error}"),
         context,
-    });
+    })
+    .await
 }
 
 /// Validate one routed message against its own release profile and record the
@@ -680,6 +692,41 @@ pub(crate) async fn ingest_edifact(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> (StatusCode, Json<IngestResponse>) {
+    let mut unrecorded = None;
+    let (status, report) = ingest_report(&state, &headers, &body, &mut unrecorded).await;
+    // A refusal whose dead letter could not be written has no record, so the
+    // caller is told the request failed and resubmits it.
+    match unrecorded {
+        Some(e) => {
+            tracing::error!(error = %e, "EDIFACT REST ingest: a dead letter could not be written");
+            (StatusCode::INTERNAL_SERVER_ERROR, report)
+        }
+        None => (status, report),
+    }
+}
+
+/// Write a dead letter on the REST door, keeping the first failure.
+async fn record(
+    state: &EdifactApiState,
+    reason: &DeadLetterReason,
+    unrecorded: &mut Option<mako_engine::error::EngineError>,
+) {
+    if let Err(e) = state.dl_sink.reject(reason).await
+        && unrecorded.is_none()
+    {
+        *unrecorded = Some(e);
+    }
+}
+
+async fn ingest_report(
+    state: &Arc<EdifactApiState>,
+    headers: &axum::http::HeaderMap,
+    body: &axum::body::Bytes,
+    unrecorded: &mut Option<mako_engine::error::EngineError>,
+) -> (StatusCode, Json<IngestResponse>) {
+    // The ÜZ of every message in the body: arrival-anchored Fristen run from
+    // the request, not from when each message reaches its dispatch arm.
+    let received_at = time::OffsetDateTime::now_utc();
     // Reject non-EDIFACT content types before reading the body.
     let content_type = headers
         .get(header::CONTENT_TYPE)
@@ -731,7 +778,12 @@ pub(crate) async fn ingest_edifact(
     //
     // It returns `None` for a BDEW interchange, so that path pays one head-only
     // scan and nothing else.
-    if let Some(report) = crate::dvgw_ingest::try_ingest(state.as_ref(), &body).await {
+    if let Some(report) = crate::dvgw_ingest::try_ingest(state.as_ref(), body).await {
+        if let Some(e) = &report.unrecorded
+            && unrecorded.is_none()
+        {
+            *unrecorded = Some(mako_engine::error::EngineError::dead_letter(e.clone()));
+        }
         let messages: Vec<MessageResult> = report
             .messages
             .iter()
@@ -777,14 +829,19 @@ pub(crate) async fn ingest_edifact(
                 )
                 .await
             {
-                state.dl_sink.reject(&DeadLetterReason::ProcessingError {
-                    message: format!("contrl_ack_failed: {e}"),
-                    context: AuditContext::now()
-                        .with_message_type("CONTRL")
-                        .with_receiver_eic(report.recipient_mp_id.as_str())
-                        .with_message_ref(report.interchange_ref.as_str())
-                        .with_tenant_id(state.tenant_id.to_string()),
-                });
+                record(
+                    state,
+                    &DeadLetterReason::ProcessingError {
+                        message: format!("contrl_ack_failed: {e}"),
+                        context: AuditContext::now()
+                            .with_message_type("CONTRL")
+                            .with_receiver_eic(report.recipient_mp_id.as_str())
+                            .with_message_ref(report.interchange_ref.as_str())
+                            .with_tenant_id(state.tenant_id.to_string()),
+                    },
+                    unrecorded,
+                )
+                .await;
             }
         }
 
@@ -831,14 +888,17 @@ pub(crate) async fn ingest_edifact(
                 .platform
                 .parse_interchange(std::io::Cursor::new(&body[..]))
                 .collect();
-            reject_broken_interchange(
-                &state,
+            if let Err(e) = reject_broken_interchange(
+                state,
                 state.contrl_ack.as_deref(),
-                &body,
+                body,
                 &results,
                 "edifact-rest",
             )
-            .await;
+            .await
+            {
+                *unrecorded = Some(e);
+            }
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(IngestResponse {
@@ -867,9 +927,12 @@ pub(crate) async fn ingest_edifact(
             &pi.header.control_ref,
         )
         .with_tenant_id(state.tenant_id.to_string());
-        state
-            .dl_sink
-            .reject(&DeadLetterReason::TestMessage { context: ctx });
+        record(
+            state,
+            &DeadLetterReason::TestMessage { context: ctx },
+            unrecorded,
+        )
+        .await;
         tracing::warn!(
             sender = %pi.header.sender_id,
             receiver = %pi.header.receiver_id,
@@ -882,7 +945,7 @@ pub(crate) async fn ingest_edifact(
         if let Some(contrl_svc) = state.contrl_ack.as_deref()
             && let Err(e) = contrl_svc
                 .emit_syntax_error(
-                    &body,
+                    body,
                     &pi.header.control_ref,
                     &pi.header.receiver_id,
                     &pi.header.sender_id,
@@ -890,15 +953,20 @@ pub(crate) async fn ingest_edifact(
                 )
                 .await
         {
-            state.dl_sink.reject(&DeadLetterReason::ProcessingError {
-                message: format!("contrl_syntaxfehler_failed: {e}"),
-                context: AuditContext::from_interchange(
-                    &pi.header.sender_id,
-                    &pi.header.receiver_id,
-                    &pi.header.control_ref,
-                )
-                .with_message_type("CONTRL"),
-            });
+            record(
+                state,
+                &DeadLetterReason::ProcessingError {
+                    message: format!("contrl_syntaxfehler_failed: {e}"),
+                    context: AuditContext::from_interchange(
+                        &pi.header.sender_id,
+                        &pi.header.receiver_id,
+                        &pi.header.control_ref,
+                    )
+                    .with_message_type("CONTRL"),
+                },
+                unrecorded,
+            )
+            .await;
         }
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -970,7 +1038,7 @@ pub(crate) async fn ingest_edifact(
             // Alertmanager can alert on `makod_inbound_messages_total{result=…}`.
             mako_engine::metrics::EngineMetrics::global()
                 .inbound_received(dead_pid.as_u32(), result);
-            state.dl_sink.reject(&reason);
+            record(state, &reason, unrecorded).await;
         }
 
         // Auto-upsert PARTIN: when we receive a PARTIN message and a
@@ -1018,7 +1086,10 @@ pub(crate) async fn ingest_edifact(
             (pid, workflow.as_deref(), state.dispatcher.as_deref())
             && matches!(status, MessageStatus::Routed)
         {
-            match dispatcher.dispatch(&msg, wf_name, pid_val.as_u32()).await {
+            match dispatcher
+                .dispatch(&msg, wf_name, pid_val.as_u32(), received_at)
+                .await
+            {
                 Ok(outcome) => {
                     use crate::ingest_dispatcher::IngestOutcome;
                     match &outcome {
@@ -1034,19 +1105,24 @@ pub(crate) async fn ingest_edifact(
                     // trace § 147 AO / GoBD require, so it is recorded rather
                     // than only logged.
                     if let Some((wf, reason)) = outcome.coverage_gap() {
-                        state.dl_sink.reject(&DeadLetterReason::NotDispatchable {
-                            workflow_name: wf.to_owned(),
-                            pid: pid_val,
-                            reason: reason.to_owned(),
-                            context: AuditContext::from_interchange(
-                                &env.header.sender_id,
-                                &env.header.receiver_id,
-                                &env.header.control_ref,
-                            )
-                            .with_message_type(message_type.as_deref().unwrap_or(""))
-                            .with_pid(pid_val)
-                            .with_tenant_id(state.tenant_id.to_string()),
-                        });
+                        record(
+                            state,
+                            &DeadLetterReason::NotDispatchable {
+                                workflow_name: wf.to_owned(),
+                                pid: pid_val,
+                                reason: reason.to_owned(),
+                                context: AuditContext::from_interchange(
+                                    &env.header.sender_id,
+                                    &env.header.receiver_id,
+                                    &env.header.control_ref,
+                                )
+                                .with_message_type(message_type.as_deref().unwrap_or(""))
+                                .with_pid(pid_val)
+                                .with_tenant_id(state.tenant_id.to_string()),
+                            },
+                            unrecorded,
+                        )
+                        .await;
                     }
                     // Extract MaLo from the raw message for the response.
                     dispatch_malo_id = Some(String::from(
@@ -1063,7 +1139,7 @@ pub(crate) async fn ingest_edifact(
                     );
                 }
                 Err(e) => {
-                    dead_letter_dispatch_failure(
+                    if let Err(dl) = dead_letter_dispatch_failure(
                         state.dl_sink.as_ref(),
                         AuditContext::from_interchange(
                             &env.header.sender_id,
@@ -1075,7 +1151,12 @@ pub(crate) async fn ingest_edifact(
                         .with_tenant_id(state.tenant_id.to_string()),
                         wf_name,
                         &e,
-                    );
+                    )
+                    .await
+                        && unrecorded.is_none()
+                    {
+                        *unrecorded = Some(dl);
+                    }
                     tracing::error!(
                         workflow = %wf_name,
                         pid      = pid_val.as_u32(),
@@ -1109,15 +1190,20 @@ pub(crate) async fn ingest_edifact(
             .emit_for_interchange(&refs, &pi.header.control_ref, &pi.header.receiver_id)
             .await
         {
-            state.dl_sink.reject(&DeadLetterReason::ProcessingError {
-                message: format!("contrl_ack_failed: {e}"),
-                context: AuditContext::from_interchange(
-                    &pi.header.sender_id,
-                    &pi.header.receiver_id,
-                    &pi.header.control_ref,
-                )
-                .with_message_type("CONTRL"),
-            });
+            record(
+                state,
+                &DeadLetterReason::ProcessingError {
+                    message: format!("contrl_ack_failed: {e}"),
+                    context: AuditContext::from_interchange(
+                        &pi.header.sender_id,
+                        &pi.header.receiver_id,
+                        &pi.header.control_ref,
+                    )
+                    .with_message_type("CONTRL"),
+                },
+                unrecorded,
+            )
+            .await;
         }
     }
 

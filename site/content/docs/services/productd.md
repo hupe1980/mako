@@ -230,6 +230,25 @@ PUT /api/v1/nehs-prices/2026-07-15   { "eur_per_t": "6.35", "source": "auktion" 
 
 GET /api/v1/nehs-prices/latest?date=2026-08-01
 ```
+
+### The CO₂ price of a Gas quotation
+
+A Gas position of an Angebot is priced at the CO₂ cost of its Stichtag — the
+proposed Lieferbeginn, or today — by the same resolution `billingd` bills a
+period with:
+
+1. a point of this series counts only when it was set in the **Stichtag's own
+   year** — a 2026 auction never prices a 2027 Lieferbeginn;
+2. without one, the statutory table prices the year — the § 10 Abs. 2 BEHG
+   Festpreise for 2021–2025, the corridor midpoint for 2026 (§ 4 Abs. 1 Nr. 2
+   CO2KostAufG);
+3. a year § 10 BEHG fixes no price for (2027) takes a series point only through
+   `behg_regime` (`rvo_bezugspreis`, the default, or `korridor`, 55–65 EUR/t),
+   which checks it.
+
+The price is converted at the year's EBeV emission factor for Erdgas. A
+position the steps leave without a price is refused with `BEHG_PREIS_FEHLT`,
+naming the year, unless it carries its own `behg_gas_ct_per_kwh`.
 ---
 
 ## § 41c EnWG comparison feed

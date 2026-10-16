@@ -116,7 +116,7 @@ pub fn eog_response_pid(accepted: bool) -> u32 {
 ///
 /// Strom **55013** states two windows selected by a date in the payload — 15:00
 /// Uhr *am ÜT* when the Zuordnungsbeginn lies in the future, and 15:00 Uhr des
-/// ersten Werktags when it does not (GPKE Teil 2 § 2.3.2.2 Nr. 2). Gas **44013**
+/// ersten Werktags when it does not (GPKE Teil 2 Kap. 2.3.2.2 Nr. 2). Gas **44013**
 /// is a plain 2-Werktage window (BK7-24-01-009 Kap. 3.3.2).
 ///
 /// Both come from [`mako_fristen::antwort`], which publishes the **tighter** of

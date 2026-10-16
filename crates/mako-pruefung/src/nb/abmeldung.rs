@@ -65,7 +65,7 @@
 //!
 //! # Vorlauffrist (Prüfschritt 50)
 //!
-//! Strom, per GPKE Teil 2 § 2.5.1 SD Prozessschritt 1:
+//! Strom, per GPKE Teil 2 Kap. 2.5.1 SD Prozessschritt 1:
 //!
 //! - **EEG-Marktlokationen und ihre Tranchen:** the Zuordnungsende must be a
 //!   Monatserster, „spätester ÜT liegt 1 Monat vor dem Zuordnungsende"
@@ -81,7 +81,7 @@
 //!
 //! - Entscheidungsbaum-Diagramme und Codelisten 4.3, Kap. 6.3.1 (`E_0607`),
 //!   13.4.1 (`E_3019` / `G_0007` / `G_0008`)
-//! - BK6-24-174 GPKE Teil 2 § 2.5.1
+//! - BK6-24-174 GPKE Teil 2 Kap. 2.5.1
 //! - BK7-24-01-009 GeLi Gas 3.0 Kap. 3.2.1 / 3.2.2
 
 use time::{Date, Duration, OffsetDateTime};
@@ -439,7 +439,7 @@ fn e_0607_erzeugend(
             format!(
                 "Abmeldung einer erzeugenden Marktlokation zum {d}, das kein Monatserster ist. \
                  Das Lieferende muss auf dem 1. eines Kalendermonats 00:00 Uhr liegen \
-                 (§ 21b Abs. 1 EEG 2023; GPKE Teil 2 § 2.5.1)."
+                 (§ 21b Abs. 1 EEG 2023; GPKE Teil 2 Kap. 2.5.1)."
             ),
         );
     }
@@ -517,7 +517,7 @@ fn check_vorlauffrist_strom(
     let d = anfrage.abmeldedatum;
 
     // EEG-Marktlokationen und Tranchen davon: Monatserster, spätester ÜT liegt
-    // einen Monat vor dem Zuordnungsende (GPKE Teil 2 § 2.5.1 SD Nr. 1).
+    // einen Monat vor dem Zuordnungsende (GPKE Teil 2 Kap. 2.5.1 SD Nr. 1).
     if anfrage.marktlokationsart == Marktlokationsart::Erzeugend {
         if d.day() != 1 {
             return Some(reject(
@@ -528,7 +528,7 @@ fn check_vorlauffrist_strom(
                 format!(
                     "Abmeldung einer EEG-Marktlokation zum {d}, das kein Monatserster ist. \
                      Das Zuordnungsende muss ein Monatserster sein (§ 21b Abs. 1 EEG 2023; \
-                     GPKE Teil 2 § 2.5.1 SD Lieferende von LF an NB, Prozessschritt 1).",
+                     GPKE Teil 2 Kap. 2.5.1 SD Lieferende von LF an NB, Prozessschritt 1).",
                 ),
             ));
         }
@@ -559,7 +559,7 @@ fn check_vorlauffrist_strom(
             format!(
                 "Vorlauffrist nicht eingehalten: Zuordnungsende {d} bei Eingang {today}. \
                  Spätester ÜT ist der Tag vor dem letzten WT vor dem Zuordnungsende \
-                 (GPKE Teil 2 § 2.5.1 SD Lieferende von LF an NB, Prozessschritt 1) — \
+                 (GPKE Teil 2 Kap. 2.5.1 SD Lieferende von LF an NB, Prozessschritt 1) — \
                  mindestens ein voller Werktag muss dazwischen liegen.",
             ),
         )

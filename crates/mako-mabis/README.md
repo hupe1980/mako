@@ -47,7 +47,7 @@ assert!(ctx.registered_workflows().contains(&mako_mabis::bilanzkreisabrechnung::
 | `mabis-profile` | MSCONS 13010–13012 · ORDERS 17211 |
 | `mabis-clearingliste` | UTILMD 55067, 55069, 55070, 55073 |
 | `mabis-listenabgleich` | 55065+55066, 55195+55196, 55201+55202, 55223+55224 |
-| `mabis-zp-lifecycle` | 55062–55064, 55071/55072, 55197–55214, 55235–55237 |
+| `mabis-zp-lifecycle` | 55062–55064, 55071/55072, 55197–55200, 55203–55214, 55235–55237 |
 | `mabis-anforderung` | ORDERS 17201–17208, 17210 · ORDRSP 19204 |
 
 ## What MaBiS does differently

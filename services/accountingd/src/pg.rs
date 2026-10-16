@@ -2385,8 +2385,9 @@ pub struct AnonymizeResult {
 ///
 /// All `ledger_entries` are kept intact — amounts, dates, entry_type, description,
 /// and reference_id are **not** modified. This satisfies:
-/// - §238 HGB (10-year Buchführungspflicht)
-/// - §147 AO (6-10 year tax record retention)
+/// - § 257 Abs. 1 Nr. 1 / Nr. 4, Abs. 4 HGB: Handelsbücher ten years, Belege
+///   für Buchungen eight years, from the end of the calendar year (Abs. 5)
+/// - § 147 Abs. 1, Abs. 3 AO: the same records for tax purposes
 /// - GDPR Art. 17(3)(b): erasure exemption for legal obligations
 ///
 /// The `malo_id` (MaLo = market location) is **not** personal data per BDEW

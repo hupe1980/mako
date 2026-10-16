@@ -283,8 +283,12 @@ impl AllocationState {
         }
     }
 
-    /// `true` once the binding final allocation has been recorded. No further
-    /// correction is admissible after this point (§47 Ziffer 1 KoV XV).
+    /// `true` once the binding final allocation has been recorded. A correction
+    /// after this point is no further allocation but an Allokationsclearing:
+    /// § 47 Ziffer 1 KoV XV (Stand 27.03.2026, S. 66–67) opens it once the
+    /// finale Allokation has been sent and the Grenzwerte of § 13 Anlage 4 are
+    /// exceeded, and Ziffer 2 carries it as a CLEARING-ALOCAT with a
+    /// Clearingnummer.
     #[must_use]
     pub fn is_settled(&self) -> bool {
         matches!(

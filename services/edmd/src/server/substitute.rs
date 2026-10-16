@@ -71,8 +71,10 @@ pub struct SubstituteRequest {
     pub confirmed_outage: bool,
     /// Operator ID for audit trail.
     pub operator_id: Option<String>,
-    /// `STROM` (default) · `GAS` · `WAERME` · `WASSER`. Determines the `unit`
-    /// the substitute is stored in — a substituted water gap is m³, not kWh.
+    /// `STROM` · `GAS` · `WAERME` · `WASSER`. Determines the `unit` the
+    /// substitute is stored in — a substituted water gap is m³, not kWh. Read
+    /// only when the register has no stored read to take it from; with
+    /// neither, the request is refused.
     pub sparte: Option<String>,
     /// Why a substitute is required — **required**.
     ///
@@ -287,13 +289,21 @@ pub async fn run_substitute_values(
     let resolved: Vec<MeterRead> = resolved.into_iter().filter(in_target).collect();
 
     // The Sparte is authoritative on the stored series the gap belongs to; the
-    // request value is only a fallback for a MaLo with no resolved reads.
+    // request value is only a fallback for a MaLo with no resolved reads. With
+    // neither, the substitution is refused: a Sparte decides the unit and the
+    // day class of the Ersatzwert, and assuming Strom files a gas gap in kWh.
     let sparte = match resolved.first().map(|r| r.sparte) {
         Some(sparte) => sparte,
         None => match req.sparte.as_deref().map(|s| s.trim().parse()) {
             Some(Ok(sparte)) => sparte,
             Some(Err(e)) => return unprocessable(format!("sparte: {e}")),
-            None => metering::Sparte::Strom,
+            None => {
+                return unprocessable(
+                    "sparte: the register has no stored read to take the Sparte from — \
+                     name it in the request"
+                        .to_owned(),
+                );
+            }
         },
     };
 
@@ -527,8 +537,8 @@ pub async fn run_substitute_values(
         if let Err(e) = sqlx::query(
             r"INSERT INTO substitute_value_log
                 (malo_id, dtm_from, dtm_to, method, reason, substitute_kwh,
-                 original_kwh, created_by, tenant)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                 original_kwh, created_by, tenant, bundesland)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
         .bind(malo_id)
         .bind(from)
@@ -539,6 +549,7 @@ pub async fn run_substitute_values(
         .bind(original)
         .bind(operator_id)
         .bind(tenant)
+        .bind(bundesland.as_str())
         .execute(&mut *tx)
         .await
         {

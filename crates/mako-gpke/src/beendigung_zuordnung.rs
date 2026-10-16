@@ -17,7 +17,7 @@
 //!
 //! # Why the NB side matters
 //!
-//! The Anfrage is not optional courtesy. GPKE Teil 2 § 2.1.2 SD Lieferbeginn
+//! The Anfrage is not optional courtesy. GPKE Teil 2 Kap. 2.1.2 SD Lieferbeginn
 //! Nr. 1 **Prüfschritt 4** routes an Anmeldung on an already-assigned
 //! Marktlokation to Prozessschritt 3, and `E_0623` Prüfschritte 20–50 read the
 //! answer: a Widerspruch that is not `A30` refuses the Anmeldung with `A50`.
@@ -89,7 +89,7 @@ pub const ANFRAGE_PID: u32 = 55_010;
 pub const ANTWORT_PIDS: &[u32] = &[55_011, 55_012];
 
 /// Deadline label for the **LFA's** answer window, as the NB tracks it —
-/// 09:00 Uhr des 1. WT nach dem ÜT der Anmeldung (GPKE Teil 2 § 2.1.2 Nr. 4).
+/// 09:00 Uhr des 1. WT nach dem ÜT der Anmeldung (GPKE Teil 2 Kap. 2.1.2 Nr. 4).
 ///
 /// Its own label, distinct from
 /// [`BEENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL`]: that one is the LFA's clock on
@@ -100,7 +100,7 @@ pub const ANTWORT_PIDS: &[u32] = &[55_011, 55_012];
 pub const NB_ANFRAGE_WINDOW_LABEL: &str = "gpke-beendigung-zuordnung-lfa-antwort";
 
 /// Deadline label for the **business** answer window — 09:00 Uhr des 1. WT nach
-/// dem ÜT (GPKE Teil 2 § 2.1.2), resolved by `mako_fristen::antwort`.
+/// dem ÜT (GPKE Teil 2 Kap. 2.1.2), resolved by `mako_fristen::antwort`.
 ///
 /// Not the APERAK clock: that is 45 Minuten for a UTILMD (APERAK AHB 1.1
 /// § 2.4.1) and rides `mako_fristen::APERAK_STROM_WINDOW_LABEL`.
@@ -377,7 +377,7 @@ pub enum BeendigungZuordnungCommand {
     /// Send the outbound UTILMD response (55011 = Bestätigung, 55012 = Ablehnung).
     ///
     /// The LFA answers by **09:00 Uhr des 1. WT nach dem ÜT** — GPKE Teil 2
-    /// § 2.1.2 SD Lieferbeginn Prozessschritt 4, resolved by
+    /// Kap. 2.1.2 SD Lieferbeginn Prozessschritt 4, resolved by
     /// `mako_fristen::antwort` (trigger PID 55010). It is a clock time on a
     /// Werktag, not a 24-hour duration.
     SendAntwort {
@@ -388,7 +388,7 @@ pub enum BeendigungZuordnungCommand {
     /// **NB side.** Render and queue the Anfrage zur Beendigung der Zuordnung
     /// (55010) and start the LFA's 09:00 window.
     ///
-    /// GPKE Teil 2 § 2.1.2 Nr. 3, „parallel zu Nr. 2". Issued by `processd`
+    /// GPKE Teil 2 Kap. 2.1.2 Nr. 3, „parallel zu Nr. 2". Issued by `processd`
     /// when `mako_pruefung` answers
     /// `NbEntscheidung::AnfrageErforderlich` — `mako-gpke` is a transport-layer
     /// crate and does not depend on `mako-pruefung`, so the link is a name.

@@ -20,10 +20,45 @@ pub enum BillingError {
         input_value: Option<rust_decimal::Decimal>,
     },
 
+    /// A Strom period carries a network levy that has neither a tabled rate nor
+    /// an override for one of its calendar years.
+    ///
+    /// The Übertragungsnetzbetreiber publish the next year's Umlagen „bis zum
+    /// 25. Oktober eines Kalenderjahres" (§ 11 EnFG); until a year's row is
+    /// tabled in [`crate::umlagen`], its rate is the caller's to supply.
+    /// Omitting the levy instead would understate the invoice by an amount the
+    /// ÜNB reclaim.
+    #[error(
+        "cannot bill the Netzentgelt-Umlagen: no tabled rate and no override for {}",
+        missing.join(", ")
+    )]
+    UmlageRateMissing {
+        /// Each missing levy with its year, e.g. `"KWKG-Umlage 2027"`.
+        missing: Vec<String>,
+    },
+
+    /// A Gas period ends after the GasNEV lapsed, so no Verordnung forms its
+    /// Netzentgelte.
+    ///
+    /// The GasNEV „tritt gem. Art. 15 Abs. 2 G v. 22.12.2023 I Nr. 405 mit
+    /// Ablauf des 31.12.2027 außer Kraft" (GasNEV, gesetze-im-internet.de), a
+    /// year before StromNEV and ARegV, and no successor basis for the Gas
+    /// Netzentgelte is published. See
+    /// [`crate::regulatory::GasEntgeltRegime::OhneGrundlage`].
+    #[error(
+        "cannot price Gas-Netzentgelte for Tarifjahr {tarifjahr}: the GasNEV is außer Kraft \
+         mit Ablauf des 31.12.2027 (Art. 15 Abs. 2 G v. 22.12.2023, BGBl. 2023 I Nr. 405) and \
+         no successor basis for the Gas Netzentgelte is published"
+    )]
+    GasNevAusserKraft {
+        /// The calendar year whose rates the settlement would have priced.
+        tarifjahr: i32,
+    },
+
     /// The delivery period is governed by an Entgelt regime whose methodology
     /// cannot be computed yet.
     ///
-    /// StromNEV/GasNEV and the ARegV lapse with the end of 2028; the successor
+    /// StromNEV and the ARegV lapse with the end of 2028; the successor
     /// system AgNeS (GBK-25-01) is draft only — the Rahmenfestlegung is
     /// expected end-2026, and its parameter tables follow as configuration
     /// once they become binding. Refusing is deliberate: computing under the

@@ -8,10 +8,14 @@
 //! to the erased MaLo is gone, so they are unattributable everywhere at once, with
 //! no external Parquet-rewrite step to schedule.
 //!
-//! edmd's own derived tables (billing-period cache, quality assessments,
-//! substitute-value log) carry no audit obligation and are deleted outright — in
-//! the **same transaction** as the mapping erasure, so an Art. 17 request either
-//! completes whole or not at all. A partial erasure reported as success would close
+//! edmd's own tables are handled by what they are, in the **same transaction**
+//! as the mapping erasure, so an Art. 17 request either completes whole or not
+//! at all. The Buchungsbelege among them — corrections, the substitute-value
+//! log, receipts, reading orders, gas quality data and the ZSG conversion log —
+//! are kept and their `malo_id` rewritten to a reference that resolves to no
+//! one; the derived and operational ones (billing-period cache, quality
+//! assessments, sessions, alerts, virtual meter configuration) carry no
+//! retention duty and are deleted outright. A partial erasure reported as success would close
 //! the request while personal data survived, indistinguishable from a MaLo that
 //! legitimately held nothing.
 
@@ -39,10 +43,13 @@ use super::*;
 ///    is still written, so a request that arrived before the delivery did is
 ///    honoured and the later delivery refused.
 /// 3. Rewrites `malo_id` to the (now unmapped) subject reference in every table
-///    whose rows are Buchungsbelege — `meter_read_corrections`,
-///    `substitute_value_log`, `meter_data_receipts`, `ablese_auftraege`,
-///    `gas_quality_data` — and deletes the derived, operational and device
-///    tables outright. Tenant-scoped throughout.
+///    whose rows are Buchungsbelege — `zsg_conversion_log`,
+///    `meter_read_corrections`, `substitute_value_log`, `meter_data_receipts`,
+///    `ablese_auftraege`, `gas_quality_data` — and deletes the derived,
+///    operational and device tables outright. A MaLo with no mapping has no
+///    subject reference to rewrite to, so its Belege get a freshly minted one
+///    that is recorded nowhere: they survive, unattributable, and are never
+///    deleted. Tenant-scoped throughout.
 ///
 /// ## Regulatory basis
 ///
@@ -206,44 +213,26 @@ pub(crate) async fn post_gdpr_erasure(
     //
     //    A MaLo-ID is not unique across tenants, so every statement is
     //    tenant-scoped.
-    // Any of the erased references does as the pseudonym for the rows kept as
-    // Buchungsbelege: none of them resolves to a person any more, and the rows
-    // were already linked to one another by the MaLo-ID this replaces. The
-    // oldest epoch comes first, so the last is the most recent one — the token
-    // matching the epoch the surviving rows mostly carry.
-    let pseudonym = subjects.last().map(|s| s.as_str().to_owned());
+    let pseudonym = belege_pseudonym(&subjects);
 
-    /// Rewrite `malo_id` to the pseudonym, or delete the rows when the MaLo
-    /// never had a mapping (nothing to keep them linked to).
+    /// Rewrite `malo_id` to the pseudonym. A Buchungsbeleg is never deleted
+    /// here, mapping or not: § 147 Abs. 1 Nr. 4 AO keeps it for eight years
+    /// (Abs. 3), and Art. 17 Abs. 3 lit. b DSGVO exempts exactly that duty.
     macro_rules! pseudonymise {
         ($step:literal, $table:literal) => {
-            match pseudonym.as_deref() {
-                Some(p) => erasure_step!(
-                    $step,
-                    sqlx::query(concat!(
-                        "UPDATE ",
-                        $table,
-                        " SET malo_id = $1 WHERE malo_id = $2 AND tenant = $3"
-                    ))
-                    .bind(p)
-                    .bind(&malo_id)
-                    .bind(resource_tenant)
-                    .execute(&mut *tx)
-                    .await
-                ),
-                None => erasure_step!(
-                    $step,
-                    sqlx::query(concat!(
-                        "DELETE FROM ",
-                        $table,
-                        " WHERE malo_id = $1 AND tenant = $2"
-                    ))
-                    .bind(&malo_id)
-                    .bind(resource_tenant)
-                    .execute(&mut *tx)
-                    .await
-                ),
-            }
+            erasure_step!(
+                $step,
+                sqlx::query(concat!(
+                    "UPDATE ",
+                    $table,
+                    " SET malo_id = $1 WHERE malo_id = $2 AND tenant = $3"
+                ))
+                .bind(&pseudonym)
+                .bind(&malo_id)
+                .bind(resource_tenant)
+                .execute(&mut *tx)
+                .await
+            )
         };
     }
 
@@ -363,6 +352,41 @@ pub(crate) async fn post_gdpr_erasure(
         })),
     )
         .into_response()
+}
+
+/// The reference an erasure rewrites the Buchungsbelege' `malo_id` to.
+///
+/// Any of the erased references does: none of them resolves to a person any
+/// more, and the rows were already linked to one another by the MaLo-ID this
+/// replaces. The oldest epoch comes first, so the last is the most recent one —
+/// the token matching the epoch the surviving rows mostly carry.
+///
+/// A MaLo with no mapping — Belege written for it while no reading was ever
+/// stored, or a deployment without a subject registry — has no reference to
+/// reuse. It gets a freshly minted one instead, written nowhere but into the
+/// rewritten rows, so it links them to one another and to no one else.
+fn belege_pseudonym(subjects: &[meterstore::erasure::SubjectRef]) -> String {
+    subjects.last().map_or_else(
+        || format!("erased-unmapped-{}", uuid::Uuid::new_v4()),
+        |s| s.as_str().to_owned(),
+    )
+}
+
+#[cfg(test)]
+mod pseudonym_tests {
+    use super::belege_pseudonym;
+
+    /// Without a mapping the Belege still get a pseudonym — the rows are
+    /// rewritten, never deleted — and it is one nobody can recompute from the
+    /// MaLo-ID: two erasures of nothing mint two different ones.
+    #[test]
+    fn an_unmapped_malo_gets_a_fresh_unlinkable_pseudonym() {
+        let a = belege_pseudonym(&[]);
+        let b = belege_pseudonym(&[]);
+        assert_ne!(a, b, "the pseudonym must not be derivable from the request");
+        assert!(!a.contains("51238696012"));
+        assert!(a.starts_with("erased-unmapped-"), "{a}");
+    }
 }
 
 /// `GET /api/v1/gdpr/erasures`

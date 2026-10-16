@@ -8,11 +8,13 @@
 //!
 //! # Design
 //!
-//! [`DeadLetterSink`] is a synchronous trait that receives a structured
-//! [`DeadLetterReason`] for every rejected message. The synchronous contract
-//! keeps dispatch-path hot code fast; implementations that need async work
-//! (e.g. persisting to a durable DLQ or sending a CONTRL) can use
-//! `tokio::spawn` internally.
+//! [`DeadLetterSink`] receives a structured [`DeadLetterReason`] for every
+//! rejected message, and its [`reject`](DeadLetterSink::reject) is awaited:
+//! it returns once the record is as durable as the sink makes it, or an error
+//! when it could not be written. A caller that settles something on the
+//! strength of the record — an AS4 dedup claim, an outbox entry it is about to
+//! delete — settles only on `Ok`, because a record still in flight when that
+//! settlement lands is lost with nothing left to retry it.
 //!
 //! # Implementations
 //!
@@ -31,13 +33,27 @@
 //! use mako_engine::dead_letter::{AuditContext, DeadLetterReason, DeadLetterSink, LogDeadLetterSink};
 //! use mako_engine::ids::Pid;
 //!
+//! # async fn example() -> Result<(), mako_engine::error::EngineError> {
 //! let sink = LogDeadLetterSink;
-//! sink.reject(&DeadLetterReason::UnknownPid { pid: Pid::new(99999), context: AuditContext::now() });
+//! sink.reject(&DeadLetterReason::UnknownPid { pid: Pid::new(99999), context: AuditContext::now() })
+//!     .await?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! [`EngineBuilder::with_dead_letter_sink`]: crate::builder::EngineBuilder::with_dead_letter_sink
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+
+use crate::error::EngineError;
+
+/// The future [`DeadLetterSink::reject`] returns.
+///
+/// Boxed so the trait stays object-safe: the engine and `makod` hold the sink
+/// as `Arc<dyn DeadLetterSink>`.
+pub type RejectFuture<'a> = Pin<Box<dyn Future<Output = Result<(), EngineError>> + Send + 'a>>;
 
 // ── AuditContext ──────────────────────────────────────────────────────────────
 
@@ -457,27 +473,34 @@ impl std::fmt::Display for DeadLetterReason {
 /// Receives messages that cannot be routed or processed.
 ///
 /// Implement this trait to:
-/// - Emit CONTRL negative acknowledgements for unroutable messages
 /// - Persist rejections to a durable dead-letter queue for manual review
 /// - Trigger alerts when duplicate-message counts exceed a threshold
 ///
-/// The method is **synchronous**. Implementations that require async work
-/// (network calls, database writes) must use `tokio::spawn` internally.
+/// # Contract
+///
+/// [`reject`](Self::reject) resolves once the record is written, or with an
+/// error when it is not. A dead letter is the § 147 AO / GoBD business record
+/// of a refused message, and the callers that matter settle something on it:
+/// the AS4 door accepts the dedup claim, after which a retransmission is
+/// answered as a duplicate, and the outbox worker deletes the exhausted entry.
+/// Both act only on `Ok` — on an error the AS4 claim is abandoned so the
+/// counterparty retransmits, and the outbox entry is kept.
 ///
 /// # Default
 ///
 /// The default dead-letter sink is [`LogDeadLetterSink`], which emits
 /// `tracing::warn!` events. Override with
-/// [`EngineBuilder::with_dead_letter_sink`] to add CONTRL dispatch or
-/// persistent DLQ storage.
+/// [`EngineBuilder::with_dead_letter_sink`] for persistent DLQ storage.
 ///
 /// [`EngineBuilder::with_dead_letter_sink`]: crate::builder::EngineBuilder::with_dead_letter_sink
 pub trait DeadLetterSink: Send + Sync + 'static {
-    /// Record a rejected message.
+    /// Record a rejected message, returning once the record is written.
     ///
-    /// Called by the dispatch path synchronously, before the inbound
-    /// message is acknowledged at the AS4 transport layer. Must not block.
-    fn reject(&self, reason: &DeadLetterReason);
+    /// # Errors
+    ///
+    /// Returns [`EngineError::DeadLetter`] when the record could not be
+    /// written. The caller must then not settle anything on it.
+    fn reject<'a>(&'a self, reason: &'a DeadLetterReason) -> RejectFuture<'a>;
 }
 
 // ── LogDeadLetterSink ─────────────────────────────────────────────────────────
@@ -496,7 +519,15 @@ pub trait DeadLetterSink: Send + Sync + 'static {
 pub struct LogDeadLetterSink;
 
 impl DeadLetterSink for LogDeadLetterSink {
-    fn reject(&self, reason: &DeadLetterReason) {
+    fn reject<'a>(&'a self, reason: &'a DeadLetterReason) -> RejectFuture<'a> {
+        Self::log(reason);
+        Box::pin(std::future::ready(Ok(())))
+    }
+}
+
+impl LogDeadLetterSink {
+    /// The log line is the record this sink keeps.
+    fn log(reason: &DeadLetterReason) {
         // Increment Prometheus counter for every rejection, regardless of
         // which sink is wired — mirrors SlateDbDeadLetterSink behaviour so
         // alerting works in non-SlateDB and smoke environments too.
@@ -563,7 +594,9 @@ pub struct NoopDeadLetterSink;
 
 #[cfg(any(test, feature = "testing"))]
 impl DeadLetterSink for NoopDeadLetterSink {
-    fn reject(&self, _reason: &DeadLetterReason) {}
+    fn reject<'a>(&'a self, _reason: &'a DeadLetterReason) -> RejectFuture<'a> {
+        Box::pin(std::future::ready(Ok(())))
+    }
 }
 
 // ── ArcDeadLetterSink ─────────────────────────────────────────────────────────
@@ -573,8 +606,8 @@ impl DeadLetterSink for NoopDeadLetterSink {
 /// This allows passing `Arc<LogDeadLetterSink>` or `Arc<dyn DeadLetterSink>`
 /// wherever a `DeadLetterSink` is expected without an extra wrapper.
 impl<T: DeadLetterSink> DeadLetterSink for Arc<T> {
-    fn reject(&self, reason: &DeadLetterReason) {
-        self.as_ref().reject(reason);
+    fn reject<'a>(&'a self, reason: &'a DeadLetterReason) -> RejectFuture<'a> {
+        self.as_ref().reject(reason)
     }
 }
 
@@ -627,48 +660,62 @@ mod tests {
         );
     }
 
-    #[test]
-    fn log_sink_does_not_panic() {
+    #[tokio::test]
+    async fn log_sink_does_not_panic() {
         let sink = LogDeadLetterSink;
         sink.reject(&DeadLetterReason::UnknownPid {
             pid: crate::ids::Pid::new(99999),
             context: AuditContext::now(),
-        });
+        })
+        .await
+        .unwrap();
         sink.reject(&DeadLetterReason::UnknownConversation {
             conversation_id: "conv-123".into(),
             context: AuditContext::now(),
-        });
+        })
+        .await
+        .unwrap();
         sink.reject(&DeadLetterReason::VersionMismatch {
             expected: "FV2025-10-01".into(),
             received: "FV2026-10-01".into(),
             context: AuditContext::now(),
-        });
+        })
+        .await
+        .unwrap();
         sink.reject(&DeadLetterReason::DuplicateMessage {
             inbox_key: "msg-42".into(),
             context: AuditContext::now(),
-        });
+        })
+        .await
+        .unwrap();
         sink.reject(&DeadLetterReason::ProcessingError {
             message: "workflow rejected command".into(),
             context: AuditContext::now(),
-        });
+        })
+        .await
+        .unwrap();
     }
 
-    #[test]
-    fn noop_sink_does_not_panic() {
+    #[tokio::test]
+    async fn noop_sink_does_not_panic() {
         let sink = NoopDeadLetterSink;
         sink.reject(&DeadLetterReason::UnknownPid {
             pid: crate::ids::Pid::new(55001),
             context: AuditContext::now(),
-        });
+        })
+        .await
+        .unwrap();
     }
 
-    #[test]
-    fn arc_blanket_impl_works() {
+    #[tokio::test]
+    async fn arc_blanket_impl_works() {
         let sink: Arc<LogDeadLetterSink> = Arc::new(LogDeadLetterSink);
         sink.reject(&DeadLetterReason::UnknownPid {
             pid: crate::ids::Pid::new(1),
             context: AuditContext::now(),
-        });
+        })
+        .await
+        .unwrap();
     }
 
     #[test]

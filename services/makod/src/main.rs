@@ -431,10 +431,11 @@ struct Cli {
     /// or DynamoDB conditional write) protects against concurrent multi-instance
     /// inbox duplication.
     ///
-    /// By default makod emits `tracing::error!` at startup when the inbox store
-    /// is wired, because running multiple instances without a distributed lock
-    /// will silently deduplicate AS4 messages across instances. Pass this flag
-    /// only when your infrastructure provides that guarantee.
+    /// By default makod logs a `WARN` at startup when the inbox store is wired,
+    /// because two instances on one store do not share the inbox's
+    /// serializable isolation, so the same AS4 message can be processed twice.
+    /// With this flag the warning becomes an `INFO` acknowledging the external
+    /// lock. Pass it only when your infrastructure provides that guarantee.
     ///
     /// Can also be set via the `MAKOD_ALLOW_MULTI_INSTANCE` environment variable.
     #[arg(long, env = "MAKOD_ALLOW_MULTI_INSTANCE", default_value_t = false)]
@@ -653,15 +654,24 @@ struct Cli {
     #[arg(long, env = "MAKOD_WEBDIENSTE_CLIENT_KEY_PEM")]
     webdienste_client_key_pem: Option<SecretString>,
 
-    /// PKCS#8 private key of the EMT.API certificate, for TR-03116-3
-    /// content-layer signing of MaLo-ID callbacks.
+    /// PKCS#8 private key of the EMT.API certificate, for content-layer
+    /// signing of MaLo-ID callbacks (Regelungen zum Übertragungsweg für
+    /// API-Webdienste 1.2, Kap. 3.3).
     ///
     /// A layer above TLS: it signs the URI, the canonical body, the
-    /// `creationDateTime` and the `transactionId`, so it is not a substitute
-    /// for `--webdienste-client-key-pem` and that one is not a substitute for
-    /// it.
+    /// `creationDateTime`, the `transactionId` and any `initialTransactionId`,
+    /// so it is not a substitute for `--webdienste-client-key-pem` and that one
+    /// is not a substitute for it.
     #[arg(long, env = "MAKOD_WEBDIENSTE_SIGNING_KEY_PEM")]
     webdienste_signing_key_pem: Option<SecretString>,
+
+    /// The EMT.API certificate of `--webdienste-signing-key-pem`, PEM.
+    ///
+    /// Sent as `X-BDEW-CERT` beside every signed request (Kap. 3.3): the
+    /// receiver verifies the signature against this certificate's key. Required
+    /// with the key; the boot refuses a pair that does not belong together.
+    #[arg(long, env = "MAKOD_WEBDIENSTE_SIGNING_CERT_PEM")]
+    webdienste_signing_cert_pem: Option<String>,
 
     /// Additional root CA certificate (PEM) to trust when calling out.
     ///
@@ -957,10 +967,10 @@ struct Cli {
 
     /// How often (in seconds) the deadline scheduler polls for due deadlines.
     ///
-    /// The deadline scheduler fires compensation commands (e.g. GPKE 24h
-    /// APERAK timeout, MABIS 1-Werktag Prüfmitteilung deadline) at this
-    /// interval. For Redispatch workflows with 5-minute regulatory windows,
-    /// reduce this to 30 seconds or less.
+    /// A fired deadline reaches its workflow's `on_deadline` at most this long
+    /// after it fell due. The tightest window makod registers is the Strom
+    /// APERAK for UTILMD / ORDERS, 45 Minuten after receipt (APERAK AHB 1.1
+    /// §2.4.1), so the interval stays well below it.
     ///
     /// Defaults to 30 seconds. Minimum 1 second.
     ///
@@ -1216,22 +1226,15 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         return run_migrations(&store).await;
     }
 
-    // ── Dead-letter sink + worker ────────────────────────────────────
+    // ── Dead-letter sink ─────────────────────────────────────────────
     //
-    // The sink enqueues rejected messages into a bounded mpsc channel; the
-    // worker drains the channel to SlateDB in the background.
-    //
-    // Three clones are made:
-    //  • `dl_sink_shutdown` — signals graceful shutdown from the teardown path
-    //  • `dl_sink_ingest`   — shared between the REST and AS4 EdifactApiState
-    //                         instances so ingest-path rejections also land in
-    //                         the durable dead-letter queue (§ 147 AO / GoBD)
-    //  • the original `dl_sink` — consumed by EngineBuilder below
-    let (dl_sink, dl_worker) = store.as_dead_letter_sink();
-    let dl_sink_shutdown = dl_sink.clone();
+    // Every `reject` writes to SlateDB before it returns, so there is nothing
+    // to drain on shutdown. Clones go to the REST and AS4 ingest state (so
+    // ingest-path rejections land in the durable dead-letter queue, § 147 AO /
+    // GoBD), to the outbox workers, and to the EngineBuilder below.
+    let dl_sink = store.as_dead_letter_sink();
     let dl_sink_ingest = dl_sink.clone();
     let dl_sink_workers = dl_sink.clone();
-    let dl_worker_handle = tokio::spawn(dl_worker.run());
 
     let ctx = startup::build_engine(&store, dl_sink, effective_deployment_roles);
 
@@ -1482,21 +1485,32 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         }
     };
 
-    // TR-03116-3 content signing for the MaLo-ID callbacks. Parsed here so a
-    // malformed key fails the boot rather than every callback: a send that
-    // cannot sign must not fall back to sending unsigned.
-    let webdienste_signing_key = cli
-        .webdienste_signing_key_pem
-        .as_ref()
-        .map(|k| {
-            energy_api::transport::content_security::signing_key_from_pem(
-                secrecy::ExposeSecret::expose_secret(k),
+    // Content signing for the MaLo-ID callbacks (Regelungen zum Übertragungsweg
+    // für API-Webdienste 1.2, Kap. 3.3). Parsed here so a malformed key, a
+    // missing certificate or a pair that does not belong together fails the
+    // boot rather than every callback: a send that cannot sign must not fall
+    // back to sending unsigned.
+    let webdienste_signing = match (
+        cli.webdienste_signing_key_pem.as_ref(),
+        cli.webdienste_signing_cert_pem.as_deref(),
+    ) {
+        (None, None) => None,
+        (Some(key), Some(cert)) => Some(
+            crate::transport::webdienste::ContentSigning::from_pem(
+                secrecy::ExposeSecret::expose_secret(key),
+                cert,
             )
-            .map_err(|e| {
-                anyhow::anyhow!("webdienste.signing_key_pem is not a usable EMT.API key: {e}")
-            })
-        })
-        .transpose()?;
+            .map_err(|e| anyhow::anyhow!("webdienste content signing: {e}"))?,
+        ),
+        (Some(_), None) => anyhow::bail!(
+            "webdienste.signing_key_pem is set without webdienste.signing_cert_pem: the \
+             certificate travels as X-BDEW-CERT beside every signed request (Regelungen zum \
+             Übertragungsweg für API-Webdienste 1.2, Kap. 3.3)"
+        ),
+        (None, Some(_)) => {
+            anyhow::bail!("webdienste.signing_cert_pem is set without webdienste.signing_key_pem")
+        }
+    };
 
     // The WIRK TLS identity for the AS4 send path, parsed here so a mismatched
     // certificate/key pair fails at the point it is configured rather than on
@@ -1662,7 +1676,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         ingest_dispatcher: Arc::clone(&ingest_dispatcher),
         http_client,
         webdienste_client,
-        webdienste_signing_key,
+        webdienste_signing,
         as4_client_identity,
         malo_cache: Arc::clone(&malo_cache),
         shutdown_token: shutdown_token.clone(),
@@ -1730,26 +1744,6 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
 
     let workers_stopped = workers.join_all(remaining()).await;
 
-    // Close the DL channel first so `reject()` becomes a no-op and the worker
-    // can drain its buffer without new entries racing in.
-    dl_sink_shutdown.signal_shutdown();
-    let dl_drained = match tokio::time::timeout(remaining().min(DL_DRAIN_TIMEOUT), dl_worker_handle)
-        .await
-    {
-        Ok(Ok(n)) => {
-            info!(entries = n, "dead-letter worker drained and exited");
-            true
-        }
-        Ok(Err(e)) => {
-            tracing::error!(error = %e, "dead-letter worker panicked");
-            false
-        }
-        Err(_) => {
-            tracing::error!("dead-letter worker drain timed out; buffered rejections were lost");
-            false
-        }
-    };
-
     // The store close always gets a floor, even if the workers ate the budget:
     // abandoning an unflushed SlateDB WAL is worse than overrunning the grace
     // period by a few seconds, and the container's own SIGKILL bounds it.
@@ -1775,7 +1769,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // exit 0 reads as "asked to stop, stopped" — which would leave a fenced
     // replica silently out of service under a `restartPolicy` that only acts on
     // failure.
-    if workers_stopped && dl_drained && store_closed && cause == ShutdownCause::Signal {
+    if workers_stopped && store_closed && cause == ShutdownCause::Signal {
         info!("shutdown complete");
         Ok(())
     } else if let ShutdownCause::Store(reason) = cause {
@@ -1785,17 +1779,10 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         // gets that the drain was incomplete. Reporting success here would make
         // a lost write indistinguishable from a clean stop.
         anyhow::bail!(
-            "unclean shutdown: workers_stopped={workers_stopped}, \
-             dead_letters_drained={dl_drained}, store_closed={store_closed}"
+            "unclean shutdown: workers_stopped={workers_stopped}, store_closed={store_closed}"
         )
     }
 }
-
-/// Time allowed for the dead-letter buffer to reach the store on shutdown.
-///
-/// The buffer is small and in-memory; this is a cap on a flush, not a drain
-/// budget, and it is bounded separately so a slow worker join cannot starve it.
-const DL_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Floor for the SlateDB close, applied even when the rest of the drain has
 /// already spent `--shutdown-timeout-secs`.
@@ -2058,6 +2045,13 @@ fn apply_config_file(
                 wd.signing_key_pem_file.as_ref(),
             )?
             .map(SecretString::from);
+        }
+        if cli.webdienste_signing_cert_pem.is_none() {
+            cli.webdienste_signing_cert_pem = either_inline_or_file(
+                "webdienste.signing_cert_pem",
+                wd.signing_cert_pem,
+                wd.signing_cert_pem_file.as_ref(),
+            )?;
         }
         if cli.webdienste_root_ca_pem.is_empty()
             && let Some(paths) = wd.client_root_ca_pem_files

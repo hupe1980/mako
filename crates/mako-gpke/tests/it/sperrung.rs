@@ -11,7 +11,7 @@
 //!
 //! „Unverzüglich, jedoch spätester ÜT ist der 1. WT nach dem ÜT" for 17115 /
 //! 17117 / 39000, and der **3. WT** for the Anfrage Sperrung 17116 the NB puts
-//! to the MSB (BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2 / 3.5.3.2). Werktage
+//! to the MSB (BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 / 3.5.2.2 / 3.5.3.2). Werktage
 //! — Saturday is not one — and not one flat number across the four. It is also
 //! not the APERAK clock, which is a separate 45 minutes.
 //!

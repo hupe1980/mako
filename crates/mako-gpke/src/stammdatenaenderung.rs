@@ -15,7 +15,7 @@
 //! Unlike a Lieferbeginn Anmeldung, a GPKE Teil 4 Stammdatenänderung is
 //! **always applied** — the new values are valid from the Änderungsdatum
 //! regardless of the Rückmeldung, and a missing Rückmeldung counts as tacit
-//! acceptance (GPKE Teil 4 §1.4.2). The Rückmeldung only reports:
+//! acceptance (GPKE Teil 4 Kap. 1.4.2). The Rückmeldung only reports:
 //!
 //! - **A01** — „Empfänger übernimmt die Stammdaten ohne Anmerkung".
 //! - **A02** — „Empfänger übernimmt die Stammdaten, teilt aber mit, dass sie aus
@@ -52,7 +52,7 @@
 //! apply.
 //!
 //! Frist: Rückmeldung „unverzüglich, spätester ÜT = **2. Werktag** nach dem
-//! Eingang" (GPKE Teil 4 § 1.4.2). Not the Teil-2 Lieferbeginn window either —
+//! Eingang" (GPKE Teil 4 Kap. 1.4.2). Not the Teil-2 Lieferbeginn window either —
 //! that one is a clock time on the 1. Werktag, and neither is a 24-hour
 //! duration, which no GPKE Festlegung contains.
 //!
@@ -60,7 +60,8 @@
 //!
 //! - **GPKE Teil 4 (BK6-22-024 Anlage 1d)** §1.4 Stammdatenänderung
 //! - **UTILMD AHB Strom 2.1** ch. 3 (object → PID → LOC map)
-//! - **EBD 4.2** E_0408/E_0409/E_0410/E_0412/E_0415/… (Rückmeldung A01/A02)
+//! - **EBD 4.3** (Entscheidungsbaum-Diagramme und Codelisten, binding from
+//!   01.10.2026) E_0408/E_0409/E_0410/E_0412/E_0415/… (Rückmeldung A01/A02)
 //! - **APERAK AHB 1.1 §2.4.1** — Strom UTILMD 45-min APERAK Frist
 
 use mako_engine::types::Pruefidentifikator;
@@ -81,7 +82,7 @@ use mako_fristen::{
 /// Workflow name used for PID routing and `WorkflowId` construction.
 pub const WORKFLOW_NAME: &str = "gpke-stammdatenaenderung";
 
-/// Deadline label for the 2-Werktage Rückmeldung window (GPKE Teil 4 §1.4.2).
+/// Deadline label for the 2-Werktage Rückmeldung window (GPKE Teil 4 Kap. 1.4.2).
 pub const RUECKMELDUNG_WINDOW_LABEL: &str = "gpke-stammdaten-rueckmeldung-window";
 
 /// Master-data object a Stammdatenänderung targets (SG5 `LOC` qualifier).
@@ -306,7 +307,7 @@ pub enum StammdatenEvent {
         qualitaet: Qualitaet,
     },
     /// The Rückmeldung window elapsed with no answer — tacit acceptance
-    /// (GPKE Teil 4 §1.4.2).
+    /// (GPKE Teil 4 Kap. 1.4.2).
     StillschweigendAngenommen {
         /// The expired deadline.
         deadline_id: DeadlineId,

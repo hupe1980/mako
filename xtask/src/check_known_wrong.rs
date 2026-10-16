@@ -90,7 +90,8 @@ const RULES: &[Rule] = &[
         pattern: r"GPKE Teil 1,? Kap(\.|itel)? ?1\.7",
         reason: "GPKE Teil 1 defines the Werktag in Kap. 2 and applies it in Kap. 7 \
                  „Fristenberechnung\"; Kap. 1.7 is the WiM Teil 1 (Anlage 2a) chapter that \
-                 defers to it",
+                 defers to it. Narrower than the row: only the spelling „GPKE Teil 1 \
+                 Kap. 1.7\" is caught, not the chapter named before the document",
     },
     Rule {
         id: "asx-sign-only",
@@ -111,7 +112,9 @@ const RULES: &[Rule] = &[
         pattern: r"§ 20 Abs\.[^;|/]{0,30}EEG 2023",
         reason: "§ 20 EEG 2023 (Marktprämie) has Sätze, no Absätze; Anlage 1 Nr. 2 decides \
                  when the Jahresmarktwert applies and Nr. 4 computes it (Nr. 4.3.1 the \
-                 energieträgerspezifischen categories)",
+                 energieträgerspezifischen categories). Narrower than the row: an Absatz \
+                 is caught only where „EEG 2023\" follows, since earlier EEG editions are \
+                 not this row's claim",
     },
     Rule {
         id: "enwg-6b-integrated",
@@ -125,7 +128,9 @@ const RULES: &[Rule] = &[
         row: "Blindmehrarbeit rests on StromNEV §18",
         pattern: r"(?i)§ 18 StromNEV.{0,60}blind|blind\w*.{0,60}§ 18 StromNEV",
         reason: "§ 18 StromNEV is the Entgelt für dezentrale Erzeugung; reactive energy is \
-                 charged from the Preisblatt formed under § 17 StromNEV",
+                 charged from the Preisblatt formed under § 17 StromNEV. Narrower than the \
+                 row: the free-share constant (tan φ) it names is a design claim, not \
+                 matched",
     },
     Rule {
         id: "gasnev-14",
@@ -164,7 +169,8 @@ const RULES: &[Rule] = &[
         id: "enwg-40a-abschlag",
         row: "§40a EnWG = Abschlagszahlungen",
         pattern: r"(?i)§ 40a( Abs\. \d)? EnWG[^·;,|]{0,30}abschlag|abschlag\w*\s*\(§ 40a",
-        reason: "§ 40a EnWG is Verbrauchsermittlung; Abschläge are § 13 StromGVV/GasGVV",
+        reason: "§ 40a EnWG is Verbrauchsermittlung; Abschläge are § 13 StromGVV/GasGVV. \
+                 Narrower than the row: its § 40c deadline half is not matched",
     },
     Rule {
         id: "enwg-41b-dynamic",
@@ -191,14 +197,18 @@ const RULES: &[Rule] = &[
         id: "eeg-54-generic",
         row: "§54 EEG = generic BNetzA Ausschreibungsreduzierung",
         pattern: r"(?i)§ 54 EEG.{0,80}(§ 36d|§ 37a)",
-        reason: "§ 54 EEG 2023 is Ausschreibungen für Solaranlagen des ersten Segments only",
+        reason: "§ 54 EEG 2023 is Ausschreibungen für Solaranlagen des ersten Segments only. \
+                 Narrower than the row: caught only beside the two neighbours the row names \
+                 (§ 36d, § 37a); a generic-reduction reading in other words passes",
     },
     Rule {
         id: "eeg-35a-erloeschen",
         row: "Zuschlag-Erlöschen = §35a EEG",
-        pattern: r"(?i)§ 35a( EEG)?.{0,30}(erlösch|expir|lapse)|(erlösch|expir|lapse)\w*.{0,30}§ 35a",
+        pattern: r"(?i)§ (35a|33|55)\b( EEG)?.{0,30}(erlösch|erlisch|expir|lapse)|(erlösch|erlisch|expir|lapse)\w*.{0,30}§ (35a|33|55)\b",
         reason: "expiry for want of commissioning is §§ 36e / 37e / 39e EEG 2023; § 35a is \
-                 Entwertung von Zuschlägen",
+                 Entwertung von Zuschlägen, § 33 Ausschluss von Geboten, § 55 Pönalen. \
+                 Narrower than the row: a § 33 or § 55 is caught only within 30 characters \
+                 of an expiry word, so the bare citation of either for something else passes",
     },
     Rule {
         id: "modul-2-3",
@@ -212,7 +222,9 @@ const RULES: &[Rule] = &[
         id: "invoic-31009-direction",
         row: "INVOIC 31009 (MSB-Rechnung) is NB → MSB",
         pattern: r"31009.{0,60}NB ?(→|->) ?MSB",
-        reason: "31009 is MSB → NB / LF / ESA; the MSB is the invoicer",
+        reason: "31009 is MSB → NB / LF / ESA; the MSB is the invoicer. Narrower than the \
+                 row: only the arrow spelling „NB → MSB\" after the PID is caught; a \
+                 modelled `nb_mp_id` recipient is a design defect no phrase shows",
     },
     Rule {
         id: "pid-13025",
@@ -223,9 +235,13 @@ const RULES: &[Rule] = &[
     Rule {
         id: "ust-12-3-pv",
         row: "§12 Abs. 3 UStG 0 % applies to PV electricity",
-        pattern: r"(?i)§ 12 Abs\. 3 UStG.{0,40}(30 ?kWp|feed-in|einspeis)",
+        pattern: r"(?i)§ 12 Abs\. 3 UStG.{0,40}(30 ?kWp|feed-in|einspeis)|kWp[^.;|]{0,60}§ 19\b|§ 19 (UStG )?(limit|grenze)\b",
         reason: "§ 12 Abs. 3 UStG zero-rates the supply of the PV installation, never \
-                 electricity or a feed-in Gutschrift",
+                 electricity or a feed-in Gutschrift; the Kleinunternehmerregelung (§ 19 \
+                 UStG) is an election bounded by turnover, never by plant size. Narrower \
+                 than the row: the § 19 half is caught beside a kWp figure or as a bare \
+                 „§ 19 limit/Grenze\"; a „§ 19 turnover/Kleinunternehmer limit\" names the \
+                 real Umsatzgrenze and passes",
     },
     Rule {
         id: "fv2027-04-release",
@@ -784,6 +800,18 @@ mod tests {
             ),
             ("eeg-54-generic", "/// §54 EEG reduction for §36d deadlines"),
             ("eeg-35a-erloeschen", "/// Zuschlag expires (§35a EEG)"),
+            (
+                "eeg-35a-erloeschen",
+                "/// BNetzA tender award expired (§33 EEG 2023): plant not built",
+            ),
+            (
+                "eeg-35a-erloeschen",
+                "/// - A second tender is required when the first award expires (§33 EEG 2023).",
+            ),
+            (
+                "eeg-35a-erloeschen",
+                "/// Zuschlag erlischt (§ 55 EEG 2023)",
+            ),
             ("modul-2-3", "/// Modul 2 (HT/NT), Modul 3 (spot)"),
             (
                 "invoic-31009-direction",
@@ -791,6 +819,18 @@ mod tests {
             ),
             ("pid-13025", "// 13025 is not a real PID"),
             ("ust-12-3-pv", "/// §12 Abs. 3 UStG (Solar ≤ 30 kWp)"),
+            (
+                "ust-12-3-pv",
+                "/// // 50 kWp solar → exceeds the §19 limit, Regelbesteuerung",
+            ),
+            (
+                "ust-12-3-pv",
+                "/// // 9.5 kWp solar, commissioned 2024 → Kleinunternehmer (§19)",
+            ),
+            (
+                "ust-12-3-pv",
+                "// 50 kWp: exceeds the §19 turnover reality → Regelbesteuerung",
+            ),
             ("aperak-ahb-1-0", "/// APERAK AHB 1.0 §2.4.1: 45 Minuten"),
             (
                 "fv2027-04-release",
@@ -840,6 +880,11 @@ mod tests {
             "//! §18 StromNEV pays the operator of a decentral generating plant",
             "| 13025 | Lastgang Marktlokation, Tranche | MSB → LF |",
             "Modul 1 pauschal, Modul 2 prozentual, Modul 3 zeitvariabel",
+            "//! All other operators (large plants exceeding the §19 turnover limit, commercial",
+            "/// - Operators whose turnover exceeds the §19 Kleinunternehmer limit",
+            "{grenze} Masseprozent — kein Anspruch nach §19 Abs. 1\"",
+            "/// Ausschluss von Geboten (§ 33 EEG 2023) before any award exists",
+            "/// Zuschlag erlischt (§ 36e EEG 2023) when the plant is not commissioned",
         ] {
             assert!(
                 hit_ids(line).is_empty(),

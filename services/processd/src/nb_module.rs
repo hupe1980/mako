@@ -617,6 +617,8 @@ pub async fn evaluate_and_decide(
         mako_pruefung::Abmeldeanfrage::Erforderlich { lfa_mp_ids }
     };
     let anfrage = anfrage;
+    // The audit log's `decided_at` is the wall clock; the decision itself is
+    // judged on the receipt instant (see `decide_anmeldung`).
     let now = OffsetDateTime::now_utc();
 
     // ── 4. Evaluate ───────────────────────────────────────────────────────
@@ -643,28 +645,14 @@ pub async fn evaluate_and_decide(
     };
     let grid_ref = grid_nc.as_ref();
 
-    // `E_0622` / `E_3005` is the **Vorprüfung**: every code it publishes is an
-    // Ablehnung, and surviving it means only that the Anmeldung is not
-    // *directly* refusable. What the NB answers comes from `E_0623` / `E_3007`,
-    // which reads the LFA's answer to the Anfrage zur Beendigung der Zuordnung.
-    // Answering out of `E_0622` alone can only ever say `A51`.
-    let vorpruefung = mako_pruefung::evaluate(
+    let result = decide_anmeldung(
         &anfrage,
         vs_ref,
         grid_ref,
         partner_known,
-        now,
+        received_at,
         &config.netz_check_config(),
     );
-    let result = if vorpruefung.is_accept() {
-        // Geschäftsvorfall 3 answers out of Prüfschritte 500–600, which read a
-        // Tranchen-Zuordnung `marktd` does not project — the tree escalates on
-        // its own rather than guessing between two Ablehnungen and two
-        // Zustimmungen.
-        mako_pruefung::evaluate_lieferbeginn(&anfrage, None)
-    } else {
-        vorpruefung
-    };
 
     info!(
         %process_id, pid, %malo_id,
@@ -1864,10 +1852,13 @@ async fn decide_abmeldung(
 
     let anfrage = payload.into_anfrage();
     let now = OffsetDateTime::now_utc();
+    // Judged on the receipt instant, as the Anmeldung is (`decide_anmeldung`):
+    // the Frist runs from the ÜT, the „Tag des Empfangs der Übertragungsdatei"
+    // (GPKE Teil 1 Kap. 7, S. 27).
     let result = mako_pruefung::evaluate_abmeldung(
         &anfrage,
         versorgung.as_ref(),
-        now,
+        received_at,
         &config.netz_check_config(),
     );
 
@@ -1966,6 +1957,48 @@ async fn decide_abmeldung(
     }
 
     Ok(true)
+}
+
+/// Decide an Anmeldung as of its receipt.
+///
+/// The Vorlauffrist is counted from the ÜT, the „Tag des Empfangs der
+/// Übertragungsdatei" — GPKE Teil 1 (BK6-24-174 Anlage 1a) Kap. 7
+/// „Fristenberechnung" (S. 27) — not the day processd happens to evaluate it.
+/// An Anmeldung received at 23:40 and evaluated after midnight has lost a
+/// Werktag of Vorlauf if the evaluation instant is used, and is refused `A07`
+/// although it was on time. The function takes no other instant, so it cannot
+/// be judged on the wall clock.
+///
+/// `E_0622` / `E_3005` is the **Vorprüfung**: every code it publishes is an
+/// Ablehnung, and surviving it means only that the Anmeldung is not
+/// *directly* refusable. What the NB answers comes from `E_0623` / `E_3007`,
+/// which reads the LFA's answer to the Anfrage zur Beendigung der Zuordnung.
+/// Answering out of `E_0622` alone can only ever say `A51`.
+fn decide_anmeldung(
+    anfrage: &AnmeldungAnfrage,
+    versorgung: Option<&mako_markt::repository::VersorgungsStatusRecord>,
+    grid: Option<&mako_pruefung::MaloGridRecord>,
+    partner_known: bool,
+    received_at: OffsetDateTime,
+    config: &mako_pruefung::NetzCheckConfig,
+) -> NbEntscheidung {
+    let vorpruefung = mako_pruefung::evaluate(
+        anfrage,
+        versorgung,
+        grid,
+        partner_known,
+        received_at,
+        config,
+    );
+    if vorpruefung.is_accept() {
+        // Geschäftsvorfall 3 answers out of Prüfschritte 500–600, which read a
+        // Tranchen-Zuordnung `marktd` does not project — the tree escalates on
+        // its own rather than guessing between two Ablehnungen and two
+        // Zustimmungen.
+        mako_pruefung::evaluate_lieferbeginn(anfrage, None)
+    } else {
+        vorpruefung
+    }
 }
 
 /// The answer Frist runs from receipt of the market message; the CloudEvent
@@ -2266,6 +2299,58 @@ mod tests {
             erzeugung: None,
             abmeldeanfrage: Abmeldeanfrage::NichtErforderlich,
         }
+    }
+
+    // ── The Vorlauf is judged on the receipt day (GPKE Teil 1 Kap. 7) ───────
+
+    fn unbeliefert() -> mako_markt::repository::VersorgungsStatusRecord {
+        mako_markt::repository::VersorgungsStatusRecord {
+            malo_id: "51238696781".parse().expect("valid MaLo"),
+            lieferstatus: mako_markt::repository::LieferStatus::Unbeliefert,
+            zuordnungen: Vec::new(),
+            lieferende: None,
+            msb_mp_id: None,
+            nb_mp_id: "9900357000004".to_owned(),
+            eog_seit: None,
+            last_process_id: None,
+            updated_at: OffsetDateTime::now_utc(),
+            tenant: "9900357000004".to_owned(),
+            version: 1,
+        }
+    }
+
+    /// A 55001 received Wednesday 23:40 Europe/Berlin for a Zuordnungsbeginn on
+    /// Friday has Thursday as a full Werktag between ÜT and Zuordnungsbeginn,
+    /// and is on time. processd evaluating it at 00:30 on Thursday must still
+    /// judge it on Wednesday: counted from Thursday there is no Werktag left,
+    /// and the Anmeldung would be refused `A07` for a Vorlauf it kept.
+    #[test]
+    fn the_vorlauf_is_judged_on_the_receipt_day_not_the_evaluation_day() {
+        use time::macros::datetime;
+        let mut a = anmeldung(Marktlokationsart::Verbrauchend);
+        a.process_date =
+            time::Date::from_calendar_date(2026, time::Month::July, 10).expect("valid date");
+        let grid = mako_pruefung::MaloGridRecord {
+            malo_id: a.malo_id.clone(),
+            nb_mp_id: a.grid_operator_gln.clone(),
+            bilanzierungsgebiet: Some("11YB-TENNET-----W".to_owned()),
+            netzgebiet: None,
+        };
+        let vs = unbeliefert();
+        let cfg = mako_pruefung::NetzCheckConfig::default();
+        // Wed 2026-07-08 23:40 CEST.
+        let received_at = datetime!(2026-07-08 21:40 UTC);
+        let out = decide_anmeldung(&a, Some(&vs), Some(&grid), true, received_at, &cfg);
+        assert!(out.is_accept(), "on time at receipt: {out:?}");
+
+        // The same Anmeldung judged at the evaluation instant, Thu 00:30 CEST,
+        // is the refusal the receipt anchor prevents.
+        let evaluated_at = datetime!(2026-07-08 22:30 UTC);
+        let late = decide_anmeldung(&a, Some(&vs), Some(&grid), true, evaluated_at, &cfg);
+        assert!(
+            !late.is_accept(),
+            "the scenario must turn on the anchor, or it proves nothing: {late:?}"
+        );
     }
 
     /// The branch the whole two-phase design turns on. An **unassigned**

@@ -175,6 +175,7 @@ pub fn settle_dezentrale_einspeisung(
     // lapsed rules here, so refusing on the Entgelt axis would only turn an
     // already-explicit "nothing is payable" into an error.
     crate::billing::warn_if_straddles_turnover(
+        Sparte::Strom,
         input.period.from(),
         input.period.to(),
         &mut warnings,
@@ -231,6 +232,7 @@ pub fn settle_dezentrale_einspeisung(
         malo_id: input.malo_id.clone(),
         sparte: Sparte::Strom,
         regime: crate::regulatory::RegulatoryRegime::for_period(
+            Sparte::Strom,
             input.period.from(),
             input.period.to(),
         ),

@@ -835,8 +835,9 @@ curl -X POST "http://accountingd:9380/api/v1/accounts/51238696012/anonymize" \
 
 Pseudonymized: `accounts.iban` and `sepa_mandates.iban`/`kontoinhaber` →
 `ANONYMIZED`; `mandatsref`, `zahlungsinformation`, `vorauszahlung`, `addr_*`,
-`bic`, `debtor_*` → `NULL`. The ledger is untouched (Art. 17(3)(b); § 238 HGB,
-§ 147 AO, 10 years), as are the address snapshots on `eeg_payout_orders`, which
+`bic`, `debtor_*` → `NULL`. The ledger is untouched (Art. 17(3)(b); § 257
+Abs. 1, 4 HGB and § 147 Abs. 1, 3 AO — ten years for the books, eight for the
+Buchungsbelege), as are the address snapshots on `eeg_payout_orders`, which
 are Buchungsbelege. Each erasure is logged in `anonymization_log`; a repeat is
 `409`.
 

@@ -80,7 +80,7 @@ graph LR
 | **§ 60 Abs. 1 MsbG** (der MSB hat die erhobenen Daten *aufzubereiten* und zu übermitteln — Plausibilisierung und Ersatzwertbildung; Abs. 2 Satz 2 lets that happen outside the Smart-Meter-Gateway) | Both | `metering` crate (`vee::validation`, `vee::substitute`), `edmd` |
 | **§ 40a Abs. 2 EnWG** (Verbrauchsschätzung) · **§ 13 Abs. 1 StromGVV** (Abschlagshöhe) | Strom | `metering::project_annual_consumption`, `edmd /api/v1/forecast` |
 | **BSI TR-03109** (iMSys / SMGW lifecycle, §14a CLS channels) | Strom | `metering` (`SmgwSession`, `ClsChannel`), `edmd` |
-| **StromNEV / GasNEV / KAV** (grid charge settlement) | Both | `grid-billing` crate, `netzbilanzd` |
+| **StromNEV / GasNEV / KAV** (grid charge settlement) | Both | `grid-billing` crate, `netzbilanzd` (a Gas NNE, Abschlag or AWH period ending after 31.12.2027 is refused: the GasNEV is außer Kraft mit Ablauf des 31.12.2027, Art. 15 Abs. 2 G v. 22.12.2023, BGBl. 2023 I Nr. 405) |
 | **§14a EnWG** (Steuerbare Verbrauchseinrichtungen — Modul 1/2/3) | Strom | `grid-billing` (`Sect14aModule`), `processd` (produktcode check, GPKE Teil 3 Kap. 1.3) |
 | **§41 EnWG** (Vertragsinhalte, Abs. 5 Preisänderungs-Unterrichtung + Sonderkündigungsrecht) / **§5 Abs. 2 StromGVV/GasGVV** (6-Wochen-Frist) | Both | `vertragd` |
 | **§41a EnWG** (Dynamic tariffs — EPEX Spot day-ahead) | Strom | `productd` (EPEX prices), `billingd` (§41a iMSys guard) |

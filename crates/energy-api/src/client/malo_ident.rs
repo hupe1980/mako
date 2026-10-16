@@ -19,8 +19,11 @@
 //!
 //! ## Content-layer security (TR-03116-3)
 //!
-//! Enable automatic `DIGEST` + `SIGNATURE` signing via [`MaloIdentClient::with_signing`].
-//! The digest covers the RFC 8785 canonical JSON body for all three endpoints.
+//! Enable content-layer signing via [`MaloIdentClient::with_signing`]: every
+//! request then carries `X-BDEW-DIGEST`, `X-BDEW-SIGNATURE` and `X-BDEW-CERT`
+//! (Regelungen zum Übertragungsweg für API-Webdienste 1.2, Kap. 3.3). The
+//! digest covers the URI, the RFC 8785 canonical JSON body, `creationDateTime`,
+//! `transactionId` and — when the request carries one — `initialTransactionId`.
 
 use reqwest::{Client, StatusCode};
 use url::Url;
@@ -32,6 +35,8 @@ use crate::models::electricity::{
 };
 
 use p256::ecdsa::SigningKey;
+
+use crate::transport::content_security::SignedInputs;
 
 /// HTTP client for the [MaLo Identification API v1][spec].
 ///
@@ -48,7 +53,16 @@ use p256::ecdsa::SigningKey;
 pub struct MaloIdentClient {
     inner: Client,
     base_url: Url,
-    signing_key: Option<SigningKey>,
+    signing: Option<Signing>,
+}
+
+/// The key a request is signed with and the certificate that names it.
+#[derive(Clone, Debug)]
+struct Signing {
+    key: SigningKey,
+    /// The [`HEADER_CERT`](crate::transport::content_security::HEADER_CERT)
+    /// value, encoded once.
+    cert_header: String,
 }
 
 impl MaloIdentClient {
@@ -57,17 +71,23 @@ impl MaloIdentClient {
         Self {
             inner: client,
             base_url,
-            signing_key: None,
+            signing: None,
         }
     }
 
-    /// Enable TR-03116-3 content-layer signing on every outgoing request.
+    /// Enable content-layer signing on every outgoing request.
     ///
-    /// The `key` must belong to an EMT.API certificate from the BSI SM-PKI.
-    /// Every request will carry `DIGEST` and `SIGNATURE` HTTP headers computed
-    /// over the RFC 8785 canonical JSON body.
-    pub fn with_signing(mut self, key: SigningKey) -> Self {
-        self.signing_key = Some(key);
+    /// `key` must belong to the EMT.API certificate `cert_der` from the BSI
+    /// SM-PKI. Every request then carries `X-BDEW-DIGEST`, `X-BDEW-SIGNATURE`
+    /// and `X-BDEW-CERT` (Regelungen zum Übertragungsweg für API-Webdienste 1.2,
+    /// Kap. 3.3) — the receiver verifies the signature against the key of the
+    /// certificate the request names, so the three travel together.
+    #[must_use]
+    pub fn with_signing(mut self, key: SigningKey, cert_der: &[u8]) -> Self {
+        self.signing = Some(Signing {
+            key,
+            cert_header: crate::transport::content_security::cert_header_value(cert_der),
+        });
         self
     }
 
@@ -96,16 +116,20 @@ impl MaloIdentClient {
             .header("creationDateTime", creation_date_time)
             .header("Content-Type", "application/json")
             .body(canonical.clone());
+        let initial = initial_transaction_id.map(|id| id.to_string());
+        if let Some(id) = &initial {
+            req = req.header("initialTransactionId", id);
+        }
         req = self.sign_if_enabled(
             req,
-            url.as_str(),
-            &canonical,
-            creation_date_time,
-            &transaction_id.to_string(),
+            &SignedInputs {
+                uri: url.as_str(),
+                payload: &canonical,
+                creation_date_time,
+                transaction_id: &transaction_id.to_string(),
+                initial_transaction_id: initial.as_deref(),
+            },
         )?;
-        if let Some(id) = initial_transaction_id {
-            req = req.header("initialTransactionId", id.to_string());
-        }
         check_accepted(req.send().await?).await
     }
 
@@ -134,16 +158,20 @@ impl MaloIdentClient {
             .header("creationDateTime", creation_date_time)
             .header("Content-Type", "application/json")
             .body(canonical.clone());
+        let initial = initial_transaction_id.map(|id| id.to_string());
+        if let Some(id) = &initial {
+            req = req.header("initialTransactionId", id);
+        }
         req = self.sign_if_enabled(
             req,
-            url.as_str(),
-            &canonical,
-            creation_date_time,
-            &transaction_id.to_string(),
+            &SignedInputs {
+                uri: url.as_str(),
+                payload: &canonical,
+                creation_date_time,
+                transaction_id: &transaction_id.to_string(),
+                initial_transaction_id: initial.as_deref(),
+            },
         )?;
-        if let Some(id) = initial_transaction_id {
-            req = req.header("initialTransactionId", id.to_string());
-        }
         check_accepted(req.send().await?).await
     }
 
@@ -170,16 +198,20 @@ impl MaloIdentClient {
             .header("creationDateTime", creation_date_time)
             .header("Content-Type", "application/json")
             .body(canonical.clone());
+        let initial = initial_transaction_id.map(|id| id.to_string());
+        if let Some(id) = &initial {
+            req = req.header("initialTransactionId", id);
+        }
         req = self.sign_if_enabled(
             req,
-            url.as_str(),
-            &canonical,
-            creation_date_time,
-            &transaction_id.to_string(),
+            &SignedInputs {
+                uri: url.as_str(),
+                payload: &canonical,
+                creation_date_time,
+                transaction_id: &transaction_id.to_string(),
+                initial_transaction_id: initial.as_deref(),
+            },
         )?;
-        if let Some(id) = initial_transaction_id {
-            req = req.header("initialTransactionId", id.to_string());
-        }
         check_accepted(req.send().await?).await
     }
 
@@ -192,7 +224,7 @@ impl MaloIdentClient {
     /// Serialize `value` to RFC 8785 canonical JSON bytes for use as the
     /// request body and as the signing payload.
     fn canonical_body<T: serde::Serialize>(&self, value: &T) -> Result<Vec<u8>, Error> {
-        if self.signing_key.is_some() {
+        if self.signing.is_some() {
             return crate::transport::content_security::canonical_json(value);
         }
         // When signing is disabled fall back to compact serde_json so the
@@ -200,23 +232,22 @@ impl MaloIdentClient {
         serde_json::to_vec(value).map_err(Error::Json)
     }
 
-    /// Attach `DIGEST` and `SIGNATURE` headers when a signing key is configured.
+    /// Attach the three content-signature headers when signing is configured.
     #[inline]
     fn sign_if_enabled(
         &self,
         req: reqwest::RequestBuilder,
-        uri: &str,
-        canonical_payload: &[u8],
-        creation_dt: &str,
-        tx_id: &str,
+        inputs: &SignedInputs<'_>,
     ) -> Result<reqwest::RequestBuilder, Error> {
-        if let Some(key) = &self.signing_key {
-            use crate::transport::content_security::{self, HEADER_DIGEST, HEADER_SIGNATURE};
-            let (digest, sig) =
-                content_security::sign_request(uri, canonical_payload, creation_dt, tx_id, key)?;
+        if let Some(signing) = &self.signing {
+            use crate::transport::content_security::{
+                self, HEADER_CERT, HEADER_DIGEST, HEADER_SIGNATURE,
+            };
+            let (digest, sig) = content_security::sign_request(inputs, &signing.key)?;
             return Ok(req
                 .header(HEADER_DIGEST, digest)
-                .header(HEADER_SIGNATURE, sig));
+                .header(HEADER_SIGNATURE, sig)
+                .header(HEADER_CERT, &signing.cert_header));
         }
         Ok(req)
     }

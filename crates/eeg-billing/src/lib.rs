@@ -149,8 +149,8 @@ pub use negativpreis::{
 };
 pub use scheme::{
     ANLAGE1_NR2_STICHTAG, AusschreibungMetadata, CorrectionReason, MarktpreisKategorie,
-    Marktwertserie, Paragraph100Rule, SettlementScheme, SettlementType, TariffSource,
-    marktwertserie,
+    Marktwertserie, Monatsmarktwertart, Paragraph100Rule, SettlementScheme, SettlementType,
+    TariffSource, marktwertserie,
 };
 pub use seed::{VerguetungssatzRow, verguetungssatz_rows};
 pub use technology::{
@@ -159,7 +159,8 @@ pub use technology::{
 };
 pub use version::{
     Beihilfegenehmigung, Beihilfevorbehalt, EEG2023_BEIHILFEGENEHMIGUNG_BIS, EegGesetz, Fassung,
-    InvalidEegGesetz, beihilfevorbehalt,
+    InvalidEegGesetz, LETZTE_TABELLIERTE_INBETRIEBNAHME, SECT100_ABS47_GENEHMIGT_AB,
+    beihilfevorbehalt, sect100_abs47_anwendbar, sect100_abs47_anwendbar_ab,
 };
 pub use zusammenfassung::{
     AnlageFuerZusammenfassung, SolarMontage, Steckersolar, ZusammenfassungErgebnis,

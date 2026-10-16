@@ -644,6 +644,11 @@ impl As4Sender for BdewAs4Sender {
                         crate::dvgw_ingest::try_ingest(loopback_state.as_ref(), &payload_bytes)
                             .await
                     {
+                        // A refusal without its dead letter keeps the outbox
+                        // entry, so the delivery is retried.
+                        if let Some(e) = report.unrecorded {
+                            return Err(EngineError::dead_letter(e));
+                        }
                         tracing::info!(
                             message_id = %message_id_str,
                             accepted   = report.accepted(),
@@ -659,6 +664,9 @@ impl As4Sender for BdewAs4Sender {
                     // silently abandoning every message after it.
                     let mut dispatched = 0usize;
                     let mut unrouted_pids: Vec<u32> = Vec::new();
+                    // A loopback delivery is received when it is delivered:
+                    // the ÜZ of every message in it.
+                    let received_at = time::OffsetDateTime::now_utc();
                     for parse_result in loopback_state
                         .platform
                         .parse_interchange(std::io::Cursor::new(&payload_bytes[..]))
@@ -684,7 +692,10 @@ impl As4Sender for BdewAs4Sender {
 
                         match (pid_opt, workflow_opt, loopback_state.dispatcher.as_deref()) {
                             (Some(pid_val), Some(wf_name), Some(dispatcher)) => {
-                                match dispatcher.dispatch(&parsed_msg, wf_name, pid_val).await {
+                                match dispatcher
+                                    .dispatch(&parsed_msg, wf_name, pid_val, received_at)
+                                    .await
+                                {
                                     Ok(outcome) => {
                                         tracing::info!(
                                             message_id   = %message_id_str,

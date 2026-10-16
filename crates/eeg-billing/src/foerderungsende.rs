@@ -29,7 +29,9 @@ pub enum FoerderendeGrund {
     /// and credit the §51a extension when reporting to the operator.
     Expired20YearsPlusSect51aExtension,
 
-    /// BNetzA tender award expired (§33 EEG 2023): plant not built within deadline.
+    /// BNetzA tender award erloschen: the plant was not commissioned in time —
+    /// § 36e (Wind an Land), § 37e (Solaranlagen des ersten Segments) or § 39e
+    /// (Biomasseanlagen) EEG 2023.
     ///
     /// The Ausschreibungsanlage loses its award. No PostEEG transition —
     /// the plant receives no payment unless it wins a new tender.

@@ -107,9 +107,9 @@ fn zeile_fuer(series: &'static [SatzZeile], year: i32) -> Option<&'static SatzZe
 // ── Stromsteuer (§ 3 StromStG) ───────────────────────────────────────────────
 
 /// The § 3 StromStG series lives in `grid-billing`, the one source `eeg-billing`
-/// reads as well; the reliefs that did move are **Entlastungen** (§ 9b
-/// StromStG), which the customer claims from the Hauptzollamt and which never
-/// change what a supplier invoices — see [`crate::steuer`].
+/// reads as well. The reliefs from it are **Entlastungen** (§ 9b StromStG),
+/// which the customer claims from the Hauptzollamt and which never change what
+/// a supplier invoices — see [`crate::steuer`].
 pub use grid_billing::stromsteuer::{
     STROMSTEUER_REGELSATZ_CT_PER_KWH, STROMSTEUER_SERIE, stromsteuer_for_year,
 };
@@ -123,7 +123,9 @@ pub const ENERGIESTEUER_GAS_CT_PER_KWH: Decimal = dec!(0.55);
 /// The § 2 Abs. 3 Satz 1 Nr. 4 EnergieStG series.
 ///
 /// Starts in 2006, the first year of the EnergieStG (in force 01.08.2006);
-/// ends with the year the statute was last read. The time-limited Fassungen
+/// ends with 2027, the last year the reading in its `quelle` reaches: § 2
+/// Abs. 3 carries no Befristung and no verkündete Änderung for 2027, and a
+/// later year is not read. The time-limited Fassungen
 /// of § 68 EnergieStG (2022 and 2026) reach § 2 Abs. 1 motor fuels only, never
 /// § 2 Abs. 3 heating gas.
 pub const ENERGIESTEUER_GAS_SERIE: &[SatzZeile] = &[SatzZeile {

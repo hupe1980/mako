@@ -62,7 +62,7 @@ fn fixture(pid: u32) -> Vec<u8> {
 async fn dispatch_on(d: &EdifactIngestDispatcher, pid: u32, workflow: &str) -> IngestOutcome {
     let msg = edi_energy::parse(&fixture(pid))
         .unwrap_or_else(|e| panic!("fixture {pid} does not parse: {e}"));
-    d.dispatch(&msg, workflow, pid)
+    d.dispatch(&msg, workflow, pid, time::OffsetDateTime::now_utc())
         .await
         .unwrap_or_else(|e| panic!("dispatch of {pid} errored: {e}"))
 }

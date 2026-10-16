@@ -3,7 +3,8 @@
 //!
 //! Regelungen zum Übertragungsweg für API-Webdienste 1.2, Kap. 3.3: every API
 //! interaction is signed over the URI, the canonical payload and the
-//! `creationDateTime` / `transactionId` headers; the signature travels in
+//! `creationDateTime` / `transactionId` headers — and `initialTransactionId`
+//! when the request carries one; the signature travels in
 //! `X-BDEW-SIGNATURE`, the digest in `X-BDEW-DIGEST` and the signer's
 //! certificate in `X-BDEW-CERT` (RFC 9440 encoding). A signature checked by
 //! nobody proves nothing, so a request carrying one that does not verify must
@@ -60,31 +61,80 @@ async fn app() -> axum::Router {
 }
 
 fn signed(key_pem: &str) -> Request<Body> {
-    use energy_api::transport::content_security;
+    signed_with(key_pem, None)
+}
+
+/// A request signed the way `energy-api` signs one, carrying the three
+/// content-signature headers under the names `energy-api` publishes.
+fn signed_with(key_pem: &str, initial_tx: Option<&str>) -> Request<Body> {
+    use energy_api::transport::content_security::{self, SignedInputs};
     let key = content_security::signing_key_from_pem(key_pem).expect("test key");
-    let (digest, signature) =
-        content_security::sign_request(&format!("https://{HOST}{PATH}"), &[], CREATED, TX, &key)
-            .expect("sign");
-    // RFC 9440 §2.1: a Byte Sequence — the DER Base64-encoded between colons.
+    let (digest, signature) = content_security::sign_request(
+        &SignedInputs {
+            uri: &format!("https://{HOST}{PATH}"),
+            payload: &[],
+            creation_date_time: CREATED,
+            transaction_id: TX,
+            initial_transaction_id: initial_tx,
+        },
+        &key,
+    )
+    .expect("sign");
     let der = base64::engine::general_purpose::STANDARD
         .decode(CALLER_CERT)
         .expect("fixture");
-    let cert = format!(
-        ":{}:",
-        base64::engine::general_purpose::STANDARD.encode(der)
-    );
-    Request::builder()
+    let mut req = Request::builder()
         .method("POST")
         .uri(PATH)
         .header("host", HOST)
         .header("x-mako-client-mp-id", CALLER)
         .header("creationDateTime", CREATED)
         .header("transactionId", TX)
-        .header("x-bdew-digest", digest)
-        .header("x-bdew-signature", signature)
-        .header("x-bdew-cert", cert)
-        .body(Body::empty())
-        .expect("request")
+        .header(content_security::HEADER_DIGEST, digest)
+        .header(content_security::HEADER_SIGNATURE, signature)
+        .header(
+            content_security::HEADER_CERT,
+            content_security::cert_header_value(&der),
+        );
+    if let Some(id) = initial_tx {
+        req = req.header("initialTransactionId", id);
+    }
+    req.body(Body::empty()).expect("request")
+}
+
+/// A retransmission names its first attempt in `initialTransactionId`, and
+/// Kap. 3.3 signs it „soweit vorhanden". Such a request, signed as the
+/// Regelungen specify, must verify and reach the handler.
+#[tokio::test]
+async fn a_signed_initial_transaction_id_reaches_the_handler() {
+    let res = app()
+        .await
+        .oneshot(signed_with(
+            CALLER_KEY,
+            Some("0b6b2d3e-6f0a-4f53-9d1e-2b8a4c1f7e90"),
+        ))
+        .await
+        .expect("service call");
+    assert_ne!(
+        res.status(),
+        StatusCode::UNAUTHORIZED,
+        "a request signed over its initialTransactionId must verify"
+    );
+}
+
+/// The `initialTransactionId` is a signed input: altering it under a valid
+/// signature is refused.
+#[tokio::test]
+async fn an_altered_initial_transaction_id_is_refused() {
+    let mut req = signed_with(CALLER_KEY, Some("0b6b2d3e-6f0a-4f53-9d1e-2b8a4c1f7e90"));
+    req.headers_mut().insert(
+        "initialTransactionId",
+        "11111111-1111-1111-1111-111111111111"
+            .parse()
+            .expect("header"),
+    );
+    let res = app().await.oneshot(req).await.expect("service call");
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -132,4 +182,14 @@ async fn a_valid_signature_reaches_the_handler() {
         "a signature that verifies must pass: {}",
         String::from_utf8_lossy(&body)
     );
+}
+
+/// The boot proves the signing key and the certificate sent as `X-BDEW-CERT`
+/// belong together: a certificate naming another key would make every signed
+/// request fail the receiver's check.
+#[test]
+fn the_signing_pair_must_belong_together() {
+    let pem = format!("-----BEGIN CERTIFICATE-----\n{CALLER_CERT}\n-----END CERTIFICATE-----\n");
+    assert!(webdienste::ContentSigning::from_pem(CALLER_KEY, &pem).is_ok());
+    assert!(webdienste::ContentSigning::from_pem(OTHER_KEY, &pem).is_err());
 }

@@ -40,8 +40,12 @@ tokio-util   = { workspace = true }
 # The EN 16931 machinery the *gates* need: the invoice specimen is a real
 # semantic model, its payload real CII, and the finished carrier is read back
 # with the same `zugferd` reader a counterparty runs. outputd renders and
-# verifies documents; it does not bill — `energy-billing` stays in billingd.
+# verifies documents; it does not bill — of `energy-billing` it reads only the
+# § 27 Abs. 38 UStG decision (`e_rechnung`), so a paper-only INVOICE is refused
+# on the same terms billingd's paper path is.
 en16931         = { workspace = true }
+energy-billing  = { workspace = true }
+mako-fristen    = { workspace = true }
 en16931-formats = { workspace = true }
 rust_decimal    = { workspace = true }
 

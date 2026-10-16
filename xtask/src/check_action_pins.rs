@@ -8,7 +8,7 @@
 //! repository only as a diff here. The same holds for a Dockerfile `FROM`: the
 //! tag is for the reader, the `@sha256:` digest is what is pulled.
 //!
-//! Three rules, each refused separately:
+//! Four rules, each refused separately:
 //!
 //! - every `uses:` names a 40-hex commit SHA and carries the tag it stands for
 //!   in a trailing comment (`# v4.4.0`) — the SHA is read, the comment is for
@@ -19,6 +19,11 @@
 //! - every workflow declares a top-level `permissions:` that grants at most
 //!   `contents: read`; a job that needs more says so on the job. A workflow
 //!   without the key inherits the repository default, which may be write-all.
+//! - every package-manager install in a workflow `run:` is pinned: `npm ci`
+//!   against the tracked lockfile, never `npm install`; `pip install` either
+//!   `--require-hashes` from a requirements file or `--no-deps` over local
+//!   artifacts (a wheel or sdist the job built), never a bare package name
+//!   resolved against the index on the day of the run.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -59,6 +64,7 @@ pub fn run(workspace_root: &Path) -> bool {
         uses += n;
         findings.extend(f);
         findings.extend(check_workflow_permissions(&rel, &src));
+        findings.extend(check_workflow_installs(&rel, &src));
     }
 
     for path in dockerfiles(workspace_root) {
@@ -82,7 +88,8 @@ pub fn run(workspace_root: &Path) -> bool {
     if findings.is_empty() {
         println!(
             "check-action-pins: {uses} `uses:` pinned by commit, {external_from} base image(s) \
-             by digest, every workflow defaults to `contents: read`"
+             by digest, every workflow defaults to `contents: read`, every pip/npm install \
+             pinned"
         );
         return true;
     }
@@ -181,6 +188,86 @@ pub fn check_workflow_uses(file: &str, src: &str) -> (usize, Vec<String>) {
         }
     }
     (seen, findings)
+}
+
+/// Every `npm install` and every `pip install` that resolves an unpinned
+/// package from the index.
+pub fn check_workflow_installs(file: &str, src: &str) -> Vec<String> {
+    let mut findings = Vec::new();
+    for (i, line) in src.lines().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with('#') {
+            continue;
+        }
+        let at = format!("{file}:{}", i + 1);
+        let words: Vec<&str> = t.split_whitespace().collect();
+        for (w, pair) in words.windows(2).enumerate() {
+            let tool = pair[0].rsplit('/').next().unwrap_or(pair[0]);
+            match (tool, pair[1]) {
+                ("npm", "install" | "i") => findings.push(format!(
+                    "{at}: `npm install` resolves against the registry on the day of the \
+                     run — use `npm ci` against the tracked lockfile"
+                )),
+                ("pip" | "pip3", "install") => {
+                    if let Some(why) = unpinned_pip(&words[w + 2..]) {
+                        findings.push(format!("{at}: `pip install` {why}"));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    findings
+}
+
+/// Why a `pip install` with these arguments is unpinned, or `None` when it is
+/// pinned: `--require-hashes` (every requirement carries its hash), or
+/// `--no-deps` over local paths only.
+fn unpinned_pip(args: &[&str]) -> Option<&'static str> {
+    if args.contains(&"--require-hashes") {
+        return None;
+    }
+    let mut targets = Vec::new();
+    let mut skip_value = false;
+    for a in args {
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        if matches!(*a, "&&" | "||" | ";" | "|") {
+            break;
+        }
+        if matches!(*a, "-r" | "--requirement" | "-c" | "--constraint") {
+            return Some("reads a requirements file without `--require-hashes`");
+        }
+        if matches!(*a, "--no-binary" | "--only-binary" | "-i" | "--index-url") {
+            skip_value = true;
+            continue;
+        }
+        if a.starts_with('-') {
+            continue;
+        }
+        targets.push(*a);
+    }
+    let local = |t: &str| {
+        t.contains('/') && (t.ends_with(".whl") || t.ends_with(".tar.gz") || t.starts_with('.'))
+    };
+    if targets.is_empty() {
+        return None;
+    }
+    if !targets.iter().all(|t| local(t)) {
+        return Some(
+            "names a package the index resolves on the day of the run — install it from \
+             a hash-pinned requirements file with `--require-hashes`",
+        );
+    }
+    if !args.contains(&"--no-deps") {
+        return Some(
+            "over a local artifact resolves its dependencies from the index — add \
+             `--no-deps` and install them from a hash-pinned file",
+        );
+    }
+    None
 }
 
 fn is_commit_sha(s: &str) -> bool {
@@ -284,6 +371,37 @@ mod tests {
     use super::*;
 
     const SHA: &str = "11d5960a326750d5838078e36cf38b85af677262";
+
+    #[test]
+    fn the_unpinned_installs_of_a_workflow_are_refused() {
+        let src = "\
+        run: |
+          pip install pytest hypothesis ruff dist/*.whl
+          /tmp/sdist-venv/bin/pip install --no-binary :all: sdist-out/*.tar.gz
+          npm install --no-audit --no-fund
+          pip install -r requirements.txt
+";
+        let f = check_workflow_installs("w.yml", src);
+        assert_eq!(f.len(), 4, "{f:?}");
+        assert!(f[0].starts_with("w.yml:2:"), "{f:?}");
+        assert!(f[1].contains("--no-deps"), "{f:?}");
+        assert!(f[2].contains("npm ci"), "{f:?}");
+        assert!(f[3].contains("--require-hashes"), "{f:?}");
+    }
+
+    #[test]
+    fn hash_pinned_and_local_no_deps_installs_pass() {
+        let src = "\
+          pip install --require-hashes -r .github/requirements/makotest-ci.txt
+          pip install --no-deps dist/*.whl
+          /tmp/v/bin/pip install --no-deps --no-build-isolation --no-binary :all: sdist-out/*.tar.gz
+          npm ci --no-audit --no-fund
+          # npm install is fine in a comment
+      # Use the action rather than `pip install maturin`
+";
+        let f = check_workflow_installs("w.yml", src);
+        assert!(f.is_empty(), "{f:?}");
+    }
 
     #[test]
     fn a_tag_pinned_action_is_refused() {

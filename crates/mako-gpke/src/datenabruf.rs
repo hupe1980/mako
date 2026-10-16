@@ -18,7 +18,7 @@
 //!
 //! # Regulatory basis
 //!
-//! - **GPKE Teil 4 § 3.2** (BK6-22-024 Anlage 1d) — „Unverzüglich, jedoch
+//! - **GPKE Teil 4 Kap. 3.2** (BK6-22-024 Anlage 1d) — „Unverzüglich, jedoch
 //!   spätester ÜZ ist 1 WT nach dem ÜZ von Nr. 1"
 //! - APERAK Frist: 45 Minuten für ORDERS (APERAK AHB 1.1 § 2.4.1)
 
@@ -56,7 +56,7 @@ pub const ORDRSP_ABLEHNUNG_PIDS: &[u32] = &[19101, 19102, 19114];
 /// Deadline label for the answer window on an inbound Geschäftsdatenanfrage.
 ///
 /// **1 Werktag** — „Unverzüglich, jedoch spätester ÜZ ist 1 WT nach dem ÜZ von
-/// Nr. 1" (GPKE Teil 4 § 3.2 Prozessschritte 2 und 4), which
+/// Nr. 1" (GPKE Teil 4 Kap. 3.2 Prozessschritte 2 und 4), which
 /// [`mako_fristen::antwort::GESCHAEFTSDATENANFRAGE_WERKTAGE`] holds. Not 24
 /// wall-clock hours, and not a GPKE Teil 2 window: the Geschäftsdatenanfrage
 /// lives in Teil 4.
@@ -250,10 +250,10 @@ impl CommandPayload for DatenabrufCommand {}
 /// The counterparty's Antwortfrist on an outbound Datenabruf ORDERS.
 ///
 /// Only the Anfrage von Werten (17102) is a Geschäftsdatenanfrage of GPKE
-/// Teil 4 § 3.2, answered „spätester ÜZ ist 1 WT nach dem ÜZ von Nr. 3"
+/// Teil 4 Kap. 3.2, answered „spätester ÜZ ist 1 WT nach dem ÜZ von Nr. 3"
 /// ([`mako_fristen::antwort::GESCHAEFTSDATENANFRAGE_WERKTAGE`]). The
 /// Anforderung (17004) and the Reklamation von Werten (17113) are WiM Teil 2
-/// Use-Cases, which § 3.1 excludes, and register no window here.
+/// Use-Cases, which Kap. 3.1 excludes, and register no window here.
 fn antwortfrist(
     orders_pid: u32,
     gesendet_am: time::OffsetDateTime,

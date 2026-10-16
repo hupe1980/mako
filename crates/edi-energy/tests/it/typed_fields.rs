@@ -347,11 +347,76 @@ fn contrl_builder_accept() {
 
     let uci = msg.uci().expect("UCI must be present");
     assert_eq!(uci.interchange_ref, "INTER-2024-001");
-    assert_eq!(uci.sender.as_deref(), Some("9900111222333"));
+    // S002 is the acknowledged interchange's sender, which is this CONTRL's
+    // recipient (CONTRL MIG 2.0b, UCI Bemerkung, S. 7).
+    assert_eq!(uci.sender.as_deref(), Some("9900444555666"));
+    assert_eq!(uci.recipient.as_deref(), Some("9900111222333"));
     assert_eq!(
         uci.action_code.as_deref(),
         Some("7"),
         "Empfangsbestätigung = code 7"
+    );
+}
+
+/// CONTRL MIG 2.0b, `UCI` Bemerkung (S. 7): „In den Datenelementgruppen S002
+/// und S003 werden die Marktpartner-IDs aus der Übertragungsdatei übernommen" —
+/// copied „in die identischen Datenelemente". A CONTRL for an interchange from
+/// A to B therefore carries A in S002 and B in S003, although the CONTRL itself
+/// travels from B to A.
+#[cfg(feature = "contrl")]
+#[test]
+fn contrl_uci_echoes_the_acknowledged_interchange_parties() {
+    use edi_energy::InterchangeHeader;
+    use edi_energy::{Release, builders::ContrlBuilder};
+
+    let a = "9900111222333"; // sent the interchange
+    let b = "9900444555666"; // received it, and answers
+    let header = InterchangeHeader {
+        sender_id: a.into(),
+        sender_qualifier: "500".into(),
+        receiver_id: b.into(),
+        receiver_qualifier: "500".into(),
+        transmission_datetime: None,
+        control_ref: "REF-A-TO-B".into(),
+        syntax_id: "UNOC".into(),
+        syntax_version: 3,
+        test_indicator: false,
+    };
+    let msg = ContrlBuilder::new(Release::new("1.0a"))
+        .for_interchange(&header)
+        .accept()
+        .build()
+        .expect("build");
+    let uci = msg.uci().expect("UCI");
+    assert_eq!(uci.interchange_ref, "REF-A-TO-B");
+    assert_eq!(
+        uci.sender.as_deref(),
+        Some(a),
+        "S002 = received UNB DE 0004"
+    );
+    assert_eq!(
+        uci.recipient.as_deref(),
+        Some(b),
+        "S003 = received UNB DE 0010"
+    );
+
+    // The received DE 0010 is echoed verbatim even when it is not the MP-ID
+    // that answers.
+    let msg = ContrlBuilder::new(Release::new("1.0a"))
+        .sender(b)
+        .receiver(a)
+        .answering(a, "9900777888999")
+        .reject("7")
+        .serialize()
+        .expect("serialize");
+    let wire = String::from_utf8(msg).expect("utf-8");
+    let uci = wire
+        .split('\'')
+        .find(|s| s.starts_with("UCI+"))
+        .expect("UCI");
+    assert!(
+        uci.starts_with("UCI+") && uci.contains("+9900111222333:500+9900777888999:500+4+7"),
+        "S002 / S003 echo the received pair verbatim: {uci}"
     );
 }
 

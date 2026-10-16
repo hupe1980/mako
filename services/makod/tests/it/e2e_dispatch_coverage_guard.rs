@@ -400,7 +400,7 @@ async fn every_registered_pid_reaches_a_dispatch_arm() {
         exercised += 1;
 
         let dropped = matches!(
-            dispatcher.dispatch(&msg, &wf, pid).await,
+            dispatcher.dispatch(&msg, &wf, pid, time::OffsetDateTime::now_utc()).await,
             Ok(IngestOutcome::Skipped { reason, .. }) if is_silent_drop(reason)
         );
 

@@ -152,11 +152,12 @@ fn make_tariff_source(sheet_id: Option<&str>) -> Option<TariffSource> {
 /// Every settlement builder emits this the same way, so the caller learns to
 /// split the period regardless of which document type it asked for.
 pub(crate) fn warn_if_straddles_turnover(
+    sparte: Sparte,
     period_from: time::Date,
     period_to: time::Date,
     warnings: &mut Vec<SettlementWarning>,
 ) {
-    if crate::regulatory::RegulatoryRegime::straddles_turnover(period_from, period_to) {
+    if crate::regulatory::RegulatoryRegime::straddles_turnover(sparte, period_from, period_to) {
         warnings.push(SettlementWarning {
             severity: WarningSeverity::Warning,
             code: "REGIME_TURNOVER_IN_PERIOD",
@@ -165,6 +166,283 @@ pub(crate) fn warn_if_straddles_turnover(
                 .to_owned(),
         });
     }
+}
+
+// ── Netzseitige Umlagen (EnFG) ───────────────────────────────────────────────
+
+/// The three network levies, in the order they are billed.
+const NETZUMLAGEN: [BillingPositionKind; 3] = [
+    BillingPositionKind::Sect19StromNevUmlage,
+    BillingPositionKind::OffshoreNetzumlage,
+    BillingPositionKind::KwkgUmlage,
+];
+
+/// The invoice label of a network levy.
+fn netzumlage_label(kind: BillingPositionKind) -> &'static str {
+    match kind {
+        BillingPositionKind::Sect19StromNevUmlage => {
+            "Aufschlag für besondere Netznutzung (§19 StromNEV)"
+        }
+        BillingPositionKind::OffshoreNetzumlage => "Offshore-Netzumlage",
+        _ => "KWKG-Umlage",
+    }
+}
+
+/// The legal basis a network levy's position cites.
+fn netzumlage_legal(kind: BillingPositionKind) -> LegalReference {
+    match kind {
+        BillingPositionKind::Sect19StromNevUmlage => LegalReference::StromNev {
+            paragraph: "§19 Abs. 2",
+        },
+        BillingPositionKind::OffshoreNetzumlage => LegalReference::Enwg { paragraph: "§17f" },
+        _ => LegalReference::Kwkg { paragraph: "§26" },
+    }
+}
+
+/// The caller's override for a network levy, if any.
+fn netzumlage_override(input: &NneInput, kind: BillingPositionKind) -> Option<Decimal> {
+    match kind {
+        BillingPositionKind::Sect19StromNevUmlage => input.sect19_umlage_ct_per_kwh,
+        BillingPositionKind::OffshoreNetzumlage => input.offshore_umlage_ct_per_kwh,
+        _ => input.kwkg_umlage_ct_per_kwh,
+    }
+}
+
+/// The tabled rate of a network levy for a year and group (see [`crate::umlagen`]).
+fn tabled_netzumlage(
+    kind: BillingPositionKind,
+    year: i32,
+    gruppe: crate::umlagen::Letztverbrauchergruppe,
+) -> Option<Decimal> {
+    match kind {
+        BillingPositionKind::Sect19StromNevUmlage => {
+            crate::umlagen::sect19_stromnev_ct_per_kwh(year, gruppe)
+        }
+        BillingPositionKind::OffshoreNetzumlage => {
+            crate::umlagen::offshore_netzumlage_ct_per_kwh(year, gruppe)
+        }
+        _ => crate::umlagen::kwkg_umlage_ct_per_kwh(year, gruppe),
+    }
+}
+
+/// The calendar years a period touches, each with its share of the quantity.
+///
+/// The levies are set per calendar year, so a period crossing 1 January is
+/// priced per year. The quantity is split by days — the settlement carries one
+/// metered total for the period, not a per-day series — and the last year takes
+/// the remainder, so the parts sum to the quantity exactly.
+fn umlagen_jahresabschnitte(
+    period: crate::types::SettlementPeriod,
+    menge_kwh: Decimal,
+) -> Vec<(i32, Decimal)> {
+    let from = period.from();
+    let to = period.to();
+    let tage_gesamt = Decimal::from(period.days());
+    let mut abschnitte = Vec::new();
+    let mut verteilt = Decimal::ZERO;
+    for jahr in from.year()..=to.year() {
+        let start = if jahr == from.year() {
+            from
+        } else {
+            time::Date::from_ordinal_date(jahr, 1).unwrap_or(from)
+        };
+        let ende = if jahr == to.year() {
+            to
+        } else {
+            time::Date::from_calendar_date(jahr, time::Month::December, 31).unwrap_or(to)
+        };
+        let menge = if jahr == to.year() {
+            menge_kwh - verteilt
+        } else {
+            let tage = Decimal::from((ende - start).whole_days() + 1);
+            menge_kwh * tage / tage_gesamt
+        };
+        verteilt += menge;
+        abschnitte.push((jahr, menge));
+    }
+    abschnitte
+}
+
+/// Bill the three network levies of a Strom NNE period; returns their net sum.
+///
+/// The levies ride on the same energy base as the Arbeitspreis and are billed
+/// per Entnahmestelle at the rate its Letztverbrauchergruppe carries, each
+/// calendar year of the period at its own year's rate. A levy with neither a
+/// tabled rate nor an override refuses the period, naming every missing
+/// levy and year: billing it at nothing understates the invoice by an amount
+/// the ÜNB reclaim.
+///
+/// An override is one rate and so cannot speak for two years: a period crossing
+/// 1 January with an override is refused and has to be split at the boundary.
+///
+/// The §19 Aufschlag is the one levy published as an explicit A′/B′/C′
+/// schedule, and B′/C′ apply „für Strommengen über 1 000 000 kWh" — so a
+/// privileged Entnahmestelle carries A′ on the year's first Gigawattstunde and
+/// its own rate above it, which is two positions rather than one. The year's
+/// threshold restarts on 1 January, so the part of a crossing period in the new
+/// year opens with no Vorverbrauch. The Offshore- and KWKG-Umlage are published
+/// only as the non-privileged rate: a Begrenzung there is granted per
+/// Entnahmestelle and arrives as the caller's override, so they stay one
+/// position at one rate.
+fn push_netzumlagen(
+    input: &NneInput,
+    tabled: &dyn Fn(
+        BillingPositionKind,
+        i32,
+        crate::umlagen::Letztverbrauchergruppe,
+    ) -> Option<Decimal>,
+    positions: &mut Vec<SettlementPosition>,
+    warnings: &mut Vec<SettlementWarning>,
+) -> Result<Decimal, BillingError> {
+    use crate::umlagen::Letztverbrauchergruppe as G;
+    let gruppe = input.letztverbrauchergruppe;
+    let abschnitte = umlagen_jahresabschnitte(input.period, input.arbeitspreis.menge_kwh());
+    let jahresuebergreifend = abschnitte.len() > 1;
+
+    if jahresuebergreifend {
+        let overridden: Vec<&str> = NETZUMLAGEN
+            .into_iter()
+            .filter(|k| netzumlage_override(input, *k).is_some())
+            .map(netzumlage_label)
+            .collect();
+        if !overridden.is_empty() {
+            return Err(BillingError::InvalidInput {
+                reason: format!(
+                    "the period {} – {} crosses 1 January and carries an Umlage override \
+                     ({}): an override is one rate and cannot price two calendar years — \
+                     split the period at the year boundary",
+                    input.period.from(),
+                    input.period.to(),
+                    overridden.join(", ")
+                ),
+            });
+        }
+    }
+
+    let mut fehlend = Vec::new();
+    for kind in NETZUMLAGEN {
+        for (jahr, _) in &abschnitte {
+            if netzumlage_override(input, kind).is_none() && tabled(kind, *jahr, gruppe).is_none() {
+                fehlend.push(format!("{} {jahr}", netzumlage_label(kind)));
+            }
+        }
+    }
+    if !fehlend.is_empty() {
+        return Err(BillingError::UmlageRateMissing { missing: fehlend });
+    }
+
+    let privilegierte_gruppe = matches!(gruppe, G::B | G::C);
+    if input.enfg_jahresvorverbrauch_kwh.is_none() && privilegierte_gruppe {
+        warnings.push(SettlementWarning {
+            severity: WarningSeverity::Warning,
+            code: "ENFG_VORVERBRAUCH_MISSING",
+            message: format!(
+                "{gruppe:?}′ is privileged only above 1 GWh a year and no \
+                 Jahresvorverbrauch was supplied — this period is billed as though \
+                 it opened the year, so the first 1 GWh of it carries the full \
+                 A′ rate"
+            ),
+        });
+    }
+
+    let mut summe = Decimal::ZERO;
+    for kind in NETZUMLAGEN {
+        let label = netzumlage_label(kind);
+        let legal = netzumlage_legal(kind);
+        for (idx, (jahr, menge_jahr)) in abschnitte.iter().enumerate() {
+            let jahr = *jahr;
+            let rate_ct = netzumlage_override(input, kind)
+                .or_else(|| tabled(kind, jahr, gruppe))
+                .ok_or_else(|| BillingError::UmlageRateMissing {
+                    missing: vec![format!("{label} {jahr}")],
+                })?;
+            if rate_ct.is_zero() {
+                // §21 EnFG exempts entirely; a zero line adds nothing.
+                continue;
+            }
+            let vorverbrauch = if idx == 0 {
+                input.enfg_jahresvorverbrauch_kwh.unwrap_or(Decimal::ZERO)
+            } else {
+                Decimal::ZERO
+            };
+            let aufteilung = crate::umlagen::aufteilung(gruppe, *menge_jahr, vorverbrauch);
+
+            // Only the §19 Aufschlag has a published privileged rate to split
+            // against, and only where the caller has not overridden it outright.
+            // Either tranche may be empty, so the empty side is dropped rather
+            // than billed as a zero line.
+            let privilegiert = kind == BillingPositionKind::Sect19StromNevUmlage
+                && input.sect19_umlage_ct_per_kwh.is_none()
+                && privilegierte_gruppe;
+
+            let tranchen: Vec<(Decimal, Decimal, &str)> = if privilegiert {
+                let voll =
+                    tabled(kind, jahr, G::A).ok_or_else(|| BillingError::UmlageRateMissing {
+                        missing: vec![format!("{label} {jahr} (A′)")],
+                    })?;
+                [
+                    (aufteilung.voller_satz_kwh, voll, "erste GWh des Jahres, A′"),
+                    (aufteilung.privilegiert_kwh, rate_ct, "über 1 GWh"),
+                ]
+                .into_iter()
+                .filter(|(menge, ..)| *menge > Decimal::ZERO)
+                .collect()
+            } else {
+                vec![(*menge_jahr, rate_ct, "")]
+            };
+
+            for (menge_kwh, tranche_ct, tranche_label) in tranchen {
+                let price_eur = ct_to_eur(tranche_ct);
+                let net_eur = pos_net(menge_kwh, price_eur);
+                summe += net_eur;
+                let mut teile: Vec<String> = Vec::new();
+                if jahresuebergreifend {
+                    teile.push(jahr.to_string());
+                }
+                if !tranche_label.is_empty() {
+                    teile.push(tranche_label.to_owned());
+                }
+                let text = if teile.is_empty() {
+                    label.to_owned()
+                } else {
+                    format!("{label} — {}", teile.join(", "))
+                };
+                let anteil = if teile.is_empty() {
+                    format!("{gruppe:?}")
+                } else {
+                    format!("{gruppe:?}, {}", teile.join(", "))
+                };
+                positions.push(SettlementPosition {
+                    text,
+                    kind,
+                    quantity: menge_kwh.round_kfm(3),
+                    unit: QuantityUnit::Kwh,
+                    unit_price_eur: price_eur.round_kfm(6),
+                    net_eur,
+                    spot_price_formula: None,
+                    trace: CalculationTrace {
+                        explanation: format!(
+                            "{menge_kwh:.3} kWh × {price_eur:.6} EUR/kWh = {:.5} EUR ({anteil})",
+                            (menge_kwh * price_eur).round_kfm(5),
+                        ),
+                        input_quantity: menge_kwh,
+                        input_unit_price_eur: price_eur,
+                        gross_eur: menge_kwh * price_eur,
+                        legal_refs: vec![
+                            legal.clone(),
+                            LegalReference::EnFG {
+                                paragraph: "§§21 ff.",
+                            },
+                        ],
+                        tariff_source: None,
+                        regulatory_reduction_factor: None,
+                        rounding_note: None,
+                    },
+                });
+            }
+        }
+    }
+    Ok(summe)
 }
 
 // ── NNE invoice (PID 31002 — NN-Rechnung, Strom + Gas) ───────────────────────
@@ -211,9 +489,14 @@ pub(crate) fn warn_if_straddles_turnover(
 ///
 /// ## Errors
 ///
-/// [`BillingError::InvalidInput`], [`BillingError::MonetaryOverflow`], or
-/// [`BillingError::UnsupportedEntgeltRegime`] for a period governed by AgNeS
-/// (from 01.01.2029), whose methodology is not yet festgelegt.
+/// [`BillingError::InvalidInput`], [`BillingError::MonetaryOverflow`],
+/// [`BillingError::UmlageRateMissing`] for a Strom period whose §19
+/// StromNEV-Umlage, Offshore-Netzumlage or KWKG-Umlage has neither a tabled
+/// rate nor an override for one of its calendar years,
+/// [`BillingError::UnsupportedEntgeltRegime`] for a Strom period governed by
+/// AgNeS (from 01.01.2029), whose methodology is not yet festgelegt, or
+/// [`BillingError::GasNevAusserKraft`] for a Gas period ending after
+/// 31.12.2027, when the GasNEV is außer Kraft.
 #[must_use = "handle the BillingError"]
 pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     // The period is ordered by construction, the Leistungspreis is paired by
@@ -280,18 +563,27 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
 
     // Resolved once from the period and recorded on the result. NNE positions
     // are priced on the Entgelt axis (StromNEV §§17/21, GasNEV §15, the
-    // §19 individual forms), which AgNeS replaces from 2029 — so a period the
-    // Verordnung methodology no longer governs is refused here rather than
-    // computed with lapsed math and merely tagged.
-    let regime =
-        crate::regulatory::RegulatoryRegime::for_period(input.period.from(), input.period.to());
+    // §19 individual forms), which AgNeS replaces for Strom from 2029 and which
+    // has no published basis for Gas from 2028 — so a period outside the
+    // Verordnung methodology is refused here rather than computed with lapsed
+    // math and merely tagged.
+    let regime = crate::regulatory::RegulatoryRegime::for_period(
+        input.sparte,
+        input.period.from(),
+        input.period.to(),
+    );
     regime.ensure_berechenbar()?;
 
     let tariff_src = make_tariff_source(input.tariff_sheet_id.as_deref());
     let mut positions: Vec<SettlementPosition> = Vec::new();
     let mut total = Decimal::ZERO;
     let mut warnings: Vec<SettlementWarning> = Vec::new();
-    warn_if_straddles_turnover(input.period.from(), input.period.to(), &mut warnings);
+    warn_if_straddles_turnover(
+        input.sparte,
+        input.period.from(),
+        input.period.to(),
+        &mut warnings,
+    );
 
     // The share of a year credited has to be the share of a year served. The
     // range check on [`Jahresanteil`] cannot see the period, so `1` — a valid
@@ -774,170 +1066,8 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     }
 
     // ── Netzseitige Umlagen (EnFG) ────────────────────────────────────────────
-    //
-    // The three levies ride on the same energy base as the Arbeitspreis and are
-    // billed per Entnahmestelle at the rate its Letztverbrauchergruppe carries.
-    // A missing tabled rate is a warning rather than a silent zero: billing a
-    // levy at nothing understates the invoice by an amount the ÜNB will reclaim.
-    //
-    // The §19 Aufschlag is the one levy published as an explicit A′/B′/C′
-    // schedule, and B′/C′ apply „für Strommengen über 1 000 000 kWh" — so a
-    // privileged Entnahmestelle carries A′ on the year's first Gigawattstunde
-    // and its own rate above it, which is two positions rather than one. The
-    // Offshore- and KWKG-Umlage are published only as the non-privileged rate:
-    // a Begrenzung there is granted per Entnahmestelle and arrives as the
-    // caller's override, so they stay one position at one rate.
-    let umlage_base_kwh = input.arbeitspreis.menge_kwh();
     if input.sparte == Sparte::Strom {
-        let year = input.period.from().year();
-        let gruppe = input.letztverbrauchergruppe;
-        let aufteilung = crate::umlagen::aufteilung(
-            gruppe,
-            umlage_base_kwh,
-            input.enfg_jahresvorverbrauch_kwh.unwrap_or(Decimal::ZERO),
-        );
-        if input.enfg_jahresvorverbrauch_kwh.is_none()
-            && matches!(
-                gruppe,
-                crate::umlagen::Letztverbrauchergruppe::B
-                    | crate::umlagen::Letztverbrauchergruppe::C
-            )
-        {
-            warnings.push(SettlementWarning {
-                severity: WarningSeverity::Warning,
-                code: "ENFG_VORVERBRAUCH_MISSING",
-                message: format!(
-                    "{gruppe:?}′ is privileged only above 1 GWh a year and no \
-                     Jahresvorverbrauch was supplied — this period is billed as though \
-                     it opened the year, so the first 1 GWh of it carries the full \
-                     A′ rate"
-                ),
-            });
-        }
-        let levies: [(&str, BillingPositionKind, Option<Decimal>, LegalReference); 3] = [
-            (
-                "Aufschlag für besondere Netznutzung (§19 StromNEV)",
-                BillingPositionKind::Sect19StromNevUmlage,
-                input
-                    .sect19_umlage_ct_per_kwh
-                    .or_else(|| crate::umlagen::sect19_stromnev_ct_per_kwh(year, gruppe)),
-                LegalReference::StromNev {
-                    paragraph: "§19 Abs. 2",
-                },
-            ),
-            (
-                "Offshore-Netzumlage",
-                BillingPositionKind::OffshoreNetzumlage,
-                input
-                    .offshore_umlage_ct_per_kwh
-                    .or_else(|| crate::umlagen::offshore_netzumlage_ct_per_kwh(year, gruppe)),
-                LegalReference::Enwg { paragraph: "§17f" },
-            ),
-            (
-                "KWKG-Umlage",
-                BillingPositionKind::KwkgUmlage,
-                input
-                    .kwkg_umlage_ct_per_kwh
-                    .or_else(|| crate::umlagen::kwkg_umlage_ct_per_kwh(year, gruppe)),
-                LegalReference::Kwkg { paragraph: "§26" },
-            ),
-        ];
-
-        for (label, kind, rate, legal) in levies {
-            let Some(rate_ct) = rate else {
-                // Only for years the series undertakes to cover: below that it
-                // claims nothing, and warning would be noise rather than signal.
-                if year >= crate::umlagen::ERSTES_ERFASSTES_JAHR {
-                    warnings.push(SettlementWarning {
-                        severity: WarningSeverity::Warning,
-                        code: "UMLAGE_RATE_MISSING",
-                        message: format!(
-                            "{label}: no published rate for {year} and no override — \
-                             the levy is omitted from this invoice"
-                        ),
-                    });
-                }
-                continue;
-            };
-            if rate_ct.is_zero() {
-                // §21 EnFG exempts entirely; a zero line adds nothing.
-                continue;
-            }
-
-            // Only the §19 Aufschlag has a published privileged rate to split
-            // against, and only where the caller has not overridden it outright.
-            // Either tranche may be empty — a period wholly inside the year's
-            // first Gigawattstunde carries A′ on all of it, one wholly past the
-            // boundary carries the group's rate on all of it — so the empty side
-            // is dropped rather than billed as a zero line.
-            let privilegiert = kind == BillingPositionKind::Sect19StromNevUmlage
-                && input.sect19_umlage_ct_per_kwh.is_none()
-                && matches!(
-                    gruppe,
-                    crate::umlagen::Letztverbrauchergruppe::B
-                        | crate::umlagen::Letztverbrauchergruppe::C
-                );
-
-            let tranchen: Vec<(Decimal, Decimal, &str)> = if privilegiert {
-                let voll = crate::umlagen::sect19_stromnev_ct_per_kwh(
-                    year,
-                    crate::umlagen::Letztverbrauchergruppe::A,
-                )
-                .unwrap_or(rate_ct);
-                [
-                    (aufteilung.voller_satz_kwh, voll, "erste GWh des Jahres, A′"),
-                    (aufteilung.privilegiert_kwh, rate_ct, "über 1 GWh"),
-                ]
-                .into_iter()
-                .filter(|(menge, ..)| *menge > Decimal::ZERO)
-                .collect()
-            } else {
-                vec![(umlage_base_kwh, rate_ct, "")]
-            };
-
-            for (menge_kwh, tranche_ct, tranche_label) in tranchen {
-                let price_eur = ct_to_eur(tranche_ct);
-                let net_eur = pos_net(menge_kwh, price_eur);
-                total += net_eur;
-                let text = if tranche_label.is_empty() {
-                    label.to_owned()
-                } else {
-                    format!("{label} — {tranche_label}")
-                };
-                let anteil = if tranche_label.is_empty() {
-                    format!("{gruppe:?}")
-                } else {
-                    format!("{gruppe:?}, {tranche_label}")
-                };
-                positions.push(SettlementPosition {
-                    text,
-                    kind,
-                    quantity: menge_kwh.round_kfm(3),
-                    unit: QuantityUnit::Kwh,
-                    unit_price_eur: price_eur.round_kfm(6),
-                    net_eur,
-                    spot_price_formula: None,
-                    trace: CalculationTrace {
-                        explanation: format!(
-                            "{menge_kwh:.3} kWh × {price_eur:.6} EUR/kWh = {:.5} EUR ({anteil})",
-                            (menge_kwh * price_eur).round_kfm(5),
-                        ),
-                        input_quantity: menge_kwh,
-                        input_unit_price_eur: price_eur,
-                        gross_eur: menge_kwh * price_eur,
-                        legal_refs: vec![
-                            legal.clone(),
-                            LegalReference::EnFG {
-                                paragraph: "§§21 ff.",
-                            },
-                        ],
-                        tariff_source: None,
-                        regulatory_reduction_factor: None,
-                        rounding_note: None,
-                    },
-                });
-            }
-        }
+        total += push_netzumlagen(input, &tabled_netzumlage, &mut positions, &mut warnings)?;
     }
 
     // Blindmehrarbeit — reactive energy beyond the Preisblatt's free share.
@@ -1430,9 +1560,17 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
     // price based — not by the StromNEV/ARegV Entgeltbildung that AgNeS
     // (GBK-25-01) replaces. A 2029 MMM settlement therefore stays computable.
     let mut warnings: Vec<SettlementWarning> = Vec::new();
-    let regime =
-        crate::regulatory::RegulatoryRegime::for_period(input.period.from(), input.period.to());
-    warn_if_straddles_turnover(input.period.from(), input.period.to(), &mut warnings);
+    let regime = crate::regulatory::RegulatoryRegime::for_period(
+        input.sparte,
+        input.period.from(),
+        input.period.to(),
+    );
+    warn_if_straddles_turnover(
+        input.sparte,
+        input.period.from(),
+        input.period.to(),
+        &mut warnings,
+    );
     use crate::regulatory::NetzzugangRegime as NZ;
     let mmm_refs = match (input.sparte, regime.netzzugang()) {
         (Sparte::Gas, NZ::Nzv) => vec![
@@ -1606,6 +1744,10 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
 /// [`BillingError::InvalidInput`] when the amount is not positive — an Abschlag
 /// asking for nothing, or crediting money, is not an Abschlag. Reverse it with
 /// [`reverse`] instead.
+///
+/// [`BillingError::UnsupportedEntgeltRegime`] for a Strom period under AgNeS
+/// and [`BillingError::GasNevAusserKraft`] for a Gas period after 31.12.2027,
+/// as for the invoice the Abschlag anticipates.
 #[must_use = "handle the BillingError"]
 pub fn settle_abschlag(input: &AbschlagInput) -> Result<SettlementResult, BillingError> {
     if input.betrag_netto_eur <= Decimal::ZERO {
@@ -1619,13 +1761,22 @@ pub fn settle_abschlag(input: &AbschlagInput) -> Result<SettlementResult, Billin
     }
 
     // The Abschlag rests on the same charge authorisation as the invoice it
-    // anticipates, so a period AgNeS governs is refused here too.
-    let regime =
-        crate::regulatory::RegulatoryRegime::for_period(input.period.from(), input.period.to());
+    // anticipates, so a period AgNeS governs (Strom) or one after the GasNEV
+    // lapsed (Gas) is refused here too.
+    let regime = crate::regulatory::RegulatoryRegime::for_period(
+        input.sparte,
+        input.period.from(),
+        input.period.to(),
+    );
     regime.ensure_berechenbar()?;
 
     let mut warnings: Vec<SettlementWarning> = Vec::new();
-    warn_if_straddles_turnover(input.period.from(), input.period.to(), &mut warnings);
+    warn_if_straddles_turnover(
+        input.sparte,
+        input.period.from(),
+        input.period.to(),
+        &mut warnings,
+    );
 
     let betrag = input.betrag_netto_eur.round_kfm(2);
     ensure_representable_eur(betrag)?;
@@ -1731,7 +1882,12 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
     // does not lapse with StromNEV/ARegV at the end of 2028 — AgNeS (GBK-25-01)
     // replaces the Netzentgeltbildung, not the metering-charge law.
     let mut warnings: Vec<SettlementWarning> = Vec::new();
-    warn_if_straddles_turnover(input.period.from(), input.period.to(), &mut warnings);
+    warn_if_straddles_turnover(
+        input.sparte,
+        input.period.from(),
+        input.period.to(),
+        &mut warnings,
+    );
 
     // §30 MsbG Preisobergrenze. Two conversions before the comparison means
     // anything.
@@ -1929,6 +2085,7 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
         // arithmetic here — it is carried because it is what the invoice states.
         sparte: input.sparte,
         regime: crate::regulatory::RegulatoryRegime::for_period(
+            input.sparte,
             input.period.from(),
             input.period.to(),
         ),
@@ -2011,7 +2168,12 @@ pub fn reverse(original: &SettlementResult, grund: KorrekturGrund) -> Settlement
     // The turnover warning is re-emitted, though: a straddling period is as
     // wrong reversed as it was billed, and the mirror should say so too.
     let mut warnings: Vec<SettlementWarning> = Vec::new();
-    warn_if_straddles_turnover(original.period.from(), original.period.to(), &mut warnings);
+    warn_if_straddles_turnover(
+        original.sparte,
+        original.period.from(),
+        original.period.to(),
+        &mut warnings,
+    );
 
     SettlementResult {
         // A reversal is the same supply under the same rules — only the signs
@@ -2115,9 +2277,9 @@ pub fn correct(
 /// - `awh_positionen` is empty
 /// - Any position has `anzahl == 0` or `preis_eur < 0`
 ///
-/// [`BillingError::UnsupportedEntgeltRegime`] for a period governed by AgNeS
-/// (from 01.01.2029) — the GasNEV §15 charge authorisation the AWH positions
-/// rest on lapses with 2028.
+/// [`BillingError::GasNevAusserKraft`] for a period ending after 31.12.2027 —
+/// the GasNEV §15 charge authorisation the AWH positions rest on is außer
+/// Kraft from then (Art. 15 Abs. 2 G v. 22.12.2023, BGBl. 2023 I Nr. 405).
 #[must_use = "handle the BillingError"]
 pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingError> {
     if input.period.from() >= input.period.to() {
@@ -2143,16 +2305,24 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
         }
     }
 
-    // AWH charges rest on the GasNEV §15 charge authorisation, i.e. on the
-    // Entgelt axis that lapses with 2028 — so a period under AgNeS is refused
-    // like an NNE settlement, not billed under an authorisation that no
-    // longer exists.
-    let regime =
-        crate::regulatory::RegulatoryRegime::for_period(input.period.from(), input.period.to());
+    // AWH charges rest on the GasNEV §15 charge authorisation, i.e. on the Gas
+    // Entgelt axis that lapses with 2027 (Art. 15 Abs. 2 G v. 22.12.2023,
+    // BGBl. 2023 I Nr. 405) — so a later period is refused like a Gas NNE
+    // settlement, not billed under a repealed authorisation.
+    let regime = crate::regulatory::RegulatoryRegime::for_period(
+        Sparte::Gas,
+        input.period.from(),
+        input.period.to(),
+    );
     regime.ensure_berechenbar()?;
 
     let mut warnings: Vec<SettlementWarning> = Vec::new();
-    warn_if_straddles_turnover(input.period.from(), input.period.to(), &mut warnings);
+    warn_if_straddles_turnover(
+        Sparte::Gas,
+        input.period.from(),
+        input.period.to(),
+        &mut warnings,
+    );
 
     let tariff_src = make_tariff_source(input.tariff_sheet_id.as_deref());
     let awh_legal_refs = vec![
@@ -2278,7 +2448,9 @@ mod tests {
                 preis_ct_per_kwh: d("3.5"),
             }),
             leistungspreis: None,
-            letztverbrauchergruppe: Default::default(),
+            // §21 EnFG-exempt, so a test about the Netzentgelt sees only its
+            // own positions; the Umlagen tests set the group they bill.
+            letztverbrauchergruppe: crate::umlagen::Letztverbrauchergruppe::Befreit,
             enfg_jahresvorverbrauch_kwh: None,
             sect19_umlage_ct_per_kwh: None,
             offshore_umlage_ct_per_kwh: None,
@@ -3848,19 +4020,157 @@ mod tests {
         );
     }
 
-    /// A year the series does not cover omits the levy and says so.
+    /// A Strom period whose levies have no tabled rate and no override is
+    /// refused, naming each missing rate — billing it without them understates
+    /// the invoice by three levies the ÜNB reclaim.
     #[test]
-    fn an_uncovered_year_warns_rather_than_billing_zero() {
+    fn a_2027_strom_period_without_an_override_is_refused() {
         let mut i = base_nne();
+        i.letztverbrauchergruppe = crate::umlagen::Letztverbrauchergruppe::A;
         i.period = SettlementPeriod::new(date!(2027 - 01 - 01), date!(2027 - 01 - 31)).unwrap();
-        let r = settle_nne(&i).unwrap();
+        let err = settle_nne(&i).expect_err("a 2027 period without Umlagen rates must refuse");
+        let msg = err.to_string();
+        for levy in ["§19 StromNEV", "Offshore-Netzumlage", "KWKG-Umlage"] {
+            assert!(msg.contains(levy), "{levy} must be named: {msg}");
+        }
+        assert!(msg.contains("2027"), "{msg}");
+    }
 
-        let missing = r
-            .warnings
+    /// An override for each levy is the supplied rate, so the period settles.
+    #[test]
+    fn a_2027_strom_period_with_all_three_overrides_settles() {
+        let mut i = base_nne();
+        i.letztverbrauchergruppe = crate::umlagen::Letztverbrauchergruppe::A;
+        i.period = SettlementPeriod::new(date!(2027 - 01 - 01), date!(2027 - 01 - 31)).unwrap();
+        i.sect19_umlage_ct_per_kwh = Some(dec!(1.6));
+        i.offshore_umlage_ct_per_kwh = Some(dec!(1.0));
+        i.kwkg_umlage_ct_per_kwh = Some(dec!(0.5));
+        let r = settle_nne(&i).expect("every levy has a rate");
+        let levies = r
+            .positions
             .iter()
-            .filter(|w| w.code == "UMLAGE_RATE_MISSING")
+            .filter(|p| {
+                matches!(
+                    p.kind,
+                    BillingPositionKind::Sect19StromNevUmlage
+                        | BillingPositionKind::OffshoreNetzumlage
+                        | BillingPositionKind::KwkgUmlage
+                )
+            })
             .count();
-        assert_eq!(missing, 3, "each unresolvable levy must be reported");
+        assert_eq!(levies, 3);
+    }
+
+    /// One missing levy refuses the period and only that one is named.
+    #[test]
+    fn a_single_missing_levy_is_named_alone() {
+        let mut i = base_nne();
+        i.letztverbrauchergruppe = crate::umlagen::Letztverbrauchergruppe::A;
+        i.period = SettlementPeriod::new(date!(2027 - 01 - 01), date!(2027 - 01 - 31)).unwrap();
+        i.sect19_umlage_ct_per_kwh = Some(dec!(1.6));
+        i.offshore_umlage_ct_per_kwh = Some(dec!(1.0));
+        let msg = settle_nne(&i).expect_err("KWKG has no rate").to_string();
+        assert!(msg.contains("KWKG-Umlage 2027"), "{msg}");
+        assert!(!msg.contains("Offshore"), "{msg}");
+    }
+
+    /// A Dec 2026 / Jan 2027 period is priced per year: the 2027 half has no
+    /// row, so the period is refused naming 2027 — it is not billed at the
+    /// 2026 rates throughout.
+    #[test]
+    fn a_period_crossing_1_january_is_refused_when_the_new_year_has_no_rate() {
+        let mut i = base_nne();
+        i.letztverbrauchergruppe = crate::umlagen::Letztverbrauchergruppe::A;
+        i.period = SettlementPeriod::new(date!(2026 - 12 - 15), date!(2027 - 01 - 15)).unwrap();
+        let msg = settle_nne(&i)
+            .expect_err("the 2027 days have no Umlagen rate")
+            .to_string();
+        assert!(msg.contains("KWKG-Umlage 2027"), "{msg}");
+        assert!(!msg.contains("2026"), "the 2026 days are tabled: {msg}");
+    }
+
+    /// A 15.12.2026–15.01.2027 period carries each levy as two positions, each
+    /// at its own year's rate, the quantity split by days (17 of 32 in 2026).
+    /// The 2027 row here stands in for the ÜNB publication.
+    #[test]
+    fn a_period_crossing_1_january_bills_each_levy_per_year() {
+        use crate::umlagen::Letztverbrauchergruppe as G;
+        let mut i = base_nne();
+        i.letztverbrauchergruppe = G::A;
+        i.period = SettlementPeriod::new(date!(2026 - 12 - 15), date!(2027 - 01 - 15)).unwrap();
+        i.arbeitspreis = ArbeitspreisModell::Einheitlich(MengePreis {
+            menge_kwh: d("3200"),
+            preis_ct_per_kwh: d("3.5"),
+        });
+        let tabled = |kind: BillingPositionKind, year: i32, g: G| -> Option<Decimal> {
+            if year == 2027 {
+                Some(dec!(1.000))
+            } else {
+                tabled_netzumlage(kind, year, g)
+            }
+        };
+        let mut positions = Vec::new();
+        let mut warnings = Vec::new();
+        let summe = push_netzumlagen(&i, &tabled, &mut positions, &mut warnings).unwrap();
+        assert_eq!(positions.len(), 6, "three levies, two years each");
+        let kwkg: Vec<_> = positions
+            .iter()
+            .filter(|p| p.kind == BillingPositionKind::KwkgUmlage)
+            .collect();
+        assert_eq!(kwkg[0].quantity, d("1700.000"));
+        assert_eq!(kwkg[0].unit_price_eur, d("0.004460"));
+        assert!(kwkg[0].text.contains("2026"), "{}", kwkg[0].text);
+        assert_eq!(kwkg[1].quantity, d("1500.000"));
+        assert_eq!(kwkg[1].unit_price_eur, d("0.010000"));
+        assert!(kwkg[1].text.contains("2027"), "{}", kwkg[1].text);
+        let sum: Decimal = positions.iter().map(|p| p.net_eur).sum();
+        assert_eq!(sum, summe);
+        assert!(warnings.is_empty());
+    }
+
+    /// An override is one rate; across 1 January it would price both years at
+    /// it, so the period is refused and must be split.
+    #[test]
+    fn an_override_on_a_period_crossing_1_january_is_refused() {
+        let mut i = base_nne();
+        i.letztverbrauchergruppe = crate::umlagen::Letztverbrauchergruppe::A;
+        i.period = SettlementPeriod::new(date!(2026 - 12 - 15), date!(2027 - 01 - 15)).unwrap();
+        i.sect19_umlage_ct_per_kwh = Some(dec!(1.6));
+        i.offshore_umlage_ct_per_kwh = Some(dec!(1.0));
+        i.kwkg_umlage_ct_per_kwh = Some(dec!(0.5));
+        let err = settle_nne(&i).expect_err("an override cannot price two years");
+        assert!(matches!(err, BillingError::InvalidInput { .. }), "{err}");
+    }
+
+    /// A privileged Entnahmestelle's 1-GWh threshold restarts on 1 January: the
+    /// new year's part opens with no Vorverbrauch and carries A′ again.
+    #[test]
+    fn the_enfg_threshold_restarts_in_the_new_year_of_a_crossing_period() {
+        use crate::umlagen::Letztverbrauchergruppe as G;
+        let mut i = base_nne();
+        i.letztverbrauchergruppe = G::B;
+        i.enfg_jahresvorverbrauch_kwh = Some(d("5000000"));
+        i.period = SettlementPeriod::new(date!(2026 - 12 - 15), date!(2027 - 01 - 15)).unwrap();
+        i.arbeitspreis = ArbeitspreisModell::Einheitlich(MengePreis {
+            menge_kwh: d("3200"),
+            preis_ct_per_kwh: d("3.5"),
+        });
+        // Both years at the 2026 schedule, so only the threshold differs.
+        let tabled = |kind: BillingPositionKind, _year: i32, g: G| -> Option<Decimal> {
+            tabled_netzumlage(kind, 2026, g)
+        };
+        let mut positions = Vec::new();
+        let mut warnings = Vec::new();
+        push_netzumlagen(&i, &tabled, &mut positions, &mut warnings).unwrap();
+        let s19: Vec<_> = positions
+            .iter()
+            .filter(|p| p.kind == BillingPositionKind::Sect19StromNevUmlage)
+            .collect();
+        assert_eq!(s19.len(), 2);
+        // 2026: past the threshold, B′ on all of it.
+        assert_eq!(s19[0].unit_price_eur, d("0.000500"));
+        // 2027: the year opens, A′ on all of it.
+        assert_eq!(s19[1].unit_price_eur, d("0.015590"));
     }
 
     /// An override wins over the tabled rate — the EnFG-decision escape hatch.
@@ -4850,7 +5160,7 @@ mod tests {
 
     // ── AgNeS refusal (regime turnover 2028 → 2029) ───────────────────────────
 
-    /// NNE positions are priced under StromNEV/GasNEV — a 2029 period is
+    /// Strom NNE positions are priced under StromNEV — a 2029 period is
     /// governed by AgNeS (GBK-25-01), whose tables are not festgelegt, so the
     /// settlement is refused rather than computed under lapsed rules.
     #[test]
@@ -4865,14 +5175,35 @@ mod tests {
         assert!(err.to_string().contains("GBK-25-01"), "{err}");
     }
 
-    /// AWH charges rest on the GasNEV §15 authorisation — same refusal.
+    /// AWH charges rest on the GasNEV § 15 authorisation, which is außer Kraft
+    /// from 2028 — a 2029 Gas-AWH period is refused on the Gas axis.
     #[test]
-    fn a_2029_gas_awh_settlement_is_refused_under_agnes() {
-        let input = GasAwhInput {
+    fn a_2029_gas_awh_settlement_is_refused() {
+        let input = gas_awh_input(date!(2029 - 01 - 01), date!(2029 - 01 - 31));
+        assert!(matches!(
+            settle_gas_awh(&input),
+            Err(BillingError::GasNevAusserKraft { tarifjahr: 2029 })
+        ));
+    }
+
+    fn abschlag_input(sparte: Sparte, from: time::Date, to: time::Date) -> AbschlagInput {
+        AbschlagInput {
+            malo_id: "51238696012".to_owned(),
+            nb_mp_id: "9900357000004".to_owned(),
+            lf_mp_id: "9900012345678".to_owned(),
+            period: SettlementPeriod::new(from, to).expect("ordered"),
+            sparte,
+            betrag_netto_eur: d("250.00"),
+            grundlage: crate::types::AbschlagGrundlage::Prognose,
+        }
+    }
+
+    fn gas_awh_input(from: time::Date, to: time::Date) -> GasAwhInput {
+        GasAwhInput {
             malo_id: "51238696012".into(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
-            period: SettlementPeriod::new(date!(2029 - 01 - 01), date!(2029 - 01 - 31)).unwrap(),
+            period: SettlementPeriod::new(from, to).unwrap(),
             tariff_sheet_id: None,
             awh_positionen: vec![AwhPositionInput {
                 beschreibung: "Sperrung Gaszähler".into(),
@@ -4880,11 +5211,78 @@ mod tests {
                 preis_eur: d("45.00"),
                 artikel_id: Some("2-01-7-001".to_owned()),
             }],
-        };
+        }
+    }
+
+    /// The Abschlag rests on the same charge authorisation as the invoice it
+    /// anticipates, so an AgNeS period is refused here too — removing
+    /// `regime.ensure_berechenbar()?` from `settle_abschlag` fails this test.
+    #[test]
+    fn a_2029_strom_abschlag_is_refused_under_agnes() {
+        let input = abschlag_input(Sparte::Strom, date!(2029 - 01 - 01), date!(2029 - 01 - 31));
+        let err = settle_abschlag(&input).expect_err("an AgNeS Abschlag must be refused");
         assert!(matches!(
-            settle_gas_awh(&input),
-            Err(BillingError::UnsupportedEntgeltRegime { tarifjahr: 2029 })
+            err,
+            BillingError::UnsupportedEntgeltRegime { tarifjahr: 2029 }
         ));
+        let last = abschlag_input(Sparte::Strom, date!(2028 - 12 - 01), date!(2028 - 12 - 31));
+        assert!(settle_abschlag(&last).is_ok(), "2028 Strom is StromNEV");
+    }
+
+    /// The GasNEV „tritt gem. Art. 15 Abs. 2 G v. 22.12.2023 I Nr. 405 mit
+    /// Ablauf des 31.12.2027 außer Kraft" (GasNEV, gesetze-im-internet.de), a
+    /// year before StromNEV and ARegV: a 2028 Gas NNE period has no § 15 GasNEV
+    /// to be priced under and is refused, naming the end date.
+    #[test]
+    fn a_2028_gas_nne_settlement_is_refused_after_the_gasnev_lapses() {
+        let mut i = base_nne();
+        i.sparte = Sparte::Gas;
+        i.period = SettlementPeriod::new(date!(2028 - 01 - 01), date!(2028 - 01 - 31)).unwrap();
+        let msg = settle_nne(&i)
+            .expect_err("a 2028 Gas period has no GasNEV")
+            .to_string();
+        assert!(
+            msg.contains("GasNEV") && msg.contains("31.12.2027"),
+            "{msg}"
+        );
+
+        i.period = SettlementPeriod::new(date!(2027 - 12 - 01), date!(2027 - 12 - 31)).unwrap();
+        assert!(settle_nne(&i).is_ok(), "December 2027 is still GasNEV");
+    }
+
+    /// The Gas-AWH rests on § 15 GasNEV — same refusal from 2028.
+    #[test]
+    fn a_2028_gas_awh_settlement_is_refused_after_the_gasnev_lapses() {
+        let input = gas_awh_input(date!(2028 - 01 - 01), date!(2028 - 01 - 31));
+        let msg = settle_gas_awh(&input)
+            .expect_err("a 2028 Gas-AWH period has no GasNEV")
+            .to_string();
+        assert!(
+            msg.contains("GasNEV") && msg.contains("31.12.2027"),
+            "{msg}"
+        );
+    }
+
+    /// The Gas-Abschlag anticipates the Gas NNE invoice — same refusal.
+    #[test]
+    fn a_2028_gas_abschlag_is_refused_after_the_gasnev_lapses() {
+        let input = abschlag_input(Sparte::Gas, date!(2028 - 01 - 01), date!(2028 - 01 - 31));
+        let msg = settle_abschlag(&input)
+            .expect_err("a 2028 Gas-Abschlag has no GasNEV")
+            .to_string();
+        assert!(
+            msg.contains("GasNEV") && msg.contains("31.12.2027"),
+            "{msg}"
+        );
+    }
+
+    /// StromNEV and ARegV run through 2028, so a 2028 Strom NNE period still
+    /// computes.
+    #[test]
+    fn a_2028_strom_nne_settlement_still_computes() {
+        let mut i = base_nne();
+        i.period = SettlementPeriod::new(date!(2028 - 01 - 01), date!(2028 - 01 - 31)).unwrap();
+        assert!(settle_nne(&i).is_ok());
     }
 
     /// MMM prices are formed on the Netzzugang axis (GPKE / GaBi Gas), not by
@@ -4895,7 +5293,10 @@ mod tests {
         let mut i = base_mmm();
         i.period = SettlementPeriod::new(date!(2029 - 02 - 01), date!(2029 - 02 - 28)).unwrap();
         let r = settle_mmm(&i).expect("MMM does not price on the Entgelt axis");
-        assert_eq!(r.regime.entgelt(), crate::regulatory::EntgeltRegime::AgNeS);
+        assert_eq!(
+            r.regime.entgelt(),
+            crate::regulatory::EntgeltAchse::Strom(crate::regulatory::EntgeltRegime::AgNeS)
+        );
     }
 
     /// MSB charges are formed under MsbG, which does not lapse with the
@@ -4905,7 +5306,10 @@ mod tests {
         let mut i = base_msb();
         i.period = SettlementPeriod::new(date!(2029 - 02 - 01), date!(2029 - 02 - 28)).unwrap();
         let r = settle_msb(&i).expect("MSB does not price on the Entgelt axis");
-        assert_eq!(r.regime.entgelt(), crate::regulatory::EntgeltRegime::AgNeS);
+        assert_eq!(
+            r.regime.entgelt(),
+            crate::regulatory::EntgeltAchse::Strom(crate::regulatory::EntgeltRegime::AgNeS)
+        );
     }
 
     // ── REGIME_TURNOVER_IN_PERIOD is emitted by every builder ─────────────────

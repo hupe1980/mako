@@ -1,4 +1,4 @@
-//! GPKE Teil 2 § 3.1 — the NB's Bearbeitungsstand on Abrechnungsdaten.
+//! GPKE Teil 2 Kap. 3.1 — the NB's Bearbeitungsstand on Abrechnungsdaten.
 //!
 //! The Netzbetreiber sends the Abrechnungsdaten (Netznutzungs- and
 //! Bilanzkreisabrechnung) to the Lieferant; the LF answers with a
@@ -12,7 +12,7 @@
 //! | 55673 | Rückmeldung / Anfrage Abr.-Daten BK-Abr. erz. MaLo | LF → NB |
 //! | 21047 | Bearbeitungsstandsmeldung (IFTSTA) | NB → LF |
 //!
-//! **Frist: der 2. Werktag nach dem ÜT** (§§ 3.1.1.2 / 3.1.2.2 / 3.1.3.2
+//! **Frist: der 2. Werktag nach dem ÜT** (GPKE Teil 2 Kap. 3.1.1.2 / 3.1.2.2 / 3.1.3.2
 //! Prozessschritt 2/3), from `mako_fristen::antwort`.
 //!
 //! # The answer is not an agreement
@@ -26,7 +26,7 @@
 //!
 //! # Regulatory basis
 //!
-//! - BK6-24-174 GPKE Teil 2 §§ 3.1.1 / 3.1.2 / 3.1.3
+//! - BK6-24-174 GPKE Teil 2 Kap. 3.1.1 / 3.1.2 / 3.1.3
 //! - Entscheidungsbaum-Diagramme und Codelisten 4.3, Kap. 6.17.1 (`E_0595`)
 
 use mako_engine::{
@@ -40,7 +40,7 @@ use mako_engine::{
 
 // ── PID set ───────────────────────────────────────────────────────────────────
 
-/// Inbound PIDs this workflow answers — all LF → NB, GPKE Teil 2 § 3.1.
+/// Inbound PIDs this workflow answers — all LF → NB, GPKE Teil 2 Kap. 3.1.
 pub const ABRECHNUNGSDATEN_PIDS: &[u32] = &[55_156, 55_220, 55_673];
 
 /// The IFTSTA Bearbeitungsstandsmeldung the NB answers with.
@@ -158,7 +158,7 @@ pub enum AbrechnungsdatenState {
     /// A window lapsed while the process still waited in `offen`, and no
     /// Festlegung gives that lapse an outcome.
     ///
-    /// GPKE Teil 2 § 3.1 gives the NB until the 2. WT nach dem ÜT to send the Bearbeitungsstandsmeldung, and no consequence of missing it. The lapse is a Frist breach for the operator to act on,
+    /// GPKE Teil 2 Kap. 3.1 gives the NB until the 2. WT nach dem ÜT to send the Bearbeitungsstandsmeldung, and no consequence of missing it. The lapse is a Frist breach for the operator to act on,
     /// not a rejection: every command `offen` accepts is still accepted — a
     /// late answer is still an answer — and the next event moves the process
     /// on from `offen`.
@@ -252,7 +252,7 @@ impl CommandPayload for AbrechnungsdatenCommand {}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
-/// The NB's Bearbeitungsstand on inbound Abrechnungsdaten (GPKE Teil 2 § 3.1).
+/// The NB's Bearbeitungsstand on inbound Abrechnungsdaten (GPKE Teil 2 Kap. 3.1).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GpkeAbrechnungsdatenWorkflow;
 
@@ -303,7 +303,7 @@ impl Workflow for GpkeAbrechnungsdatenWorkflow {
                 }
                 if !ABRECHNUNGSDATEN_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::other(format!(
-                        "PID {} is not a GPKE Teil 2 § 3.1 Abrechnungsdaten-Rückmeldung",
+                        "PID {} is not a GPKE Teil 2 Kap. 3.1 Abrechnungsdaten-Rückmeldung",
                         pid.as_u32()
                     )));
                 }

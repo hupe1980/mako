@@ -625,11 +625,20 @@ impl EdifactIngestDispatcher {
     /// combination is not in the current dispatch table, or when no process is
     /// found for a response message.  Returns `Err` only on storage or adapter
     /// failures.
+    ///
+    /// `received_at` is the instant the door received the message — for AS4
+    /// the instant it answered with its Zustellquittung. Every arrival-anchored
+    /// window (the Antwortfrist and the APERAK window) is resolved against it,
+    /// never against the dispatch instant: the Frist runs from the ÜT, the
+    /// „Tag des Empfangs der Übertragungsdatei" (GPKE Teil 1 Kap. 7
+    /// „Fristenberechnung", S. 27), and a message dispatched after midnight
+    /// was still received the day before.
     pub async fn dispatch(
         &self,
         msg: &AnyMessage,
         workflow_name: &str,
         pid: u32,
+        received_at: OffsetDateTime,
     ) -> Result<IngestOutcome, EngineError> {
         // Correlation-routing override (conversation-ID routing). A REMADV/COMDIS
         // reply PID (33001–33004 / 29001–29002) is legitimately claimed by several
@@ -642,7 +651,9 @@ impl EdifactIngestDispatcher {
         // stands — behaviour is unchanged for correctly-routed and orphan messages.
         let corrected = self.correlation_route(msg, workflow_name).await;
         let effective_name = corrected.as_deref().unwrap_or(workflow_name);
-        let outcome = self.dispatch_inner(msg, effective_name, pid).await;
+        let outcome = self
+            .dispatch_inner(msg, effective_name, pid, received_at)
+            .await;
         let result = match &outcome {
             Ok(IngestOutcome::Spawned { .. } | IngestOutcome::Dispatched { .. }) => "dispatched",
             Ok(IngestOutcome::Skipped { .. }) => "skipped",
@@ -759,17 +770,22 @@ impl EdifactIngestDispatcher {
         msg: &AnyMessage,
         workflow_name: &str,
         pid: u32,
+        received_at: OffsetDateTime,
     ) -> Result<IngestOutcome, EngineError> {
         match workflow_name {
-            n if n.starts_with("geli-gas-") => self.dispatch_geli_gas(msg, n, pid).await,
-            n if n.starts_with("gabi-gas-") => self.dispatch_gabi_gas(msg, n, pid).await,
-            n if n.starts_with("gpke-") => self.dispatch_gpke(msg, n, pid).await,
+            n if n.starts_with("geli-gas-") => {
+                self.dispatch_geli_gas(msg, n, pid, received_at).await
+            }
+            n if n.starts_with("gabi-gas-") => {
+                self.dispatch_gabi_gas(msg, n, pid, received_at).await
+            }
+            n if n.starts_with("gpke-") => self.dispatch_gpke(msg, n, pid, received_at).await,
             // ESA-side Wertebestellung is WiM Strom Teil 2 — its arm lives in
             // the `wim` submodule next to the MSB-side half of the handshake.
             n if n == mako_wim::esa_wertebestellung::WORKFLOW_NAME => {
-                self.dispatch_wim(msg, n, pid).await
+                self.dispatch_wim(msg, n, pid, received_at).await
             }
-            n if n.starts_with("wim-") => self.dispatch_wim(msg, n, pid).await,
+            n if n.starts_with("wim-") => self.dispatch_wim(msg, n, pid, received_at).await,
             n if n.starts_with("mabis-") => self.dispatch_mabis(msg, n, pid).await,
             n if n.starts_with("emob-") => self.dispatch_emob(msg, n, pid).await,
             n if n.starts_with("redispatch-") => self.dispatch_redispatch(msg, n, pid).await,

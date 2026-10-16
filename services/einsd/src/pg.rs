@@ -1895,6 +1895,242 @@ fn build_gutschrift(
     }
 }
 
+/// The money-bearing columns of one settlement receipt.
+///
+/// Every outcome of [`run_settlement`] — a calculated period and an expired
+/// award alike — writes its receipt through [`persist_receipt`], so the
+/// overwrite of an initial receipt is snapshotted on every path.
+struct ReceiptRow<'a> {
+    einspeisemenge_kwh: Option<Decimal>,
+    settlement_eur: Option<Decimal>,
+    status: &'a str,
+    pflichtzahlung_eur: Option<Decimal>,
+    faelligkeitsdatum: Option<Date>,
+    verlaengerungsanspruch_qh: i64,
+    billing_days_fraction: Option<Decimal>,
+    positions_json: Option<serde_json::Value>,
+    rechnung_json: Option<serde_json::Value>,
+    gutschrift_nummer: Option<String>,
+    marktwert_vorlaeufig: bool,
+}
+
+/// Snapshot the initial receipt it is about to overwrite, then upsert `row`;
+/// returns the id of the receipt that exists afterwards.
+async fn persist_receipt(
+    conn: &mut sqlx::PgConnection,
+    input: &SettleInput,
+    row: &ReceiptRow<'_>,
+) -> anyhow::Result<Uuid> {
+    // Proposed id for a first settlement. An upsert that lands on the DO UPDATE
+    // branch keeps the row's original id, which is what `RETURNING` yields — the
+    // caller must get the id of the receipt that actually exists.
+    let id = Uuid::new_v4();
+
+    // ── § 147 AO / GoBD: snapshot the initial receipt before it is overwritten ───
+    //
+    // Only an **initial** settle overwrites anything: its upsert lands on the
+    // partial unique index and replaces the row in place, so whatever that row
+    // held has to be preserved before it is lost.
+    //
+    // A correction does not: it carries `is_correction = true`, misses the index
+    // predicate, and is inserted *beside* the original, which stays live and
+    // unchanged. Snapshotting it would copy a row nobody is about to lose, and
+    // `ON CONFLICT DO NOTHING` would not dedupe the copies — the table's only
+    // unique key is its own surrogate `id`.
+    let snapshot_id: Option<uuid::Uuid> = if input.correction.is_some() {
+        None
+    } else {
+        sqlx::query_scalar(
+            "SELECT id FROM settlement_receipts
+             WHERE tr_id = $1 AND tenant = $2
+               AND billing_year = $3 AND billing_month = $4
+               AND is_correction = false",
+        )
+        .bind(&input.tr_id)
+        .bind(&input.tenant)
+        .bind(input.billing_year)
+        .bind(input.billing_month)
+        .fetch_optional(&mut *conn)
+        .await
+        .context("check existing initial receipt")?
+    };
+
+    if let Some(original_id) = snapshot_id {
+        sqlx::query(
+            r"INSERT INTO settlement_receipt_history
+                  (original_id, tr_id, tenant, billing_year, billing_month,
+                   settlement_eur, status, settlement_data)
+              SELECT id, tr_id, tenant, billing_year, billing_month,
+                     settlement_eur, status,
+                     to_jsonb(settlement_receipts) AS settlement_data
+              FROM settlement_receipts
+              WHERE id = $1
+              ON CONFLICT DO NOTHING",
+        )
+        .bind(original_id)
+        .execute(&mut *conn)
+        .await
+        .context("snapshot receipt before overwrite")?;
+    }
+
+    // Every money-bearing column is overwritten, not just the status: a
+    // re-settle that ends at `foerderung_beendet` must not keep the old
+    // `settlement_eur` and Gutschrift on the row.
+    let id: Uuid = sqlx::query_scalar(
+        r"INSERT INTO settlement_receipts
+              (id, tr_id, tenant, billing_year, billing_month,
+               settlement_model, einspeisemenge_kwh, settlement_eur, status,
+               pflichtzahlung_eur, faelligkeitsdatum,
+               verlaengerungsanspruch_qh, billing_days_fraction, positions_json,
+               is_correction, correction_of, correction_reason,
+               rechnung_json, gutschrift_nummer, marktwert_vorlaeufig)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                  $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+          ON CONFLICT (tr_id, tenant, billing_year, billing_month) WHERE is_correction = false DO UPDATE
+          SET settlement_model          = EXCLUDED.settlement_model,
+              einspeisemenge_kwh        = EXCLUDED.einspeisemenge_kwh,
+              settlement_eur            = EXCLUDED.settlement_eur,
+              status                    = EXCLUDED.status,
+              pflichtzahlung_eur        = EXCLUDED.pflichtzahlung_eur,
+              marktwert_vorlaeufig      = EXCLUDED.marktwert_vorlaeufig,
+              faelligkeitsdatum         = EXCLUDED.faelligkeitsdatum,
+              verlaengerungsanspruch_qh = EXCLUDED.verlaengerungsanspruch_qh,
+              billing_days_fraction     = EXCLUDED.billing_days_fraction,
+              positions_json            = EXCLUDED.positions_json,
+              is_correction             = EXCLUDED.is_correction,
+              correction_of             = EXCLUDED.correction_of,
+              correction_reason         = EXCLUDED.correction_reason,
+              rechnung_json             = EXCLUDED.rechnung_json,
+              gutschrift_nummer         = EXCLUDED.gutschrift_nummer,
+              settled_at                = now()
+          RETURNING id",
+    )
+    .bind(id)
+    .bind(&input.tr_id)
+    .bind(&input.tenant)
+    .bind(input.billing_year)
+    .bind(input.billing_month)
+    .bind(&input.settlement_model)
+    .bind(row.einspeisemenge_kwh)
+    .bind(row.settlement_eur)
+    .bind(row.status)
+    .bind(row.pflichtzahlung_eur)
+    .bind(row.faelligkeitsdatum)
+    .bind(row.verlaengerungsanspruch_qh)
+    .bind(row.billing_days_fraction)
+    .bind(row.positions_json.clone())
+    .bind(input.correction.is_some())
+    .bind(input.correction.as_ref().and_then(|k| k.original_id))
+    .bind(input.correction.as_ref().map(Korrektur::reason_text))
+    .bind(row.rechnung_json.clone())
+    .bind(row.gutschrift_nummer.clone())
+    .bind(row.marktwert_vorlaeufig)
+    .fetch_one(&mut *conn)
+    .await
+    .context("persist settlement")?;
+    Ok(id)
+}
+
+/// Record the period's absolute contribution to the plant's running totals
+/// and apply the difference to the §44b, §51a and KWKG counters.
+///
+/// `status` is the receipt's stored status; it decides the KWKG plant status
+/// written beside the counter.
+async fn apply_period_accrual(
+    conn: &mut sqlx::PgConnection,
+    input: &SettleInput,
+    period: &PeriodAccrual,
+    status: &str,
+) -> anyhow::Result<()> {
+    let delta = record_period_accrual(
+        &mut *conn,
+        &input.tr_id,
+        &input.tenant,
+        input.billing_year,
+        input.billing_month,
+        period,
+    )
+    .await?;
+
+    // ── §44b: update Biogas year-to-date production counter ──────────────────
+    if delta.biogas_kwh != Decimal::ZERO {
+        update_biogas_quota_ytd(
+            &mut *conn,
+            &input.tr_id,
+            &input.tenant,
+            input.billing_year,
+            delta.biogas_kwh,
+        )
+        .await
+        .context("update biogas §44b YTD")?;
+    }
+
+    // ── §51a: accrue the RAW negative-price quarter-hours on the plant ────────
+    // The extension rounds up to a full calendar day (or the solar
+    // Volllastviertelstunden contingent) **once over the 20-year total**, so the
+    // cumulative column stores the raw lost QH — `build_settle_input` converts it
+    // to the effective Förderende via `effektives_foerderende`. Accruing the
+    // per-month rounded value would over-extend (each partial day rounding up).
+    if delta.negative_price_qh != 0 {
+        sqlx::query(
+            r"UPDATE eeg_anlagen
+              SET negative_price_qh_gesamt =
+                      GREATEST(COALESCE(negative_price_qh_gesamt, 0) + $3, 0),
+                  updated_at = now()
+              WHERE tr_id = $1 AND tenant = $2",
+        )
+        .bind(&input.tr_id)
+        .bind(&input.tenant)
+        .bind(delta.negative_price_qh)
+        .execute(&mut *conn)
+        .await
+        .context("accrue negative_price_qh_gesamt")?;
+    }
+
+    // ── KWKG: update accumulated kWh + auto-expire when limit reached ────────
+    // Guarded on the **delta**, exactly like §44b and §51a above — not on this
+    // period's new contribution, which would drop the negative delta of a month
+    // corrected down to zero and go on burning the § 8 KWKG
+    // Vollbenutzungsstunden against kWh the plant was never paid for.
+    //
+    // The status follows this settlement's outcome on the same condition, so a
+    // plant parked at `foerderung_beendet` by kWh a correction has since removed
+    // returns to `aktiv`.
+    if input.settlement_model == KWKG_ZUSCHLAG && !delta.kwk_kwh.is_zero() {
+        let new_status = if status == "foerderung_beendet" {
+            "foerderung_beendet"
+        } else {
+            "aktiv"
+        };
+        // The § 8 Abs. 4 year counter is reset whenever the row still tracks an
+        // earlier year: the Jahreshöchstbetrag is per Kalenderjahr, so nothing
+        // carries over.
+        sqlx::query(
+            r"UPDATE eeg_anlagen
+              SET kwk_strom_kwh_gesamt =
+                      GREATEST(COALESCE(kwk_strom_kwh_gesamt, 0) + $3, 0),
+                  kwk_kwh_jahr =
+                      GREATEST(
+                          CASE WHEN kwk_kwh_jahr_year = $5
+                               THEN COALESCE(kwk_kwh_jahr, 0) ELSE 0 END + $3,
+                          0),
+                  kwk_kwh_jahr_year = $5,
+                  status = $4,
+                  updated_at = now()
+              WHERE tr_id = $1 AND tenant = $2",
+        )
+        .bind(&input.tr_id)
+        .bind(&input.tenant)
+        .bind(delta.kwk_kwh)
+        .bind(new_status)
+        .bind(input.billing_year)
+        .execute(&mut *conn)
+        .await
+        .context("update kwk_strom_kwh_gesamt")?;
+    }
+    Ok(())
+}
+
 pub async fn run_settlement(
     conn: &mut sqlx::PgConnection,
     input: SettleInput,
@@ -1923,8 +2159,12 @@ pub async fn run_settlement(
     // The scheme is built AFTER the §54 computation so direktverm_aw_ct_effective
     // is available.
 
-    let eeg_gesetz_enum = eeg_billing::EegGesetz::from_db_year(input.eeg_gesetz)
-        .unwrap_or(eeg_billing::EegGesetz::Eeg2023);
+    let eeg_gesetz_enum = eeg_billing::EegGesetz::from_db_year(input.eeg_gesetz).map_err(|e| {
+        anyhow::anyhow!(
+            "Anlage {}: {e} — eine Fassung, die nicht tabelliert ist, wird nicht abgerechnet",
+            input.tr_id
+        )
+    })?;
 
     // ── §52 EEG 2023 Pflichtverstöße ─────────────────────────────────────────
     // EEG 2023: separate Pflichtzahlungen, Vergütung keeps flowing.
@@ -1971,42 +2211,35 @@ pub async fn run_settlement(
     // §36e (Wind an Land) / §37e (Solar erstes Segment) / §39e (Biomasse) EEG
     // 2023. Not §35a, which is BNetzA-driven Entwertung, and not §33, which
     // excludes a bid before any award exists.
+    //
+    // The receipt goes through the same write as every other outcome, so a
+    // receipt it overwrites is snapshotted into `settlement_receipt_history`,
+    // and the period's accrual is recorded as zero: a period with no Förderung
+    // consumes no §44b quota, extends no §51a Förderende and burns no KWKG
+    // Vollbenutzungsstunden. Recording nothing would leave an earlier settle's
+    // contribution standing in the running totals beside a receipt that pays
+    // nothing.
     if input.award_expired {
-        let id = Uuid::new_v4();
-        // Every money-bearing column is overwritten, not just the status: an
-        // already-settled plant must not keep its old `settlement_eur` and
-        // Gutschrift on a row now labelled `foerderung_beendet`.
-        sqlx::query(
-            r"INSERT INTO settlement_receipts
-                  (id, tr_id, tenant, billing_year, billing_month,
-                   settlement_model, einspeisemenge_kwh, settlement_eur, status)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-              ON CONFLICT (tr_id, tenant, billing_year, billing_month)
-                  WHERE is_correction = false DO UPDATE
-              SET settlement_model    = EXCLUDED.settlement_model,
-                  einspeisemenge_kwh  = EXCLUDED.einspeisemenge_kwh,
-                  settlement_eur      = EXCLUDED.settlement_eur,
-                  status              = EXCLUDED.status,
-                  pflichtzahlung_eur  = NULL,
-                  faelligkeitsdatum   = NULL,
-                  verlaengerungsanspruch_qh = 0,
-                  positions_json      = NULL,
-                  rechnung_json       = NULL,
-                  gutschrift_nummer   = NULL,
-                  settled_at          = now()",
+        const STATUS: &str = "foerderung_beendet";
+        let id = persist_receipt(
+            &mut *conn,
+            &input,
+            &ReceiptRow {
+                einspeisemenge_kwh: input.einspeisemenge_kwh,
+                settlement_eur: Some(Decimal::ZERO),
+                status: STATUS,
+                pflichtzahlung_eur: None,
+                faelligkeitsdatum: None,
+                verlaengerungsanspruch_qh: 0,
+                billing_days_fraction: None,
+                positions_json: None,
+                rechnung_json: None,
+                gutschrift_nummer: None,
+                marktwert_vorlaeufig: false,
+            },
         )
-        .bind(id)
-        .bind(&input.tr_id)
-        .bind(&input.tenant)
-        .bind(input.billing_year)
-        .bind(input.billing_month)
-        .bind(&input.settlement_model)
-        .bind(input.einspeisemenge_kwh)
-        .bind(rust_decimal::Decimal::ZERO)
-        .bind("foerderung_beendet")
-        .execute(&mut *conn)
-        .await
-        .context("persist expired-award receipt")?;
+        .await?;
+        apply_period_accrual(&mut *conn, &input, &PeriodAccrual::default(), STATUS).await?;
         return Ok(SettleResult {
             id,
             tr_id: input.tr_id,
@@ -2014,8 +2247,8 @@ pub async fn run_settlement(
             billing_month: input.billing_month,
             settlement_model: input.settlement_model,
             einspeisemenge_kwh: input.einspeisemenge_kwh,
-            settlement_eur: Some(rust_decimal::Decimal::ZERO),
-            status: "foerderung_beendet".to_owned(),
+            settlement_eur: Some(Decimal::ZERO),
+            status: STATUS.to_owned(),
             // Förderung ended → nothing to bill, so no Gutschrift is issued.
             gutschrift_nummer: None,
             gutschrift_steuer_eur: None,
@@ -2496,110 +2729,24 @@ pub async fn run_settlement(
             (None, None, None, None)
         };
 
-    // Proposed id for a first settlement. An upsert that lands on the DO UPDATE
-    // branch keeps the row's original id, which is what `RETURNING` yields — the
-    // caller must get the id of the receipt that actually exists.
-    let id = Uuid::new_v4();
-
-    // ── § 147 AO / GoBD: snapshot the initial receipt before it is overwritten ───
-    //
-    // Only an **initial** settle overwrites anything: its upsert lands on the
-    // partial unique index and replaces the row in place, so whatever that row
-    // held has to be preserved before it is lost.
-    //
-    // A correction does not: it carries `is_correction = true`, misses the index
-    // predicate, and is inserted *beside* the original, which stays live and
-    // unchanged. Snapshotting it would copy a row nobody is about to lose, and
-    // `ON CONFLICT DO NOTHING` would not dedupe the copies — the table's only
-    // unique key is its own surrogate `id`.
-    let snapshot_id: Option<uuid::Uuid> = if input.correction.is_some() {
-        None
-    } else {
-        sqlx::query_scalar(
-            "SELECT id FROM settlement_receipts
-             WHERE tr_id = $1 AND tenant = $2
-               AND billing_year = $3 AND billing_month = $4
-               AND is_correction = false",
-        )
-        .bind(&input.tr_id)
-        .bind(&input.tenant)
-        .bind(input.billing_year)
-        .bind(input.billing_month)
-        .fetch_optional(&mut *conn)
-        .await
-        .context("check existing initial receipt")?
-    };
-
-    if let Some(original_id) = snapshot_id {
-        sqlx::query(
-            r"INSERT INTO settlement_receipt_history
-                  (original_id, tr_id, tenant, billing_year, billing_month,
-                   settlement_eur, status, settlement_data)
-              SELECT id, tr_id, tenant, billing_year, billing_month,
-                     settlement_eur, status,
-                     to_jsonb(settlement_receipts) AS settlement_data
-              FROM settlement_receipts
-              WHERE id = $1
-              ON CONFLICT DO NOTHING",
-        )
-        .bind(original_id)
-        .execute(&mut *conn)
-        .await
-        .context("snapshot receipt before overwrite")?;
-    }
-
-    let id: Uuid = sqlx::query_scalar(
-        r"INSERT INTO settlement_receipts
-              (id, tr_id, tenant, billing_year, billing_month,
-               settlement_model, einspeisemenge_kwh, settlement_eur, status,
-               pflichtzahlung_eur, faelligkeitsdatum,
-               verlaengerungsanspruch_qh, billing_days_fraction, positions_json,
-               is_correction, correction_of, correction_reason,
-               rechnung_json, gutschrift_nummer, marktwert_vorlaeufig)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                  $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
-          ON CONFLICT (tr_id, tenant, billing_year, billing_month) WHERE is_correction = false DO UPDATE
-          SET settlement_model          = EXCLUDED.settlement_model,
-              einspeisemenge_kwh        = EXCLUDED.einspeisemenge_kwh,
-              settlement_eur            = EXCLUDED.settlement_eur,
-              status                    = EXCLUDED.status,
-              pflichtzahlung_eur        = EXCLUDED.pflichtzahlung_eur,
-              marktwert_vorlaeufig      = EXCLUDED.marktwert_vorlaeufig,
-              faelligkeitsdatum         = EXCLUDED.faelligkeitsdatum,
-              verlaengerungsanspruch_qh = EXCLUDED.verlaengerungsanspruch_qh,
-              billing_days_fraction     = EXCLUDED.billing_days_fraction,
-              positions_json            = EXCLUDED.positions_json,
-              is_correction             = EXCLUDED.is_correction,
-              correction_of             = EXCLUDED.correction_of,
-              correction_reason         = EXCLUDED.correction_reason,
-              rechnung_json             = EXCLUDED.rechnung_json,
-              gutschrift_nummer         = EXCLUDED.gutschrift_nummer,
-              settled_at                = now()
-          RETURNING id",
+    let id = persist_receipt(
+        &mut *conn,
+        &input,
+        &ReceiptRow {
+            einspeisemenge_kwh: effective_kwh.or(input.einspeisemenge_kwh),
+            settlement_eur,
+            status,
+            pflichtzahlung_eur,
+            faelligkeitsdatum,
+            verlaengerungsanspruch_qh,
+            billing_days_fraction: billing_days_fraction_stored,
+            positions_json,
+            rechnung_json: rechnung_json.clone(),
+            gutschrift_nummer: gutschrift_nummer.clone(),
+            marktwert_vorlaeufig,
+        },
     )
-    .bind(id)
-    .bind(&input.tr_id)
-    .bind(&input.tenant)
-    .bind(input.billing_year)
-    .bind(input.billing_month)
-    .bind(&input.settlement_model)
-    .bind(effective_kwh.or(input.einspeisemenge_kwh))
-    .bind(settlement_eur)
-    .bind(status)
-    .bind(pflichtzahlung_eur)
-    .bind(faelligkeitsdatum)
-    .bind(verlaengerungsanspruch_qh)
-    .bind(billing_days_fraction_stored)
-    .bind(positions_json)
-    .bind(input.correction.is_some())
-    .bind(input.correction.as_ref().and_then(|k| k.original_id))
-    .bind(input.correction.as_ref().map(Korrektur::reason_text))
-    .bind(rechnung_json.clone())
-    .bind(gutschrift_nummer.clone())
-    .bind(marktwert_vorlaeufig)
-    .fetch_one(&mut *conn)
-    .await
-    .context("persist settlement")?;
+    .await?;
 
     // ── Cumulative counters, accrued once per period ──────────────────────────
     //
@@ -2641,92 +2788,7 @@ pub async fn run_settlement(
             Decimal::ZERO
         },
     };
-    let delta = record_period_accrual(
-        &mut *conn,
-        &input.tr_id,
-        &input.tenant,
-        input.billing_year,
-        input.billing_month,
-        &period,
-    )
-    .await?;
-
-    // ── §44b: update Biogas year-to-date production counter ──────────────────
-    if delta.biogas_kwh != Decimal::ZERO {
-        update_biogas_quota_ytd(
-            &mut *conn,
-            &input.tr_id,
-            &input.tenant,
-            input.billing_year,
-            delta.biogas_kwh,
-        )
-        .await
-        .context("update biogas §44b YTD")?;
-    }
-
-    // ── §51a: accrue the RAW negative-price quarter-hours on the plant ────────
-    // The extension rounds up to a full calendar day (or the solar
-    // Volllastviertelstunden contingent) **once over the 20-year total**, so the
-    // cumulative column stores the raw lost QH — `build_settle_input` converts it
-    // to the effective Förderende via `effektives_foerderende`. Accruing the
-    // per-month rounded value would over-extend (each partial day rounding up).
-    if delta.negative_price_qh != 0 {
-        sqlx::query(
-            r"UPDATE eeg_anlagen
-              SET negative_price_qh_gesamt =
-                      GREATEST(COALESCE(negative_price_qh_gesamt, 0) + $3, 0),
-                  updated_at = now()
-              WHERE tr_id = $1 AND tenant = $2",
-        )
-        .bind(&input.tr_id)
-        .bind(&input.tenant)
-        .bind(delta.negative_price_qh)
-        .execute(&mut *conn)
-        .await
-        .context("accrue negative_price_qh_gesamt")?;
-    }
-
-    // ── KWKG: update accumulated kWh + auto-expire when limit reached ────────
-    // Guarded on the **delta**, exactly like §44b and §51a above — not on this
-    // period's new contribution, which would drop the negative delta of a month
-    // corrected down to zero and go on burning the § 8 KWKG
-    // Vollbenutzungsstunden against kWh the plant was never paid for.
-    //
-    // The status follows this settlement's outcome on the same condition, so a
-    // plant parked at `foerderung_beendet` by kWh a correction has since removed
-    // returns to `aktiv`.
-    if input.settlement_model == KWKG_ZUSCHLAG && !delta.kwk_kwh.is_zero() {
-        let new_status = if status == "foerderung_beendet" {
-            "foerderung_beendet"
-        } else {
-            "aktiv"
-        };
-        // The § 8 Abs. 4 year counter is reset whenever the row still tracks an
-        // earlier year: the Jahreshöchstbetrag is per Kalenderjahr, so nothing
-        // carries over.
-        sqlx::query(
-            r"UPDATE eeg_anlagen
-              SET kwk_strom_kwh_gesamt =
-                      GREATEST(COALESCE(kwk_strom_kwh_gesamt, 0) + $3, 0),
-                  kwk_kwh_jahr =
-                      GREATEST(
-                          CASE WHEN kwk_kwh_jahr_year = $5
-                               THEN COALESCE(kwk_kwh_jahr, 0) ELSE 0 END + $3,
-                          0),
-                  kwk_kwh_jahr_year = $5,
-                  status = $4,
-                  updated_at = now()
-              WHERE tr_id = $1 AND tenant = $2",
-        )
-        .bind(&input.tr_id)
-        .bind(&input.tenant)
-        .bind(delta.kwk_kwh)
-        .bind(new_status)
-        .bind(input.billing_year)
-        .execute(&mut *conn)
-        .await
-        .context("update kwk_strom_kwh_gesamt")?;
-    }
+    apply_period_accrual(&mut *conn, &input, &period, status).await?;
 
     // ── H-2: derive_settlement_state and update plant record ─────────────────
     // §52 EEG 2023 state machine: drive settlement_state from compliance status.

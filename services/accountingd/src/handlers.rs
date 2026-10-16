@@ -4219,7 +4219,7 @@ pub struct AnonymizeRequest {
 /// All `ledger_entries` (amounts, dates, types, references) are kept intact.
 /// `malo_id` is retained (location pseudonym, not personal data per BDEW).
 /// Financial records are exempt from GDPR Art. 17 erasure under Art. 17(3)(b)
-/// and §238 HGB / §147 AO retention requirements.
+/// and the § 257 Abs. 4 HGB / § 147 Abs. 3 AO retention periods.
 ///
 /// ## Audit trail
 ///

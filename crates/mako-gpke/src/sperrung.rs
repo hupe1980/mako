@@ -21,7 +21,7 @@
 //! # Regulatory basis
 //!
 //! - **BDEW GPKE** — Geschäftsprozesse zur Kundenbelieferung mit Elektrizität
-//! - **BK6-24-174 GPKE Teil 2 § 3.5** — the only source that quantifies these
+//! - **BK6-24-174 GPKE Teil 2 Kap. 3.5** — the only source that quantifies these
 //!   windows. The ORDERS and ORDRSP AHBs state no deadline for 17115 / 17116 /
 //!   17117 at all, and the Gas twins are governed by the BDEW AWH
 //!   „Unterbrechung / Wiederherstellung der Anschlussnutzung" (EBD `E_1000` /
@@ -73,7 +73,7 @@ pub const MSB_ANTWORT_PIDS: &[u32] = &[19118, 19119];
 ///
 /// „Unverzüglich, jedoch spätester ÜT ist der 1. WT nach dem ÜT" for 17115 /
 /// 17117 / 39000, and der **3. WT** for the Anfrage Sperrung 17116 that the NB
-/// puts to the MSB (BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2 / 3.5.3.2).
+/// puts to the MSB (BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 / 3.5.2.2 / 3.5.3.2).
 /// Werktage, not wall-clock hours, and not one flat number across the four.
 ///
 /// Register a `Deadline` with this label immediately after `ValidationPassed`:
@@ -380,7 +380,7 @@ impl Workflow for GpkeSperrungWorkflow {
     ///
     /// | Label | State guard | Command emitted | Fundstelle |
     /// |---|---|---|---|
-    /// | [`SPERRUNG_WINDOW_LABEL`] | `AnweisungErhalten` or `ValidationPassed` | `TimeoutExpired` | BK6-24-174 GPKE Teil 2 § 3.5 — 1 WT (17115/17117/39000), 3 WT (17116) |
+    /// | [`SPERRUNG_WINDOW_LABEL`] | `AnweisungErhalten` or `ValidationPassed` | `TimeoutExpired` | BK6-24-174 GPKE Teil 2 Kap. 3.5 — 1 WT (17115/17117/39000), 3 WT (17116) |
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,

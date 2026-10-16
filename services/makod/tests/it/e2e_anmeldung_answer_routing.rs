@@ -11,9 +11,9 @@
 //! (`ANTWORT_PIDS_LF`, `UTILMD_ANFRAGE_PIDS`), so the dispatch table cannot
 //! drift from the router registration.
 //!
-//! `UTILMD_ANFRAGE_PIDS` is deliberately narrower than `UTILMD_PIDS`: 55557 has
-//! no Antwort mapping, so spawning it would only ever end in a deadline-driven
-//! false rejection.
+//! The NB arm spawns on `UTILMD_ANFRAGE_PIDS` (55001, 55004, 55077) — the
+//! Anfragen `SendAntwort` can answer, because `response_pid_for` maps each of
+//! them to its Bestätigung and Ablehnung.
 
 use std::sync::Arc;
 
@@ -62,7 +62,7 @@ async fn reaches_arm(pid: u32, workflow: &str) -> bool {
     let edi = fixture(pid);
     let msg = edi_energy::parse(edi.as_bytes()).expect("fixture parses");
     !matches!(
-        dispatcher().await.dispatch(&msg, workflow, pid).await,
+        dispatcher().await.dispatch(&msg, workflow, pid, time::OffsetDateTime::now_utc()).await,
         Ok(IngestOutcome::Skipped { reason, .. }) if reason.starts_with("pid_not_in_")
     )
 }
@@ -124,4 +124,53 @@ async fn every_supplier_change_anfrage_pid_reaches_the_spawn_arm() {
             "PID {pid} is in UTILMD_ANFRAGE_PIDS but never reaches a dispatch arm"
         );
     }
+}
+
+/// The Antwortfrist runs from the receipt instant the door recorded, not from
+/// when the message reaches its dispatch arm: GPKE Teil 1 Kap. 7
+/// „Fristenberechnung" (S. 27) counts from the ÜT, the „Tag des Empfangs der
+/// Übertragungsdatei". A 55001 received on Tuesday and dispatched months later keeps Tuesday's Frist —
+/// 11:00 Uhr des 1. WT nach dem ÜT — instead of one counted from the dispatch
+/// day.
+#[tokio::test]
+async fn the_antwortfrist_runs_from_the_receipt_instant() {
+    use mako_engine::deadline::DeadlineStore as _;
+    let store = SlateDbStore::open_in_memory()
+        .await
+        .expect("in-memory store");
+    let dispatcher = EdifactIngestDispatcher::new(
+        Arc::new(store.clone()),
+        store.as_snapshot_store(),
+        100,
+        TenantId::from_party_id(OWN_MP),
+    );
+    let edi = fixture(55001);
+    let msg = edi_energy::parse(edi.as_bytes()).expect("fixture parses");
+    // Tue 2026-07-07 12:00 CEST.
+    let received_at = time::macros::datetime!(2026-07-07 10:00 UTC);
+    let outcome = dispatcher
+        .dispatch(&msg, "gpke-supplier-change", 55001, received_at)
+        .await
+        .expect("dispatch");
+    assert!(
+        matches!(outcome, IngestOutcome::Spawned { .. }),
+        "the Anmeldung spawns: {outcome:?}"
+    );
+    let due = store
+        .as_deadline_store()
+        .due_now(100)
+        .await
+        .expect("read deadlines");
+    let frist = due
+        .deadlines
+        .iter()
+        .find(|d| d.label() == mako_gpke::GPKE_PROCESS_RESPONSE_LABEL)
+        .expect("the Antwortfrist is registered");
+    let expected = mako_fristen::antwort::antwort_deadline(55001, received_at)
+        .expect("55001 has a published Antwortfrist");
+    assert_eq!(
+        frist.due_at(),
+        expected,
+        "the Frist counts from the receipt instant"
+    );
 }

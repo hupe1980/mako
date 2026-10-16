@@ -163,14 +163,33 @@ impl NegativpreisRegime {
     /// `optin_wirksam_ab` is the effective date of a §100 opt-in declaration (see
     /// [`optin_wirksam_ab`]); from that date the plant is under the
     /// Solarspitzengesetz regime whatever its vintage, and earns the
-    /// [`SECT51_OPTIN_ZUSCHLAG_CT_KWH`] uplift.
+    /// [`SECT51_OPTIN_ZUSCHLAG_CT_KWH`] uplift — once § 100 Abs. 47 EEG 2023 is
+    /// approved ([`crate::version::sect100_abs47_anwendbar`]). Until then the
+    /// declaration moves nothing and the vintage governs.
     #[must_use]
     pub fn fuer_periode(
         inbetriebnahme: Date,
         optin_wirksam_ab: Option<Date>,
         billing_date: Option<Date>,
     ) -> Self {
-        if let (Some(ab), Some(bd)) = (optin_wirksam_ab, billing_date)
+        Self::fuer_periode_bei(
+            inbetriebnahme,
+            optin_wirksam_ab,
+            billing_date,
+            crate::version::SECT100_ABS47_GENEHMIGT_AB,
+        )
+    }
+
+    /// [`Self::fuer_periode`] with the § 100 Abs. 47 approval date stated.
+    #[must_use]
+    pub fn fuer_periode_bei(
+        inbetriebnahme: Date,
+        optin_wirksam_ab: Option<Date>,
+        billing_date: Option<Date>,
+        abs47_genehmigt_ab: Option<Date>,
+    ) -> Self {
+        if crate::version::sect100_abs47_anwendbar_ab(abs47_genehmigt_ab, billing_date)
+            && let (Some(ab), Some(bd)) = (optin_wirksam_ab, billing_date)
             && bd >= ab
         {
             return Self::Solarspitzen;
@@ -601,23 +620,43 @@ mod tests {
         assert_eq!(optin_wirksam_ab(date!(2026 - 03 - 01), None), None);
     }
 
+    /// Once § 100 Abs. 47 is approved, an effective declaration moves the
+    /// plant to §§ 51/51a; the approval date here stands in for the
+    /// Commission's decision.
     #[test]
     fn an_effective_optin_moves_a_bestandsanlage_to_the_new_regime() {
         let ibn = date!(2019 - 06 - 01);
         let ab = Some(date!(2027 - 01 - 01));
+        let genehmigt = Some(date!(2026 - 06 - 01));
         assert_eq!(
-            NegativpreisRegime::fuer_periode(ibn, ab, Some(date!(2026 - 12 - 01))),
+            NegativpreisRegime::fuer_periode_bei(ibn, ab, Some(date!(2026 - 12 - 01)), genehmigt),
             NegativpreisRegime::Eeg2017,
             "before the effective date the old regime still governs"
         );
         assert_eq!(
-            NegativpreisRegime::fuer_periode(ibn, ab, Some(date!(2027 - 01 - 01))),
+            NegativpreisRegime::fuer_periode_bei(ibn, ab, Some(date!(2027 - 01 - 01)), genehmigt),
             NegativpreisRegime::Solarspitzen
         );
         assert_eq!(
-            NegativpreisRegime::fuer_periode(ibn, None, Some(date!(2030 - 01 - 01))),
+            NegativpreisRegime::fuer_periode_bei(ibn, None, Some(date!(2030 - 01 - 01)), genehmigt),
             NegativpreisRegime::Eeg2017,
             "without a declaration the vintage governs for the whole Förderdauer"
+        );
+    }
+
+    /// § 101 Abs. 1 S. 1 EEG 2023: without the Commission's approval of
+    /// § 100 Abs. 47 an effective declaration leaves the plant on its own rule.
+    #[test]
+    fn without_the_abs47_approval_the_vintage_governs() {
+        let ibn = date!(2019 - 06 - 01);
+        let ab = Some(date!(2027 - 01 - 01));
+        assert_eq!(
+            NegativpreisRegime::fuer_periode(ibn, ab, Some(date!(2027 - 06 - 01))),
+            NegativpreisRegime::Eeg2017
+        );
+        assert_eq!(
+            NegativpreisRegime::fuer_periode_bei(ibn, ab, Some(date!(2027 - 06 - 01)), None),
+            NegativpreisRegime::Eeg2017
         );
     }
 

@@ -59,7 +59,7 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BNetzA BK6-24-174** — GPKE Teil 2 § 2.4 „Herstellung einer 100 %
+//! - **BNetzA BK6-24-174** — GPKE Teil 2 Kap. 2.4 „Herstellung einer 100 %
 //!   LF-Zuordnung zu einer erzeugenden Marktlokation", SD Fälle 1–4
 //! - **EDI@Energy EBD 4.3** Kap. 6.50–6.53 — `E_0603`–`E_0606`
 //! - **UTILMD AHB Strom 2.1/2.2** — message layout
@@ -89,7 +89,7 @@ pub const ANKUENDIGUNG_ZUORDNUNG_PIDS: &[u32] = &[55607];
 pub const WORKFLOW_NAME: &str = "gpke-ankuendigung-zuordnung-lf";
 
 /// Deadline label for the **business answer window** — 15:00 Uhr am ÜT
-/// (GPKE Teil 2 § 2.4.2.2 Nr. 2), resolved by [`mako_fristen::antwort`].
+/// (GPKE Teil 2 Kap. 2.4.2.2 Nr. 2), resolved by [`mako_fristen::antwort`].
 ///
 /// Distinct from the APERAK clock, which is 45 minutes and belongs to `makod`'s
 /// outbox. Missing this one is not a lapsed obligation: the NB then assigns the
@@ -307,7 +307,7 @@ pub enum AnkuendigungZuordnungLfCommand {
     },
     /// Send the outbound UTILMD response (55608 = Bestätigung, 55609 = Ablehnung).
     ///
-    /// Due by **15:00 Uhr am ÜT** (GPKE Teil 2 § 2.4.2.2 Nr. 2), resolved by
+    /// Due by **15:00 Uhr am ÜT** (GPKE Teil 2 Kap. 2.4.2.2 Nr. 2), resolved by
     /// `mako_fristen::antwort` from trigger PID 55607.
     SendAntwort {
         /// The resolved answer: Antwortcode, its EBD, and the Cluster that

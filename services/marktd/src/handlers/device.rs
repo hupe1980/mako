@@ -17,8 +17,8 @@ use mako_markt::repository::{
     DeviceRepository, GeraetKonfiguration, Konfigurationsparameter, SteuerbareRessourceRepository,
     TechnischeRessourceRepository,
 };
-use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
+use mako_service::{ApiError, ApiResult, Json};
 use rubo4e::current::{
     Geraet, SteuerbareRessource, TechnischeRessource, Zaehler, Zaehlzeitdefinition,
 };
@@ -1238,7 +1238,6 @@ pub async fn put_zaehler_saison(
 /// `GET /api/v1/zaehler-register/{register_id}/saisons`
 ///
 /// List all `ZaehlzeitSaison` windows for a register.
-/// Used by `billingd` / `edmd` to classify 15-min intervals into HT/NT bands.
 pub async fn list_zaehler_saisons(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
@@ -1485,9 +1484,12 @@ fn wochentage_key_to_wiederholungstyp(key: &str) -> rubo4e::current::Wiederholun
 
 /// `GET /api/v1/zaehler/{zaehler_id}/tariff-zone`
 ///
-/// Resolve the current tariff zone (HT/NT/EINZEL) for a Zähler at a given
-/// local datetime string (`?at=HH:MM` on the current date, or `?datetime=ISO`).
-/// Used by `billingd` during 15-min interval classification.
+/// Resolve the tariff zone (HT/NT/EINZEL) for a Zähler at a local datetime
+/// (`?datetime=ISO`, default: now in Europe/Berlin).
+///
+/// A single-rate meter answers `EINZEL` from its own window. An instant no
+/// Zählzeit window covers is refused with `422`: answering `EINZEL` there
+/// would price a gap in the master data at a rate nobody configured.
 pub async fn get_tariff_zone(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
@@ -1495,26 +1497,15 @@ pub async fn get_tariff_zone(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Path(zaehler_id): Path<String>,
     axum::extract::Query(q): axum::extract::Query<TariffZoneQuery>,
-) -> impl IntoResponse {
-    if enforcer
+) -> ApiResult<Json<serde_json::Value>> {
+    enforcer
         .check(&claims.principal(), "read-device", &tenant)
-        .is_err()
-    {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
-    }
+        .map_err(|e| ApiError::forbidden(e.to_string()))?;
     // Parse local datetime — defaults to now() if not specified.
     let local_dt = if let Some(dt_str) = q.datetime.as_deref() {
         use time::format_description::well_known::Iso8601;
-        match time::PrimitiveDateTime::parse(dt_str, &Iso8601::DEFAULT) {
-            Ok(dt) => dt,
-            Err(_) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    "invalid datetime, expected ISO 8601",
-                )
-                    .into_response();
-            }
-        }
+        time::PrimitiveDateTime::parse(dt_str, &Iso8601::DEFAULT)
+            .map_err(|_| ApiError::bad_request("invalid datetime, expected ISO 8601"))?
     } else {
         // Use current German local time (CET/CEST) — a Zählzeit/Schaltzeit
         // boundary is a wall-clock time, so the UTC clock resolves the zone one
@@ -1523,24 +1514,21 @@ pub async fn get_tariff_zone(
         time::PrimitiveDateTime::new(now.date(), now.time())
     };
 
-    match repo
+    let zone = repo
         .resolve_tariff_zone(&zaehler_id, &tenant, local_dt)
         .await
-    {
-        Ok(Some(zone)) => Json(serde_json::json!({
-            "zaehler_id": zaehler_id,
-            "local_datetime": local_dt.to_string(),
-            "tariff_zone": zone,
-        }))
-        .into_response(),
-        Ok(None) => Json(serde_json::json!({
-            "zaehler_id": zaehler_id,
-            "tariff_zone": "EINZEL",
-            "note": "No matching ZaehlzeitSaison window found — defaulting to EINZEL",
-        }))
-        .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?
+        .ok_or_else(|| {
+            ApiError::unprocessable(format!(
+                "Zähler {zaehler_id}: no Zählzeit window covers {local_dt} — \
+                 the tariff zone is undetermined"
+            ))
+        })?;
+    Ok(Json(serde_json::json!({
+        "zaehler_id": zaehler_id,
+        "local_datetime": local_dt.to_string(),
+        "tariff_zone": zone,
+    })))
 }
 
 #[derive(serde::Deserialize)]
@@ -1664,15 +1652,12 @@ pub async fn get_sharing_eligibility(
     Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(melo_id): Path<String>,
-) -> impl IntoResponse {
+) -> ApiResult<Json<SharingEligibilityResponse>> {
     use metering::allocation::sharing::{Capability, MeteringCapabilityInput, assess_capability};
 
-    if enforcer
+    enforcer
         .check(&claims.principal(), "read-sharing-eligibility", &tenant)
-        .is_err()
-    {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
-    }
+        .map_err(|e| ApiError::forbidden(e.to_string()))?;
 
     // One join: MeLo → MaLo (Bilanzierungsmethode/-gebiet) → Zaehler (Typ,
     // Fernauslesbarkeit). The MeLo may have no MaLo and no meter yet; LEFT JOINs
@@ -1700,18 +1685,12 @@ pub async fn get_sharing_eligibility(
     .bind(&melo_id)
     .bind(&tenant)
     .fetch_optional(&pool)
-    .await;
-
-    let row = match row {
-        Ok(Some(r)) => r,
-        Ok(None) => {
-            return (StatusCode::NOT_FOUND, format!("MeLo {melo_id} not found")).into_response();
-        }
-        Err(e) => {
-            tracing::warn!(melo_id = %melo_id, error = %e, "sharing-eligibility query failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
-    };
+    .await
+    .map_err(|e| {
+        tracing::warn!(melo_id = %melo_id, error = %e, "sharing-eligibility query failed");
+        ApiError::Internal(anyhow::anyhow!(e).context("sharing-eligibility query"))
+    })?
+    .ok_or(ApiError::NotFound)?;
 
     use sqlx::Row as _;
     let malo_id: Option<String> = row.try_get("malo_id").unwrap_or(None);
@@ -1735,16 +1714,11 @@ pub async fn get_sharing_eligibility(
     // Master data that cannot all be true (a moderne Messeinrichtung balanced
     // as RLM, a conventional meter as IMS) is refused rather than assessed:
     // any verdict over it would be a guess.
-    let (capability, findings) = match assess_capability(&input) {
-        Ok(verdict) => verdict,
-        Err(contradiction) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                format!("MeLo {melo_id}: contradictory master data — {contradiction}"),
-            )
-                .into_response();
-        }
-    };
+    let (capability, findings) = assess_capability(&input).map_err(|contradiction| {
+        ApiError::unprocessable(format!(
+            "MeLo {melo_id}: contradictory master data — {contradiction}"
+        ))
+    })?;
 
     // `assess_capability` returns typed `Finding`s, each with a stable wire code
     // — `Debug` formatting would put a Rust variant name on the API. marktd's
@@ -1769,7 +1743,7 @@ pub async fn get_sharing_eligibility(
         Capability::Unknown => "Stammdaten vervollständigen",
     };
 
-    Json(SharingEligibilityResponse {
+    Ok(Json(SharingEligibilityResponse {
         melo_id,
         malo_id,
         capability: cap_label.to_owned(),
@@ -1783,8 +1757,7 @@ pub async fn get_sharing_eligibility(
             ist_fernauslesbar,
             bilanzierungsmethode,
         },
-    })
-    .into_response()
+    }))
 }
 
 /// Render a window boundary as `HH:MM` for the BO4E `Zaehlzeitdefinition`

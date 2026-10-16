@@ -3,9 +3,12 @@
 //! Applies to the **Control Measures API** and the **MaLo Identification API**.
 //! The **Directory Service** uses a different scheme — see [`super::jws`].
 //!
-//! ## Algorithm (TR-03116-3 chapter 9, referenced by `controlMeasuresV1.yaml`)
+//! ## Algorithm (Regelungen zum Übertragungsweg für API-Webdienste 1.2, Kap. 3.3)
 //!
-//! Four components are signed per request:
+//! Kap. 3.3 signs „die angesprochene Ressource (URI) inklusive aller
+//! Query-Parameter, die http-Kopfzeilen creationDateTime, transactionId und
+//! soweit vorhanden initialTransactionId, und die übermittelte Payload", with
+//! the algorithms of TR-03116-3 Kap. 8 and 9:
 //!
 //! | Component | Source |
 //! |-----------|--------|
@@ -13,19 +16,20 @@
 //! | Payload | Request body in RFC 8785 canonical JSON form; `&[]` when no body |
 //! | `creationDateTime` | Value of the `creationDateTime` request header |
 //! | `transactionId` | Value of the `transactionId` request header |
+//! | `initialTransactionId` | Value of the `initialTransactionId` header — **only when present** |
 //!
 //! ```text
-//! digest = SHA-256(
-//!              SHA-256(uri_bytes)
-//!            ‖ SHA-256(canonical_payload_bytes)
-//!            ‖ SHA-256(creation_dt_bytes)
-//!            ‖ SHA-256(tx_id_bytes)
-//!          )
+//! M         = SHA-256(uri) ‖ SHA-256(payload) ‖ SHA-256(creationDateTime)
+//!           ‖ SHA-256(transactionId) [‖ SHA-256(initialTransactionId)]
+//! digest    = SHA-256(M)
 //! signature = ECDSA-P256(prehash = digest)
 //! ```
 //!
-//! Both values are **standard Base64** (with padding, RFC 4648 §4) and are
-//! transmitted as HTTP headers [`HEADER_DIGEST`] and [`HEADER_SIGNATURE`].
+//! Both values are **standard Base64** (with padding, RFC 4648 §4). The
+//! signature travels in [`HEADER_SIGNATURE`] (`X-BDEW-SIGNATURE`), the digest
+//! in [`HEADER_DIGEST`] (`X-BDEW-DIGEST`) and the signer's certificate in
+//! [`HEADER_CERT`] (`X-BDEW-CERT`, RFC 9440 §2.1 encoding — see
+//! [`cert_header_value`]).
 //!
 //! ## Signing keys
 //!
@@ -35,39 +39,43 @@
 //! ## Client-side usage
 //!
 //! ```no_run
-//! use energy_api::transport::content_security::{self, HEADER_DIGEST, HEADER_SIGNATURE};
+//! use energy_api::transport::content_security::{self, SignedInputs};
 //!
 //! let key = content_security::signing_key_from_pem(
 //!     "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----",
 //! )?;
-//! let uri = "https://msb.example.de/[Post]/steuerbefehl/konfiguration/\
-//!             ?locationId=E1234848431&commandControl=%7B...%7D";
-//! let (digest, sig) = content_security::sign_request(
-//!     uri,
-//!     &[],                                      // no body for control-measures calls
-//!     "2025-06-01T10:00:00.000Z",
-//!     "f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
-//!     &key,
-//! )?;
-//! // add `HEADER_DIGEST: digest` and `HEADER_SIGNATURE: sig` to the outgoing request
+//! let inputs = SignedInputs {
+//!     uri: "https://msb.example.de/[Post]/steuerbefehl/konfiguration/\
+//!           ?locationId=E1234848431&commandControl=%7B...%7D",
+//!     payload: &[], // no body for control-measures calls
+//!     creation_date_time: "2025-06-01T10:00:00.000Z",
+//!     transaction_id: "f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
+//!     initial_transaction_id: None,
+//! };
+//! let (digest, sig) = content_security::sign_request(&inputs, &key)?;
+//! // set `HEADER_DIGEST: digest`, `HEADER_SIGNATURE: sig` and `HEADER_CERT`
 //! # Ok::<(), energy_api::Error>(())
 //! ```
 //!
 //! ## Server-side usage
 //!
 //! ```no_run
-//! use energy_api::transport::content_security;
+//! use energy_api::transport::content_security::{self, SignedInputs};
 //!
-//! // verifying_key loaded from the X-BDEW-CERT / DER certificate in the TLS handshake
+//! // verifying_key loaded from the X-BDEW-CERT certificate
 //! # let verifying_key = content_security::verifying_key_from_pem(
 //! #     "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----")?;
+//! let inputs = SignedInputs {
+//!     uri: "https://my-server.example.de/[Post]/steuerbefehl/konfiguration/?...",
+//!     payload: &[],
+//!     creation_date_time: "2025-06-01T10:00:00.000Z",
+//!     transaction_id: "f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
+//!     initial_transaction_id: None,
+//! };
 //! content_security::verify_request(
-//!     "https://my-server.example.de/[Post]/steuerbefehl/konfiguration/?...",
-//!     &[],
-//!     "2025-06-01T10:00:00.000Z",
-//!     "f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
-//!     /* digest_b64 from DIGEST header   */ "...",
-//!     /* sig_b64   from SIGNATURE header */ "...",
+//!     &inputs,
+//!     /* from X-BDEW-DIGEST    */ "...",
+//!     /* from X-BDEW-SIGNATURE */ "...",
 //!     &verifying_key,
 //! )?;
 //! # Ok::<(), energy_api::Error>(())
@@ -90,41 +98,56 @@ use crate::error::Error;
 
 // ── Header names ─────────────────────────────────────────────────────────────
 
-/// HTTP header name carrying the Base64-encoded (standard, padded) SHA-256 digest.
-///
-/// Value: `"DIGEST"`
-pub const HEADER_DIGEST: &str = "DIGEST";
+/// HTTP header carrying the signed digest `Hash(M)`, standard Base64
+/// (Regelungen zum Übertragungsweg für API-Webdienste 1.2, Kap. 3.3).
+pub const HEADER_DIGEST: &str = "X-BDEW-DIGEST";
 
-/// HTTP header name carrying the Base64-encoded (standard, padded) ECDSA-P256 signature.
-///
-/// Value: `"SIGNATURE"`
-pub const HEADER_SIGNATURE: &str = "SIGNATURE";
+/// HTTP header carrying the Plain-encoded ECDSA signature (TR-03111), standard
+/// Base64 (same chapter).
+pub const HEADER_SIGNATURE: &str = "X-BDEW-SIGNATURE";
+
+/// HTTP header carrying the certificate of the signing key, encoded as RFC 9440
+/// §2.1 encodes a TLS certificate (same chapter).
+pub const HEADER_CERT: &str = "X-BDEW-CERT";
+
+/// The value of [`HEADER_CERT`] for a DER certificate: RFC 9440 §2.1's Byte
+/// Sequence — the DER in standard Base64, between colons.
+#[must_use]
+pub fn cert_header_value(cert_der: &[u8]) -> String {
+    format!(":{}:", Base64::encode_string(cert_der))
+}
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/// Sign an outgoing API request and return Base64-encoded `(digest, signature)` strings
-/// ready to be set as [`HEADER_DIGEST`] and [`HEADER_SIGNATURE`] HTTP headers.
-///
-/// # Arguments
-///
-/// - `uri` — full request URI, **including** URL-encoded query parameters.
-/// - `canonical_payload` — RFC 8785 JCS bytes of the request body;
-///   pass `&[]` for endpoints with no structured body.
-/// - `creation_dt` — value of the `creationDateTime` request header (ISO 8601 UTC).
-/// - `tx_id` — value of the `transactionId` request header (UUID string).
-/// - `signing_key` — EMT.API P-256 private key from the SM-PKI.
+/// The request components Kap. 3.3 signs.
+#[derive(Debug, Clone, Copy)]
+pub struct SignedInputs<'a> {
+    /// Full request URI, **including** URL-encoded query parameters.
+    pub uri: &'a str,
+    /// RFC 8785 JCS bytes of the request body; `&[]` for an endpoint with no
+    /// structured body.
+    pub payload: &'a [u8],
+    /// Value of the `creationDateTime` request header.
+    pub creation_date_time: &'a str,
+    /// Value of the `transactionId` request header.
+    pub transaction_id: &'a str,
+    /// Value of the `initialTransactionId` request header. Kap. 3.3 includes
+    /// its hash „nur dann …, wenn diese vorhanden ist" — `None` leaves it out
+    /// of `M`, `Some` appends it.
+    pub initial_transaction_id: Option<&'a str>,
+}
+
+/// Sign an outgoing API request and return Base64-encoded `(digest, signature)`
+/// strings for [`HEADER_DIGEST`] and [`HEADER_SIGNATURE`].
 ///
 /// # Errors
 ///
 /// Returns [`Error::Signature`] if ECDSA signing fails.
 pub fn sign_request(
-    uri: &str,
-    canonical_payload: &[u8],
-    creation_dt: &str,
-    tx_id: &str,
+    inputs: &SignedInputs<'_>,
     signing_key: &SigningKey,
 ) -> Result<(String, String), Error> {
-    let digest = compute_digest(uri, canonical_payload, creation_dt, tx_id);
+    let digest = compute_digest(inputs);
     let sig: Signature = signing_key
         .sign_prehash(&digest)
         .map_err(|e| Error::Signature(format!("ECDSA prehash sign: {e}")))?;
@@ -137,46 +160,34 @@ pub fn sign_request(
 /// Verify the content-security headers of an incoming API request.
 ///
 /// Checks that:
-/// 1. The received `DIGEST` header matches the independently recomputed digest.
-/// 2. The `SIGNATURE` header is a valid ECDSA-P256 signature over that digest.
+/// 1. The received [`HEADER_DIGEST`] matches the independently recomputed digest.
+/// 2. The [`HEADER_SIGNATURE`] is a valid ECDSA-P256 signature over that digest.
 ///
-/// # Arguments
-///
-/// - `uri` — full request URI, **including** URL-encoded query parameters.
-/// - `canonical_payload` — RFC 8785 JCS bytes of the request body;
-///   pass `&[]` for endpoints with no structured body.
-/// - `creation_dt` — value of the `creationDateTime` request header.
-/// - `tx_id` — value of the `transactionId` request header.
-/// - `digest_b64` — value of the `DIGEST` HTTP header (standard Base64).
-/// - `signature_b64` — value of the `SIGNATURE` HTTP header (standard Base64).
-/// - `verifying_key` — EMT.API P-256 public key extracted from the sender's certificate.
+/// `verifying_key` is the EMT.API P-256 public key of the sender's certificate.
 ///
 /// # Errors
 ///
 /// Returns [`Error::Signature`] on any mismatch or decode failure.
 pub fn verify_request(
-    uri: &str,
-    canonical_payload: &[u8],
-    creation_dt: &str,
-    tx_id: &str,
+    inputs: &SignedInputs<'_>,
     digest_b64: &str,
     signature_b64: &str,
     verifying_key: &VerifyingKey,
 ) -> Result<(), Error> {
-    let expected = compute_digest(uri, canonical_payload, creation_dt, tx_id);
+    let expected = compute_digest(inputs);
 
     // 1. Verify the digest header matches.
     let received = Base64::decode_vec(digest_b64)
-        .map_err(|e| Error::Signature(format!("DIGEST base64 decode: {e}")))?;
+        .map_err(|e| Error::Signature(format!("{HEADER_DIGEST} base64 decode: {e}")))?;
     if received.as_slice() != expected {
-        return Err(Error::Signature(
-            "DIGEST header does not match request components".into(),
-        ));
+        return Err(Error::Signature(format!(
+            "{HEADER_DIGEST} does not match the request components"
+        )));
     }
 
     // 2. Verify the ECDSA signature.
     let sig_bytes = Base64::decode_vec(signature_b64)
-        .map_err(|e| Error::Signature(format!("SIGNATURE base64 decode: {e}")))?;
+        .map_err(|e| Error::Signature(format!("{HEADER_SIGNATURE} base64 decode: {e}")))?;
     let sig = Signature::from_slice(&sig_bytes)
         .map_err(|e| Error::Signature(format!("malformed ECDSA signature bytes: {e}")))?;
     verifying_key
@@ -224,26 +235,25 @@ pub fn verifying_key_from_pem(pem: &str) -> Result<VerifyingKey, Error> {
 
 // ── Internal ──────────────────────────────────────────────────────────────────
 
-/// Compute the two-level SHA-256 digest over the four signed request components.
+/// Compute the digest `Hash(M)` over the signed request components.
 ///
 /// ```text
-/// digest = SHA-256(SHA-256(uri) ‖ SHA-256(payload) ‖ SHA-256(dt) ‖ SHA-256(tx_id))
+/// Hash(SHA-256(uri) ‖ SHA-256(payload) ‖ SHA-256(dt) ‖ SHA-256(tx_id) [‖ SHA-256(initial_tx_id)])
 /// ```
 ///
 /// This function is `pub` so callers can inspect the digest bytes directly
 /// (e.g. for logging or debugging) without going through the full sign/verify flow.
-pub fn compute_digest(
-    uri: &str,
-    canonical_payload: &[u8],
-    creation_dt: &str,
-    tx_id: &str,
-) -> [u8; 32] {
-    let mut combined = [0u8; 128]; // four × 32-byte inner hashes
-    combined[0..32].copy_from_slice(&sha256(uri.as_bytes()));
-    combined[32..64].copy_from_slice(&sha256(canonical_payload));
-    combined[64..96].copy_from_slice(&sha256(creation_dt.as_bytes()));
-    combined[96..128].copy_from_slice(&sha256(tx_id.as_bytes()));
-    sha256(&combined)
+#[must_use]
+pub fn compute_digest(inputs: &SignedInputs<'_>) -> [u8; 32] {
+    let mut m = Sha256::new();
+    m.update(sha256(inputs.uri.as_bytes()));
+    m.update(sha256(inputs.payload));
+    m.update(sha256(inputs.creation_date_time.as_bytes()));
+    m.update(sha256(inputs.transaction_id.as_bytes()));
+    if let Some(initial) = inputs.initial_transaction_id {
+        m.update(sha256(initial.as_bytes()));
+    }
+    m.finalize().into()
 }
 
 #[inline]
@@ -268,30 +278,28 @@ mod tests {
         SigningKey::from(&secret)
     }
 
+    fn inputs<'a>(uri: &'a str, payload: &'a [u8], dt: &'a str, tx: &'a str) -> SignedInputs<'a> {
+        SignedInputs {
+            uri,
+            payload,
+            creation_date_time: dt,
+            transaction_id: tx,
+            initial_transaction_id: None,
+        }
+    }
+
     #[test]
     fn roundtrip_no_body() {
         let key = test_signing_key();
         let vk = *key.verifying_key();
-
-        let (d, s) = sign_request(
+        let i = inputs(
             "https://msb.example.de/[Post]/steuerbefehl/konfiguration/?locationId=E1234848431",
             &[],
             "2025-06-01T10:00:00.000Z",
             "f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
-            &key,
-        )
-        .expect("sign");
-
-        verify_request(
-            "https://msb.example.de/[Post]/steuerbefehl/konfiguration/?locationId=E1234848431",
-            &[],
-            "2025-06-01T10:00:00.000Z",
-            "f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
-            &d,
-            &s,
-            &vk,
-        )
-        .expect("verify");
+        );
+        let (d, s) = sign_request(&i, &key).expect("sign");
+        verify_request(&i, &d, &s, &vk).expect("verify");
     }
 
     #[test]
@@ -300,49 +308,39 @@ mod tests {
         let vk = *key.verifying_key();
         let body =
             br#"{"identificationDateTime":"2025-06-01T22:00:00Z","energyDirection":"consumption"}"#;
-
-        let (d, s) = sign_request(
+        let i = inputs(
             "https://nb.example.de/maloId/request/v1",
             body,
             "2025-06-01T10:00:00.000Z",
             "aabbccdd-eeff-0011-2233-445566778899",
-            &key,
-        )
-        .expect("sign");
-
-        verify_request(
-            "https://nb.example.de/maloId/request/v1",
-            body,
-            "2025-06-01T10:00:00.000Z",
-            "aabbccdd-eeff-0011-2233-445566778899",
-            &d,
-            &s,
-            &vk,
-        )
-        .expect("verify");
+        );
+        let (d, s) = sign_request(&i, &key).expect("sign");
+        verify_request(&i, &d, &s, &vk).expect("verify");
     }
 
     #[test]
     fn digest_mismatch_is_rejected() {
         let key = test_signing_key();
         let vk = *key.verifying_key();
-
         let (digest_b64, sig_b64) = sign_request(
-            "https://example.de/api?x=1",
-            b"body",
-            "2025-06-01T10:00:00Z",
-            "tx-000",
-            &key,
-        )
-        .expect("sign");
-
-        // Tampered URI — digest should not match.
-        assert!(
-            verify_request(
-                "https://example.de/api?x=TAMPERED",
+            &inputs(
+                "https://example.de/api?x=1",
                 b"body",
                 "2025-06-01T10:00:00Z",
                 "tx-000",
+            ),
+            &key,
+        )
+        .expect("sign");
+        // Tampered URI — digest should not match.
+        assert!(
+            verify_request(
+                &inputs(
+                    "https://example.de/api?x=TAMPERED",
+                    b"body",
+                    "2025-06-01T10:00:00Z",
+                    "tx-000"
+                ),
                 &digest_b64,
                 &sig_b64,
                 &vk,
@@ -355,43 +353,69 @@ mod tests {
     fn signature_mismatch_is_rejected() {
         let key = test_signing_key();
         let vk = *key.verifying_key();
-
-        let (digest_b64, _) = sign_request(
+        let i = inputs(
             "https://example.de/api",
             &[],
             "2025-06-01T10:00:00Z",
             "tx-000",
-            &key,
-        )
-        .expect("sign");
-
+        );
+        let (digest_b64, _) = sign_request(&i, &key).expect("sign");
         // Correct digest, wrong signature.
         let bad_sig = Base64::encode_string(&[0u8; 64]);
-        assert!(
-            verify_request(
-                "https://example.de/api",
-                &[],
-                "2025-06-01T10:00:00Z",
-                "tx-000",
-                &digest_b64,
-                &bad_sig,
-                &vk,
-            )
-            .is_err()
-        );
+        assert!(verify_request(&i, &digest_b64, &bad_sig, &vk).is_err());
     }
 
     #[test]
     fn compute_digest_is_deterministic() {
-        let d1 = compute_digest("uri", b"body", "dt", "tx");
-        let d2 = compute_digest("uri", b"body", "dt", "tx");
-        assert_eq!(d1, d2);
+        let i = inputs("uri", b"body", "dt", "tx");
+        assert_eq!(compute_digest(&i), compute_digest(&i));
     }
 
     #[test]
     fn empty_and_non_empty_payload_differ() {
-        let d_empty = compute_digest("uri", &[], "dt", "tx");
-        let d_body = compute_digest("uri", b"x", "dt", "tx");
-        assert_ne!(d_empty, d_body);
+        assert_ne!(
+            compute_digest(&inputs("uri", &[], "dt", "tx")),
+            compute_digest(&inputs("uri", b"x", "dt", "tx"))
+        );
+    }
+
+    /// Kap. 3.3: `M = Hash(URI) + Hash(Payload) + Hash(creationDateTime) +
+    /// Hash(transactionId) + Hash(initialTransactionId)`, the last term only
+    /// when the header is present. A digest that ignored it would let the
+    /// header be altered under a valid signature.
+    #[test]
+    fn the_initial_transaction_id_is_signed_when_present() {
+        let without = inputs("uri", b"body", "dt", "tx");
+        let with = SignedInputs {
+            initial_transaction_id: Some("first-tx"),
+            ..without
+        };
+        assert_ne!(compute_digest(&without), compute_digest(&with));
+        let mut m = Vec::new();
+        for part in [&b"uri"[..], b"body", b"dt", b"tx", b"first-tx"] {
+            m.extend_from_slice(&sha256(part));
+        }
+        assert_eq!(
+            compute_digest(&with),
+            sha256(&m),
+            "Hash(M) over the five hashes"
+        );
+
+        let key = test_signing_key();
+        let (d, s) = sign_request(&with, &key).expect("sign");
+        let altered = SignedInputs {
+            initial_transaction_id: Some("other-tx"),
+            ..with
+        };
+        assert!(verify_request(&altered, &d, &s, key.verifying_key()).is_err());
+    }
+
+    /// The header names Kap. 3.3 (S. 5) publishes.
+    #[test]
+    fn the_headers_carry_the_published_names() {
+        assert_eq!(HEADER_DIGEST, "X-BDEW-DIGEST");
+        assert_eq!(HEADER_SIGNATURE, "X-BDEW-SIGNATURE");
+        assert_eq!(HEADER_CERT, "X-BDEW-CERT");
+        assert_eq!(cert_header_value(&[1, 2, 3]), ":AQID:");
     }
 }

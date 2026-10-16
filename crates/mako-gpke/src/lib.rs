@@ -501,14 +501,14 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             router.register(pid, "gpke-neuanlage");
         }
 
-        // PID 55007 (NB-seitiges Lieferende, NB→LF) — GPKE Teil 2 §2.5.
+        // PID 55007 (NB-seitiges Lieferende, NB→LF) — GPKE Teil 2 Kap. 2.5.
         // LF-role makod receives PID 55007 and responds with 55008/55009.
         for &pid in LF_ABMELDUNG_PIDS {
             router.register(pid, "gpke-lf-abmeldung");
         }
 
         // PIDs 55036/55037/55038 (Zuordnungs-Meldungen, NB→LFN/LFA/LFZ) — GPKE
-        // Teil 2 § 2.1.2 SD Lieferbeginn Nr. 2 / 10 / 13. One-way: the NB sends
+        // Teil 2 Kap. 2.1.2 SD Lieferbeginn Nr. 2 / 10 / 13. One-way: the NB sends
         // them by command, and a supplier-role deployment records the inbound
         // ones. Registering them is what stops an inbound Meldung from being
         // dead-lettered as `MessageStatus::UnknownPid` — there is no
@@ -523,7 +523,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             router.register(pid, beendigung_zuordnung::WORKFLOW_NAME);
         }
 
-        // PID 55016 (Kündigung, LFN→LFA) — GPKE Teil 2 § 1.2, EBD `E_0614`.
+        // PID 55016 (Kündigung, LFN→LFA) — GPKE Teil 2 Kap. 1.2, EBD `E_0614`.
         // Its own workflow rather than a `gpke-supplier-change` variant: both
         // are keyed by Marktlokation, and an integrated NB+LF deployment runs
         // the NB's Anmeldung on the same MaLo.
@@ -550,13 +550,13 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         }
 
         // PIDs 55156/55220/55673 (Rückmeldung/Bestellung Abrechnungsdaten, LF → NB)
-        // — GPKE Teil 2 § 3.1. The NB answers with IFTSTA 21047 by the 2. WT
+        // — GPKE Teil 2 Kap. 3.1. The NB answers with IFTSTA 21047 by the 2. WT
         // nach dem ÜT.
         for &pid in ABRECHNUNGSDATEN_PIDS {
             router.register(pid, abrechnungsdaten::WORKFLOW_NAME);
         }
 
-        // PID 55607 (Ankündigung Zuordnung LF, NB→LFN) — GPKE Teil 2 §2.2, BK6-24-174.
+        // PID 55607 (Ankündigung Zuordnung LF, NB→LFN) — GPKE Teil 2 Kap. 2.2, BK6-24-174.
         // LF-role makod receives PID 55607 and responds with 55608/55609.
         for &pid in ANKUENDIGUNG_ZUORDNUNG_PIDS {
             router.register(pid, ankuendigung_zuordnung_lf::WORKFLOW_NAME);

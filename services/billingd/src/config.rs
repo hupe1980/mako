@@ -171,6 +171,34 @@ pub struct Gesamtumsatz {
 }
 
 impl ERechnungConfig {
+    /// Refuse a list that names a year twice or records a negative figure.
+    ///
+    /// [`Self::gesamtumsatz_im`] reads one figure per year; with two, a
+    /// second, corrected figure would be ignored without notice, and the
+    /// § 27 Abs. 38 Nr. 2 UStG test would run on whichever came first.
+    ///
+    /// # Errors
+    ///
+    /// Names the duplicated year or the negative figure.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let mut jahre = std::collections::BTreeSet::new();
+        for g in &self.gesamtumsatz {
+            anyhow::ensure!(
+                jahre.insert(g.jahr),
+                "[e_rechnung] gesamtumsatz names {} twice — one Gesamtumsatz per calendar \
+                 year (§ 19 Abs. 2 UStG); remove the superseded entry",
+                g.jahr
+            );
+            anyhow::ensure!(
+                g.eur >= Decimal::ZERO,
+                "[e_rechnung] gesamtumsatz {}: {} EUR is not a Gesamtumsatz",
+                g.jahr,
+                g.eur
+            );
+        }
+        Ok(())
+    }
+
     /// The recorded Gesamtumsatz of `jahr`, if any.
     #[must_use]
     pub fn gesamtumsatz_im(&self, jahr: i32) -> Option<Decimal> {
@@ -458,6 +486,7 @@ impl BillingdConfig {
         if let Some(rates) = &self.rates {
             rates.validate()?;
         }
+        self.e_rechnung.validate()?;
         Ok(())
     }
 
@@ -774,30 +803,51 @@ impl BillingdConfig {
         period_to: time::Date,
         nehs: Option<NehsPreis>,
     ) -> Result<energy_billing::RegulatoryRates, StraddlesRateBoundary> {
+        let straddles = |stichtage: Vec<time::Date>| StraddlesRateBoundary {
+            category: category.to_owned(),
+            period_from,
+            period_to,
+            stichtage,
+        };
         let stichtage = self.steuer_stichtage(category, period_from, period_to);
         if !stichtage.is_empty() {
-            return Err(StraddlesRateBoundary {
-                category: category.to_owned(),
-                period_from,
-                period_to,
-                stichtage,
-            });
+            return Err(straddles(stichtage));
         }
-        Ok(self.regulatory_rates_for_period(category, period_from, period_to, nehs))
+        // An operator-pinned rate is their VAT decision; otherwise the period's
+        // own rate, which the helpers return only for a period inside one rate.
+        // A `None` here says no single rate is correct for the period, so it is
+        // refused with the Stichtage rather than answered with a default.
+        let mwst_rate = self
+            .rates_config()
+            .mwst_rate
+            .or_else(|| {
+                if matches!(category, "GAS" | "WAERME") {
+                    energy_billing::mwst_rate_for_gas_waerme_period(period_from, period_to)
+                } else {
+                    energy_billing::mwst_rate_for_period(period_from, period_to)
+                }
+            })
+            .ok_or_else(|| {
+                straddles(energy_billing::steuer_stichtage_im_zeitraum(
+                    category,
+                    period_from,
+                    period_to,
+                ))
+            })?;
+        Ok(self.uniform_rates_for_period(category, period_from, period_to, nehs, mwst_rate))
     }
 
-    /// Resolve the statutory rates for a period, assuming it is uniform.
+    /// The statutory rates of a period [`Self::try_regulatory_rates_for_period`]
+    /// has found to be uniform, at the VAT rate it resolved.
     ///
-    /// Prefer [`Self::try_regulatory_rates_for_period`] on any path that bills:
-    /// this one reads the rates at the period start where a period straddles a
-    /// boundary, which is only safe for previews and estimates. A tax with no
-    /// source for the period is carried as its refusal either way.
-    pub fn regulatory_rates_for_period(
+    /// A tax with no source for the period is carried as its refusal.
+    fn uniform_rates_for_period(
         &self,
         category: &str,
         period_from: time::Date,
         period_to: time::Date,
         nehs: Option<NehsPreis>,
+        mwst_rate: rust_decimal::Decimal,
     ) -> energy_billing::RegulatoryRates {
         use energy_billing::{
             ENERGIESTEUER_GAS_SERIE, RateRefusal, RegulatoryRates, STROMSTEUER_SERIE,
@@ -831,16 +881,6 @@ impl BillingdConfig {
         let (behg_gas_ct_per_kwh, behg_rechtsgrundlage) =
             self.behg_for_period(category, period_from, period_to, nehs);
 
-        let mwst_rate = cfg
-            .mwst_rate
-            .or_else(|| {
-                if matches!(category, "GAS" | "WAERME") {
-                    energy_billing::mwst_rate_for_gas_waerme_period(period_from, period_to)
-                } else {
-                    energy_billing::mwst_rate_for_period(period_from, period_to)
-                }
-            })
-            .unwrap_or(rust_decimal::dec!(0.19));
         RegulatoryRates {
             stromsteuer_ct_per_kwh,
             energiesteuer_gas_ct_per_kwh,
@@ -1056,6 +1096,26 @@ mod dated_rate_tests {
         .expect("config parses")
     }
 
+    /// A gas period crossing the 7 %/19 % Stichtag of 01.04.2024 has no single
+    /// VAT rate, so no rate set is resolved for it — never 19 % for the whole.
+    #[test]
+    fn a_straddling_gas_period_resolves_no_vat_rate() {
+        let c = cfg(serde_json::Value::Null);
+        let err = c
+            .try_regulatory_rates_for_period(
+                "GAS",
+                date!(2024 - 03 - 15),
+                date!(2024 - 04 - 15),
+                None,
+            )
+            .expect_err("no single VAT rate covers the period");
+        assert!(
+            err.stichtage.contains(&date!(2024 - 04 - 01)),
+            "{:?}",
+            err.stichtage
+        );
+    }
+
     fn gas_jan(year: i32) -> (time::Date, time::Date) {
         (
             time::Date::from_calendar_date(year, time::Month::January, 1).unwrap(),
@@ -1136,7 +1196,9 @@ mod dated_rate_tests {
             "behg_eur_per_t": [row("2027-01-01", "2027-03-31", "70")]
         }));
         rvo.validate().expect("the RVO regime has no corridor");
-        let r = rvo.regulatory_rates_for_period("GAS", from, to, None);
+        let r = rvo
+            .try_regulatory_rates_for_period("GAS", from, to, None)
+            .expect("uniform period");
         assert_eq!(
             r.behg_gas_ct_per_kwh.unwrap(),
             dec!(70) * dec!(0.18139464) / dec!(10)
@@ -1153,7 +1215,8 @@ mod dated_rate_tests {
         assert!(korridor.validate().is_err(), "70 EUR/t is outside 55–65");
         assert!(
             korridor
-                .regulatory_rates_for_period("GAS", from, to, None)
+                .try_regulatory_rates_for_period("GAS", from, to, None)
+                .expect("uniform period")
                 .behg_gas_ct_per_kwh
                 .is_err()
         );
@@ -1163,7 +1226,9 @@ mod dated_rate_tests {
             "behg_eur_per_t": [row("2027-01-01", "2027-12-31", "60")]
         }));
         ok.validate().expect("60 lies inside the corridor");
-        let r = ok.regulatory_rates_for_period("GAS", from, to, None);
+        let r = ok
+            .try_regulatory_rates_for_period("GAS", from, to, None)
+            .expect("uniform period");
         assert!(r.behg_gas_ct_per_kwh.is_ok());
         assert!(r.behg_rechtsgrundlage.contains("BT-Drs. 21/7869"));
 
@@ -1214,7 +1279,8 @@ mod dated_rate_tests {
             eur_per_t: dec!(63),
         };
         assert!(
-            c.regulatory_rates_for_period("GAS", from, to, Some(dec_2026))
+            c.try_regulatory_rates_for_period("GAS", from, to, Some(dec_2026))
+                .expect("uniform period")
                 .behg_gas_ct_per_kwh
                 .is_err()
         );
@@ -1224,7 +1290,8 @@ mod dated_rate_tests {
             eur_per_t: dec!(55),
         };
         assert_eq!(
-            c.regulatory_rates_for_period("GAS", from, to, Some(dec_2025))
+            c.try_regulatory_rates_for_period("GAS", from, to, Some(dec_2025))
+                .expect("uniform period")
                 .behg_gas_ct_per_kwh
                 .unwrap(),
             dec!(1.08836784),
@@ -1235,7 +1302,8 @@ mod dated_rate_tests {
             eur_per_t: dec!(62),
         };
         assert_eq!(
-            c.regulatory_rates_for_period("GAS", from, to, Some(jan_2026))
+            c.try_regulatory_rates_for_period("GAS", from, to, Some(jan_2026))
+                .expect("uniform period")
                 .behg_gas_ct_per_kwh
                 .unwrap(),
             dec!(62) * dec!(0.18139464) / dec!(10)
@@ -1247,7 +1315,9 @@ mod dated_rate_tests {
     #[test]
     fn a_2028_strom_period_refuses_until_a_sourced_row_fills_it() {
         let (from, to) = gas_jan(2028);
-        let r = cfg(serde_json::Value::Null).regulatory_rates_for_period("STROM", from, to, None);
+        let r = cfg(serde_json::Value::Null)
+            .try_regulatory_rates_for_period("STROM", from, to, None)
+            .expect("uniform period");
         let err = r.effective_stromsteuer(None).expect_err("2028 is unread");
         let msg = err.to_string();
         assert!(msg.contains("Stromsteuer") && msg.contains("2028"), "{msg}");
@@ -1261,7 +1331,8 @@ mod dated_rate_tests {
         filled.validate().expect("a gap-filling row with a source");
         assert_eq!(
             filled
-                .regulatory_rates_for_period("STROM", from, to, None)
+                .try_regulatory_rates_for_period("STROM", from, to, None)
+                .expect("uniform period")
                 .effective_stromsteuer(None)
                 .unwrap(),
             dec!(2.05)
@@ -1316,6 +1387,34 @@ mod seller_identity_tests {
             cfg(None, Some("123/456/78901")).seller_tax_identifier(),
             Some("123/456/78901"),
         );
+    }
+
+    /// A year listed twice is refused at startup: the lookup reads one figure,
+    /// so a second, corrected one would be ignored without notice.
+    #[test]
+    fn a_gesamtumsatz_year_listed_twice_is_refused() {
+        let mut v = serde_json::json!({
+            "database": { "url": "postgres://localhost/x" },
+            "tenant": "9900357000004",
+            "productd_url": "http://localhost:9080",
+            "edmd_url": "http://localhost:8380",
+            "marktd_url": "http://localhost:8080",
+            "seller_vat_id": "DE123456789",
+        });
+        v["e_rechnung"] = serde_json::json!({ "gesamtumsatz": [
+            { "jahr": 2026, "eur": "750000" },
+            { "jahr": 2026, "eur": "850000" },
+        ]});
+        let c: BillingdConfig = serde_json::from_value(v.clone()).expect("config parses");
+        let err = c.validate().expect_err("2026 is named twice");
+        assert!(err.to_string().contains("2026"), "{err}");
+
+        v["e_rechnung"] = serde_json::json!({ "gesamtumsatz": [
+            { "jahr": 2025, "eur": "750000" },
+            { "jahr": 2026, "eur": "850000" },
+        ]});
+        let c: BillingdConfig = serde_json::from_value(v).expect("config parses");
+        c.validate().expect("one figure per year");
     }
 
     /// With both, the USt-IdNr. is the one a counterparty can verify (VIES).

@@ -2474,7 +2474,7 @@ mod wire_tests {
     #[test]
     fn the_series_with_their_own_pids_are_not_reachable_from_the_generic_codes() {
         // The Zuordnungsermächtigung, the AAÜZ families and the LF-AASZR are
-        // activated with 55071/55072 and 55197–55214, not with 55062/55063, so
+        // activated with 55071/55072, 55197–55200 and 55203–55214, not with 55062/55063, so
         // no CAV code names them.
         let unreachable = [
             ZpSerie::Zuordnungsermaechtigung,

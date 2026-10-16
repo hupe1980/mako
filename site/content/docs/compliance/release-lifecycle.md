@@ -100,14 +100,16 @@ When all profile and code changes are merged and `just ci` is green:
 1. **Bump the workspace version** with `cargo xtask bump-version <X.Y.Z>`.
 2. **Create and push a tag**: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. The `release.yml` GitHub Actions workflow runs automatically:
-   - Runs pre-flight `fmt` / `clippy` / `test`, checks the tag equals the
-     workspace version and the publish order resolves, and runs
-     `validate-profiles`.
+   - Runs pre-flight `fmt` / `clippy` / `test` and checks the tag equals the
+     workspace version and the publish order resolves; beside it, the
+     `guards` job runs every `just ci` recipe that is one `cargo xtask` call
+     (`validate-profiles` among them). Nothing is published unless both pass.
    - Runs `just semver` (`cargo-semver-checks` against the previous `v*` tag,
      over every crate the workflow publishes): a public-API break the new
      version number does not admit stops the release before anything is
      published. It runs only here, not in `just ci`.
-   - Publishes the 25 library crates to [crates.io](https://crates.io)
+   - Publishes the 24 published library crates (every crate under `crates/`
+     but `mako-service`, which is `publish = false`) to [crates.io](https://crates.io)
      with `cargo publish`, in dependency order, by Trusted Publishing.
    - Builds and pushes multi-arch Docker images (`linux/amd64`, `linux/arm64`)
      for each service daemon to `ghcr.io/hupe1980/mako-<service>` (e.g.
@@ -153,8 +155,11 @@ depends on its role under the Regulation, which this page does not determine.
 `deny.toml`'s `[advisories] ignore` list — status, justification and impact
 statement — so a scanner does not re-raise an advisory the project has
 already assessed. `cargo xtask check-vex` holds the two lists equal in both
-directions and, where a local RustSec database is present, refuses a statement
-naming a different crate than the advisory does. The Regulation does not name
+directions, refuses a subcomponent version that neither `Cargo.lock` nor
+`fuzz/Cargo.lock` holds and, where a local RustSec database is present, refuses
+a statement naming a different crate than the advisory does. `fuzz/` lies
+outside the workspace, so `just deny` (and the CI `deny` job) runs the
+advisory check over its lock separately, under the same `deny.toml`. The Regulation does not name
 VEX; it is the machine-readable form chosen here for documenting how a known
 vulnerability is addressed (Annex I Part II point (2)).
 
@@ -167,9 +172,9 @@ v1.0 Build Level 2.
 **Publishing without a stored secret.** crates.io trusts repository
 `hupe1980/mako`, workflow `release.yml` and environment `crates-io` for each
 crate. `rust-lang/crates-io-auth-action` exchanges the job's OIDC token for a
-crates.io token valid for 30 minutes, revoked when the job ends; because 25
+crates.io token valid for 30 minutes, revoked when the job ends; because 24
 verified publishes take longer than that, each crate mints its own immediately
-before it publishes. No repository secret can publish anything. Trusted
+before it publishes. The workflow reads no repository secret to publish. Trusted
 Publishing takes over an existing crate only: a new crate is published once by
 hand, then given a trusted publisher on crates.io, and the release refuses a
 crate crates.io does not know yet, by name, before uploading anything. PyPI
@@ -183,9 +188,14 @@ compiler cannot pass silently.
 **Pinned supply chain.** Every third-party action is pinned to a full commit
 SHA with its release tag in a trailing comment, every Dockerfile base image to
 an `@sha256:` digest, and every workflow grants `contents: read` by default with
-each job declaring what more it needs. `cargo xtask check-action-pins` refuses a
-tag-pinned `uses:`, a digest-less `FROM` and a wider workflow default; a pin
-moves only in a reviewed change. OpenSSF Scorecard scores the repository weekly
+each job declaring what more it needs. Python packages a workflow installs come
+from hash-pinned requirements files under `.github/requirements/`
+(`pip install --require-hashes`), the job's own built wheel or sdist is installed
+`--no-deps`, and the site tooling installs with `npm ci` against the tracked
+`site/package-lock.json`. `cargo xtask check-action-pins` refuses a
+tag-pinned `uses:`, a digest-less `FROM`, a wider workflow default, an
+unpinned `pip install` and an `npm install`; a pin moves only in a reviewed
+change. OpenSSF Scorecard scores the repository weekly
 (`scorecard.yml`), publishes the result and fails below a recorded floor.
 
 #### The evidence pack
@@ -197,7 +207,7 @@ job from what the earlier jobs produced:
 |---|---|
 | `fidelity` | `DAMAGE_BUDGET` and `SILENT_PERMIT_BUDGET` from `extraction_fidelity.rs`, and the values the test measured on the release commit |
 | `outbound_sweep` | the outbound conformance sweep's per-PID result |
-| `guards` | every recipe of `just ci` with its exit status — the single-`cargo xtask` recipes run in the release job, the workspace builds ran as `preflight` |
+| `guards` | every recipe of `just ci`: an exit status for each recipe that is one `cargo xtask` call (run by the `guards` job) and for `fmt-check`, `clippy` and `check` (run by `preflight`); `not measured` for the `_ci` recipes the release does not run |
 | `mutation_score` | the mutation score |
 | `release_lead_time` | the lead time from BDEW publication to a shipped profile |
 | `sbom` | the SHA-256 of each CycloneDX document |
@@ -211,7 +221,10 @@ the release workflow, so every pack reads `not measured` for them.
 a pack with a section absent, a status other than `measured` or `not measured`,
 a `measured` section without its figures, a fidelity figure over budget, or a
 guard that exited non-zero — and the GitHub Release is not created from a
-refused pack.
+refused pack. The verdicts themselves are taken before anything is published:
+`publish`, `makotest-publish` and `docker-bake` need the `guards` job, which
+fails on any non-zero guard, so a refused guard stops the release before a
+crate, a wheel or an image leaves it.
 
 ### The `makotest` Python package
 

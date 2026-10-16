@@ -460,6 +460,29 @@ async fn main() -> anyhow::Result<()> {
     mako_service::run::<Einsd>().await
 }
 
+/// The router builds as the runner mounts it.
+///
+/// `build` runs with a minimal configuration and a lazy pool, and the runner's
+/// infra routes are merged in exactly as at boot — so a route axum refuses, a
+/// merge collision with the runner's `/metrics` or `/health/*`, or a `build`
+/// that refuses its own config fails `cargo test` instead of the container
+/// start.
+#[cfg(test)]
+mod startup_test {
+    #[tokio::test]
+    async fn the_router_builds_as_the_runner_mounts_it() {
+        let cfg = serde_json::from_value(serde_json::json!({
+            "database": {"url": "postgres://startup-test/einsd"},
+            "tenant": "9900357000004",
+            "allow_insecure_no_auth": true,
+        }))
+        .expect("the configuration parses");
+        let _app = mako_service::build_for_test::<super::Einsd>(cfg)
+            .await
+            .expect("the router builds");
+    }
+}
+
 #[cfg(test)]
 mod month_offset_tests {
     use super::month_offset;

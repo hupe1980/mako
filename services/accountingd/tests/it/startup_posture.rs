@@ -41,7 +41,7 @@ fn startup_refuses_without_oidc() {
         "IBAN",
         "Kontokorrent",
         "pain.001",
-        "§ 17 DSGVO",
+        "Art. 17 DSGVO",
     ] {
         assert!(
             msg.contains(named),

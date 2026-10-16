@@ -494,24 +494,17 @@ async fn inbox_concurrent_accept_exactly_one_winner() {
 
 /// `reject()` persists a `DeadLetterRecord` to the `dr/` key space and
 /// `list_dead_letters(1)` returns it (most-recent first).
-///
-/// Uses the mpsc-buffered sink: spawn the worker, reject, signal
-/// shutdown, await worker, then read.
 #[tokio::test]
 async fn dead_letter_persists_and_lists() {
     let store = open().await;
-    let (sink, worker) = store.as_dead_letter_sink();
-    let handle = tokio::spawn(worker.run());
+    let sink = store.as_dead_letter_sink();
 
     sink.reject(&DeadLetterReason::UnknownPid {
         pid: mako_engine::ids::Pid::new(55001),
         context: mako_engine::dead_letter::AuditContext::now(),
-    });
-
-    // Close the channel; the worker drains remaining entries then exits.
-    sink.signal_shutdown();
-    let persisted = handle.await.expect("worker task must not panic");
-    assert_eq!(persisted, 1, "expected exactly 1 entry persisted");
+    })
+    .await
+    .expect("reject must persist");
 
     let records = store
         .list_dead_letters(10)
@@ -531,8 +524,7 @@ async fn dead_letter_persists_and_lists() {
 #[tokio::test]
 async fn dead_letter_list_recent_order_and_limit() {
     let store = open().await;
-    let (sink, worker) = store.as_dead_letter_sink();
-    let handle = tokio::spawn(worker.run());
+    let sink = store.as_dead_letter_sink();
 
     let reasons = [
         DeadLetterReason::UnknownPid {
@@ -550,15 +542,10 @@ async fn dead_letter_list_recent_order_and_limit() {
     ];
 
     for reason in &reasons {
-        sink.reject(reason);
+        sink.reject(reason).await.expect("reject must persist");
         // Slight delay so each record gets a distinct timestamp key.
         tokio::time::sleep(std::time::Duration::from_millis(2)).await;
     }
-
-    // Close the channel; the worker drains and exits.
-    sink.signal_shutdown();
-    let persisted = handle.await.expect("worker must not panic");
-    assert_eq!(persisted, 3, "all 3 entries must be persisted");
 
     // limit = 2: should return the 2 most-recent records.
     let recent = store
@@ -578,42 +565,6 @@ async fn dead_letter_list_recent_order_and_limit() {
     assert!(empty.is_empty(), "limit=0 must return empty vec");
 }
 
-/// Dead-letter records written by one sink are visible via `store.list_dead_letters`.
-///
-/// `signal_shutdown()` on any clone closes the shared channel, causing the
-/// worker to drain and exit cleanly.
-#[tokio::test]
-async fn dead_letter_visible_after_worker_drains() {
-    let store = open().await;
-
-    let (sink, worker) = store.as_dead_letter_sink();
-    let handle = tokio::spawn(worker.run());
-
-    sink.reject(&DeadLetterReason::ProcessingError {
-        message: "simulated adapter crash".into(),
-        context: mako_engine::dead_letter::AuditContext::now(),
-    });
-
-    sink.signal_shutdown();
-    handle.await.expect("worker must not panic");
-
-    let records = store
-        .list_dead_letters(10)
-        .await
-        .expect("list_dead_letters must succeed");
-
-    assert_eq!(
-        records.len(),
-        1,
-        "record must be visible after worker drain"
-    );
-    assert_eq!(records[0].reason_label, "processing_error");
-    assert!(
-        records[0].reason_detail.contains("simulated adapter crash"),
-        "reason detail must be preserved",
-    );
-}
-
 /// `dr/` key space does not interfere with `ot/`, `dt/`, or `it/` key spaces.
 ///
 /// Writes events to the outbox, registers a deadline, accepts an inbox key,
@@ -621,8 +572,7 @@ async fn dead_letter_visible_after_worker_drains() {
 #[tokio::test]
 async fn dead_letter_key_space_is_isolated() {
     let store = open().await;
-    let (sink, worker) = store.as_dead_letter_sink();
-    let handle = tokio::spawn(worker.run());
+    let sink = store.as_dead_letter_sink();
 
     // Populate other key spaces.
     let stream = StreamId::new("test/dl-isolation");
@@ -651,11 +601,9 @@ async fn dead_letter_key_space_is_isolated() {
         expected: "FV2025-10-01".into(),
         received: "FV2024-04-01".into(),
         context: mako_engine::dead_letter::AuditContext::now(),
-    });
-
-    // Drain and verify.
-    sink.signal_shutdown();
-    handle.await.expect("worker must not panic");
+    })
+    .await
+    .expect("reject must persist");
 
     let records = store
         .list_dead_letters(100)
@@ -803,5 +751,51 @@ async fn concurrent_append_conflict_retry_succeeds() {
         events.len(),
         2,
         "both events must be present after successful retry"
+    );
+}
+
+/// A dead letter whose `reject` returned `Ok` is in the store: a rejection
+/// burst is not capped by a buffer, and nothing sits in memory between the
+/// caller and the write. Six hundred exceeds any in-memory bound a sink might
+/// pick, so a sink that drops on overflow fails here.
+#[tokio::test]
+async fn a_returned_dead_letter_is_durable_through_a_rejection_burst() {
+    let store = open().await;
+    let sink = store.as_dead_letter_sink();
+    // Concurrent, as a rejection storm is: the writes share WAL flushes.
+    let mut burst = tokio::task::JoinSet::new();
+    for _ in 0..600 {
+        let sink = sink.clone();
+        burst.spawn(async move {
+            sink.reject(&DeadLetterReason::ProcessingError {
+                message: "burst".into(),
+                context: mako_engine::dead_letter::AuditContext::now(),
+            })
+            .await
+        });
+    }
+    while let Some(r) = burst.join_next().await {
+        r.expect("task").expect("reject must persist");
+    }
+    let records = store.list_dead_letters(1000).await.unwrap();
+    assert_eq!(records.len(), 600, "every returned reject must be recorded");
+}
+
+/// A sink whose store is closed refuses the record instead of reporting it
+/// written: the caller must be able to keep the message.
+#[tokio::test]
+async fn a_dead_letter_on_a_closed_store_is_an_error() {
+    let store = open().await;
+    let sink = store.as_dead_letter_sink();
+    store.close().await.expect("close");
+    let r = sink
+        .reject(&DeadLetterReason::ProcessingError {
+            message: "after shutdown".into(),
+            context: mako_engine::dead_letter::AuditContext::now(),
+        })
+        .await;
+    assert!(
+        r.is_err(),
+        "a closed store must refuse the dead letter, got {r:?}"
     );
 }

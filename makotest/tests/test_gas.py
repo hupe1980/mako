@@ -79,6 +79,14 @@ class TestTrack:
         assert strom.startswith("S") and gas.startswith("G")
         assert strom != gas
 
+    def test_a_gas_partner_acknowledges_before_it_answers(self):
+        """Gas answers every Übertragungsdatei with a CONTRL (CONTRL AHB 1.0 Kap. 1.2)."""
+        sim = nb()
+        sim.on(44001).bestaetigung(antwort_code="E15", ebd="E_3007")
+        reply = sim.receive(gas_anmeldung())
+        assert reply.ack_kind == "CONTRL" and reply.ack_positive
+        assert_edifact_valid(reply.ack, on=ON)
+
     def test_the_answer_stays_on_the_gas_track(self):
         """A Gas answer built against the Strom profile would report a mismatch."""
         sim = nb()

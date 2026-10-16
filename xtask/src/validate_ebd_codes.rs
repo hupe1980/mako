@@ -166,11 +166,11 @@ pub fn run(workspace_root: &str) -> bool {
     // ── The other direction: codes the document publishes and mako omits ─────
     //
     // The check above can only be as complete as the catalogue is, so a whole
-    // branch of a tree can be missing without a single disagreement. `E_0607`
-    // was: Prüfschritt 10 „nein" opens an erzeugende branch with six codes of
-    // its own — including its **Zustimmung** — and mako carried none of them,
-    // so an erzeugende Abmeldung was confirmed with the verbrauchend branch's
-    // `A11`. Every existing guard passed.
+    // branch of a tree can be missing without a single disagreement: in
+    // `E_0607`, Prüfschritt 10 „nein" opens an erzeugende branch with six codes
+    // of its own — its **Zustimmung** among them — and a catalogue without them
+    // confirms an erzeugende Abmeldung with the verbrauchend branch's `A11`
+    // while every other guard passes.
     for (tree, mako_codes) in &by_tree {
         let Some(published) = doc.get(*tree) else {
             continue; // already reported above
@@ -250,8 +250,8 @@ const KNOWN_UNCARRIED: &[(&str, &str, &str)] = &[
     (
         "E_0406",
         "*",
-        "the Netznutzungsabrechnung tree has 205 Prüfschritte and mako answers with three \
-         codes — a deliberate partial walk, not an oversight",
+        "the Netznutzungsabrechnung tree has 211 Prüfschritte (EBD 4.3 Kap. 6.10.1) and \
+         mako answers with three codes — a deliberate partial walk, not an oversight",
     ),
 ];
 

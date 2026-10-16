@@ -179,10 +179,12 @@ identifiers appear in both channels.
 | `server` | Axum router factories for `ControlMeasuresHandler`, `MaloIdentHandler`, and `WimOrderHandler` receive handlers |
 | `websocket` | The Verzeichnisdienst subscription client (tokio-tungstenite) |
 
-TR-03116-3 content-layer signing (`DIGEST` / `SIGNATURE` over RFC 8785
-canonical JSON) and JWS verification are always compiled, not features. A
-request is signed exactly when a signing key is configured on the client
-(`with_signing`).
+Content-layer signing (Regelungen zum Übertragungsweg für API-Webdienste 1.2,
+Kap. 3.3: `X-BDEW-DIGEST` / `X-BDEW-SIGNATURE` / `X-BDEW-CERT` over the URI, the
+RFC 8785 canonical JSON, `creationDateTime`, `transactionId` and any
+`initialTransactionId`) and JWS verification are always compiled, not features.
+A request is signed exactly when a signing key and its certificate are
+configured on the client (`with_signing`).
 
 ---
 

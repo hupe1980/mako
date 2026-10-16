@@ -51,11 +51,16 @@ async fn dispatcher() -> EdifactIngestDispatcher {
 async fn second_spawns(mt: edi_energy::MessageType, pid: u32, workflow: &str) {
     let d = dispatcher().await;
     let msg = fixture(mt, pid);
-    let first = d.dispatch(&msg, workflow, pid).await.expect("first");
+    let first = d
+        .dispatch(&msg, workflow, pid, time::OffsetDateTime::now_utc())
+        .await
+        .expect("first");
     let IngestOutcome::Spawned { process_id: a, .. } = first else {
         panic!("the first {pid} spawns: {first:?}");
     };
-    let second = d.dispatch(&msg, workflow, pid).await;
+    let second = d
+        .dispatch(&msg, workflow, pid, time::OffsetDateTime::now_utc())
+        .await;
     match second {
         Ok(IngestOutcome::Spawned { process_id: b, .. }) => assert_ne!(a, b),
         other => panic!(
@@ -92,9 +97,14 @@ async fn a_recorded_rechnungsabwicklung_does_not_block_the_next_one() {
 async fn a_live_eog_zuordnung_still_blocks_the_malo() {
     let d = dispatcher().await;
     let msg = fixture(edi_energy::MessageType::Utilmd, 55013);
-    let first = d.dispatch(&msg, "gpke-eog", 55013).await.expect("first");
+    let first = d
+        .dispatch(&msg, "gpke-eog", 55013, time::OffsetDateTime::now_utc())
+        .await
+        .expect("first");
     assert!(matches!(first, IngestOutcome::Spawned { .. }), "{first:?}");
-    let second = d.dispatch(&msg, "gpke-eog", 55013).await;
+    let second = d
+        .dispatch(&msg, "gpke-eog", 55013, time::OffsetDateTime::now_utc())
+        .await;
     assert!(
         !matches!(second, Ok(IngestOutcome::Spawned { .. })),
         "a live EoG Zuordnung must not be duplicated: {second:?}"

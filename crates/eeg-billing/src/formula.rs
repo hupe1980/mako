@@ -736,6 +736,43 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
 fn calculate_settlement_inner(input: &SettleInput) -> SettleOutput {
     use crate::model::SanktionAlt;
 
+    // ── The plant's vintage must be a tabled Fassung ─────────────────────────
+    // A plant keeps the EEG in force at its commissioning. For a commissioning
+    // after the last tabled one (the EEG 2027, BT-Drs. 21/7867, is not
+    // verkündet) no Fassung exists to compute under, so nothing is settled —
+    // even under a recorded Genehmigung. A KWKG Zuschlag is outside Teil 3.
+    if let Some(ibn) = juengste_inbetriebnahme(input)
+        && ibn > crate::version::LETZTE_TABELLIERTE_INBETRIEBNAHME
+        && !matches!(
+            input.scheme,
+            crate::scheme::SettlementScheme::KwkSurcharge { .. }
+        )
+    {
+        return SettleOutput {
+            settlement_eur: None,
+            eligible_kwh: input.einspeisemenge_kwh,
+            positions: vec![crate::model::SettlePosition {
+                description: format!(
+                    "Inbetriebnahme {ibn}: für eine nach dem {} in Betrieb genommene Anlage \
+                     ist keine EEG-Fassung tabelliert (EEG 2027, BT-Drs. 21/7867, nicht \
+                     verkündet) — nicht nach EEG 2023 abgerechnet",
+                    crate::version::LETZTE_TABELLIERTE_INBETRIEBNAHME
+                ),
+                legal_basis: "EEG-Fassung der Inbetriebnahme".to_owned(),
+                kwh: input.einspeisemenge_kwh.unwrap_or(Decimal::ZERO),
+                rate_ct_kwh: Decimal::ZERO,
+                eur: Decimal::ZERO,
+            }],
+            status: SettlementStatus::FassungNichtTabelliert,
+            pflichtzahlung_eur: None,
+            pflichtzahlung_faelligkeitsdatum: None,
+            verlaengerungsanspruch_qh: 0,
+            dezentrale_einspeisung_anspruch_verloren: false,
+            billing_days_fraction_applied: None,
+            faelligkeitsdatum: None,
+        };
+    }
+
     // ── The Fassung a reduction is read from ─────────────────────────────────
     // §§ 53b–54 cut the anzulegender Wert under the Fassung of the payment
     // period. Where none is tabled, the same § number may carry another rule
@@ -924,6 +961,17 @@ fn calculate_settlement_inner(input: &SettleInput) -> SettleOutput {
     settle_normal_body(input)
 }
 
+/// The latest commissioning date on the input — the plant's, or the youngest
+/// § 24 capacity block's.
+fn juengste_inbetriebnahme(input: &SettleInput) -> Option<time::Date> {
+    input
+        .capacity_blocks
+        .iter()
+        .map(|b| b.inbetriebnahme)
+        .chain(input.inbetriebnahme)
+        .max()
+}
+
 /// Apply §§53b–54 to an anzulegender Wert, using the input's context.
 ///
 /// Returns the reduced AW and the list of cuts that fired. Reductions act on the
@@ -962,11 +1010,16 @@ fn apply_aw_cuts(
 }
 
 /// Whether the §100 Solarspitzengesetz opt-in is in force for this period.
+///
+/// § 101 Abs. 1 S. 1 EEG 2023 reserves § 100 Abs. 47 until the Commission's
+/// state-aid approval, so an effective declaration earns nothing before it
+/// ([`crate::version::sect100_abs47_anwendbar`]).
 fn sect51_optin_active(input: &SettleInput) -> bool {
-    matches!(
-        (input.sect51_optin_wirksam_ab, input.billing_date),
-        (Some(ab), Some(bd)) if bd >= ab
-    )
+    crate::version::sect100_abs47_anwendbar(input.billing_date)
+        && matches!(
+            (input.sect51_optin_wirksam_ab, input.billing_date),
+            (Some(ab), Some(bd)) if bd >= ab
+        )
 }
 
 /// Render each AW cut as a zero-euro audit position.

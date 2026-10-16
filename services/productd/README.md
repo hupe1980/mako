@@ -46,6 +46,11 @@ lf_mp_id = "9900357000004"   # market identity; defaults to tenant
 erp_webhook_url = "http://erp:8000/events"
 erp_hmac_secret = "env:PRODUCTD_ERP_HMAC_SECRET"
 
+# Which law prices nEHS certificates in a year § 10 BEHG fixes no price for
+# (2027): "rvo_bezugspreis" (default) or "korridor" (55–65 EUR/t) — the same
+# setting billingd bills under, so a Gas quotation and its invoice agree.
+behg_regime = "rvo_bezugspreis"
+
 [database]
 url = "postgresql://productd:secret@db:5432/productd"
 

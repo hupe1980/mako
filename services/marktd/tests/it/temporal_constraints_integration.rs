@@ -398,13 +398,114 @@ async fn the_tariff_zone_resolves_from_typed_weekday_and_wall_clock_columns() {
         Some("HT"),
     );
 
-    // Saturday 2026-01-10 matches no weekday in the array.
-    assert_eq!(
-        repo.resolve_tariff_zone("Z1", tenant, datetime!(2026-01-10 09:30))
+    // Saturday 2026-01-10 matches no weekday in the array: the endpoint
+    // refuses it rather than answering a defaulted `EINZEL`, which would price
+    // a gap in the master data at a rate nobody configured.
+    let tariff_zone = |datetime: &'static str| {
+        let repo = std::sync::Arc::new(PgZaehlzeitRepository::new(pool.clone()));
+        async move {
+            let verifier = mako_service::oidc::OidcVerifier::disabled(tenant);
+            let cedar = std::sync::Arc::new(
+                mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
+                    "../../policies/marktd.cedar"
+                ))
+                .expect("marktd.cedar parses"),
+            );
+            marktd::handlers::device::get_tariff_zone(
+                axum::Extension(repo),
+                mako_service::oidc::Claims(verifier.disabled_claims()),
+                axum::Extension(marktd::handlers::Tenant(tenant.to_owned())),
+                axum::Extension(cedar),
+                axum::extract::Path("Z1".to_owned()),
+                axum::extract::Query(marktd::handlers::device::TariffZoneQuery {
+                    datetime: Some(datetime.to_owned()),
+                }),
+            )
             .await
-            .unwrap(),
-        None,
-        "a weekday outside the window's `wochentage` must not resolve"
+        }
+    };
+    let saturday = tariff_zone("2026-01-10T09:30:00")
+        .await
+        .expect_err("no window covers a Saturday");
+    assert_eq!(
+        saturday.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+        "a weekday outside every window's `wochentage` is refused: {saturday}"
+    );
+    let thursday = tariff_zone("2026-01-08T09:30:00")
+        .await
+        .expect("the HT window covers a Thursday morning");
+    assert_eq!(thursday.0["tariff_zone"], "HT");
+}
+
+/// Master data that cannot all be true is refused with the shared problem
+/// body — `{"error", "detail"}` — so a client reads it like every other
+/// refusal: a moderne Messeinrichtung cannot be balanced as RLM.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn contradictory_sharing_master_data_is_refused_with_the_problem_body() {
+    use axum::response::IntoResponse as _;
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let tenant = "9900357000004";
+    let malo = "51238696012";
+    let melo = "DE0001112223334445556667778889990";
+    sqlx::query(
+        "INSERT INTO malo (malo_id, sparte, data, bilanzierungsmethode)
+         VALUES ($1, 'STROM', '{}'::jsonb, 'RLM')",
+    )
+    .bind(malo)
+    .execute(&pool)
+    .await
+    .expect("seed malo");
+    sqlx::query("INSERT INTO melo (melo_id, malo_id, data) VALUES ($1, $2, '{}'::jsonb)")
+        .bind(melo)
+        .bind(malo)
+        .execute(&pool)
+        .await
+        .expect("seed melo");
+    sqlx::query(
+        "INSERT INTO zaehler (zaehler_id, tenant, melo_id, zaehler_typ)
+         VALUES ('Z-MME', $1, $2, 'MODERNE_MESSEINRICHTUNG')",
+    )
+    .bind(tenant)
+    .bind(melo)
+    .execute(&pool)
+    .await
+    .expect("seed zaehler");
+
+    let verifier = mako_service::oidc::OidcVerifier::disabled(tenant);
+    let cedar = std::sync::Arc::new(
+        mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
+            "../../policies/marktd.cedar"
+        ))
+        .expect("marktd.cedar parses"),
+    );
+    let refusal = marktd::handlers::device::get_sharing_eligibility(
+        axum::Extension(pool.clone()),
+        axum::Extension(cedar),
+        axum::Extension(marktd::handlers::Tenant(tenant.to_owned())),
+        mako_service::oidc::Claims(verifier.disabled_claims()),
+        axum::extract::Path(melo.to_owned()),
+    )
+    .await
+    .expect_err("contradictory master data is refused");
+    let response = refusal.into_response();
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("body");
+    let body: serde_json::Value = serde_json::from_slice(&body).expect("a JSON problem body");
+    assert_eq!(body["error"], "Unprocessable Entity");
+    assert!(
+        body["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("contradictory master data")),
+        "{body}"
     );
 }
 

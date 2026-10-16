@@ -3628,7 +3628,9 @@ impl BillingProvider for DynamicElectricityProvider {
                 }
             }
         }
-        // ── §41a Abs. 6 EnWG — Annual savings comparison
+        // ── Annual comparison of the dynamic tariff — informational, the
+        // Lieferant's choice; § 41a EnWG prescribes none (see
+        // `Sect41aAnnualComparison`).
         if let Some(comp) = &quantities.sect41a_annual_comparison {
             let sign = if comp.savings_eur >= Decimal::ZERO {
                 "Ersparnis"
@@ -3637,11 +3639,11 @@ impl BillingProvider for DynamicElectricityProvider {
             };
             positions.push(BillingPosition {
                 description: format!(
-                    "§41a Abs. 6 EnWG Jahresvergleich: {:.2} EUR (Dynamisch) vs. {:.2} EUR (Festpreis {:.4} ct/kWh) -> {} {:.2} EUR",
+                    "Jahresvergleich dynamischer Tarif: {:.2} EUR (Dynamisch) vs. {:.2} EUR (Festpreis {:.4} ct/kWh) -> {} {:.2} EUR",
                     comp.actual_eur_brutto, comp.reference_eur_brutto,
                     comp.reference_price_ct_per_kwh, sign, comp.savings_eur.abs(),
                 ),
-                legal_basis: Some("§41a Abs. 6 EnWG".to_owned()),
+                legal_basis: None,
                 quantity: comp.actual_kwh,
                 unit: "kWh".to_owned(),
                 unit_price_eur: Decimal::ZERO,

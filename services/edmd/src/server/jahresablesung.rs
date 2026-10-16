@@ -99,6 +99,9 @@ pub struct CampaignOutcome {
     pub geplant_am: time::Date,
     /// Latest acceptable reading date.
     pub ausfuehrt_bis: time::Date,
+    /// MaLos ordered nothing because marktd names no Sparte edmd reads, with
+    /// the value it named (`None` when absent).
+    pub refused_sparte: Vec<(String, Option<String>)>,
 }
 
 impl CampaignOutcome {
@@ -111,6 +114,14 @@ impl CampaignOutcome {
             "total_slp_malos_enumerated": self.total_malos,
             "reading_orders_created": self.created,
             "already_scheduled_skipped": self.skipped,
+            "refused_unknown_sparte": self
+                .refused_sparte
+                .iter()
+                .map(|(malo_id, sparte)| serde_json::json!({
+                    "malo_id": malo_id,
+                    "sparte": sparte,
+                }))
+                .collect::<Vec<_>>(),
             "legal_basis": "§ 40b Abs. 1 EnWG",
         })
     }
@@ -165,18 +176,44 @@ impl CampaignError {
     }
 }
 
+/// One `GET /api/v1/malos` item: the MaLo and its Sparte, or — when marktd
+/// names no Sparte edmd reads — the MaLo and the value it did name.
+///
+/// An absent or unknown Sparte is not Strom: the Sparte decides whether the
+/// Zählerstand the order comes back with is kWh or m³, so guessing one files
+/// a gas point's reading in the wrong dimension. `None` for an item without a
+/// `malo_id`.
+fn campaign_item(item: &serde_json::Value) -> Option<Result<KnownSparte, UnknownSparte>> {
+    let mid = item.get("malo_id").and_then(|v| v.as_str())?.to_owned();
+    let raw = item.get("sparte").and_then(|v| v.as_str());
+    Some(match raw.and_then(crate::domain::parse_sparte) {
+        Some(sparte) => Ok((mid, sparte)),
+        None => Err((mid, raw.map(str::to_owned))),
+    })
+}
+
+/// A MaLo and the Sparte marktd names for it.
+type KnownSparte = (String, crate::domain::Sparte);
+/// A MaLo and the value marktd named where no Sparte edmd reads was given.
+type UnknownSparte = (String, Option<String>);
+/// SLP Marktlokationen found in a grid area, split by whether their Sparte is
+/// known.
+type Enumerated = (Vec<KnownSparte>, Vec<UnknownSparte>);
+
 /// Every SLP Marktlokation in `nb_mp_id`'s grid area, with its Sparte, up to
-/// `max_malos` — paged through `marktd`'s `GET /api/v1/malos`.
+/// `max_malos` — paged through `marktd`'s `GET /api/v1/malos`. MaLos whose
+/// Sparte marktd does not name are returned apart, to be reported.
 async fn enumerate_slp_malos(
     marktd: &mako_service::http::Upstream,
     nb_mp_id: &str,
     max_malos: i64,
-) -> Result<Vec<(String, crate::domain::Sparte)>, CampaignError> {
+) -> Result<Enumerated, CampaignError> {
     // The MaLo **and its Sparte**. A campaign enumerates SLP Marktlokationen,
     // and an SLP point is as often gas as electricity — the Sparte decides
     // whether the Zählerstand the order comes back with is kWh or m³, and a
     // reading filed in the wrong dimension is refused rather than stored.
     let mut malos: Vec<(String, crate::domain::Sparte)> = Vec::new();
+    let mut refused: Vec<(String, Option<String>)> = Vec::new();
     // `marktd` pages from 0 (`offset = page × size`); starting at 1 skips the
     // first page, whose MaLos would receive no reading order.
     let mut page = 0i64;
@@ -210,28 +247,26 @@ async fn enumerate_slp_malos(
         }
 
         for item in &items {
-            if let Some(mid) = item.get("malo_id").and_then(|v| v.as_str()) {
-                let sparte = item
-                    .get("sparte")
-                    .and_then(|v| v.as_str())
-                    .and_then(crate::domain::parse_sparte)
-                    .unwrap_or(crate::domain::Sparte::Strom);
-                malos.push((mid.to_owned(), sparte));
-                if malos.len() as i64 >= max_malos {
-                    break;
-                }
+            match campaign_item(item) {
+                Some(Ok(known)) => malos.push(known),
+                Some(Err(unknown)) => refused.push(unknown),
+                None => continue,
+            }
+            if (malos.len() + refused.len()) as i64 >= max_malos {
+                break;
             }
         }
 
         // Check pagination — stop when we've retrieved all or hit max.
+        let seen = (malos.len() + refused.len()) as i64;
         let total: i64 = body.get("total").and_then(|v| v.as_i64()).unwrap_or(0);
-        if malos.len() as i64 >= total || malos.len() as i64 >= max_malos {
+        if seen >= total || seen >= max_malos {
             break;
         }
         page += 1;
     }
 
-    Ok(malos)
+    Ok((malos, refused))
 }
 
 /// Create the Jahresablesung reading orders for one NB's grid area.
@@ -286,7 +321,13 @@ pub async fn run_jahresablesung_campaign(
     if nb_mp_id.len() != 13 || !nb_mp_id.chars().all(|c| c.is_ascii_digit()) {
         return Err(CampaignError::InvalidNbMpId);
     }
-    let malos = enumerate_slp_malos(&marktd, nb_mp_id, max_malos).await?;
+    let (malos, refused_sparte) = enumerate_slp_malos(&marktd, nb_mp_id, max_malos).await?;
+    for (malo_id, sparte) in &refused_sparte {
+        tracing::warn!(
+            malo_id, sparte = ?sparte,
+            "edmd: Jahresablesung — marktd names no Sparte edmd reads, no order created"
+        );
+    }
 
     let total_malos = malos.len();
 
@@ -344,6 +385,7 @@ pub async fn run_jahresablesung_campaign(
         year,
         geplant_am,
         ausfuehrt_bis,
+        refused_sparte,
     })
 }
 
@@ -476,7 +518,31 @@ pub(crate) async fn jahresablesung_compliance(
 
 #[cfg(test)]
 mod tests {
-    use super::enumerate_slp_malos;
+    use super::{campaign_item, enumerate_slp_malos};
+
+    /// An absent or unknown Sparte is reported, never ordered as Strom: the
+    /// Sparte decides whether the reading is kWh or m³.
+    #[test]
+    fn a_malo_without_a_known_sparte_is_refused_not_ordered_as_strom() {
+        let fern = serde_json::json!({ "malo_id": "51238696012", "sparte": "FERNWAERME" });
+        assert_eq!(
+            campaign_item(&fern),
+            Some(Err((
+                "51238696012".to_owned(),
+                Some("FERNWAERME".to_owned())
+            )))
+        );
+        let absent = serde_json::json!({ "malo_id": "51238696012" });
+        assert_eq!(
+            campaign_item(&absent),
+            Some(Err(("51238696012".to_owned(), None)))
+        );
+        let gas = serde_json::json!({ "malo_id": "51238696012", "sparte": "GAS" });
+        assert_eq!(
+            campaign_item(&gas),
+            Some(Ok(("51238696012".to_owned(), crate::domain::Sparte::Gas)))
+        );
+    }
 
     /// A `marktd` stand-in paging `n` SLP MaLos the way `marktd` pages: from
     /// page 0, `size` per page, with the total beside each page.
@@ -514,7 +580,7 @@ mod tests {
     #[tokio::test]
     async fn the_first_page_is_enumerated() {
         let marktd = marktd_with(501).await;
-        let malos = enumerate_slp_malos(&marktd, "9900000000001", 5_000)
+        let (malos, _) = enumerate_slp_malos(&marktd, "9900000000001", 5_000)
             .await
             .expect("enumerates");
         assert_eq!(malos.len(), 501, "every MaLo, not only the last page");
@@ -529,6 +595,7 @@ mod tests {
             enumerate_slp_malos(&marktd, "9900000000001", 5_000)
                 .await
                 .expect("enumerates")
+                .0
                 .len(),
             500
         );
@@ -537,6 +604,7 @@ mod tests {
             enumerate_slp_malos(&marktd, "9900000000001", 600)
                 .await
                 .expect("enumerates")
+                .0
                 .len(),
             600
         );

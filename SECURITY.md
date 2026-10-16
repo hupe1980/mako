@@ -90,13 +90,18 @@ Stated plainly, because a security page that overstates is worse than none:
   with the release workflow's identity. Verify with
   `gh attestation verify oci://ghcr.io/hupe1980/mako-<service>:<version> --repo hupe1980/mako`.
 - Crates reach crates.io by **Trusted Publishing** and the Python package PyPI
-  the same way: no registry token is stored in the repository.
+  the same way: the release workflow reads no stored registry token — each
+  publish uses a short-lived token minted from the job's OIDC identity.
 - Every workflow action is pinned to a commit SHA, every base image to a
   digest, and `cargo xtask check-action-pins` refuses a tag pin.
 - Each release carries an **evidence pack** (`evidence-vX.Y.Z.json`): the
-  extraction-fidelity budgets and measured values, every `just ci` guard with
-  its exit status, the SBOM digests and the attestations; a figure that was not
-  measured reads `not measured`.
+  extraction-fidelity budgets and measured values, the exit status of each
+  `just ci` recipe the release runs (every recipe that is one `cargo xtask`
+  call, and the `fmt-check`, `clippy` and `check` runs of the pre-flight job),
+  the SBOM digests and the attestations; a figure that was not measured — a
+  `just ci` recipe the release does not run among them — reads
+  `not measured`. Every guard verdict is taken before anything is published,
+  and a failing guard stops the release.
 
 The release process and how to check each artefact are on the
 [Release Lifecycle](https://hupe1980.github.io/mako/docs/compliance/release-lifecycle/#what-a-release-carries)

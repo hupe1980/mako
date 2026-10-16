@@ -1041,20 +1041,87 @@ pub fn angebot_is_priced(bo4e: &serde_json::Value) -> bool {
     bo4e.as_object().is_some_and(|m| !m.is_empty())
 }
 
+/// Why an Angebot could not be accepted.
+///
+/// The handler answers each kind on its own: a storage failure is not a
+/// business conflict, and answering it as one tells the caller the Angebot
+/// was decided when nothing was read.
+#[derive(Debug)]
+pub enum AcceptError {
+    /// No Angebot with this id in this tenant.
+    NotFound,
+    /// `gueltig_bis` has passed; the Angebot is now ABGELAUFEN.
+    Abgelaufen {
+        /// The last day the Angebot was binding.
+        gueltig_bis: Date,
+    },
+    /// The Angebot is already decided (ANGENOMMEN, ABGELEHNT or ABGELAUFEN).
+    Entschieden {
+        /// Its status.
+        status: String,
+    },
+    /// The quotation has not been priced yet.
+    NichtBepreist,
+    /// The Angebot left its acceptable state between the read and the write.
+    Wettlauf,
+    /// The database failed.
+    Storage(anyhow::Error),
+}
+
+impl std::fmt::Display for AcceptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => write!(f, "Angebot not found"),
+            Self::Abgelaufen { gueltig_bis } => {
+                write!(f, "Angebot has expired (gueltig_bis={gueltig_bis})")
+            }
+            Self::Entschieden { status } => write!(
+                f,
+                "Angebot is in status '{status}' — only ANGELEGT or VERSANDT can be accepted"
+            ),
+            Self::NichtBepreist => write!(
+                f,
+                "Angebot is not priced yet — call GET /api/v1/angebote/{{id}}/comparison \
+                 before accepting"
+            ),
+            Self::Wettlauf => write!(
+                f,
+                "Angebot left its acceptable state concurrently — it was declined or expired"
+            ),
+            Self::Storage(e) => write!(f, "{e:#}"),
+        }
+    }
+}
+
+impl From<anyhow::Error> for AcceptError {
+    fn from(e: anyhow::Error) -> Self {
+        Self::Storage(e)
+    }
+}
+
+impl From<sqlx::Error> for AcceptError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Storage(anyhow::Error::new(e).context("accept_angebot"))
+    }
+}
+
 /// Transition Angebot to ANGENOMMEN.
 ///
 /// Validates that `gueltig_bis >= today` **and** that the quotation has been
-/// priced (`bo4e` populated) before accepting. Returns Err if the Angebot is in
-/// a terminal state, has expired, or has not been priced.
+/// priced (`bo4e` populated) before accepting.
+///
+/// # Errors
+///
+/// [`AcceptError`] — one kind per reason, the storage failure among them.
 pub async fn accept_angebot(
     pool: &PgPool,
     id: Uuid,
     tenant: &str,
     gewaehlte_variante: Option<i16>,
-) -> anyhow::Result<AngebotRow> {
+) -> Result<AngebotRow, AcceptError> {
     let angebot = fetch_angebot(pool, id, tenant)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("Angebot {id} not found"))?;
+        .ok_or(AcceptError::NotFound)?;
 
     let today = mako_fristen::heute();
     if angebot.gueltig_bis < today {
@@ -1063,26 +1130,21 @@ pub async fn accept_angebot(
             .bind(id)
             .execute(pool)
             .await?;
-        anyhow::bail!(
-            "Angebot {id} has expired (gueltig_bis={})",
-            angebot.gueltig_bis
-        );
+        return Err(AcceptError::Abgelaufen {
+            gueltig_bis: angebot.gueltig_bis,
+        });
     }
     if !matches!(angebot.status.as_str(), "ANGELEGT" | "VERSANDT") {
-        anyhow::bail!(
-            "Angebot {id} is in status '{}' — only ANGELEGT or VERSANDT can be accepted",
-            angebot.status
-        );
+        return Err(AcceptError::Entschieden {
+            status: angebot.status,
+        });
     }
 
     // A quotation must be priced before it can be accepted — otherwise
     // `de.tarif.angebot.angenommen` would carry an empty BO4E `Angebot` and the
     // downstream Rahmenvertrag build has nothing to derive the contract from.
     if !angebot_is_priced(&angebot.bo4e) {
-        anyhow::bail!(
-            "Angebot {id} is not priced yet — call GET /api/v1/angebote/{id}/comparison \
-             before accepting"
-        );
+        return Err(AcceptError::NichtBepreist);
     }
 
     // The status was read on a separate statement, so a decline or an expiry
@@ -1102,15 +1164,9 @@ pub async fn accept_angebot(
     .bind(tenant)
     .bind(gewaehlte_variante)
     .fetch_optional(pool)
-    .await
-    .context("accept_angebot")?;
+    .await?;
 
-    // The handler maps any error here to 409, which is what a lost race is.
-    row.ok_or_else(|| {
-        anyhow::anyhow!(
-            "Angebot {id} left its acceptable state concurrently — it was declined or expired"
-        )
-    })
+    row.ok_or(AcceptError::Wettlauf)
 }
 
 /// Transition Angebot to ABGELEHNT.

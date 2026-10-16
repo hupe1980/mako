@@ -565,18 +565,21 @@ pub struct DynamicInterval {
     pub kwh: Decimal,
 }
 
-// ── §41a Abs. 6 — Annual savings comparison ───────────────────────────────────
+// ── Annual comparison of a dynamic tariff ────────────────────────────────────
 
-/// §41a Abs. 6 EnWG — Annual savings comparison for dynamic tariff customers.
+/// An annual comparison of what a dynamic-tariff customer (§ 41a Abs. 2 EnWG)
+/// paid against a reference fixed price — an informational position the
+/// Lieferant chooses to give.
 ///
-/// Lieferanten must provide dynamic tariff customers with an annual statement
-/// of how much they saved (or paid more) compared to a reference fixed tariff.
+/// ## What the statute requires
 ///
-/// ## Legal basis
-///
-/// §41a Abs. 6 EnWG: „Der Lieferant hat dem Letztverbraucher jährlich mitzuteilen,
-/// wie viel er durch die dynamische Preiskomponente im Vergleich zu einem
-/// Standardtarif eingespart oder mehr ausgegeben hat."
+/// No provision of § 41a EnWG prescribes an annual comparison. Abs. 6 is a
+/// duty to inform before the choice is made: „Stromlieferanten haben die
+/// Letztverbraucher über die Kosten sowie über die Vorteile, Nachteile und
+/// Risiken eines Stromliefervertrages mit dynamischen Tarifen nach Absatz 2 und
+/// eines Festpreisvertrages nach Absatz 4 umfassend zu unterrichten"
+/// (gesetze-im-internet.de, read 2026-10-15). The position therefore names no
+/// legal basis of its own.
 ///
 /// ## Usage
 ///
@@ -1054,11 +1057,11 @@ pub struct Quantities {
     /// - NNE does NOT apply to self-consumed energy
     pub prosumer: Option<ProsumerMeterInput>,
 
-    /// §41a Abs. 6 EnWG — annual savings comparison for dynamic tariff customers.
+    /// Annual comparison of a dynamic tariff against a reference fixed price.
     ///
-    /// When set, `DynamicElectricityProvider` renders a mandatory informational
-    /// position on the annual invoice comparing actual dynamic costs against a
-    /// reference fixed tariff (§41a Abs. 6 EnWG).
+    /// When set, `DynamicElectricityProvider` renders it as an informational
+    /// position on the annual invoice. It is the Lieferant's choice: § 41a
+    /// EnWG prescribes no such comparison (see [`Sect41aAnnualComparison`]).
     pub sect41a_annual_comparison: Option<Sect41aAnnualComparison>,
 
     /// §42c EnWG Energy Sharing — allocated community energy for this customer.
@@ -1068,9 +1071,10 @@ pub struct Quantities {
     ///
     /// ## Data source
     ///
-    /// Populated by `billingd` after querying the sharing community's allocation
-    /// data from `edmd` (`GET /api/v1/sharing/{plant}/allocation` over the
-    /// participants' `COMMUNITY_SHARE` rules — same infrastructure as §42b EnWG GGV).
+    /// The caller supplies it: `billingd` takes it from the calculation
+    /// request's `energy_share` field and does not fetch it. The community's
+    /// allocation is served by `edmd` (`GET /api/v1/sharing/{community_id}/allocation`)
+    /// for the caller to read.
     pub energy_share: Option<EnergyShareMeterInput>,
 }
 

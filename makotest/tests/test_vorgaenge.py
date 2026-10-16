@@ -54,7 +54,9 @@ class TestVorgangOnTheWire:
         assert vorgang.location("melo") is None
 
     def test_a_message_type_with_no_vorgaenge_reports_none(self):
-        sim = nb()
+        # A Gas partner answers a sound interchange with a CONTRL, which
+        # carries no Vorgang.
+        sim = MarktpartnerSim(mp_id=NB_ID, rolle="NB", reference_date=ON, sparte="gas")
         reply = sim.receive(utilmd_interchange(55001))
         ack = validate_edifact(reply.ack, ON)
         assert ack.messages[0].vorgaenge == []
@@ -110,7 +112,7 @@ class TestDuplicateAnmeldung:
         )
         reply = sim.receive(utilmd_interchange(55001))
         assert reply.business is None, "no unconditional binding to answer with"
-        assert reply.ack_kind == "CONTRL"
+        assert reply.ack is None, "a sound Strom interchange earns no CONTRL"
 
     def test_the_register_is_keyed_on_the_lokation_not_the_vorgangsnummer(self):
         """A duplicate carries a *new* Vorgangsnummer — it is the sender's ref.

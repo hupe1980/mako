@@ -1033,6 +1033,19 @@ async fn a_long_gap_takes_the_vergleichswert_of_comparable_days() {
         logged.iter().all(|(t, _)| *t != measured_slot),
         "the untouched measured slot must not appear in the audit log"
     );
+    let laender: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT bundesland FROM substitute_value_log WHERE malo_id = $1 AND tenant = $2",
+    )
+    .bind(malo)
+    .bind("9910000000010")
+    .fetch_all(&pool)
+    .await
+    .expect("read the audit rows' Bundesland");
+    assert_eq!(
+        laender,
+        ["BE"],
+        "the audit row names the Land the day class ran under"
+    );
 }
 
 /// A gap of up to two hours between measured values is linearly interpolated

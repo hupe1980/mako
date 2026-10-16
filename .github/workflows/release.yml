@@ -49,6 +49,7 @@ jobs:
 
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
 
       # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
       # command needs an interpreter >= 3.11. `.cargo/config.toml` points
@@ -90,24 +91,45 @@ jobs:
       - name: Publish order resolves on crates.io
         run: cargo xtask check-publish-order
 
+      # The steps that build the workspace run the `just ci` recipes of the same
+      # name, so the evidence pack can carry their verdicts beside the guards'.
+      # A failing step fails the job and nothing is released, so each verdict
+      # is written only once its recipe has passed.
       - name: Format check
-        run: cargo fmt --all -- --check
+        run: just fmt-check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: just clippy
 
       - name: Tests
         # Mirror the CI test-workspace job: makod's suite has a job of its own.
+        # Not `just test` (which covers makod too), so it records no verdict.
         run: cargo test --workspace --all-features --exclude makod
 
       - name: Warning gate
-        run: cargo check --workspace --all-targets --all-features
+        run: just check
 
-  # ── Profile validation ───────────────────────────────────────────────────────
-  validate-profiles:
-    name: Validate profiles
+      - name: Record the verdicts of the recipes run above
+        run: |
+          mkdir -p preflight-verdicts
+          for recipe in fmt-check clippy check; do echo 0 > "preflight-verdicts/${recipe}.exit"; done
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: preflight-verdicts
+          path: preflight-verdicts
+          if-no-files-found: error
+
+  # ── Guard verdicts ───────────────────────────────────────────────────────────
+  #
+  # Every `just ci` recipe whose body is one xtask call, run before anything is
+  # published: `publish`, `makotest-publish` and `docker-bake` need this job,
+  # so a failing guard stops the release before a crate reaches crates.io, a
+  # wheel reaches PyPI or an image is tagged. Every recipe runs and leaves its
+  # exit status for the evidence pack; the job fails if any is non-zero.
+  guards:
+    name: Guard verdicts (every xtask recipe of `_ci`)
     runs-on: ubuntu-latest
-    needs: preflight
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Toolchain is rust-toolchain.toml's
@@ -118,14 +140,37 @@ jobs:
           case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
             *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: Build xtask
-        run: cargo build -p xtask
-      - name: validate-profiles
-        run: cargo xtask validate-profiles
+      - uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
+      - name: Run every guard and record its exit status
+        run: |
+          set -uo pipefail
+          mkdir -p guards
+          recipes=$(cargo xtask evidence-pack --xtask-recipes)
+          test -n "$recipes" || { echo "::error::no xtask recipe found in the justfile's _ci"; exit 1; }
+          failed=""
+          for recipe in $recipes; do
+            just "$recipe" > "guards/${recipe}.log" 2>&1 && code=0 || code=$?
+            echo "$code" > "guards/${recipe}.exit"
+            echo "${recipe}: exit ${code}"
+            if [ "$code" -ne 0 ]; then
+              tail -40 "guards/${recipe}.log"
+              failed="$failed $recipe"
+            fi
+          done
+          if [ -n "$failed" ]; then
+            for recipe in $failed; do echo "::error::just $recipe failed"; done
+            exit 1
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: guard-verdicts
+          path: guards
+          if-no-files-found: error
 
   # ── Publish to crates.io ─────────────────────────────────────────────────────
   #
-  # crates.io Trusted Publishing: no registry token is stored anywhere. Each
+  # crates.io Trusted Publishing: this job reads no stored registry token. Each
   # `cargo publish` reads a token `rust-lang/crates-io-auth-action` mints from
   # this job's OIDC identity — trusted on crates.io for repository
   # `hupe1980/mako`, workflow `release.yml`, environment `crates-io` — and the
@@ -137,7 +182,7 @@ jobs:
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    needs: [validate-profiles]
+    needs: [preflight, guards]   # guards include validate-profiles
     environment: crates-io
     permissions:
       contents: read
@@ -167,7 +212,7 @@ jobs:
       - name: Published API admitted by the version (cargo-semver-checks)
         run: just semver
 
-      # 25 `cargo publish` runs share one target directory, and each verifies by
+      # 24 `cargo publish` runs share one target directory, and each verifies by
       # building the packaged crate.
       - name: Reclaim runner disk
         run: |
@@ -501,21 +546,19 @@ jobs:
 
   # ── Docker build + push ──────────────────────────────────────────────────────
   #
-  # Improved pipeline — three stages, two key changes vs. the old design:
+  # Three stages:
   #
-  # 1. docker-builder now runs in PARALLEL with `publish` (needs: preflight, not publish).
-  #    Previously it waited ~10-15 min for crates.io publishing before starting.
+  # 1. `docker-builder` runs in parallel with `publish` (it needs `preflight`
+  #    only), so the Rust compile does not wait for crates.io.
   #
-  # 2. docker-builder now PUSHES the builder image to ghcr.io instead of push: false.
-  #    Runtime jobs use it as cache-from=type=registry, guaranteeing a cache hit
-  #    (no Rust recompilation in runtime stages, even on cache-size-eviction).
+  # 2. `docker-builder` pushes the builder images to ghcr.io, and the bake jobs
+  #    read them back as `cache-from=type=registry` — a cache hit even when the
+  #    GHA cache has evicted them, so the runtime stages recompile no Rust.
   #
-  # 3. docker-bake replaces the per-service docker jobs with 2 bake jobs (one per
-  #    platform). docker buildx bake shares the builder stage across all 17
-  #    service targets, so the builder compiles once per platform instead of once
-  #    per service.
-  #
-  # Wall-clock time target: ~25–30 min total (vs. 2+ h before).
+  # 3. `docker-bake` is one job per platform: `docker buildx bake` shares the
+  #    builder stage across all 17 service targets, so the builder compiles once
+  #    per platform rather than once per service. It needs `publish` (the semver
+  #    tag) and `guards`, so no image is built for a release a guard refused.
   #
   # The service list appears twice below — the digest-export loop and the
   # `docker-manifest` matrix — and both must hold every target in
@@ -608,7 +651,7 @@ jobs:
   makotest-publish:
     name: Publish makotest to PyPI
     runs-on: ubuntu-latest
-    needs: [makotest-wheels, makotest-sdist]
+    needs: [makotest-wheels, makotest-sdist, guards]
     environment: pypi
     permissions:
       # Required for PyPI Trusted Publishing — mints the OIDC token in place
@@ -635,7 +678,7 @@ jobs:
   docker-builder:
     name: Docker — builder (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    needs: preflight          # CHANGED: parallel with publish (was: needs publish)
+    needs: preflight          # parallel with `publish`
     permissions:
       contents: read
       packages: write
@@ -684,7 +727,7 @@ jobs:
           context: .
           target: builder
           platforms: ${{ matrix.platform }}
-          push: true                            # CHANGED: was push: false
+          push: true                            # the bake jobs read it back as cache
           tags: ghcr.io/${{ github.repository_owner }}/mako-builder:${{ matrix.tag }}
           build-args: |
             OCI_REVISION=${{ github.sha }}
@@ -716,7 +759,7 @@ jobs:
   docker-bake:
     name: Docker — bake ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
-    needs: [docker-builder, publish]    # publish provides the semver version tag
+    needs: [docker-builder, publish, guards]    # publish provides the semver version tag
     permissions:
       contents: read
       packages: write
@@ -818,7 +861,7 @@ jobs:
           # Every target in `docker-bake.hcl`'s `default` group. A service the
           # bake builds but this loop omits is pushed by digest and then never
           # tagged: no manifest job runs for it, so the image exists in the
-          # registry under no name anyone can pull. `outputd` shipped that way.
+          # registry under no name anyone can pull.
           for service in makod marktd processd invoicd edmd obsd \
                         netzbilanzd sperrd einsd \
                         productd billingd outputd accountingd vertragd \
@@ -1166,7 +1209,7 @@ jobs:
   release:
     name: GitHub Release with the evidence pack
     runs-on: ubuntu-latest
-    needs: [publish, makotest-publish, docker-manifest, sbom]
+    needs: [guards, publish, makotest-publish, docker-manifest, sbom]
     permissions:
       contents: write       # creates the GitHub Release
       id-token: write       # attests the evidence pack
@@ -1202,17 +1245,21 @@ jobs:
             > evidence/fidelity.log 2>&1 || true
           grep -E 'distinct conditions|unreadable Voraussetzung' evidence/fidelity.log || true
 
-      # Every `just ci` recipe that is one `cargo xtask` call runs here and
-      # leaves its exit status; the recipes that build the whole workspace ran
-      # as `preflight` and read `not measured` in the pack.
-      - name: Guard verdicts
-        run: |
-          mkdir -p evidence/guards
-          for recipe in $(cargo xtask evidence-pack --xtask-recipes); do
-            just "$recipe" > "evidence/guards/${recipe}.log" 2>&1 && code=0 || code=$?
-            echo "$code" > "evidence/guards/${recipe}.exit"
-            echo "${recipe}: exit $(cat "evidence/guards/${recipe}.exit")"
-          done
+      # The verdicts were taken before anything was published: `guards` ran
+      # every xtask recipe of `_ci`, and `preflight` the workspace-building
+      # recipes it runs under their own names (fmt-check, clippy, check). The
+      # `_ci` recipes neither job runs read `not measured` in the pack.
+      - name: Download the guard verdicts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: guard-verdicts
+          path: evidence/guards
+
+      - name: Download the preflight verdicts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: preflight-verdicts
+          path: evidence/guards
 
       - name: Download the CycloneDX SBOMs
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0

@@ -1,6 +1,6 @@
 //! GPKE Kündigung — the incoming supplier terminates the incumbent's contract.
 //!
-//! GPKE Teil 2 § 1.2: the **LFN sends the Kündigung directly to the LFA**, with
+//! GPKE Teil 2 Kap. 1.2: the **LFN sends the Kündigung directly to the LFA**, with
 //! no Netzbetreiber in between. Both parties are suppliers, which is what makes
 //! this process its own workflow rather than a variant of the supplier change:
 //! `gpke-supplier-change` is correlated by Marktlokation and hosts the NB-side
@@ -20,7 +20,7 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BK6-24-174 GPKE Teil 2 § 1.2** — UC/SD Kündigung; the LFA answers by the
+//! - **BK6-24-174 GPKE Teil 2 Kap. 1.2** — UC/SD Kündigung; the LFA answers by the
 //!   **Ablauf des 1. Werktags nach dem ÜT**
 //! - **EBD 4.3 Kap. 6.2.1** — `E_0614` „Kündigung Vertrag prüfen"
 //! - **APERAK AHB 1.1 § 2.4.1** — the separate 45-minute technical window
@@ -270,7 +270,7 @@ pub enum KuendigungCommand {
     /// Send the outbound UTILMD response (55017 = Bestätigung, 55018 = Ablehnung).
     ///
     /// The LFA answers by the **Ablauf des 1. Werktags nach dem ÜT** — GPKE
-    /// Teil 2 § 1.2.2 SD Kündigung Prozessschritt 2, resolved by
+    /// Teil 2 Kap. 1.2.2 SD Kündigung Prozessschritt 2, resolved by
     /// `mako_fristen::antwort` (trigger PID 55016).
     SendAntwort {
         /// The resolved answer: Antwortcode, its EBD, and the Cluster that

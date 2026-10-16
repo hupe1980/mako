@@ -2439,191 +2439,83 @@ impl InboxStore for SlateDbInboxStore {
 
 // ── SlateDbDeadLetterSink ─────────────────────────────────────────────────────
 
-/// Capacity of the in-memory dead-letter buffer.
+/// A [`DeadLetterSink`] that writes every rejection to SlateDB before
+/// [`reject`](crate::dead_letter::DeadLetterSink::reject) resolves.
 ///
-/// 512 entries is far more than enough for any realistic rejection burst.
-/// If the buffer fills (> 512 concurrent unprocessed rejections), new entries
-/// are dropped with an `tracing::error!` log and a `channel_overflow` metric.
-const DL_BUFFER_CAPACITY: usize = 512;
-
-/// Internal entry queued from the synchronous `reject()` call to the async writer.
-struct DlEntry {
-    label: String,
-    detail: String,
-}
-
-/// A [`DeadLetterSink`] that buffers rejections in a bounded in-memory queue
-/// and persists them to SlateDB via a paired [`SlateDbDeadLetterWorker`] task.
-///
-/// ## Why a channel rather than `rt.spawn()`
-///
-/// `reject()` is synchronous. Spawning the write from it loses the DLQ entry
-/// whenever the Tokio runtime is shutting down at that moment — `spawn()`
-/// silently drops the future, and BNetzA traceability requires the record.
-///
-/// This implementation uses a bounded `tokio::sync::mpsc` channel. `reject()`
-/// is a non-blocking `try_send` into the buffer; the background
-/// [`SlateDbDeadLetterWorker`] drains the buffer to SlateDB. Because the
-/// worker is started at daemon startup (not inside `reject()`), it is immune
-/// to the runtime-shutdown race.
-///
-/// ## Wiring
+/// The write is awaited with SlateDB's default `await_durable`, so an `Ok`
+/// means the record is in the store. There is no buffer between the caller
+/// and the write: a record held in memory is lost on a crash, a shutdown or an
+/// overflow while its caller has already settled the AS4 claim or deleted the
+/// outbox entry on the strength of it. A write that fails — the store closed
+/// or unreachable — is returned to the caller as [`EngineError::DeadLetter`],
+/// so it can keep the message instead.
 ///
 /// ```rust,no_run
 /// # async fn example(store: mako_engine::store_slatedb::SlateDbStore) {
-/// let (dl_sink, dl_worker) = store.as_dead_letter_sink();
-/// let dl_handle = tokio::spawn(dl_worker.run());
-///
+/// let dl_sink = store.as_dead_letter_sink();
 /// // Wire dl_sink into EngineBuilder::with_dead_letter_sink(dl_sink).
-///
-/// // On graceful shutdown (after wait_for_shutdown()):
-/// // 1. Call dl_sink.signal_shutdown() — closes the channel.
-/// // 2. Await dl_handle — worker drains remaining entries and exits.
-/// // 3. Call store.close_owned().
 /// # }
 /// ```
 ///
 /// [`DeadLetterSink`]: crate::dead_letter::DeadLetterSink
 #[derive(Clone)]
 pub struct SlateDbDeadLetterSink {
-    inner: std::sync::Arc<DlSinkInner>,
-}
-
-struct DlSinkInner {
-    /// `None` after `signal_shutdown()` is called.
-    tx: std::sync::Mutex<Option<tokio::sync::mpsc::Sender<DlEntry>>>,
+    db: Db,
 }
 
 impl std::fmt::Debug for SlateDbDeadLetterSink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let open = self.inner.tx.lock().map(|g| g.is_some()).unwrap_or(false);
         f.debug_struct("SlateDbDeadLetterSink")
-            .field("channel_open", &open)
             .finish_non_exhaustive()
-    }
-}
-
-impl SlateDbDeadLetterSink {
-    /// Close the dead-letter channel and signal the background worker to drain
-    /// remaining buffered entries and exit.
-    ///
-    /// After this call, `reject()` is a **silent no-op** — no new entries are
-    /// queued. Call this during graceful shutdown **before** awaiting the
-    /// [`SlateDbDeadLetterWorker`] handle and **before** `store.close_owned()`.
-    pub fn signal_shutdown(&self) {
-        // Dropping the Sender closes the mpsc channel.  The worker's `recv()`
-        // loop will drain remaining entries and then return `None`, exiting cleanly.
-        if let Ok(mut guard) = self.inner.tx.lock() {
-            *guard = None;
-        }
     }
 }
 
 impl crate::dead_letter::DeadLetterSink for SlateDbDeadLetterSink {
-    fn reject(&self, reason: &crate::dead_letter::DeadLetterReason) {
-        let label = reason.label();
-        let detail = reason.to_string();
+    fn reject<'a>(
+        &'a self,
+        reason: &'a crate::dead_letter::DeadLetterReason,
+    ) -> crate::dead_letter::RejectFuture<'a> {
+        Box::pin(async move {
+            let label = reason.label();
+            let detail = reason.to_string();
 
-        // Metrics (sync, no I/O). Per-PID label for unknown-PID alerts.
-        let metric_label: std::borrow::Cow<'static, str> = match reason {
-            crate::dead_letter::DeadLetterReason::UnknownPid { pid, .. } => {
-                format!("unknown_pid:{pid}").into()
-            }
-            _ => label.into(),
-        };
-        crate::metrics::EngineMetrics::global().dead_letter_recorded(&metric_label);
+            // Metrics (sync, no I/O). Per-PID label for unknown-PID alerts.
+            let metric_label: std::borrow::Cow<'static, str> = match reason {
+                crate::dead_letter::DeadLetterReason::UnknownPid { pid, .. } => {
+                    format!("unknown_pid:{pid}").into()
+                }
+                _ => label.into(),
+            };
+            crate::metrics::EngineMetrics::global().dead_letter_recorded(&metric_label);
 
-        // Structured log (sync, never blocks).
-        tracing::warn!(
-            reason = label,
-            detail = %detail,
-            "dead letter: enqueueing for durable DLQ persistence",
-        );
-
-        // Non-blocking enqueue into the bounded buffer.
-        let guard = self.inner.tx.lock().unwrap();
-        let Some(tx) = &*guard else {
-            // signal_shutdown() was called; silently discard.
-            return;
-        };
-        if let Err(_full) = tx.try_send(DlEntry {
-            label: label.to_owned(),
-            detail,
-        }) {
-            tracing::error!(
+            tracing::warn!(
                 reason = label,
-                capacity = DL_BUFFER_CAPACITY,
-                "dead letter channel full; entry dropped — check for mass-rejection storm",
+                detail = %detail,
+                "dead letter: persisting to the durable DLQ",
             );
-            crate::metrics::EngineMetrics::global().dead_letter_recorded("channel_overflow");
-        }
-    }
-}
 
-/// Background task that persists dead-letter entries from the in-memory buffer
-/// to SlateDB.
-///
-/// Obtained alongside [`SlateDbDeadLetterSink`] via
-/// [`SlateDbStore::as_dead_letter_sink`].
-///
-/// ## Usage
-///
-/// ```rust,no_run
-/// # async fn example(store: mako_engine::store_slatedb::SlateDbStore) {
-/// let (dl_sink, dl_worker) = store.as_dead_letter_sink();
-/// let dl_handle = tokio::spawn(dl_worker.run());
-/// // ...
-/// # }
-/// ```
-pub struct SlateDbDeadLetterWorker {
-    rx: tokio::sync::mpsc::Receiver<DlEntry>,
-    db: Db,
-}
-
-impl std::fmt::Debug for SlateDbDeadLetterWorker {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SlateDbDeadLetterWorker")
-            .finish_non_exhaustive()
-    }
-}
-
-impl SlateDbDeadLetterWorker {
-    /// Run the background writer until the channel is closed.
-    ///
-    /// The channel is closed when [`SlateDbDeadLetterSink::signal_shutdown`] is
-    /// called (or when all `SlateDbDeadLetterSink` clones are dropped). The
-    /// worker drains any remaining buffered entries before returning.
-    ///
-    /// Returns the total number of entries persisted.
-    pub async fn run(mut self) -> u64 {
-        let mut count = 0u64;
-        while let Some(entry) = self.rx.recv().await {
-            Self::persist_entry(&self.db, entry).await;
-            count += 1;
-        }
-        count
-    }
-
-    async fn persist_entry(db: &Db, entry: DlEntry) {
-        let now = OffsetDateTime::now_utc();
-        let uuid = uuid::Uuid::new_v4().to_string();
-        let key = dr_key(now, &uuid);
-        let record = DeadLetterRecord {
-            rejected_at: now.to_string(),
-            reason_label: entry.label,
-            reason_detail: entry.detail,
-        };
-        if let Ok(bytes) = serde_json::to_vec(&record) {
+            let now = OffsetDateTime::now_utc();
+            let uuid = uuid::Uuid::new_v4().to_string();
+            let key = dr_key(now, &uuid);
+            let record = DeadLetterRecord {
+                rejected_at: now.to_string(),
+                reason_label: label.to_owned(),
+                reason_detail: detail,
+            };
+            let bytes = serde_json::to_vec(&record)
+                .map_err(|e| EngineError::dead_letter(format!("serialise record: {e}")))?;
             let mut batch = WriteBatch::new();
             batch.put(key.as_bytes(), &bytes);
-            if let Err(e) = db.write(batch).await {
+            self.db.write(batch).await.map_err(|e| {
                 tracing::error!(
+                    reason = label,
                     error = %e,
-                    "SlateDbDeadLetterWorker: failed to persist dead-letter entry; \
-                     entry is lost — check storage health",
+                    "dead letter: could not persist the record",
                 );
-            }
-        }
+                EngineError::dead_letter(slatedb_error_kind_str(&e))
+            })?;
+            Ok(())
+        })
     }
 }
 
@@ -2651,35 +2543,13 @@ fn dr_key(ts: OffsetDateTime, uuid: &str) -> String {
 }
 
 impl SlateDbStore {
-    /// Create a dead-letter sink backed by a buffered async writer.
-    ///
-    /// Returns `(sink, worker)` where:
-    /// - `sink` implements [`DeadLetterSink`] and is `Clone + Send + Sync`.
-    /// - `worker` must be spawned: `tokio::spawn(worker.run())`.
-    ///
-    /// ## Graceful shutdown sequence
-    ///
-    /// ```text
-    /// 1. wait_for_shutdown().await
-    /// 2. dl_sink.signal_shutdown()       — closes the channel
-    /// 3. dl_handle.await.ok()            — worker drains remaining entries
-    /// 4. store.close_owned().await       — safe to close storage
-    /// ```
-    ///
-    /// [`DeadLetterSink`]: crate::dead_letter::DeadLetterSink
+    /// Create a dead-letter sink that writes each rejection before
+    /// returning; see [`SlateDbDeadLetterSink`].
     #[must_use]
-    pub fn as_dead_letter_sink(&self) -> (SlateDbDeadLetterSink, SlateDbDeadLetterWorker) {
-        let (tx, rx) = tokio::sync::mpsc::channel(DL_BUFFER_CAPACITY);
-        let inner = std::sync::Arc::new(DlSinkInner {
-            tx: std::sync::Mutex::new(Some(tx)),
-        });
-        (
-            SlateDbDeadLetterSink { inner },
-            SlateDbDeadLetterWorker {
-                rx,
-                db: self.db.clone(),
-            },
-        )
+    pub fn as_dead_letter_sink(&self) -> SlateDbDeadLetterSink {
+        SlateDbDeadLetterSink {
+            db: self.db.clone(),
+        }
     }
 
     /// Return up to `limit` dead-letter records in **reverse-chronological**

@@ -41,7 +41,7 @@ const DOCKER_BUILDS: &[&str] = &["docker/build-push-action", "docker/bake-action
 
 /// Commands that compile the **whole** workspace.
 ///
-/// `cargo publish` walks 25 crates; `just ci` is the whole gate. Everything
+/// `cargo publish` walks 24 crates; `just ci` is the whole gate. Everything
 /// else is recognised by scope rather than by name — see [`builds_workspace`] —
 /// because what decides the footprint is `--workspace` / `--all-features`, not
 /// which cargo subcommand carries it.

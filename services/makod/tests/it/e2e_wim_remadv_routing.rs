@@ -109,7 +109,12 @@ async fn remadv_routes_to_wim_invoic_despite_wrong_static_resolution() {
     // Dispatch with the WRONG statically-resolved family (last-write-wins could
     // have picked gpke-abrechnung for the Strom-shared REMADV PID).
     let outcome = dispatcher
-        .dispatch(&msg, "gpke-abrechnung", 33001)
+        .dispatch(
+            &msg,
+            "gpke-abrechnung",
+            33001,
+            time::OffsetDateTime::now_utc(),
+        )
         .await
         .expect("dispatch");
 
@@ -129,7 +134,12 @@ async fn orphan_remadv_is_skipped_not_misrouted() {
 
     let msg = edi_energy::parse(REMADV_33001.as_bytes()).expect("parse REMADV 33001");
     let outcome = dispatcher
-        .dispatch(&msg, "gpke-abrechnung", 33001)
+        .dispatch(
+            &msg,
+            "gpke-abrechnung",
+            33001,
+            time::OffsetDateTime::now_utc(),
+        )
         .await
         .expect("dispatch");
 

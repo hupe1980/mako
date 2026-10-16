@@ -1,6 +1,6 @@
 //! Integration tests for `GpkeLfAbmeldungWorkflow` (PIDs 55007/55008/55009).
 //!
-//! Covers the NB-initiated Lieferende process (GPKE Teil 2 §2.5):
+//! Covers the NB-initiated Lieferende process (GPKE Teil 2 Kap. 2.5):
 //!
 //! - Happy path: receive 55007 Ankündigung → ValidationPassed → SendAntwort →
 //!   Bestätigung/Ablehnung → Beendet

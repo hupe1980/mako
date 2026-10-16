@@ -42,7 +42,7 @@
 //! | `mabis-profile` | MSCONS 13010–13012; ORDERS 17211 |
 //! | `mabis-clearingliste` | UTILMD 55067 · 55069 · 55070 · 55073 |
 //! | `mabis-listenabgleich` | UTILMD 55065/55066 · 55195/55196 · 55201/55202 · 55223/55224 |
-//! | `mabis-zp-lifecycle` | UTILMD 55062–55064 · 55071/55072 · 55197–55214 · 55235–55237 |
+//! | `mabis-zp-lifecycle` | UTILMD 55062–55064 · 55071/55072 · 55197–55200 · 55203–55214 · 55235–55237 |
 //! | `mabis-anforderung` | ORDERS 17201–17208 · 17210; ORDRSP 19204 |
 //!
 //! # The Kapitel-17 series expire on 30.09.2026
@@ -164,7 +164,7 @@ pub use zp_lifecycle::{
 /// | `mabis-profile` | MSCONS 13010–13012; ORDERS 17211 |
 /// | `mabis-clearingliste` | UTILMD 55067 · 55069 · 55070 · 55073 |
 /// | `mabis-listenabgleich` | UTILMD 55065/55066 · 55195/55196 · 55201/55202 · 55223/55224 |
-/// | `mabis-zp-lifecycle` | UTILMD 55062–55064 · 55071/55072 · 55197–55214 · 55235–55237 |
+/// | `mabis-zp-lifecycle` | UTILMD 55062–55064 · 55071/55072 · 55197–55200 · 55203–55214 · 55235–55237 |
 /// | `mabis-anforderung` | ORDERS 17201–17208 · 17210; ORDRSP 19204 |
 ///
 /// Each workflow's module docs carry the use case it answers and the Fristen
@@ -208,8 +208,8 @@ impl mako_engine::builder::EngineModule for MabisModule {
         // Lieferantenausfallarbeitssummenzeitreihe are **MaBiS**, not
         // Redispatch: the PID overview files both under the MaBiS
         // Prozessbeschreibung and both carry the full Prüfmitteilung/
-        // Datenstatus cycle (IFTSTA 21000/21002–21005). They were routed to a
-        // Redispatch workflow, which had no settlement stream to put them in.
+        // Datenstatus cycle (IFTSTA 21000/21002–21005), and only a MaBiS
+        // workflow has the settlement stream they belong to.
         //
         // 13022 stays with `mako-redispatch`: it is the TR-scharfe Einzel-
         // zeitreihe the BTR and the NB reconcile, not a Summenzeitreihe.
@@ -240,8 +240,8 @@ impl mako_engine::builder::EngineModule for MabisModule {
         // ── Normierte Profile (Kap. 6.5 / 6.7) ──────────────────────────────
         //
         // MSCONS 13010/13011/13012 deliver the values; ORDERS 17211 is the LF's
-        // Reklamation (EBD E_0100). 17211 was filed with the Redispatch ORDERS
-        // codes, which left the delivery with no correction leg at all.
+        // Reklamation (EBD E_0100) — the correction leg of the delivery, so it
+        // routes to the same workflow as the values it reclaims.
         for pid in profile::all_pids() {
             router.register(pid, profile::WORKFLOW_NAME);
         }
@@ -278,9 +278,9 @@ impl mako_engine::builder::EngineModule for MabisModule {
         // ── MaBiS Anforderungen ─────────────────────────────────────────────
         //
         // ORDERS 17201–17208 and 17210, plus the one Ablehnung the family has,
-        // ORDRSP 19204 (only 17207 can be refused). 17210 was filed with the
-        // Redispatch codes; it asks the ANB for the
-        // Lieferantenausfallarbeitsclearingliste, which is a MaBiS list.
+        // ORDRSP 19204 (only 17207 can be refused). 17210 asks the ANB for the
+        // Lieferantenausfallarbeitsclearingliste, which is a MaBiS list, not a
+        // Redispatch one.
         for pid in anforderung::all_pids() {
             router.register(pid, anforderung::WORKFLOW_NAME);
         }

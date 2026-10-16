@@ -104,6 +104,11 @@ const FRIST_UNREAD: &[Unread] = &[
 /// Meldepflicht rows (by PID) nothing reads. May only shrink.
 const MELDUNG_UNREAD: &[Unread] = &[
     Unread {
+        name: "55007",
+        reason: "the NB's 05:00–06:00 send window on a silent LF (GPKE Teil 2 Kap. 2.5.2.2 Nr. 3) is catalogued; no NB-side workflow sends 55007 yet",
+        milestone: "M11",
+    },
+    Unread {
         name: "44036",
         reason: "catalogued Meldepflicht no workflow applies yet — nothing outside mako-fristen reads `mako_fristen::meldung`",
         milestone: "M11",

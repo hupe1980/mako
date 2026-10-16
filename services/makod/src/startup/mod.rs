@@ -534,9 +534,9 @@ pub(crate) struct WorkersConfig {
     /// certificate would be wrong; this one is the identity the BDEW services
     /// authenticate. One shared client cannot be both.
     pub webdienste_client: reqwest::Client,
-    /// EMT.API signing key for TR-03116-3 content-layer signing, when the
-    /// operator configured one.
-    pub webdienste_signing_key: Option<energy_api::transport::content_security::ContentSigningKey>,
+    /// EMT.API signing key and certificate for content-layer signing, when
+    /// the operator configured them.
+    pub webdienste_signing: Option<crate::transport::webdienste::ContentSigning>,
     /// WIRK TLS identity presented to a partner MSH, when the operator holds it
     /// here rather than on an egress proxy.
     ///
@@ -704,7 +704,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
         maloid_partners,
         verzeichnisdienst_lookup,
         cfg.store.clone(),
-        cfg.webdienste_signing_key.clone(),
+        cfg.webdienste_signing.clone(),
     );
 
     // ── AS4 partner P-Mode registry (built by the preflight) ─────────────

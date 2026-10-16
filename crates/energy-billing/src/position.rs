@@ -611,7 +611,6 @@ pub(crate) fn arbeitspreis_position(
     p
 }
 
-/// Build a per-unit levy position (quantity × rate in ct/unit).
 /// The § 3 Abs. 1 CO2KostAufG disclosures that accompany a CO₂ cost position.
 ///
 /// The statute lists six items a Brennstoff- or Wärmelieferant must show
@@ -675,6 +674,7 @@ pub(crate) fn co2kostaufg_disclosures(
     ]
 }
 
+/// Build a per-unit levy position (quantity × rate in ct/unit).
 pub(crate) fn levy_position(
     label: impl Into<String>,
     quantity: Decimal,

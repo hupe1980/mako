@@ -105,12 +105,43 @@ pub struct GetStpRateParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListByFamilyParams {
-    /// Process family: `gpke`, `wim`, `geli-gas`, `wim-gas`, `gabi-gas`, `mabis`, `unknown`.
+    /// Process family — one of the families the projection writes.
+    #[schemars(schema_with = "family_schema")]
     pub family: String,
-    /// Optional state filter: `initiated`, `running`, `completed`, `rejected`, `cancelled`, `aperak_timeout`.
+    /// Optional state filter — one of the process states.
+    #[schemars(schema_with = "state_schema")]
     pub state: Option<String>,
     /// Maximum results (default: 50, max: 500).
     pub limit: Option<u32>,
+}
+
+/// The `family` enum, generated from [`crate::handler::FAMILIES`] — the list
+/// `derive_family` is swept against — so the schema an agent filters by names
+/// every family the projection writes and nothing else.
+fn family_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "string",
+        "enum": crate::handler::FAMILIES,
+        "description": "Process family — one of the families the projection writes.",
+    })
+}
+
+/// The `state` enum, generated from [`ProcessState::ALL`] in its wire
+/// spelling, so the documented values and the accepted ones are one list.
+///
+/// [`ProcessState::ALL`]: mako_obs::domain::ProcessState::ALL
+fn state_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    use mako_obs::domain::ProcessState;
+    let states: Vec<serde_json::Value> = ProcessState::ALL
+        .into_iter()
+        .map(|st| serde_json::Value::from(st.as_str()))
+        .chain(std::iter::once(serde_json::Value::Null))
+        .collect();
+    schemars::json_schema!({
+        "type": ["string", "null"],
+        "enum": states,
+        "description": "Optional state filter — one of the process states.",
+    })
 }
 
 // ── MCP handler ───────────────────────────────────────────────────────────────
@@ -176,9 +207,9 @@ impl ObsdMcpHandler {
 
     /// Processes past their **business Antwortfrist**.
     ///
-    /// Not the APERAK clock: that is minutes, arrives as its own event and lands
-    /// in `state = aperak_timeout`, which this list deliberately still includes
-    /// — a counterparty that missed the acknowledgement still owes the answer.
+    /// A process in `state = aperak_timeout` is still listed: that state is the
+    /// Lieferantenwechsel's own report that this same Antwortfrist lapsed, it
+    /// is not terminal, and the answer is still owed.
     ///
     /// Processes with **no published Frist carry no deadline** and are therefore
     /// absent: unknown, never measured against an instant nobody can cite.
@@ -232,18 +263,22 @@ impl ObsdMcpHandler {
 
     /// Process KPIs for a Prüfidentifikator and calendar month.
     ///
-    /// **Two clocks, two numbers.** `aperak_timeout` counts processes whose
-    /// *technical acknowledgement* window lapsed (45 min Strom, next Werktag
-    /// 12:00 / 3 Werktage Gas); `frist_breached` counts processes that passed
-    /// their *business* Antwortfrist. Reporting the second under the first's
-    /// name points an operator at the wrong clock by three orders of magnitude.
+    /// `frist_breached` counts processes that passed their *business*
+    /// Antwortfrist, measured by obsd against `deadline_at`. `aperak_timeout`
+    /// counts processes whose current state is `aperak_timeout`: the
+    /// `de.mako.aperak.timeout` event that `gpke-supplier-change` and
+    /// `geli-gas-supplier-change` emit when *their* Antwortfrist lapses
+    /// unanswered. Neither number measures an APERAK or CONTRL delivery
+    /// window — no such lapse reaches obsd.
     ///
     /// `pid` — BDEW Prüfidentifikator (e.g. 55001 for the GPKE Lieferbeginn).
     /// `period` — `YYYY-MM` (default: current month).
     #[tool(
-        description = "Process KPIs for a PID and calendar month (YYYY-MM). Reports the APERAK \
-                       acknowledgement clock and the business Antwortfrist as separate numbers. \
-                       Rates are null when the bucket contains nothing measurable — never 0.",
+        description = "Process KPIs for a PID and calendar month (YYYY-MM). frist_breached is \
+                       the business Antwortfrist measured against deadline_at; aperak_timeout \
+                       counts the supplier-change workflows' own Antwortfrist-lapse reports. \
+                       Neither measures an APERAK delivery window. Rates are null when the \
+                       bucket contains nothing measurable — never 0.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_kpi_report(
@@ -267,7 +302,8 @@ impl ObsdMcpHandler {
                 "total_completed": report.total_completed,
                 "total_rejected": report.total_rejected,
                 "total_failed": report.total_failed,
-                // The technical acknowledgement clock.
+                // The GPKE / GeLi Gas Lieferantenwechsel reporting its own
+                // Antwortfrist lapse — not an APERAK delivery window.
                 "aperak_timeout": report.total_aperak_timeout,
                 // The business Antwortfrist. `total_with_frist` is the
                 // denominator and is reported because a small one means the
@@ -277,9 +313,11 @@ impl ObsdMcpHandler {
                 "frist_compliance_rate": report.frist_compliance_rate,
                 "avg_cycle_time_hours": report.avg_cycle_time_hours,
                 "p95_cycle_time_hours": report.p95_cycle_time_hours,
-                "note": "aperak_timeout is the technical acknowledgement clock; frist_breached \
-                         is the business Antwortfrist. They are different obligations. Null \
-                         rates mean nothing measurable in the bucket, not perfect performance.",
+                "note": "frist_breached is the business Antwortfrist measured against \
+                         deadline_at; aperak_timeout counts processes the GPKE / GeLi Gas \
+                         supplier-change workflow reported as past its Antwortfrist. Neither \
+                         measures an APERAK delivery window. Null rates mean nothing measurable \
+                         in the bucket, not perfect performance.",
             }))
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None)),
@@ -385,9 +423,9 @@ impl ObsdMcpHandler {
     /// Rolling STP (Straight-Through Processing) rate across all families.
     ///
     /// The denominator is processes that **ended** — completed, rejected or
-    /// failed. An `aperak_timeout` is not an ending: the counterparty missed the
-    /// acknowledgement window and can still answer, so counting it as a terminal
-    /// failure understates the rate for as long as the process stays open.
+    /// failed. An `aperak_timeout` is not an ending: the Antwortfrist lapsed and
+    /// the answer can still arrive, so counting it as a terminal failure
+    /// understates the rate for as long as the process stays open.
     #[tool(
         description = "Rolling STP rate over processes that ended in the last N days. \
                        Denominator is completed + rejected + failed; in-flight and \
@@ -448,8 +486,8 @@ impl ObsdMcpHandler {
             "frist_breached": n("frist_breached"),
             "stp_rate": stp_rate,
             "note": "stp_rate = completed / (completed + rejected + failed). aperak_timeout is \
-                     the technical acknowledgement clock and is not an ending — a counterparty \
-                     that missed it can still answer. No regulatory STP target exists.",
+                     a lapsed Antwortfrist the supplier-change workflow reported and is not an \
+                     ending — the answer can still arrive. No regulatory STP target exists.",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
@@ -460,9 +498,8 @@ impl ObsdMcpHandler {
     /// Useful for investigating a drop inside one family (e.g. "all rejected
     /// GPKE processes this week").
     #[tool(
-        description = "List processes by family (gpke, wim, geli-gas, wim-gas, gabi-gas, mabis, \
-                       invoic-storno, unknown), newest first. Optional state filter: initiated, \
-                       running, aperak_timeout, completed, rejected, failed.",
+        description = "List processes of one family, newest first, optionally filtered by state. \
+                       The `family` and `state` parameters enumerate the accepted values.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_processes_by_family(
@@ -486,6 +523,19 @@ impl ObsdMcpHandler {
                 )
             })?),
         };
+
+        // An unknown family is refused for the same reason: it matches no row,
+        // and an empty list reads as "nothing in this family".
+        if !crate::handler::FAMILIES.contains(&p.family.as_str()) {
+            return Err(McpError::invalid_params(
+                format!(
+                    "unknown family `{}` — one of {:?}",
+                    p.family,
+                    crate::handler::FAMILIES
+                ),
+                None,
+            ));
+        }
 
         let limit = p.limit.unwrap_or(50).min(500);
         let repo = crate::pg::PgProcessProjectionRepository::new(self.state.pool.clone());
@@ -714,9 +764,10 @@ fn audit_kpi_prompt_text() -> String {
         "1. Use `get_kpi_report` with a PID and a `YYYY-MM` period.\n\
          2. Read `total_initiated`, `total_completed`, `total_rejected`, `total_failed`, \
          `aperak_timeout`, `frist_breached`, `frist_compliance_rate` and \
-         `avg_cycle_time_hours`. `aperak_timeout` is the technical acknowledgement clock, \
-         `frist_breached` the business Antwortfrist — never report one under the other's \
-         name.\n\
+         `avg_cycle_time_hours`. `frist_breached` is the business Antwortfrist measured \
+         against `deadline_at`; `aperak_timeout` counts the GPKE / GeLi Gas supplier-change \
+         workflows' own Antwortfrist-lapse reports. Neither is an APERAK delivery window — \
+         never report either as one.\n\
          3. No BNetzA threshold exists for these rates. Any target is the operator's own; \
          say whose it is.\n\
          4. Drill into breaches with `list_overdue_processes` for individual cases.",
@@ -727,10 +778,10 @@ fn audit_kpi_prompt_text() -> String {
 fn aperak_prompt_text() -> String {
     format!(
         "1. Use `get_process` with the process_id to see the full projection.\n\
-         2. Compare `aperak_deadline_at` with when the APERAK was sent.\n\
-         3. The APERAK Frist: {}.\n\
-         4. A lapse is the acknowledgement clock, not the business Antwortfrist — \
-         document the root cause under that name.",
+         2. The APERAK Frist: {}.\n\
+         3. obsd does not measure it: no APERAK or CONTRL delivery-window lapse reaches \
+         this read model, and `state = aperak_timeout` is a lapsed Antwortfrist. A missed \
+         APERAK Frist is root-caused from makod's delivery-window alert and outbox.",
         aperak_frist_sentence()
     )
 }
@@ -744,10 +795,12 @@ fn instructions() -> String {
              process KPIs.\n\
              \n\
              ## Two deadline clocks, never one number\n\
-             - **APERAK Frist** — the technical acknowledgement: {aperak}. A lapse \
-             arrives as its own event and shows as `state = aperak_timeout`.\n\
+             - **APERAK Frist** — the technical acknowledgement: {aperak}. obsd does not \
+             measure it: no delivery-window lapse reaches this read model.\n\
              - **Antwortfrist** — the business answer, per inbound PID: {antwort}. Stored as \
-             `deadline_at`, with `deadline_source` naming the Festlegung.\n\
+             `deadline_at`, with `deadline_source` naming the Festlegung. `state = \
+             aperak_timeout` is the GPKE / GeLi Gas Lieferantenwechsel reporting that this \
+             window lapsed unanswered.\n\
              \n\
              They differ by orders of magnitude and fail for different reasons. Never report \
              one under the other's name.\n\
@@ -777,7 +830,7 @@ fn instructions() -> String {
              \n\
              ## Process states\n\
              `initiated` → `running` → `completed` | `rejected` | `failed`; `aperak_timeout` \
-             is not terminal — a counterparty that missed the acknowledgement can still answer.",
+             is not terminal — the answer can still arrive after the Antwortfrist lapsed.",
         aperak = aperak_frist_sentence(),
         antwort = antwort_examples(),
     )
@@ -879,5 +932,48 @@ mod instruction_tests {
         let text = audit_kpi_prompt_text();
         assert!(!text.contains("BNetzA targets"), "{text}");
         assert!(!text.contains("Qualitätsbericht"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+    use mako_obs::domain::ProcessState;
+
+    fn params_schema() -> serde_json::Value {
+        serde_json::to_value(schemars::schema_for!(ListByFamilyParams)).expect("schema serialises")
+    }
+
+    fn enum_of(schema: &serde_json::Value, field: &str) -> Vec<serde_json::Value> {
+        schema["properties"][field]["enum"]
+            .as_array()
+            .unwrap_or_else(|| panic!("`{field}` carries an enum: {schema:#}"))
+            .clone()
+    }
+
+    /// The documented states are exactly the process states, in their wire
+    /// spelling: no `cancelled`, which nothing emits, and `failed` present.
+    #[test]
+    fn the_state_filter_lists_exactly_the_process_states() {
+        let listed: Vec<String> = enum_of(&params_schema(), "state")
+            .into_iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect();
+        let states: Vec<String> = ProcessState::ALL.map(|s| s.as_str().to_owned()).to_vec();
+        assert_eq!(listed, states);
+        assert!(!listed.iter().any(|s| s == "cancelled"));
+    }
+
+    /// The documented families are exactly the ones the projection writes.
+    #[test]
+    fn the_family_parameter_lists_exactly_the_derived_families() {
+        let listed: Vec<String> = enum_of(&params_schema(), "family")
+            .into_iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect();
+        assert_eq!(listed, crate::handler::FAMILIES.map(str::to_owned).to_vec());
+        for f in ["emob", "redispatch"] {
+            assert!(listed.iter().any(|l| l == f), "{f} is a family");
+        }
     }
 }

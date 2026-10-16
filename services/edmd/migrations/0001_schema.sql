@@ -490,6 +490,10 @@ CREATE TABLE substitute_value_log (
                             'INTERPOLATION','VERGLEICHSWERT','HOLD','ZERO'
                         )),
     reason          TEXT,
+    -- The Bundesland whose statutory holidays decided the Vergleichswert's
+    -- day class: the same gap forms a different Ersatzwert in another Land,
+    -- so the audit row names the one it ran under.
+    bundesland      TEXT          NOT NULL,
     -- Operator who authorised the Ersatzwert (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) attributability).
     created_by      TEXT,
     created_at      TIMESTAMPTZ   NOT NULL DEFAULT now(),

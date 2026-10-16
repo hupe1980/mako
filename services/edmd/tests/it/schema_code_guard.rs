@@ -158,6 +158,27 @@ fn substitute_method_check_matches_the_method_enum() {
     );
 }
 
+/// The substitute audit row names the Bundesland the day class ran under, and
+/// the insert writes it: the same gap forms a different Vergleichswert in a
+/// Land with a different holiday.
+#[test]
+fn the_substitute_log_records_the_bundesland() {
+    let ddl = ddl_of(&migration(), "substitute_value_log");
+    assert!(
+        declared_columns(&ddl).contains("bundesland"),
+        "substitute_value_log declares no bundesland column"
+    );
+    let handler = read("src/server/substitute.rs");
+    let insert = &handler[handler
+        .find("INSERT INTO substitute_value_log")
+        .expect("the handler writes the audit row")..];
+    let columns = &insert[..insert.find("VALUES").expect("a VALUES list")];
+    assert!(
+        columns.contains("bundesland"),
+        "the insert omits the Bundesland: {columns}"
+    );
+}
+
 /// Extract the quoted values of a `CHECK (column IN (...))` list.
 fn check_list(ddl: &str, column: &str) -> Vec<String> {
     let anchor = format!("CHECK ({column} IN (");

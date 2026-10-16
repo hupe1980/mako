@@ -800,7 +800,7 @@ mod tests {
         for z in alle() {
             if z.familie().stammt_aus_kapitel_17() {
                 // Kapitel-17 series are activated by their own PIDs
-                // (55197–55214), not by 55062/55063, so the AHB gives them no
+                // (55197–55200, 55203–55214), not by 55062/55063, so the AHB gives them no
                 // CAV code in this codelist.
                 continue;
             }

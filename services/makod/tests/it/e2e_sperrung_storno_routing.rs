@@ -62,7 +62,7 @@ async fn assert_reaches_resume(workflow: &str, pid: u32) {
     let msg = edi_energy::parse(ordrsp(pid).as_bytes())
         .unwrap_or_else(|e| panic!("parse ORDRSP {pid} failed: {e:?}"));
     let outcome = dispatcher
-        .dispatch(&msg, workflow, pid)
+        .dispatch(&msg, workflow, pid, time::OffsetDateTime::now_utc())
         .await
         .unwrap_or_else(|e| panic!("dispatch {pid} failed: {e:?}"));
     match outcome {

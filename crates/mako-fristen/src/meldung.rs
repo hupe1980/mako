@@ -49,6 +49,14 @@
 //! or declared missing with a reason. No deadline is registered for a message
 //! that cannot be rendered.
 //!
+//! # Steps owed on silence
+//!
+//! [`AusbleibendeAntwort`] is the third shape: a message owed only because an
+//! answer did not arrive, inside a window with an earliest **and** a latest
+//! bound. [`GPKE_LIEFERENDE_OHNE_ANTWORT`] is the NB's Beendigung after an
+//! unanswered 55007 (GPKE Teil 2 Kap. 2.5.2.2 Nr. 3); [`bei_ausbleibender_antwort`]
+//! finds it by the unanswered PID.
+//!
 //! # Anchors
 //!
 //! The clock does not always start where the process does. The Strom windows run
@@ -275,6 +283,111 @@ pub const GPKE_LIEFERENDE: &[Meldepflicht] = &[Meldepflicht {
 
 const TABLES: &[&[Meldepflicht]] = &[GPKE, GPKE_LIEFERENDE, GELI_GAS];
 
+/// A window with **both** bounds: „frühester ÜZ ist … und spätester …".
+///
+/// Where a Festlegung names an earliest instant, sending before it is as wrong
+/// as sending after the latest: the earliest bound is where another party's
+/// own window closes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sendefenster {
+    /// The earliest instant the message may go out.
+    pub fruehestens: FristShape,
+    /// The latest instant the message may go out.
+    pub spaetestens: FristShape,
+}
+
+/// A step a party performs because an answer it was owed **did not arrive**.
+///
+/// Not a [`Meldepflicht`]: it is owed only on the counterparty's silence, and
+/// it carries the same Prüfidentifikator as the message that went unanswered,
+/// so it is neither in [`all`] nor reachable through [`meldepflicht`] — a
+/// lookup by PID would hand it to every caller asking about the original
+/// message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AusbleibendeAntwort {
+    /// The Prüfidentifikator of the message this step sends.
+    pub pid: u32,
+    /// Human-readable name, as the Anwendungsübersicht spells it.
+    pub name: &'static str,
+    /// The Marktrolle that owes the step.
+    pub sent_by: &'static str,
+    /// The Marktrolle that receives it.
+    pub sent_to: &'static str,
+    /// The Prüfidentifikator of this party's own message whose answer is missing.
+    pub unanswered: u32,
+    /// Which instant [`AusbleibendeAntwort::fenster`] is resolved against.
+    pub anchor: MeldungAnchor,
+    /// Both bounds of the window.
+    pub fenster: Sendefenster,
+    /// Which Festlegung family states it.
+    pub family: Family,
+    /// Citation, for the audit trail.
+    pub source: &'static str,
+}
+
+impl AusbleibendeAntwort {
+    /// The earliest and the latest instant the step may be sent, resolved
+    /// against `anchor_at` — the instant [`AusbleibendeAntwort::anchor`] names.
+    #[must_use]
+    pub fn window(
+        &self,
+        anchor_at: OffsetDateTime,
+        cal: HolidayCalendar,
+    ) -> (OffsetDateTime, OffsetDateTime) {
+        (
+            self.fenster.fruehestens.due_at(anchor_at, cal),
+            self.fenster.spaetestens.due_at(anchor_at, cal),
+        )
+    }
+}
+
+/// GPKE Strom, SD „Lieferende von NB an LF" Nr. 3 — the NB ends the Zuordnung
+/// when the LF has not answered its Ankündigung.
+///
+/// The window opens at **05:00**, which is where the LF's own answer window to
+/// the same 55007 closes (Nr. 2, „spätester ÜZ ist 05:00 Uhr des 1. WT nach dem
+/// ÜT von Nr. 1"): sending it earlier ends a Zuordnung while the LF may still
+/// answer. It closes at **06:00**. The Anwendungsübersicht der
+/// Prüfidentifikatoren 4.0 carries Nr. 3 on **55007** (Lfd. Nr. 20940,
+/// „Beendigung der Zuordnung aufgrund fehlender Antwort", NB → LF, S. 34) — the
+/// PID of Nr. 1 itself.
+pub const GPKE_LIEFERENDE_OHNE_ANTWORT: AusbleibendeAntwort = AusbleibendeAntwort {
+    pid: 55_007,
+    name: "Beendigung der Zuordnung aufgrund fehlender Antwort",
+    sent_by: "NB",
+    sent_to: "LF",
+    unanswered: 55_007,
+    anchor: MeldungAnchor::EigeneAnkuendigung,
+    fenster: Sendefenster {
+        fruehestens: FristShape::WerktagAt {
+            werktage: 1,
+            at: at(5),
+        },
+        spaetestens: FristShape::WerktagAt {
+            werktage: 1,
+            at: at(6),
+        },
+    },
+    family: Family::Gpke,
+    source: "BK6-24-174 GPKE Teil 2 Kap. 2.5.2.2 SD Lieferende von NB an LF Nr. 3 (S. 62) — \
+             „Unverzüglich, jedoch frühester ÜZ ist 05:00 Uhr und spätester 06:00 Uhr des 1. \
+             WT nach dem ÜT von Nr. 1.\"; „Antwortet der LF in Prozessschritt 2 nicht \
+             fristgerecht, beendet der NB die Zuordnung des LF zur Marktlokation bzw. Tranche \
+             unverzüglich zum Zuordnungsende.\"",
+};
+
+/// Every catalogued step owed on a missing answer.
+pub const AUSBLEIBENDE_ANTWORTEN: &[AusbleibendeAntwort] = &[GPKE_LIEFERENDE_OHNE_ANTWORT];
+
+/// The step this party owes when the answer to its own `unanswered_pid` does
+/// not arrive, if one is catalogued.
+#[must_use]
+pub fn bei_ausbleibender_antwort(unanswered_pid: u32) -> Option<&'static AusbleibendeAntwort> {
+    AUSBLEIBENDE_ANTWORTEN
+        .iter()
+        .find(|a| a.unanswered == unanswered_pid)
+}
+
 /// Every catalogued Meldepflicht, across all families.
 pub fn all() -> impl Iterator<Item = &'static Meldepflicht> {
     TABLES.iter().copied().flatten()
@@ -396,6 +509,29 @@ mod tests {
             to.dedup();
             assert_eq!(to.len(), 3, "expected LFN, LFA and LFZ, got {to:?}");
         }
+    }
+
+    /// GPKE Teil 2 Kap. 2.5.2.2 Nr. 3: a silent LF lets the NB end the
+    /// Zuordnung between 05:00 and 06:00 of the 1. WT after the ÜT of its own
+    /// 55007 — opening exactly where the LF's answer window closes.
+    #[test]
+    fn a_silent_lf_is_ended_between_five_and_six() {
+        let a = bei_ausbleibender_antwort(55_007).expect("Nr. 3 is catalogued");
+        assert_eq!(a.anchor, MeldungAnchor::EigeneAnkuendigung);
+        // Friday 2026-03-06 14:00 UTC: the 1. WT after it is Monday 03-09 (CET).
+        let sent = utc(2026, Month::March, 6, 14);
+        let (fruehestens, spaetestens) = a.window(sent, HolidayCalendar::BdewMaKo);
+        assert_eq!(fruehestens, utc(2026, Month::March, 9, 4), "05:00 CET");
+        assert_eq!(spaetestens, utc(2026, Month::March, 9, 5), "06:00 CET");
+        assert_eq!(
+            Some(fruehestens),
+            antwort::antwort_deadline(55_007, sent),
+            "the window opens where the LF's answer window to the same 55007 closes"
+        );
+        assert!(
+            meldepflicht(55_007).is_none(),
+            "a step owed on silence is not a Meldepflicht of the PID it re-sends"
+        );
     }
 
     /// Every entry carries a Fundstelle naming a document and a Prozessschritt.

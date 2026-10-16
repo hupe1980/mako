@@ -51,9 +51,23 @@ pub struct DvgwIngestReport {
     pub recipient_mp_id: String,
     /// The UNB DE 0020 Datenaustauschreferenz, which a CONTRL acknowledges.
     pub interchange_ref: String,
+    /// The first dead letter this interchange owed and could not write.
+    ///
+    /// `Some` means a refused message has no record, so the AS4 door must not
+    /// accept its claim: it abandons it and the counterparty retransmits.
+    pub unrecorded: Option<String>,
 }
 
 impl DvgwIngestReport {
+    /// Write a dead letter, keeping the first failure on the report.
+    async fn dead_letter(&mut self, state: &EdifactApiState, reason: &DeadLetterReason) {
+        if let Err(e) = state.dl_sink.reject(reason).await
+            && self.unrecorded.is_none()
+        {
+            self.unrecorded = Some(e.to_string());
+        }
+    }
+
     /// How many messages were accepted.
     ///
     /// Matches the BDEW path's table: a message that parsed and carries a
@@ -145,9 +159,9 @@ pub async fn try_ingest(state: &EdifactApiState, body: &[u8]) -> Option<DvgwInge
             .with_message_ref(interchange_ref_for_audit.as_str())
             .with_receiver_eic(recipient_mp_id.as_str())
             .with_tenant_id(state.tenant_id.to_string());
-        state
-            .dl_sink
-            .reject(&DeadLetterReason::TestMessage { context: ctx });
+        report
+            .dead_letter(state, &DeadLetterReason::TestMessage { context: ctx })
+            .await;
         tracing::warn!(
             recipient_mp_id = %recipient_mp_id,
             interchange_ref = %interchange_ref_for_audit,
@@ -175,13 +189,18 @@ pub async fn try_ingest(state: &EdifactApiState, body: &[u8]) -> Option<DvgwInge
                 // Dead-lettered on the same terms as the BDEW path (§ 147 AO /
                 // GoBD): the AS4 receipt still goes out, so an unrecorded
                 // message is acknowledged and gone.
-                state.dl_sink.reject(&DeadLetterReason::ProcessingError {
-                    message: format!("dvgw_parse_error: {e}"),
-                    context: AuditContext::now()
-                        .with_message_ref(interchange_ref_for_audit.as_str())
-                        .with_receiver_eic(recipient_mp_id.as_str())
-                        .with_tenant_id(state.tenant_id.to_string()),
-                });
+                report
+                    .dead_letter(
+                        state,
+                        &DeadLetterReason::ProcessingError {
+                            message: format!("dvgw_parse_error: {e}"),
+                            context: AuditContext::now()
+                                .with_message_ref(interchange_ref_for_audit.as_str())
+                                .with_receiver_eic(recipient_mp_id.as_str())
+                                .with_tenant_id(state.tenant_id.to_string()),
+                        },
+                    )
+                    .await;
                 report.messages.push(DvgwMessageResult {
                     document: None,
                     pruefidentifikator: None,
@@ -253,10 +272,15 @@ pub async fn try_ingest(state: &EdifactApiState, body: &[u8]) -> Option<DvgwInge
                 .unwrap_or(mako_engine::ids::Pid::new(1));
             mako_engine::metrics::EngineMetrics::global()
                 .inbound_received(dead_pid.as_u32(), "unknown_pid");
-            state.dl_sink.reject(&DeadLetterReason::UnknownPid {
-                pid: dead_pid,
-                context: ctx,
-            });
+            report
+                .dead_letter(
+                    state,
+                    &DeadLetterReason::UnknownPid {
+                        pid: dead_pid,
+                        context: ctx,
+                    },
+                )
+                .await;
             result.skipped = Some(if pid.is_none() {
                 "no_pruefidentifikator"
             } else {
@@ -288,17 +312,22 @@ pub async fn try_ingest(state: &EdifactApiState, body: &[u8]) -> Option<DvgwInge
                     // The PID resolved, the AS4 receipt went out, and nothing
                     // consumed the message — an acknowledged inbound message
                     // with no process behind it (§ 147 AO / GoBD).
-                    state.dl_sink.reject(&DeadLetterReason::NotDispatchable {
-                        workflow_name: workflow_name.to_owned(),
-                        pid: mako_engine::ids::Pid::from_u32(pid)
-                            .unwrap_or(mako_engine::ids::Pid::new(1)),
-                        reason: reason.to_owned(),
-                        context: AuditContext::now()
-                            .with_message_type(msg.document.code())
-                            .with_message_ref(msg.message_ref.clone())
-                            .with_receiver_eic(recipient_mp_id.as_str())
-                            .with_tenant_id(state.tenant_id.to_string()),
-                    });
+                    report
+                        .dead_letter(
+                            state,
+                            &DeadLetterReason::NotDispatchable {
+                                workflow_name: workflow_name.to_owned(),
+                                pid: mako_engine::ids::Pid::from_u32(pid)
+                                    .unwrap_or(mako_engine::ids::Pid::new(1)),
+                                reason: reason.to_owned(),
+                                context: AuditContext::now()
+                                    .with_message_type(msg.document.code())
+                                    .with_message_ref(msg.message_ref.clone())
+                                    .with_receiver_eic(recipient_mp_id.as_str())
+                                    .with_tenant_id(state.tenant_id.to_string()),
+                            },
+                        )
+                        .await;
                 }
                 match outcome {
                     IngestOutcome::Spawned { process_id, .. }
@@ -312,18 +341,23 @@ pub async fn try_ingest(state: &EdifactApiState, body: &[u8]) -> Option<DvgwInge
                 tracing::warn!(pid, workflow = %workflow, error = %e, "DVGW ingest: dispatch failed");
                 // A regulated message that did not land; the BDEW path
                 // dead-letters the same case.
-                state.dl_sink.reject(&DeadLetterReason::ProcessingError {
-                    message: format!("dvgw_dispatch_failed: {e}"),
-                    context: AuditContext::now()
-                        .with_message_type(msg.document.code())
-                        .with_message_ref(msg.message_ref.clone())
-                        .with_receiver_eic(recipient_mp_id.as_str())
-                        .with_tenant_id(state.tenant_id.to_string())
-                        .with_pid(
-                            mako_engine::ids::Pid::from_u32(pid)
-                                .unwrap_or(mako_engine::ids::Pid::new(1)),
-                        ),
-                });
+                report
+                    .dead_letter(
+                        state,
+                        &DeadLetterReason::ProcessingError {
+                            message: format!("dvgw_dispatch_failed: {e}"),
+                            context: AuditContext::now()
+                                .with_message_type(msg.document.code())
+                                .with_message_ref(msg.message_ref.clone())
+                                .with_receiver_eic(recipient_mp_id.as_str())
+                                .with_tenant_id(state.tenant_id.to_string())
+                                .with_pid(
+                                    mako_engine::ids::Pid::from_u32(pid)
+                                        .unwrap_or(mako_engine::ids::Pid::new(1)),
+                                ),
+                        },
+                    )
+                    .await;
                 result.error = Some(e.to_string());
             }
         }

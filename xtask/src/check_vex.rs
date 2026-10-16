@@ -18,11 +18,21 @@
 //! (`$CARGO_HOME/advisory-db`, which `cargo deny` maintains), the subcomponent
 //! must be the crate the advisory is filed against — the check that catches
 //! two IDs whose reasons have been swapped.
+//!
+//! A subcomponent that names a version must be a package one of the two
+//! lockfiles holds — the workspace's `Cargo.lock` or `fuzz/Cargo.lock`, which
+//! lies outside the workspace and is gated by its own `cargo deny` run under
+//! the same `deny.toml`. A statement about a version neither lock carries is a
+//! judgement about code the release does not contain, and it hides that the
+//! version actually locked was never assessed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 const VEX: &str = "release/vex.json";
+
+/// Every lockfile the release's dependency graph is read from.
+pub const LOCKS: &[&str] = &["Cargo.lock", "fuzz/Cargo.lock"];
 
 const STATUSES: &[&str] = &["not_affected", "affected", "fixed", "under_investigation"];
 
@@ -44,7 +54,16 @@ pub fn run(workspace_root: &Path) -> bool {
         return false;
     };
     let db = advisory_db();
-    let findings = check(&deny, &vex, db.as_deref());
+    let mut findings = check(&deny, &vex, db.as_deref());
+    let mut locks = Vec::new();
+    for lock in LOCKS {
+        match std::fs::read_to_string(workspace_root.join(lock)) {
+            Ok(text) => locks.push((*lock, text)),
+            Err(e) => findings.push(format!("{lock}: unreadable ({e})")),
+        }
+    }
+    let locks: Vec<(&str, &str)> = locks.iter().map(|(n, t)| (*n, t.as_str())).collect();
+    findings.extend(check_locked(&vex, &locks));
     let ignored = ignored_ids(&deny);
     if ignored.is_empty() {
         eprintln!("check-vex: deny.toml ignores no advisory — has the [advisories] table moved?");
@@ -62,8 +81,10 @@ pub fn run(workspace_root: &Path) -> bool {
         None => "crate names NOT matched: no local advisory-db (run `cargo deny fetch`)".into(),
     };
     println!(
-        "check-vex: {} ignored advisory(ies), one VEX statement each; {crate_check}",
-        ignored.len()
+        "check-vex: {} ignored advisory(ies), one VEX statement each, every versioned \
+         subcomponent locked in {}; {crate_check}",
+        ignored.len(),
+        LOCKS.join(" or ")
     );
     true
 }
@@ -221,6 +242,72 @@ pub fn check(deny: &str, vex: &str, db: Option<&Path>) -> Vec<String> {
     findings
 }
 
+/// The `(name, version)` of every `[[package]]` in a `Cargo.lock`.
+pub fn locked_packages(lock: &str) -> BTreeSet<(String, String)> {
+    let mut out = BTreeSet::new();
+    let mut name: Option<String> = None;
+    for line in lock.lines() {
+        let t = line.trim();
+        if t == "[[package]]" {
+            name = None;
+        } else if let Some(v) = t.strip_prefix("name = ") {
+            name = Some(v.trim_matches('"').to_string());
+        } else if let Some(v) = t.strip_prefix("version = ") {
+            if let Some(n) = name.take() {
+                out.insert((n, v.trim_matches('"').to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// Every versioned `pkg:cargo/` subcomponent no lock in `locks` (name, text)
+/// holds.
+pub fn check_locked(vex: &str, locks: &[(&str, &str)]) -> Vec<String> {
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(vex) else {
+        return Vec::new(); // `check` reports the parse failure
+    };
+    let locked: BTreeSet<(String, String)> = locks
+        .iter()
+        .flat_map(|(_, text)| locked_packages(text))
+        .collect();
+    let names: Vec<&str> = locks.iter().map(|(n, _)| *n).collect();
+    let mut findings = Vec::new();
+    for st in doc
+        .get("statements")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let id = st
+            .pointer("/vulnerability/name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let purls = st
+            .get("products")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|p| p.get("subcomponents").and_then(|v| v.as_array()))
+            .flatten()
+            .filter_map(|c| c.get("@id").and_then(|v| v.as_str()))
+            .filter_map(|purl| purl.strip_prefix("pkg:cargo/"));
+        for rest in purls {
+            let Some((name, version)) = rest.split_once('@') else {
+                continue;
+            };
+            if !locked.contains(&(name.to_string(), version.to_string())) {
+                findings.push(format!(
+                    "{id}: names {name}@{version}, which neither {} locks — the statement \
+                     assesses a version the release does not contain",
+                    names.join(" nor ")
+                ));
+            }
+        }
+    }
+    findings
+}
+
 /// The crate an advisory is filed against, read from its file in the database.
 fn advisory_package(db: &Path, id: &str) -> Option<String> {
     let crates = std::fs::read_dir(db.join("crates")).ok()?;
@@ -329,5 +416,53 @@ reason = "RUSTSEC-2099-0003 in a bans reason is not an ignore"
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(f.len(), 2, "{f:?}");
         assert!(f[0].contains("filed against `a`"));
+    }
+
+    const LOCK: &str = "\
+version = 4
+
+[[package]]
+name = \"a\"
+version = \"1.0.0\"
+source = \"registry+https://github.com/rust-lang/crates.io-index\"
+
+[[package]]
+name = \"b\"
+version = \"2.0.0\"
+dependencies = [
+ \"a\",
+]
+";
+
+    #[test]
+    fn the_lock_is_read_as_name_version_pairs() {
+        let p: Vec<_> = locked_packages(LOCK).into_iter().collect();
+        assert_eq!(
+            p,
+            [("a".into(), "1.0.0".into()), ("b".into(), "2.0.0".into())]
+        );
+    }
+
+    #[test]
+    fn a_subcomponent_locked_in_either_lock_passes() {
+        let v = vex(&[
+            statement("RUSTSEC-2099-0001", "pkg:cargo/a@1.0.0"),
+            statement("RUSTSEC-2099-0002", "pkg:cargo/c@3.0.0"),
+        ]);
+        let fuzz = "[[package]]\nname = \"c\"\nversion = \"3.0.0\"\n";
+        let f = check_locked(&v, &[("Cargo.lock", LOCK), ("fuzz/Cargo.lock", fuzz)]);
+        assert!(f.is_empty(), "{f:?}");
+    }
+
+    #[test]
+    fn a_subcomponent_version_no_lock_holds_is_refused() {
+        let v = vex(&[
+            statement("RUSTSEC-2099-0001", "pkg:cargo/a@0.9.0"),
+            statement("RUSTSEC-2099-0002", "pkg:cargo/b"),
+        ]);
+        let f = check_locked(&v, &[("Cargo.lock", LOCK), ("fuzz/Cargo.lock", "")]);
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0].contains("a@0.9.0"), "{f:?}");
+        assert!(f[0].contains("fuzz/Cargo.lock"), "{f:?}");
     }
 }

@@ -380,18 +380,26 @@ pub struct WebdiensteConfig {
     pub client_key_pem: Option<String>,
     /// Path form of [`Self::client_key_pem`].
     pub client_key_pem_file: Option<PathBuf>,
-    /// PEM PKCS#8 private key of the **EMT.API** certificate, for TR-03116-3
+    /// PEM PKCS#8 private key of the **EMT.API** certificate, for
     /// content-layer signing.
     ///
     /// Distinct from [`Self::client_key_pem`], which is the mTLS identity.
-    /// TR-03116-3 (chapter 9) signs the URI, the RFC 8785 canonical body, the
-    /// `creationDateTime` and the `transactionId`, and carries the result in
-    /// `DIGEST` / `SIGNATURE` headers — a layer above TLS, so the two are not
-    /// substitutes. It applies to the Control Measures and MaLo Identification
-    /// APIs; the Verzeichnisdienst uses JWS instead.
+    /// Regelungen zum Übertragungsweg für API-Webdienste 1.2, Kap. 3.3 signs
+    /// the URI, the RFC 8785 canonical body, the `creationDateTime`, the
+    /// `transactionId` and any `initialTransactionId` (algorithms per
+    /// TR-03116-3 Kap. 8 and 9), and carries the result in `X-BDEW-DIGEST` /
+    /// `X-BDEW-SIGNATURE` — a layer above TLS, so the two are not substitutes.
+    /// It applies to the Control Measures and MaLo Identification APIs; the
+    /// Verzeichnisdienst uses JWS instead.
     pub signing_key_pem: Option<String>,
     /// Path form of [`Self::signing_key_pem`].
     pub signing_key_pem_file: Option<PathBuf>,
+    /// PEM X.509 certificate of [`Self::signing_key_pem`], sent as
+    /// `X-BDEW-CERT` with every signed request (same chapter). Required with
+    /// the key.
+    pub signing_cert_pem: Option<String>,
+    /// Path form of [`Self::signing_cert_pem`].
+    pub signing_cert_pem_file: Option<PathBuf>,
 
     /// DEV/TEST ONLY. Call the API-Webdienste without a client identity.
     ///

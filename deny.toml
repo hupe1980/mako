@@ -475,6 +475,14 @@ ignore = [
     # AS4 cryptography runs on OpenSSL through asx-rs, not on this crate.
     # Resolve when jsonwebtoken or rsa ships a constant-time implementation.
     { id = "RUSTSEC-2023-0071", reason = "rsa Marvin timing attack; reached via jsonwebtoken for public-key JWT verification only — no private-key operation in a release binary" },
+    # RUSTSEC-2024-0449: unsafe-libyaml unmaintained (no fixed version).
+    # slatedb 0.14 turns on figment's `yaml` feature (figment → serde_yaml 0.9 →
+    # unsafe-libyaml), and feature unification puts it in every graph that holds
+    # slatedb. It parses a `SlateDb.yaml` only when `slatedb::config::Settings`
+    # loads one from a file; no crate here calls those loaders — makod builds
+    # slatedb's settings in code from its own TOML config — so no YAML reaches it.
+    # Resolution: drops out when slatedb stops enabling figment's `yaml`.
+    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml unmaintained (no CVE); enabled by slatedb through figment `yaml`, reached only by slatedb's Settings file loaders, which nothing here calls" },
 ]
 
 # ── Bans: duplicate-version skip entries ──────────────────────────────────────

@@ -971,7 +971,8 @@ fn ust_default_small_post_2023_solar_is_kleinunternehmer() {
 #[test]
 fn ust_default_large_solar_is_regelbesteuerung() {
     use eeg_billing::ust::VatStatus;
-    // 50 kWp: exceeds the §19 turnover reality → Regelbesteuerung
+    // 50 kWp solar: the suggested default is Regelbesteuerung; the operator's
+    // declared status wins (Kleinunternehmer is an election, not a plant size)
     let vat = VatStatus::default_for_plant(true, dec!(50), Some(date!(2024 - 01 - 01)));
     assert_eq!(vat, VatStatus::Regelbesteuerung);
     assert!(!vat.is_exempt());

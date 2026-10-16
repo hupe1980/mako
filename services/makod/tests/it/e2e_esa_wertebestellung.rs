@@ -123,7 +123,7 @@ async fn relay_pending(
             other => panic!("unexpected outbox message {other:?}"),
         };
         let outcome = dispatcher
-            .dispatch(&msg, workflow_name, pid)
+            .dispatch(&msg, workflow_name, pid, time::OffsetDateTime::now_utc())
             .await
             .unwrap_or_else(|e| panic!("dispatch {} failed: {e:?}", om.message_type));
         outcomes.push(outcome);

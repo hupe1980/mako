@@ -37,7 +37,7 @@
 //!
 //! ## Regelbesteuerung
 //!
-//! All other operators (large plants exceeding the §19 turnover limit, commercial
+//! All other operators (whose turnover exceeds the §19 Umsatzgrenze, commercial
 //! operators, operators who opted into regular taxation) apply standard USt at
 //! **19 %** on the Einspeisevergütung / Marktprämie. The Netzbetreiber pays the
 //! gross amount (Netto + USt) and deducts the input tax.
@@ -132,8 +132,12 @@ impl VatStatus {
     ///
     /// 1. Solar PV ≤ 30 kWp commissioned on/after 01.01.2023 → `Kleinunternehmer`
     ///    (the post-§12-Abs.-3 norm — see the module docs).
-    /// 2. Otherwise → `Regelbesteuerung` (larger/commercial plants exceed the §19
-    ///    turnover limit; the operator can still declare Kleinunternehmer).
+    /// 2. Otherwise → `Regelbesteuerung`.
+    ///
+    /// The plant size is only what the suggestion is keyed on. § 19 UStG itself
+    /// tests the operator's turnover, not the plant, and is an election the
+    /// operator may waive — so either suggestion can be wrong for a given
+    /// operator, and the declared status replaces it.
     ///
     /// # Example
     ///
@@ -142,13 +146,13 @@ impl VatStatus {
     /// use rust_decimal::dec;
     /// use time::macros::date;
     ///
-    /// // 9.5 kWp solar, commissioned 2024 → Kleinunternehmer (§19)
+    /// // 9.5 kWp solar, commissioned 2024 → suggested Kleinunternehmer
     /// assert_eq!(
     ///     VatStatus::default_for_plant(true, dec!(9.5), Some(date!(2024-06-01))),
     ///     VatStatus::Kleinunternehmer
     /// );
     ///
-    /// // 50 kWp solar → exceeds the §19 limit, Regelbesteuerung
+    /// // 50 kWp solar → suggested Regelbesteuerung; the declared status wins
     /// assert_eq!(
     ///     VatStatus::default_for_plant(true, dec!(50), Some(date!(2024-01-01))),
     ///     VatStatus::Regelbesteuerung

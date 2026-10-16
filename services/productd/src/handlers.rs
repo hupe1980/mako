@@ -1129,17 +1129,16 @@ impl Unpreisbar {
 
 /// The statutory inputs a quotation is priced under that the product itself
 /// does not carry.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PricingContext {
-    /// BEHG CO₂ cost in ct/kWh_Hs, derived from the dated nEHS certificate
-    /// series for the quotation's Stichtag.
+    /// BEHG CO₂ cost in ct/kWh_Hs for the quotation's Stichtag, resolved by
+    /// [`behg_gas_fuer_stichtag`].
     ///
-    /// `None` when the series holds no price at or before that date. A Gas
-    /// position then has to carry its own `behg_gas_ct_per_kwh`: § 10 Abs. 1
-    /// BEHG prices certificates by auction from 2026, so there is no statutory
-    /// figure left to fall back on and a constant would quote a past year's
-    /// CO₂ cost.
-    pub behg_gas_ct_per_kwh: Option<Decimal>,
+    /// `Err` carries why the Stichtag's year has no price (empty when there is
+    /// nothing more to say than that). A Gas position then has to carry its own
+    /// `behg_gas_ct_per_kwh`: a constant or a neighbouring year's auction point
+    /// would quote a CO₂ cost that did not apply.
+    pub behg_gas_ct_per_kwh: Result<Decimal, String>,
     /// The recipient is a Wiederverkäufer i.S.d. § 3g UStG, so under
     /// § 13b Abs. 2 Nr. 5 Buchst. b i.V.m. Abs. 5 UStG they owe the tax and the
     /// quotation states none.
@@ -1149,18 +1148,48 @@ pub struct PricingContext {
 /// The context the public comparison feed prices under: supply only, so no Gas
 /// CO₂ component, and a household tariff, so never a reverse charge.
 const FEED_PRICING_CONTEXT: PricingContext = PricingContext {
-    behg_gas_ct_per_kwh: None,
+    behg_gas_ct_per_kwh: Err(String::new()),
     reverse_charge_13b: false,
 };
 
-/// The Erdgas CO₂ cost of one kWh_Hs at a given certificate price.
+/// The Erdgas CO₂ cost in ct/kWh_Hs a quotation is priced at for its Stichtag.
 ///
-/// EBeV Standardwert 55,8 t CO₂/TJ for Erdgas at the ordinance's Umrechnungs-
-/// faktor of 3,2508 GJ/MWh_Hs — 0,18139464 kg CO₂ per kWh_Hs — turned from
-/// EUR/t into ct/kWh.
-fn behg_erdgas_ct_per_kwh(eur_per_t: Decimal) -> Decimal {
-    use rust_decimal::dec;
-    eur_per_t * dec!(0.18139464) / dec!(10)
+/// The same resolution `billingd` bills a period with: a point of the nEHS
+/// series counts only when it was set in the Stichtag's own year (a 2026
+/// auction never prices 2027); without one the § 10 BEHG table prices the year;
+/// a year § 10 BEHG fixes no price for takes a series price only through the
+/// configured [`energy_billing::BehgRegime`], which checks it, and is refused
+/// otherwise. The price is converted at the year's EBeV emission factor
+/// ([`energy_billing::behg_ct_per_kwh_from_price`]).
+///
+/// # Errors
+///
+/// Why the year has no price — the regime's refusal, or no EBeV factor.
+pub fn behg_gas_fuer_stichtag(
+    stichtag: time::Date,
+    punkt: Option<(time::Date, Decimal)>,
+    regime: energy_billing::BehgRegime,
+) -> Result<Decimal, String> {
+    let year = stichtag.year();
+    let tabled = energy_billing::RegulatoryRates::for_year(year)
+        .behg_gas_ct_per_kwh
+        .ok();
+    let to_ct = |eur_per_t: Decimal| {
+        energy_billing::behg_ct_per_kwh_from_price(eur_per_t, year)
+            .ok_or_else(|| format!("BEHG {year}: kein EBeV-Emissionsfaktor für Erdgas"))
+    };
+    if let Some((datum, eur_per_t)) = punkt.filter(|(datum, _)| datum.year() == year) {
+        if tabled.is_none() {
+            regime
+                .pruefe(eur_per_t, year)
+                .map_err(|e| format!("nEHS-Zertifikatspreis vom {datum}: {e}"))?;
+        }
+        return to_ct(eur_per_t);
+    }
+    if let Some(ct) = tabled {
+        return Ok(ct);
+    }
+    Err(regime.fehlender_preis(year).to_string())
 }
 
 /// The Umsatzsteuersatz a position is quoted at, as a fraction of the net.
@@ -1388,17 +1417,23 @@ pub fn compute_cost_breakdown(
     let levies_ct_per_kwh = if sparte_upper.contains("GAS") {
         // § 2 Abs. 3 Satz 1 Nr. 4 EnergieStG: 5,50 EUR/MWh = 0,55 ct/kWh.
         let energiesteuer = pos.energiesteuer_gas_ct_per_kwh.unwrap_or(dec!(0.55));
-        let behg = pos
-            .behg_gas_ct_per_kwh
-            .or(ctx.behg_gas_ct_per_kwh)
-            .ok_or_else(|| {
-                Unpreisbar::new(
+        let behg = match (pos.behg_gas_ct_per_kwh, &ctx.behg_gas_ct_per_kwh) {
+            (Some(ct), _) => ct,
+            (None, Ok(ct)) => *ct,
+            (None, Err(warum)) => {
+                let hinweis = "für den Stichtag liegt kein nEHS-Zertifikatspreis seines \
+                               Jahres vor; behg_gas_ct_per_kwh ist anzugeben oder der Preis \
+                               zu importieren (PUT /api/v1/nehs-prices/{datum})";
+                return Err(Unpreisbar::new(
                     grund::BEHG_PREIS_FEHLT,
-                    "für den Stichtag liegt kein nEHS-Zertifikatspreis vor; \
-                     behg_gas_ct_per_kwh ist anzugeben oder der Preis zu importieren \
-                     (PUT /api/v1/nehs-prices/{datum})",
-                )
-            })?;
+                    if warum.is_empty() {
+                        hinweis.to_owned()
+                    } else {
+                        format!("{warum} — {hinweis}")
+                    },
+                ));
+            }
+        };
         energiesteuer + behg
     } else if sparte_upper.contains("STROM") {
         // § 3 StromStG: 20,50 EUR/MWh, from the one Stromsteuer series.
@@ -1579,19 +1614,19 @@ fn unpreisbar_response(errors: &[PositionPricingError]) -> axum::response::Respo
 /// Resolve the statutory inputs a quotation is priced under for its Stichtag.
 async fn pricing_context(
     pool: &PgPool,
+    regime: energy_billing::BehgRegime,
     stichtag: time::Date,
     reverse_charge_13b: bool,
 ) -> PricingContext {
     let behg_gas_ct_per_kwh = match crate::pg::latest_nehs_price(pool, stichtag).await {
-        Ok(Some((_, eur_per_t))) => Some(behg_erdgas_ct_per_kwh(eur_per_t)),
-        Ok(None) => None,
+        Ok(punkt) => behg_gas_fuer_stichtag(stichtag, punkt, regime),
         Err(e) => {
             tracing::error!(
                 error = %e,
                 "productd: nEHS-Preisreihe nicht lesbar — Gaspositionen ohne eigenen \
                  CO₂-Preis werden abgelehnt"
             );
-            None
+            Err("die nEHS-Preisreihe ist nicht lesbar".to_owned())
         }
     };
     PricingContext {
@@ -1717,7 +1752,7 @@ pub async fn post_angebot(
     // Lieferbeginn where the quotation names one: the CO₂ certificate price it
     // is quoted at is the one in force when supply starts.
     let stichtag = lieferbeginn.unwrap_or_else(mako_fristen::heute);
-    let ctx = pricing_context(&pool, stichtag, req.wiederverkaeufer_13b).await;
+    let ctx = pricing_context(&pool, cfg.behg_regime, stichtag, req.wiederverkaeufer_13b).await;
     let mut cache = ProductCache::new();
 
     let priced = match price_positionen(
@@ -1996,7 +2031,13 @@ pub async fn get_angebot_comparison(
     // the CO₂ certificate price it is priced at is the one in force when supply
     // starts.
     let stichtag = angebot.lieferbeginn.unwrap_or_else(mako_fristen::heute);
-    let ctx = pricing_context(&pool, stichtag, angebot.wiederverkaeufer_13b).await;
+    let ctx = pricing_context(
+        &pool,
+        cfg.behg_regime,
+        stichtag,
+        angebot.wiederverkaeufer_13b,
+    )
+    .await;
     let mut cache = ProductCache::new();
 
     // One row per scenario: the base quotation first, then each variant with
@@ -2155,14 +2196,11 @@ pub async fn post_angebot_annehmen(
     Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<AnnehmenRequest>,
-) -> impl IntoResponse {
-    if let Err(e) = authorize(&cedar, &claims, "entscheiden-angebot", &cfg.tenant) {
-        return e.into_response();
-    }
-    let angebot = match accept_angebot(&pool, id, &cfg.tenant, req.gewaehlte_variante).await {
-        Ok(a) => a,
-        Err(e) => return (StatusCode::CONFLICT, e.to_string()).into_response(),
-    };
+) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&cedar, &claims, "entscheiden-angebot", &cfg.tenant)?;
+    let angebot = accept_angebot(&pool, id, &cfg.tenant, req.gewaehlte_variante)
+        .await
+        .map_err(accept_error_response)?;
 
     // Emit de.tarif.angebot.angenommen CloudEvent.
     let mut erp_dispatch = "not_configured";
@@ -2256,9 +2294,7 @@ pub async fn post_angebot_annehmen(
         }
     }
 
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
             "id": angebot.id,
             "angebotsnummer": angebot.angebotsnummer,
             "status": "ANGENOMMEN",
@@ -2277,9 +2313,24 @@ pub async fn post_angebot_annehmen(
                 _ => "Angebot angenommen, but de.tarif.angebot.angenommen was NOT delivered — \
                       no Rahmenvertrag exists yet",
             },
-        })),
-    )
-        .into_response()
+    })))
+}
+
+/// The answer to an Angebot that could not be accepted.
+///
+/// `409` only for an Angebot that is already decided — expired, in a terminal
+/// status, or decided concurrently; a quotation not yet priced is `422`, an
+/// unknown id `404`, and a storage failure `500`.
+pub(crate) fn accept_error_response(e: crate::pg::AcceptError) -> ApiError {
+    use crate::pg::AcceptError as E;
+    match e {
+        E::NotFound => ApiError::NotFound,
+        E::NichtBepreist => ApiError::unprocessable(e.to_string()),
+        E::Abgelaufen { .. } | E::Entschieden { .. } | E::Wettlauf => {
+            ApiError::conflict(e.to_string())
+        }
+        E::Storage(inner) => ApiError::Internal(inner),
+    }
 }
 
 /// `POST /api/v1/angebote/{id}/ablehnen`
@@ -2377,7 +2428,13 @@ pub async fn put_angebot(
     let (positionen_json, total_netto_opt, total_brutto_opt) =
         if let Some(ref new_pos) = req.positionen {
             let stichtag = existing.lieferbeginn.unwrap_or_else(mako_fristen::heute);
-            let ctx = pricing_context(&pool, stichtag, existing.wiederverkaeufer_13b).await;
+            let ctx = pricing_context(
+                &pool,
+                cfg.behg_regime,
+                stichtag,
+                existing.wiederverkaeufer_13b,
+            )
+            .await;
             let mut cache = ProductCache::new();
             let priced = match price_positionen(
                 &pool,
@@ -3276,5 +3333,44 @@ mod category_tests {
                 "{category} carries a Tarifpreisblatt but is not an accepted category"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod accept_error_tests {
+    use super::accept_error_response;
+    use crate::pg::AcceptError;
+    use axum::http::StatusCode;
+
+    /// A storage failure is not a business conflict: answering it 409 tells
+    /// the caller the Angebot was decided when nothing was read.
+    #[test]
+    fn a_storage_failure_on_accept_is_a_500_not_a_conflict() {
+        let e = accept_error_response(AcceptError::Storage(anyhow::anyhow!("connection reset")));
+        assert_eq!(e.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// 409 is reserved for an Angebot that is already decided.
+    #[test]
+    fn only_a_decided_angebot_is_a_conflict() {
+        for e in [
+            AcceptError::Abgelaufen {
+                gueltig_bis: time::macros::date!(2026 - 01 - 31),
+            },
+            AcceptError::Entschieden {
+                status: "ABGELEHNT".to_owned(),
+            },
+            AcceptError::Wettlauf,
+        ] {
+            assert_eq!(accept_error_response(e).status(), StatusCode::CONFLICT);
+        }
+        assert_eq!(
+            accept_error_response(AcceptError::NotFound).status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            accept_error_response(AcceptError::NichtBepreist).status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
     }
 }

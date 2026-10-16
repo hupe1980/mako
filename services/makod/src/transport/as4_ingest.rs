@@ -405,30 +405,8 @@ impl As4AxumHandler for BdewAs4IngestHandler {
             }
 
             Ok(As4ReceiveOutcome::FirstSeen { output, claim }) => {
-                let outcome = self.handle_first_seen(output, &ingress).await;
-
-                // Settle the claim as handled, on every path.
-                //
-                // By the time `handle_first_seen` returns, the message is
-                // durably recorded whichever way it went: dispatched, or
-                // dead-lettered before the refusal. `check-as4-controls`
-                // enforces that second half, because it is what makes this
-                // single unconditional `accept` correct — a refusal path that
-                // returned without a dead letter would be accepted here and the
-                // message would be gone, its retransmission answered as a
-                // duplicate.
-                if let Err(e) = claim.accept().await {
-                    // The work is done and recorded; only the dedup settlement
-                    // failed. Saying so is all that is left — the claim's lease
-                    // expires and a retransmission is reprocessed, which is the
-                    // safe direction.
-                    tracing::error!(
-                        error = %e,
-                        "AS4 inbound: could not settle the dedup claim; a retransmission \
-                         will be reprocessed once the claim lease expires",
-                    );
-                }
-                outcome
+                let handled = self.handle_first_seen(output, &ingress).await;
+                settle_first_seen(claim, handled).await
             }
 
             Ok(As4ReceiveOutcome::InFlight { message_id }) => {
@@ -455,6 +433,126 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                 HandlerOutcome::ok()
             }
         }
+    }
+}
+
+// ── Claim settlement ──────────────────────────────────────────────────────────
+
+/// The two ways a first-seen dedup claim is settled.
+///
+/// A seam over [`asx_rs::storage::DedupClaim`], whose constructor is private to
+/// the receive pipeline, so the settlement rule is testable on its own.
+trait FirstSeenClaim {
+    fn accept(self) -> impl std::future::Future<Output = asx_rs::core::Result<()>> + Send;
+    fn abandon(self) -> impl std::future::Future<Output = asx_rs::core::Result<()>> + Send;
+}
+
+impl FirstSeenClaim for asx_rs::storage::DedupClaim {
+    fn accept(self) -> impl std::future::Future<Output = asx_rs::core::Result<()>> + Send {
+        asx_rs::storage::DedupClaim::accept(self)
+    }
+    fn abandon(self) -> impl std::future::Future<Output = asx_rs::core::Result<()>> + Send {
+        asx_rs::storage::DedupClaim::abandon(self)
+    }
+}
+
+/// Settle the claim of a first-seen message on what handling it recorded.
+///
+/// `Ok` means the message is durably recorded — dispatched, or dead-lettered
+/// with the write awaited — and the claim is accepted: a retransmission is
+/// then answered as a duplicate, 200 with no dispatch. `check-as4-controls`
+/// keeps every refusal path writing its dead letter first.
+///
+/// `Err` means a dead letter could not be written, so the message has no
+/// record. Accepting would lose it; the claim is abandoned instead and the
+/// answer carries no receipt, so the counterparty's `ReceptionAwareness`
+/// retry is processed as first-seen.
+async fn settle_first_seen<C: FirstSeenClaim>(
+    claim: C,
+    handled: Result<HandlerOutcome, mako_engine::error::EngineError>,
+) -> HandlerOutcome {
+    match handled {
+        Ok(outcome) => {
+            if let Err(e) = claim.accept().await {
+                // The work is done and recorded; only the dedup settlement
+                // failed. The claim's lease expires and a retransmission is
+                // reprocessed, which is the safe direction.
+                tracing::error!(
+                    error = %e,
+                    "AS4 inbound: could not settle the dedup claim; a retransmission will be \
+                     reprocessed once the claim lease expires",
+                );
+            }
+            outcome
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "AS4 inbound: a dead letter could not be written; abandoning the claim so \
+                 the retransmission is reprocessed",
+            );
+            if let Err(e) = claim.abandon().await {
+                tracing::error!(
+                    error = %e,
+                    "AS4 inbound: could not abandon the dedup claim; the retransmission is \
+                     reprocessed once the claim lease expires",
+                );
+            }
+            HandlerOutcome::server_error("the message could not be recorded")
+        }
+    }
+}
+
+#[cfg(test)]
+mod settlement_tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::{FirstSeenClaim, settle_first_seen};
+    use asx_rs::transport::server::HandlerOutcome;
+
+    /// Records which settlement the claim received.
+    #[derive(Clone, Default)]
+    struct FakeClaim(Arc<Mutex<Vec<&'static str>>>);
+
+    impl FirstSeenClaim for FakeClaim {
+        fn accept(self) -> impl std::future::Future<Output = asx_rs::core::Result<()>> + Send {
+            self.0.lock().expect("not poisoned").push("accept");
+            std::future::ready(Ok(()))
+        }
+        fn abandon(self) -> impl std::future::Future<Output = asx_rs::core::Result<()>> + Send {
+            self.0.lock().expect("not poisoned").push("abandon");
+            std::future::ready(Ok(()))
+        }
+    }
+
+    /// A refusal whose dead letter could not be written must not be accepted:
+    /// the accepted claim would answer the retransmission as a duplicate and
+    /// the refused message would leave no record anywhere.
+    #[tokio::test]
+    async fn an_unrecorded_refusal_abandons_the_claim() {
+        let claim = FakeClaim::default();
+        let outcome = settle_first_seen(
+            claim.clone(),
+            Err(mako_engine::error::EngineError::dead_letter("store closed")),
+        )
+        .await;
+        assert_eq!(*claim.0.lock().unwrap(), ["abandon"]);
+        assert!(
+            matches!(outcome, HandlerOutcome::Rejected { status: 500, .. }),
+            "no receipt, so the sender retransmits: {outcome:?}"
+        );
+    }
+
+    /// A recorded outcome is accepted and answered as handling decided.
+    #[tokio::test]
+    async fn a_recorded_outcome_accepts_the_claim() {
+        let claim = FakeClaim::default();
+        let outcome = settle_first_seen(claim.clone(), Ok(HandlerOutcome::bad_request("x"))).await;
+        assert_eq!(*claim.0.lock().unwrap(), ["accept"]);
+        assert!(matches!(
+            outcome,
+            HandlerOutcome::Rejected { status: 400, .. }
+        ));
     }
 }
 
@@ -776,7 +874,10 @@ mod dispatch_failure_tests {
     struct CapturingSink(Mutex<Vec<(String, String)>>);
 
     impl DeadLetterSink for CapturingSink {
-        fn reject(&self, reason: &DeadLetterReason) {
+        fn reject<'a>(
+            &'a self,
+            reason: &'a DeadLetterReason,
+        ) -> mako_engine::dead_letter::RejectFuture<'a> {
             let detail = match reason {
                 DeadLetterReason::ProcessingError { message, .. } => message.clone(),
                 other => format!("{other:?}"),
@@ -785,14 +886,15 @@ mod dispatch_failure_tests {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push((reason.label().to_owned(), detail));
+            Box::pin(std::future::ready(Ok(())))
         }
     }
 
     /// A dispatch failure must leave a dead letter naming it. Logged as
     /// "non-fatal" while the receipt still goes out and the dedup entry stays
     /// durable, the message is lost with no § 147 AO trace.
-    #[test]
-    fn a_failed_dispatch_is_dead_lettered() {
+    #[tokio::test]
+    async fn a_failed_dispatch_is_dead_lettered() {
         let sink = CapturingSink::default();
         dead_letter_dispatch_failure(
             &sink,
@@ -805,7 +907,9 @@ mod dispatch_failure_tests {
                 message: "store unavailable".to_owned(),
                 transient: false,
             },
-        );
+        )
+        .await
+        .expect("the capturing sink records");
         let recorded = sink.0.lock().expect("not poisoned");
         assert_eq!(recorded.len(), 1, "exactly one dead letter");
         let (label, detail) = &recorded[0];
@@ -829,14 +933,21 @@ impl BdewAs4IngestHandler {
     /// remember to settle, and the one that forgot would strand the key until
     /// its lease expired.
     ///
-    /// **Every path here records the message durably before returning** —
-    /// dispatched, or dead-lettered ahead of the refusal — which is what lets
-    /// the caller settle unconditionally. `check-as4-controls` keeps it true.
+    /// **Every `Ok` path here records the message durably before returning** —
+    /// dispatched, or dead-lettered ahead of the refusal with the write
+    /// awaited — which is what lets the caller accept the claim on `Ok`. An
+    /// `Err` is a dead letter that could not be written; the caller abandons
+    /// the claim. `check-as4-controls` keeps every refusal writing its dead
+    /// letter.
     async fn handle_first_seen(
         &self,
         output: Box<asx_rs::as4::As4ReceivePushOutput>,
         ingress: &As4HttpIngress,
-    ) -> HandlerOutcome {
+    ) -> Result<HandlerOutcome, mako_engine::error::EngineError> {
+        // The ÜZ: the instant this door took the message, which the receipt
+        // returned on this same request confirms. Every arrival-anchored Frist
+        // of the messages inside runs from it, however long dispatch takes.
+        let received_at = time::OffsetDateTime::now_utc();
         let msg_id = output.user_message.message_id.clone();
         let action = &output.user_message.action;
         let from = output
@@ -922,7 +1033,7 @@ impl BdewAs4IngestHandler {
                 from_party     = %from,
                 "AS4 inbound: ebMS3 Test Service ping — acknowledged, not delivered",
             );
-            return send_receipt();
+            return Ok(send_receipt());
         }
 
         // ── Redispatch 2.0 XML leg ────────────────────────────────────
@@ -945,81 +1056,88 @@ impl BdewAs4IngestHandler {
                         context: AuditContext::now()
                             .with_message_type("REDISPATCH-XML")
                             .with_message_ref(msg_id.clone()),
-                    });
+                    })
+                    .await?;
                 tracing::error!(
                     as4_message_id = %msg_id,
                     "AS4 ingest: XML payload received but no Phase 2 dispatcher \
                      is wired — dead-lettered",
                 );
-                return HandlerOutcome::bad_request(
+                return Ok(HandlerOutcome::bad_request(
                     "XML payload received but workflow dispatch is not configured",
-                );
+                ));
             };
-            return match crate::redispatch_xml_ingest::dispatch_redispatch_xml(dispatcher, &edifact)
-                .await
-            {
-                Ok(crate::ingest_dispatcher::IngestOutcome::Skipped {
-                    workflow_name,
-                    reason,
-                }) => {
-                    // Parse/validation failure or unroutable document —
-                    // reject *without* a receipt: an AS4 receipt asserts
-                    // successful reception, and the sender must correct
-                    // and retransmit.
-                    // The sender has to correct and resend under a new
-                    // `eb:MessageId`; this one's dedup key is spent, so a
-                    // plain retransmission is answered 200 and vanishes.
-                    // A regulated document arrived and was refused — that
-                    // is a record we owe regardless of whose fault it is.
-                    use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
-                    self.ingest
-                        .dl_sink
-                        .reject(&DeadLetterReason::ProcessingError {
-                            message: format!("redispatch_xml_rejected: {workflow_name}: {reason}"),
-                            context: AuditContext::now()
-                                .with_message_type("REDISPATCH-XML")
-                                .with_message_ref(msg_id.clone()),
-                        });
-                    tracing::warn!(
-                        as4_message_id = %msg_id,
-                        workflow       = %workflow_name,
-                        reason         = %reason,
-                        "AS4 ingest: Redispatch XML payload rejected — dead-lettered",
-                    );
-                    HandlerOutcome::bad_request(format!("Redispatch XML rejected: {reason}"))
-                }
-                Ok(outcome) => {
-                    tracing::info!(
-                        as4_message_id = %msg_id,
-                        outcome        = ?outcome,
-                        "AS4 ingest: Redispatch XML document dispatched",
-                    );
-                    send_receipt()
-                }
-                Err(e) => {
-                    // No durable business record was written, and the
-                    // dedup key is already spent: the `ReceptionAwareness`
-                    // retry carries the same `eb:MessageId` and is
-                    // answered 200 without dispatching. Without this dead
-                    // letter the document is lost while the counterparty
-                    // holds an acknowledgement saying it arrived.
-                    use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
-                    self.ingest
-                        .dl_sink
-                        .reject(&DeadLetterReason::ProcessingError {
-                            message: format!("redispatch_xml_dispatch_failed: {e}"),
-                            context: AuditContext::now()
-                                .with_message_type("REDISPATCH-XML")
-                                .with_message_ref(msg_id.clone()),
-                        });
-                    tracing::error!(
-                        as4_message_id = %msg_id,
-                        error          = %e,
-                        "AS4 ingest: Redispatch XML dispatch failed — dead-lettered",
-                    );
-                    HandlerOutcome::bad_request(format!("Redispatch XML dispatch failed: {e}"))
-                }
-            };
+            return Ok(
+                match crate::redispatch_xml_ingest::dispatch_redispatch_xml(dispatcher, &edifact)
+                    .await
+                {
+                    Ok(crate::ingest_dispatcher::IngestOutcome::Skipped {
+                        workflow_name,
+                        reason,
+                    }) => {
+                        // Parse/validation failure or unroutable document —
+                        // reject *without* a receipt: an AS4 receipt asserts
+                        // successful reception, and the sender must correct
+                        // and retransmit.
+                        // The sender has to correct and resend under a new
+                        // `eb:MessageId`; this one's dedup key is spent, so a
+                        // plain retransmission is answered 200 and vanishes.
+                        // A regulated document arrived and was refused — that
+                        // is a record we owe regardless of whose fault it is.
+                        use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                        self.ingest
+                            .dl_sink
+                            .reject(&DeadLetterReason::ProcessingError {
+                                message: format!(
+                                    "redispatch_xml_rejected: {workflow_name}: {reason}"
+                                ),
+                                context: AuditContext::now()
+                                    .with_message_type("REDISPATCH-XML")
+                                    .with_message_ref(msg_id.clone()),
+                            })
+                            .await?;
+                        tracing::warn!(
+                            as4_message_id = %msg_id,
+                            workflow       = %workflow_name,
+                            reason         = %reason,
+                            "AS4 ingest: Redispatch XML payload rejected — dead-lettered",
+                        );
+                        HandlerOutcome::bad_request(format!("Redispatch XML rejected: {reason}"))
+                    }
+                    Ok(outcome) => {
+                        tracing::info!(
+                            as4_message_id = %msg_id,
+                            outcome        = ?outcome,
+                            "AS4 ingest: Redispatch XML document dispatched",
+                        );
+                        send_receipt()
+                    }
+                    Err(e) => {
+                        // No durable business record was written, and the
+                        // dedup key is already spent: the `ReceptionAwareness`
+                        // retry carries the same `eb:MessageId` and is
+                        // answered 200 without dispatching. Without this dead
+                        // letter the document is lost while the counterparty
+                        // holds an acknowledgement saying it arrived.
+                        use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                        self.ingest
+                            .dl_sink
+                            .reject(&DeadLetterReason::ProcessingError {
+                                message: format!("redispatch_xml_dispatch_failed: {e}"),
+                                context: AuditContext::now()
+                                    .with_message_type("REDISPATCH-XML")
+                                    .with_message_ref(msg_id.clone()),
+                            })
+                            .await?;
+                        tracing::error!(
+                            as4_message_id = %msg_id,
+                            error          = %e,
+                            "AS4 ingest: Redispatch XML dispatch failed — dead-lettered",
+                        );
+                        HandlerOutcome::bad_request(format!("Redispatch XML dispatch failed: {e}"))
+                    }
+                },
+            );
         }
 
         // The `UNB` alone, not a full parse. A full parse errs on a
@@ -1064,7 +1182,8 @@ impl BdewAs4IngestHandler {
                         &header.receiver_id,
                         &header.control_ref,
                     ),
-                });
+                })
+                .await?;
             tracing::warn!(
                 as4_message_id = %msg_id,
                 sender = %header.sender_id,
@@ -1073,9 +1192,9 @@ impl BdewAs4IngestHandler {
                 "AS4 ingest: interchange is addressed to an MP-ID this deployment \
                  does not hold — refused",
             );
-            return HandlerOutcome::bad_request(
+            return Ok(HandlerOutcome::bad_request(
                 "UNB DE0010 names an MP-ID this deployment does not hold",
-            );
+            ));
         }
 
         // ── Test-indicator guard (§AF §3 / Allgemeine Festlegungen V6.1d §3) ──
@@ -1091,7 +1210,8 @@ impl BdewAs4IngestHandler {
             );
             self.ingest
                 .dl_sink
-                .reject(&DeadLetterReason::TestMessage { context: ctx });
+                .reject(&DeadLetterReason::TestMessage { context: ctx })
+                .await?;
             tracing::warn!(
                 as4_message_id = %msg_id,
                 sender = %header.sender_id,
@@ -1125,11 +1245,12 @@ impl BdewAs4IngestHandler {
                             &header.control_ref,
                         )
                         .with_message_type("CONTRL"),
-                    });
+                    })
+                    .await?;
             }
-            return HandlerOutcome::bad_request(
+            return Ok(HandlerOutcome::bad_request(
                 "test interchange rejected: DE0035=1 on production endpoint",
-            );
+            ));
         }
         // ── DVGW gas transport ────────────────────────────────────────
         // Tried first, because a DVGW message rides `ORDERS`/`ORDRSP` and
@@ -1141,6 +1262,11 @@ impl BdewAs4IngestHandler {
             if let Some(report) =
                 crate::dvgw_ingest::try_ingest(self.ingest.as_ref(), &edifact).await
             {
+                // A refused DVGW message without its dead letter must not be
+                // settled: the claim is abandoned and the sender retransmits.
+                if let Some(e) = report.unrecorded {
+                    return Err(mako_engine::error::EngineError::dead_letter(e));
+                }
                 tracing::info!(
                     as4_message_id = %msg_id,
                     accepted = report.accepted(),
@@ -1172,7 +1298,8 @@ impl BdewAs4IngestHandler {
                                     .with_message_type("CONTRL")
                                     .with_receiver_eic(report.recipient_mp_id.as_str())
                                     .with_message_ref(report.interchange_ref.as_str()),
-                            });
+                            })
+                            .await?;
                     }
                 }
 
@@ -1180,7 +1307,7 @@ impl BdewAs4IngestHandler {
                 // payload belongs to, so the DVGW path returns through the
                 // same closure the BDEW path ends with rather than
                 // short-circuiting it.
-                return send_receipt();
+                return Ok(send_receipt());
             }
         }
 
@@ -1221,10 +1348,10 @@ impl BdewAs4IngestHandler {
                 &results,
                 &msg_id,
             )
-            .await;
+            .await?;
             // The file arrived; the CONTRL, not the transport, says it is
             // rejected.
-            return send_receipt();
+            return Ok(send_receipt());
         }
         let mut accepted = 0usize;
         let mut rejected = 0usize;
@@ -1267,7 +1394,8 @@ impl BdewAs4IngestHandler {
                                 context: AuditContext::now()
                                     .with_message_type("UNPARSEABLE")
                                     .with_message_ref(msg_id.as_str()),
-                            });
+                            })
+                            .await?;
                     }
                     tracing::warn!(
                         as4_message_id = %msg_id,
@@ -1313,7 +1441,7 @@ impl BdewAs4IngestHandler {
                         let (reason, result) =
                             crate::edifact_api::unroutable_rejection(status, &msg, dead_pid, ctx);
                         EngineMetrics::global().inbound_received(dead_pid.as_u32(), result);
-                        self.ingest.dl_sink.reject(&reason);
+                        self.ingest.dl_sink.reject(&reason).await?;
                     }
 
                     tracing::info!(
@@ -1329,7 +1457,10 @@ impl BdewAs4IngestHandler {
                     if let (Some(pid_val), Some(wf_name)) = (pid, workflow.as_deref())
                         && let Some(dispatcher) = self.ingest.dispatcher.as_deref()
                     {
-                        match dispatcher.dispatch(&msg, wf_name, pid_val.as_u32()).await {
+                        match dispatcher
+                            .dispatch(&msg, wf_name, pid_val.as_u32(), received_at)
+                            .await
+                        {
                             Ok(outcome) => {
                                 // The receipt has already gone out, so a
                                 // message the router claimed and no arm
@@ -1340,8 +1471,9 @@ impl BdewAs4IngestHandler {
                                     use mako_engine::dead_letter::{
                                         AuditContext, DeadLetterReason,
                                     };
-                                    self.ingest.dl_sink.reject(
-                                        &DeadLetterReason::NotDispatchable {
+                                    self.ingest
+                                        .dl_sink
+                                        .reject(&DeadLetterReason::NotDispatchable {
                                             workflow_name: wf.to_owned(),
                                             pid: pid_val,
                                             reason: reason.to_owned(),
@@ -1352,8 +1484,8 @@ impl BdewAs4IngestHandler {
                                                 .with_message_ref(msg_id.as_str())
                                                 .with_receiver_eic(recipient_mp_id.as_str())
                                                 .with_pid(pid_val),
-                                        },
-                                    );
+                                        })
+                                        .await?;
                                 }
                                 tracing::debug!(
                                     as4_message_id = %msg_id,
@@ -1371,7 +1503,8 @@ impl BdewAs4IngestHandler {
                                         .with_message_ref(&msg_id),
                                     wf_name,
                                     &e,
-                                );
+                                )
+                                .await?;
                                 tracing::error!(
                                     as4_message_id = %msg_id,
                                     workflow       = %wf_name,
@@ -1420,9 +1553,12 @@ impl BdewAs4IngestHandler {
                             .with_message_type("CONTRL")
                             .with_receiver_eic(recipient_mp_id.as_str())
                             .with_message_ref(interchange_ref.as_str()),
-                    });
+                    })
+                    .await?;
             }
-            return HandlerOutcome::bad_request("AS4 payload contained no valid EDIFACT messages");
+            return Ok(HandlerOutcome::bad_request(
+                "AS4 payload contained no valid EDIFACT messages",
+            ));
         }
 
         // ── Gas CONTRL Empfangsbestätigung ────────────────────────────
@@ -1446,11 +1582,12 @@ impl BdewAs4IngestHandler {
                             .with_message_type("CONTRL")
                             .with_receiver_eic(recipient_mp_id.as_str())
                             .with_message_ref(interchange_ref.as_str()),
-                    });
+                    })
+                    .await?;
             }
         }
 
         // ── Synchronous receipt (BDEW AS4-Profil §2.2.4) ──────────────
-        send_receipt()
+        Ok(send_receipt())
     }
 }

@@ -9,7 +9,7 @@
 //! Prüfschritte 110 and 590 are a **loop, not a refusal**: an Anmeldung whose
 //! Marktlokation cannot yet be identified is re-checked *daily* and may only be
 //! answered `A07` / `A16` once it has been open for **more than 60 Werktage**.
-//! That is why GPKE Teil 2 § 2.2.2 states the answer window as „spätester ÜZ ist
+//! That is why GPKE Teil 2 Kap. 2.2.2 states the answer window as „spätester ÜZ ist
 //! 00:00 Uhr des 61. WT nach dem ÜT" and why this module returns
 //! [`NeuanlageEntscheidung::Vertagen`] alongside Accept / Reject / Escalate. A
 //! two-outcome engine has to call the unidentifiable case *something*, and both
@@ -35,7 +35,7 @@
 //!
 //! # Vorlauffrist (Prüfschritt 20 / 500)
 //!
-//! GPKE Teil 2 § 2.2.2 Nr. 1 states two:
+//! GPKE Teil 2 Kap. 2.2.2 Nr. 1 states two:
 //!
 //! - **Direktvermarktung ab Inbetriebnahmedatum**: „spätester ÜT liegt 1 Monat
 //!   vor dem voraussichtlichen Zuordnungsbeginn."
@@ -47,7 +47,7 @@
 //!
 //! # Sources
 //!
-//! - BK6-24-174 GPKE Teil 2 § 2.2 (UC/SD Neuanlage)
+//! - BK6-24-174 GPKE Teil 2 Kap. 2.2 (UC/SD Neuanlage)
 //! - Entscheidungsbaum-Diagramme und Codelisten 4.3, Kap. 6.5.1 (`E_0608`)
 
 use time::Date;
@@ -409,7 +409,7 @@ fn befund_pruefschritte(
 
 /// Prüfschritt 20 / 500 — „Wurde die Vorlauffrist eingehalten?"
 ///
-/// GPKE Teil 2 § 2.2.2 Nr. 1: a Direktvermarktung ab Inbetriebnahmedatum takes
+/// GPKE Teil 2 Kap. 2.2.2 Nr. 1: a Direktvermarktung ab Inbetriebnahmedatum takes
 /// a month, everything else the Tag-vor-dem-letzten-WT rule.
 ///
 /// Measured against the **Übertragungstag**, not today: the Frist is a property
@@ -431,7 +431,7 @@ fn check_vorlauffrist(
                 c.vorlauffrist.1,
                 format!(
                     "Vorlauffrist wurde nicht eingehalten: Zuordnungsbeginn {}, spätester ÜT \
-                     {latest_ut} (1 Monat davor, GPKE Teil 2 § 2.2.2 Nr. 1 für die \
+                     {latest_ut} (1 Monat davor, GPKE Teil 2 Kap. 2.2.2 Nr. 1 für die \
                      Direktvermarktung ab Inbetriebnahmedatum); ÜT war {}.",
                     anfrage.zuordnungsbeginn, anfrage.uebertragungstag
                 ),
@@ -450,7 +450,7 @@ fn check_vorlauffrist(
             format!(
                 "Vorlauffrist wurde nicht eingehalten: Zuordnungsbeginn {}, ÜT {}. Spätester \
                  ÜT ist der Tag vor dem letzten WT vor dem voraussichtlichen \
-                 Zuordnungsbeginn (GPKE Teil 2 § 2.2.2 Nr. 1).",
+                 Zuordnungsbeginn (GPKE Teil 2 Kap. 2.2.2 Nr. 1).",
                 anfrage.zuordnungsbeginn, anfrage.uebertragungstag
             ),
         )
@@ -618,7 +618,7 @@ mod tests {
     }
 
     /// A Direktvermarktung ab Inbetriebnahmedatum takes the month, not the
-    /// Werktag rule — GPKE Teil 2 § 2.2.2 Nr. 1.
+    /// Werktag rule — GPKE Teil 2 Kap. 2.2.2 Nr. 1.
     #[test]
     fn a_direktvermarktung_neuanlage_needs_a_month_of_lead() {
         let mut a = anfrage(55_601, d(2026, Month::March, 4), d(2026, Month::March, 9));

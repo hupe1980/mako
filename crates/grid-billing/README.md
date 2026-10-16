@@ -90,6 +90,7 @@ for pos in &settlement.positions {
 | `ArbeitspreisModell` | exactly one Arbeitspreis form — flat, § 14a Modul 1/2/3, or spot-linked |
 | `RegulatoryRegime` | which rules governed the delivery period, resolved once; a period crossing a turnover raises `REGIME_TURNOVER_IN_PERIOD` |
 | `msbg`, `umlagen`, `sect19`, `netzebene`, `gas` | MsbG § 30 ceilings, EnFG levies, § 19 StromNEV, Netzebene, Gas capacity |
+| `umlagen` rows | each year's §19 StromNEV-, Offshore- and KWKG-Umlage with the ÜNB publication it is read from; a Strom period with a year neither tabled nor overridden is refused (`UmlageRateMissing`), and a period crossing 1 January is priced per year |
 | feature `bo4e` | `bo4e::into_rechnung()` — the settlement as a BO4E `Rechnung` |
 
 | PID | Description | Direction | Sparte |

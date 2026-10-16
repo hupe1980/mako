@@ -232,7 +232,7 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/sharing/{community_id}/allocation",
             get(get_sharing_allocation),
         )
-        // GDPR §17 DSGVO right to erasure — mark a MaLo for deletion from
+        // Art. 17 DSGVO right to erasure — mark a MaLo for deletion from
         // hot PostgreSQL storage. Cold Iceberg deletion is scheduled asynchronously.
         .route(
             "/api/v1/gdpr/erasure/{malo_id}",

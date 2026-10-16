@@ -787,20 +787,24 @@ pub fn build_app(
 // ── Content signature (Inhaltsdatensicherung) ────────────────────────────────
 
 /// Header carrying the Base64 signature value (Regelungen zum Übertragungsweg
-/// für API-Webdienste 1.2, Kap. 3.3).
+/// für API-Webdienste 1.2, Kap. 3.3): `X-BDEW-SIGNATURE`, in the lower case
+/// HTTP/2 transmits. The sending side is `energy_api`'s
+/// `content_security::HEADER_SIGNATURE`; a test pins the two together.
 pub const HEADER_BDEW_SIGNATURE: &str = "x-bdew-signature";
-/// Header carrying the Base64 signed digest `Hash(M)` (same chapter).
+/// Header carrying the Base64 signed digest `Hash(M)`: `X-BDEW-DIGEST` (same
+/// chapter).
 pub const HEADER_BDEW_DIGEST: &str = "x-bdew-digest";
 /// Header carrying the signer's certificate, encoded as RFC 9440 §2.1 does for
-/// a TLS certificate (same chapter).
+/// a TLS certificate: `X-BDEW-CERT` (same chapter).
 pub const HEADER_BDEW_CERT: &str = "x-bdew-cert";
 
 /// Verify the content-layer signature of an inbound request before any handler
 /// sees it.
 ///
 /// Regelungen zum Übertragungsweg für API-Webdienste 1.2, Kap. 3.3 signs the
-/// URI with its query, the RFC 8785 canonical payload and the
-/// `creationDateTime` / `transactionId` headers; the signature, the digest and
+/// URI with its query, the RFC 8785 canonical payload, the
+/// `creationDateTime` / `transactionId` headers and, when present, the
+/// `initialTransactionId` header; the signature, the digest and
 /// the signer's certificate travel in [`HEADER_BDEW_SIGNATURE`],
 /// [`HEADER_BDEW_DIGEST`] and [`HEADER_BDEW_CERT`]. A request carrying a
 /// signature that does not verify against the certificate it names is refused
@@ -813,8 +817,6 @@ pub const HEADER_BDEW_CERT: &str = "x-bdew-cert";
 ///   here; the mTLS-terminating proxy authenticates the caller.
 /// - The signed URI is rebuilt as `https://{Host}{path?query}`, the URL the
 ///   caller addressed through the proxy.
-/// - A request carrying `initialTransactionId` is refused: the digest
-///   `energy_api::transport::content_security` computes does not include it.
 /// - A request carrying no signature at all passes with a warning.
 pub async fn content_signature_middleware(
     axum::extract::State(max_body_bytes): axum::extract::State<usize>,
@@ -855,13 +857,15 @@ pub async fn content_signature_middleware(
             ));
         }
     };
-    if headers.contains_key("initialtransactionid") {
-        return refuse("a signature over initialTransactionId cannot be verified here".to_owned());
-    }
     let (Ok(Some(creation_dt)), Ok(Some(tx_id)), Ok(Some(host))) =
         (one("creationdatetime"), one("transactionid"), one("host"))
     else {
         return refuse("creationDateTime, transactionId and Host are signed inputs".to_owned());
+    };
+    // Signed „soweit vorhanden": absent, it is not part of `M`.
+    let initial_tx_id = match one("initialtransactionid") {
+        Ok(v) => v.map(str::to_owned),
+        Err(e) => return refuse(format!("{} must appear at most once", e.name)),
     };
     let (creation_dt, tx_id) = (creation_dt.to_owned(), tx_id.to_owned());
     let uri = format!(
@@ -893,10 +897,13 @@ pub async fn content_signature_middleware(
         }
     };
     if let Err(e) = energy_api::transport::content_security::verify_request(
-        &uri,
-        &canonical,
-        &creation_dt,
-        &tx_id,
+        &energy_api::transport::content_security::SignedInputs {
+            uri: &uri,
+            payload: &canonical,
+            creation_date_time: &creation_dt,
+            transaction_id: &tx_id,
+            initial_transaction_id: initial_tx_id.as_deref(),
+        },
         &digest,
         &signature,
         &key,
@@ -905,6 +912,56 @@ pub async fn content_signature_middleware(
     }
     let request = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
     next.run(request).await
+}
+
+/// The operator's content-signing identity: the EMT.API key and the
+/// certificate sent beside it as `X-BDEW-CERT` (Regelungen zum Übertragungsweg
+/// für API-Webdienste 1.2, Kap. 3.3).
+#[derive(Clone)]
+pub struct ContentSigning {
+    /// The EMT.API private key.
+    pub key: energy_api::transport::content_security::ContentSigningKey,
+    /// The DER of the certificate naming its public key.
+    pub cert_der: Vec<u8>,
+}
+
+impl std::fmt::Debug for ContentSigning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContentSigning").finish_non_exhaustive()
+    }
+}
+
+impl ContentSigning {
+    /// Parse the key and certificate PEMs and prove they belong together.
+    ///
+    /// A certificate naming another key would make every signed request fail
+    /// the receiver's check, so the pair is refused here rather than on the
+    /// wire.
+    ///
+    /// # Errors
+    ///
+    /// When either PEM does not parse, or the certificate's key is not the
+    /// signing key's.
+    pub fn from_pem(key_pem: &str, cert_pem: &str) -> Result<Self, String> {
+        use base64::Engine as _;
+        use energy_api::transport::content_security as cs;
+        let key = cs::signing_key_from_pem(key_pem).map_err(|e| e.to_string())?;
+        let body: String = cert_pem
+            .lines()
+            .map(str::trim)
+            .skip_while(|l| *l != "-----BEGIN CERTIFICATE-----")
+            .skip(1)
+            .take_while(|l| *l != "-----END CERTIFICATE-----")
+            .collect();
+        let cert_der = base64::engine::general_purpose::STANDARD
+            .decode(body)
+            .map_err(|e| format!("signing certificate is not a PEM CERTIFICATE: {e}"))?;
+        let named = verifying_key_from_rfc9440(&cs::cert_header_value(&cert_der))?;
+        if named != *key.verifying_key() {
+            return Err("the signing certificate names a different key".to_owned());
+        }
+        Ok(Self { key, cert_der })
+    }
 }
 
 /// The verifying key of the certificate in an RFC 9440 §2.1 header value — the
@@ -1076,6 +1133,24 @@ pub async fn webdienste_auth_middleware(
             .into_response();
     }
     next.run(request).await
+}
+
+#[cfg(test)]
+mod header_name_tests {
+    use energy_api::transport::content_security as cs;
+
+    /// The headers `makod` reads are the ones `energy-api` writes: the
+    /// published names of Kap. 3.3, compared case-insensitively as HTTP does.
+    #[test]
+    fn the_verified_headers_are_the_ones_energy_api_signs() {
+        for (read, written) in [
+            (super::HEADER_BDEW_DIGEST, cs::HEADER_DIGEST),
+            (super::HEADER_BDEW_SIGNATURE, cs::HEADER_SIGNATURE),
+            (super::HEADER_BDEW_CERT, cs::HEADER_CERT),
+        ] {
+            assert!(read.eq_ignore_ascii_case(written), "{read} vs {written}");
+        }
+    }
 }
 
 #[cfg(test)]
