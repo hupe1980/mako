@@ -32,19 +32,15 @@
 //! (`Content-Type: text/plain; charset=utf-8`).  The body is parsed as a
 //! PARTIN message using [`edi_energy::Platform`]; each participating party
 //! is extracted and upserted into the `PartnerStore`.
-//!
-//! Until full PARTIN segment extraction is implemented the endpoint returns
-//! `501 Not Implemented`.
 
-use mako_service::ApiError;
+use mako_service::{ApiError, ApiResult};
 use std::sync::Arc;
 
 use axum::{
     Router,
     body::Bytes,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    http::HeaderMap,
     routing::{delete, get, post, put},
 };
 use edi_energy::{AnyMessage, EdiEnergyMessage as _, Platform};
@@ -121,11 +117,6 @@ pub(crate) struct ImportResponse {
     glns: Vec<String>,
 }
 
-#[derive(Serialize, ToSchema)]
-pub(crate) struct ErrorResponse {
-    error: String,
-}
-
 // ── Router ────────────────────────────────────────────────────────────────────
 
 /// Build the axum [`Router`] for the partner admin API.
@@ -144,19 +135,9 @@ pub fn router(state: Arc<PartnerAdminState>) -> Router {
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 
-fn unauthorized() -> Response {
-    (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
-}
-
-fn internal_error(e: impl std::fmt::Display) -> Response {
-    tracing::error!(error = %e, "partner admin API error");
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(ErrorResponse {
-            error: "internal error".to_string(),
-        }),
-    )
-        .into_response()
+/// A store failure: logged under an `error_id`, answered without its text.
+fn internal_error(e: impl std::fmt::Display) -> ApiError {
+    ApiError::internal(anyhow::anyhow!("partner admin API: {e}"))
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
@@ -175,11 +156,11 @@ fn internal_error(e: impl std::fmt::Display) -> Response {
 pub(crate) async fn handle_list(
     headers: HeaderMap,
     State(state): State<Arc<PartnerAdminState>>,
-) -> Response {
-    let identity = match state.cedar.authenticate(&headers) {
-        Some(id) => id,
-        None => return unauthorized(),
-    };
+) -> ApiResult<Json<ListResponse>> {
+    let identity = state
+        .cedar
+        .authenticate(&headers)
+        .ok_or(ApiError::Unauthorized)?;
     if !state.cedar.authorize_partner(
         &identity,
         MakoAction::AdminPartnerRead,
@@ -188,15 +169,15 @@ pub(crate) async fn handle_list(
             mp_id: None,
         },
     ) {
-        return ApiError::Forbidden.into_response();
+        return Err(ApiError::Forbidden);
     }
-    match state.store.list(state.tenant_id).await {
-        Ok(partners) => {
-            let count = partners.len();
-            Json(ListResponse { partners, count }).into_response()
-        }
-        Err(e) => internal_error(e),
-    }
+    let partners = state
+        .store
+        .list(state.tenant_id)
+        .await
+        .map_err(internal_error)?;
+    let count = partners.len();
+    Ok(Json(ListResponse { partners, count }))
 }
 
 /// `GET /admin/partners/{mp_id}` — retrieve a single partner record.
@@ -216,11 +197,11 @@ pub(crate) async fn handle_get(
     headers: HeaderMap,
     State(state): State<Arc<PartnerAdminState>>,
     Path(mp_id_str): Path<String>,
-) -> Response {
-    let identity = match state.cedar.authenticate(&headers) {
-        Some(id) => id,
-        None => return unauthorized(),
-    };
+) -> ApiResult<Json<PartnerResponse>> {
+    let identity = state
+        .cedar
+        .authenticate(&headers)
+        .ok_or(ApiError::Unauthorized)?;
     if !state.cedar.authorize_partner(
         &identity,
         MakoAction::AdminPartnerRead,
@@ -229,17 +210,17 @@ pub(crate) async fn handle_get(
             mp_id: Some(&mp_id_str),
         },
     ) {
-        return ApiError::Forbidden.into_response();
+        return Err(ApiError::Forbidden);
     }
     let mp_id = MarktpartnerCode::from(mp_id_str.as_str());
-    match state.store.get(state.tenant_id, &mp_id).await {
-        Ok(Some(record)) => {
-            let updated_at = record.updated_at.to_string();
-            Json(PartnerResponse { record, updated_at }).into_response()
-        }
-        Ok(None) => (StatusCode::NOT_FOUND, "Not Found").into_response(),
-        Err(e) => internal_error(e),
-    }
+    let record = state
+        .store
+        .get(state.tenant_id, &mp_id)
+        .await
+        .map_err(internal_error)?
+        .ok_or(ApiError::NotFound)?;
+    let updated_at = record.updated_at.to_string();
+    Ok(Json(PartnerResponse { record, updated_at }))
 }
 
 /// Reject a record whose delivery channels are not on a secure transport.
@@ -286,11 +267,11 @@ pub(crate) async fn handle_put(
     State(state): State<Arc<PartnerAdminState>>,
     Path(mp_id_str): Path<String>,
     Json(record): Json<PartnerRecord>,
-) -> Response {
-    let identity = match state.cedar.authenticate(&headers) {
-        Some(id) => id,
-        None => return unauthorized(),
-    };
+) -> ApiResult<Json<PartnerResponse>> {
+    let identity = state
+        .cedar
+        .authenticate(&headers)
+        .ok_or(ApiError::Unauthorized)?;
     if !state.cedar.authorize_partner(
         &identity,
         MakoAction::AdminPartnerWrite,
@@ -299,48 +280,35 @@ pub(crate) async fn handle_put(
             mp_id: Some(&mp_id_str),
         },
     ) {
-        return ApiError::Forbidden.into_response();
+        return Err(ApiError::Forbidden);
     }
     let path_gln = MarktpartnerCode::from(mp_id_str.as_str());
     if record.mp_id != path_gln {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!(
-                    "MP-ID in path ({path_gln}) does not match MP-ID in body ({})",
-                    record.mp_id
-                ),
-            }),
-        )
-            .into_response();
+        return Err(ApiError::bad_request(format!(
+            "MP-ID in path ({path_gln}) does not match MP-ID in body ({})",
+            record.mp_id
+        )));
     }
     if let Some((qualifier, address)) = insecure_delivery_channel(&record) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!(
-                    "channel {qualifier:?} address {address:?} must be an https:// URL. \
-                     makod delivers regulated messages and MaLo-ID callbacks over this \
-                     channel; the configuration path already refuses a plaintext \
-                     endpoint and this one does too."
-                ),
-            }),
-        )
-            .into_response();
+        return Err(ApiError::bad_request(format!(
+            "channel {qualifier:?} address {address:?} must be an https:// URL. makod \
+             delivers regulated messages and MaLo-ID callbacks over this channel; the \
+             configuration path already refuses a plaintext endpoint and this one does too."
+        )));
     }
     // `updated_at` is when *we* wrote the record, so the server stamps it. A
     // client-supplied value would also be read back by `merge_from_partin`,
     // which carries it forward on every PARTIN merge.
     let mut record = record;
     record.updated_at = time::OffsetDateTime::now_utc();
-    match state.store.upsert(state.tenant_id, &record).await {
-        Ok(()) => {
-            info!(mp_id = %path_gln, tenant = %state.tenant_id, "partner upserted via admin API");
-            let updated_at = record.updated_at.to_string();
-            (StatusCode::OK, Json(PartnerResponse { record, updated_at })).into_response()
-        }
-        Err(e) => internal_error(e),
-    }
+    state
+        .store
+        .upsert(state.tenant_id, &record)
+        .await
+        .map_err(internal_error)?;
+    info!(mp_id = %path_gln, tenant = %state.tenant_id, "partner upserted via admin API");
+    let updated_at = record.updated_at.to_string();
+    Ok(Json(PartnerResponse { record, updated_at }))
 }
 
 /// `DELETE /admin/partners/{mp_id}` — remove a partner record.
@@ -359,11 +327,11 @@ pub(crate) async fn handle_delete(
     headers: HeaderMap,
     State(state): State<Arc<PartnerAdminState>>,
     Path(mp_id_str): Path<String>,
-) -> Response {
-    let identity = match state.cedar.authenticate(&headers) {
-        Some(id) => id,
-        None => return unauthorized(),
-    };
+) -> ApiResult<Json<DeleteResponse>> {
+    let identity = state
+        .cedar
+        .authenticate(&headers)
+        .ok_or(ApiError::Unauthorized)?;
     if !state.cedar.authorize_partner(
         &identity,
         MakoAction::AdminPartnerDelete,
@@ -372,20 +340,19 @@ pub(crate) async fn handle_delete(
             mp_id: Some(&mp_id_str),
         },
     ) {
-        return ApiError::Forbidden.into_response();
+        return Err(ApiError::Forbidden);
     }
     let mp_id = MarktpartnerCode::from(mp_id_str.as_str());
-    match state.store.remove(state.tenant_id, &mp_id).await {
-        Ok(()) => {
-            info!(%mp_id, tenant = %state.tenant_id, "partner removed via admin API");
-            Json(DeleteResponse {
-                mp_id: mp_id.to_string(),
-                deleted: true,
-            })
-            .into_response()
-        }
-        Err(e) => internal_error(e),
-    }
+    state
+        .store
+        .remove(state.tenant_id, &mp_id)
+        .await
+        .map_err(internal_error)?;
+    info!(%mp_id, tenant = %state.tenant_id, "partner removed via admin API");
+    Ok(Json(DeleteResponse {
+        mp_id: mp_id.to_string(),
+        deleted: true,
+    }))
 }
 
 /// `POST /admin/partners/import` — import partners from a raw PARTIN EDIFACT
@@ -418,11 +385,11 @@ pub(crate) async fn handle_import(
     headers: HeaderMap,
     State(state): State<Arc<PartnerAdminState>>,
     body: Bytes,
-) -> Response {
-    let identity = match state.cedar.authenticate(&headers) {
-        Some(id) => id,
-        None => return unauthorized(),
-    };
+) -> ApiResult<Json<ImportResponse>> {
+    let identity = state
+        .cedar
+        .authenticate(&headers)
+        .ok_or(ApiError::Unauthorized)?;
     if !state.cedar.authorize_partner(
         &identity,
         MakoAction::AdminPartnerImport,
@@ -431,16 +398,10 @@ pub(crate) async fn handle_import(
             mp_id: None,
         },
     ) {
-        return ApiError::Forbidden.into_response();
+        return Err(ApiError::Forbidden);
     }
     if body.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "request body is empty".to_string(),
-            }),
-        )
-            .into_response();
+        return Err(ApiError::bad_request("request body is empty"));
     }
 
     let mut upserted = 0usize;
@@ -487,15 +448,11 @@ pub(crate) async fn handle_import(
         }
     }
 
-    (
-        StatusCode::OK,
-        Json(ImportResponse {
-            upserted,
-            skipped,
-            glns,
-        }),
-    )
-        .into_response()
+    Ok(Json(ImportResponse {
+        upserted,
+        skipped,
+        glns,
+    }))
 }
 
 // ── Bootstrap helper ──────────────────────────────────────────────────────────

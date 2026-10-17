@@ -9,8 +9,9 @@ pub struct EinsdConfig {
     /// PostgreSQL connection + pool tuning (`application_name` = `einsd`).
     pub database: mako_service::config::DatabaseConfig,
 
-    /// HTTP port.  Defaults to `9180` (billing extension range).
-    pub port: Option<u16>,
+    /// `[http]` — the listen address. Defaults to every interface on `9180`.
+    #[serde(default = "default_http")]
+    pub http: mako_service::config::HttpConfig,
 
     /// Tenant identifier — data-isolation key written to every database row.
     /// Typically the operator’s BDEW- or DVGW-Codenummer, but any stable unique string is valid.
@@ -97,10 +98,13 @@ pub struct EinsdConfig {
     #[serde(default)]
     pub oidc: Option<mako_service::oidc::OidcConfig>,
 
-    /// The Beihilfevorbehalt on EEG Teil-3 payments for supply periods from
-    /// 01.01.2027 — `[beihilfevorbehalt]`.
+    /// The Beihilfevorbehalt approvals recorded so far — `[beihilfevorbehalt]`.
     #[serde(default)]
     pub beihilfevorbehalt: BeihilfevorbehaltConfig,
+
+    /// `[policy]` — the operator readings this deployment settles under.
+    #[serde(default)]
+    pub policy: EinsdPolicy,
 
     /// Start without token verification.
     ///
@@ -110,42 +114,118 @@ pub struct EinsdConfig {
     pub allow_insecure_no_auth: bool,
 }
 
-/// `[beihilfevorbehalt]` — what einsd does with a Teil-3 payment no state-aid
-/// approval covers, and the approvals recorded so far.
+/// `[beihilfevorbehalt]` — the state-aid approvals recorded so far.
 ///
 /// The Commission's approval of the EEG 2023 „bis zum 31. Dezember 2026
 /// befristet ist" (BT-Drs. 21/7867, Begründung zu § 104), so a payment for a
-/// supply period from 01.01.2027 has none until one is recorded here.
+/// supply period from 01.01.2027 has none until one is recorded here. What
+/// einsd does with an uncovered payment is `[policy] beihilfe_politik`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BeihilfevorbehaltConfig {
-    /// What happens to an uncovered payment. Default: `verweigern`.
-    #[serde(default)]
-    pub politik: BeihilfePolitik,
     /// Each recorded approval: `eingang`, `gilt_ab`, optional `gilt_bis`,
     /// `bundesanzeiger`, `umfang`.
     #[serde(default)]
     pub genehmigungen: Vec<eeg_billing::Beihilfegenehmigung>,
+    /// Removed: the choice is `[policy] beihilfe_politik`. Named so a config
+    /// still carrying it is refused at startup instead of running under the
+    /// default while the operator believes their value is in force.
+    #[serde(default)]
+    pub politik: Option<String>,
 }
 
-/// What einsd does with a Teil-3 payment no recorded approval covers.
-///
-/// The legal answer is the operator's to give; neither policy is a legal
-/// outcome mako asserts. The default refuses, because paying is the step that
-/// cannot be taken back.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BeihilfePolitik {
-    /// Refuse the settlement, naming the reservation; no receipt is written,
-    /// and the sweep retries the period once an approval is recorded.
-    #[default]
-    Verweigern,
-    /// Settle and pay, with the reservation stated as a zero-euro position on
-    /// the receipt and the Gutschrift.
-    UnterVorbehalt,
+/// `[policy]` — einsd's operator settings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EinsdPolicy {
+    /// What happens to a Teil-3 payment no recorded approval covers.
+    #[serde(default)]
+    pub beihilfe_politik: mako_service::policy::Policy<BeihilfePolitik>,
+}
+
+mako_service::policy_choice! {
+    /// What einsd does with a Teil-3 payment for a supply period no recorded
+    /// state-aid approval covers.
+    ///
+    /// The legal answer is the operator's to give; none of the three is a legal
+    /// outcome mako asserts. The default refuses, because paying is the step
+    /// that cannot be taken back.
+    pub enum BeihilfePolitik {
+        key: "beihilfe_politik",
+        doc: "@/docs/services/einsd.md#policy-beihilfe-politik",
+        default: tightening(Verweigern, "paying is the step that cannot be taken back; a refused period is retried by the sweep once an approval is recorded"),
+        options: {
+            /// Refuse the settlement, naming the reservation; no receipt is
+            /// written, and the sweep retries the period once an approval is
+            /// recorded.
+            Verweigern = "verweigern" => "BT-Drs. 21/7867 S. 248, Zu § 104: Genehmigungsvorbehalt, die Beihilfegenehmigung für das EEG 2023 ist bis zum 31. Dezember 2026 befristet",
+            /// Settle and pay, with the reservation stated as a zero-euro
+            /// position on the receipt and the Gutschrift.
+            UnterVorbehalt = "unter_vorbehalt" => "BT-Drs. 21/7867 S. 248, Zu § 104: Genehmigungsvorbehalt, die Beihilfegenehmigung für das EEG 2023 ist bis zum 31. Dezember 2026 befristet",
+            /// Settle without paying: the receipt is stored as `gehalten` with
+            /// no Gutschrift number and no payout event, and the sweep
+            /// releases it once an approval covering the period is recorded.
+            Halten = "halten" => "BT-Drs. 21/7867 S. 248, Zu § 104: Genehmigungsvorbehalt, die Beihilfegenehmigung für das EEG 2023 ist bis zum 31. Dezember 2026 befristet",
+        }
+    }
 }
 
 impl EinsdConfig {
+    /// Refuse a config einsd cannot run as documented: a removed key, or a
+    /// posture that serves payment obligations unauthenticated.
+    ///
+    /// # Errors
+    ///
+    /// Names the problem and what replaces a removed key.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if let Some(old) = &self.beihilfevorbehalt.politik {
+            anyhow::bail!(
+                "einsd: `[beihilfevorbehalt] politik = {old:?}` is not read; the choice is \
+                 `[policy] beihilfe_politik` (verweigern | unter_vorbehalt | halten). Move the \
+                 value there."
+            );
+        }
+        // Settling a plant creates a payment obligation to the Anlagenbetreiber, so
+        // the API is closed by default; running it open has to be stated explicitly.
+        if self.oidc.is_none() && !self.allow_insecure_no_auth {
+            anyhow::bail!(
+                "einsd: no [oidc] section and allow_insecure_no_auth is not set — \
+                 refusing to serve the settlement API unauthenticated"
+            );
+        }
+        // `OutboxWorker` signs only when it has a secret. With a webhook URL and
+        // none, every de.eeg.* CloudEvent — the settled amounts the ERP pays out
+        // on among them — reaches the receiver unsigned and indistinguishable
+        // from a body anybody posted.
+        if self.erp_webhook_url.is_some()
+            && self.erp_hmac_secret.is_none()
+            && !self.allow_insecure_no_auth
+        {
+            anyhow::bail!(
+                "einsd: erp_webhook_url is set but erp_hmac_secret is not — the outbox \
+                 worker signs only when it has a secret, so every de.eeg.* CloudEvent, \
+                 settlement amounts included, would reach the ERP unsigned. Configure \
+                 erp_hmac_secret, or set allow_insecure_no_auth = true"
+            );
+        }
+        Ok(())
+    }
+
+    /// The policy and posture einsd runs under — logged, exported, recorded
+    /// and served by the runner and `GET /api/v1/policy`.
+    #[must_use]
+    pub fn policy_report(&self) -> mako_service::policy::PolicyReport {
+        mako_service::policy::PolicyReport::new()
+            .with(&self.policy.beihilfe_politik)
+            .posture_flag("allow_insecure_no_auth", self.allow_insecure_no_auth)
+            .posture_presence("oidc", self.oidc.is_some(), true)
+            .posture_presence(
+                "erp_hmac_secret",
+                self.erp_hmac_secret.is_some(),
+                self.erp_webhook_url.is_some(),
+            )
+    }
+
     /// `edmd`, addressed and credentialed, or `None` when it is not configured.
     ///
     /// The single place `edmd_url` and `edmd_api_key` are read, so where the
@@ -168,6 +248,10 @@ impl mako_service::ServiceConfig for EinsdConfig {
         Some(&self.database)
     }
     fn bind_addr(&self) -> String {
-        format!("0.0.0.0:{}", self.port.unwrap_or(9180))
+        self.http.addr.clone()
     }
+}
+
+fn default_http() -> mako_service::config::HttpConfig {
+    mako_service::config::HttpConfig::on_port(9180)
 }

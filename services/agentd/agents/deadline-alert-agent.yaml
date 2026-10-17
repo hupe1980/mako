@@ -9,7 +9,7 @@
 # registered skill: `agentd::skills::DeadlineTriage`.
 #
 # The work is a subtraction, three comparisons against fixed severity bands,
-# and reading `partner_mp_id` out of the JSON obsd returned — per deadline
+# and reading `partner_mp_id` out of the JSON processd returned — per deadline
 # event, at whatever rate mako's counterparties approach their Fristen. Asking a
 # frontier model for that also makes it untestable: "is 29 minutes CRITICAL?"
 # would only be answerable by calling the model, so a drifting threshold would
@@ -25,9 +25,9 @@
 # ## One grant, because one tool is called
 #
 # A coded skill's reach is legible, and the grant is held to exactly it: this
-# agent calls `obsd/list_overdue_processes`, so that one tool is what it may
+# agent calls `processd/list_overdue_processes`, so that one tool is what it may
 # reach. The alternative is a grant sized to the servers instead of to the
-# skill — every specialist holding obsd's, makod's and marktd's full read
+# skill — every specialist holding processd's, makod's and marktd's full read
 # surface, which is authority nobody has reasoned about and no reviewer can
 # assess from the digest.
 #
@@ -57,7 +57,7 @@ spec:
         WARNING   under 2 hours remain
         COMPLIANT more than 2 hours remain
 
-      The set classified is the union of the **triggering event** and the rows obsd
+      The set classified is the union of the **triggering event** and the rows processd
       `list_overdue_processes` returns — the one tool this specialist holds —
       deduplicated by process_id. The trigger matters: a
       `de.obs.deadline.approaching` alert carries a deadline that is usually
@@ -77,7 +77,7 @@ spec:
                        Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for
                        WiM Strom. This is what `deadline_at` holds.
 
-      Both are obsd's to compute, from `mako_fristen` — the same Werktage
+      Both are processd's to compute, from `mako_fristen` — the same Werktage
       calendar this plane resolves approval windows with. This specialist does
       not re-derive them: it reads `deadline_at`, subtracts, and quotes
       `deadline_source` so the answer cites the Festlegung rather than asserting
@@ -137,7 +137,7 @@ spec:
           type: integer
           minimum: 0
           description: >-
-            Processes classified in this run: the triggering alert plus obsd's
+            Processes classified in this run: the triggering alert plus processd's
             overdue list, deduplicated by process_id. Was `overdue_count`, which
             was wrong twice over — the set includes the not-yet-overdue process
             the run was woken for.
@@ -146,12 +146,12 @@ spec:
           minimum: 0
           description: >-
             Rows whose deadline could not be read. Counted rather than treated as
-            compliant, so an obsd projection fault cannot hide behind a green
+            compliant, so a processd projection fault cannot hide behind a green
             alert.
         truncated:
           type: boolean
           description: >-
-            obsd returned a full batch. At least the cap was waiting — never that
+            processd returned a full batch. At least the cap was waiting — never that
             the cap was all there was.
         by_partner_mp_id:
           type: object
@@ -173,7 +173,7 @@ spec:
               deadline_source:
                 type: string
                 description: >-
-                  The Festlegung the deadline came from, as obsd stored it. A
+                  The Festlegung the deadline came from, as processd stored it. A
                   recommendation that cites the rule beats one that asserts a
                   number.
               remaining_secs:
@@ -187,7 +187,7 @@ spec:
           description: The event that caused this run, reported back for correlation.
 
   tools:
-    - ref: tool://obsd/list_overdue_processes
+    - ref: tool://processd/list_overdue_processes
       mutates: false
       max_sensitivity: internal
       description: >-

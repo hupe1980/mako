@@ -120,6 +120,7 @@ fn instantiate(schema: &Value) -> Value {
 fn completion(structured: Value) -> Completion {
     Completion {
         text: String::new(),
+        model: None,
         structured: Some(structured),
         tool_calls: Vec::new(),
         usage: Usage::default(),

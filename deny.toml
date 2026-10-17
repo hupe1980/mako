@@ -104,9 +104,9 @@ name    = "weezl"
 reason  = "GIF/LZW decoder duplicated across the typst image stack; not reachable from an invoice render."
 
 [[bans.skip]]
-name    = "chacha20"
-version = "0.9"
-reason  = "agentplane's keyring AEAD (chacha20poly1305 0.10, its latest release) pins chacha20 0.9; our rand 0.10 (mako-engine, lopdf) uses 0.10. Not unifiable from here — resolve when chacha20poly1305 bumps."
+name    = "ulid"
+version = "1"
+reason  = "slatedb 0.14 (mako-engine's store) pins ulid 1; agentplane 0.47 (agentd) uses ulid 3. Two independent upstream trees — resolves when slatedb moves to ulid 3."
 
 # ── synstructure: the AS4 X.509 chain vs. the Typst/ICU chain ────────────────
 # Two independent upstream trees, neither of them mako's to unify:
@@ -255,7 +255,7 @@ reason  = "miette 7.x depends directly on unicode-width 0.1 AND pulls 0.2 via te
 [[bans.skip]]
 name    = "winnow"
 version = "0.6"
-reason  = "cargo's build-time toml_edit pulls winnow 0.6; runtime toml 0.8 (mako-service, invoicd, edmd, obsd, processd) pulls 0.7 via toml_edit 0.22."
+reason  = "cargo's build-time toml_edit pulls winnow 0.6; runtime toml 0.8 (mako-service, invoicd, edmd, processd) pulls 0.7 via toml_edit 0.22."
 
 [[bans.skip]]
 name    = "winnow"

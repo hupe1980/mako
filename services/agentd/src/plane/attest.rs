@@ -2,7 +2,7 @@
 //!
 //! The journal is hash-chained, so a rewritten record is detectable and a
 //! removed run breaks the Merkle root. Neither of those says **who wrote it**.
-//! An [`Attestation`](agentplane::core::Attestation) does: every record carries
+//! A [`KeySignature`](agentplane::core::KeySignature) does: every record carries
 //! a signature over its chain hash and the key id of the workload that produced
 //! it, so an auditor holding the public key can tell mako's plane from anything
 //! else that reached the same database.

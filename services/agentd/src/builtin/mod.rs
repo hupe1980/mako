@@ -168,7 +168,7 @@ static BUILTIN_AGENTS: &[Specialist] = &[
         not(any(feature = "role-lf", feature = "role-nb", feature = "role-msb")),
         feature = "role-nb",
     ))]
-    MABIS_SYNCD_AGENT,
+    MABIS_AGENT,
     #[cfg(any(
         not(any(feature = "role-lf", feature = "role-nb", feature = "role-msb")),
         feature = "role-msb",
@@ -472,8 +472,8 @@ const REPLACEMENT_VALUE_AGENT: Specialist = Specialist {
     not(any(feature = "role-lf", feature = "role-nb", feature = "role-msb")),
     feature = "role-nb",
 ))]
-const MABIS_SYNCD_AGENT: Specialist = Specialist {
-    name: "mabis-syncd-agent",
+const MABIS_AGENT: Specialist = Specialist {
+    name: "mabis-agent",
     trigger_patterns: &[
         mako_events::mabis::SUBMISSION_FAILED,
         mako_events::mabis::KORREKTURBEDARF_OPENED,
@@ -533,7 +533,9 @@ const EINSD_BATCH_AGENT: Specialist = Specialist {
 
 /// Every specialist compiled into this binary, in declaration order.
 ///
-/// A role-scoped build yields only its own role's specialists (§§ 6a, 7a EnWG).
+/// A role-scoped build yields only its own role's specialists, so it cannot
+/// answer as a role it was not built for. The confidentiality duty of
+/// §§ 6a, 7a EnWG is the deployment's Cedar policy, enforced at runtime.
 pub fn all() -> impl Iterator<Item = &'static Specialist> {
     BUILTIN_AGENTS.iter()
 }
@@ -565,7 +567,10 @@ mod trigger_contract_tests {
         );
     }
 
-    /// §§ 6a, 7a EnWG: a role-scoped build contains no other arm's specialists.
+    /// A role-scoped build contains no other arm's specialists.
+    ///
+    /// That fails a misconfiguration closed; the confidentiality duty of
+    /// §§ 6a, 7a EnWG is the deployment's Cedar policy, enforced at runtime.
     ///
     /// `agentd` is the one service that reaches all the others, so in a
     /// combined-role deployment it is the component that cannot be split by
@@ -605,10 +610,10 @@ mod trigger_contract_tests {
             // specialists, not the embedded manifest set — `manifests![]` is
             // not role-gated, so without the filter in `servers_named_in_grants`
             // an LF deployment could not boot without an MCP endpoint for
-            // `sperrd`, a server only the NB Sperrung specialist grants.
+            // `netzbilanzd`, a server only the NB specialists grant.
             assert!(
-                !crate::plane::tools::servers_named_in_grants().contains("sperrd"),
-                "an LF deployment must not be required to wire the NB-only sperrd endpoint"
+                !crate::plane::tools::servers_named_in_grants().contains("netzbilanzd"),
+                "an LF deployment must not be required to wire the NB-only netzbilanzd endpoint"
             );
         }
 
@@ -650,7 +655,7 @@ mod trigger_contract_tests {
         (
             "regulatory-reporting-agent",
             "the BNetzA Diskriminierungsbericht is an annual/quarterly report started \
-             by an operator; obsd emits no reporting-period event",
+             by an operator; processd's read model emits no reporting-period event",
         ),
     ];
 

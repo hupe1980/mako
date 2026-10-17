@@ -90,9 +90,9 @@ graph LR
 | `POST/GET` | `/api/v1/angebote` | B2B Angebot (quotation) — ANGELEGT→VERSANDT→ANGENOMMEN/ABGELEHNT/ABGELAUFEN |
 | `GET` | `/api/v1/angebote/{id}` | One Angebot |
 | `GET` | `/api/v1/angebote/{id}/comparison` | Prices the scenarios and persists the BO4E `Angebot` to `angebote.bo4e` |
-| `POST` | `/api/v1/angebote/{id}/versenden` | ANGELEGT → VERSANDT |
+| `POST` | `/api/v1/angebote/{id}/versenden` | ANGELEGT → VERSANDT; an unknown id is `404`, another status `409` |
 | `PUT` | `/api/v1/angebote/{id}` | Edit before sending — `gueltig_bis`, `lieferbeginn`, `laufzeit_monate`, `positionen`, `varianten`, `notizen`. **`ANGELEGT` only**: once VERSANDT the customer holds the document |
-| `POST` | `/api/v1/angebote/{id}/annehmen` · `/ablehnen` | ANGELEGT **or** VERSANDT → ANGENOMMEN / ABGELEHNT. Acceptance also requires a priced `bo4e` — otherwise `de.tarif.angebot.angenommen` would carry an empty document |
+| `POST` | `/api/v1/angebote/{id}/annehmen` · `/ablehnen` | ANGELEGT **or** VERSANDT → ANGENOMMEN / ABGELEHNT. Acceptance also requires a priced `bo4e` — otherwise `de.tarif.angebot.angenommen` would carry an empty document. An unknown id is `404`, an Angebot already decided `409`, an unpriced one `422` (acceptance only) |
 | `POST` | `/api/v1/angebote/expire` | Sweeps ANGELEGT and VERSANDT Angebote past `gueltig_bis` to ABGELAUFEN |
 | `GET` | `/health/live` · `/health/ready` · `/metrics` | From the `mako_service` runner |
 
@@ -560,8 +560,10 @@ The BO4E `Angebot` comes from `GET /angebote/{id}/comparison`, not from a tool.
 
 ```toml
 # productd.toml
-port   = 9080
 tenant = "9910000000002"   # operator LF BDEW-Codenummer
+
+[http]
+addr = "0.0.0.0:9080"
 
 [database]
 url = "postgresql://productd:secret@db:5432/productd"

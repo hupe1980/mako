@@ -11,6 +11,7 @@
 //! - `GET` — any authenticated caller in the same tenant
 //! - `PUT` — MSB/NB role (`write-melo-msb` Cedar action)
 
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{
@@ -26,7 +27,7 @@ use tracing::info;
 
 use mako_service::cedar::CedarEnforcer;
 
-use crate::handlers::{Claims, MdmErrorResponse, Tenant};
+use crate::handlers::{Claims, Tenant, mdm_error};
 use crate::pg::PgMeloMsbRepository;
 
 /// Extension alias — concrete type so AFIT dispatches statically.
@@ -57,11 +58,7 @@ pub async fn get_melo_msb_at(
     Query(q): Query<MsbAtQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-melo-msb", &tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let at = match q.at.as_deref() {
         Some(s) => match mako_service::dates::parse_iso_date("at", s) {
@@ -77,16 +74,10 @@ pub async fn get_melo_msb_at(
             "msb_mp_id": msb_mp_id,
         }))
         .into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "no MSB assignment covers this date",
-                "melo_id": melo_id,
-                "at": at.to_string(),
-            })),
-        )
+        Ok(None) => ApiError::not_found("no MSB assignment covers this date")
+            .with_fields(serde_json::json!({ "melo_id": melo_id, "at": at.to_string() }))
             .into_response(),
-        Err(e) => MdmErrorResponse(e).into_response(),
+        Err(e) => mdm_error(e).into_response(),
     }
 }
 
@@ -99,17 +90,13 @@ pub async fn get_melo_msb_history(
     Path(melo_id): Path<String>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-melo-msb", &tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match repo.history(&tenant, &melo_id).await {
         Ok(rows) => {
             Json(serde_json::json!({ "melo_id": melo_id, "history": rows })).into_response()
         }
-        Err(e) => MdmErrorResponse(e).into_response(),
+        Err(e) => mdm_error(e).into_response(),
     }
 }
 
@@ -123,11 +110,7 @@ pub async fn put_melo_msb(
     Json(body): Json<PutMeloMsbBody>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "write-melo-msb", &tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let valid_from = match mako_service::dates::parse_iso_date("valid_from", &body.valid_from) {
         Ok(d) => d,
@@ -139,6 +122,6 @@ pub async fn put_melo_msb(
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => MdmErrorResponse(e).into_response(),
+        Err(e) => mdm_error(e).into_response(),
     }
 }

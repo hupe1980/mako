@@ -80,9 +80,9 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;
+use mako_service::{ApiError, Json};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
@@ -1050,22 +1050,14 @@ pub async fn put_smgw_session(
 ) -> impl IntoResponse {
     let tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "write-meter-reads", tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     // Parse and validate the session payload.
     let session: SmgwSession = match serde_json::from_value(req.clone()) {
         Ok(s) => s,
         Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": format!("invalid SmgwSession: {e}") })),
-            )
-                .into_response();
+            return ApiError::unprocessable(format!("invalid SmgwSession: {e}")).into_response();
         }
     };
 
@@ -1085,7 +1077,7 @@ pub async fn put_smgw_session(
     let session_json = match serde_json::to_value(&session) {
         Ok(v) => v,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            return ApiError::internal(e).into_response();
         }
     };
 
@@ -1112,7 +1104,7 @@ pub async fn put_smgw_session(
     .await
     {
         tracing::warn!(error = %e, malo_id, "edmd: put_smgw_session: DB error");
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return ApiError::internal(e).into_response();
     }
 
     // Immediate compliance check on upsert, so a newly registered gateway does
@@ -1218,11 +1210,7 @@ pub async fn get_smgw_session(
 ) -> impl IntoResponse {
     let tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let row = match sqlx::query(
@@ -1235,15 +1223,11 @@ pub async fn get_smgw_session(
     .await
     {
         Ok(r) => r,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let Some(row) = row else {
-        return (
-            StatusCode::NOT_FOUND,
-            format!("SmgwSession for MaLo {malo_id} not found"),
-        )
-            .into_response();
+        return ApiError::NotFound.into_response();
     };
 
     let device_id: String = row.get("device_id");
@@ -1327,11 +1311,7 @@ pub async fn list_smgw_sessions(
 ) -> impl IntoResponse {
     let tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     // Filters are pushed into SQL and the result is bounded. Applying them with
@@ -1397,7 +1377,7 @@ pub async fn list_smgw_sessions(
             }))
             .into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1419,11 +1399,7 @@ pub async fn get_smgw_compliance(
 ) -> impl IntoResponse {
     let tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let scanned_at = OffsetDateTime::now_utc();
@@ -1437,7 +1413,7 @@ pub async fn get_smgw_compliance(
     .await
     {
         Ok(r) => r,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let session_count = rows.len();
@@ -1498,11 +1474,7 @@ pub async fn post_smgw_compliance_scan(
 ) -> impl IntoResponse {
     let tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "write-meter-reads", tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let report = run_cls_compliance_sweep(

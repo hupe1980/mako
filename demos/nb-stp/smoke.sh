@@ -272,7 +272,7 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
     [[ "$code" == "200" || "$code" == "201" ]] || \
         fail "PUT /api/v1/malos/$SMOKE_MALO_ID returned $code: $(body "$resp")"
     VERSION=$(body "$resp" | jq -r '.version')
-    pass "PUT /api/v1/malos/$SMOKE_MALO_ID → $code  (version=$VERSION, makod cache push triggered)"
+    pass "PUT /api/v1/malos/$SMOKE_MALO_ID → $code  (version=$VERSION, makod cache follows via the fan-out)"
 
     # ── P2b. PUT MaLo grid record (required by the grid-record precondition) ──────────
     #
@@ -662,7 +662,7 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
     MARKTD_STATUS=$(body "$resp" | jq -r '.status // "ok"')
     pass "GET $MARKTD_URL/health → $MARKTD_STATUS"
 
-    # ── m2. Verify MaLo was stored and makod cache push triggered (P2 above) ──
+    # ── m2. Verify MaLo was stored (P2 above) ──
     info "[m2/m5] GET MaLo $SMOKE_MALO_ID (verify pre-load + rollenzuordnung)"
     resp=$(marktd_get "/api/v1/malos/$SMOKE_MALO_ID")
     code=$(status "$resp")

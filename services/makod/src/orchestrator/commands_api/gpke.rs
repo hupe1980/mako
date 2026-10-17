@@ -1089,8 +1089,9 @@ pub(super) async fn dispatch_lf_activate(
 /// Report physical Sperrung/Entsperrung execution to the NB-role
 /// `GpkeSperrungWorkflow` (ORDERS 17115/17117 → IFTSTA 21039).
 ///
-/// Called by `sperrd` after a field technician confirms (or fails to carry out)
-/// the disconnection, and by ERP operators driving `sperrd` manually.
+/// Called by `processd`'s Sperrauftrag queue after a field technician confirms
+/// (or fails to carry out) the disconnection, and by ERP operators driving it
+/// manually.
 ///
 /// **Role: NB.** This is the *grid operator* confirming execution of an order it
 /// received from the Lieferant — not the LF issuing one. The LF-side lifecycle is
@@ -1109,7 +1110,7 @@ pub(super) async fn dispatch_gpke_sperrung_ausfuehrung(
 ) -> Result<DispatchOutcome, DispatchError> {
     let malo_id = extract_malo_id(payload)?;
 
-    // `note` is what sperrd sends; `reason` is the ERP-facing alias.
+    // `note` is what processd sends; `reason` is the ERP-facing alias.
     let reason = payload
         .get("reason")
         .or_else(|| payload.get("note"))

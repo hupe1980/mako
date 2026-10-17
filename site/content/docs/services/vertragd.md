@@ -106,7 +106,7 @@ market role and a matching tenant.
 > IdP that puts a market role on a customer token makes that customer an operator
 > of this service, with reach across every customer in the tenant.
 
-### The 24 actions
+### The 25 actions
 
 Each is checked with `authorize(&enforcer, &claims, …)` in its handler; the
 policy reads only `context.*`. A denial is a `403`.
@@ -135,6 +135,7 @@ policy reads only `context.*`. A denial is a `403`.
 | `read-outbound-tasks` | `GET /outbound/dead` |
 | `retry-outbound-task` | `POST /outbound/dead/{id}/retry` |
 | `use-mcp` | the whole `/mcp` surface, gated once by the shared `McpAuth` middleware rather than per tool |
+| `read-policy` | `GET /api/v1/policy` — the operator policy report, checked by the shared `mako_service::policy` router |
 
 ᶜ = customer-scoped: tenant equality only, no market role.
 
@@ -391,6 +392,36 @@ still owed (it would drop the notice and the Sonderkündigungsrecht).
 
 `GET /api/v1/kunden/{id}/export` returns Kunde, Person, Zahlungsinformation,
 portal identities, contracts and components; any failing read fails the export.
+Beside them it states `datenuebertragbarkeit` — which of those categories form
+the Art. 20 document — and `automatisierte_entscheidungen` — the Art. 15
+Abs. 1 lit. h statement — each entry with the reading it was decided under.
+
+### `[policy.dsr]` {#policy-dsr}
+
+Two questions the DSGVO text leaves to the data protection officer, set per
+category and per process:
+
+| Key | Default | Reading |
+|---|---|---|
+| `portabel.<kategorie>` | `true` | Whether the category counts as *bereitgestellt* under Art. 20 Abs. 1 DSGVO and so belongs to the Art. 20 document. Categories: `kunde`, `person`, `zahlungsinformation`, `identitaeten`, `vertraege`, `komponenten` |
+| `automatisiert.<prozess>` | `true` | Whether the Auskunft states the process as an automated decision under Art. 15 Abs. 1 lit. h i. V. m. Art. 22 Abs. 1 DSGVO. Processes: `mahnwesen`, `sperreskalation` |
+
+Both default to `true` because stating more than a reading requires cannot
+breach Art. 15 or Art. 20, and stating less can. An unknown category or
+process is refused at startup.
+
+```toml
+[policy.dsr.portabel]
+zahlungsinformation = false
+
+[policy.dsr.automatisiert]
+mahnwesen = false
+```
+
+Each entry is logged at startup as `dsr.portabel.<kategorie>` /
+`dsr.automatisiert.<prozess>` with its origin and source, served at
+`GET /api/v1/policy` and by the MCP tool `get_policy`, and listed in
+[Operator policy](@/docs/reference/operator-policy.md).
 
 ### Art. 17 — erasure
 
@@ -553,7 +584,6 @@ conditional on a contract, so the party record lives in
 
 ```toml
 # vertragd.toml
-port     = 9780
 tenant   = "9900357000004"   # data-isolation key (here: the operator's BDEW-Codenummer)
 lf_mp_id = "9900357000004"   # market identity registered on the UTILMD
 
@@ -573,6 +603,9 @@ inbound_secret  = "env:VERTRAGD_INBOUND_SECRET"
 
 max_identitaeten_per_kunde = 50
 
+[http]
+addr = "0.0.0.0:9780"
+
 # § 126b BGB declarant on a rendered notice.
 [absender]
 name         = "Stadtwerke Musterstadt GmbH"
@@ -591,6 +624,9 @@ audience = "vertragd"
 # [mcp]
 # api_key       = "env:VERTRAGD_MCP_API_KEY"
 # api_key_roles = ["LF"]
+
+# [policy.dsr.portabel]          # see [policy.dsr]; every entry defaults to true
+# zahlungsinformation = false
 ```
 
 `tenant` is the isolation key, `lf_mp_id` the market identity on the UTILMD;
@@ -598,7 +634,7 @@ they differ in a shared install.
 
 ## MCP
 
-17 read-only tools and 4 prompts at `/mcp`, behind OIDC or an `[mcp]` key. `compute_kuendigungsfrist` returns the earliest lawful end date for
+18 read-only tools and 4 prompts at `/mcp`, behind OIDC or an `[mcp]` key. `compute_kuendigungsfrist` returns the earliest lawful end date for
 **every** termination reason with the rule that produced it;
 `check_mako_trigger_status` distinguishes a registration still waiting in the
 outbound queue from one the NB has not answered — a distinction an operator

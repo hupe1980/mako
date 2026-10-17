@@ -16,6 +16,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "agentd"
 path = "src/main.rs"
+# `main.rs` is the one `run` call; the daemon and its tests live in the library.
+test = false
 
 [dependencies]
 mako-fristen = { workspace = true }
@@ -44,7 +46,7 @@ secrecy      = { version = "0.10", features = ["serde"] }
 # `openssl rand -base64 32` produces and the one C2SP `signed-note` uses on the
 # wire. Same version `mako-service` verifies Standard Webhooks signatures with.
 base64       = { version = "0.22" }
-agentplane = { version = "0.29", features = [
+agentplane = { version = "0.47", features = [
     # The declaration, and the wires that reach a model and a tool server.
     "manifest", "mcp", "providers",
     # Both journal backends: an embedded file, or one database several
@@ -80,7 +82,7 @@ mako-service = { workspace = true, features = ["testing"] }
 rmcp = { version = "3.1", features = ["server", "transport-streamable-http-server"] }
 # testkit brings FakeProvider, Faulty and the replay assertions. It carries no
 # reqwest dependency, so it resolves independently of the provider drivers.
-agentplane = { version = "0.29", features = [
+agentplane = { version = "0.47", features = [
     "manifest", "mcp", "providers", "redb", "postgres", "cedar", "signing",
     "keyring", "keyring-vault", "http", "push", "witness-http", "testkit",
 ] }

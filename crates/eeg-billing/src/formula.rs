@@ -20,13 +20,13 @@ use crate::scheme::SettlementScheme;
 /// settlement can reach this range; reaching it means the input data is
 /// corrupt, and a silently altered amount would be worse than the panic.
 fn validated_eur(d: Decimal) -> Decimal {
-    // `checked_from_decimal` is exact — it errors on excess precision rather than
+    // `Amount::from_decimal` is exact — it errors on excess precision rather than
     // rounding. This helper's job is to *round* the high-precision settlement
     // product down to the 5-dp money resolution, so it uses the explicit
     // `from_decimal_rounded`; the remaining error arm is a true range overflow,
     // which no physical EEG settlement can reach.
-    EuroAmount::from_decimal_rounded(d, billing::RoundingStrategy::MidpointAwayFromZero)
-        .map(crate::EuroAmount::into_decimal)
+    EuroAmount::from_decimal_rounded(d, billing::Rounding::HalfAwayFromZero)
+        .map(crate::EuroAmount::to_decimal)
         .unwrap_or_else(|_| panic!("settlement amount {d} EUR exceeds the EuroAmount range"))
 }
 
@@ -259,27 +259,37 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
     // across them by installed capacity — and the parts have to add back up to
     // it. Computing each block from its own rounded share does not: three equal
     // blocks of 1500 kWh each take 500.000 and the plant is settled for a
-    // quantity it never fed in. `proportional_split` allocates by largest
+    // quantity it never fed in. `billing::split` allocates by largest
     // remainder, so the parts sum to the total exactly at kWh scale 3.
     //
     // Expired blocks are allocated and then dropped rather than excluded from
     // the split: their capacity still counts towards the plant, and the energy
     // that falls to them is simply no longer eligible.
     //
-    // The shares are kept at full `Decimal` precision — `proportional_split`
-    // requires them to sum to 1, and rounding them first is what breaks that.
-    let shares: Vec<Decimal> = std::iter::once(primary_kwp)
+    // The weights are the installed capacities themselves, so every quota
+    // `kwh · kWpᵢ / Σ kWp` is an exact fraction — no 28-digit share
+    // `kWpᵢ / Σ kWp` is formed first. The quantity is put on the kWh scale
+    // (kaufmännisch) before it is split: `split` refuses a total finer than the
+    // scale it splits at rather than rounding it, and a metered value with a
+    // fourth decimal is a valid Einspeisemenge. A negative quantity is not
+    // settleable and is refused here, because `split` mirrors the sign of a
+    // negative total instead of refusing it.
+    let weights: Vec<Decimal> = std::iter::once(primary_kwp)
         .chain(input.capacity_blocks.iter().map(|b| b.leistung_kwp))
-        .map(|kwp| kwp / total_kwp)
         .collect();
-    let split = |quantity: Decimal| billing::proportional_split(quantity, &shares, 3);
+    let split = |quantity: Decimal| {
+        if quantity.is_sign_negative() && !quantity.is_zero() {
+            return Err(());
+        }
+        billing::split(crate::round_money(quantity, 3), &weights, 3).map_err(|_| ())
+    };
     let (Ok(block_kwh_split), Ok(negative_kwh_split)) = (
         split(total_kwh),
         input
             .kwh_during_negative_epex
-            .map_or_else(|| Ok(vec![Decimal::ZERO; shares.len()]), split),
+            .map_or_else(|| Ok(vec![Decimal::ZERO; weights.len()]), split),
     ) else {
-        // `primary_kwp > 0` and the shares are derived from it, so the only
+        // `primary_kwp > 0` and the weights are the capacities, so the only
         // input that reaches here is a negative Einspeisemenge — which is not a
         // settleable figure, and paying every block zero for it would settle
         // nothing without saying so.

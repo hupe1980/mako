@@ -41,8 +41,10 @@ facts plus the caller's records and return a decision carrying its code and tree
 
 The `role-nb`, `role-lf`, `role-msb`, `role-esa`, `role-mabis` and `role-emob`
 features (all on by default) compile only their own rules, so a role-gated
-binary cannot form a decision it is not entitled to make (§ 6a EnWG
-informatorische Entflechtung). `role-msb` implies `role-esa`.
+binary cannot answer as a role it was not built for — a misconfiguration fails
+closed. That is not an unbundling control: the confidentiality duty of § 6a
+Abs. 1 EnWG is met by the deployment's access policy, not by a build flag.
+`role-msb` implies `role-esa`.
 
 ## Rules the crate keeps
 

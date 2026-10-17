@@ -41,6 +41,7 @@
 //!
 //! [`EngineContext`]: mako_engine::builder::EngineContext
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -56,6 +57,7 @@ use secrecy::SecretString;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
+use crate::deployment::Rolle;
 use crate::{
     adapters, deadline_dispatch, erp_adapter, ingest_dispatcher, malo_cache,
     party_registry::MpIdRegistry,
@@ -169,102 +171,93 @@ pub(crate) fn lock_data_dir(
 
 // ── build_engine ──────────────────────────────────────────────────────────────
 
-/// Register the compiled-in domain modules and assemble the [`EngineContext`].
-///
-/// Which modules exist is a *build-time* choice: the `role-*` features gate each
-/// `push` below, so a role-scoped binary carries neither the code nor the PID
-/// registrations for roles it does not deploy. The binary SHA therefore
-/// identifies the role scope for a BNetzA audit.
-///
-/// # Panics
-///
-/// Panics when the build selected no Marktrolle at all — such a binary compiles
-/// but routes nothing, and would silently dead-letter every inbound message.
-/// `EngineBuilder::build` additionally panics when a registered module declares
-/// a message type with no active `edi-energy` profile.
-/// Every domain module this build registers, in registration order.
-///
-/// **The single list.** Production calls it from [`build_engine`]; the
-/// coverage guards in `tests/` call it instead of restating the stack. A copy
-/// falls behind when a module is added, and an omitted module registers
-/// workflows whose deadlines nothing dispatches and silently shrinks every
-/// figure the guards pin, so the list has to exist once.
-///
-/// Each entry is gated on the deployment roles that need it, so a role-scoped
-/// build registers fewer. The `default` feature set names every role, which is
-/// why a default build — what the guards run — yields the full stack.
-///
-/// Role → module mapping:
-/// - `role-lf-strom` / `role-nb-strom` → `GpkeModule` (both sides; the
-///   `PidRouter` separates them by Marktrolle)
-/// - `role-msb-*` / `role-nb-*` / `role-esa-strom` → `WimModule` (WiM in
-///   beiden Sparten, incl. the WiM Teil 2 ESA leg)
-/// - `role-lf-gas` / `role-nb-gas` → `GeliGasModule`
-/// - `role-nb-gas` → `GaBiGasModule`
-/// - `role-nb-strom` → `MabisModule`, `RedispatchModule`
-/// - `role-nb-strom` / `role-lf-strom` → `EmobModule` (all three parties to
-///   Modell 2 answer one of its legs)
-///
-/// # Panics
-///
-/// When the build selected no Marktrolle at all, so every module is gated out
-/// and the `PidRouter` would be empty.
-#[must_use]
-#[expect(
-    clippy::vec_init_then_push,
-    reason = "the pushes are #[cfg]-gated and cannot be merged into a vec![] literal"
-)]
-pub fn production_modules() -> Vec<Box<dyn mako_engine::builder::EngineModule>> {
-    #[allow(
-        unused_mut,
-        reason = "a build with no role feature pushes no module; it is refused by the panic below"
-    )]
-    let mut m: Vec<Box<dyn mako_engine::builder::EngineModule>> = Vec::new();
+/// One engine module and the deployment roles that register it.
+pub struct ModuleRow {
+    /// The module's [`EngineModule::name`](mako_engine::builder::EngineModule::name).
+    pub name: &'static str,
+    /// The roles whose declaration registers it. Non-empty.
+    pub rollen: &'static [Rolle],
+    build: fn() -> Box<dyn mako_engine::builder::EngineModule>,
+}
 
+impl ModuleRow {
+    /// A fresh instance of the module.
+    #[must_use]
+    pub fn build(&self) -> Box<dyn mako_engine::builder::EngineModule> {
+        let module = (self.build)();
+        debug_assert_eq!(module.name(), self.name, "a row names the module it builds");
+        module
+    }
+}
+
+/// Every domain module makod can register, with the roles that register it, in
+/// registration order.
+///
+/// **The single list.** [`production_modules`] and [`modules_for`] read it; the
+/// coverage guards in `tests/` call [`production_modules`] instead of restating
+/// the stack. A copy falls behind when a module is added, and an omitted module
+/// registers workflows whose deadlines nothing dispatches and silently shrinks
+/// every figure the guards pin, so the list has to exist once.
+///
+/// The roles are `[deployment] rollen` tokens ([`Rolle`]); which ones a
+/// deployment plays is a runtime declaration, checked against `[[party]]` by
+/// [`crate::deployment::validate_rollen`]. `tests/it/startup_smoke.rs` pins
+/// each role's module set.
+pub const MODULE_TABLE: &[ModuleRow] = &[
     // GpkeModule — GPKE 55001–55018/55022–55024/55555/55600–55609 +
     //   INVOIC 31001/31002/31005/31006 + ORDERS Sperrung 17115–17117 +
     //   ORDERS/ORDRSP Konfiguration 17134/17135/19001/19002 + PARTIN
     //   37000–37006. Both sides of GPKE live here; the PidRouter separates
     //   them by Marktrolle.
-    #[cfg(any(feature = "role-lf-strom", feature = "role-nb-strom"))]
-    m.push(Box::new(mako_gpke::GpkeModule));
-
+    ModuleRow {
+        name: "gpke",
+        rollen: &[Rolle::LfStrom, Rolle::NbStrom],
+        build: || Box::new(mako_gpke::GpkeModule),
+    },
     // WimModule — Messstellenbetrieb in **beiden Sparten**: 55039/55042/
     //   55051/55168 and the Gas twins 44039/44042/44051/44168/44183, ORDERS
     //   Geräteübernahme 17001–17011, INSRPT 23001–23012, INVOIC
     //   31009/31003/31004, and the ESA-side Wertebestellung of WiM Teil 2
     //   Kap. 4. One crate for both, so every WiM role loads it.
-    #[cfg(any(
-        feature = "role-msb-strom",
-        feature = "role-msb-gas",
-        feature = "role-nb-strom",
-        feature = "role-nb-gas",
-        feature = "role-esa-strom",
-    ))]
-    m.push(Box::new(mako_wim::WimModule));
-
+    ModuleRow {
+        name: "wim",
+        rollen: &[
+            Rolle::MsbStrom,
+            Rolle::MsbGas,
+            Rolle::NbStrom,
+            Rolle::NbGas,
+            Rolle::EsaStrom,
+        ],
+        build: || Box::new(mako_wim::WimModule),
+    },
     // GeliGasModule — GeLi Gas 3.0 44001–44024 (incl. the Stornierung it
     //   shares with WiM Gas) + ORDERS Sperrung Gas 17115–17117 + PARTIN Gas
     //   37008–37014 + INVOIC 31011 (AWH Rechnung).
-    #[cfg(any(feature = "role-lf-gas", feature = "role-nb-gas"))]
-    m.push(Box::new(mako_geli_gas::GeliGasModule));
-
+    ModuleRow {
+        name: "geli-gas",
+        rollen: &[Rolle::LfGas, Rolle::NbGas],
+        build: || Box::new(mako_geli_gas::GeliGasModule),
+    },
     // GaBiGasModule — INVOIC 31007/31008/31010 + REMADV 33001 +
     //   COMDIS 29001 + MSCONS 13013 Allokationsliste. BKV/MGV interactions
     //   are GNB-side (BK7-24-01-008).
-    #[cfg(feature = "role-nb-gas")]
-    m.push(Box::new(mako_gabi_gas::GaBiGasModule));
-
+    ModuleRow {
+        name: "mako-gabi-gas",
+        rollen: &[Rolle::NbGas],
+        build: || Box::new(mako_gabi_gas::GaBiGasModule),
+    },
     // MabisModule — Bilanzkreisabrechnung Strom (BK6-24-174): MSCONS
     //   Summenzeitreihen, IFTSTA Datenstatus, the MaBiS-ZP lifecycle.
-    #[cfg(feature = "role-nb-strom")]
-    m.push(Box::new(mako_mabis::MabisModule));
-
+    ModuleRow {
+        name: "mabis",
+        rollen: &[Rolle::NbStrom],
+        build: || Box::new(mako_mabis::MabisModule),
+    },
     // EmobModule — NZR-EMob / Modell 2 (BK6-20-160 Anlage 6, BK6-24-267):
     //   UTILMD 55238–55243, the three legs that move a Marktlokation into
     //   and out of the LPB's Bilanzierungsgebiet.
     //
-    //   Loaded for **both** Strom roles, because all three parties to the
+    //   Registered for **both** Strom roles, because all three parties to the
     //   model answer one of the legs: the VNB answers the Anmeldung and the
     //   Abmeldung, the **LF** answers the Beendigung der Zuordnung (55240),
     //   and the LPB — whose wire role is NB — receives both its own
@@ -275,34 +268,64 @@ pub fn production_modules() -> Vec<Box<dyn mako_engine::builder::EngineModule>> 
     //   answered from `E_0102`/`E_0103` — and `MabisModule` registers them
     //   as the `ZpSerie::NetzgangzeitreiheNzr` family of
     //   `mabis-zp-lifecycle`.
-    #[cfg(any(feature = "role-nb-strom", feature = "role-lf-strom"))]
-    m.push(Box::new(mako_emob::EmobModule));
-
+    ModuleRow {
+        name: "emob",
+        rollen: &[Rolle::NbStrom, Rolle::LfStrom],
+        build: || Box::new(mako_emob::EmobModule),
+    },
     // RedispatchModule — Redispatch 2.0 (§§ 13/13a/14 EnWG); XML routing +
     //   IFTSTA 21037/21038. VNB, ANB and ÜNB share the NB Strom deployment
     //   role; LF, MSB and gas-only deployments have no §13a obligations
     //   (BK6-20-059/060/061).
-    #[cfg(feature = "role-nb-strom")]
-    m.push(Box::new(mako_redispatch::RedispatchModule));
+    ModuleRow {
+        name: "redispatch",
+        rollen: &[Rolle::NbStrom],
+        build: || Box::new(mako_redispatch::RedispatchModule),
+    },
+];
 
-    // A binary with no role compiles but can route nothing — every module
-    // is gated out and the PidRouter is empty. Catch it here rather than
-    // shipping a daemon that silently dead-letters every inbound message.
-    assert!(
-        !m.is_empty(),
-        "this build selected no Marktrolle: every domain module was gated out. \
-         Build with the default features, or name at least one role feature \
-         (e.g. --no-default-features --features role-lf)."
-    );
-    m
+/// Every domain module makod can register — the union over all roles, in
+/// registration order.
+///
+/// The coverage guards and the name → driver tables read this: they describe
+/// what the binary can run, which is every module whatever a deployment
+/// declares. A deployment registers [`modules_for`] its `rollen`.
+#[must_use]
+pub fn production_modules() -> Vec<Box<dyn mako_engine::builder::EngineModule>> {
+    MODULE_TABLE.iter().map(ModuleRow::build).collect()
 }
 
+/// The modules a deployment declaring `rollen` registers: every row naming one
+/// of them, in registration order.
+#[must_use]
+pub fn modules_for(rollen: &BTreeSet<Rolle>) -> Vec<Box<dyn mako_engine::builder::EngineModule>> {
+    MODULE_TABLE
+        .iter()
+        .filter(|row| row.rollen.iter().any(|r| rollen.contains(r)))
+        .map(ModuleRow::build)
+        .collect()
+}
+
+/// Register the declared roles' domain modules and assemble the
+/// [`EngineContext`].
+///
+/// # Panics
+///
+/// When `rollen` selects no module — [`crate::deployment::validate_rollen`]
+/// refuses an empty declaration first, and every role registers at least one
+/// module. `EngineBuilder::build` additionally panics when a registered module
+/// declares a message type with no active `edi-energy` profile.
 pub(crate) fn build_engine(
     store: &SlateDbStore,
     dead_letter_sink: mako_engine::store_slatedb::SlateDbDeadLetterSink,
     deployment_roles: mako_engine::marktrolle::DeploymentRoles,
+    rollen: &BTreeSet<Rolle>,
 ) -> MakodCtx {
-    let modules = production_modules();
+    let modules = modules_for(rollen);
+    assert!(
+        !modules.is_empty(),
+        "the declared deployment roles {rollen:?} select no engine module"
+    );
 
     EngineBuilder::with_stores(
         store.clone(),
@@ -445,11 +468,10 @@ pub(crate) fn validate_dispatch_completeness(router: &mako_engine::pid_router::P
             missing.join("\n  ")
         );
     }
-    // Log what this binary actually registers, not only what the dispatcher
-    // could handle. `KNOWN_WORKFLOW_NAMES` is a const array and identical in
-    // every build, so on its own it reads as "all workflows active" even in a
-    // role-scoped deployment that registers a fraction of them. The registered
-    // counts are what identify the binary's role scope for a BNetzA audit.
+    // Log what this deployment actually registers, not only what the
+    // dispatcher could handle. `KNOWN_WORKFLOW_NAMES` is a const array and
+    // identical in every deployment, so on its own it reads as "all workflows
+    // active" even where the declared roles register a fraction of them.
     info!(
         registered_workflows = router.workflow_names().len(),
         registered_pids = router.registered_pids().count(),

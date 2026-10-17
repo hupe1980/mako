@@ -6,6 +6,7 @@
 //! document (§ 14 Abs. 2 Satz 2 UStG Gutschriftverfahren).
 
 use super::*;
+use mako_service::ApiError;
 
 // ── § 41e EnWG dispatch settlement (Art. 17 RL (EU) 2019/944) ─────────────────
 
@@ -111,7 +112,7 @@ async fn record_seen(
         Ok(()) => Ok(()),
         Err(e) => {
             tracing::error!(tx_id, error = %e, "billingd: vpp_dispatch_ledger write FAILED");
-            Err(StatusCode::INTERNAL_SERVER_ERROR.into_response())
+            Err(ApiError::internal(e).into_response())
         }
     }
 }
@@ -454,7 +455,7 @@ pub async fn post_vpp_webhook(
     let event: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, format!("invalid JSON: {e}")).into_response();
+            return ApiError::bad_request(format!("invalid JSON: {e}")).into_response();
         }
     };
     let data = event
@@ -474,11 +475,10 @@ pub async fn post_vpp_webhook(
         .map(str::to_owned)
     else {
         tracing::warn!("billingd: vpp-dispatch webhook — event carries neither data.tx_id nor id");
-        return (
-            StatusCode::BAD_REQUEST,
+        return ApiError::bad_request(
             "the event must carry data.tx_id (or a CloudEvent id) as its idempotency key",
         )
-            .into_response();
+        .into_response();
     };
 
     // ── 3. Idempotency check ───────────────────────────────────────────────────
@@ -492,11 +492,7 @@ pub async fn post_vpp_webhook(
             // Fail closed: proceeding without the ledger answer risks billing
             // the same dispatch twice. The sender retries on 5xx.
             tracing::error!(tx_id, error = %e, "billingd: vpp_dispatch_ledger check failed");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "idempotency ledger unavailable — retry later",
-            )
-                .into_response();
+            return ApiError::internal(e).into_response();
         }
     }
 
@@ -573,7 +569,7 @@ pub async fn post_vpp_webhook(
             // retry can settle it once vertragd is back. Recording here would
             // consume the idempotency key and silently drop the dispatch.
             tracing::error!(tx_id, error = %e, "billingd: Aggregatorvertrag lookup failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(e).into_response();
         }
     };
 
@@ -673,7 +669,7 @@ pub async fn post_vpp_webhook(
         Ok(nr) => nr,
         Err(e) => {
             tracing::error!(tx_id, error = %e, "billingd: could not allocate a Rechnungsnummer");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(e).into_response();
         }
     };
 
@@ -718,7 +714,7 @@ pub async fn post_vpp_webhook(
         Ok(v) => v,
         Err(e) => {
             tracing::error!(tx_id, error = %e, "billingd: vpp invoice build failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(e).into_response();
         }
     };
     let position_netto = invoice.netto_eur;
@@ -734,7 +730,7 @@ pub async fn post_vpp_webhook(
         Ok(tx) => tx,
         Err(e) => {
             tracing::error!(tx_id, error = %e, "billingd: vpp auto-billing tx begin failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(e).into_response();
         }
     };
     let record_id = match insert_billing_record(
@@ -758,7 +754,7 @@ pub async fn post_vpp_webhook(
         Ok(id) => id,
         Err(e) => {
             tracing::error!(tx_id, error = %e, "billingd: vpp auto-billing insert failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(e).into_response();
         }
     };
 
@@ -768,7 +764,7 @@ pub async fn post_vpp_webhook(
         crate::pg::record_vpp_dispatch(&mut *tx, &tx_id, &cfg.tenant, Some(record_id)).await
     {
         tracing::error!(tx_id, error = %e, "billingd: vpp_dispatch_ledger write failed");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return ApiError::internal(e).into_response();
     }
 
     // ── 9. Enqueue de.vpp.settlement.berechnet ────────────────────────────────
@@ -795,18 +791,18 @@ pub async fn post_vpp_webhook(
         );
         if let Err(e) = issue_record(&mut tx, cfg, record_id, &ce).await {
             tracing::error!(tx_id, error = %e, "billingd: vpp settlement issuance failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return ApiError::internal(e).into_response();
         }
     }
     if let Err(e) =
         crate::einvoice::store(&mut tx, record_id, &invoice, cfg, &contract.malo_id).await
     {
         tracing::error!(%record_id, error = ?e, "billingd: attach en16931 model failed");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return ApiError::internal(e).into_response();
     }
     if let Err(e) = tx.commit().await {
         tracing::error!(tx_id, error = %e, "billingd: vpp auto-billing commit failed");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return ApiError::internal(e).into_response();
     }
 
     tracing::info!(

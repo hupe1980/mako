@@ -7,146 +7,161 @@
 //! (category `E`) — but the document, with its VAT breakdown (EN 16931 BG-23), is
 //! required in every case. The settlement *amount* alone was never a legal document.
 //!
-//! The [`settlement_to_gutschrift`] function assembles a [`billing::BillingDocument`]
-//! (positions + the VAT layers for the operator's tax status) and renders it as a
-//! BO4E [`rubo4e::current::Rechnung`]. The `billing` crate does the money and VAT
-//! (shared with energy-/grid-billing); the BO4E rendering below is EEG-specific and
-//! lives here — this is the crate's own `bo4e` bridge, the same pattern
-//! `energy-billing::Invoice::to_rechnung` and `grid_billing::bo4e::into_rechnung`
-//! already follow.
+//! [`settlement_to_gutschrift`] builds the [`billing::Document`] (the positions
+//! under the VAT treatment of the operator's tax status, see
+//! [`crate::bridge::settlement_document`]) and renders it, with the
+//! [`GutschriftHeader`], as a BO4E [`rubo4e::current::Rechnung`]. `billing`
+//! derives the money and VAT once (shared with energy-/grid-billing); the header
+//! and the BO4E rendering are EEG-specific and live here — this is the crate's
+//! own `bo4e` bridge, the same pattern `energy-billing::Invoice::to_rechnung`
+//! and `grid_billing::bo4e::into_rechnung` already follow.
 
-use billing::{BillingDocument, BillingError, DocumentMeta, LineItem, PricingModel, TaxCategory};
-use grid_billing::RoundMoney;
+use billing::{Amount, Document, TaxCategory};
 use rubo4e::current as bo;
 use rust_decimal::Decimal;
+use time::Date;
 
+use crate::bridge::settlement_document;
 use crate::model::SettleOutput;
-use crate::tariff::EegSettleTariff;
-use crate::ust::{VatStatus, ust_tax_layers};
+use crate::ust::VatStatus;
+
+/// The document facts of a Gutschrift that `billing` does not derive.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GutschriftHeader {
+    /// Gutschriftnummer (BO4E `rechnungsnummer`).
+    pub nummer: String,
+    /// Title, typically the settled month (BO4E `rechnungstitel`).
+    pub titel: String,
+    /// The settled period, first and last day inclusive.
+    pub zeitraum: Option<(Date, Date)>,
+    /// Rechnungsdatum — § 14 Abs. 4 Nr. 3 UStG.
+    pub rechnungsdatum: Option<Date>,
+    /// Fälligkeitsdatum.
+    pub faelligkeitsdatum: Option<Date>,
+    /// MP-ID of the Netzbetreiber, who issues the Gutschrift.
+    pub aussteller: Option<String>,
+    /// Identifier of the Anlagenbetreiber, who receives it.
+    pub empfaenger: Option<String>,
+}
+
+/// Why a Gutschrift cannot be assembled.
+#[derive(Debug, thiserror::Error)]
+pub enum GutschriftError {
+    /// `billing` refused the document (an amount outside the representable range).
+    #[error("Gutschrift document: {0}")]
+    Billing(#[from] billing::Error),
+    /// The settled period ends before it starts.
+    #[error("Gutschrift period ends {to} before it starts {from}")]
+    PeriodReversed {
+        /// First day.
+        from: Date,
+        /// Last day.
+        to: Date,
+    },
+}
 
 /// Render an EEG settlement as a §14 UStG Gutschrift (`rubo4e::current::Rechnung`).
 ///
-/// `vat` selects the tax layers (Regelbesteuerung 19 % `S` / §19 Kleinunternehmer
-/// exempt `E`); `meta` carries the document facts (Gutschrift number, period, dates,
-/// NB = `issuer_id`, Anlagenbetreiber = `recipient_id`). For a settlement with no
-/// billable positions (NoData / PriceMissing) the Rechnung has no positions — the
-/// caller decides whether to issue it.
+/// `vat` selects the VAT treatment (Regelbesteuerung 19 % `S` / §19
+/// Kleinunternehmer exempt `E`); `header` carries the document facts. For a
+/// settlement with no billable positions (NoData / PriceMissing) the Rechnung
+/// has no positions — the caller decides whether to issue it.
 ///
 /// # Errors
 ///
-/// Propagates any [`BillingError`] from document assembly (e.g. a position amount
-/// outside the representable range).
+/// [`GutschriftError`] when the document cannot be built or the period is
+/// reversed.
 pub fn settlement_to_gutschrift(
     output: &SettleOutput,
     vat: VatStatus,
-    meta: DocumentMeta,
-) -> Result<bo::Rechnung, BillingError> {
-    Ok(settlement_to_gutschrift_with_document(output, vat, meta)?.0)
+    header: &GutschriftHeader,
+) -> Result<bo::Rechnung, GutschriftError> {
+    Ok(settlement_to_gutschrift_with_document(output, vat, header)?.0)
 }
 
-/// The Gutschrift **and** the [`BillingDocument`] it came from, for callers that
-/// also want the typed totals (net / tax / gross) for a ledger entry without
+/// The Gutschrift **and** the [`Document`] it came from, for callers that also
+/// want the typed totals (BT-109 / BT-110 / BT-112) for a ledger entry without
 /// re-parsing the BO4E form.
 ///
 /// # Errors
 ///
-/// Propagates any [`BillingError`] from document assembly.
+/// As [`settlement_to_gutschrift`].
 pub fn settlement_to_gutschrift_with_document(
     output: &SettleOutput,
     vat: VatStatus,
-    meta: DocumentMeta,
-) -> Result<(bo::Rechnung, BillingDocument), BillingError> {
-    let positions = EegSettleTariff::new(output).positions(&())?.into_inner();
-    let doc = BillingDocument::from_positions(meta, positions, ust_tax_layers(vat), vec![])?;
-    let rechnung = document_to_rechnung(&doc)?;
+    header: &GutschriftHeader,
+) -> Result<(bo::Rechnung, Document), GutschriftError> {
+    if let Some((from, to)) = header.zeitraum
+        && to < from
+    {
+        return Err(GutschriftError::PeriodReversed { from, to });
+    }
+    let doc = settlement_document(output, vat)?;
+    let rechnung = document_to_rechnung(&doc, header)?;
     Ok((rechnung, doc))
 }
 
-/// Map the assembled [`BillingDocument`] to the BO4E Gutschrift.
+/// An amount the EN 16931 scale already reduced to cents, as a 2-dp `Decimal`.
+fn cents(a: Amount) -> Result<Decimal, billing::Error> {
+    Ok(a.exact::<2>()?.to_decimal())
+}
+
+/// Map the built [`Document`] to the BO4E Gutschrift.
 ///
 /// EEG feed-in is electricity billed per kWh, so the mapping is small: no BDEW
 /// Artikelnummer, one unit. The per-position `legal_basis` (`§21 EEG 2023`, …) and
 /// the party MP-IDs ride as round-trip-preserved extension data BO4E has no field
-/// for.
-fn document_to_rechnung(doc: &BillingDocument) -> Result<bo::Rechnung, BillingError> {
-    let meta = &doc.meta;
-
+/// for. Every amount is the document's own, derived once at two decimals
+/// (EN 16931 BR-DEC); nothing is rounded here.
+fn document_to_rechnung(
+    doc: &Document,
+    header: &GutschriftHeader,
+) -> Result<bo::Rechnung, GutschriftError> {
     let rechnungspositionen: Vec<bo::Rechnungsposition> = doc
-        .net_positions()
+        .lines()
         .iter()
         .enumerate()
-        .map(|(i, p)| position_to_bo4e(i + 1, p))
-        .collect();
+        .map(|(i, line)| position_to_bo4e(i + 1, line, doc.line_net(i)))
+        .collect::<Result<_, _>>()?;
 
     let steuerbetraege: Vec<bo::Steuerbetrag> = doc
-        .tax_breakdown()
+        .vat_groups()
         .iter()
-        .map(|e| bo::Steuerbetrag {
-            // BT-116 / BT-117 are document-level amounts: EN 16931 BR-DEC-19 and
-            // BR-DEC-20 cap them at two decimals, and a third of a cent is not
-            // bankable in any case.
-            basiswert: Some(e.taxable_base.into_decimal().round_kfm(2)),
-            steuerwert: Some(e.tax_amount.into_decimal().round_kfm(2)),
-            // BO4E carries the rate as a percentage (BT-119); billing stores a fraction.
-            steuersatz: Some(e.rate * Decimal::ONE_HUNDRED),
-            steuerart: Some(match e.category {
-                TaxCategory::ReverseCharge => bo::Steuerart::Rcv,
-                _ => bo::Steuerart::Ust,
-            }),
-            waehrungscode: Some(bo::Waehrungscode::Eur),
-            ..Default::default()
-        })
-        .collect();
-
-    // EN 16931 BR-DEC-14 / -13 / -15: BT-109, BT-110 and BT-112 carry at most two
-    // decimals. 81.10 net at 19 % is 15.409 EUR of VAT — a figure no bank can
-    // move — so the cent rounding happens here, once, and the gross is the sum of
-    // the two rounded parts rather than a third independently rounded number.
-    let taxable_total = doc.taxable_total()?.into_decimal().round_kfm(2);
-    let vat_total = doc.vat_total()?.into_decimal().round_kfm(2);
-    let non_vat_total = (doc.gross_total().into_decimal()
-        - doc.taxable_total()?.into_decimal()
-        - doc.vat_total()?.into_decimal())
-    .round_kfm(2);
-
-    let issue_date = meta
-        .issue_date
-        .as_deref()
-        .map(|d| document_date("issue_date", d))
-        .transpose()?;
-    let due_date = meta
-        .due_date
-        .as_deref()
-        .map(|d| document_date("due_date", d))
-        .transpose()?;
-    let rechnungsperiode = meta
-        .period
-        .as_ref()
-        .map(|per| -> Result<bo::Zeitraum, BillingError> {
-            Ok(bo::Zeitraum {
-                startdatum: Some(document_date("period.from", &per.from)?),
-                enddatum: Some(document_date("period.to", &per.to)?),
+        .map(|g| -> Result<bo::Steuerbetrag, billing::Error> {
+            Ok(bo::Steuerbetrag {
+                basiswert: Some(cents(g.taxable_base())?),
+                steuerwert: Some(cents(g.tax())?),
+                // BT-119, a percentage on both sides.
+                steuersatz: Some(g.rate_percent().value()),
+                steuerart: Some(match g.category() {
+                    TaxCategory::ReverseCharge => bo::Steuerart::Rcv,
+                    _ => bo::Steuerart::Ust,
+                }),
+                waehrungscode: Some(bo::Waehrungscode::Eur),
                 ..Default::default()
             })
         })
-        .transpose()?;
+        .collect::<Result<_, _>>()?;
+
+    let rechnungsperiode = header.zeitraum.map(|(from, to)| bo::Zeitraum {
+        startdatum: Some(from),
+        enddatum: Some(to),
+        ..Default::default()
+    });
 
     let mut rechnung = bo::Rechnung {
         typ: Some(bo::BoTyp::Rechnung),
         sparte: Some(bo::Sparte::Strom),
-        rechnungsnummer: non_empty(&meta.invoice_number),
-        rechnungstitel: non_empty(&meta.period_label),
-        rechnungsdatum: issue_date.and_then(as_bo4e_timestamp),
-        faelligkeitsdatum: due_date.and_then(as_bo4e_timestamp),
+        rechnungsnummer: non_empty(&header.nummer),
+        rechnungstitel: non_empty(&header.titel),
+        rechnungsdatum: header.rechnungsdatum.and_then(as_bo4e_timestamp),
+        faelligkeitsdatum: header.faelligkeitsdatum.and_then(as_bo4e_timestamp),
         rechnungsperiode,
-        // BO4E gesamtnetto/-steuer are EN 16931 BT-109 (taxable base) and BT-110
-        // (VAT total). `taxable_total()`/`vat_total()` are the BT-accurate
-        // accessors — unlike `net_total()` (BT-106−BT-107) and `tax_total()` (all
-        // tax layers incl. non-VAT levies), they stay correct if the Gutschrift
-        // ever gains a document charge or a second, non-VAT tax layer.
-        gesamtnetto: Some(betrag(taxable_total)),
-        gesamtsteuer: Some(betrag(vat_total)),
-        gesamtbrutto: Some(betrag(taxable_total + vat_total + non_vat_total)),
+        // BO4E gesamtnetto/-steuer/-brutto are EN 16931 BT-109 (Summe ohne
+        // USt), BT-110 (USt-Summe) and BT-112 (Summe mit USt).
+        gesamtnetto: Some(betrag(cents(doc.tax_exclusive_total())?)),
+        gesamtsteuer: Some(betrag(cents(doc.vat_total())?)),
+        gesamtbrutto: Some(betrag(cents(doc.tax_inclusive_total())?)),
         steuerbetraege: (!steuerbetraege.is_empty()).then_some(steuerbetraege),
         rechnungspositionen: Some(rechnungspositionen),
         ..Default::default()
@@ -168,31 +183,41 @@ fn document_to_rechnung(doc: &BillingDocument) -> Result<bo::Rechnung, BillingEr
             ..Default::default()
         })
     }
-    rechnung.rechnungsersteller = meta.issuer_id.as_ref().map(|id| party(id.value.as_str()));
-    rechnung.rechnungsempfaenger = meta
-        .recipient_id
-        .as_ref()
-        .map(|id| party(id.value.as_str()));
+    rechnung.rechnungsersteller = header.aussteller.as_deref().map(party);
+    rechnung.rechnungsempfaenger = header.empfaenger.as_deref().map(party);
     Ok(rechnung)
 }
 
-fn position_to_bo4e(number: usize, p: &LineItem) -> bo::Rechnungsposition {
-    let positions_menge = p.quantity.as_ref().map(|q| bo::Menge {
-        wert: Some(q.value),
+/// One BO4E position. `billing` carries a negative rate as a negated quantity
+/// at the rate's magnitude (BR-27); BO4E states the metered kWh and the signed
+/// rate, so both are turned back here and their product is unchanged.
+fn position_to_bo4e(
+    number: usize,
+    line: &billing::Line,
+    net: Amount,
+) -> Result<bo::Rechnungsposition, billing::Error> {
+    let q = line.quantity().value();
+    let sign = if q.is_sign_negative() {
+        Decimal::NEGATIVE_ONE
+    } else {
+        Decimal::ONE
+    };
+    let positions_menge = Some(bo::Menge {
+        wert: Some(q.abs()),
         einheit: Some(bo::Mengeneinheit::Kwh), // EEG feed-in is always kWh
         ..Default::default()
     });
-    let einzelpreis = p.unit_price.as_ref().map(|up| bo::Preis {
-        wert: Some(up.value),
+    let einzelpreis = Some(bo::Preis {
+        wert: Some(sign * line.price().price().value()),
         einheit: Some(bo::Waehrungseinheit::Eur),
         ..Default::default()
     });
     let mut pos = bo::Rechnungsposition {
         positionsnummer: Some(number as i64),
-        positionstext: non_empty(&p.description),
+        positionstext: non_empty(line.description()),
         positions_menge,
         einzelpreis,
-        gesamtpreis: Some(betrag(p.net_amount.into_decimal())),
+        gesamtpreis: Some(betrag(cents(net)?)),
         ..Default::default()
     };
     // The legal basis (§21 EEG 2023, …) is the audit record of why the rate
@@ -200,7 +225,7 @@ fn position_to_bo4e(number: usize, p: &LineItem) -> bo::Rechnungsposition {
     // `mako:` namespace, not as a bare `_additional` key: an unprefixed
     // `rechtlicheGrundlage` is indistinguishable from a field BO4E might define
     // and from one the counterparty's own system writes.
-    if let Some(lb) = p.get_meta("legal_basis") {
+    if let Some(lb) = line.label("legal_basis") {
         pos.zusatz_attribute
             .get_or_insert_with(Vec::new)
             .push(bo::ZusatzAttribut {
@@ -209,7 +234,7 @@ fn position_to_bo4e(number: usize, p: &LineItem) -> bo::Rechnungsposition {
                 ..Default::default()
             });
     }
-    pos
+    Ok(pos)
 }
 
 fn betrag(wert: Decimal) -> bo::Betrag {
@@ -238,50 +263,30 @@ fn non_empty(s: &str) -> Option<String> {
 /// becomes the previous day the moment someone converts it.
 ///
 /// `None` for a year outside RFC 3339's `0000`–`9999`, which the field
-/// serialises as. The field is optional and an invoice with no billing period
-/// has no issue date, so it is omitted rather than made fatal — rejecting a
-/// periodless invoice is the engine's job, not the serializer's.
+/// serialises as. The field is optional, so it is omitted rather than made
+/// fatal — rejecting such a date is the caller's job, not the serializer's.
 fn as_bo4e_timestamp(date: time::Date) -> Option<time::OffsetDateTime> {
     (0..=9999)
         .contains(&date.year())
         .then(|| date.midnight().assume_utc())
 }
 
-/// A document date in `meta`, as `YYYY-MM-DD` optionally followed by a time.
-///
-/// A malformed one is refused rather than dropped: the Gutschrift would
-/// otherwise go out without the date it was given, and nothing would say why.
-/// `eeg-billing` sits below `mako-service`, so it cannot share that crate's
-/// request-boundary parser; the date reaches it already inside a
-/// [`DocumentMeta`] built by the caller.
-fn document_date(field: &str, s: &str) -> Result<time::Date, BillingError> {
-    let fmt = time::macros::format_description!("[year]-[month]-[day]");
-    s.get(..10)
-        .filter(|_| s.len() == 10 || s.as_bytes()[10] == b'T' || s.as_bytes()[10] == b' ')
-        .and_then(|d| time::Date::parse(d, fmt).ok())
-        .ok_or_else(|| BillingError::InvalidInput {
-            reason: format!("{field} must be an ISO 8601 date (YYYY-MM-DD), got {s:?}"),
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{SettleInput, SettlementScheme, calculate_settlement};
-    use billing::{Currency, Period};
     use rust_decimal::dec;
+    use time::macros::date;
 
-    fn meta() -> DocumentMeta {
-        DocumentMeta {
-            invoice_number: "GS-EEG-2026-07-000123".into(),
-            currency: Currency::EUR,
-            period_label: "Juli 2026".into(),
-            period: Some(Period::from_display("2026-07-01", "2026-07-31")),
-            issue_date: Some("2026-08-05".into()),
-            due_date: Some("2026-08-15".into()),
-            issuer_id: Some("9904234560001".into()), // NB MP-ID (issues the Gutschrift)
-            recipient_id: Some("DE00012345678".into()), // Anlagenbetreiber
-            ..Default::default()
+    fn header() -> GutschriftHeader {
+        GutschriftHeader {
+            nummer: "GS-EEG-2026-07-000123".into(),
+            titel: "Juli 2026".into(),
+            zeitraum: Some((date!(2026 - 07 - 01), date!(2026 - 07 - 31))),
+            rechnungsdatum: Some(date!(2026 - 08 - 05)),
+            faelligkeitsdatum: Some(date!(2026 - 08 - 15)),
+            aussteller: Some("9904234560001".into()), // NB MP-ID (issues the Gutschrift)
+            empfaenger: Some("DE00012345678".into()), // Anlagenbetreiber
         }
     }
 
@@ -295,40 +300,29 @@ mod tests {
         })
     }
 
-    /// A document date that is present and malformed is refused: dropping it
-    /// would issue a Gutschrift without the Rechnungsdatum § 14 Abs. 4 Nr. 3
-    /// UStG requires, and nothing would say why it is missing.
+    /// A period that ends before it starts is refused: the Gutschrift would
+    /// otherwise state a Leistungszeitraum (§ 14 Abs. 4 Nr. 6 UStG) no supply
+    /// can have.
     #[test]
-    fn a_malformed_document_date_is_refused_not_dropped() {
-        for broken in [
-            DocumentMeta {
-                issue_date: Some("bald".into()),
-                ..meta()
-            },
-            DocumentMeta {
-                due_date: Some("15.08.2026".into()),
-                ..meta()
-            },
-            DocumentMeta {
-                period: Some(Period::from_display("2026-07-01", "Ende Juli")),
-                ..meta()
-            },
-        ] {
-            assert!(
-                settlement_to_gutschrift(&feed_in_output(), VatStatus::Regelbesteuerung, broken)
-                    .is_err()
-            );
-        }
+    fn a_reversed_period_is_refused() {
+        let broken = GutschriftHeader {
+            zeitraum: Some((date!(2026 - 07 - 31), date!(2026 - 07 - 01))),
+            ..header()
+        };
+        assert!(matches!(
+            settlement_to_gutschrift(&feed_in_output(), VatStatus::Regelbesteuerung, &broken),
+            Err(GutschriftError::PeriodReversed { .. })
+        ));
     }
 
     #[test]
     fn regelbesteuerung_gutschrift_shows_19pct_ust() {
-        let r = settlement_to_gutschrift(&feed_in_output(), VatStatus::Regelbesteuerung, meta())
+        let r = settlement_to_gutschrift(&feed_in_output(), VatStatus::Regelbesteuerung, &header())
             .unwrap();
         assert_eq!(r.rechnungsnummer.as_deref(), Some("GS-EEG-2026-07-000123"));
         assert_eq!(r.sparte, Some(bo::Sparte::Strom));
         assert_eq!(r.gesamtnetto.unwrap().wert, Some(dec!(81.10)));
-        // EN 16931 BR-DEC-13/-14/-15: 81.10 × 19 % = 15.409 → 15.41, gross 96.51.
+        // EN 16931 BR-CO-17: 81.10 × 19 % = 15.409 → 15.41, gross 96.51.
         assert_eq!(r.gesamtsteuer.unwrap().wert, Some(dec!(15.41)));
         assert_eq!(r.gesamtbrutto.unwrap().wert, Some(dec!(96.51)));
         let steuer = r
@@ -343,9 +337,53 @@ mod tests {
         );
     }
 
+    /// The document's own totals are the cent figures the BO4E form states:
+    /// `billing` derives BT-110 once, at the EN 16931 scale, so a ledger entry
+    /// taken from the document (`einsd` stores `vat_total` and
+    /// `tax_inclusive_total`) is 15.41 / 96.51 — the amounts on the Gutschrift
+    /// — and never the unrounded 15.409 / 96.509.
+    #[test]
+    fn the_document_totals_are_the_gutschrift_cents() {
+        let (_, doc) = settlement_to_gutschrift_with_document(
+            &feed_in_output(),
+            VatStatus::Regelbesteuerung,
+            &header(),
+        )
+        .unwrap();
+        assert_eq!(doc.tax_exclusive_total().to_decimal(), dec!(81.10));
+        assert_eq!(doc.vat_total().to_decimal(), dec!(15.41));
+        assert_eq!(doc.tax_inclusive_total().to_decimal(), dec!(96.51));
+    }
+
+    /// A negative rate (post-EEG at negative EPEX) is the negated quantity at
+    /// the rate's magnitude inside `billing`, and the BO4E position states the
+    /// metered kWh and the signed rate again.
+    #[test]
+    fn a_negative_rate_bills_the_signed_product() {
+        let output = SettleOutput {
+            status: crate::SettlementStatus::Calculated,
+            positions: vec![crate::SettlePosition {
+                description: "Post-EEG Spot".into(),
+                legal_basis: "\u{00a7}21 Abs. 1 Nr. 3 EEG 2023 (post-F\u{00f6}rderung)".into(),
+                kwh: dec!(100),
+                rate_ct_kwh: dec!(-2.5),
+                eur: dec!(-2.5),
+            }],
+            ..SettleOutput::default()
+        };
+        let (r, doc) =
+            settlement_to_gutschrift_with_document(&output, VatStatus::Kleinunternehmer, &header())
+                .unwrap();
+        assert_eq!(doc.tax_exclusive_total().to_decimal(), dec!(-2.50));
+        let pos = &r.rechnungspositionen.unwrap()[0];
+        assert_eq!(pos.positions_menge.as_ref().unwrap().wert, Some(dec!(100)));
+        assert_eq!(pos.einzelpreis.as_ref().unwrap().wert, Some(dec!(-0.025)));
+        assert_eq!(pos.gesamtpreis.as_ref().unwrap().wert, Some(dec!(-2.50)));
+    }
+
     #[test]
     fn kleinunternehmer_gutschrift_is_exempt_not_missing() {
-        let r = settlement_to_gutschrift(&feed_in_output(), VatStatus::Kleinunternehmer, meta())
+        let r = settlement_to_gutschrift(&feed_in_output(), VatStatus::Kleinunternehmer, &header())
             .unwrap();
         assert_eq!(r.gesamtbrutto.unwrap().wert, r.gesamtnetto.unwrap().wert);
         let steuer = r
@@ -374,7 +412,7 @@ mod tests {
         // Both VAT statuses — they set different `Steuerart` values, which is
         // the branch most likely to reach for an enum BO4E does not define.
         for vat in [VatStatus::Regelbesteuerung, VatStatus::Kleinunternehmer] {
-            let g = settlement_to_gutschrift(&feed_in_output(), vat, meta())
+            let g = settlement_to_gutschrift(&feed_in_output(), vat, &header())
                 .unwrap_or_else(|e| panic!("{vat:?}: settlement failed: {e}"));
             // The outbound gate: out-of-schema enums *and* the BO4E-stated
             // rules — net plus tax is gross, the Steuerbetrag breakdown sums to

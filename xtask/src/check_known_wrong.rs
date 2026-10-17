@@ -258,6 +258,14 @@ const RULES: &[Rule] = &[
         reason: "APERAK AHB 1.1 binds from FV2026-10-01 (profiles/sources.json); cite it, or \
                  admit an edition-specific sentence in ALLOWED",
     },
+    Rule {
+        id: "role-features-6a",
+        row: "Compile-time role features enforce § 6a EnWG",
+        pattern: r"(?i)(compile[- ]time|cargo[- ]features?|role[- ](builds?|features?|scoped|gated)|build[- ]flags?|binary sha).{0,80}§ 6a|§ 6a.{0,60}(compile[- ]time|cargo[- ]features?|role[- ](builds?|features?|scoped|gated)|build[- ]flags?)",
+        reason: "a role build cannot answer as a role it was not built for — that fails a \
+                 misconfiguration closed and discharges no unbundling duty; the \
+                 confidentiality of § 6a Abs. 1 EnWG is the deployment's access policy (Cedar)",
+    },
 ];
 
 /// Table rows no phrase can catch, by the first cell's text.
@@ -471,6 +479,17 @@ pub fn run(workspace_root: &Path) -> bool {
         eprintln!("  {path}:{line}  {msg}");
     }
     false
+}
+
+/// Every known-wrong phrase rule `text` matches, as `(line, message)` — for a
+/// string that is about to become a claim elsewhere, such as the source of an
+/// operator policy option.
+#[must_use]
+pub fn findings_in_text(text: &str) -> Vec<(usize, String)> {
+    phrase_findings(&compile(), "", text)
+        .into_iter()
+        .map(|(_, line, msg)| (line, msg))
+        .collect()
 }
 
 /// Every tracked or not-ignored file, workspace-relative.
@@ -849,6 +868,18 @@ mod tests {
                 "UTILTS wird durch die API-Webdienste ersetzt",
             ),
             ("fv2027-04-release", "the API retires UTILTS"),
+            (
+                "role-features-6a",
+                "//! Entflechtung of § 6a EnWG, enforced at compile time.",
+            ),
+            (
+                "role-features-6a",
+                "a role build contains no other role's code, least privilege in support of § 6a EnWG.",
+            ),
+            (
+                "role-features-6a",
+                "# processd's role features enforce § 6a EnWG informatorische Entflechtung",
+            ),
         ];
         for rule in RULES {
             assert!(
@@ -885,6 +916,8 @@ mod tests {
             "{grenze} Masseprozent — kein Anspruch nach §19 Abs. 1\"",
             "/// Ausschluss von Geboten (§ 33 EEG 2023) before any award exists",
             "/// Zuschlag erlischt (§ 36e EEG 2023) when the plant is not commissioned",
+            "/// § 6a EnWG informatorisches Unbundling: in a combined-role (VIU) deployment",
+            "| § 6a EnWG informatorisches Unbundling | Cedar on the `ReadProcess` action |",
         ] {
             assert!(
                 hit_ids(line).is_empty(),

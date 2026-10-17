@@ -16,6 +16,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "einsd"
 path = "src/main.rs"
+# The binary is the one-line runner call; the daemon is tested through the library.
+test = false
 
 [dependencies]
 mako-fristen = { workspace = true }

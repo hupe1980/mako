@@ -144,6 +144,9 @@ A combined Strom+Gas operator therefore needs at least two `[[party]]` entries:
 ```toml
 # makod.toml — combined Strom + Gas operator (LG)
 
+[deployment]
+rollen = ["lf-strom", "msb-strom", "lf-gas", "msb-gas"]
+
 # Strom identity: BDEW-Codenummer (starts with 99)
 [[party]]
 mp_id   = "9900357000004"
@@ -606,6 +609,9 @@ test certificates:
 
 ```toml
 # nb.toml
+[deployment]
+rollen = ["nb-strom"]
+
 [[party]]
 mp_id   = "9900357000004"
 primary = true
@@ -617,6 +623,9 @@ allow_volatile = true
 
 ```toml
 # lf.toml
+[deployment]
+rollen = ["lf-strom"]
+
 [[party]]
 mp_id   = "4012345000023"
 primary = true
@@ -689,7 +698,7 @@ AlgorithmID/PartyUInfo/PartyVInfo = empty strings (§2.2.6.2.2)
 | Trust verification failure | Self-signed cert or wrong CA | `--as4-trust-anchor-pem` must be the BDEW PKI CA (not the signing cert itself) |
 | Inbound messages not arriving | AS4 not configured | `--as4-addr :4080` + signing key/cert required |
 | AS4 inbox dedup does not survive a restart | No `--data-dir` set — the store is in-memory | Add `--data-dir /var/lib/makod`; without it makod refuses to start unless `--allow-volatile` is given |
-| Duplicate AS4 processing across replicas | Two makod instances on one `--data-dir` | `SlateDbInboxStore` is linearisable within one instance only; scale out behind an external distributed lock and acknowledge with `--allow-multi-instance` |
+| Duplicate AS4 processing across replicas | Two makod instances on one `--data-dir` | `SlateDbInboxStore` is linearisable within one instance only, and makod has no multi-instance mode; run one replica per data directory or bucket prefix |
 | Partner endpoint not found | P-Mode not registered | Add `--as4-partner GLN=URL` for the recipient GLN |
 
 ---

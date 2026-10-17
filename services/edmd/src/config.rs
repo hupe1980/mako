@@ -287,6 +287,95 @@ pub struct Config {
     /// by name rather than reached by leaving a section out.
     #[serde(default)]
     pub allow_insecure_no_auth: bool,
+    /// `[policy]` — the operator readings this deployment runs under.
+    #[serde(default)]
+    pub policy: EdmdPolicy,
+}
+
+/// `[policy]` — edmd's operator settings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EdmdPolicy {
+    /// How an Art. 17 DSGVO erasure removes a subject's readings.
+    #[serde(default)]
+    pub physische_loeschung: mako_service::policy::Policy<PhysischeLoeschung>,
+}
+
+mako_service::policy_choice! {
+    /// How an Art. 17 DSGVO erasure removes a subject's readings — the data
+    /// protection officer's reading.
+    ///
+    /// Physical removal serves Art. 17 most literally and can collide with the
+    /// § 147 Abs. 1 AO duty to keep the same values as Buchungsbelege, which
+    /// Art. 17 Abs. 3 lit. b DSGVO exempts. Until the DPO settles which
+    /// direction cannot breach, the default is the erasure edmd performs.
+    pub enum PhysischeLoeschung {
+        key: "physische_loeschung",
+        doc: "@/docs/services/edmd.md#policy-physische-loeschung",
+        default: tightening(Nein, "the erasure edmd performs: the subject mapping is destroyed and a tombstone refuses re-linking, while the § 147 Abs. 1 AO Buchungsbelege survive unattributable"),
+        options: {
+            /// Destroy the subject mapping in both tiers and record a
+            /// suppression tombstone; the readings stay, attributable to no one.
+            Nein = "false" => "Art. 17 Abs. 1 DSGVO durch Aufhebung des Personenbezugs (Zuordnung zerstört, Tombstone gegen Neuverknüpfung); Art. 17 Abs. 3 lit. b DSGVO i. V. m. § 147 Abs. 1 AO für die Buchungsbelege",
+            /// Remove erased rows physically from the cold tier as well. This
+            /// build performs no such removal, so the value is refused at startup.
+            Ja = "true" => "Art. 17 Abs. 1 DSGVO in der Lesart physischer Entfernung der gelöschten Datensätze aus beiden Speicherebenen",
+        }
+    }
+}
+
+impl Config {
+    /// Refuse a config edmd cannot run as documented.
+    ///
+    /// # Errors
+    ///
+    /// No `[oidc]` without `allow_insecure_no_auth`, or
+    /// `[policy] physische_loeschung = true`, which this build cannot honour.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        // `OidcVerifier::disabled` admits every caller as `dev-admin` with all
+        // roles, so an omitted `[oidc]` section leaves the whole API — GDPR
+        // erasure and `POST /api/v1/query/sql` included — open to anyone who can
+        // reach the port.
+        if self.oidc.is_none() && !self.allow_insecure_no_auth {
+            anyhow::bail!(
+                "no [oidc] section configured. Without it every request is admitted as \
+                 `dev-admin` with all market roles and every Cedar check passes. \
+                 Configure [oidc], or set allow_insecure_no_auth = true to accept an \
+                 unauthenticated deployment."
+            );
+        }
+        if self.policy.physische_loeschung.get() == PhysischeLoeschung::Ja {
+            anyhow::bail!(
+                "[policy] physische_loeschung = true selects physical removal of erased rows \
+                 from the cold tier, and this build removes none: every Art. 17 erasure would \
+                 report a deletion it did not perform. Set physische_loeschung = false (the \
+                 subject mapping is destroyed and a tombstone refuses re-linking)."
+            );
+        }
+        Ok(())
+    }
+
+    /// The policy and posture edmd runs under — logged, exported, recorded
+    /// and served by the runner and `GET /api/v1/policy`.
+    #[must_use]
+    pub fn policy_report(&self) -> mako_service::policy::PolicyReport {
+        mako_service::policy::PolicyReport::new()
+            .with(&self.policy.physische_loeschung)
+            .posture_flag("allow_insecure_no_auth", self.allow_insecure_no_auth)
+            .posture_presence("oidc", self.oidc.is_some(), true)
+            // Without the key an erasure destroys the mapping and nothing more:
+            // the next delivery for the same MaLo re-links it.
+            .posture_presence(
+                "privacy.erasure_secret",
+                self.privacy.erasure_secret.is_some(),
+                true,
+            )
+            .posture_presence(
+                "webhook.inbound_secret",
+                self.webhook.inbound_secret.is_some(),
+                true,
+            )
+    }
 }
 
 /// `[kafka_ingest]` — high-throughput meter-reading intake from a Kafka topic.
@@ -664,6 +753,41 @@ pub fn erasure_key_ring(privacy: &PrivacyConfig) -> anyhow::Result<Vec<Vec<u8>>>
 #[cfg(test)]
 mod tests {
     use super::ArchiveConfig;
+
+    fn minimal(policy: serde_json::Value) -> super::Config {
+        serde_json::from_value(serde_json::json!({
+            "http": {"addr": "0.0.0.0:8380"},
+            "database": {"url": "postgres://localhost/edmd"},
+            "identity": {"tenant": "9900357000004"},
+            "marktd": {"url": "http://localhost:8080", "api_key": "k"},
+            "allow_insecure_no_auth": true,
+            "policy": policy,
+        }))
+        .expect("the configuration parses")
+    }
+
+    /// A9: unset, the erasure is the tombstone suppression edmd performs, and
+    /// the report says the value is the default; `true` — a physical removal
+    /// this build does not perform — is refused rather than run as `false`.
+    #[test]
+    fn physische_loeschung_defaults_to_false_and_true_is_refused() {
+        let cfg = minimal(serde_json::json!({}));
+        cfg.validate().expect("the default starts");
+        let e = cfg.policy_report();
+        let entry = e.get("physische_loeschung").expect("reported");
+        assert_eq!(entry.value, "false");
+        assert_eq!(entry.origin, mako_service::policy::Origin::Default);
+        assert!(
+            entry
+                .quelle
+                .as_deref()
+                .is_some_and(|q| q.contains("Art. 17"))
+        );
+
+        let strict = minimal(serde_json::json!({"physische_loeschung": true}));
+        let err = strict.validate().unwrap_err().to_string();
+        assert!(err.contains("physische_loeschung = true"), "{err}");
+    }
 
     /// Object-store credentials must not reach a log through `Debug`, and a
     /// field added later must not slip in unnoticed: the exhaustive

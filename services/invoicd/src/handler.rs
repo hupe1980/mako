@@ -106,7 +106,7 @@ pub async fn handle_webhook(
     // generic JSON rather than coupling to an internal `Deserialize`.
     let Ok(event) = serde_json::from_slice::<serde_json::Value>(&body) else {
         warn!("invoicd: inbound webhook body is not JSON");
-        return (StatusCode::BAD_REQUEST, "invalid JSON").into_response();
+        return mako_service::ApiError::bad_request("invalid JSON").into_response();
     };
 
     let ce_type = event["type"].as_str().unwrap_or_default();
@@ -1529,7 +1529,7 @@ mod tests {
 
     use crate::routing::route_for;
 
-    use invoic_checker::{EuroAmount, Finding, FindingKind, amount::RoundingStrategy};
+    use invoic_checker::{EuroAmount, Finding, FindingKind, amount::Rounding};
 
     use super::*;
 
@@ -1565,7 +1565,7 @@ mod tests {
             pid: 31002,
             total_net_invoic: EuroAmount::from_decimal_rounded(
                 total_eur.parse().expect("decimal"),
-                RoundingStrategy::MidpointAwayFromZero,
+                Rounding::HalfAwayFromZero,
             )
             .ok(),
             total_net_computed: None,

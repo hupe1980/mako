@@ -12,6 +12,8 @@ publish          = false
 [[bin]]
 name = "edmd"
 path = "src/main.rs"
+# `main.rs` is the one `run` call; the daemon and its tests live in the library.
+test = false
 
 [lib]
 name = "edmd"

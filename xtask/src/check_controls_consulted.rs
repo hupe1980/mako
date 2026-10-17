@@ -190,9 +190,9 @@ const ROLE_COLUMNS: &[(&str, &str, Site)] = &[
         Site::At("services/marktd/src/pg/subscription.rs", "= ANY(roles)"),
     ),
     (
-        "obsd",
+        "processd",
         "mdm_role",
-        Site::At("services/obsd/src/pg/projection.rs", "mdm_role = $4"),
+        Site::At("services/processd/src/obs/pg.rs", "mdm_role = $4"),
     ),
     (
         "processd",

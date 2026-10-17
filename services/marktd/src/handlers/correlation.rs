@@ -10,7 +10,6 @@ use std::sync::Arc;
 use axum::{
     Extension,
     extract::{Path, Query, State},
-    http::StatusCode,
     response::IntoResponse,
 };
 use mako_markt::{
@@ -76,14 +75,11 @@ pub async fn list_correlations(
         .into_response();
     }
     if q.erp_order_id.is_none() && q.malo_id.is_none() && q.status.is_none() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            axum::Json(serde_json::json!({
-                "error": "UNPROCESSABLE",
-                "message": "At least one query parameter (erp_order_id, malo_id, status) is required"
-            })),
-        )
-            .into_response();
+        return MdmError::Unprocessable {
+            reason: "at least one query parameter (erp_order_id, malo_id, status) is required"
+                .to_owned(),
+        }
+        .into_response();
     }
 
     let malo_id_filter = match q.malo_id {

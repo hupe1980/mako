@@ -12,6 +12,8 @@ publish          = false
 [[bin]]
 name = "invoicd"
 path = "src/main.rs"
+# The binary is the one-line `run` call; the daemon is tested through the library.
+test = false
 
 [dependencies]
 mako-events = { workspace = true }

@@ -15,6 +15,7 @@
 //! instalments, which is an unrelated concept sharing a German noun. The field
 //! therefore crosses no BO4E gate: there is no type to gate it against.
 
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{
@@ -240,11 +241,7 @@ pub async fn list_tranchen(
         .into_response();
     }
     let Some(malo_id) = query.malo_id.as_deref() else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "malo_id query parameter is required" })),
-        )
-            .into_response();
+        return ApiError::bad_request("malo_id query parameter is required").into_response();
     };
     match repo
         .list_by_malo(malo_id, &tenant, query.page, query.size)

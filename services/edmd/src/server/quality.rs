@@ -24,11 +24,7 @@ pub(crate) async fn list_quality_assessments(
         "read-timeseries",
         state.tenant.as_str(),
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
         Ok(w) => w,
@@ -523,11 +519,7 @@ pub async fn post_quality_rescore(
         "write-quality-rescore",
         resource_tenant,
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     // Parse date window — default: 30 days.
@@ -560,11 +552,7 @@ pub async fn post_quality_rescore(
     {
         Ok(r) => r,
         Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
+            return ApiError::internal(e).into_response();
         }
     };
 

@@ -7,7 +7,7 @@
 #   chef          cargo-chef + Rust toolchain + native build deps
 #   planner       Analyse workspace, emit recipe.json
 #   demo-builder  makod, marktd, processd — what `just build-demo` builds
-#   builder       The other fourteen services
+#   builder       Every other service
 #   *-runtime     gcr.io/distroless/cc-debian12:nonroot, one per binary
 #
 # Build one image:
@@ -16,9 +16,7 @@
 #   docker build --target processd-runtime    -t processd:dev    .
 #   docker build --target invoicd-runtime     -t invoicd:dev     .
 #   docker build --target edmd-runtime        -t edmd:dev        .
-#   docker build --target obsd-runtime        -t obsd:dev        .
 #   docker build --target netzbilanzd-runtime -t netzbilanzd:dev .
-#   docker build --target sperrd-runtime      -t sperrd:dev      .
 #   docker build --target einsd-runtime       -t einsd:dev       .
 #   docker build --target productd-runtime    -t productd:dev    .
 #   docker build --target billingd-runtime    -t billingd:dev    .
@@ -27,7 +25,6 @@
 #   docker build --target vertragd-runtime    -t vertragd:dev    .
 #   docker build --target portald-runtime     -t portald:dev     .
 #   docker build --target agentd-runtime      -t agentd:dev      .
-#   docker build --target mabis-syncd-runtime -t mabis-syncd:dev .
 #
 # `docker-bake.hcl` has a target per service and builds them in groups;
 # `just build-demo` builds the three `demos/nb-stp` starts.
@@ -172,7 +169,7 @@ RUN --mount=type=cache,id=cargo-registry-demo,sharing=locked,target=/usr/local/c
     && install -d -o 65532 -g 65532 -m 0700 /var/lib/makod
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 3b — builder  (the other fourteen — production / CI release pipeline)
+# ║ Stage 3b — builder  (every other service — production / CI release pipeline)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM chef AS builder
 ARG PROFILE=release
@@ -189,24 +186,24 @@ COPY --from=planner /build/recipe.json recipe.json
 RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target-full,sharing=locked,target=/build/target \
     cargo chef cook --profile ${PROFILE} \
-                    -p makod -p marktd -p processd -p invoicd -p edmd -p obsd \
-                    -p netzbilanzd -p sperrd -p einsd \
+                    -p makod -p marktd -p processd -p invoicd -p edmd \
+                    -p netzbilanzd -p einsd \
                     -p productd -p billingd -p outputd -p accountingd -p vertragd \
-                    -p portald -p agentd -p mabis-syncd \
+                    -p portald -p agentd \
                     --recipe-path recipe.json
 
 # ── Application layer (rebuilt on every source change) ────────────────────────
 COPY . .
 RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target-full,sharing=locked,target=/build/target \
-    CARGO_INCREMENTAL=1 mold -run cargo auditable build --profile ${PROFILE} -p makod -p marktd -p invoicd -p edmd -p obsd \
-                                     -p netzbilanzd -p sperrd -p einsd \
+    CARGO_INCREMENTAL=1 mold -run cargo auditable build --profile ${PROFILE} -p makod -p marktd -p invoicd -p edmd \
+                                     -p netzbilanzd -p einsd \
                                      -p productd -p billingd -p outputd -p accountingd \
-                                     -p vertragd -p portald -p agentd -p mabis-syncd \
+                                     -p vertragd -p portald -p agentd \
     && CARGO_INCREMENTAL=1 mold -run cargo auditable build --profile ${PROFILE} -p processd --features integrated \
     && BIN_DIR="$([ "${PROFILE}" = "release" ] && echo target/release || echo target/debug)" \
-    && for bin in makod marktd processd invoicd edmd obsd netzbilanzd sperrd einsd \
-                  productd billingd outputd accountingd vertragd portald agentd mabis-syncd; do \
+    && for bin in makod marktd processd invoicd edmd netzbilanzd einsd \
+                  productd billingd outputd accountingd vertragd portald agentd; do \
          cp "${BIN_DIR}/${bin}" "/usr/local/bin/${bin}" && strip "/usr/local/bin/${bin}" || exit 1; \
          rust-audit-info "/usr/local/bin/${bin}" > /dev/null \
            || { echo "${bin}: no cargo-auditable manifest after strip" >&2; exit 1; }; \
@@ -433,43 +430,7 @@ LABEL org.opencontainers.image.title="edmd" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 9 — obsd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS obsd-runtime
-
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-
-ENV TZ=Europe/Berlin
-
-COPY --from=builder --chown=root:root /usr/local/bin/obsd /usr/local/bin/obsd
-
-EXPOSE 8480
-
-ENV OBSD_LOG_FORMAT=json \
-    OBSD_LOG_LEVEL=info
-
-HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
-    CMD ["/usr/local/bin/obsd", "--check"]
-
-ENTRYPOINT ["/usr/local/bin/obsd"]
-
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="obsd" \
-      org.opencontainers.image.description="Business-process observability daemon — KPI reports, §20 EnWG parity (MaKo)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 10 — netzbilanzd-runtime (distroless)
+# ║ Stage 9 — netzbilanzd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS netzbilanzd-runtime
 
@@ -490,7 +451,7 @@ ARG OCI_VERSION=dev
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="netzbilanzd" \
-      org.opencontainers.image.description="NNE/KA/MMM/MSB/AWH billing daemon — NB role, GridSettlement, CalculationTrace (MaKo)" \
+      org.opencontainers.image.description="NNE/KA/MMM/MSB/AWH billing and MaBiS Summenzeitreihen (MSCONS 13003) — NB role, GridSettlement, CalculationTrace (MaKo)" \
       org.opencontainers.image.version="${OCI_VERSION}" \
       org.opencontainers.image.revision="${OCI_REVISION}" \
       org.opencontainers.image.created="${OCI_CREATED}" \
@@ -498,36 +459,7 @@ LABEL org.opencontainers.image.title="netzbilanzd" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 11 — sperrd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS sperrd-runtime
-
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-ENV TZ=Europe/Berlin
-COPY --from=builder --chown=root:root /usr/local/bin/sperrd /usr/local/bin/sperrd
-EXPOSE 8780
-ENV SPERRD_LOG_FORMAT=json \
-    SPERRD_LOG_LEVEL=info
-HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
-    CMD ["/usr/local/bin/sperrd", "--check"]
-ENTRYPOINT ["/usr/local/bin/sperrd"]
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="sperrd" \
-      org.opencontainers.image.description="Sperrung execution tracking daemon — NB role, IFTSTA 21039 auto-dispatch (MaKo)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 12 — einsd-runtime (distroless)
+# ║ Stage 10 — einsd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS einsd-runtime
 
@@ -556,7 +488,7 @@ LABEL org.opencontainers.image.title="einsd" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 13 — productd-runtime (distroless)
+# ║ Stage 11 — productd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS productd-runtime
 
@@ -585,7 +517,7 @@ LABEL org.opencontainers.image.title="productd" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 14 — billingd-runtime (distroless)
+# ║ Stage 12 — billingd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS billingd-runtime
 
@@ -614,7 +546,7 @@ LABEL org.opencontainers.image.title="billingd" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 15 — outputd-runtime (distroless)
+# ║ Stage 13 — outputd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS outputd-runtime
 
@@ -643,7 +575,7 @@ LABEL org.opencontainers.image.title="outputd" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 16 — accountingd-runtime (distroless)
+# ║ Stage 14 — accountingd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS accountingd-runtime
 
@@ -672,7 +604,7 @@ LABEL org.opencontainers.image.title="accountingd" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 17 — vertragd-runtime (distroless)
+# ║ Stage 15 — vertragd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS vertragd-runtime
 
@@ -701,7 +633,7 @@ LABEL org.opencontainers.image.title="vertragd" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 18 — portald-runtime (distroless)
+# ║ Stage 16 — portald-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS portald-runtime
 
@@ -730,7 +662,7 @@ LABEL org.opencontainers.image.title="portald" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 19 — agentd-runtime (distroless)
+# ║ Stage 17 — agentd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS agentd-runtime
 
@@ -752,35 +684,6 @@ ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="agentd" \
       org.opencontainers.image.description="Multi-agent LLM orchestration daemon — 28 specialists, LanceDB RAG, MCP tools (MaKo)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 20 — mabis-syncd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS mabis-syncd-runtime
-
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-ENV TZ=Europe/Berlin
-COPY --from=builder --chown=root:root /usr/local/bin/mabis-syncd /usr/local/bin/mabis-syncd
-EXPOSE 8880
-ENV MABIS_SYNCD_LOG_FORMAT=json \
-    MABIS_SYNCD_LOG_LEVEL=info
-HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
-    CMD ["/usr/local/bin/mabis-syncd", "--check"]
-ENTRYPOINT ["/usr/local/bin/mabis-syncd"]
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="mabis-syncd" \
-      org.opencontainers.image.description="MaBiS UTILTS synchronisation daemon — ÜNB/NB role, Summenzeitreihe day-3/day-8 schedule (MaKo)" \
       org.opencontainers.image.version="${OCI_VERSION}" \
       org.opencontainers.image.revision="${OCI_REVISION}" \
       org.opencontainers.image.created="${OCI_CREATED}" \

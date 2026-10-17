@@ -153,13 +153,6 @@ spec:
   # answers were schemas instead of prose.
   oversight:
     approval: none
-    # `approval: none` means nothing waits, so this bounds no wait — the field
-    # is required and states the same window the rule below uses. One figure
-    # written twice is cheaper than one field meaning two things.
-    deadline:
-      name: jahresabrechnung-blocked-review
-      kind: working-days
-      params: { n: 3 }
     # A triage row *is* the finding, so an unanswered one widens rather than
     # closes: `deny` would take it out of the worklist and delete the delivery
     # of a breach that was correctly detected. (gabi-gas-agent's dispatching
@@ -198,6 +191,11 @@ spec:
         - malo_id
         - billing_year
         - total_kwh
+        - brutto_eur
+        - sum_abschlage_eur
+        - zahlbetrag_eur
+        - compliance_status
+        - issues
       properties:
         malo_id:
           type: string
@@ -206,26 +204,27 @@ spec:
         total_kwh:
           type: number
         brutto_eur:
-          type: number
+          type: [number, "null"]
         sum_abschlage_eur:
-          type: number
+          type: [number, "null"]
         zahlbetrag_eur:
-          type: number
+          type: [number, "null"]
         compliance_status:
-          type: string
+          type: [string, "null"]
           enum:
             - READY_TO_DISPATCH
             - NEEDS_REVIEW
             - BLOCKED
+            - null
         issues:
-          type: array
+          type: [array, "null"]
           items:
             type: string
 
   # Knowledge, granted rather than copied.
   #
-  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
-  # their own procedures. A specialist names the one it needs; a hand-typed
+  # mako's MCP servers publish step-by-step prompts for their own
+  # procedures. A specialist names the one it needs; a hand-typed
   # paraphrase in `constraints` would be a second copy with nothing keeping the
   # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.

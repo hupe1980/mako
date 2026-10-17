@@ -451,7 +451,8 @@ pub async fn get_zahlungsinformation(
 /// `GET /api/v1/kunden/{id}/export` — DSGVO Art. 15 / Art. 20.
 ///
 /// The complete record `vertragd` holds about one data subject: Kunde, Person,
-/// Zahlungsinformation, portal identities, contracts and components.
+/// Zahlungsinformation, portal identities, contracts and components — with the
+/// Art. 20 subset and the Art. 15 Abs. 1 lit. h statement `[policy.dsr]` decides.
 pub async fn gdpr_export(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -463,12 +464,18 @@ pub async fn gdpr_export(
         .await
         .map_err(ApiError::Internal)?
         .ok_or(ApiError::NotFound)?;
+    let dsr = &ctx.cfg.policy.dsr;
     ok(serde_json::json!({
         "rechtsgrundlage": "DSGVO Art. 15 (Auskunft) / Art. 20 (Datenübertragbarkeit)",
         "exported_at": time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap_or_default(),
         "export": export,
+        // `[policy.dsr]`: which of the categories above form the Art. 20
+        // document, and which processes the Auskunft states as automated
+        // decisions — each with the reading it was decided under.
+        "datenuebertragbarkeit": dsr.datenuebertragbarkeit(),
+        "automatisierte_entscheidungen": dsr.automatisierte_entscheidungen(),
     }))
 }
 

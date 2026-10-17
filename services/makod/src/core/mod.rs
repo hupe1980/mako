@@ -3,9 +3,11 @@
 
 pub mod cedar_authz;
 pub mod config;
+pub mod deployment;
 pub mod erp_adapter;
 pub mod health;
 pub mod malo_cache;
+pub mod malo_sync;
 pub mod party_registry;
 pub mod preflight;
 pub mod worker_health;

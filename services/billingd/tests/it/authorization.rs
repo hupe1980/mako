@@ -79,6 +79,9 @@ fn the_policy_and_the_code_name_the_same_actions() {
     // what this crate's own handlers check.
     let mut expected = used.clone();
     expected.insert("use-mcp".to_owned());
+    // `read-policy` is checked by `mako_service::policy::router`, the one
+    // handler that serves `GET /api/v1/policy` for every daemon.
+    expected.insert("read-policy".to_owned());
     let permitted = actions_permitted_in_policy();
     let missing: Vec<_> = expected.difference(&permitted).cloned().collect();
     assert!(

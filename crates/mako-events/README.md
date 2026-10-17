@@ -59,7 +59,6 @@ waits forever, and the doc comment naming its emitter is simply untrue.
 |---|---|
 | [`mako-events`](https://docs.rs/mako-events) ← **this crate** | The `type` constants and the glob `matches()` — nothing else |
 | [`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service) | The CloudEvents *envelope* and transport — building, signing, delivering |
-| [`mako-obs`](https://docs.rs/mako-obs) | Consumes `de.mako.*` into process projections and KPI reports |
 | [`mako-markt`](https://docs.rs/mako-markt) | Emits the `de.markt.*` half of the catalog |
 
 Part of **mako**, an open-source Rust platform for German energy market

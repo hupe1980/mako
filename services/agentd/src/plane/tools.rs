@@ -37,8 +37,8 @@ use secrecy::ExposeSecret as _;
 /// Filtered to the specialists in this build's subscription table, because the
 /// `manifests![]` embedding itself is not role-gated: a `role-lf` binary still
 /// carries the NB manifests as data. Without the filter, an LF deployment would
-/// be required to wire `sperrd`'s MCP endpoint — a server only the NB Sperrung
-/// specialist grants — which is exactly the cross-arm configuration §§ 6a and 7a EnWG
+/// be required to wire `netzbilanzd`'s MCP endpoint — a server only the NB
+/// specialists grant — which is exactly the cross-arm configuration §§ 6a and 7a EnWG
 /// role scoping exists to make impossible.
 #[must_use]
 pub fn servers_named_in_grants() -> BTreeSet<String> {
@@ -185,6 +185,27 @@ async fn connect_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The client offers 2026-07-28 and speaks exactly it and 2025-11-25.
+    ///
+    /// The set every mako MCP server's declared revisions are held to. A
+    /// server settling outside it is refused by `McpClient::new` at startup;
+    /// one settling on 2025-11-25 is the negotiate-down `connect_one` warns
+    /// about. Pinned here so an agentplane release that moves either value
+    /// fails a test beside the code that reports it.
+    #[test]
+    fn the_client_offers_2026_07_28_and_speaks_exactly_two_revisions() {
+        assert_eq!(
+            McpClient::host_info().protocol_version.as_str(),
+            "2026-07-28"
+        );
+        assert_eq!(agentplane::tools::MCP_REVISION.as_str(), "2026-07-28");
+        let spoken: Vec<&str> = McpClient::SPOKEN_REVISIONS
+            .iter()
+            .map(rmcp::model::ProtocolVersion::as_str)
+            .collect();
+        assert_eq!(spoken, ["2026-07-28", "2025-11-25"]);
+    }
 
     /// The manifests grant tools on servers, and we can name them.
     ///

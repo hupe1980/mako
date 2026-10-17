@@ -25,7 +25,7 @@
 //! `gpke.sperrung.beauftragen` / `gpke.entsperrung.beauftragen` /
 //! `gpke.sperrung.stornieren`. The NB reports execution back with
 //! `gpke.sperrung.bestaetigen` / `gpke.sperrung.fehlgeschlagen`, which is what
-//! `sperrd` calls after field service.
+//! `processd` calls after field service.
 //!
 //! # Regulatory context
 //!

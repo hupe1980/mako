@@ -5,7 +5,7 @@
 //! with `BillingEngine`.
 
 use crate::rates::RoundMoney;
-use billing::{Currency, DynamicPricing, RateBand, RateSchedule, TimeBand, TimeOfUsePricing};
+use billing::{Price, Tariff, Tier, Tiers, rate_series};
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 
@@ -342,9 +342,9 @@ impl BillingProvider for ElectricityProvider {
         // them nothing for it.
         if meter.billable_kwh() > Decimal::ZERO {
             if let Some(tiers) = product.block_tiers.as_ref().filter(|t| !t.is_empty()) {
-                // Delegate to billing::RateSchedule for correct graduated pricing.
-                // Replaces manual tier iteration — gains contiguous-band validation
-                // and exact Amount<5> arithmetic. Legal basis: §41 EnWG.
+                // Graduated pricing through `billing::Tariff::Graduated`: the
+                // ladder is validated on construction and each tier's slice is
+                // exact. Legal basis: §41 EnWG.
                 positions.extend(build_block_tariff_positions(tiers, kwh, &[])?);
             } else if let (Some(ht), Some(nt), true) = (
                 meter.arbeitsmenge_ht_kwh,
@@ -358,50 +358,47 @@ impl BillingProvider for ElectricityProvider {
                 product.arbeitspreis_ht_ct_per_kwh.is_some()
                     && product.arbeitspreis_nt_ct_per_kwh.is_some(),
             ) {
-                // Zweitarif (HT/NT) — billing::TimeOfUsePricing for validated band arithmetic.
-                // Negative quantities return Err; zero quantities are skipped silently.
-                let mut bands = Vec::new();
-                if let Some(ap_ht) = product.arbeitspreis_ht_ct_per_kwh {
-                    let price = billing::Amount::<5>::try_from((ap_ht / dec!(100)).round_kfm(5))
-                        .map_err(|_| EngineError::PriceOutOfRange {
-                            field: "arbeitspreis_ht_ct_per_kwh".to_owned(),
-                            value: ap_ht,
-                        })?;
-                    bands.push(TimeBand::new("HT", price));
-                }
-                if let Some(ap_nt) = product.arbeitspreis_nt_ct_per_kwh {
-                    let price = billing::Amount::<5>::try_from((ap_nt / dec!(100)).round_kfm(5))
-                        .map_err(|_| EngineError::PriceOutOfRange {
-                            field: "arbeitspreis_nt_ct_per_kwh".to_owned(),
-                            value: ap_nt,
-                        })?;
-                    bands.push(TimeBand::new("NT", price));
-                }
-                if !bands.is_empty() {
-                    let items = TimeOfUsePricing::builder()
-                        .bands(bands)
-                        .unit("kWh")
-                        .currency(Currency::EUR)
-                        .build()?
-                        .calculate(&[("HT", ht), ("NT", nt)])?;
-                    for item in items {
-                        let is_ht = item.has_tag("HT");
-                        let label = if is_ht {
-                            "Arbeitspreis Hochtarif (HT)"
-                        } else {
-                            "Arbeitspreis Niedertarif (NT)"
-                        };
-                        let band_tag = if is_ht { "ht" } else { "nt" };
-                        let mut pos = billing_item_to_position(
-                            item,
-                            PositionCategory::Commodity,
-                            "§41 EnWG",
-                            &["strom", "arbeitspreis"],
-                        );
-                        pos.description = label.to_owned();
-                        pos.tags.push(band_tag.to_owned());
-                        positions.push(pos);
+                // Zweitarif (HT/NT): each register at its band's price, HT first.
+                // A negative register is refused; a zero one bills nothing.
+                for (ap_ct, band_kwh, field, label, band_tag) in [
+                    (
+                        product.arbeitspreis_ht_ct_per_kwh,
+                        ht,
+                        "arbeitspreis_ht_ct_per_kwh",
+                        "Arbeitspreis Hochtarif (HT)",
+                        "ht",
+                    ),
+                    (
+                        product.arbeitspreis_nt_ct_per_kwh,
+                        nt,
+                        "arbeitspreis_nt_ct_per_kwh",
+                        "Arbeitspreis Niedertarif (NT)",
+                        "nt",
+                    ),
+                ] {
+                    let Some(ap_ct) = ap_ct else { continue };
+                    let price = price_eur_per_kwh(ap_ct, field)?;
+                    if band_kwh < Decimal::ZERO {
+                        return Err(EngineError::Arithmetic(billing::Error::from(
+                            billing::ErrorKind::Uncovered { value: band_kwh },
+                        )));
                     }
+                    if band_kwh.is_zero() {
+                        continue;
+                    }
+                    positions.push(
+                        BillingPosition::debit(
+                            label,
+                            band_kwh,
+                            "kWh",
+                            price,
+                            PositionCategory::Commodity,
+                        )
+                        .with_legal_basis("§41 EnWG")
+                        .with_tag("strom")
+                        .with_tag("arbeitspreis")
+                        .with_tag(band_tag),
+                    );
                 }
             } else if let Some((effective_ct, idx)) = product
                 .indexed_price
@@ -2596,8 +2593,13 @@ impl BillingProvider for EegProvider {
         Vec::new()
     }
 
-    // `ctx` is consumed only by the eeg-feature path below.
-    #[cfg_attr(not(feature = "eeg"), allow(unused_variables))]
+    #[cfg_attr(
+        not(feature = "eeg"),
+        allow(
+            unused_variables,
+            reason = "`ctx` is consumed only by the eeg-feature path below"
+        )
+    )]
     fn bill(
         &self,
         ctx: &BillingContext,
@@ -3407,13 +3409,12 @@ impl BillingProvider for DynamicElectricityProvider {
             );
         }
 
-        // Per-interval EPEX pricing via `billing::DynamicPricing`.
+        // Per-interval EPEX pricing via `billing::rate_series`.
         //
-        // `DynamicPricing` computes the weighted-average unit price using
-        // `Amount<5>` arithmetic throughout — no intermediate Decimal accumulation.
-        // We pass it (kwh, eur_per_kwh) pairs; it returns a single `LineItem` from
-        // which we extract `net_amount` and `quantity_value` to build our own
-        // `BillingPosition` (with energy-billing tags and legal basis).
+        // `rate_series` sums Σ qᵢ·pᵢ exactly, with no intermediate rounding, and
+        // states the weighted-average unit price beside it. We pass it
+        // (kwh, EUR/kWh) pairs and build our own `BillingPosition` (with
+        // energy-billing tags and legal basis) from the total.
         //
         // Primary price source: `self.spot_price_source` (live API / Tibber / NordPool).
         // Fallback: `quantities.dynamic_epex_prices` (pre-fetched map from billingd /
@@ -3421,7 +3422,7 @@ impl BillingProvider for DynamicElectricityProvider {
         // the provider before prices are known.
         let mut missing_price_intervals: u32 = 0;
         let mut missing_price_kwh = Decimal::ZERO;
-        let mut priced_pairs: Vec<(Decimal, billing::Amount<5>)> =
+        let mut priced_pairs: Vec<(Decimal, Price)> =
             Vec::with_capacity(quantities.dynamic_intervals.len());
 
         for interval in &quantities.dynamic_intervals {
@@ -3448,19 +3449,19 @@ impl BillingProvider for DynamicElectricityProvider {
             // §41a: market spot clamped into [floor, cap] + fixed Arbeitspreis-Aufschlag.
             let effective_ct = spot_ct + aufschlag_ct;
 
-            // ct/kWh → EUR/kWh as Amount<5>. Rounding kaufmännisch to 5 dp first
-            // ensures the Decimal fits the target precision before conversion.
-            // EPEX prices are typically 2 dp in ct/kWh → 4 dp after /100, so this
-            // never loses precision in practice.
+            // ct/kWh → EUR/kWh, kaufmännisch at 5 dp — the price resolution of
+            // every Arbeitspreis in this crate. EPEX prices are typically 2 dp in
+            // ct/kWh → 4 dp after /100, so this never loses precision in
+            // practice. Spot prices go below zero, and `rate_series` takes a
+            // signed interval price.
             //
-            // A conversion that does not fit is an error, not a skip: silently
+            // A price that does not fit is an error, not a skip: silently
             // dropping the interval is the same under-bill the missing-price
             // guard below refuses, arrived at by a different route.
-            let price_eur = billing::Amount::<5>::try_from((effective_ct / dec!(100)).round_kfm(5))
-                .map_err(|_| EngineError::PriceOutOfRange {
-                    field: format!("spotpreis@{}", interval.timestamp_utc),
-                    value: effective_ct,
-                })?;
+            let price_eur = Price::new(price_eur_per_kwh(
+                effective_ct,
+                &format!("spotpreis@{}", interval.timestamp_utc),
+            )?);
             priced_pairs.push((interval.kwh, price_eur));
         }
 
@@ -3497,20 +3498,18 @@ impl BillingProvider for DynamicElectricityProvider {
         }
 
         if !priced_pairs.is_empty() {
-            let item = DynamicPricing::builder()
-                .intervals(priced_pairs)
-                .unit("kWh")
-                .currency(Currency::EUR)
-                .build()
-                .and_then(|dp| dp.calculate())?;
+            let series = rate_series(priced_pairs)?;
 
-            let total_kwh = item.quantity_value().unwrap_or_default();
-            let total_eur = item.net_amount.into_decimal();
+            let total_kwh = series.quantity;
+            // Σ qᵢ·pᵢ exactly, put on the 5-dp position resolution once.
+            let total_eur = crate::position::validated_eur(series.net);
             // The weighted-average unit price is the crate's, not ours:
-            // `DynamicPricing::calculate` computes it while it sums and hands it
-            // back as the `LineItem`'s `unit_price` in EUR/kWh. Re-deriving it
-            // as `net ÷ quantity` would be a second division on the figure that
-            // has to agree with the amount beside it.
+            // `rate_series` computes it while it sums. Re-deriving it as
+            // `net ÷ quantity` would be a second division on the figure that
+            // has to agree with the amount beside it. `billing` states it as a
+            // magnitude (BR-27) and moves a negative average's direction into the
+            // quantity; a `BillingPosition` keeps the metered quantity and signs
+            // the price instead, so the product is the same.
             //
             // It is carried at **full precision**, and only the description
             // rounds. A weighted average is rarely representable, so a price
@@ -3520,7 +3519,11 @@ impl BillingProvider for DynamicElectricityProvider {
             // industrial volumes — €2.42 over a spot-linked year at 2 MW. The
             // reader gets the rounded average in the description; the machine
             // field stays exact.
-            let avg_eur = item.unit_price.as_ref().map_or(Decimal::ZERO, |p| p.value);
+            let avg_eur = if series.is_negative_average() {
+                -series.average_price.value()
+            } else {
+                series.average_price.value()
+            };
             let avg_ct = (avg_eur * dec!(100)).round_kfm(4);
             positions.push(BillingPosition {
                 description: format!("Arbeitspreis {source_name} (∅ {avg_ct:.4} ct/kWh)",),
@@ -4195,48 +4198,34 @@ fn entlastungs_hinweise(
 
 // ── billing crate bridge helpers ──────────────────────────────────────────────
 
-/// Convert a [`billing::LineItem`] to a [`BillingPosition`].
+/// A contract price in ct/kWh as the EUR/kWh unit price of a position,
+/// kaufmännisch at 5 dp, the price resolution of every Arbeitspreis here.
 ///
-/// The `billing` crate is domain-agnostic; this adapter attaches energy-domain
-/// metadata (`category`, `legal_basis`, `tags`) to the generic `LineItem`.
-/// Used by [`build_block_tariff_positions`] and any other paths that delegate
-/// to billing-crate primitives.
-#[inline]
-fn billing_item_to_position(
-    item: billing::LineItem,
-    category: PositionCategory,
-    legal_basis: &str,
-    tags: &[&str],
-) -> BillingPosition {
-    BillingPosition {
-        description: item.description,
-        legal_basis: Some(legal_basis.to_owned()),
-        quantity: item.quantity.as_ref().map(|q| q.value).unwrap_or_default(),
-        unit: item
-            .quantity
-            .as_ref()
-            .map(|q| q.unit.clone())
-            .unwrap_or_default(),
-        unit_price_eur: item
-            .unit_price
-            .as_ref()
-            .map(|p| p.value)
-            .unwrap_or_default(),
-        net_eur: item.net_amount.into_decimal(),
-        category,
-        tags: tags.iter().map(|s| s.to_string()).collect(),
-        applicable_tax_rate: None,
-        trace: crate::position::PositionTrace::default(),
-    }
+/// # Errors
+///
+/// [`EngineError::PriceOutOfRange`] for a price that is not representable as a
+/// 5-dp EUR amount, naming the product field it came from.
+fn price_eur_per_kwh(ct: Decimal, field: &str) -> Result<Decimal, EngineError> {
+    let eur = (ct / dec!(100)).round_kfm(5);
+    billing::Amount::<5>::from_decimal(eur)
+        .map(billing::Amount::to_decimal)
+        .map_err(|_| EngineError::PriceOutOfRange {
+            field: field.to_owned(),
+            value: ct,
+        })
 }
 
-/// Build block tariff `BillingPosition`s using [`billing::RateSchedule`].
+/// Build block tariff `BillingPosition`s through `billing::Tariff::Graduated`.
 ///
-/// Replaces the manual tier-iteration loop with the well-tested graduated
-/// schedule from the `billing` crate, gaining:
-/// - Contiguous-band validation on construction (catches misconfigured tiers)
-/// - Correct open-ended last-tier handling
-/// - Exact `Amount<5>` arithmetic (no intermediate float money)
+/// The ladder is a [`billing::Tiers`], which refuses on construction what a
+/// hand-rolled loop would bill silently:
+/// - bounds that do not rise strictly (an unsorted ladder is refused, never
+///   sorted)
+/// - an open tier anywhere but last
+/// - a negative price
+///
+/// Each tier's slice is rated exactly and becomes one position at that tier's
+/// price.
 ///
 /// ## Legal basis
 ///
@@ -4247,40 +4236,45 @@ fn build_block_tariff_positions(
     kwh: Decimal,
     extra_tags: &[&str],
 ) -> Result<Vec<BillingPosition>, EngineError> {
-    let mut builder = RateSchedule::graduated().unit("kWh");
-    let mut prev: Option<Decimal> = None;
-
+    let mut ladder = Vec::with_capacity(tiers.len());
     for (idx, tier) in tiers.iter().enumerate() {
-        let price_eur =
-            billing::Amount::<5>::try_from((tier.preis_ct_per_kwh / dec!(100)).round_kfm(5))
-                .map_err(|_| EngineError::PriceOutOfRange {
-                    field: format!("blocktarif_stufe_{}_preis_ct_per_kwh", idx + 1),
-                    value: tier.preis_ct_per_kwh,
-                })?;
-        let desc = match tier.bis_kwh {
+        let price = Price::new(price_eur_per_kwh(
+            tier.preis_ct_per_kwh,
+            &format!("blocktarif_stufe_{}_preis_ct_per_kwh", idx + 1),
+        )?);
+        ladder.push(match tier.bis_kwh {
+            Some(upper) => Tier::up_to(upper, price),
+            None => Tier::above(price),
+        });
+    }
+    let pieces = Tariff::Graduated(Tiers::new(ladder)?).rate(kwh)?;
+
+    let mut positions = Vec::with_capacity(pieces.len());
+    for piece in pieces {
+        let desc = match tiers.get(piece.tier).and_then(|t| t.bis_kwh) {
             Some(upper) => format!(
                 "Arbeitspreis Strom Stufe {} (bis {upper}\u{202f}kWh)",
-                idx + 1
+                piece.tier + 1
             ),
-            None => format!("Arbeitspreis Strom Stufe {}", idx + 1),
+            None => format!("Arbeitspreis Strom Stufe {}", piece.tier + 1),
         };
-        let band = match (prev, tier.bis_kwh) {
-            (None, Some(upper)) => RateBand::up_to(upper, price_eur),
-            (Some(lower), Some(upper)) => RateBand::between(lower, upper, price_eur),
-            (lower, None) => RateBand::over(lower.unwrap_or(Decimal::ZERO), price_eur),
+        let mut pos = BillingPosition::debit(
+            desc,
+            piece.quantity.to_decimal(),
+            "kWh",
+            piece.unit_price.value(),
+            PositionCategory::Commodity,
+        )
+        .with_legal_basis("§41 EnWG")
+        .with_tag("strom")
+        .with_tag("arbeitspreis")
+        .with_tag("block_tier");
+        for tag in extra_tags {
+            pos = pos.with_tag(*tag);
         }
-        .with_description(desc);
-        builder = builder.band(band);
-        prev = tier.bis_kwh;
+        positions.push(pos);
     }
-
-    let items = builder.build().and_then(|s| s.split(kwh))?;
-    let mut tags: Vec<&str> = vec!["strom", "arbeitspreis", "block_tier"];
-    tags.extend_from_slice(extra_tags);
-    Ok(items
-        .into_iter()
-        .map(|item| billing_item_to_position(item, PositionCategory::Commodity, "§41 EnWG", &tags))
-        .collect())
+    Ok(positions)
 }
 
 // ── EnergyShareProvider ───────────────────────────────────────────────────────

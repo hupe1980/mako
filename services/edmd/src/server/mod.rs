@@ -13,9 +13,9 @@ use axum::{
     response::IntoResponse,
     routing::{get, post, put},
 };
-use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::{Claims, OidcVerifier};
+use mako_service::{ApiError, Json, Lenient};
 use rubo4e::current::{
     Energiemenge, Lastgang, Medium, Menge, Mengeneinheit, Messart, Messwertstatus,
     Sparte as Bo4eSparte, Zeitraum, Zeitreihe, Zeitreihenwert,
@@ -93,8 +93,8 @@ pub fn router(state: HandlerState) -> Router {
             get(get_imbalance),
         )
         .route("/api/v1/billing-period/{malo_id}", get(get_billing_period))
-        // Collection endpoint for mabis-syncd MaLo discovery.
-        // mabis-syncd calls: GET /api/v1/billing-periods?from=YYYY-MM-DD&to=YYYY-MM-DD&tenant=...
+        // Collection endpoint for netzbilanzd MaLo discovery.
+        // netzbilanzd calls: GET /api/v1/billing-periods?from=YYYY-MM-DD&to=YYYY-MM-DD&tenant=...
         .route("/api/v1/billing-periods", get(list_billing_periods))
         .route("/api/v1/lastgang/{malo_id}", get(get_lastgang))
         // The canonical projected series, in one direction, through
@@ -349,11 +349,7 @@ pub(crate) struct WindowRefusal(String);
 impl WindowRefusal {
     /// The `400` this refusal renders as.
     pub(crate) fn into_response(self) -> axum::response::Response {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": self.0 })),
-        )
-            .into_response()
+        ApiError::bad_request(self.0).into_response()
     }
 }
 
@@ -437,6 +433,11 @@ pub struct RunConfig {
     /// erasure then unlinks without recording that it happened, and the next
     /// delivery for the same MaLo re-links it.
     pub erasure_keys: Vec<Vec<u8>>,
+    /// The policy and posture report, served at `GET /api/v1/policy` and by
+    /// the `get_policy` MCP tool.
+    pub policy: mako_service::policy::PolicyReport,
+    /// `[policy] physische_loeschung`, named in every erasure result.
+    pub physische_loeschung: mako_service::policy::PolicyTriple,
     /// ERP webhook URL for outbound CloudEvents (direct push + quality warnings).
     pub erp_webhook_url: Option<String>,
     /// Optional secret signing every outbound CloudEvent (Standard Webhooks).
@@ -470,11 +471,7 @@ async fn iceberg_catalog_guard(
         "read-archive-olap",
         state.tenant.as_str(),
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     next.run(request).await
 }
@@ -578,6 +575,7 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
     let repo_for_surveillance = repo.clone();
 
     let mcp_state = Arc::new(crate::mcp_server::EdmdMcpState {
+        policy: Arc::new(cfg.policy.clone()),
         pool: pool.clone(),
         repo: repo.clone(),
         tenant: cfg.tenant.clone(),
@@ -613,6 +611,7 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
         cold_tier_enabled: cfg.archive.as_ref().is_some_and(|a| a.enabled),
         smgw: cfg.smgw.clone(),
         surveillance: cfg.surveillance.clone(),
+        physische_loeschung: cfg.physische_loeschung.clone(),
     };
     // ── Outbox drain ─────────────────────────────────────────────────────────
     // Every CloudEvent edmd publishes goes through `event_outbox`, so delivery
@@ -714,6 +713,8 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
         .merge(
             router(state)
                 .nest("/api/v1/iceberg", iceberg_facade)
+                // Operator policy: GET /api/v1/policy (read-only; Cedar `read-policy`).
+                .merge(mako_service::policy::router(cfg.policy.clone()))
                 .layer(Extension(expected_tenant))
                 .layer(Extension(cfg.cedar))
                 .layer(Extension(cfg.oidc))

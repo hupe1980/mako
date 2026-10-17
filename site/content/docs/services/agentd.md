@@ -6,11 +6,12 @@ weight = 38
 `agentd` is the **AI automation layer**. It connects language models to
 [the production services](@/docs/services/_index.md) over MCP for analysis and
 decision support. Every specialist is a **declarative manifest** run by
-[agentplane](https://github.com/hupe1980/agentplane) 0.29, a journal-first
+[agentplane](https://github.com/hupe1980/agentplane) 0.47, a journal-first
 durable agent runtime: every model call and tool call is a journaled effect, so a
 run resumes after a crash and replays for audit. As an MCP client it offers
-protocol revision `2026-07-28` (`server/discover`) and falls back to the
-`2025-11-25` `initialize` handshake for servers that do not speak it.
+protocol revision `2026-07-28` (`server/discover`), falls back to the
+`2025-11-25` `initialize` handshake for servers that do not speak it, and
+refuses a server that settles on any other revision.
 
 Port: **`:9580`**
 
@@ -27,7 +28,7 @@ Port: **`:9580`**
 |---|---|
 | `POST /webhook` | Inbound CloudEvent trigger (Standard Webhooks-verified). Admits durably, then answers `202` with the run ids |
 | `POST /api/v1/run` | Manual agent invocation (OIDC JWT **and** Cedar `api:run.start`; honours `Idempotency-Key`). Waits for the answer |
-| `POST /api/v1/erasure` | Destroy a case wrapping key and/or forget a memory subject (OIDC + `api:erasure.execute`; reason required) |
+| `POST /api/v1/erasure` | Destroy a case wrapping key and/or forget a memory subject (OIDC + `api:erasure.execute`; reason required). `409` when a case is named and no `[keyring]` is configured; a key-service or memory-store failure is a `500` carrying an `error_id` |
 | `GET /api/v1/agents` | Activated specialists and subscriptions. OIDC + `api:agent.list`; version and digest are in `/api/v1/agents/catalog` |
 | `GET /api/v1/agents/catalog` | Every specialist compiled into this binary. OIDC + `api:agent.list` |
 | `GET /.well-known/agents/{name}` | A2A Agent Card, derived from the manifest |
@@ -87,9 +88,9 @@ what it last cosigned for `mako/agentd/<tenant>`.
 ### Durability instead of a dead-letter queue
 
 A failed run resumes from its last completed effect; there is no retry worklist
-and no exhaustion event. `de.agent.decision.made` carries the real outcome —
-`completed`, `failed`, `suspended`, `exhausted`, `quarantined`, `replanning`,
-`cancelled` or `abandoned` — see [decision delivery](#decision-delivery).
+and no exhaustion event. `de.agent.decision.made` carries the real outcome in
+the journal's own spelling — `succeeded`, `failed`, `exhausted`, `quarantined`,
+`cancelled`, `abandoned`, `withheld` — see [CloudEvents emitted](#cloudevents-emitted).
 
 ### At-least-once delivery, at-most-once admission
 
@@ -109,8 +110,8 @@ The status code is a retry instruction (mako's emitter retries 429 and 5xx):
 | `202` | at least one specialist admitted — the run ids are in the body | done; a retry meets the runs already holding its keys |
 | `204` | nothing subscribes to this event type | done |
 | `400` | `id`, `source` or `type` missing | dead-letters |
-| `429` | nothing admitted, something transient — a `[quota]` ceiling reached | resends |
-| `422` | nothing admitted and resending cannot help | dead-letters **now**, where an operator sees it |
+| `429` | nothing admitted, something transient — a `[quota]` ceiling reached; a problem body whose `admissions` holds each specialist's refusal | resends |
+| `422` | nothing admitted and resending cannot help — a problem body whose `admissions` holds each specialist's refusal | dead-letters **now**, where an operator sees it |
 
 Unknown refusals count as transient (`RuntimeError` is `#[non_exhaustive]`).
 The admission key is the CloudEvent's `(source, id)` joined with the
@@ -192,8 +193,13 @@ The worklist itself is agentplane's operator surface, mounted at
 | `POST /tasks/{id}/claim` · `/release` | This one is mine — don't duplicate the work |
 | `POST /tasks/{id}/decide` | Approve or reject, **as myself** |
 | `GET /runs?outcome=…` · `GET /runs/{run}` | What ended this way, and why is this one not finishing? |
+| `GET /runs/live` · `GET /runs/waiting` · `GET /attention` | What is executing, what is waiting and for what, and what needs a person now? |
+| `GET /runs/{run}/history` | The run's journal, record by record — its inputs, model exchanges and arguments |
 | `GET /cases/{case}` | What has happened on this matter, and by when must it end? |
-| `GET /obligations` | What did we miss? — obligations in the `breached` state |
+| `GET /obligations` · `POST /obligations/acknowledge` | What did we miss? — obligations in the `breached` state, and accounting for one |
+| `GET /halts` · `POST /halts` · `POST /halts/lift` | The emergency stop: what stands, throw one, lift one |
+| `GET /holds` · `POST /holds` · `POST /holds/release` | Legal holds: what is preserved, place one, release one |
+| `GET /drill` | The last recovery rehearsal's verdict |
 | `POST /runs/{run}/cancel` | Stop it, with a reason on the record |
 | `POST /runs/{run}/reconcile` · `/reopen` · `/abandon` | A quarantined run: what actually happened, judge it again, or write it off |
 | `GET /dead-letters` | Which message arrived that no run was waiting for? |
@@ -207,8 +213,10 @@ Controls on that surface:
   schema, menus, ceilings and field rules. An approval without one releases
   nothing a trusted field demands.
 - **The actor comes from the token, never the body.** Four-eyes is enforced in
-  the task store: the proposer cannot approve; a barred reviewer still sees the
-  task, marked so.
+  the task store: the proposer cannot approve, nor can the caller who started
+  the run; a barred reviewer still sees the task, marked so. A decision may name
+  the task `digest` it was made against, and is refused when the row changed
+  since.
 - **No OIDC, no surface.** Without OIDC the routes are not mounted.
 - **Two-layer eligibility.** Cedar decides who may use the surface; the task
   store narrows by `candidate_roles`. A test parses the manifests and fails when
@@ -218,7 +226,14 @@ Controls on that surface:
   `POST /events` is the machine door). A test walks
   `agentplane::api::action::ALL` and fails on a verb granted to no role.
   `api:obligation.list` is held to `mako-operations` and `regulatory`, because
-  `GET /obligations` does not narrow by domain.
+  `GET /obligations` does not narrow by domain — and so are
+  `api:obligation.acknowledge`, `api:run.history` (a run's inputs and
+  arguments, plane-wide), `api:drill.read`, `api:hold.list` and
+  `api:hold.place`. Releasing a hold is what lets the next erasure destroy the
+  matter, so `api:hold.release` is `regulatory`'s alone; throwing and lifting the
+  emergency stop are `mako-operations`'. mako embeds its own Cedar set, never
+  agentplane's shipped `serve-policy.cedar`, so that bundle's on-call grants do
+  not reach this plane; a test in `plane::policy` holds each narrowing.
 - **A quarantine has three verbs.** A run is quarantined when an effect's
   outcome cannot be established. *Reconcile* (look the outcome up; domain
   audience), *reopen* (judge again; an intervention) and *abandon* (close
@@ -230,7 +245,9 @@ obligations, breaches passed ones, applies each overdue task's `on_expiry`,
 wakes runs and dead-letters uncorrelated events. An approval expires with
 `deny` (an unanswered window sends nothing); all eighteen triage specialists
 declare `escalate` with an `escalate_to` audience, which joins the audience and
-keeps the row waiting.
+keeps the row waiting. A triage-only block declares no block-level `deadline`
+and no `approvers`: each rule's own deadline bounds its row, and agentplane
+refuses a field nothing reads.
 
 `kind: working-days` resolves through mako's BDEW Werktage calendar — the same
 holiday table and Europe/Berlin resolution as a [`makod`](@/docs/services/makod.md)
@@ -250,8 +267,10 @@ proposals, and erasing a case (`POST /api/v1/erasure`) destroys its wrapping
 key — reaching backups and replicas too. Specialists are handed identifiers,
 not customer records, and each declares `max_sensitivity_journaled`.
 
-> **Deployment note.** A HashiCorp Vault transit key must be created with
-> deletion allowed; erasure against a default key fails loudly.
+> **Deployment note.** Each erasure scope has its own HashiCorp Vault transit
+> key, named `ap-` and the hex SHA-256 of the scope
+> (`agentplane::keyring::VaultTransit::key_name`). Each must be configured with
+> `deletion_allowed=true`; erasure against a default key fails loudly.
 
 A plane with no key ring starts with a warning that personal data written to the
 chain cannot be erased later; `[keyring] required = true` refuses instead.
@@ -280,7 +299,7 @@ identifier satisfies it, a counterparty-authored string does not.
 
 The coded skills declare `models: {}` and no `execution` block; their behaviour
 is a registered skill in `agentd::skills`. `deadline-alert-agent` reads
-`deadline_at` and `partner_mp_id` from `obsd`, subtracts the journaled clock and
+`deadline_at` and `partner_mp_id` from `processd`'s read model, subtracts the journaled clock and
 classifies — `BREACH` past the Frist, `CRITICAL` under 30 minutes, `WARNING`
 under 2 hours, `COMPLIANT` beyond — tested at every boundary. The tool call and
 the clock read are still journaled effects through the policy gate. A procedure
@@ -295,21 +314,26 @@ belongs in `skills/` when it is a total function of what the tools return.
 ### Every answer is a shape
 
 All 28 specialists declare `output.schema`, and every schema is **closed**
-(`additionalProperties: false`, pinned by a test). The runtime folds the schema
-into the effect key and the manifest digest, so editing it reports divergence on
-replay.
+(`additionalProperties: false`, pinned by a test). Every model-backed schema
+also fits strict constrained decoding — each property listed in `required`, an
+optional one spelled nullable (`type: [string, "null"]`, with `null` in its
+`enum`) — so the Anthropic driver sends it as a strict tool and the model is
+held to the shape while it writes, not only checked after. The runtime folds
+the schema into the effect key and the manifest digest, so editing it reports
+divergence on replay.
 
 ### The legal basis is part of the answer
 
 A wrong citation is a wrong answer. Specialists **quote the service that
-computes the number** where one exists ([`sperrd`](@/docs/services/sperrd.md)'s
+computes the number** where one exists (the
+[Sperrauftrag queue](@/docs/services/processd.md#sperr-entsperrauftrag-queue-nb-role)'s
 `frist_ueberschritten`, `energy-billing`'s `guthabenerstattung` for § 40c
 Abs. 3) and **label anything else as an operating default**: § 60 Abs. 2 MsbG
 names no substitution method and § 20 EnWG no straight-through rate.
 
 ### Knowledge is granted, not copied
 
-mako's MCP servers publish 57 step-by-step prompts across 15 servers, and 25
+mako's MCP servers publish 54 step-by-step prompts across 11 servers, and 25
 specialists declare `context.prompts` against their own service instead of a
 paraphrase in `constraints`. A context grant authorises no action but is
 declared where a reviewer sees it. The three without one: the two coded skills,
@@ -348,6 +372,7 @@ The `plane::` suite parses every manifest and refuses:
 
 - a specialist in `agents/` that the Rust subscription table never wires up, or the reverse;
 - an answer-schema object that names its fields and then accepts others;
+- a model-backed answer schema outside strict constrained decoding;
 - a finding code the procedure emits that its schema cannot carry;
 - a memory subject that pools customers instead of binding `$correlation/malo`;
 - a terminal finding no triage rule reports;
@@ -361,7 +386,7 @@ so the check reads each *sentence*: an instruction verb outside the backticks
 (call, use, query, fetch, retrieve, invoke, consult, poll, check), no negation,
 and a tool-shaped backticked name. A grant no step mentions is refused too, so
 the grants and the procedure are the **same set** —
-150 grants across 28 manifests.
+151 grants across 28 manifests.
 
 ---
 
@@ -379,10 +404,10 @@ graph TB
         OVERSIGHT["Worklist<br/>triage for terminal findings<br/>bounded and escalating"]
     end
 
-    subgraph tools ["MCP Tools — 15 services, 163 tools"]
+    subgraph tools ["MCP Tools — 11 services, 160 tools"]
         T1["makod · marktd · billingd"]
-        T2["edmd · accountingd · obsd"]
-        T3["einsd · netzbilanzd · sperrd · ..."]
+        T2["edmd · accountingd · processd"]
+        T3["einsd · netzbilanzd · ..."]
     end
 
     HUMAN["Operator<br/>OIDC identity + role"]
@@ -448,8 +473,8 @@ procedure by `cargo xtask check-prompt-tools`.
 
 | Specialist | Capability | Shape | Reach | Subscribes to |
 |---|---|---|---|---|
-| `mako-agent` | `mako` | `tool-calling` | 7 on makod, marktd, obsd | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.mako.aperak.*` |
-| `deadline-alert-agent` | `deadline.alert` | **coded skill** (no model) | 1 on obsd | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.obs.deadline.approaching` |
+| `mako-agent` | `mako` | `tool-calling` | 7 on makod, marktd, processd | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.mako.aperak.*` |
+| `deadline-alert-agent` | `deadline.alert` | **coded skill** (no model) | 1 on processd | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.obs.deadline.approaching` |
 | `billing-agent` | `billing` | `tool-calling` | 9 on accountingd, billingd, invoicd, marktd | `de.invoic.receipt.disputed`, `de.accounting.mahnung.issued` |
 | `netzbilanz-agent` | `netzbilanz` | `tool-calling` | 7 on marktd, netzbilanzd | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched`, `de.netzbilanz.invoic.dispatch-overdue`, `de.netzbilanz.invoic.disputed` |
 | `invoice-reconciliation-agent` | `invoice.reconciliation` | `tool-calling` | 6 on accountingd, billingd, invoicd | `de.invoic.payment.overdue`, `de.invoic.receipt.*` |
@@ -459,7 +484,7 @@ procedure by `cargo xtask check-prompt-tools`.
 | `eeg-agent` | `eeg` | `tool-calling` | 4 on edmd, einsd, productd | `de.eeg.anlage.foerderung-auslaufend`, `de.messwert.reading.direct.stored` |
 | `eeg-compliance-agent` | `eeg.compliance` | `tool-calling` | 5 on einsd | `de.eeg.anlage.*`, `de.eeg.verguetung.*`, `de.eeg.marktpraemie.*`, `de.eeg.compliance.*`, `de.eeg.veraeusserungsform.gewechselt` |
 | `payment-reconciliation-agent` | `payment.reconciliation` | `tool-calling` | 4 on accountingd | `de.accounting.payment.due`, `de.accounting.bankruecklast`, `de.accounting.sepa.collection-rejected`, `de.accounting.sperrandrohung`, `de.accounting.sperrankuendigung`, `de.accounting.abwendung.angeboten`, `de.accounting.abwendung.gebrochen` |
-| `compliance-agent` | `compliance` | `tool-calling` | 5 on obsd, processd | `de.obs.stp.parity.alert` |
+| `compliance-agent` | `compliance` | `tool-calling` | 5 on processd | `de.obs.stp.parity.alert` |
 | `msb-history-agent` | `msb.history` | `tool-calling` | 6 on edmd, marktd | `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.completed`, `de.messwert.reading.order.failed`, `de.messwert.reading.delivery.overdue` |
 | `meter-data-agent` | `meter.data` | `tool-calling` | 3 on edmd | `de.messwert.reading.quality.warning`, `de.mako.process.completed` |
 | `grid-anomaly-agent` | `grid.anomaly` | `tool-calling` | 3 on marktd | `de.markt.nb-contract.updated`, `de.markt.malo.updated` |
@@ -467,11 +492,11 @@ procedure by `cargo xtask check-prompt-tools`.
 | `vertragd-agent` | `vertragd` | `tool-calling` | 9 on marktd, processd, productd, vertragd | `de.vertrag.*`, `de.mako.aperak.rejected`, `de.mako.process.failed`, `de.vertrag.ablauf.ankuendigung`, `de.vertrag.preisaenderung.ankuendigung` |
 | `productd-agent` | `productd` | `tool-calling` | 6 on productd | `de.tarif.product.updated`, `de.tarif.angebot.abgelaufen`, `de.tarif.epex.missing` |
 | `processd-agent` | `processd` | `tool-calling` | 7 on marktd, processd | `de.mako.process.initiated`, `de.mako.aperak.rejected`, `de.mako.process.failed` |
-| `sperrd-agent` | `sperrd` | `tool-calling` | 6 on makod, sperrd | `de.accounting.sperrauftrag`, `de.sperr.*`, `de.mako.process.completed` |
-| `portald-agent` | `portald` | `tool-calling` | 7 on accountingd, billingd, einsd, portald | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung-auslaufend`, `de.accounting.mahnung.issued`, `de.vertrag.*` |
-| `regulatory-reporting-agent` | `regulatory.reporting` | `tool-calling` | 5 on obsd, processd | _manual / scheduled_ |
+| `sperrd-agent` | `sperrd` | `tool-calling` | 6 on makod, processd | `de.accounting.sperrauftrag`, `de.sperr.*`, `de.mako.process.completed` |
+| `portald-agent` | `portald` | `tool-calling` | 8 on accountingd, billingd, einsd, marktd | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung-auslaufend`, `de.accounting.mahnung.issued`, `de.vertrag.*` |
+| `regulatory-reporting-agent` | `regulatory.reporting` | `tool-calling` | 5 on processd | _manual / scheduled_ |
 | `replacement-value-agent` | `replacement.value` | `tool-calling` | 3 on edmd | `de.messwert.reading.quality.warning`, `de.mako.process.completed` |
-| `mabis-syncd-agent` | `mabis.syncd` | `tool-calling` | 7 on edmd, mabis_syncd | `de.mabis.submission.failed`, `de.mabis.korrekturbedarf.opened`, `de.messwert.reading.quality.warning` |
+| `mabis-agent` | `mabis.submission` | `tool-calling` | 7 on edmd, netzbilanzd | `de.mabis.submission.failed`, `de.mabis.korrekturbedarf.opened`, `de.messwert.reading.quality.warning` |
 | `smgw-diagnostics-agent` | `smgw.diagnostics` | `tool-calling` | 5 on edmd, marktd | `de.messwert.cls.compliance-issue`, `de.messwert.smgw.cert.expiry-warning`, `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.initiated`, `de.markt.geraet.konfiguration.updated` |
 | `vpp-billing-agent` | `vpp.billing` | `tool-calling` | 3 on billingd, marktd | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` |
 | `gabi-gas-agent` | `gabi.gas.balancing` | **coded skill** (no model) | 0 | `de.gabi.alocat.missing` |
@@ -524,13 +549,53 @@ changes not one of the 28 manifests — and keeps customer data off a third-part
 | **Split-view detection** | `[witness]` submits checkpoints for cosignature over C2SP `tlog-witness`; a witness refuses a history that does not extend the one it saw |
 | **Back-pressure** | `[quota] max_concurrent_runs`, reserved in the store at admission — durable, cross-instance, and released when a run suspends. 429 when exhausted |
 | **Readiness** | `/health/ready` reads a journal checkpoint under a two-second ceiling — the store this plane cannot admit without, and the one the built-in database ping does not cover |
-| **Arm boundary on a worklist row** | A role build asserts no compiled specialist hands a finding to another arm (§§ 6a, 7a EnWG); a role-scoped deployment may not even contain that desk |
+| **Arm boundary on a worklist row** | A role build asserts no compiled specialist hands a finding to another arm; a role-scoped deployment may not even contain that desk. That fails a misconfiguration closed — the confidentiality duty of §§ 6a, 7a EnWG is the deployment's Cedar policy, enforced at runtime |
 | **Declaration identity** | `/api/v1/agents` and `/agents/catalog` report each specialist's `version` and the digest over its canonical manifest, so a running plane can be checked against the file a reviewer approved |
 | **Observability** | agentplane's instrument catalogue is bridged onto `GET /metrics` — runs by terminal status, policy denials, budget refusals, quarantines, breached obligations, open cases and tasks. Emitted at `info` under the global filter, so a `warn` deployment must admit `agentplane.metric=info` or the series flatline |
 | **Manual-run timeout** | `session_timeout_secs` bounds a *manual* run's wait; `POST /webhook` waits for nothing. Each run stays journaled and resumable either way |
 | **API keys** | `api_key`, `mcp_api_key`, `keyring.vault.token`, `audit_hmac_secret` are `SecretString` — never in logs or debug output. Bedrock credentials come from the AWS chain, not from config |
 | **Grant truth** | `cargo xtask check-tool-grants` checks every `tool://` grant against the server's own `read_only_hint`, and refuses a mutating grant on a `tool-calling` agent |
 | **Least privilege** | `cargo xtask check-prompt-tools` holds the grants and the procedure to the same set in both directions, so a specialist cannot hold a server's whole read surface again |
+
+---
+
+## Upgrading agentplane
+
+agentplane is pre-freeze: a minor may change a durable format — id spellings,
+chain digests, effect keys, sealed-envelope bindings, store schemas — with no
+migration, and the store is then **recreated**, never opened in place. agentd
+holds no production data a recreate loses beyond the runs themselves, so every
+such upgrade takes the same steps:
+
+1. **Drain.** Stop the emitters (or route `POST /webhook` away) and let running
+   work conclude. A run still open after the upgrade does not resume: its
+   declaration or policy-bundle digest moved, so agentplane quarantines it
+   naming both, and its admission key does not deduplicate a redelivery under
+   the new build.
+2. **Keep what an auditor may ask for.** `agentplane export` with the *old*
+   binary writes the journal to a file; keep that binary beside it, because
+   `agentplane verify` of the same build is what checks it.
+3. **Stop agentd and recreate the store.** redb: move the journal file aside.
+   PostgreSQL: drop and recreate the database `journal.url` names — agentplane
+   creates its schema on connect.
+4. **Re-provision the Vault transit keys** when the key-name derivation moved:
+   one key per erasure scope, named by `VaultTransit::key_name`, each with
+   `deletion_allowed=true`.
+5. **Witnesses.** The recreated log publishes under the same origin
+   `mako/agentd/<tenant>`, and a witness holds every checkpoint to the last it
+   cosigned, so its first submission is refused as an integrity failure —
+   correctly: it is another history under that name. Arrange the reset with each witness
+   operator before starting, or start with `[witness]` removed until they have.
+6. **Start agentd.** Startup refuses a store this build cannot read before
+   anything appends to it: redb refuses a file an earlier build wrote at open
+   (its tables have other shapes), and for both backends the newest run must
+   verify end to end under the running build
+   (`Stores::refuse_an_unreadable_journal`, `tests/it/durability.rs`).
+
+The `agentplane` operator CLI against the store takes `--store` as a path or a
+`postgres://` URL with `--tenant`; `halt` and `hold` take `--actor`;
+`reconcile` and `acknowledge` take `--reason`; a decision is
+`decide <task> approve|reject`.
 
 ---
 
@@ -667,18 +732,14 @@ token   = "env:VAULT_TOKEN"
 makod       = "http://makod:8080/mcp"
 marktd      = "http://marktd:8180/mcp"
 processd    = "http://processd:8580/mcp"
-obsd        = "http://obsd:8480/mcp"
 billingd    = "http://billingd:9280/mcp"
 edmd        = "http://edmd:8380/mcp"
 invoicd     = "http://invoicd:8280/mcp"
 accountingd = "http://accountingd:9380/mcp"
 einsd       = "http://einsd:9180/mcp"
 netzbilanzd = "http://netzbilanzd:8680/mcp"
-portald     = "http://portald:9480/mcp"
-sperrd      = "http://sperrd:8780/mcp"
 productd    = "http://productd:9080/mcp"
 vertragd    = "http://vertragd:9780/mcp"
-mabis_syncd = "http://mabis-syncd:8880/mcp"
 ```
 
 A name in `enable` that matches no compiled specialist is a **startup failure**,
@@ -757,11 +818,15 @@ The answer is not in it: shipping a run's output would be an undeclared egress.
 `GET /api/v1/oversight/runs/{run}` holds the reasoning. There is no `time`
 attribute — time inside a run comes from journaled `clock.now` effects.
 
-`outcome` is one of `completed`, `failed`, `suspended`, `exhausted`,
-`quarantined`, `replanning`, `cancelled`, `abandoned` or `not-admitted`.
-`suspended` waits for a human or an event; `quarantined` means an effect's
-outcome cannot be established (a failure may be unwound, an unknown outcome may
-not); `abandoned` is that doubt closed by a person. A failed run carries
+`outcome` is the journal's spelling of the conclusion (`RunStatus::as_str`):
+`succeeded` for a completed run, and otherwise the word `POST /api/v1/run`
+answers with — `failed`, `exhausted`, `quarantined`, `cancelled`, `abandoned`,
+`withheld`. `quarantined` means an effect's outcome cannot be established (a
+failure may be unwound, an unknown outcome may not); `abandoned` is that doubt
+closed by a person; `withheld` is a run paused because the authority it acts
+for was withdrawn by a `subject:` halt, resumed when the halt is lifted. The
+manual-run answer adds `completed` (for `succeeded`), `suspended` (waiting for
+a human or an event), `replanning`, `running` and `not-admitted`. A failed run carries
 **`reason`**, absent (not `null`) on success — asserted in `tests/it/evidence.rs`.
 
 ---

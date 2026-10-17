@@ -741,7 +741,7 @@ pub struct MeterRead {
     /// column, not an enum), so it can record whatever a delivery called itself.
     ///
     /// It is deliberately *not* how preliminary is told from final. That
-    /// question is answered by transaction time: `mabis-syncd` asks for the
+    /// question is answered by transaction time: `netzbilanzd` asks for the
     /// readings as they were known at the Erstaufschlag versus at the Clearing
     /// deadline via `repo.query_as_of` (see `valid_from_tx` below). A label
     /// would have to be maintained in lockstep with the real correction history

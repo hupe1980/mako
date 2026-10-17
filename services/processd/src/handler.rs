@@ -1,10 +1,17 @@
-//! Axum webhook handler for `processd`.
+//! Axum webhook handler for `processd` — the one inbound door.
 //!
-//! Receives `de.mako.process.*` CloudEvents from `marktd` (HMAC-signed).
+//! Receives the subscribed CloudEvents from `marktd`'s fan-out (HMAC-signed),
+//! verifies the signature once and hands each event to every module whose
+//! types it matches. One subscription, one delivery, one acknowledgement.
 //!
 //! ## Event routing
 //!
-//! ## Event routing, by the role that owes the answer
+//! 1. **Process read model** — every `de.mako.*` lifecycle event is projected
+//!    into `process_projections` first, for every role build
+//!    ([`crate::obs::project::project`]).
+//! 2. **Sperrauftrag queue** — `process.initiated` 17115 / 17117 opens a work
+//!    order (`role-nb-*`, [`crate::sperr::handlers::ingest`]).
+//! 3. **Decision modules**, by the role that owes the answer:
 //!
 //! | Trigger | Module | Cargo feature |
 //! |---|---|---|
@@ -106,11 +113,30 @@ pub async fn handle_webhook(
         Ok(e) => e,
         Err(err) => {
             warn!(%err, "processd: failed to parse CloudEvent");
-            return (StatusCode::BAD_REQUEST, "invalid JSON").into_response();
+            return mako_service::ApiError::bad_request("the body is not a JSON CloudEvent")
+                .into_response();
         }
     };
 
     let ce_type = event["type"].as_str().unwrap_or("").to_owned();
+
+    // ── 2a. Process read model ────────────────────────────────────────────
+    // Ahead of every decision module: a lost `process.initiated` leaves no
+    // projection and no deadline, and the process can then breach in silence.
+    // A failed write is therefore not acknowledged — the fan-out redelivers,
+    // and every module below is idempotent against a redelivery.
+    if let Err(err) = crate::obs::project::project(&state.obs, &event).await {
+        warn!(%err, "processd obs: projection failed — fan-out will redeliver");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    // ── 2b. Sperr-/Entsperrauftrag queue (ORDERS 17115 / 17117) ───────────
+    #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+    match crate::sperr::handlers::ingest(&state.pool, &state.tenant, &event).await {
+        Ok(Some(resp)) => return resp,
+        Ok(None) => {}
+        Err(e) => return e.into_response(),
+    }
 
     // ── 3. Route by event type ────────────────────────────────────────────
     // 3a. EoG gap-closure automation (§36/§38 EnWG, NB role) — consumes the

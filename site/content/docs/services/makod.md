@@ -40,8 +40,7 @@ Daemons `makod` exchanges commands and events with most directly:
 | [`marktd`](@/docs/services/marktd.md) | `:8180` | Master data (MaLo/MeLo/contracts), webhook fan-out, price sheets |
 | `invoicd` | `:8280` | INVOIC plausibility, receipt persistence, REMADV auto-dispatch |
 | [`edmd`](@/docs/services/edmd.md) | `:8380` | Meter-data store (MSCONS), time-series API, Mehr-/Mindermengen |
-| `obsd` | `:8480` | Business-process observability, BNetzA KPI reports, alerting |
-| [`processd`](@/docs/services/processd.md) | `:8580` | Walks the Entscheidungsbäume and posts the answer command back |
+| [`processd`](@/docs/services/processd.md) | `:8580` | Walks the Entscheidungsbäume and posts the answer command back; keeps the process read model (BNetzA KPIs, Fristen alerts) and the NB Sperrauftrag queue |
 | `netzbilanzd` | `:8680` | NNE/MMM/MSB INVOIC generation |
 
 The [service index](@/docs/services/_index.md) lists every daemon.
@@ -69,6 +68,9 @@ allow_volatile = true          # in-memory; data is lost on exit
 [http]
 addr      = "127.0.0.1:8080"
 auth_keys = ["dev=dev-makod-key"]
+
+[deployment]
+rollen = ["nb-strom", "lf-strom", "msb-strom"]
 
 [[party]]
 mp_id   = "9900357000004"
@@ -138,6 +140,10 @@ bucket = "my-makod-events"
 prefix = "makod"
 # endpoint = "http://minio:9000"
 
+# The roles this instance plays — each needs exactly one [[party]] MP-ID.
+[deployment]
+rollen = ["nb-strom"]
+
 # One entry per Marktpartner-ID. Allgemeine Festlegungen §2.13 requires a
 # separate code per Energieart and Marktrolle.
 [[party]]
@@ -185,8 +191,10 @@ webhook_url         = "https://erp.example.com/mako/events"
 webhook_secret_file = "/etc/makod/erp-webhook.secret"
 
 [marktd]
-# url          = "http://marktd:8180"
-# api_key_file = "/etc/makod/marktd.key"
+# url                 = "http://marktd:8180"
+# api_key_file        = "/etc/makod/marktd.key"
+# webhook_url         = "http://makod:8080/webhooks/marktd"   # required with url
+# webhook_secret_file = "/etc/makod/marktd-webhook.secret"
 
 [maloid]
 # partners              = ["9900000000001=https://partner-a.example/maloid"]
@@ -209,6 +217,7 @@ environment and the container spec.
 | `http.auth_keys` | `http.auth_keys_file` |
 | `erp.webhook_secret` | `erp.webhook_secret_file` |
 | `marktd.api_key` | `marktd.api_key_file` |
+| `marktd.webhook_secret` | `marktd.webhook_secret_file` |
 
 ---
 
@@ -236,7 +245,6 @@ does not apply).
 | `data_dir` | `MAKOD_DATA_DIR` | `--data-dir` | *(in-memory)* | Local path (`backend = "local"`) |
 | `allow_volatile` | `MAKOD_ALLOW_VOLATILE` | `--allow-volatile` | `false` | Required to run without `data_dir`; never production |
 | `max_stream_events` | `MAKOD_MAX_STREAM_EVENTS` | `--max-stream-events` | `10000` | Per-stream event quota; `0` disables |
-| `allow_multi_instance` | `MAKOD_ALLOW_MULTI_INSTANCE` | `--allow-multi-instance` | `false` | Only behind an external lock — see [Scaling](#scaling) |
 
 | Section | Keys (env `MAKOD_<SECTION>_<KEY>`, flag `--<section>-<key>`) | Credentials |
 |---|---|---|
@@ -260,6 +268,12 @@ A command for a role outside `marktrollen` is refused with
 `422 role_not_configured`. Typical values: `LF` (supplier), `LF,LFG`
 (dual-fuel), `NB`, `NB,MSB` (Stadtwerke), `BKV`.
 
+### `[deployment]` — the roles this instance plays (required)
+
+| TOML key | Required | Description |
+|---|---|---|
+| `rollen` | yes | `lf-strom`, `lf-gas`, `nb-strom`, `nb-gas`, `msb-strom`, `msb-gas`, `esa-strom`. Each needs exactly one `[[party]]` MP-ID; see [Deployment roles](#deployment-roles) |
+
 ### `[[party]]` — operator identities (required)
 
 At least one entry; one per Marktpartner-ID.
@@ -267,7 +281,7 @@ At least one entry; one per Marktpartner-ID.
 | TOML key | Required | Description |
 |---|---|---|
 | `mp_id` | yes | 13-digit BDEW- (`99…`) or DVGW-Codenummer (`98…`), GS1 GLN, or 16-char EIC |
-| `roles` | yes | Case-insensitive. Strom: `NB`, `LF`, `MSB`, `ANB`, `VNB`, `NMSB`, `AMSB`, `BKV`, `UNB`, `BIKO`, `ESA`, `DP`, `EIV`. Gas: `GNB`, `LFG`, `GMSB`, `MGV`, `FNB`, `KN`. Both: `RB`. `MGV`, `DP`, `EIV`, `KN`, `RB` route no PIDs |
+| `roles` | yes | Case-insensitive. Strom: `NB`, `ANB`, `VNB` (`nb-strom`), `LF` (`lf-strom`), `MSB`, `NMSB`, `AMSB` (`msb-strom`), `ESA` (`esa-strom`). Gas: `GNB` (`nb-gas`), `LFG` (`lf-gas`), `GMSB` (`msb-gas`). Each must belong to a declared `rollen` token; `BKV`, `UNB`, `BIKO`, `DP`, `EIV`, `MGV`, `FNB`, `KN` and `RB` have no module and are refused |
 | `primary` | no | Storage partition key (derives the `TenantId`) and default sender MP-ID; the first entry when none is marked |
 | `agency` | no | NAD DE 3055 override; derived from the prefix otherwise (`99…` → `293`, `98…` → `332`, EIC → `ZEW`, else `9`) |
 
@@ -287,35 +301,46 @@ OIDC issuer, and when neither a policy directory nor `permit_all` is set.
 
 ---
 
-## Role Feature Flags
+## Deployment roles
 
-Cargo features decide which domain modules are compiled in;
-`startup::production_modules()` is the list.
+`[deployment] rollen` decides which domain modules register;
+`startup::MODULE_TABLE` maps each role to its modules. Startup — and `--check` —
+refuses a configuration that declares no role, a declared role without exactly
+one `[[party]]` MP-ID, an MP-ID for a role the deployment does not declare, and
+a `[[party]]` role no module answers for (`BKV`, `UNB`, `BIKO`, `FNB`, `MGV`,
+`KN`, `DP`, `EIV`, `RB`). One MP-ID per role and Sparte is BDEW-AWH
+Identifikatoren V1.2 Kap. 2.1 (S. 4): „Für jede Sparte (Gas bzw. Strom) und
+jede Rolle hat ein Markteilnehmer genau eine MP-ID."
 
-| Feature flag | Modules compiled in |
-|---|---|
-| `role-lf-strom` | `GpkeModule` (LF side) · `EmobModule` (the LF answers 55240) |
-| `role-nb-strom` | `GpkeModule` · `WimModule` · `MabisModule` · `EmobModule` · `RedispatchModule` |
-| `role-lf-gas` | `GeliGasModule` (LF side) |
-| `role-nb-gas` | `GeliGasModule` (GNB side) · `WimModule` · `GaBiGasModule` |
-| `role-msb-strom` / `role-msb-gas` | `WimModule` |
-| `role-esa-strom` | `WimModule` (`esa-wertebestellung` and its `wim-wertebestellung` counterpart) |
-| `role-lf` · `role-nb` · `role-msb` | the Strom + Gas pair of each |
+```toml
+[deployment]
+rollen = ["nb-strom", "msb-strom"]
+
+[[party]]
+mp_id = "9900357000004"
+roles = ["NB", "MSB"]
+```
+
+| `rollen` token | `[[party]]` roles | Modules registered |
+|---|---|---|
+| `lf-strom` | `LF` | `GpkeModule` (LF side) · `EmobModule` (the LF answers 55240) |
+| `nb-strom` | `NB` · `ANB` · `VNB` | `GpkeModule` · `WimModule` · `MabisModule` · `EmobModule` · `RedispatchModule` |
+| `lf-gas` | `LFG` | `GeliGasModule` (LF side) |
+| `nb-gas` | `GNB` | `GeliGasModule` (GNB side) · `WimModule` · `GaBiGasModule` |
+| `msb-strom` | `MSB` · `NMSB` · `AMSB` | `WimModule` |
+| `msb-gas` | `GMSB` | `WimModule` |
+| `esa-strom` | `ESA` | `WimModule` (`esa-wertebestellung` and its `wim-wertebestellung` counterpart) |
 
 `WimModule` covers both Sparten. `RedispatchModule` is NB Strom only — LF, MSB
 and gas-only deployments have no §§ 13/13a obligations (BK6-20-059/060/061 as
 consolidated by BK6-23-241).
 
-`default` enables every role. A role-scoped build turns it off:
-
-```dockerfile
-RUN cargo build -p makod --release --no-default-features --features role-lf
-```
-
-Selecting no role is refused at startup. Each role build registers a strict
-subset of the default's **71 workflows over 469 Prüfidentifikatoren**, and the
-startup log records both counts. Feature flags remove code; `--marktrollen`
-only refuses commands at runtime.
+Every build links every domain crate; the declaration selects registrations,
+and `--marktrollen` additionally refuses commands at runtime. Declaring every
+role registers the full **71 workflows over 469 Prüfidentifikatoren**, and the
+startup log records the counts a declaration registers. Which principal may
+read which role's processes is the Cedar policy's decision
+([Authorization](#authorization)).
 
 ---
 
@@ -791,8 +816,7 @@ The CONTRL Empfangsbestätigung is owed for a DVGW interchange too (CONTRL AHB
 | **Self-addressed messages meet the network's standard** | The [loopback](#integrated-operators-nb-msb-same-mp-id) runs the same pre-send AHB conformance gate, refuses an interchange that will not parse back, and treats "dispatched nothing" as an error — except when no workflow for the receiving side is compiled in, where it acknowledges |
 
 The business-key lock is in-process; that suffices because the data-directory
-lock makes makod a single writer. `--allow-multi-instance` needs an external
-lock.
+lock makes makod a single writer.
 
 ---
 
@@ -851,7 +875,15 @@ decimals), or `{"art": "aufteilungsfaktor" | "technische_ressourcen", "wert": �
 
 ### Error responses
 
-| HTTP | `error` | Cause |
+Every refusal is the problem body every mako service answers with —
+`error` is the HTTP reason phrase, `detail` the sentence — and carries the
+stable machine reason in `code`, the key to branch on:
+
+```json
+{ "error": "Conflict", "code": "duplicate_process", "detail": "…", "malo_id": "51238696012", "process_id": "018f3a2b-…" }
+```
+
+| HTTP | `code` | Cause |
 |------|---------|-------|
 | `400` | `duplicate_idempotency_key_header` | `Idempotency-Key` sent twice |
 | `401` / `403` | — | No valid bearer token / Cedar denied `SubmitCommand` |
@@ -860,11 +892,11 @@ decimals), or `{"art": "aufteilungsfaktor" | "technische_ressourcen", "wert": �
 | `409` | `ambiguous_process` | More than one live process for the key — a data-integrity issue |
 | `409` | `invalid_state` | The process refuses the command in its current state |
 | `422` | `missing_idempotency_key` | No `Idempotency-Key` |
-| `422` | `command_rejected` — detail `unknown_command` · `marktrolle_required` · `role_not_permitted` · `role_not_configured` | Name not registered · multi-role without `marktrolle` · role not allowed for this command · role not in `--marktrollen` |
+| `422` | `command_rejected` — `reason` `unknown_command` · `marktrolle_required` · `role_not_permitted` · `role_not_configured` | Name not registered · multi-role without `marktrolle` · role not allowed for this command · role not in `--marktrollen` |
 | `422` | `idempotency_key_reuse` | Key used for a different command or payload |
 | `422` | `malo_not_found` | `malo_id` not in the MaLo cache — seed it via `PUT /admin/malo/{malo_id}` |
 | `422` | `invalid_payload` | Missing or malformed payload field |
-| `500` | `engine_error` | Storage or engine failure |
+| `500` | — | Storage or engine failure — the body carries an `error_id` the log line carries, never the cause |
 | `501` | `not_implemented` | Registered but not dispatchable in this build — do not retry automatically |
 | `503` | `idempotency_unavailable` | The idempotency record could not be read — retry |
 
@@ -1143,7 +1175,7 @@ curl -X POST http://localhost:8080/api/v1/commands \
   }'
 ```
 
-`sperrd` issues both from `PUT /api/v1/sperr-orders/{id}/execute` and `.../fail`.
+`processd`'s Sperrauftrag queue issues both from `PUT /api/v1/sperr-orders/{id}/execute` and `.../fail`.
 
 ### A Prüfidentifikator two Sparten share
 
@@ -1367,6 +1399,25 @@ and logs the MP-ID and address.
 
 A command whose `malo_id` is not cached is `422 malo_not_found`.
 
+### MaLo cache follows marktd
+
+With `[marktd] url` set, the cache follows marktd's durable fan-out instead of
+waiting to be pushed:
+
+| Step | What happens |
+|---|---|
+| Subscription | At startup makod registers subscriber `makod` for `de.markt.malo.updated` at `[marktd] webhook_url` (required with `url`; the HTTP port must be open) |
+| Backfill | makod reads marktd's whole MaLo list (`GET /api/v1/malos`, pages of 500) into the cache. `/health/ready` answers `503 not_ready:malo_backfill` until subscription and backfill have succeeded; both retry with backoff up to 60 s |
+| Delivery | `POST /webhooks/marktd`, verified against `[marktd] webhook_secret` (Standard Webhooks; unsigned accepted only without a secret). makod reads the record back with `GET /api/v1/malos/{malo_id}` and upserts it; a `404` drops the entry |
+| Failure | A read or cache write that fails answers `503`, so marktd redelivers with backoff and dead-letters after its budget (`/admin/fanout/dlq` on marktd) |
+
+The cache record takes the NB and MSB from the Rollenzuordnungen valid today
+(`NB`/`GNB`, `MSB`/`GMSB`); a record without an NB is attributed to the
+operator's own NB MP-ID for its Sparte, and one the operator holds none for is
+left out and logged. A backfill page older than a record a delivery already
+applied does not overwrite it. `PUT /admin/malo/{malo_id}` stays available for
+an ERP that keeps the cache itself.
+
 ---
 
 ## EDIFACT Rendering
@@ -1586,10 +1637,10 @@ spec:
 
 Run **one writer**. On `local`, makod holds an exclusive lock on
 `<data-dir>/.makod.lock` and a second instance refuses to start. Object-store
-backends have no such lock: use a leader-election layer (Kubernetes lease, etcd)
-and pass `--allow-multi-instance` only with that lock in place — AS4 inbox
-deduplication and the business-key lock are per instance. There is no read-only
-replica mode.
+backends carry no such lock, so keeping a second instance off the same bucket
+prefix is the deployment's job — one replica with a `Recreate` rollout. AS4
+inbox deduplication and the business-key lock are per instance, and makod has
+no multi-instance mode and no read-only replica mode.
 
 ---
 
@@ -1603,6 +1654,8 @@ boot consumes the same preflight output.
 |---|---|
 | Config file | Schema parses; no unknown key; no secret both inline and by file |
 | `[[party]]` | MP-ID format, one code per Marktrolle, no mixed Strom+Gas entry (§2.13) |
+| `[deployment] rollen` | Declared; each role has exactly one `[[party]]` MP-ID and no MP-ID names an undeclared role |
+| `[marktd]` | `webhook_url` set with `url`, and the HTTP port open for it |
 | Profiles | Every module has an active `edi-energy` profile for each of its message types |
 | Adapter coverage | Every adapter registry accepts every format version the profile registry declares |
 | Dispatch completeness | Every workflow the `PidRouter` reaches has an ingest dispatch arm |
@@ -1842,8 +1895,8 @@ tariff zones (HT/ST/NT).
 | `ZE` el. 0 | `saison` | `Z01` SOMMER, `Z02` WINTER, `Z03` GESAMT |
 | `ZD` el. 0 / 1..N | `tagtyp` / time windows | `Z01` WERKTAG, `Z02` SAMSTAG, `Z03` SONNTAG_FEIERTAG · `"HHMM:RegisterCode"` |
 
-Active whenever `wim-stammdaten` is registered (`role-msb-strom` or
-`role-nb-strom`).
+Active whenever `wim-stammdaten` is registered (`[deployment] rollen` naming
+`msb-strom` or `nb-strom`).
 
 ### WiM Steuerungsauftrag — VPP dispatch billing
 

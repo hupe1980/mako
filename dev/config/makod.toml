@@ -22,6 +22,10 @@ addr = "127.0.0.1:8080"
 # presents `dev-mcp-key`.
 auth_keys = ["dev=dev-makod-key", "agentd=dev-mcp-key"]
 
+# The roles this instance plays; each needs exactly one [[party]] MP-ID.
+[deployment]
+rollen = ["nb-strom", "lf-strom", "msb-strom"]
+
 [[party]]
 mp_id   = "9900357000004"
 roles   = ["NB", "LF", "MSB"]

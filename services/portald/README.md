@@ -50,7 +50,6 @@ and `/metrics` come from the service runner.
 
 ```toml
 # portald.toml
-port   = 9480
 tenant = "9900357000004"
 
 # Required — the authorization authority.
@@ -65,19 +64,22 @@ marktd_url      = "http://marktd:8180"
 outputd_url     = "http://outputd:9880"   # the document inbox behind /dokumente
 # …_api_key = "env:…"  — opaque service Bearer tokens
 
-# Required unless `allow_insecure_no_auth = true`.
-[mcp]
-api_key = "env:PORTALD_MCP_API_KEY"
+[http]
+addr = "0.0.0.0:9480"
 ```
 
-## MCP server
+## No MCP server
 
-`/mcp` (Streamable HTTP), 8 read-only tools and 3 prompts. The tools take a
-`malo_id` and no customer token, so `/mcp` is operator-facing: gate it with
-`[mcp]` and keep it off the public ingress.
+`portald` serves no `/mcp`. An MCP tool takes a `malo_id` and no customer
+token, so it could not pass the `vertragd` ownership check every route here
+makes. Agents read the same data from the service that owns it, behind that
+service's Cedar policy: `billingd` `list_billing_records`, `accountingd`
+`get_balance` · `list_ledger` · `get_vorauszahlung`, `edmd` `get_timeseries`,
+`einsd` `list_plants`, `marktd` `get_versorgungsstatus`.
 
 An LF-role service (§§ 6a, 7a EnWG): it reads `marktd` only for the LF's own
-VersorgungsStatus; `netzbilanzd` and `sperrd` are not reachable through it.
+VersorgungsStatus; `netzbilanzd` and `processd` (which holds the Sperrauftrag
+queue) are not reachable through it.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/portald/)
 has the full reference.

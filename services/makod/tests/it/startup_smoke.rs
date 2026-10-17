@@ -41,6 +41,75 @@ fn the_production_stack_builds_with_a_driver_per_workflow() {
     assert!(!ctx.drivers().is_empty());
 }
 
+/// Each deployment role registers exactly its module set.
+///
+/// One row per role, stated here rather than read from `MODULE_TABLE`: a module
+/// added to the table changes some role's set, and this test fails until the
+/// row names it. A role whose set is empty would boot a daemon that routes
+/// nothing.
+#[test]
+fn each_role_registers_its_module_set() {
+    use makod::deployment::Rolle;
+    let expected: &[(Rolle, &[&str])] = &[
+        (Rolle::LfStrom, &["gpke", "emob"]),
+        (Rolle::LfGas, &["geli-gas"]),
+        (
+            Rolle::NbStrom,
+            &["gpke", "wim", "mabis", "emob", "redispatch"],
+        ),
+        (Rolle::NbGas, &["wim", "geli-gas", "mako-gabi-gas"]),
+        (Rolle::MsbStrom, &["wim"]),
+        (Rolle::MsbGas, &["wim"]),
+        (Rolle::EsaStrom, &["wim"]),
+    ];
+    assert_eq!(
+        expected.iter().map(|(r, _)| *r).collect::<Vec<_>>(),
+        Rolle::ALL.to_vec(),
+        "every role has exactly one row"
+    );
+    for (rolle, modules) in expected {
+        let got: Vec<&str> = makod::startup::modules_for(&std::iter::once(*rolle).collect())
+            .iter()
+            .map(|m| m.name())
+            .collect();
+        assert_eq!(&got, modules, "{rolle} registers the wrong module set");
+    }
+
+    // Every table row is some role's module, and names what it builds.
+    for row in makod::startup::MODULE_TABLE {
+        assert!(
+            !row.rollen.is_empty(),
+            "{} is registered by no role",
+            row.name
+        );
+        assert_eq!(row.build().name(), row.name);
+    }
+    // All roles together are the whole stack the guards measure.
+    assert_eq!(
+        makod::startup::modules_for(&Rolle::ALL.into_iter().collect()).len(),
+        makod::startup::production_modules().len()
+    );
+}
+
+/// An LF-only deployment registers no NB module.
+///
+/// MaBiS, Redispatch and GaBi Gas are network-operator obligations; a
+/// deployment declaring `lf-strom` alone must not route their PIDs.
+#[test]
+fn an_lf_strom_deployment_registers_no_network_module() {
+    let names: Vec<&str> =
+        makod::startup::modules_for(&std::iter::once(makod::deployment::Rolle::LfStrom).collect())
+            .iter()
+            .map(|m| m.name())
+            .collect();
+    for nb_only in ["mabis", "redispatch", "mako-gabi-gas", "wim"] {
+        assert!(
+            !names.contains(&nb_only),
+            "lf-strom registers {nb_only}: {names:?}"
+        );
+    }
+}
+
 /// Assert that every active FV transition is registered in the migration
 /// dispatch table.
 ///
@@ -226,8 +295,8 @@ fn landing_page_stats() -> std::collections::HashMap<String, usize> {
 /// so editing the page alone would keep CI green on a number nothing backs.
 ///
 /// The counts are taken over the **full** module stack, which is what the page
-/// describes: a deployment holding every market role. A role-limited deployment
-/// registers fewer.
+/// describes: a deployment declaring every role. One declaring fewer registers
+/// fewer.
 ///
 /// When this fails, the fix is to change whichever side is wrong — usually the
 /// page — not to loosen the assertion.
@@ -264,7 +333,7 @@ fn the_landing_page_figures_match_the_registered_engine() {
     let landing_page_workflows = stat("MaKo workflows");
     let landing_page_message_types = stat("EDI@Energy message types");
     let landing_page_services = stat("services");
-    let landing_page_roles = stat("role-scoped deployments");
+    let landing_page_roles = stat("deployable roles");
 
     assert_eq!(
         edi_energy::MessageType::ALL.len(),
@@ -293,28 +362,18 @@ fn the_landing_page_figures_match_the_registered_engine() {
          workspace has {services} — update the page"
     );
 
-    // § 6a EnWG informational unbundling is the claim behind this number, so it
-    // has to be the number of binaries that can actually be built in isolation —
-    // makod's own top-level role features, not the Marktrollen the Rollenmodell
-    // defines (twelve) nor the answer-rule families `mako-pruefung` carries
-    // (six). Counted from the manifest the build reads.
-    let manifest = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
-    )
-    .expect("makod's manifest");
-    let makod_roles: std::collections::BTreeSet<&str> = manifest
-        .lines()
-        .filter_map(|l| l.split_once('='))
-        .filter_map(|(name, _)| name.trim().strip_prefix("role-"))
-        // The role, not the build: `role-lf`, `role-lf-strom` and `role-lf-gas`
-        // are one deployment scoped three ways, and ESA is Strom-only so it has
-        // no dual-fuel alias to count instead.
-        .map(|rest| rest.split('-').next().unwrap_or(rest))
+    // The Marktrollen a deployment can declare, counted from the role type
+    // `[deployment] rollen` parses — the role, not the Sparte: `lf-strom` and
+    // `lf-gas` are one Marktrolle in two Sparten, and ESA is Strom-only.
+    let makod_roles: std::collections::BTreeSet<&str> = makod::deployment::Rolle::ALL
+        .iter()
+        .map(|r| r.token().split('-').next().unwrap_or(r.token()))
         .collect();
     let makod_roles = makod_roles.len();
     assert_eq!(
         makod_roles, landing_page_roles,
-        "site/templates/index.html advertises {landing_page_roles} role-scoped deployments,          makod declares {makod_roles} top-level role features — update the page"
+        "site/templates/index.html advertises {landing_page_roles} deployable roles, \
+         makod's [deployment] rollen names {makod_roles} Marktrollen — update the page"
     );
 
     assert_eq!(
@@ -329,7 +388,7 @@ fn the_landing_page_figures_match_the_registered_engine() {
     );
 
     // The landing page is not the only place that states these figures. Prose
-    // elsewhere restates them to explain what a role-scoped build is a subset
+    // elsewhere restates them to explain what a role-limited deployment is a subset
     // *of*, and a sentence naming a number nothing checks goes stale on its own,
     // so every such sentence is listed here.
     //

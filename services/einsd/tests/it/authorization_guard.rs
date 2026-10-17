@@ -34,12 +34,15 @@ const HANDLERS: &str = include_str!("../../src/handlers.rs");
 
 /// Actions enforced somewhere other than a handler body.
 ///
-/// `use-mcp` gates the whole MCP surface from the transport: `main.rs` builds
+/// `use-mcp` gates the whole MCP surface from the transport: `daemon.rs` builds
 /// `McpAuth::from_auth_config_oidc(.., Some(cedar.clone()), ..)`, so the check
 /// runs in middleware before any tool is dispatched. A per-tool check would be
 /// redundant, so its absence from `handlers.rs` is correct and not a dead
 /// grant.
-const ENFORCED_BY_MIDDLEWARE: [&str; 1] = ["use-mcp"];
+///
+/// `read-policy` is checked by `mako_service::policy::router`, which serves
+/// `GET /api/v1/policy` for every daemon from one handler.
+const ENFORCED_BY_MIDDLEWARE: [&str; 2] = ["use-mcp", "read-policy"];
 
 /// Every handler the router actually mounts.
 fn routed_handlers() -> BTreeSet<String> {

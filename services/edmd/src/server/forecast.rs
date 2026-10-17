@@ -61,11 +61,7 @@ pub(crate) async fn get_annual_forecast(
         "read-timeseries",
         state.tenant.as_str(),
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
@@ -74,9 +70,7 @@ pub(crate) async fn get_annual_forecast(
     };
     match annual_forecast(&state.repo, &state.tenant, &malo_id, from, to).await {
         Ok(body) => Json(body).into_response(),
-        Err((status, error)) => {
-            (status, Json(serde_json::json!({ "error": error }))).into_response()
-        }
+        Err(refusal) => refusal.into_response(),
     }
 }
 
@@ -92,15 +86,15 @@ pub(crate) async fn get_annual_forecast(
 ///
 /// # Errors
 ///
-/// `(status, message)`: `404` without readings, `422` for a window the
-/// projection refuses, `500` for a failed read.
+/// `404` without readings, `422` for a window the projection refuses, `500`
+/// for a failed read.
 pub(crate) async fn annual_forecast(
     repo: &MeterStoreTimeSeriesRepository,
     tenant: &str,
     malo_id: &str,
     from: OffsetDateTime,
     to: OffsetDateTime,
-) -> Result<serde_json::Value, (StatusCode, String)> {
+) -> Result<serde_json::Value, ApiError> {
     use metering::billing::forecast::project_annual_consumption;
 
     let query = |from, to| TimeSeriesQuery {
@@ -110,15 +104,12 @@ pub(crate) async fn annual_forecast(
         sparte: None,
         tenant: tenant.to_owned(),
     };
-    let reads = repo.query(&query(from, to)).await.map_err(|e| {
-        tracing::warn!(error = %e, malo_id, "edmd: forecast query failed");
-        (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-    })?;
+    let reads = repo
+        .query(&query(from, to))
+        .await
+        .map_err(ApiError::internal)?;
     if reads.is_empty() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            "no meter reads for this MaLo in requested window".to_owned(),
-        ));
+        return Err(ApiError::NotFound);
     }
 
     // A Jahresprognose is about the consumption, so the reads go through the
@@ -128,20 +119,16 @@ pub(crate) async fn annual_forecast(
     let sparte = reads.first().map_or(EdmSparte::Strom, |r| r.sparte);
     let intervals = crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
     let series = crate::domain::vee::energy_series(sparte, &intervals).map_err(|defect| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("the consumption series cannot be projected: {defect}"),
-        )
+        ApiError::unprocessable(format!(
+            "the consumption series cannot be projected: {defect}"
+        ))
     })?;
 
     // The observation on its own first: a window too short or too thinly
     // covered is refused for what it is, not for a prior year that happened to
     // be missing as well.
     let plain = project_annual_consumption(&series, None).map_err(|e| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("insufficient data for an annual forecast: {e}"),
-        )
+        ApiError::unprocessable(format!("insufficient data for an annual forecast: {e}"))
     })?;
 
     // Both years go through the same projection — comparing a raw prior year
@@ -216,11 +203,7 @@ pub(crate) async fn get_netzverlust(
         "read-timeseries",
         state.tenant.as_str(),
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
@@ -319,12 +302,7 @@ pub(crate) async fn get_netzverlust(
             }
             let Some(losses) = metering::billing::losses::NetworkLosses::new(einspeisung, entnahme)
             else {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": "the loss balance leaves the decimal range",
-                    })),
-                )
+                return ApiError::unprocessable("the loss balance leaves the decimal range")
                     .into_response();
             };
             Json(serde_json::json!({

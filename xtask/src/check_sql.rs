@@ -223,7 +223,8 @@ fn collect(dir: &Path, workspace_root: &Path) -> (Vec<Statement>, usize) {
     // A `format!` in a query is always a fragment the crate holds as a `const`
     // — a column list, a terminal-state set. Reading those makes the assembled
     // statement checkable, which is most of what the service's own SQL is: the
-    // `format!` sites are 12 % of the call sites and 100 % of `obsd`'s.
+    // `format!` sites are 12 % of the call sites and every one of the process
+    // read model's.
     //
     // Scoped to the file that writes the query, then to the crate — but only
     // for a name the crate defines once. Half a dozen `marktd` modules each

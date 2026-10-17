@@ -18,14 +18,13 @@
 //! | `DELETE` | `/admin/malo/{malo_id}` | Remove a record |
 //! | `GET` | `/admin/malo/stats` | Per-tenant statistics |
 
-use mako_service::ApiError;
+use mako_service::{ApiError, ApiResult};
 use std::sync::Arc;
 
 use axum::{
     Router,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    http::HeaderMap,
     routing::{delete, get, put},
 };
 use energy_api::models::electricity::MaloIdentResultPositive;
@@ -42,24 +41,15 @@ use crate::malo_cache::{MaloCacheStats, SlateDbMaloCache};
 
 /// Reject an invalid MaLo-ID path parameter before any business logic runs.
 ///
-/// Returns `Some(422 response)` when `s` is not a valid 11-digit
-/// Marktlokations-ID (BDEW alternating-weight checksum); `None` when valid.
+/// A `422` when `s` is not a valid 11-digit Marktlokations-ID (BDEW
+/// alternating-weight checksum).
 #[inline]
-fn invalid_malo_id_response(s: &str) -> Option<Response> {
-    if s.parse::<rubo4e::identifiers::MaloId>().is_err() {
-        Some(
-            (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": "invalid_malo_id",
-                    "detail": format!("{s:?} is not a valid 11-digit Marktlokations-ID"),
-                })),
-            )
-                .into_response(),
-        )
-    } else {
-        None
-    }
+fn check_malo_id(s: &str) -> ApiResult<()> {
+    s.parse::<rubo4e::identifiers::MaloId>()
+        .map(drop)
+        .map_err(|_| {
+            ApiError::unprocessable(format!("{s:?} is not a valid 11-digit Marktlokations-ID"))
+        })
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -147,13 +137,9 @@ pub fn router(state: Arc<MaloAdminState>) -> Router {
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 
-fn unauthorized() -> Response {
-    (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
-}
-
-fn internal_error(e: impl std::fmt::Display) -> Response {
-    tracing::error!("malo-admin-api internal error: {e}");
-    (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
+/// A cache failure: logged under an `error_id`, answered without its text.
+fn internal_error(e: impl std::fmt::Display) -> ApiError {
+    ApiError::internal(anyhow::anyhow!("malo-admin-api: {e}"))
 }
 
 fn iso_now() -> String {
@@ -183,14 +169,12 @@ pub(crate) async fn handle_get(
     State(state): State<Arc<MaloAdminState>>,
     headers: HeaderMap,
     Path(malo_id): Path<String>,
-) -> Response {
-    if let Some(err) = invalid_malo_id_response(&malo_id) {
-        return err;
-    }
-    let identity = match state.cedar.authenticate(&headers) {
-        Some(id) => id,
-        None => return unauthorized(),
-    };
+) -> ApiResult<Json<MaloIdentResultPositive>> {
+    check_malo_id(&malo_id)?;
+    let identity = state
+        .cedar
+        .authenticate(&headers)
+        .ok_or(ApiError::Unauthorized)?;
     if !state.cedar.authorize_malo(
         &identity,
         MakoAction::AdminMaloRead,
@@ -199,17 +183,16 @@ pub(crate) async fn handle_get(
             malo_id: Some(&malo_id),
         },
     ) {
-        return ApiError::Forbidden.into_response();
+        return Err(ApiError::Forbidden);
     }
-    let tenant_id = match resolve_tenant(&headers, &state.tenant_id) {
-        Ok(id) => id,
-        Err(rejection) => return rejection.into_response(),
-    };
-    match state.cache.get(&tenant_id, &malo_id).await {
-        Ok(Some(result)) => Json(result).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => internal_error(e),
-    }
+    let tenant_id = resolve_tenant(&headers, &state.tenant_id)?;
+    state
+        .cache
+        .get(&tenant_id, &malo_id)
+        .await
+        .map_err(internal_error)?
+        .map(Json)
+        .ok_or(ApiError::NotFound)
 }
 
 /// `PUT /admin/malo/{malo_id}` — upsert a MaLo record.
@@ -232,14 +215,12 @@ pub(crate) async fn handle_put(
     headers: HeaderMap,
     Path(malo_id): Path<String>,
     Json(body): Json<UpsertRequest>,
-) -> Response {
-    if let Some(err) = invalid_malo_id_response(&malo_id) {
-        return err;
-    }
-    let identity = match state.cedar.authenticate(&headers) {
-        Some(id) => id,
-        None => return unauthorized(),
-    };
+) -> ApiResult<Json<UpsertResponse>> {
+    check_malo_id(&malo_id)?;
+    let identity = state
+        .cedar
+        .authenticate(&headers)
+        .ok_or(ApiError::Unauthorized)?;
     if !state.cedar.authorize_malo(
         &identity,
         MakoAction::AdminMaloWrite,
@@ -248,18 +229,14 @@ pub(crate) async fn handle_put(
             malo_id: Some(&malo_id),
         },
     ) {
-        return ApiError::Forbidden.into_response();
+        return Err(ApiError::Forbidden);
     }
     // Validate that the path parameter matches the payload MaLo-ID.
     if body.result.data_market_location.malo_id.as_ref() != malo_id {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!(
-                "path malo_id {malo_id:?} does not match payload maloId {:?}",
-                body.result.data_market_location.malo_id.as_ref(),
-            ),
-        )
-            .into_response();
+        return Err(ApiError::unprocessable(format!(
+            "path malo_id {malo_id:?} does not match payload maloId {:?}",
+            body.result.data_market_location.malo_id.as_ref(),
+        )));
     }
     let tenant_id = state.tenant_id.clone();
     let UpsertRequest {
@@ -276,14 +253,15 @@ pub(crate) async fn handle_put(
         "admin malo upsert request",
     );
 
-    match state.cache.upsert(&tenant_id, &result).await {
-        Ok(()) => Json(UpsertResponse {
-            malo_id,
-            updated_at: iso_now(),
-        })
-        .into_response(),
-        Err(e) => internal_error(e),
-    }
+    state
+        .cache
+        .upsert(&tenant_id, &result)
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(UpsertResponse {
+        malo_id,
+        updated_at: iso_now(),
+    }))
 }
 
 /// `DELETE /admin/malo/{malo_id}` — remove a MaLo record.
@@ -304,14 +282,12 @@ pub(crate) async fn handle_delete(
     State(state): State<Arc<MaloAdminState>>,
     headers: HeaderMap,
     Path(malo_id): Path<String>,
-) -> Response {
-    if let Some(err) = invalid_malo_id_response(&malo_id) {
-        return err;
-    }
-    let identity = match state.cedar.authenticate(&headers) {
-        Some(id) => id,
-        None => return unauthorized(),
-    };
+) -> ApiResult<Json<DeleteResponse>> {
+    check_malo_id(&malo_id)?;
+    let identity = state
+        .cedar
+        .authenticate(&headers)
+        .ok_or(ApiError::Unauthorized)?;
     if !state.cedar.authorize_malo(
         &identity,
         MakoAction::AdminMaloDelete,
@@ -320,16 +296,15 @@ pub(crate) async fn handle_delete(
             malo_id: Some(&malo_id),
         },
     ) {
-        return ApiError::Forbidden.into_response();
+        return Err(ApiError::Forbidden);
     }
-    let tenant_id = match resolve_tenant(&headers, &state.tenant_id) {
-        Ok(id) => id,
-        Err(rejection) => return rejection.into_response(),
-    };
-    match state.cache.remove(&tenant_id, &malo_id).await {
-        Ok(deleted) => Json(DeleteResponse { malo_id, deleted }).into_response(),
-        Err(e) => internal_error(e),
-    }
+    let tenant_id = resolve_tenant(&headers, &state.tenant_id)?;
+    let deleted = state
+        .cache
+        .remove(&tenant_id, &malo_id)
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(DeleteResponse { malo_id, deleted }))
 }
 
 /// `GET /admin/malo/stats` — per-tenant cache statistics.
@@ -346,11 +321,11 @@ pub(crate) async fn handle_delete(
 pub(crate) async fn handle_stats(
     State(state): State<Arc<MaloAdminState>>,
     headers: HeaderMap,
-) -> Response {
-    let identity = match state.cedar.authenticate(&headers) {
-        Some(id) => id,
-        None => return unauthorized(),
-    };
+) -> ApiResult<Json<StatsResponse>> {
+    let identity = state
+        .cedar
+        .authenticate(&headers)
+        .ok_or(ApiError::Unauthorized)?;
     if !state.cedar.authorize_malo(
         &identity,
         MakoAction::AdminMaloStats,
@@ -359,24 +334,17 @@ pub(crate) async fn handle_stats(
             malo_id: None,
         },
     ) {
-        return ApiError::Forbidden.into_response();
+        return Err(ApiError::Forbidden);
     }
-    let tenants_res = state.cache.list_tenants().await;
-    let tenant_ids = match tenants_res {
-        Ok(t) => t,
-        Err(e) => return internal_error(e),
-    };
+    let tenant_ids = state.cache.list_tenants().await.map_err(internal_error)?;
     let mut tenant_stats: Vec<TenantStats> = Vec::new();
     for tid in tenant_ids {
-        match state.cache.stats(&tid).await {
-            Ok(s) => tenant_stats.push(stats_to_json(s)),
-            Err(e) => return internal_error(e),
-        }
+        let s = state.cache.stats(&tid).await.map_err(internal_error)?;
+        tenant_stats.push(stats_to_json(s));
     }
-    Json(StatsResponse {
+    Ok(Json(StatsResponse {
         tenants: tenant_stats,
-    })
-    .into_response()
+    }))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -388,16 +356,12 @@ pub(crate) async fn handle_stats(
 /// arbitrary tenant ID from a header is cross-tenant data access. A repeated
 /// header is refused rather than resolved first-wins: an intermediary that
 /// authorizes on the second value would disagree with what this reads.
-fn resolve_tenant(
-    headers: &HeaderMap,
-    operator_tenant: &str,
-) -> Result<String, (StatusCode, String)> {
+fn resolve_tenant(headers: &HeaderMap, operator_tenant: &str) -> ApiResult<String> {
     let header = mako_service::headers::single_str(headers, "x-tenant-id")
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
     match header {
-        Some(id) if id != operator_tenant => Err((
-            StatusCode::FORBIDDEN,
-            "X-Tenant-Id does not match operator tenant".to_owned(),
+        Some(id) if id != operator_tenant => Err(ApiError::forbidden(
+            "X-Tenant-Id does not match operator tenant",
         )),
         Some(id) => Ok(id.to_owned()),
         None => Ok(operator_tenant.to_owned()),

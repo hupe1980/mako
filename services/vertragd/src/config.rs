@@ -8,7 +8,9 @@ use serde::Deserialize;
 pub struct VertragdConfig {
     /// PostgreSQL connection + pool tuning (`[database]` block).
     pub database: mako_service::config::DatabaseConfig,
-    pub port: Option<u16>,
+    /// `[http]` — the listen address. Defaults to every interface on `9780`.
+    #[serde(default = "default_http")]
+    pub http: mako_service::config::HttpConfig,
     /// Tenant identifier — the data-isolation key written to every row and
     /// enforced on every token. Typically the operator's BDEW- or
     /// DVGW-Codenummer, but any stable unique string is valid.
@@ -89,9 +91,38 @@ pub struct VertragdConfig {
     /// a section out.
     #[serde(default)]
     pub allow_insecure_no_auth: bool,
+
+    /// `[policy]` — the operator readings this deployment runs under.
+    #[serde(default)]
+    pub policy: VertragdPolicy,
+}
+
+/// `[policy]` — vertragd's operator settings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VertragdPolicy {
+    /// `[policy.dsr]` — the DPO's readings for a data-subject export.
+    #[serde(default)]
+    pub dsr: crate::dsr_policy::DsrPolicy,
 }
 
 impl VertragdConfig {
+    /// The policy and posture vertragd runs under — logged, exported, recorded
+    /// and served by the runner and `GET /api/v1/policy`.
+    #[must_use]
+    pub fn policy_report(&self) -> mako_service::policy::PolicyReport {
+        let mut r = mako_service::policy::PolicyReport::new();
+        r.entries.extend(self.policy.dsr.entries());
+        r.posture_flag("allow_insecure_no_auth", self.allow_insecure_no_auth)
+            .posture_presence("oidc", self.oidc.is_some(), true)
+            .posture_presence("inbound_secret", self.inbound_secret.is_some(), true)
+            .posture_presence(
+                "erp_hmac_secret",
+                self.erp_hmac_secret.is_some(),
+                self.erp_webhook_url.is_some(),
+            )
+    }
+
     const fn default_max_identitaeten() -> u32 {
         50
     }
@@ -154,7 +185,7 @@ impl mako_service::ServiceConfig for VertragdConfig {
         Some(&self.database)
     }
     fn bind_addr(&self) -> String {
-        format!("0.0.0.0:{}", self.port.unwrap_or(9780))
+        self.http.addr.clone()
     }
 }
 
@@ -177,6 +208,10 @@ pub struct AbsenderConfig {
     pub contact_name: Option<String>,
     pub phone: Option<String>,
     pub email: Option<String>,
+}
+
+fn default_http() -> mako_service::config::HttpConfig {
+    mako_service::config::HttpConfig::on_port(9780)
 }
 
 #[cfg(test)]

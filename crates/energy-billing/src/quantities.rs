@@ -468,9 +468,11 @@ impl GgvNutzungsplan {
     ///
     /// Returns `(malo_id, allocated_kwh)` pairs.
     ///
-    /// Uses `billing::proportional_split` (Largest-Remainder / Hamilton method) —
-    /// guarantees `Σ(allocated_kwh) == total_kwh` with each tenant within
-    /// ±0.001 kWh of their exact share. No single entry absorbs all rounding error.
+    /// Uses [`billing::split`] (Largest-Remainder / Hamilton method over the
+    /// exact quotas, ties to the first tenant) — guarantees
+    /// `Σ(allocated_kwh) == total_kwh` at 0.001 kWh with each tenant within
+    /// 0.001 kWh of their exact share. No single entry absorbs all rounding
+    /// error. The generation is put on that scale (kaufmännisch) first.
     ///
     /// # Errors
     ///
@@ -487,13 +489,15 @@ impl GgvNutzungsplan {
             return Ok(vec![]);
         }
         let fractions: Vec<Decimal> = self.0.iter().map(|e| e.fraction).collect();
-        // billing::proportional_split uses Largest-Remainder (Hamilton) method:
-        // scale=3 → 0.001 kWh resolution.
-        let parts = billing::proportional_split(total_kwh, &fractions, 3).map_err(|_| {
-            crate::EngineError::NutzungsplanSharesInvalid {
-                sum: fractions.iter().copied().sum(),
-            }
-        })?;
+        // The plan states shares of one. `billing::split` would normalise any
+        // weights — a plan entered as percentages (Σ = 100) included — so the
+        // sum is checked here, to the 10⁻⁹ a plan typed as thirds can miss by.
+        let sum: Decimal = fractions.iter().copied().sum();
+        if (sum - Decimal::ONE).abs() > Decimal::new(1, 9) {
+            return Err(crate::EngineError::NutzungsplanSharesInvalid { sum });
+        }
+        let parts = billing::split(crate::rates::round_money(total_kwh, 3), &fractions, 3)
+            .map_err(|_| crate::EngineError::NutzungsplanSharesInvalid { sum })?;
         Ok(self
             .0
             .iter()
@@ -738,9 +742,9 @@ pub struct EnergyShareMeterInput {
 /// whichever leg contains it, a sealed surface is a property of the premises,
 /// and a unit price is a price.
 ///
-/// The shares are split with [`billing::proportional_split`]
-/// (Largest-Remainder), so the legs of a period sum back to the caller's total
-/// exactly rather than to it plus a rounding residue.
+/// The shares are split with [`billing::split`] (Largest-Remainder over the
+/// exact quotas `total · daysᵢ / Σ days`), so the legs of a period sum back to
+/// the caller's total exactly rather than to it plus a rounding residue.
 #[derive(Debug, Clone)]
 pub struct DayApportionment {
     /// Days per leg, in order.
@@ -792,22 +796,19 @@ impl DayApportionment {
         if self.is_whole() || total.is_zero() {
             return total;
         }
-        let sum: Decimal = self.days.iter().copied().sum();
-        let last = self.days.len() - 1;
-        // `proportional_split` requires shares that sum to exactly one, and a
-        // day count rarely divides evenly; the last leg absorbs the residue.
-        let mut fractions: Vec<Decimal> = self.days.iter().map(|d| *d / sum).collect();
-        let head: Decimal = fractions[..last].iter().copied().sum();
-        fractions[last] = Decimal::ONE - head;
-        // A quantity is non-negative, but a correction run can carry a negative
-        // one; the sign is lifted out and re-applied, which is exact.
-        let negative = total < Decimal::ZERO;
-        let magnitude = if negative { -total } else { total };
-        let part = billing::proportional_split(magnitude, &fractions, scale)
+        // The day counts are the weights, so every quota is an exact fraction;
+        // `split` mirrors the sign of a negative total (a correction run), and
+        // refuses a total finer than `scale`, so the total is put on it first.
+        let total = crate::rates::round_money(total, scale);
+        u8::try_from(scale)
             .ok()
+            .and_then(|dp| billing::split(total, &self.days, dp).ok())
             .and_then(|parts| parts.get(self.index).copied())
-            .unwrap_or_else(|| crate::rates::round_money(magnitude * fractions[self.index], scale));
-        if negative { -part } else { part }
+            .unwrap_or_else(|| {
+                // Only an `i128` overflow of `total · daysᵢ` reaches here.
+                let sum: Decimal = self.days.iter().copied().sum();
+                crate::rates::round_money(total * self.days[self.index] / sum, scale)
+            })
     }
 
     /// This leg's share of an additive quantity — kWh, m³ or months.
@@ -1523,7 +1524,8 @@ impl Abschlagsplan {
     /// Build a uniform monthly advance payment plan for `months` months.
     ///
     /// The annual amount is **distributed exactly** over a 12-month cycle via
-    /// [`billing::Amount::distribute`] (largest-remainder): any 12 consecutive
+    /// [`billing::split`] (largest-remainder, the extra cents to the first
+    /// months): any 12 consecutive
     /// instalments sum to precisely `annual_brutto_eur` at cent precision.
     /// Naïve `round(annual / 12)` per month drifts up to 6 ct per year — a
     /// reconciliation gap §13 Abs. 3 StromGVV's refund duty would surface on
@@ -1537,16 +1539,9 @@ impl Abschlagsplan {
         jahresverbrauch_kwh: Decimal,
     ) -> Self {
         use rust_decimal::dec;
-        // Exact-sum 12-month cycle; conversion failure (absurd magnitude)
-        // degrades to the plain division, never to a panic.
-        let cycle: Vec<Decimal> = billing::Amount::<2>::checked_from_decimal(annual_brutto_eur)
-            .and_then(|a| a.distribute(12))
-            .map(|parts| {
-                parts
-                    .into_iter()
-                    .map(billing::Amount::into_decimal)
-                    .collect()
-            })
+        // Exact-sum 12-month cycle; a total finer than a cent or of absurd
+        // magnitude degrades to the plain division, never to a panic.
+        let cycle: Vec<Decimal> = billing::split(annual_brutto_eur, &[Decimal::ONE; 12], 2)
             .unwrap_or_else(|_| vec![(annual_brutto_eur / dec!(12)).round_kfm(2); 12]);
         let entries = (0..months)
             .filter_map(|i| {

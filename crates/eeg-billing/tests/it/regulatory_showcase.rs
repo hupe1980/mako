@@ -927,13 +927,13 @@ fn s20_energy_crisis_epex_far_above_aw() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// billing::LineItem bridge — settlement_to_line_items()
+// billing::Line bridge — settlement_to_lines()
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// `settlement_to_line_items` produces correct line item count and tags.
+/// `settlement_to_lines` produces the right line count and labels.
 #[test]
 fn bridge_verguetung_one_line_item() {
-    use eeg_billing::bridge::settlement_to_line_items;
+    use eeg_billing::bridge::settlement_to_lines;
     let input = SettleInput {
         scheme: SettlementScheme::FeedInTariff {
             verguetungssatz_ct: d("8.11"),
@@ -942,24 +942,21 @@ fn bridge_verguetung_one_line_item() {
         ..SettleInput::default()
     };
     let output = calculate_settlement(&input);
-    let items = settlement_to_line_items(&output);
+    let items = settlement_to_lines(&output);
     assert_eq!(items.len(), 1);
     assert!(
-        items[0].description.contains("EEG"),
+        items[0].description().contains("EEG"),
         "position description should mention EEG"
     );
-    assert!(items[0].has_tag("eeg"));
-    assert!(items[0].has_tag("verguetung"));
-    assert_eq!(
-        items[0].net_amount,
-        eeg_billing::EuroAmount::checked_from_decimal(d("40.55")).unwrap()
-    );
+    assert_eq!(items[0].label("regime"), Some("eeg"));
+    assert_eq!(items[0].label("position"), Some("verguetung"));
+    assert_eq!(items[0].exact_net().unwrap(), d("40.55"));
 }
 
 /// Direktvermarktung produces 2 items: Marktprämie + Managementprämie.
 #[test]
 fn bridge_direktvermarktung_two_line_items() {
-    use eeg_billing::bridge::settlement_to_line_items;
+    use eeg_billing::bridge::settlement_to_lines;
     let input = SettleInput {
         scheme: SettlementScheme::MarketPremium {
             direktverm_aw_ct: d("6.2"),
@@ -971,9 +968,9 @@ fn bridge_direktvermarktung_two_line_items() {
         ..SettleInput::default()
     };
     let output = calculate_settlement(&input);
-    let items = settlement_to_line_items(&output);
+    let items = settlement_to_lines(&output);
     assert_eq!(items.len(), 1, "one Marktprämie line, no Managementprämie");
-    assert!(items[0].has_tag("marktpraemie"));
+    assert_eq!(items[0].label("position"), Some("marktpraemie"));
 }
 
 /// A sanction bills what the sanction leaves, not zero.
@@ -984,7 +981,7 @@ fn bridge_direktvermarktung_two_line_items() {
 /// one € 0 line paid a plant nothing where the statute pays it something.
 #[test]
 fn bridge_bills_a_reduced_sanction_and_zeroes_only_a_total_one() {
-    use eeg_billing::bridge::settlement_to_line_items;
+    use eeg_billing::bridge::settlement_to_lines;
     let settle = |sanktion| {
         calculate_settlement(&SettleInput {
             scheme: SettlementScheme::FeedInTariff {
@@ -998,25 +995,22 @@ fn bridge_bills_a_reduced_sanction_and_zeroes_only_a_total_one() {
     };
 
     let auf_null = settle(eeg_billing::SanktionAlt::VerguetungAufNull);
-    let items = settlement_to_line_items(&auf_null);
+    let items = settlement_to_lines(&auf_null);
     assert_eq!(
         items
             .iter()
-            .map(|i| i.net_amount)
-            .fold(eeg_billing::EuroAmount::ZERO, |a, b| a + b),
-        eeg_billing::EuroAmount::ZERO,
+            .map(|i| i.exact_net().unwrap())
+            .sum::<rust_decimal::Decimal>(),
+        rust_decimal::Decimal::ZERO,
         "§ 52 Abs. 1 leaves no claim"
     );
     assert_eq!(auf_null.status, SettlementStatus::Sanctioned);
 
     let reduziert = settle(eeg_billing::SanktionAlt::VerguetungReduziert20Prozent);
-    let items = settlement_to_line_items(&reduziert);
-    let total = items
-        .iter()
-        .map(|i| i.net_amount)
-        .fold(eeg_billing::EuroAmount::ZERO, |a, b| a + b);
+    let items = settlement_to_lines(&reduziert);
+    let total: rust_decimal::Decimal = items.iter().map(|i| i.exact_net().unwrap()).sum();
     assert!(
-        total > eeg_billing::EuroAmount::ZERO,
+        total > rust_decimal::Decimal::ZERO,
         "§ 52 Abs. 3 reduces the claim by a fifth, it does not extinguish it"
     );
     assert_eq!(reduziert.status, SettlementStatus::Sanctioned);
@@ -1025,7 +1019,7 @@ fn bridge_bills_a_reduced_sanction_and_zeroes_only_a_total_one() {
 /// NoData → empty line items (nothing to bill yet).
 #[test]
 fn bridge_no_data_empty() {
-    use eeg_billing::bridge::settlement_to_line_items;
+    use eeg_billing::bridge::settlement_to_lines;
     let input = SettleInput {
         scheme: SettlementScheme::FeedInTariff {
             verguetungssatz_ct: d("8.11"),
@@ -1034,7 +1028,7 @@ fn bridge_no_data_empty() {
         ..SettleInput::default()
     };
     let output = calculate_settlement(&input);
-    let items = settlement_to_line_items(&output);
+    let items = settlement_to_lines(&output);
     assert!(items.is_empty(), "no meter data → no line items");
 }
 
@@ -1302,10 +1296,11 @@ fn positions_of_a_total_sanction_sum_to_the_settled_amount() {
     );
 }
 
-/// POST_EEG_SPOT negative: position eur is negative, to_line_item uses Sign::Credit.
+/// POST_EEG_SPOT negative: position eur is negative, and the line carries the
+/// direction in its quantity at a non-negative price (EN 16931 BR-27).
 #[test]
 fn positions_post_eeg_negative_eur_credit_line_item() {
-    use eeg_billing::bridge::settlement_to_line_items;
+    use eeg_billing::bridge::settlement_to_lines;
 
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::PostEeg { price_floor: None },
@@ -1321,14 +1316,11 @@ fn positions_post_eeg_negative_eur_credit_line_item() {
     );
     assert_eq!(p.eur, d("-5.00")); // 1000 × (-0.5) / 100
 
-    // Bridge converts negative position to Sign::Credit LineItem
-    let items = settlement_to_line_items(&out);
+    let items = settlement_to_lines(&out);
     assert_eq!(items.len(), 1);
-    // The net_amount is negative (credit = negative in billing convention)
-    assert!(
-        items[0].net_amount < billing::Amount::<5>::ZERO,
-        "negative EPEX must produce credit (negative) LineItem"
-    );
+    assert_eq!(items[0].exact_net().unwrap(), d("-5.00"));
+    assert_eq!(items[0].quantity().value(), d("-1000"));
+    assert_eq!(items[0].price().price().value(), d("0.005"));
 }
 
 /// Positions sum invariant: settlement_eur always equals sum(positions[*].eur).
@@ -1377,10 +1369,10 @@ fn positions_sum_equals_settlement_eur_invariant() {
     }
 }
 
-/// to_line_item bridge: VERGUETUNG produces a debit LineItem with correct quantity and rate.
+/// to_line bridge: VERGUETUNG produces a line with the metered quantity and rate.
 #[test]
-fn to_line_item_verguetung_debit_with_qty_and_rate() {
-    use eeg_billing::bridge::settlement_to_line_items;
+fn to_line_verguetung_carries_qty_and_rate() {
+    use eeg_billing::bridge::settlement_to_lines;
 
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
@@ -1389,27 +1381,20 @@ fn to_line_item_verguetung_debit_with_qty_and_rate() {
         einspeisemenge_kwh: Some(d("1000")),
         ..SettleInput::default()
     });
-    let items = settlement_to_line_items(&out);
+    let items = settlement_to_lines(&out);
     assert_eq!(items.len(), 1);
     let item = &items[0];
     assert!(
-        item.description.contains("EEG"),
+        item.description().contains("EEG"),
         "description should mention EEG"
     );
-    // Quantity = 1000 kWh
-    assert_eq!(item.quantity_value(), Some(d("1000")));
-    assert_eq!(item.unit_label(), Some("kWh"));
+    // Quantity = 1000 kWh, BT-130 is the UN/ECE Rec 20 code.
+    assert_eq!(item.quantity().value(), d("1000"));
+    assert_eq!(item.quantity().unit(), "KWH");
     // Net amount = 81.10 EUR
-    use billing::Amount;
-    assert_eq!(
-        item.net_amount,
-        Amount::<5>::checked_from_decimal(d("81.10")).unwrap()
-    );
-    // Tagged with legal_basis
-    assert_eq!(
-        item.metadata.get("legal_basis").map(String::as_str),
-        Some("§21 EEG 2023")
-    );
+    assert_eq!(item.exact_net().unwrap(), d("81.10"));
+    // Labelled with legal_basis
+    assert_eq!(item.label("legal_basis"), Some("§21 EEG 2023"));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4495,7 +4480,7 @@ fn sect44_guellekleinanlage_pays_the_statutory_ladder() {
         table
             .rate_for(kw)
             .expect("in range")
-            .into_decimal()
+            .to_decimal()
             .checked_mul(rust_decimal::Decimal::from(100u32))
             .expect("in range")
             .round_kfm(2)
@@ -4946,6 +4931,46 @@ fn s24_blocks_sum_to_the_metered_einspeisemenge() {
     }
 }
 
+/// §24 EEG — each block's quota is exact: `kwh · kWpᵢ / Σ kWp` with the
+/// capacities as weights, largest remainder, ties to the first block.
+///
+/// 1000 kWh over three 5-kWp blocks is 333.334 / 333.333 / 333.333 — the
+/// remaining thousandth goes to the primary block. A metered value finer than
+/// the 0.001 kWh scale (1000.0004) is put on it kaufmännisch and then split,
+/// rather than refused.
+#[test]
+fn s24_blocks_get_their_exact_largest_remainder_share() {
+    use eeg_billing::CapacityBlock;
+
+    let block = |kwp: &str| CapacityBlock {
+        leistung_kwp: d(kwp),
+        verguetungssatz_ct: d("8.11"),
+        inbetriebnahme: date!(2024 - 06 - 01),
+        foerderendedatum: date!(2044 - 12 - 31),
+    };
+    for menge in ["1000", "1000.0004"] {
+        let out = calculate_settlement(&SettleInput {
+            scheme: SettlementScheme::FeedInTariff {
+                verguetungssatz_ct: d("9.25"),
+            },
+            einspeisemenge_kwh: Some(d(menge)),
+            leistung_kwp: Some(d("5")),
+            inbetriebnahme: Some(date!(2020 - 03 - 15)),
+            foerderendedatum: Some(date!(2040 - 12 - 31)),
+            capacity_blocks: vec![block("5"), block("5")],
+            billing_date: Some(date!(2026 - 07 - 01)),
+            ..SettleInput::default()
+        });
+        assert_eq!(out.status, SettlementStatus::Calculated, "{menge}");
+        let kwh: Vec<rust_decimal::Decimal> = out.positions.iter().map(|p| p.kwh).collect();
+        assert_eq!(
+            kwh,
+            vec![d("333.334"), d("333.333"), d("333.333")],
+            "{menge}"
+        );
+    }
+}
+
 /// A negative Einspeisemenge is not a settleable figure, and a §24 plant must
 /// say so rather than settling every block at zero.
 #[test]
@@ -5134,7 +5159,7 @@ fn sect52_abs5_caps_each_calendar_month_not_the_longest_violation() {
 #[test]
 fn the_three_sanction_tiers_carry_their_own_positions() {
     use eeg_billing::SanktionAlt;
-    use eeg_billing::bridge::settlement_to_line_items;
+    use eeg_billing::bridge::settlement_to_lines;
 
     let with = |sanktion| {
         calculate_settlement(&SettleInput {
@@ -5151,12 +5176,12 @@ fn the_three_sanction_tiers_carry_their_own_positions() {
     // Abs. 1 — nothing is paid, and the line says why.
     let auf_null = with(SanktionAlt::VerguetungAufNull);
     assert_eq!(auf_null.settlement_eur, Some(Decimal::ZERO));
-    assert_eq!(settlement_to_line_items(&auf_null).len(), 1);
+    assert_eq!(settlement_to_lines(&auf_null).len(), 1);
 
     // Abs. 2 — the Monatsmarktwert is a real claim: 1 000 × 6,00 ct.
     let marktwert = with(SanktionAlt::VerguetungAufMarktwert);
     assert_eq!(marktwert.settlement_eur, Some(d("60.00")));
-    assert_eq!(settlement_to_line_items(&marktwert).len(), 1);
+    assert_eq!(settlement_to_lines(&marktwert).len(), 1);
 
     // Abs. 3 — 80 % of 100,00 EUR, and the positions add up to it.
     let reduziert = with(SanktionAlt::VerguetungReduziert20Prozent);
@@ -5167,7 +5192,7 @@ fn the_three_sanction_tiers_carry_their_own_positions() {
         d("80.00"),
         "a Gutschrift whose lines do not sum to the amount paid is not a document"
     );
-    assert!(!settlement_to_line_items(&reduziert).is_empty());
+    assert!(!settlement_to_lines(&reduziert).is_empty());
 }
 
 /// **§ 188 Abs. 3 BGB** — „Fehlt bei einer nach Monaten bestimmten Frist in dem

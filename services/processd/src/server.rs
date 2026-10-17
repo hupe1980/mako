@@ -160,6 +160,11 @@ pub struct ProcessdState {
     /// NB Neuanlage (`E_0608`) — the case log and its 60-Werktage Prüflauf.
     #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
     pub neuanlage: Arc<crate::neuanlage_module::NeuanlageModuleConfig>,
+    /// The process read model every `de.mako.*` event is projected into.
+    pub obs: crate::obs::project::ObsState,
+    /// `marktd`, as the source of the CloudEvent replay log the read model is
+    /// rebuilt from.
+    pub marktd_replay: mako_service::http::Upstream,
 }
 
 // ── RunConfig ─────────────────────────────────────────────────────────────────
@@ -216,8 +221,17 @@ pub struct RunConfig {
     pub self_register_webhook_url: Option<String>,
     /// Subscriber ID for the `marktd` subscription upsert.
     pub subscriber_id: String,
-    /// Comma-separated event types to subscribe to.
-    pub subscriber_event_types: String,
+    /// Event types to subscribe to — the union every module reads.
+    pub subscriber_event_types: Vec<String>,
+    /// Every operator MP-ID, for the read model's § 7a Abs. 5 EnWG evidence.
+    pub own_mp_ids: Vec<String>,
+    /// `[obs]` — the read model's `de.obs.*` producers.
+    pub obs_outbound_url: Option<String>,
+    pub obs_outbound_secret: Option<SecretString>,
+    pub obs_worker: crate::config::ObsConfig,
+    /// `[sperr]` — the ERP webhook the `de.sperr.*` notices are delivered to.
+    pub sperr_erp_webhook_url: Option<String>,
+    pub sperr_erp_hmac_secret: Option<SecretString>,
     pub oidc: OidcVerifier,
     pub cedar: Arc<CedarEnforcer>,
     /// MCP server auth config (API-key fallback + optional per-named-key identity).
@@ -291,8 +305,8 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         let sub_path = format!("/api/v1/subscriptions/{}", cfg.subscriber_id);
         let event_types: Vec<&str> = cfg
             .subscriber_event_types
-            .split(',')
-            .map(str::trim)
+            .iter()
+            .map(String::as_str)
             .collect();
         let body = serde_json::json!({
             "webhook_url":    self_webhook_url,
@@ -457,6 +471,81 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         });
     }
 
+    // ── Process read model ─────────────────────────────────────────────────
+    //
+    // § 7a Abs. 5 EnWG: the affiliate-detection set is every MP-ID the
+    // operator acts under, falling back to the primary one.
+    let own_mp_ids: std::collections::HashSet<String> = if cfg.own_mp_ids.is_empty() {
+        std::iter::once(cfg.own_mp_id.clone()).collect()
+    } else {
+        cfg.own_mp_ids.iter().cloned().collect()
+    };
+    let obs_state = crate::obs::project::ObsState {
+        repo: crate::obs::pg::PgProcessProjectionRepository::new(pool.clone()),
+        tenant: cfg.tenant.clone(),
+        own_mp_ids: Arc::new(own_mp_ids),
+    };
+    if let Some(outbound_url) = cfg.obs_outbound_url.clone() {
+        use secrecy::ExposeSecret as _;
+        let rt = crate::obs::worker::WorkerRuntime {
+            pool: pool.clone(),
+            client: Arc::new(http.clone()),
+            outbound_url: Arc::new(outbound_url),
+            outbound_secret: cfg
+                .obs_outbound_secret
+                .as_ref()
+                .map(|s| Arc::new(s.expose_secret().to_owned())),
+            tenant: cfg.tenant.clone(),
+            deadline_sweep_secs: cfg.obs_worker.deadline_sweep_secs,
+            deadline_warn_hours: cfg.obs_worker.deadline_warn_hours,
+            parity_sweep_secs: cfg.obs_worker.parity_sweep_secs,
+            parity_threshold_pp: cfg.obs_worker.parity_threshold_pp,
+            parity_window_days: cfg.obs_worker.parity_window_days,
+        };
+        crate::obs::worker::spawn_deadline_sweep(rt.clone(), ctx.shutdown.clone());
+        crate::obs::worker::spawn_parity_sweep(rt, ctx.shutdown.clone());
+        info!("processd obs: de.obs.* sweep producers started");
+    } else {
+        tracing::warn!(
+            "processd obs: [obs] outbound_url not set — de.obs.deadline.approaching and \
+             de.obs.stp.parity.alert producers are disabled"
+        );
+    }
+
+    // ── Sperr-/Entsperrauftrag queue (NB role) ─────────────────────────────
+    #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+    let sperr_router = {
+        let sperr_makod = Arc::new(makod.clone());
+        // A terminal order whose IFTSTA never went out leaves the Lieferant
+        // waiting indefinitely. This drains that queue.
+        tokio::spawn(crate::sperr::worker::run(
+            pool.clone(),
+            Arc::clone(&sperr_makod),
+            cfg.tenant.clone(),
+            ctx.shutdown.clone(),
+        ));
+        // `sperr::events` enqueues into `event_outbox` inside the same
+        // transaction as the state change; this drains it to the ERP.
+        if let Some(url) = cfg.sperr_erp_webhook_url.clone() {
+            tokio::spawn(
+                mako_service::outbox::OutboxWorker::new(
+                    pool.clone(),
+                    url,
+                    cfg.sperr_erp_hmac_secret.clone(),
+                )
+                .run(ctx.shutdown.clone()),
+            );
+        } else {
+            tracing::warn!(
+                "processd sperr: no [sperr] erp_webhook_url — the de.sperr.* notices \
+                 accumulate in event_outbox undelivered"
+            );
+        }
+        crate::sperr::router(sperr_makod, cfg.tenant.clone())
+    };
+    #[cfg(not(any(feature = "role-nb-strom", feature = "role-nb-gas")))]
+    let sperr_router = Router::new();
+
     // ── Assemble shared handler state ──────────────────────────────────────
     let marktd_for_state = Arc::new(mako_markt::marktd_client::MarktdClient::new(
         &cfg.marktd_url,
@@ -495,6 +584,13 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             tenant: cfg.tenant.clone(),
             auto_accept: cfg.nb_auto_accept,
         }),
+        obs: obs_state.clone(),
+        marktd_replay: mako_service::http::Upstream::new(
+            "marktd",
+            &cfg.marktd_url,
+            Some(cfg.marktd_api_key.clone()),
+            http.clone(),
+        ),
     };
 
     // ── Background: E_0608 Neuanlage Prüflauf (daily) ─────────────────────
@@ -604,6 +700,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
     // one `/metrics` rather than a second endpoint of its own.
     let app = Router::new()
         .route("/webhook", post(handle_webhook))
+        .route("/api/v1/obs/rebuild", post(rest::rebuild_projection))
         .route("/api/v1/decisions", get(rest::list_decisions))
         .route("/api/v1/queue", get(rest::list_queue))
         .route(QUEUE_APPROVE.path_template, post(rest::approve_queue_entry))
@@ -619,6 +716,8 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             put(rest::set_neuanlage_identifikation),
         )
         .with_state(state)
+        .merge(crate::obs::router(obs_state))
+        .merge(sperr_router)
         .layer(axum::Extension(mako_service::oidc::ExpectedTenant(
             cfg.tenant.clone(),
         )))
@@ -642,7 +741,7 @@ mod rest {
         http::StatusCode,
         response::IntoResponse,
     };
-    use mako_service::Json;
+    use mako_service::{ApiError, ApiResult, Json};
 
     use mako_service::{cedar::CedarEnforcer, oidc::Claims};
     use sqlx::PgPool;
@@ -659,31 +758,48 @@ mod rest {
     /// `end-supply` commit the operator to a market position. Every route below
     /// therefore takes a `Claims` extractor (which is what authenticates the
     /// request — there is no global auth middleware) and passes through here.
-    // The `Err` is a fully-formed HTTP response the caller returns as-is, the
-    // same shape `mako_service::mcp_auth::authorize` uses; boxing it would add
-    // an allocation on every denial for no benefit.
-    #[expect(
-        clippy::result_large_err,
-        reason = "the error carries the context its caller reports, and the path is not hot"
-    )]
     fn authorize(
         enforcer: &CedarEnforcer,
         claims: &Claims,
         action: &'static str,
         tenant: &str,
-    ) -> Result<(), axum::response::Response> {
+    ) -> ApiResult<()> {
         enforcer
             .check(&claims.principal(), action, tenant)
-            .map_err(|_| {
-                (
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({
-                        "error":   "FORBIDDEN",
-                        "message": format!("{action} denied for this principal"),
-                    })),
-                )
-                    .into_response()
-            })
+            .map_err(|_| ApiError::forbidden(format!("{action} denied for this principal")))
+    }
+
+    /// A `422` whose `code` names the refusal for a machine reader, beside the
+    /// sentence for a human one.
+    fn refuse(code: &'static str, detail: impl Into<String>) -> ApiError {
+        refuse_with(code, detail, serde_json::json!({}))
+    }
+
+    /// [`refuse`] with further machine-readable keys beside `code`.
+    fn refuse_with(
+        code: &'static str,
+        detail: impl Into<String>,
+        mut extra: serde_json::Value,
+    ) -> ApiError {
+        if let Some(obj) = extra.as_object_mut() {
+            obj.insert("code".into(), code.into());
+        }
+        ApiError::unprocessable_with(detail, extra)
+    }
+
+    /// What an NB route answers in a build without the NB role: `501`, because
+    /// the route exists and this build does not serve it — a retry against the
+    /// same build cannot succeed, and a `404` would read as a missing record.
+    ///
+    /// The route stays mounted so the Cedar decision is still the first answer
+    /// a caller gets; past it, the build has nothing to serve.
+    #[cfg(not(any(feature = "role-nb-strom", feature = "role-nb-gas")))]
+    fn nb_role_not_compiled_in() -> ApiError {
+        tracing::debug!("processd: NB route called in a build without the NB role");
+        ApiError::not_implemented(
+            "this processd build carries no NB role (role-nb-strom / role-nb-gas); \
+             the route answers only in an NB build",
+        )
     }
 
     /// The principal to record as the deciding operator.
@@ -716,36 +832,47 @@ mod rest {
         }
     }
 
-    /// Turn a failed `makod` command dispatch into a response.
+    /// Turn a failed `makod` command dispatch into an [`ApiError`].
     ///
-    /// The status is taken from the error itself rather than hard-coded to 502.
     /// A `MakodConflict` (makod's `invalid_state` — the command is not legal in
     /// the process's current state) is a caller error at 409: repeating it will
     /// fail identically, and callers such as `vertragd` retry on 5xx, so
-    /// reporting it as a gateway failure produced three pointless retries and a
-    /// component parked in `ANGELEGT` with a misleading "processd unreachable"
-    /// trail. Transport failures still surface as 502.
-    fn makod_dispatch_error(e: &mako_markt::error::MdmError) -> axum::response::Response {
-        let status =
-            StatusCode::from_u16(e.status_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        let status = if status == StatusCode::INTERNAL_SERVER_ERROR {
-            StatusCode::BAD_GATEWAY
-        } else {
-            status
-        };
-        (
-            status,
-            Json(serde_json::json!({
-                "error":   if status == StatusCode::CONFLICT {
-                    "MAKOD_COMMAND_CONFLICT"
-                } else {
-                    "MAKOD_DISPATCH_FAILED"
-                },
-                "message": e.to_string(),
-                "retryable": status.is_server_error(),
-            })),
+    /// reporting it as a gateway failure would earn three pointless retries and
+    /// a component parked in `ANGELEGT` with a misleading "processd
+    /// unreachable" trail. Everything else is `makod` failing, a 502 whose
+    /// text is logged and not echoed.
+    fn makod_dispatch_error(e: mako_markt::error::MdmError) -> ApiError {
+        match e {
+            mako_markt::error::MdmError::MakodConflict { kind, detail } => {
+                ApiError::conflict(format!("makod refused the command ({kind}): {detail}"))
+            }
+            other => ApiError::upstream("makod", anyhow::Error::new(other)),
+        }
+    }
+
+    /// `POST /api/v1/obs/rebuild` — replay `marktd`'s CloudEvent log into the
+    /// process read model through the projection function the webhook calls.
+    ///
+    /// Runs inline and answers with what it read; the projection is idempotent,
+    /// so a rebuild interrupted by a dropped connection is finished by sending
+    /// it again.
+    pub async fn rebuild_projection(
+        State(state): State<ProcessdState>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
+    ) -> ApiResult<Json<serde_json::Value>> {
+        authorize(&enforcer, &claims, "rebuild-projection", &state.tenant)?;
+        let report = crate::obs::rebuild::rebuild(
+            &state.obs,
+            &state.marktd_replay,
+            crate::obs::rebuild::PAGE_LIMIT,
         )
-            .into_response()
+        .await
+        .map_err(|e| match e {
+            crate::obs::rebuild::RebuildError::Upstream(_) => ApiError::upstream("marktd", e),
+            other => ApiError::internal(other),
+        })?;
+        Ok(Json(serde_json::json!({ "rebuilt": report })))
     }
 
     pub async fn list_decisions(
@@ -753,15 +880,16 @@ mod rest {
         Extension(pool): Extension<PgPool>,
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
         claims: Claims,
-    ) -> impl IntoResponse {
-        if let Err(deny) = authorize(&enforcer, &claims, "read-decisions", &state.tenant) {
-            return deny;
-        }
+    ) -> ApiResult<Json<serde_json::Value>> {
+        authorize(&enforcer, &claims, "read-decisions", &state.tenant)?;
         let repo = PgAnmeldungRepository::new(pool);
-        match repo.list(&state.tenant, 100).await {
-            Ok(records) => Json(serde_json::to_value(records).unwrap_or_default()).into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        }
+        let records = repo
+            .list(&state.tenant, 100)
+            .await
+            .map_err(ApiError::internal)?;
+        Ok(Json(
+            serde_json::to_value(records).map_err(ApiError::internal)?,
+        ))
     }
 
     pub async fn list_queue(
@@ -769,15 +897,16 @@ mod rest {
         Extension(pool): Extension<PgPool>,
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
         claims: Claims,
-    ) -> impl IntoResponse {
-        if let Err(deny) = authorize(&enforcer, &claims, "read-queue", &state.tenant) {
-            return deny;
-        }
+    ) -> ApiResult<Json<serde_json::Value>> {
+        authorize(&enforcer, &claims, "read-queue", &state.tenant)?;
         let queue = PgApprovalQueue::new(pool);
-        match queue.list(&state.tenant, None, 100).await {
-            Ok(entries) => Json(serde_json::to_value(entries).unwrap_or_default()).into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        }
+        let entries = queue
+            .list(&state.tenant, None, 100)
+            .await
+            .map_err(ApiError::internal)?;
+        Ok(Json(
+            serde_json::to_value(entries).map_err(ApiError::internal)?,
+        ))
     }
 
     /// `GET /api/v1/eog?status=…` — EoG gap-closure case log (§36/§38 EnWG).
@@ -787,27 +916,25 @@ mod rest {
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
         claims: Claims,
         axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
-    ) -> impl IntoResponse {
-        if let Err(deny) = authorize(&enforcer, &claims, "read-eog", &state.tenant) {
-            return deny;
-        }
+    ) -> ApiResult<Json<serde_json::Value>> {
+        authorize(&enforcer, &claims, "read-eog", &state.tenant)?;
         #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
         {
-            match crate::eog_module::list_cases(
+            let rows = crate::eog_module::list_cases(
                 &pool,
                 &state.tenant,
                 q.get("status").map(String::as_str),
             )
             .await
-            {
-                Ok(rows) => Json(serde_json::to_value(rows).unwrap_or_default()).into_response(),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-            }
+            .map_err(ApiError::internal)?;
+            Ok(Json(
+                serde_json::to_value(rows).map_err(ApiError::internal)?,
+            ))
         }
         #[cfg(not(any(feature = "role-nb-strom", feature = "role-nb-gas")))]
         {
             let _ = (pool, state, q);
-            (StatusCode::NOT_IMPLEMENTED, "NB role not compiled in").into_response()
+            Err(nb_role_not_compiled_in())
         }
     }
 
@@ -822,28 +949,26 @@ mod rest {
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
         claims: Claims,
         axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
-    ) -> impl IntoResponse {
-        if let Err(deny) = authorize(&enforcer, &claims, "read-neuanlage", &state.tenant) {
-            return deny;
-        }
+    ) -> ApiResult<Json<serde_json::Value>> {
+        authorize(&enforcer, &claims, "read-neuanlage", &state.tenant)?;
         #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
         {
-            match crate::pg::neuanlage::list_cases(
+            let rows = crate::pg::neuanlage::list_cases(
                 &pool,
                 &state.tenant,
                 q.get("status").map(String::as_str),
                 200,
             )
             .await
-            {
-                Ok(rows) => Json(serde_json::to_value(rows).unwrap_or_default()).into_response(),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-            }
+            .map_err(ApiError::internal)?;
+            Ok(Json(
+                serde_json::to_value(rows).map_err(ApiError::internal)?,
+            ))
         }
         #[cfg(not(any(feature = "role-nb-strom", feature = "role-nb-gas")))]
         {
             let _ = (pool, state, q);
-            (StatusCode::NOT_IMPLEMENTED, "NB role not compiled in").into_response()
+            Err(nb_role_not_compiled_in())
         }
     }
 
@@ -860,41 +985,31 @@ mod rest {
         claims: Claims,
         Path(id): Path<uuid::Uuid>,
         Json(body): Json<serde_json::Value>,
-    ) -> impl IntoResponse {
-        if let Err(deny) = authorize(&enforcer, &claims, "identify-neuanlage", &state.tenant) {
-            return deny;
-        }
+    ) -> ApiResult<StatusCode> {
+        authorize(&enforcer, &claims, "identify-neuanlage", &state.tenant)?;
         #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
         {
             let Some(malo_id) = body.get("malo_id").and_then(|v| v.as_str()) else {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": "MISSING_MALO_ID",
-                        "message": "body must contain \"malo_id\" — the Marktlokation the \
-                                    NB identified for this Neuanlage",
-                    })),
-                )
-                    .into_response();
+                return Err(refuse(
+                    "MISSING_MALO_ID",
+                    "body must contain \"malo_id\" — the Marktlokation the NB identified \
+                     for this Neuanlage",
+                ));
             };
-            match crate::pg::neuanlage::set_identifikation(&pool, id, &state.tenant, malo_id).await
+            // No open case with that id in this tenant: absent or already decided.
+            if crate::pg::neuanlage::set_identifikation(&pool, id, &state.tenant, malo_id)
+                .await
+                .map_err(ApiError::internal)?
             {
-                Ok(true) => StatusCode::NO_CONTENT.into_response(),
-                Ok(false) => (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({
-                        "error": "NO_OPEN_CASE",
-                        "message": "no open Neuanlage case with that id in this tenant",
-                    })),
-                )
-                    .into_response(),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                Ok(StatusCode::NO_CONTENT)
+            } else {
+                Err(ApiError::NotFound)
             }
         }
         #[cfg(not(any(feature = "role-nb-strom", feature = "role-nb-gas")))]
         {
             let _ = (pool, state, id, body);
-            (StatusCode::NOT_IMPLEMENTED, "NB role not compiled in").into_response()
+            Err(nb_role_not_compiled_in())
         }
     }
 
@@ -912,27 +1027,24 @@ mod rest {
         approve: bool,
         decided_by: &str,
         body: &[u8],
-    ) -> axum::response::Response {
+    ) -> ApiResult<StatusCode> {
         let Ok(id) = id_str.parse::<uuid::Uuid>() else {
-            return StatusCode::BAD_REQUEST.into_response();
+            return Err(ApiError::bad_request("the queue entry id is not a UUID"));
         };
         // The operator's answer, when the entry does not carry one. An empty
         // body is no answer; anything else must be exactly an
         // `OperatorAnswer` — an unknown key is refused, not dropped.
-        let operator: crate::pg::approval::OperatorAnswer = if body
-            .iter()
-            .all(u8::is_ascii_whitespace)
-        {
-            crate::pg::approval::OperatorAnswer::default()
-        } else {
-            match serde_json::from_slice(body) {
-                Ok(a) => a,
-                Err(e) => {
-                    return mako_service::ApiError::unprocessable(format!("decision body: {e}"))
-                        .into_response();
+        let operator: crate::pg::approval::OperatorAnswer =
+            if body.iter().all(u8::is_ascii_whitespace) {
+                crate::pg::approval::OperatorAnswer::default()
+            } else {
+                match serde_json::from_slice(body) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        return Err(ApiError::unprocessable(format!("decision body: {e}")));
+                    }
                 }
-            }
-        };
+            };
         let queue = PgApprovalQueue::new(pool);
         let target = if approve {
             crate::pg::approval::QueueStatus::Approved
@@ -940,12 +1052,12 @@ mod rest {
             crate::pg::approval::QueueStatus::Rejected
         };
 
-        let entry = match queue.claim(id, &state.tenant, target, decided_by).await {
-            Ok(Some(e)) => e,
-            // Absent or already decided — nothing to dispatch.
-            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        };
+        // Absent or already decided — nothing to dispatch.
+        let entry = queue
+            .claim(id, &state.tenant, target, decided_by)
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or(ApiError::NotFound)?;
 
         // Every enqueuing module resolves both commands from the trigger PID at
         // enqueue time, so a stored `None` means "this decision has no market
@@ -958,7 +1070,7 @@ mod rest {
         };
         let Some(command) = stored else {
             tracing::info!(%id, pid = entry.pid, approve, "processd: queue entry decided without a market message");
-            return StatusCode::NO_CONTENT.into_response();
+            return Ok(StatusCode::NO_CONTENT);
         };
 
         // The body the command needs: frozen at enqueue where the answer was
@@ -985,7 +1097,7 @@ mod rest {
                 if let Err(e) = queue.unclaim(id, &state.tenant).await {
                     tracing::error!(%id, error = %e, "processd: failed to release the queue claim");
                 }
-                return mako_service::ApiError::unprocessable(refusal.to_string()).into_response();
+                return Err(ApiError::unprocessable(refusal.to_string()));
             }
         };
 
@@ -1016,11 +1128,7 @@ mod rest {
             if let Err(e) = queue.unclaim(id, &state.tenant).await {
                 tracing::error!(%id, error = %e, "processd: failed to release the queue claim");
             }
-            return (
-                StatusCode::BAD_GATEWAY,
-                format!("makod dispatch failed: {e}"),
-            )
-                .into_response();
+            return Err(makod_dispatch_error(e));
         }
 
         tracing::info!(%id, process_id = %entry.process_id, command, "processd: queue entry {verb}d — command dispatched");
@@ -1058,7 +1166,7 @@ mod rest {
                 ),
             }
         }
-        StatusCode::NO_CONTENT.into_response()
+        Ok(StatusCode::NO_CONTENT)
     }
 
     /// Approve an approval-queue entry: claim it, then dispatch its command.
@@ -1080,10 +1188,8 @@ mod rest {
         headers: axum::http::HeaderMap,
         Path(id_str): Path<String>,
         body: axum::body::Bytes,
-    ) -> impl IntoResponse {
-        if let Err(deny) = authorize(&enforcer, &claims, "decide-queue", &state.tenant) {
-            return deny;
-        }
+    ) -> ApiResult<StatusCode> {
+        authorize(&enforcer, &claims, "decide-queue", &state.tenant)?;
         decide_queue_entry(
             &state,
             pool,
@@ -1108,10 +1214,8 @@ mod rest {
         headers: axum::http::HeaderMap,
         Path(id_str): Path<String>,
         body: axum::body::Bytes,
-    ) -> impl IntoResponse {
-        if let Err(deny) = authorize(&enforcer, &claims, "decide-queue", &state.tenant) {
-            return deny;
-        }
+    ) -> ApiResult<StatusCode> {
+        authorize(&enforcer, &claims, "decide-queue", &state.tenant)?;
         decide_queue_entry(
             &state,
             pool,
@@ -1175,10 +1279,8 @@ mod rest {
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
         claims: Claims,
         axum::Json(body): axum::Json<serde_json::Value>,
-    ) -> impl IntoResponse {
-        if let Err(deny) = authorize(&enforcer, &claims, "initiate-supply", &state.tenant) {
-            return deny;
-        }
+    ) -> ApiResult<axum::response::Response> {
+        authorize(&enforcer, &claims, "initiate-supply", &state.tenant)?;
         use mako_fristen::{self as fristen, HolidayCalendar};
 
         let malo_id = match body
@@ -1188,14 +1290,10 @@ mod rest {
         {
             Some(id) => id.to_owned(),
             None => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    axum::Json(serde_json::json!({
-                        "error": "MISSING_MALO_ID",
-                        "message": "\"malo_id\" is required (11-digit Strom Marktlokations-ID)"
-                    })),
-                )
-                    .into_response();
+                return Err(refuse(
+                    "MISSING_MALO_ID",
+                    "\"malo_id\" is required (11-digit Strom Marktlokations-ID)",
+                ));
             }
         };
 
@@ -1206,14 +1304,10 @@ mod rest {
         {
             Some(d) => d.to_owned(),
             None => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    axum::Json(serde_json::json!({
-                        "error": "MISSING_LIEFERBEGINN",
-                        "message": "\"lieferbeginn_datum\" is required (ISO-8601 date, e.g. \"2026-10-01\")"
-                    })),
-                )
-                    .into_response();
+                return Err(refuse(
+                    "MISSING_LIEFERBEGINN",
+                    "\"lieferbeginn_datum\" is required (ISO-8601 date, e.g. \"2026-10-01\")",
+                ));
             }
         };
 
@@ -1243,14 +1337,10 @@ mod rest {
             .map(str::to_owned)
             .or_else(|| configured_standard_bilanzkreis(&state));
         if bilanzkreis.is_none() {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                axum::Json(serde_json::json!({
-                    "error": "MISSING_BILANZKREIS",
-                    "message": "\"bilanzkreis\" is required: the UTILMD AHB Strom 2.2                                 Kap. 5.3 makes the SG8 SEQ+Z79 Produktpaket with Produkt-Code                                 9991000002082 (Bilanzkreis) a Muss on PID 55001, and without                                 a Bilanzkreis valid for this LF the NB cannot assign the                                 Marktlokation. Configure [[lf.bilanzkreise]] with a single                                 `standard` entry to have it filled in automatically."
-                })),
-            )
-                .into_response();
+            return Err(refuse(
+                "MISSING_BILANZKREIS",
+                "\"bilanzkreis\" is required: the UTILMD AHB Strom 2.2 Kap. 5.3 makes the SG8 SEQ+Z79 Produktpaket with Produkt-Code 9991000002082 (Bilanzkreis) a Muss on PID 55001, and without a Bilanzkreis valid for this LF the NB cannot assign the Marktlokation. Configure [[lf.bilanzkreise]] with a single `standard` entry to have it filled in automatically.",
+            ));
         }
 
         let lieferbeginn = match time::Date::parse(
@@ -1259,14 +1349,12 @@ mod rest {
         ) {
             Ok(d) => d,
             Err(_) => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    axum::Json(serde_json::json!({
-                        "error": "INVALID_DATE",
-                        "message": format!("\"lieferbeginn_datum\" is not a valid ISO-8601 date: {lieferbeginn_str:?}")
-                    })),
-                )
-                    .into_response();
+                return Err(refuse(
+                    "INVALID_DATE",
+                    format!(
+                        "\"lieferbeginn_datum\" is not a valid ISO-8601 date: {lieferbeginn_str:?}"
+                    ),
+                ));
             }
         };
 
@@ -1282,16 +1370,12 @@ mod rest {
         let today_berlin = mako_fristen::heute();
 
         if lieferbeginn < today_berlin {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                axum::Json(serde_json::json!({
-                    "error": "RETROACTIVE_DATE",
-                    "message": format!(
-                        "Retroactive Lieferbeginn is forbidden. Requested: {lieferbeginn}, today (Berlin): {today_berlin}"
-                    )
-                })),
-            )
-                .into_response();
+            return Err(refuse(
+                "RETROACTIVE_DATE",
+                format!(
+                    "Retroactive Lieferbeginn is forbidden. Requested: {lieferbeginn}, today (Berlin): {today_berlin}"
+                ),
+            ));
         }
 
         // Earliest allowed Lieferbeginn: the calendar day after the next
@@ -1302,23 +1386,19 @@ mod rest {
             .expect("date overflow");
 
         if lieferbeginn < base {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                axum::Json(serde_json::json!({
-                    "error": "VORLAUFFRIST_VIOLATION",
-                    "message": format!(
-                        "LFW24 Mindestvorlauffrist not met. \
+            return Err(refuse_with(
+                "VORLAUFFRIST_VIOLATION",
+                format!(
+                    "LFW24 Mindestvorlauffrist not met. \
                          Earliest allowed Lieferbeginn: {base}. \
                          Requested: {lieferbeginn}. \
                          (Spätester ÜT ist der Tag vor dem letzten WT vor dem \
                          Zuordnungsbeginn — BK6-24-174 GPKE Teil 2, SD Lieferbeginn)"
-                    ),
-                    "earliest_lieferbeginn": base.to_string(),
+                ),
+                serde_json::json!({ "earliest_lieferbeginn": base.to_string(),
                     "berlin_date": today_berlin.to_string(),
-                    "cutoff_rule": "spätester ÜT = Tag vor dem letzten WT vor dem Zuordnungsbeginn (day-granular, no time-of-day cutoff)"
-                })),
-            )
-                .into_response();
+                    "cutoff_rule": "spätester ÜT = Tag vor dem letzten WT vor dem Zuordnungsbeginn (day-granular, no time-of-day cutoff)" }),
+            ));
         }
 
         // ── Dispatch to makod ─────────────────────────────────────────────────
@@ -1339,7 +1419,7 @@ mod rest {
             }),
         };
         match state.makod.post_command(&idempotency_key, &cmd).await {
-            Ok(accepted) => (
+            Ok(accepted) => Ok((
                 StatusCode::ACCEPTED,
                 axum::Json(serde_json::json!({
                     "process_id": accepted.process_id,
@@ -1353,8 +1433,8 @@ mod rest {
                     }
                 })),
             )
-                .into_response(),
-            Err(e) => makod_dispatch_error(&e),
+                .into_response()),
+            Err(e) => Err(makod_dispatch_error(e)),
         }
     }
 
@@ -1391,22 +1471,16 @@ mod rest {
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
         claims: Claims,
         axum::Json(body): axum::Json<serde_json::Value>,
-    ) -> impl IntoResponse {
-        if let Err(deny) = authorize(&enforcer, &claims, "initiate-supply", &state.tenant) {
-            return deny;
-        }
+    ) -> ApiResult<axum::response::Response> {
+        authorize(&enforcer, &claims, "initiate-supply", &state.tenant)?;
         // Validate mandatory Gas fields before forwarding.
         let malo_id = match body.get("malo_id").and_then(|v| v.as_str()) {
             Some(id) if !id.is_empty() => id.to_owned(),
             _ => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    axum::Json(serde_json::json!({
-                        "error": "MISSING_MALO_ID",
-                        "message": "\"malo_id\" is required (11-digit Gas-MaLo-ID)"
-                    })),
-                )
-                    .into_response();
+                return Err(refuse(
+                    "MISSING_MALO_ID",
+                    "\"malo_id\" is required (11-digit Gas-MaLo-ID)",
+                ));
             }
         };
         if body
@@ -1415,14 +1489,10 @@ mod rest {
             .filter(|s| !s.is_empty())
             .is_none()
         {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                axum::Json(serde_json::json!({
-                    "error": "MISSING_ZAEHLPUNKT",
-                    "message": "\"zaehlpunkt\" is required (Zählpunktbezeichnung, RFF+Z13) — mandatory per BK7-24-01-009 AHB"
-                })),
-            )
-                .into_response();
+            return Err(refuse(
+                "MISSING_ZAEHLPUNKT",
+                "\"zaehlpunkt\" is required (Zählpunktbezeichnung, RFF+Z13) — mandatory per BK7-24-01-009 AHB",
+            ));
         }
         if body
             .get("process_date")
@@ -1430,14 +1500,10 @@ mod rest {
             .filter(|s| !s.is_empty())
             .is_none()
         {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                axum::Json(serde_json::json!({
-                    "error": "MISSING_PROCESS_DATE",
-                    "message": "\"process_date\" is required (Lieferbeginn date, YYYYMMDD in CET/CEST)"
-                })),
-            )
-                .into_response();
+            return Err(refuse(
+                "MISSING_PROCESS_DATE",
+                "\"process_date\" is required (Lieferbeginn date, YYYYMMDD in CET/CEST)",
+            ));
         }
 
         // `SG10 CCI+Z19` DE 7037 — **Muss** on a 44001 (UTILMD AHB Gas 1.2).
@@ -1451,14 +1517,10 @@ mod rest {
             .map(str::to_owned)
             .or_else(|| configured_standard_bilanzkreis(&state));
         let Some(bilanzkreis) = bilanzkreis else {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                axum::Json(serde_json::json!({
-                    "error": "MISSING_BILANZKREIS",
-                    "message": "\"bilanzkreis\" is required: UTILMD AHB Gas 1.2 marks                                 SG10 CCI+Z19 (Bilanzkreis) a Muss on PID 44001, and without                                 it the GNB has no balancing circle to assign the                                 Marktlokation to. Configure [[lf.bilanzkreise]] with a                                 single `standard` entry to have it filled in automatically."
-                })),
-            )
-                .into_response();
+            return Err(refuse(
+                "MISSING_BILANZKREIS",
+                "\"bilanzkreis\" is required: UTILMD AHB Gas 1.2 marks SG10 CCI+Z19 (Bilanzkreis) a Muss on PID 44001, and without it the GNB has no balancing circle to assign the Marktlokation to. Configure [[lf.bilanzkreise]] with a single `standard` entry to have it filled in automatically.",
+            ));
         };
 
         // ── GeLi Gas Mindestvorlauffrist ──────────────────────────────────
@@ -1499,23 +1561,19 @@ mod rest {
 
             if lieferbeginn < fruehestens {
                 if ist_wechsel {
-                    return (
-                        StatusCode::UNPROCESSABLE_ENTITY,
-                        axum::Json(serde_json::json!({
-                            "error": "VORLAUFFRIST_VIOLATION",
-                            "message": format!(
-                                "GeLi Gas Mindestvorlauffrist not met. Earliest allowed \
+                    return Err(refuse_with(
+                        "VORLAUFFRIST_VIOLATION",
+                        format!(
+                            "GeLi Gas Mindestvorlauffrist not met. Earliest allowed \
                                  Lieferbeginn for a Lieferantenwechsel: {fruehestens}. \
                                  Requested: {lieferbeginn}. (Mindestens {wt} WT vor Aufnahme \
                                  der Belieferung — AWH GeLi Gas 2.0 Kap. 2.5.2 SD Lieferbeginn Nr. 1)",
-                                wt = mako_fristen::vorlauf::GAS_WECHSEL_VORLAUF_WT,
-                            ),
-                            "earliest_lieferbeginn": fruehestens.to_string(),
+                            wt = mako_fristen::vorlauf::GAS_WECHSEL_VORLAUF_WT,
+                        ),
+                        serde_json::json!({ "earliest_lieferbeginn": fruehestens.to_string(),
                             "berlin_date": today_berlin.to_string(),
-                            "transaktionsgrund": transaktionsgrund,
-                        })),
-                    )
-                        .into_response();
+                            "transaktionsgrund": transaktionsgrund }),
+                    ));
                 }
                 vorlauf_hinweis = Some(format!(
                     "Lieferbeginn {lieferbeginn} liegt weniger als {GELI_GAS_VORLAUF_WT} WT in \
@@ -1555,7 +1613,7 @@ mod rest {
             },
         };
         match state.makod.post_command(&idempotency_key, &cmd).await {
-            Ok(accepted) => (
+            Ok(accepted) => Ok((
                 StatusCode::ACCEPTED,
                 axum::Json(serde_json::json!({
                     "process_id": accepted.process_id,
@@ -1572,8 +1630,8 @@ mod rest {
                     "vorlauffrist_hinweis": vorlauf_hinweis
                 })),
             )
-                .into_response(),
-            Err(e) => makod_dispatch_error(&e),
+                .into_response()),
+            Err(e) => Err(makod_dispatch_error(e)),
         }
     }
 
@@ -1589,10 +1647,8 @@ mod rest {
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
         claims: Claims,
         axum::Json(body): axum::Json<serde_json::Value>,
-    ) -> impl IntoResponse {
-        if let Err(deny) = authorize(&enforcer, &claims, "initiate-supply", &state.tenant) {
-            return deny;
-        }
+    ) -> ApiResult<axum::response::Response> {
+        authorize(&enforcer, &claims, "initiate-supply", &state.tenant)?;
         end_supply_inner(
             state,
             &body,
@@ -1608,10 +1664,8 @@ mod rest {
         Extension(enforcer): Extension<Arc<CedarEnforcer>>,
         claims: Claims,
         axum::Json(body): axum::Json<serde_json::Value>,
-    ) -> impl IntoResponse {
-        if let Err(deny) = authorize(&enforcer, &claims, "initiate-supply", &state.tenant) {
-            return deny;
-        }
+    ) -> ApiResult<axum::response::Response> {
+        authorize(&enforcer, &claims, "initiate-supply", &state.tenant)?;
         end_supply_inner(
             state,
             &body,
@@ -1627,7 +1681,7 @@ mod rest {
         body: &serde_json::Value,
         command: &str,
         key_prefix: &str,
-    ) -> axum::response::Response {
+    ) -> ApiResult<axum::response::Response> {
         let malo_id = match body
             .get("malo_id")
             .and_then(|v| v.as_str())
@@ -1635,14 +1689,7 @@ mod rest {
         {
             Some(id) => id.to_owned(),
             None => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    axum::Json(serde_json::json!({
-                        "error": "MISSING_MALO_ID",
-                        "message": "\"malo_id\" is required"
-                    })),
-                )
-                    .into_response();
+                return Err(refuse("MISSING_MALO_ID", "\"malo_id\" is required"));
             }
         };
         let lieferende_str = match body
@@ -1652,14 +1699,10 @@ mod rest {
         {
             Some(d) => d.to_owned(),
             None => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    axum::Json(serde_json::json!({
-                        "error": "MISSING_LIEFERENDE",
-                        "message": "\"lieferende_datum\" is required (ISO-8601 date)"
-                    })),
-                )
-                    .into_response();
+                return Err(refuse(
+                    "MISSING_LIEFERENDE",
+                    "\"lieferende_datum\" is required (ISO-8601 date)",
+                ));
             }
         };
 
@@ -1677,7 +1720,7 @@ mod rest {
             }),
         };
         match state.makod.post_command(&idempotency_key, &cmd).await {
-            Ok(accepted) => (
+            Ok(accepted) => Ok((
                 StatusCode::ACCEPTED,
                 axum::Json(serde_json::json!({
                     "process_id": accepted.process_id,
@@ -1687,8 +1730,8 @@ mod rest {
                     "status": "initiated",
                 })),
             )
-                .into_response(),
-            Err(e) => makod_dispatch_error(&e),
+                .into_response()),
+            Err(e) => Err(makod_dispatch_error(e)),
         }
     }
 }

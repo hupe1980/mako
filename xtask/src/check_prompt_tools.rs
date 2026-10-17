@@ -335,7 +335,8 @@ fn is_tool_name(token: &str) -> bool {
 mod tests {
     use super::{uninstructed_grants, unreachable_calls};
 
-    const GRANTS: &str = "\n  tools:\n    - ref: tool://obsd/get_process\n      mutates: false\n";
+    const GRANTS: &str =
+        "\n  tools:\n    - ref: tool://processd/get_process\n      mutates: false\n";
 
     fn manifest(procedure: &str) -> String {
         format!("spec:\n  identity:\n    constraints: |\n{procedure}\n  capabilities:\n{GRANTS}")
@@ -349,7 +350,7 @@ mod tests {
 
     #[test]
     fn a_granted_tool_is_not_a_finding() {
-        let src = manifest("      1. Call obsd `get_process` now.");
+        let src = manifest("      1. Call processd `get_process` now.");
         assert!(unreachable_calls(&src).is_empty());
     }
 
@@ -364,7 +365,7 @@ mod tests {
     #[test]
     fn a_conjoined_second_tool_is_still_a_call() {
         let src = manifest(
-            "      2. Call obsd `get_process` for the outstanding balance, and `list_ledger`\n\
+            "      2. Call processd `get_process` for the outstanding balance, and `list_ledger`\n\
              \x20        for the entries behind it.",
         );
         assert_eq!(unreachable_calls(&src), vec!["list_ledger"]);
@@ -420,7 +421,7 @@ mod tests {
     /// Mentioning it is enough for direction 2 — including to rule it out.
     #[test]
     fn a_mentioned_grant_is_not_a_finding() {
-        let src = manifest("      1. Call obsd `get_process` for the timeline.");
+        let src = manifest("      1. Call processd `get_process` for the timeline.");
         assert!(uninstructed_grants(&src).is_empty());
     }
 }

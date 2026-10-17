@@ -5,8 +5,8 @@
 //! ⚠️ The **10 Werktage** quoted for a Lieferantenwechsel is the *supplier's*
 //! minimum lead time („mindestens 10 Werktage vor Aufnahme der Belieferung",
 //! Kap. 3.2.3) — how far ahead the LF must send. The Netzbetreiber's answer
-//! window for the same message is **4 Werktage**. `obsd` computed every Gas
-//! breach alert from the lead time, six Werktage late.
+//! window for the same message is **4 Werktage**. A breach alert computed from
+//! the lead time fires six Werktage late.
 //!
 //! Only PIDs the Festlegung quantifies are listed; the Änderungsmeldung zur
 //! Bestandsliste (44020) has its Frist set per Netzbetreiber under Kap. 2.6, so

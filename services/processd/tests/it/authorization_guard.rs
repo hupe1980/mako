@@ -31,7 +31,13 @@ fn src(file: &str) -> String {
 /// Every `"…"` literal passed as the action argument of an authorization call.
 fn actions_used_in_code() -> BTreeSet<String> {
     let mut found = BTreeSet::new();
-    for file in ["server.rs", "mcp_server.rs", "handler.rs"] {
+    for file in [
+        "server.rs",
+        "mcp_server.rs",
+        "handler.rs",
+        "obs/rest.rs",
+        "sperr/handlers.rs",
+    ] {
         let text = src(file);
         for call in ["authorize(", ".check(", ".authorize("] {
             let mut rest = text.as_str();
@@ -149,11 +155,60 @@ fn every_rest_handler_authenticates_and_authorizes() {
 /// into request extensions, so `Extension<Claims>` is a guaranteed 500.
 #[test]
 fn no_handler_extracts_claims_as_a_request_extension() {
-    for file in ["server.rs", "handler.rs", "mcp_server.rs"] {
+    for file in [
+        "server.rs",
+        "handler.rs",
+        "mcp_server.rs",
+        "obs/rest.rs",
+        "obs/mcp.rs",
+        "sperr/handlers.rs",
+        "sperr/mcp.rs",
+    ] {
         assert!(
             !src(file).contains("Extension<Claims>"),
             "src/{file} extracts `Extension<Claims>`, but no layer inserts it, so every \
              request to those handlers returns 500 — take `claims: Claims` instead"
         );
     }
+}
+
+/// Every route of the process read model takes `Claims` and checks Cedar, but
+/// for the business gauges — unauthenticated by design and restricted at the
+/// ingress, like the runner's own `/metrics`.
+#[test]
+fn every_read_model_route_authenticates_and_authorizes() {
+    let rest = src("obs/rest.rs");
+    let router = &rest[rest.find("pub fn router(").expect("obs router")..];
+    let router = &router[..router.find("\n}\n").expect("router body")];
+    let routed: Vec<&str> = router
+        .split("get(")
+        .skip(1)
+        .filter_map(|s| s.split(')').next())
+        .collect();
+    assert!(routed.len() >= 6, "the route parser found only {routed:?}");
+
+    let mut offenders = Vec::new();
+    for name in routed {
+        if name == "metrics" {
+            continue;
+        }
+        let Some(start) = rest.find(&format!("async fn {name}(")) else {
+            offenders.push(format!("{name}: routed but not defined"));
+            continue;
+        };
+        let body = &rest[start..rest.len().min(start + 900)];
+        if !body.contains("claims: Claims") {
+            offenders.push(format!("{name}: no `Claims` extractor"));
+        }
+        if !body.contains("authorize(&enforcer, &claims,") {
+            offenders.push(format!("{name}: does not check Cedar"));
+        }
+    }
+    let helper = &rest[rest.find("fn authorize(").expect("the authorize helper")..];
+    assert!(
+        helper[..helper.find("\n}\n").expect("helper body")]
+            .contains("enforcer\n        .check(&claims.principal(), action, tenant)"),
+        "`authorize` must be the Cedar decision"
+    );
+    assert!(offenders.is_empty(), "{offenders:#?}");
 }

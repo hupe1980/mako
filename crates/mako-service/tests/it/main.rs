@@ -3,4 +3,5 @@
 //! binary, so a file per binary multiplies link time and disk by the file count.
 
 mod outbox_integration;
+mod policy_integration;
 mod published_verifiers;

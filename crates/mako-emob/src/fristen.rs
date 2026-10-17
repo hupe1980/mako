@@ -1,8 +1,8 @@
 //! The Modell-2 deadlines, in one place.
 //!
 //! The **answer** windows live in [`mako_fristen::antwort`] with every other
-//! Antwortfrist, keyed by trigger PID, so `makod`, `processd`, `obsd` and
-//! `agentd` cannot disagree about them. What this module adds is the three
+//! Antwortfrist, keyed by trigger PID, so `makod`, `processd` and `agentd`
+//! cannot disagree about them. What this module adds is the three
 //! windows that are not answers to an inbound message and therefore have no
 //! entry there.
 //!

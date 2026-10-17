@@ -1,9 +1,5 @@
 //! The router state every core handler receives.
 
-use std::sync::Arc;
-
-use mako_markt::makod_client::MakodClient;
-
 use crate::pg::{
     PgCorrelationIndex, PgMaloRepository, PgMeloRepository, PgPartnerRepository,
     PgSubscriptionRepository,
@@ -27,8 +23,6 @@ pub struct AppState {
     pub correlation_index: PgCorrelationIndex,
     /// Market partners.
     pub partner_repo: PgPartnerRepository,
-    /// Client for makod's admin API.
-    pub makod_client: Arc<MakodClient>,
     /// This deployment's own tenant identifier — the operator's primary market
     /// code (`makod.toml` `[[party]] primary = true`).
     ///

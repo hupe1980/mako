@@ -1,6 +1,6 @@
 +++
 title = "Services"
-description = "Operator guides for the 17 production daemons — ports, config, APIs, deployment."
+description = "Operator guides for the 14 production daemons — ports, config, APIs, deployment."
 weight = 4
 sort_by = "weight"
 template = "section.html"
@@ -11,12 +11,12 @@ roles — **LF** (Lieferant), **NB** (Netzbetreiber), **MSB**
 (Messstellenbetreiber) and **BKV** (Bilanzkreisverantwortlicher); see
 [Party Roles](@/docs/architecture/domain-model.md#party-roles-marktrollen).
 
-mako consists of **17 independently deployable services**, each a self-contained
+mako consists of **14 independently deployable services**, each a self-contained
 Docker image built on the [`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)
 SDK, with TOML configuration (`env:` and `_FILE` secrets), OIDC/JWT and API-key
 authentication, Cedar ABAC, OpenTelemetry, `/health/live` · `/health/ready` ·
-`/metrics`, and an MCP server at `/mcp` (Streamable HTTP) on 15 of the 17 —
-all except outputd and agentd (the MCP host). `just dev <service>` runs one
+`/metrics`, and an MCP server at `/mcp` (Streamable HTTP) on 11 of the 14 —
+all except outputd, portald and agentd (the MCP host). `just dev <service>` runs one
 against `dev/config/<service>.toml`.
 
 ---
@@ -30,19 +30,16 @@ graph TB
     subgraph protocol ["Protocol & Market Data"]
         makod[":8080 makod<br/>EDIFACT runtime · 71 workflows<br/>AS4 · SlateDB · MCP"]
         marktd[":8180 marktd<br/>MaLo/MeLo/NeLo · contracts<br/>VersorgungsStatus · fan-out"]
-        processd[":8580 processd<br/>Anmeldung STP ≥95%<br/>LF answers · §14a"]
+        processd[":8580 processd<br/>Anmeldung STP ≥95%<br/>LF answers · §14a<br/>process projections · KPI · §7a parity<br/>Sperrauftrag queue · IFTSTA 21039"]
     end
 
     subgraph nb_billing ["Invoice & Grid Billing (NB)"]
         invoicd[":8280 invoicd<br/>INVOIC 8-stage plausibility<br/>auto-settle/dispute"]
-        netzbilanzd[":8680 netzbilanzd<br/>NNE/KA/MMM/MSB billing<br/>SettlementResult · CalculationTrace"]
-        sperrd[":8780 sperrd<br/>Sperr-/Entsperrauftrag queue<br/>ORDERS 17115/17117 · IFTSTA 21039"]
+        netzbilanzd[":8680 netzbilanzd<br/>NNE/KA/MMM/MSB billing<br/>SettlementResult · CalculationTrace<br/>MaBiS MSCONS 13003 · 10. Werktag"]
     end
 
     subgraph data ["Energy Data & Observability"]
         edmd[":8380 edmd<br/>MSCONS · iMSys direct push<br/>validation · Ersatzwerte · virtual"]
-        obsd[":8480 obsd<br/>process projections · KPI<br/>§7a Abs. 5 EnWG parity report"]
-        mabis[":8880 mabis-syncd<br/>MaBiS Summenzeitreihe<br/>MSCONS 13003 · 10. Werktag · MCP"]
         einsd[":9180 einsd<br/>EEG/KWKG settlement<br/>10 schemes · §14 UStG Gutschrift"]
     end
 
@@ -54,7 +51,7 @@ graph TB
     end
 
     subgraph b2c ["Contract & Customer (LF)"]
-        vertragd[":9780 vertragd<br/>Kunden B2C+B2B · Rahmenverträge<br/>OIDC→MaLo · 17 MCP tools"]
+        vertragd[":9780 vertragd<br/>Kunden B2C+B2B · Rahmenverträge<br/>OIDC→MaLo · 18 MCP tools"]
         portald[":9480 portald<br/>customer portal read-model<br/>§41 self-service"]
     end
 
@@ -62,9 +59,9 @@ graph TB
 
     ext -->|AS4 / REST| makod
     makod <-->|CloudEvents| marktd
-    marktd -->|webhook fan-out| processd & invoicd & edmd & obsd & agentd
+    marktd -->|webhook fan-out| processd & invoicd & edmd & agentd
     makod -->|commands| netzbilanzd & invoicd
-    mabis -->|MSCONS 13003 cmd| makod
+    netzbilanzd -->|MSCONS 13003 cmd| makod
     billingd -->|de.billing.rechnung.erstellt| accountingd
     billingd -->|render · pin hash| outputd
     vertragd -->|start-supply| processd
@@ -79,24 +76,21 @@ graph TB
 |---|---|---|---|
 | [makod](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 71 workflows over 469 Prüfidentifikatoren, AS4/REST/iMS |
 | [marktd](@/docs/services/marktd.md) | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus, typed BO4E API, durable fan-out, MMMA monthly import worker |
-| [processd](@/docs/services/processd.md) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP ≥95%, LF answers to the NB-initiated GPKE processes, MSB REQOTE auto-response, §14a Steuerungsauftrag produktcode check; role-gated binaries (§ 6a EnWG) |
+| [processd](@/docs/services/processd.md) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP ≥95%, LF answers to the NB-initiated GPKE processes, MSB REQOTE auto-response, §14a Steuerungsauftrag produktcode check; the process read model — per-PID KPIs with the APERAK and Antwortfrist clocks reported separately, deadlines read from `mako-fristen`, `GET /api/v1/audit/gleichbehandlung` for the § 7a Abs. 5 EnWG filing, rebuildable from marktd's replay log; the NB Sperr-/Entsperrauftrag queue with IFTSTA 21039 on field confirmation; role-gated binaries, which cannot answer as a role they were not built for |
 
 ## Invoice & Grid Billing
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [invoicd](@/docs/services/invoicd.md) | `:8280` | LF | INVOIC plausibility-check — eight stages plus the WiM 31003 send window (incl. ToU band routing via `zaehlzeitregister`), auto-settle/dispute, § 147 AO / GoBD receipts |
-| [netzbilanzd](@/docs/services/netzbilanzd.md) | `:8680` | NB | NNE/KA/MMM/MSB/AWH billing — generates INVOIC 31001/31002/31005/31009/31011, full REMADV lifecycle, §14a Modul 3 ToU, §42b EnWG GGV, Redispatch 2.0 Kostenblatt, 8-tool MCP server |
-| [sperrd](@/docs/services/sperrd.md) | `:8780` | NB | Sperrung execution tracking — IFTSTA 21039 auto-dispatch on field confirmation; `GET /api/v1/sperr-orders/stats` compliance snapshot; tenant isolation; 4-tool MCP server |
+| [netzbilanzd](@/docs/services/netzbilanzd.md) | `:8680` | NB/ÜNB | NNE/KA/MMM/MSB/AWH billing — generates INVOIC 31001/31002/31005/31009/31011, full REMADV lifecycle, §14a Modul 3 ToU, §42b EnWG GGV, Redispatch 2.0 Kostenblatt; MaBiS Summenzeitreihen per Bilanzierungsgebiet filed with the BIKO as MSCONS 13003 on the 10. Werktag, with the BIKO-assigned Datenstatus and open Korrekturbedarf; 12-tool MCP server |
 
 ## Energy Data & Observability
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [edmd](@/docs/services/edmd.md) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, quality scoring and validation, virtual meters, tiered storage; 15-tool MCP server |
-| [mabis-syncd](@/docs/services/mabis-syncd.md) | `:8880` | ÜNB/NB | MaBiS synchronisation — aggregates quarter-hourly Lastgang per Bilanzierungsgebiet via `SummenzeitreiheBuilder`, files with the BIKO as MSCONS 13003 on the 10. Werktag; records the BIKO-assigned Datenstatus and open Korrekturbedarf; emits `de.mabis.*` failure events; 4-tool read-only MCP server |
-| [einsd](@/docs/services/einsd.md) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes; issues the **§14 UStG Gutschrift** (Gutschriftverfahren) per billable settlement as a BO4E `Rechnung` with per-rate USt breakdown; 19-tool MCP server |
-| [obsd](@/docs/services/obsd.md) | `:8480` | All | Business-process observability — per-PID KPIs with the APERAK and Antwortfrist clocks reported separately, deadlines read from `mako-fristen` (never computed here), `completed_at` cycle-time tracking, `GET /api/v1/audit/gleichbehandlung` for the § 7a Abs. 5 EnWG filing, 6-tool MCP server |
+| [edmd](@/docs/services/edmd.md) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, quality scoring and validation, virtual meters, tiered storage; 16-tool MCP server |
+| [einsd](@/docs/services/einsd.md) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes; issues the **§14 UStG Gutschrift** (Gutschriftverfahren) per billable settlement as a BO4E `Rechnung` with per-rate USt breakdown; 20-tool MCP server |
 
 `edmd`'s quality layer is `metering`'s validation rules, run per register with an A/B/C/F
 grade, and its Ersatzwertbildung; its derived products are virtual meters (UTILTS
@@ -124,7 +118,7 @@ with per-channel evidence.
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [vertragd](@/docs/services/vertragd.md) | `:9780` | LF + MSB | Contract & Customer Management — Kunden (B2C+B2B), Rahmenverträge, Versorgungsverträge, kunden_identitaeten (N portal users per company), Tarifwechsel with its § 41 Abs. 5 EnWG Preisänderungsanzeige (rendered and delivered through outputd), Kündigung, OIDC→MaLo auth gateway for portald |
-| [portald](@/docs/services/portald.md) | `:9480` | LF | Customer Portal gateway — stateless aggregation over all LF services plus the §41 EnWG self-service writes (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16) and the document inbox served out of outputd; every route resolves customer ownership through `vertragd`; 8-tool operator MCP server |
+| [portald](@/docs/services/portald.md) | `:9480` | LF | Customer Portal gateway — stateless aggregation over all LF services plus the §41 EnWG self-service writes (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16) and the document inbox served out of outputd; every route resolves customer ownership through `vertragd`; no MCP server — agents read each datum from the service that owns it |
 | [agentd](@/docs/services/agentd.md) | `:9580` | All | Multi-agent LLM orchestration — **28 declarative manifests** on the agentplane durable runtime, every effect journaled; read-only by construction, so oversight is a triage worklist |
 
 `agentd`'s manifests are activated through `[bundled_agents]`; one event yields
@@ -175,8 +169,8 @@ What every service gets for free from the runner:
 | **Shutdown** | SIGINT/SIGTERM graceful drain; workers observe `ctx.shutdown` |
 | **Health probe** | `--check` in-container HEALTHCHECK (no shell, no curl) |
 
-Event-emitting services — accountingd, billingd, edmd, einsd, mabis-syncd,
-netzbilanzd, sperrd and vertragd — use the SDK's **transactional outbox**: each
+Event-emitting services — accountingd, billingd, edmd, einsd,
+netzbilanzd, processd and vertragd — use the SDK's **transactional outbox**: each
 CloudEvent is written to `event_outbox` *in the same transaction* as the
 business change and drained by an `OutboxWorker` with retry and a status-column
 dead-letter queue. `marktd` keeps its own `event_log` outbox ahead of the durable

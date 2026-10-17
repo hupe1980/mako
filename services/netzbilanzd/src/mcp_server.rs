@@ -21,6 +21,14 @@
 //! | `get_billing_summary` | monthly totals by PID, Sparte, status and Rechnungsart |
 //! | `list_pending_kostenblatt` | Redispatch cost sheets awaiting the 15th |
 //! | `list_kostenblatt_gaps` | activations registered but never quantified |
+//! | `get_submission_status` | MaBiS: latest runs + open-Korrekturbedarf and failed counts |
+//! | `list_failed_submissions` | MaBiS: failed runs, newest first, with `attempt_count` |
+//! | `get_submission_run` | MaBiS: one Summenzeitreihe run by UUID |
+//! | `list_korrekturbedarf` | MaBiS: open negative Prüfmitteilungen (§9.8.1 obligations) |
+//!
+//! Filing a Summenzeitreihe is not a tool either: it is a binding filing with
+//! the BIKO and stays behind `POST /api/v1/mabis/sync`, where Cedar authorises
+//! a person.
 
 use std::sync::Arc;
 
@@ -46,6 +54,8 @@ use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::mabis::pg::SubmissionRunRow;
+use crate::mabis::server::{rfc3339, rfc3339_opt};
 use crate::pg::{self, DraftFilter};
 
 /// Shared state for the MCP tools.
@@ -124,6 +134,55 @@ pub struct MonthParams {
 pub struct StaleParams {
     /// Report drafts older than this many hours (default 48).
     pub older_than_hours: Option<i64>,
+}
+
+/// How many recent MaBiS runs `get_submission_status` reads.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SubmissionStatusParams {
+    /// Maximum recent runs to include (default 10).
+    pub limit: Option<i64>,
+}
+
+/// How many failed MaBiS runs `list_failed_submissions` reads.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListFailedSubmissionsParams {
+    /// Maximum results (default 20).
+    pub limit: Option<i64>,
+}
+
+/// A single MaBiS submission run by UUID.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SubmissionRunParams {
+    /// UUID of the submission run.
+    pub id: String,
+}
+
+/// One MaBiS run, in the wire shape the REST surface serves — RFC 3339
+/// instants, never `time`'s derived component arrays. `version` matters most:
+/// §3.8.2 identifies a Summenzeitreihe by it, and the Prüfmitteilung endpoint
+/// parses it back as RFC 3339.
+fn run_json(r: &SubmissionRunRow) -> serde_json::Value {
+    serde_json::json!({
+        "id": r.id,
+        "bilanzierungsgebiet_id": r.bilanzierungsgebiet_id,
+        "period_from": r.period_from.to_string(),
+        "period_to": r.period_to.to_string(),
+        "version": rfc3339(r.version),
+        "abrechnungslauf": r.abrechnungslauf,
+        "phase": r.phase,
+        "datenstatus": r.datenstatus,
+        "status": r.status,
+        "malo_count": r.malo_count,
+        "interval_count": r.interval_count,
+        "total_kwh": r.total_kwh,
+        "has_substituted": r.has_substituted,
+        "triggered_at": rfc3339(r.triggered_at),
+        "submitted_at": rfc3339_opt(r.submitted_at),
+        "acked_at": rfc3339_opt(r.acked_at),
+        "message_ref": r.message_ref,
+        "error_msg": r.error_msg,
+        "attempt_count": r.attempt_count,
+    })
 }
 
 /// The MCP handler.
@@ -364,6 +423,126 @@ impl NetzbilanzMcpHandler {
             "action": "POST /api/v1/redispatch/kostenblatt/{activation_id}/compute",
             "records": rows,
         }))
+    }
+
+    #[tool(
+        description = "MaBiS submission health snapshot: the most recent Summenzeitreihe runs (with status, Datenstatus and attempt_count), plus failed-run and open-Korrekturbedarf counts. BK6-24-174 Anlage 3 §3.10: Erstaufschlag closes 10 Werktage after month end, Clearing 30.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_submission_status(
+        &self,
+        Parameters(p): Parameters<SubmissionStatusParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = p.limit.unwrap_or(10).clamp(1, 100);
+        let runs = crate::mabis::pg::list_runs(&self.state.pool, &self.state.tenant, limit)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let failed = runs.iter().filter(|r| r.status == "failed").count();
+        let exhausted = runs
+            .iter()
+            .filter(|r| r.status == "failed" && r.attempt_count >= 3)
+            .count();
+        let korrekturbedarf =
+            crate::mabis::pg::open_korrekturbedarf(&self.state.pool, &self.state.tenant)
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                .len();
+
+        ContentBlock::json(serde_json::json!({
+            "runs": runs.iter().map(run_json).collect::<Vec<_>>(),
+            "failed_count": failed,
+            // Past the scheduler's retry guard — these do not retry themselves.
+            "retry_exhausted_count": exhausted,
+            "open_korrekturbedarf": korrekturbedarf,
+            "note": if exhausted > 0 || korrekturbedarf > 0 {
+                "ACTION REQUIRED: retry-exhausted runs or open Korrekturbedarf need an operator"
+            } else if failed > 0 {
+                "Failed runs present; the scheduler retries while attempt_count < 3"
+            } else {
+                "Submission cycle healthy"
+            },
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    #[tool(
+        description = "List failed Summenzeitreihe submission runs, newest first. attempt_count >= 3 means the scheduler has stopped retrying (retry-exhausted) and an operator must act. error_msg carries the aggregation or BIKO submission failure.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_failed_submissions(
+        &self,
+        Parameters(p): Parameters<ListFailedSubmissionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = p.limit.unwrap_or(20).clamp(1, 100);
+        let runs = crate::mabis::pg::list_failed_runs(&self.state.pool, &self.state.tenant, limit)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        ContentBlock::json(serde_json::json!({
+            "count": runs.len(),
+            "failed_runs": runs.iter().map(run_json).collect::<Vec<_>>(),
+            "regulatory_note":
+                "BK6-24-174 Anlage 3 §3.10: a version filed within the Erstaufschlag window \
+                 becomes Abrechnungsdaten directly; after it, corrections start as Prüfdaten \
+                 and need a positive Prüfmitteilung.",
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    #[tool(
+        description = "Get a single Summenzeitreihe submission run by UUID, including version (RFC 3339), phase, Datenstatus, MSCONS message_ref and error_msg.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_submission_run(
+        &self,
+        Parameters(p): Parameters<SubmissionRunParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let Ok(id) = p.id.parse::<uuid::Uuid>() else {
+            return Err(McpError::invalid_params("id must be a valid UUID", None));
+        };
+        match crate::mabis::pg::get_run(&self.state.pool, id, &self.state.tenant).await {
+            Ok(Some(r)) => ContentBlock::json(run_json(&r))
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None)),
+            Ok(None) => Err(McpError::invalid_params(
+                format!("run {id} not found"),
+                None,
+            )),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "List open Korrekturbedarf: negative Prüfmitteilungen (§9.8.1) with no correcting submission yet. Each must be answered by a corrected Summenzeitreihe under a higher version within the Clearing window (30 Werktage after month end).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_korrekturbedarf(&self) -> Result<CallToolResult, McpError> {
+        let rows = crate::mabis::pg::open_korrekturbedarf(&self.state.pool, &self.state.tenant)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let items: Vec<serde_json::Value> = rows
+            .into_iter()
+            .map(|(id, gebiet, from, to, version)| {
+                serde_json::json!({
+                    "pruefmitteilung_id": id.to_string(),
+                    "bilanzierungsgebiet_id": gebiet,
+                    "period_from": from.to_string(),
+                    "period_to": to.to_string(),
+                    "version": rfc3339(version),
+                })
+            })
+            .collect();
+        ContentBlock::json(serde_json::json!({
+            "count": items.len(),
+            "korrekturbedarf": items,
+            "regulatory_note":
+                "BK6-24-174 Anlage 3 §9.8.1: answered by a corrected Summenzeitreihe under a \
+                 higher version — an operator triggers it via POST /api/v1/mabis/sync with \
+                 corrects_run_id.",
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
     }
 }
 
@@ -606,6 +785,44 @@ impl NetzbilanzMcpHandler {
             ),
         ]
     }
+
+    #[prompt(
+        name = "submission-triage",
+        description = "Step-by-step: triage a failed Summenzeitreihe submission or an open Korrekturbedarf"
+    )]
+    async fn submission_triage_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "A MaBiS submission failed or the BIKO objected. How do I triage it?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "**MaBiS Summenzeitreihe triage (BK6-24-174 Anlage 3)**\n\n\
+                 **Step 1 — Snapshot**\n\
+                 Call `get_submission_status`.\n\
+                 - `retry_exhausted_count > 0`: the scheduler has given up (attempt_count >= 3) — go to Step 2.\n\
+                 - `open_korrekturbedarf > 0`: the BIKO objected — go to Step 3.\n\
+                 - only `failed_count > 0`: the scheduler still retries; watch, don't act.\n\n\
+                 **Step 2 — Failed runs**\n\
+                 Call `list_failed_submissions` and read `error_msg` per run:\n\
+                 - Aggregation errors (edmd data missing): check whether the Lastgänge for the \
+                 period exist and are complete before any retry.\n\
+                 - BIKO submission errors (makod dispatch): a transport problem — the MSCONS \
+                 never went out, so a retry files the same version safely.\n\
+                 Deadline context: the Erstaufschlag window closes on the 10. Werktag after \
+                 month end. A version filed later starts as Prüfdaten (needs a positive \
+                 Prüfmitteilung) — say so in the escalation.\n\n\
+                 **Step 3 — Korrekturbedarf**\n\
+                 Call `list_korrekturbedarf`. Each entry is an open §9.8.1 obligation: a \
+                 corrected Summenzeitreihe under a higher version, within the Clearing window \
+                 (30 Werktage after month end). The correction itself is an operator action \
+                 (`POST /api/v1/mabis/sync` with `corrects_run_id`) — name the run and the deadline \
+                 in the worklist entry.\n\n\
+                 **Output**: { submission_status, retry_exhausted: N, korrekturbedarf: N, action }",
+            ),
+        ]
+    }
 }
 
 #[tool_handler]
@@ -623,12 +840,13 @@ impl ServerHandler for NetzbilanzMcpHandler {
             "netzbilanzd — the Netzbetreiber's outbound billing daemon.\n\n\
              Issues NN-Rechnung (PID 31002, Strom and Gas), Mehr-/Mindermengensaldo (31005), \
              MSB-Rechnung (31009, issued by the MSB) and GeLi Gas AWH (31011); carries the \
-             Redispatch 2.0 Kostenblatt and the §13a Abs. 2 Vergütung.\n\n\
+             Redispatch 2.0 Kostenblatt and the §13a Abs. 2 Vergütung; files the Summenzeitreihen \
+             (MSCONS 13003) with the BIKO.\n\n\
              **This surface is read-only.** Dispatching an invoice sends EDIFACT to a \
              counterparty and starts a payment obligation, and the only way back is a \
              Stornorechnung — so settling, dispatching, rejecting and correcting all live on \
              the REST API, where the action is attributable to an operator. Read here; act there.\n\n\
-             ## Tools (8)\n\
+             ## Tools (12)\n\
              - `list_drafts` — filter by MaLo, party, PID, Sparte, status, Rechnungsart, verdict\n\
              - `get_draft` — one invoice in full: BO4E document, settlement input, findings, warnings\n\
              - `list_disputed` — REMADV Abweisungen with their ERC codes\n\
@@ -636,10 +854,21 @@ impl ServerHandler for NetzbilanzMcpHandler {
              - `list_corrections` — the Storno / Korrektur chain\n\
              - `get_billing_summary` — monthly totals by PID, Sparte, status, Rechnungsart\n\
              - `list_pending_kostenblatt` — Redispatch cost sheets awaiting the 15th\n\
-             - `list_kostenblatt_gaps` — activations registered but never quantified\n\n\
-             ## Prompts (6)\n\
+             - `list_kostenblatt_gaps` — activations registered but never quantified\n\
+             - `get_submission_status(limit)` — MaBiS: recent Summenzeitreihe runs + failed / \
+             retry-exhausted / Korrekturbedarf counts\n\
+             - `list_failed_submissions(limit)` — MaBiS: failed runs with attempt_count and error_msg\n\
+             - `get_submission_run(id)` — MaBiS: one run, full detail\n\
+             - `list_korrekturbedarf` — MaBiS: open negative Prüfmitteilungen (§9.8.1)\n\n\
+             ## Prompts (7)\n\
              `nb-invoic-overview` · `run-nne-billing` · `mmm-monthly-run` · \
-             `investigate-dispute` · `ggv-nne-billing` · `redispatch-monthly-submit`",
+             `investigate-dispute` · `ggv-nne-billing` · `redispatch-monthly-submit` · \
+             `submission-triage`\n\n\
+             ## MaBiS timing (BK6-24-174 Anlage 3 §3.10)\n\
+             Filing a Summenzeitreihe is not exposed here: it is a binding filing with the BIKO \
+             and stays behind the authenticated REST surface. Erstaufschlag: 10 Werktage after \
+             month end — a new version becomes Abrechnungsdaten directly. Clearing: 30 Werktage \
+             — a new version is Prüfdaten until a positive Prüfmitteilung. After 30 Werktage: KBKA.",
         )
     }
 }

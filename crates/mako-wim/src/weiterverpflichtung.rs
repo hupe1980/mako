@@ -651,7 +651,7 @@ mod tests {
     }
 
     /// The answer window is one Werktag, from the same table `makod` registers
-    /// the deadline from and `obsd` raises the breach against.
+    /// the deadline from and `processd` raises the breach against.
     #[test]
     fn the_answer_window_is_one_werktag() {
         use mako_fristen::antwort::{FristShape, antwort_obligation};

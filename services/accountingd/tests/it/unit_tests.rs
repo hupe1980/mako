@@ -887,8 +887,8 @@ fn gdpr_anonymization_fields_list_is_complete() {
     }
 
     // Every declared field must actually be cleared. A postal address is
-    // personal data in its own right; the EPC structured-address cut-over made
-    // mako store one, so erasure has to reach it.
+    // personal data in its own right; mako stores one for `PstlAdr`, so
+    // erasure has to reach it.
     let sweep = &PG_SRC[list_end..];
     for field in &declared {
         let (table, column) = field.split_once('.').expect("table.column");

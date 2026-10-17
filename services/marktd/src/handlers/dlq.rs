@@ -108,11 +108,7 @@ pub async fn list_dlq(
         .into_response(),
         Err(e) => {
             tracing::error!(error = %e, "dlq: list failed");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "db error"})),
-            )
-                .into_response()
+            ApiError::internal(e).into_response()
         }
     }
 }
@@ -149,18 +145,10 @@ pub async fn retry_dlq_entry(
             tracing::info!(%event_id, %subscriber_id, "dlq: entry requeued for redelivery");
             (StatusCode::OK, Json(serde_json::json!({"requeued": true}))).into_response()
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "not found or not dead-lettered"})),
-        )
-            .into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
         Err(e) => {
             tracing::error!(error = %e, "dlq: requeue failed");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "db error"})),
-            )
-                .into_response()
+            ApiError::internal(e).into_response()
         }
     }
 }
@@ -194,18 +182,10 @@ pub async fn delete_dlq_entry(
             tracing::info!(%event_id, %subscriber_id, "dlq: entry discarded by operator");
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "not found or not dead-lettered"})),
-        )
-            .into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
         Err(e) => {
             tracing::error!(error = %e, "dlq: delete failed");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "db error"})),
-            )
-                .into_response()
+            ApiError::internal(e).into_response()
         }
     }
 }

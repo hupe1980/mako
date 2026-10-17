@@ -399,8 +399,8 @@ curl -s http://localhost:8180/health/ready
 ```
 
 `just dev` starts PostgreSQL from `dev/docker-compose.yml` when it is not
-running and starts the service with `dev/config/marktd.toml`; every one of the
-seventeen services has such a file, on its port from the [services index](@/docs/services/_index.md). `makod`
+running and starts the service with `dev/config/marktd.toml`; every service has
+such a file, on its port from the [services index](@/docs/services/_index.md). `makod`
 needs no database — its dev event store is in memory — and `agentd` starts last,
 because it connects to every other service's MCP endpoint at startup.
 
@@ -430,7 +430,7 @@ covers building, testing one crate and running the gate.
 | processd — NB STP + LF answer automation | [processd guide](@/docs/services/processd.md) |
 | INVOIC plausibility, § 147 AO / GoBD | [invoicd guide](@/docs/services/invoicd.md) |
 | Energy data, imbalance, billing periods | [edmd guide](@/docs/services/edmd.md) |
-| Process observability, §20 parity | [obsd guide](@/docs/services/obsd.md) |
+| Process observability, §20 parity | [processd guide — process read model](@/docs/services/processd.md#process-read-model) |
 | Full system architecture | [Architecture](@/docs/architecture/_index.md) |
 | Process catalogue (GPKE, WiM, …) | [Processes](@/docs/reference/processes.md) |
 | mako-service SDK | [mako-service README](https://github.com/hupe1980/mako/tree/main/crates/mako-service) |

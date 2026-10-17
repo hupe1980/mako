@@ -94,6 +94,22 @@ impl ServiceContext {
     }
 }
 
+/// A further port a daemon serves besides [`ServiceConfig::bind_addr`] — an
+/// AS4 endpoint, a partner API — returned by [`Daemon::listeners`].
+///
+/// The runner binds it, merges `/health/*` into it before any of its own
+/// layers (so a probe on that port is neither authenticated nor
+/// rate-limited), serves it on the shutdown token every port shares, and joins
+/// it with the main port.
+pub struct Listener {
+    /// What the port is for, as logged at bind.
+    pub name: &'static str,
+    /// The socket address to bind.
+    pub addr: String,
+    /// The port's router, with the daemon's own layers already applied.
+    pub router: axum::Router,
+}
+
 /// A mako daemon. The SDK ([`run`]) owns the lifecycle; the implementor supplies
 /// the config type, the service name, and how to build the domain router +
 /// workers from resolved infrastructure.
@@ -141,6 +157,46 @@ pub trait Daemon: Send + 'static {
         None
     }
 
+    /// Refuse a config that loads but cannot behave as documented — values
+    /// that contradict each other, a removed key, a posture that must be asked
+    /// for by name. Default: nothing to refuse.
+    ///
+    /// The runner calls it from `--print-config` and before [`Daemon::build`]
+    /// at boot, from one place, so a config `--print-config` accepts is a
+    /// config the daemon starts on.
+    ///
+    /// # Errors
+    ///
+    /// Name every problem; the runner refuses to start.
+    fn validate(_cfg: &Self::Config) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// The operator policy and posture this config runs under. Default: none.
+    ///
+    /// The runner logs it at startup (`info` per setting, `warn` per insecure
+    /// posture and per setting past its review date), exports it as
+    /// `mako_policy_info`, prints it from `--print-config` and, for a daemon
+    /// with a database, appends every changed value to `service_policy_log`.
+    /// A daemon that reports a policy setting serves the same report at
+    /// `GET /api/v1/policy` through [`crate::policy::router`].
+    fn policy(_cfg: &Self::Config) -> crate::policy::PolicyReport {
+        crate::policy::PolicyReport::default()
+    }
+
+    /// Further ports besides [`ServiceConfig::bind_addr`], built after
+    /// [`Daemon::build`]. Default: none.
+    ///
+    /// # Errors
+    ///
+    /// Return an error to abort startup.
+    fn listeners(
+        _cfg: Arc<Self::Config>,
+        _ctx: ServiceContext,
+    ) -> impl std::future::Future<Output = anyhow::Result<Vec<Listener>>> + Send {
+        async { Ok(Vec::new()) }
+    }
+
     /// Build the domain [`axum::Router`] and spawn background workers on
     /// `ctx.shutdown`. The runner merges this with the infra routes (health,
     /// metrics, tracing) — do not add those here.
@@ -185,6 +241,20 @@ pub async fn run<D: Daemon>() -> anyhow::Result<()> {
     let _guard = crate::init_tracing_from_env_with(D::NAME, D::tracing_layer());
 
     let cfg: D::Config = crate::load_config(D::NAME)?;
+    serve::<D>(cfg, crate::shutdown::token()).await
+}
+
+/// Everything [`run`] does once the config is loaded: validate, report, pool,
+/// migrations, `service_policy_log`, build, bind every port, serve until
+/// `shutdown` is cancelled.
+///
+/// # Errors
+///
+/// As [`run`].
+pub async fn serve<D: Daemon>(cfg: D::Config, shutdown: CancellationToken) -> anyhow::Result<()> {
+    let report = validate_config::<D>(&cfg)?;
+    report.log(D::NAME, time::OffsetDateTime::now_utc());
+    crate::policy::export_metric(D::NAME, &report);
     let cfg = Arc::new(cfg);
 
     // Stateless daemons have no `[database]`: skip pool + migrations entirely.
@@ -195,31 +265,119 @@ pub async fn run<D: Daemon>() -> anyhow::Result<()> {
             .await
             .context("connect database pool")?;
         D::migrate(&pool).await.context("run migrations")?;
+        if !report.is_empty() {
+            crate::policy::ensure_schema(&pool)
+                .await
+                .context("ensure service_policy_log schema")?;
+            let changes = crate::policy::record(&pool, D::NAME, &report)
+                .await
+                .context("record the policy report in service_policy_log")?;
+            crate::policy::log_changes(D::NAME, &changes);
+        }
         Some(pool)
     } else {
         None
     };
 
-    let shutdown = crate::shutdown::token();
     let ctx = ServiceContext {
         pool,
         http: crate::http::default_client(),
         shutdown: shutdown.clone(),
     };
-    // Keep a clone for the readiness probe; `build` consumes `ctx`.
+    // Keep a clone for the readiness probe and the further ports; `build`
+    // consumes `ctx`.
     let ready_ctx = ctx.clone();
 
     let domain = D::build(Arc::clone(&cfg), ctx)
         .await
         .context("build service router")?;
+    let extra = D::listeners(Arc::clone(&cfg), ready_ctx.clone())
+        .await
+        .context("build further listeners")?;
 
-    let app = mount::<D>(domain, ready_ctx);
+    let app = mount::<D>(domain, ready_ctx.clone());
 
+    let mut ports = Vec::with_capacity(1 + extra.len());
     let addr = cfg.bind_addr();
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .with_context(|| format!("bind {addr}"))?;
-    crate::shutdown::serve(listener, app, shutdown).await
+    ports.push(("http", listener, app));
+    for l in extra {
+        let listener = tokio::net::TcpListener::bind(&l.addr)
+            .await
+            .with_context(|| format!("bind {} ({})", l.addr, l.name))?;
+        ports.push((
+            l.name,
+            listener,
+            mount_listener::<D>(l.router, ready_ctx.clone()),
+        ));
+    }
+    serve_all(ports, shutdown).await
+}
+
+/// Serve every port on one shutdown token and join them all.
+///
+/// A port that fails cancels the token, so the others drain and stop rather
+/// than leaving a daemon that answers on half its ports; the first error is
+/// returned once every port has stopped.
+async fn serve_all(
+    ports: Vec<(&'static str, tokio::net::TcpListener, axum::Router)>,
+    shutdown: CancellationToken,
+) -> anyhow::Result<()> {
+    let mut tasks = tokio::task::JoinSet::new();
+    for (name, listener, app) in ports {
+        let ct = shutdown.clone();
+        tasks.spawn(async move {
+            let r = crate::shutdown::serve(listener, app, ct.clone())
+                .await
+                .with_context(|| format!("serve the {name} port"));
+            if r.is_err() {
+                ct.cancel();
+            }
+            r
+        });
+    }
+    let mut first_err = None;
+    while let Some(joined) = tasks.join_next().await {
+        let r = joined.map_err(anyhow::Error::from).and_then(|r| r);
+        if let Err(e) = r
+            && first_err.is_none()
+        {
+            first_err = Some(e);
+        }
+    }
+    first_err.map_or(Ok(()), Err)
+}
+
+/// [`Daemon::validate`], then [`Daemon::policy`] — what `--print-config` and
+/// boot both run, from this one function, so the two cannot disagree.
+///
+/// # Errors
+///
+/// Whatever [`Daemon::validate`] refuses.
+pub fn validate_config<D: Daemon>(cfg: &D::Config) -> anyhow::Result<crate::policy::PolicyReport> {
+    D::validate(cfg).with_context(|| format!("{} config is invalid", D::NAME))?;
+    Ok(D::policy(cfg))
+}
+
+/// A further port as [`run`] serves it: `/health/*` merged before the
+/// runner's trace layer, with the daemon's router — and its layers — beside.
+fn mount_listener<D: Daemon>(router: axum::Router, ready_ctx: ServiceContext) -> axum::Router {
+    crate::ServiceBuilder::new()
+        .with_health(move || {
+            let ctx = ready_ctx.clone();
+            async move {
+                let db_ok = match &ctx.pool {
+                    Some(pool) => db_ready(pool).await,
+                    None => true,
+                };
+                db_ok && D::ready(&ctx).await
+            }
+        })
+        .merge(router)
+        .with_trace_layer()
+        .build()
 }
 
 /// The daemon's router as [`run`] serves it: the infra routes (health,
@@ -266,6 +424,8 @@ fn mount<D: Daemon>(domain: axum::Router, ready_ctx: ServiceContext) -> axum::Ro
 /// Whatever [`Daemon::build`] refuses — a config that must not start.
 #[cfg(feature = "testing")]
 pub async fn build_for_test<D: Daemon>(cfg: D::Config) -> anyhow::Result<axum::Router> {
+    let report = validate_config::<D>(&cfg)?;
+    crate::policy::export_metric(D::NAME, &report);
     let pool = match cfg.database() {
         Some(_) => Some(
             sqlx::postgres::PgPoolOptions::new()
@@ -293,6 +453,8 @@ pub async fn build_for_test_on<D: Daemon>(
     cfg: D::Config,
     pool: PgPool,
 ) -> anyhow::Result<axum::Router> {
+    let report = validate_config::<D>(&cfg)?;
+    crate::policy::export_metric(D::NAME, &report);
     D::migrate(&pool).await.context("run migrations")?;
     build_with::<D>(cfg, Some(pool)).await
 }
@@ -323,8 +485,8 @@ enum Mode {
     Check,
     /// `-h` / `--help`: print usage, read nothing.
     Help,
-    /// `--print-config`: print the merged config layers, secrets redacted, and
-    /// check them.
+    /// `--print-config`: print the merged config layers, secrets redacted, check
+    /// them as boot does, and print the policy report.
     PrintConfig,
 }
 
@@ -360,8 +522,9 @@ Usage: {name} [--check | --print-config | --help]
 Options:
   (none)          start the daemon
   --check         probe the running instance's /health/ready and exit 0 when ready
-  --print-config  print the merged file + environment config (secrets redacted)
-                  and report every missing, unknown or invalid key
+  --print-config  print the merged file + environment config (secrets redacted),
+                  report every missing, unknown or invalid key, run the
+                  daemon's own validation and print the policy it runs under
   -h, --help      print this text
 
 Configuration:
@@ -375,8 +538,9 @@ Configuration:
     )
 }
 
-/// The `--print-config` path: the merged layers as TOML, then the same check
-/// startup runs — so a config can be validated without a database.
+/// The `--print-config` path: the merged layers as TOML, then the same checks
+/// startup runs — loading, [`Daemon::validate`] — and the policy report, so a
+/// config can be validated without a database.
 ///
 /// # Errors
 ///
@@ -384,7 +548,14 @@ Configuration:
 /// load.
 fn print_config<D: Daemon>() -> anyhow::Result<()> {
     print!("{}", crate::config::render_config(D::NAME, None)?);
-    let _: D::Config = crate::load_config(D::NAME)?;
+    let cfg: D::Config = crate::load_config(D::NAME)?;
+    let report = validate_config::<D>(&cfg)?;
+    if !report.is_empty() {
+        println!("\n# The policy and posture this config runs under:");
+        for line in report.lines(D::NAME) {
+            println!("# {line}");
+        }
+    }
     Ok(())
 }
 
@@ -462,9 +633,98 @@ mod mode_tests {
 
     #[test]
     fn usage_names_the_file_and_the_env_prefix() {
-        let text = usage("mabis-syncd");
-        assert!(text.contains("MABIS_SYNCD_CONFIG"), "{text}");
-        assert!(text.contains("./mabis-syncd.toml"), "{text}");
-        assert!(text.contains("MABIS_SYNCD_DATABASE__URL"), "{text}");
+        let text = usage("netzbilanzd");
+        assert!(text.contains("NETZBILANZD_CONFIG"), "{text}");
+        assert!(text.contains("./netzbilanzd.toml"), "{text}");
+        assert!(text.contains("NETZBILANZD_DATABASE__URL"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod listener_tests {
+    use std::sync::Arc;
+
+    use axum::Router;
+    use axum::http::StatusCode;
+
+    use super::{Daemon, Listener, ServiceConfig, ServiceContext};
+
+    #[derive(serde::Deserialize)]
+    struct Cfg {
+        main: String,
+        extra: String,
+    }
+    impl ServiceConfig for Cfg {
+        fn database(&self) -> Option<&crate::config::DatabaseConfig> {
+            None
+        }
+        fn bind_addr(&self) -> String {
+            self.main.clone()
+        }
+    }
+
+    struct TwoPorts;
+    impl Daemon for TwoPorts {
+        type Config = Cfg;
+        const NAME: &'static str = "two-ports";
+        async fn build(_cfg: Arc<Cfg>, _ctx: ServiceContext) -> anyhow::Result<Router> {
+            Ok(Router::new())
+        }
+        async fn listeners(cfg: Arc<Cfg>, _ctx: ServiceContext) -> anyhow::Result<Vec<Listener>> {
+            // The daemon's own layer refuses every request it wraps: a health
+            // probe that answers 200 on this port was merged outside it.
+            let router = Router::new()
+                .route("/api/x", axum::routing::get(|| async { "x" }))
+                .layer(axum::middleware::from_fn(
+                    |_req: axum::extract::Request, _next: axum::middleware::Next| async {
+                        axum::response::IntoResponse::into_response(StatusCode::UNAUTHORIZED)
+                    },
+                ));
+            Ok(vec![Listener {
+                name: "partner",
+                addr: cfg.extra.clone(),
+                router,
+            }])
+        }
+    }
+
+    fn free_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    /// M66 T016: a second listener is bound, served with an unauthenticated
+    /// `/health/live`, and stops with the main port on shutdown.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_declared_listener_is_served_with_health_outside_its_layers() {
+        let (main, extra) = (free_port(), free_port());
+        let cfg = Cfg {
+            main: format!("127.0.0.1:{main}"),
+            extra: format!("127.0.0.1:{extra}"),
+        };
+        let ct = tokio_util::sync::CancellationToken::new();
+        let task = tokio::spawn(super::serve::<TwoPorts>(cfg, ct.clone()));
+        let client = reqwest::Client::new();
+        let get = |port: u16, path: &str| {
+            let url = format!("http://127.0.0.1:{port}{path}");
+            let client = client.clone();
+            async move {
+                for _ in 0..100 {
+                    if let Ok(r) = client.get(&url).send().await {
+                        return r.status().as_u16();
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                panic!("{url} never answered");
+            }
+        };
+        assert_eq!(get(extra, "/health/live").await, 200);
+        assert_eq!(get(extra, "/api/x").await, 401);
+        assert_eq!(get(main, "/health/live").await, 200);
+        ct.cancel();
+        task.await.unwrap().unwrap();
     }
 }

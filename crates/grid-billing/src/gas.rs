@@ -74,6 +74,7 @@ impl Kapazitaetsprodukt {
 /// the engine pro-rates it over the settlement period by calendar days, and
 /// records that convention in the trace where an auditor can see it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GasKapazitaet {
     /// Booked capacity in kWh/h.
     pub bestellte_kapazitaet_kwh_h: Decimal,

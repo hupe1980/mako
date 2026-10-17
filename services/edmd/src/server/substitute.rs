@@ -119,11 +119,7 @@ pub async fn post_substitute_values(
 ) -> impl IntoResponse {
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "write-timeseries", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     run_substitute_values(&state.repo, &state.tenant, &malo_id, &req).await
@@ -151,41 +147,23 @@ pub async fn run_substitute_values(
     use metering::vee::substitute::{Policy, SubstitutionReason};
     use time::format_description::well_known::Rfc3339;
 
-    let unprocessable = |error: String| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response()
-    };
+    let unprocessable = |error: String| ApiError::unprocessable(error).into_response();
 
     let gap_from = match OffsetDateTime::parse(&req.gap_from, &Rfc3339) {
         Ok(t) => t,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("invalid gap_from: {e}") })),
-            )
-                .into_response();
+            return ApiError::bad_request(format!("invalid gap_from: {e}")).into_response();
         }
     };
     let gap_to = match OffsetDateTime::parse(&req.gap_to, &Rfc3339) {
         Ok(t) => t,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("invalid gap_to: {e}") })),
-            )
-                .into_response();
+            return ApiError::bad_request(format!("invalid gap_to: {e}")).into_response();
         }
     };
 
     if gap_from >= gap_to {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "gap_from must be before gap_to" })),
-        )
-            .into_response();
+        return ApiError::bad_request("gap_from must be before gap_to").into_response();
     }
     let now = OffsetDateTime::now_utc();
     if gap_to > now {
@@ -210,21 +188,18 @@ pub async fn run_substitute_values(
         {
             Some(r) => r,
             None => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": format!("unknown Ersatzwertbildungsgrund `{raw}`"),
-                        "supported": SubstitutionReason::ALL
+                return ApiError::unprocessable_with(
+                    format!("unknown Ersatzwertbildungsgrund `{raw}`"),
+                    serde_json::json!({ "supported": SubstitutionReason::ALL
                             .iter()
                             .map(|r| serde_json::json!({
                                 "name": r.as_str(),
                                 "code": r.code(),
                                 "beschreibung": r.description(),
                             }))
-                            .collect::<Vec<_>>(),
-                    })),
+                            .collect::<Vec<_>>() }),
                 )
-                    .into_response();
+                .into_response();
             }
         }
     };
@@ -398,14 +373,11 @@ pub async fn run_substitute_values(
         .collect();
 
     if substitutes.is_empty() && !refused.is_empty() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "No substitute values could be formed for this gap window",
-                "refused": refused,
-            })),
+        return ApiError::unprocessable_with(
+            "No substitute values could be formed for this gap window",
+            serde_json::json!({ "refused": refused }),
         )
-            .into_response();
+        .into_response();
     }
 
     let reason_str = reason.as_str().to_owned();
@@ -513,11 +485,7 @@ pub async fn run_substitute_values(
 
     if let Err(e) = repo.store_reads(validated).await {
         tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute store failed");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::internal(e).into_response();
     }
 
     // The per-interval method/reason audit row. `original_kwh` is the rejected
@@ -526,11 +494,7 @@ pub async fn run_substitute_values(
         Ok(tx) => tx,
         Err(e) => {
             tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute audit tx failed to begin");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
+            return ApiError::internal(e).into_response();
         }
     };
     for (from, to, method_str, kwh, original) in &audit {
@@ -554,21 +518,13 @@ pub async fn run_substitute_values(
         .await
         {
             tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute audit log failed");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
+            return ApiError::internal(e).into_response();
         }
     }
 
     if let Err(e) = tx.commit().await {
         tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute commit failed");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string(), "generated_count": 0 })),
-        )
-            .into_response();
+        return ApiError::internal(e).into_response();
     }
 
     tracing::info!(

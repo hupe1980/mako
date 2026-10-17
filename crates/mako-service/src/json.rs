@@ -6,14 +6,34 @@
 //! shape [`ApiError`] guarantees — handing a client parsing the body a parse
 //! error on top of the one it was told about.
 //!
-//! This extractor is `axum::Json` with the rejection mapped onto [`ApiError`]:
+//! This extractor is `axum::Json` with the rejection mapped onto [`ApiError`],
+//! and with one refusal `serde` does not make on its own:
 //!
 //! | What went wrong | Status | `detail` |
 //! |---|---|---|
 //! | not JSON at all | 400 | `serde_json`'s syntax message |
 //! | JSON, but not this type | 422 | the field and why |
+//! | a key the type does not declare, at any depth | 422 | the key's path; `code: "unknown_field"`, `paths: [...]` |
 //! | no/foreign `Content-Type` | 415 | what was expected |
 //! | the body could not be read | 400 | the transport's message |
+//!
+//! # Unknown keys
+//!
+//! `serde` skips a key no field declares, so a misspelt setting succeeds and
+//! does nothing. [`Json`] deserialises through `serde_ignored`, which reports
+//! every key `serde` skips, and refuses the body naming each one by its JSON
+//! path (`kunde.vornme`, `intervals.3.quality`) — whatever attributes the type
+//! carries.
+//!
+//! What `serde` buffers before it decides — a `#[serde(flatten)]` field, an
+//! `#[serde(untagged)]` or internally tagged enum — is read from that buffer,
+//! out of `serde_ignored`'s sight, so a key left over there is **not**
+//! reported. Those shapes keep `#[serde(deny_unknown_fields)]` on their
+//! members (or, for `flatten`, refuse in the type itself).
+//!
+//! [`Lenient`] is the same extractor without the refusal, for a body whose
+//! schema a published external specification defines and evolves — a
+//! counterparty one revision ahead must be read, not refused.
 //!
 //! # Structured detail from a `Deserialize` impl
 //!
@@ -34,7 +54,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer, de::DeserializeOwned};
 
 use crate::error::ApiError;
 
@@ -74,10 +94,9 @@ where
     type Rejection = ApiError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        match <axum::Json<T> as FromRequest<S>>::from_request(req, state).await {
-            Ok(axum::Json(value)) => Ok(Self(value)),
-            Err(rejection) => Err(map_rejection(&rejection)),
-        }
+        let Lenient(Strict(value)) =
+            <Lenient<Strict<T>> as FromRequest<S>>::from_request(req, state).await?;
+        Ok(Self(value))
     }
 }
 
@@ -97,11 +116,112 @@ where
     /// no body and gets `None`; a body that is present and will not parse is
     /// still a refusal, with the same problem shape as everywhere else.
     async fn from_request(req: Request, state: &S) -> Result<Option<Self>, Self::Rejection> {
+        let body = <Lenient<Strict<T>> as OptionalFromRequest<S>>::from_request(req, state).await?;
+        Ok(body.map(|Lenient(Strict(value))| Self(value)))
+    }
+}
+
+/// [`Json`] without the unknown-key refusal: `serde`'s own reading of `T`.
+///
+/// Only for a body whose schema a published external specification defines —
+/// a newer revision adds keys, and refusing the document over one would be
+/// this service failing an interoperability requirement it does not get to
+/// redefine. Every other body is a [`Json`]. The rejection mapping is the same:
+/// a malformed body is still refused in the problem shape.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Lenient<T>(pub T);
+
+impl<T, S> FromRequest<S> for Lenient<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        match <axum::Json<T> as FromRequest<S>>::from_request(req, state).await {
+            Ok(axum::Json(value)) => Ok(Self(value)),
+            Err(rejection) => Err(map_rejection(&rejection)),
+        }
+    }
+}
+
+impl<T, S> OptionalFromRequest<S> for Lenient<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    /// `Option<Lenient<T>>` — absent without a JSON `Content-Type`, refused when
+    /// present and malformed; the same distinction as `Option<Json<T>>`.
+    async fn from_request(req: Request, state: &S) -> Result<Option<Self>, Self::Rejection> {
         match <axum::Json<T> as OptionalFromRequest<S>>::from_request(req, state).await {
             Ok(Some(axum::Json(value))) => Ok(Some(Self(value))),
             Ok(None) => Ok(None),
             Err(rejection) => Err(map_rejection(&rejection)),
         }
+    }
+}
+
+/// A `serde_ignored` path as the caller wrote it: map keys and array indices
+/// joined by `.`. `serde_ignored`'s own `Display` also prints a `?` for every
+/// `Option` it passed through, which names a Rust type, not a JSON position.
+fn json_path(path: &serde_ignored::Path<'_>) -> String {
+    use serde_ignored::Path;
+    let mut segments = Vec::new();
+    let mut at = path;
+    loop {
+        at = match at {
+            Path::Root => break,
+            Path::Seq { parent, index } => {
+                segments.push(index.to_string());
+                parent
+            }
+            Path::Map { parent, key } => {
+                segments.push(key.clone());
+                parent
+            }
+            Path::Some { parent }
+            | Path::NewtypeStruct { parent }
+            | Path::NewtypeVariant { parent } => parent,
+        };
+    }
+    segments.reverse();
+    segments.join(".")
+}
+
+/// `T`, refused if the document holds a key `T` does not declare.
+///
+/// The refusal is a `serde` error carrying [`DETAIL_SENTINEL`] detail, so it
+/// leaves through the same 422 path as every other data error and
+/// [`map_rejection`] lifts `code` and `paths` into the problem body.
+struct Strict<T>(T);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Strict<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let mut unknown: Vec<String> = Vec::new();
+        let value = serde_ignored::deserialize(deserializer, |path| {
+            unknown.push(json_path(&path));
+        })?;
+        if unknown.is_empty() {
+            return Ok(Self(value));
+        }
+        let named = unknown
+            .iter()
+            .map(|p| format!("`{p}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let plural = if unknown.len() == 1 { "" } else { "s" };
+        let detail = serde_json::json!({
+            "code": "unknown_field",
+            "paths": unknown,
+            "message": format!("unknown field{plural} {named}"),
+        });
+        Err(D::Error::custom(format!(
+            "unknown field{plural} {named}{DETAIL_SENTINEL}{detail}"
+        )))
     }
 }
 
@@ -152,7 +272,7 @@ fn recover_detail(message: &str) -> Option<(String, serde_json::Value)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DETAIL_SENTINEL, Json};
+    use super::{DETAIL_SENTINEL, Json, Lenient};
     use axum::{Router, body::Body, http::Request, routing::post};
     use serde::Deserialize;
     use tower::ServiceExt as _;
@@ -248,6 +368,186 @@ mod tests {
     async fn a_valid_body_extracts() {
         let (status, _) = post_body(Some("application/json"), r#"{"n":7}"#).await;
         assert_eq!(status, 200);
+    }
+
+    /// No `deny_unknown_fields` anywhere: the refusal is the extractor's.
+    #[derive(Deserialize)]
+    #[expect(dead_code, reason = "the extractor's refusal is the subject")]
+    struct Kunde {
+        vorname: String,
+        #[serde(default)]
+        adresse: Option<Adresse>,
+        #[serde(default)]
+        intervalle: Vec<Adresse>,
+        #[serde(default)]
+        frei: Option<serde_json::Value>,
+    }
+
+    #[derive(Deserialize)]
+    #[expect(dead_code, reason = "the extractor's refusal is the subject")]
+    struct Adresse {
+        ort: String,
+    }
+
+    /// `outputd`'s shape: a body that flattens a member.
+    #[derive(Deserialize)]
+    #[expect(dead_code, reason = "the extractor's refusal is the subject")]
+    struct Flattened {
+        name: String,
+        #[serde(flatten)]
+        inner: Adresse,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    #[expect(dead_code, reason = "the extractor's refusal is the subject")]
+    enum Untagged {
+        A { ort: String },
+        B { n: u8 },
+    }
+
+    #[derive(Deserialize)]
+    #[serde(tag = "art")]
+    #[expect(dead_code, reason = "the extractor's refusal is the subject")]
+    enum Tagged {
+        A { ort: String },
+    }
+
+    #[derive(Deserialize)]
+    #[serde(tag = "art", deny_unknown_fields)]
+    #[expect(dead_code, reason = "the extractor's refusal is the subject")]
+    enum TaggedDenying {
+        A { ort: String },
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged, deny_unknown_fields)]
+    #[expect(dead_code, reason = "the extractor's refusal is the subject")]
+    enum UntaggedDenying {
+        A { ort: String },
+    }
+
+    async fn post_to(app: Router, body: &'static str) -> (u16, serde_json::Value) {
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let status = resp.status().as_u16();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        )
+    }
+
+    fn strict<T: serde::de::DeserializeOwned + Send + 'static>() -> Router {
+        Router::new().route("/", post(|Json(_): Json<T>| async { "ok" }))
+    }
+
+    /// A misspelt key is refused with its path, though the type carries no
+    /// `deny_unknown_fields` — at the top level, one level in, and inside a
+    /// sequence.
+    #[tokio::test]
+    async fn an_undeclared_key_is_refused_with_its_path() {
+        for (body, path) in [
+            (r#"{"vorname":"Erika","vornme":"x"}"#, "vornme"),
+            (
+                r#"{"vorname":"Erika","adresse":{"ort":"Berlin","plz":"10115"}}"#,
+                "adresse.plz",
+            ),
+            (
+                r#"{"vorname":"Erika","intervalle":[{"ort":"a"},{"ort":"b","qualitaet":1}]}"#,
+                "intervalle.1.qualitaet",
+            ),
+        ] {
+            let (status, json) = post_to(strict::<Kunde>(), body).await;
+            assert_eq!(status, 422, "{body} → {json}");
+            assert_eq!(json["code"], "unknown_field", "{json}");
+            assert_eq!(json["paths"], serde_json::json!([path]), "{json}");
+            assert_eq!(json["detail"], format!("unknown field `{path}`"), "{json}");
+        }
+    }
+
+    #[tokio::test]
+    async fn every_undeclared_key_is_named() {
+        let (status, json) = post_to(strict::<Kunde>(), r#"{"vorname":"E","a":1,"b":2}"#).await;
+        assert_eq!(status, 422);
+        assert_eq!(json["paths"], serde_json::json!(["a", "b"]), "{json}");
+    }
+
+    /// A `serde_json::Value` field takes any document by design; what is in
+    /// it is the BO4E gate's business, not this refusal's.
+    #[tokio::test]
+    async fn a_value_field_accepts_any_keys() {
+        let (status, json) = post_to(
+            strict::<Kunde>(),
+            r#"{"vorname":"Erika","frei":{"anything":{"at":"all"}}}"#,
+        )
+        .await;
+        assert_eq!(status, 200, "{json}");
+    }
+
+    #[tokio::test]
+    async fn an_optional_body_is_refused_the_same_way() {
+        let app = Router::new().route(
+            "/",
+            post(|body: Option<Json<Kunde>>| async move {
+                if body.is_some() { "some" } else { "none" }
+            }),
+        );
+        let (status, json) = post_to(app, r#"{"vorname":"Erika","vornme":"x"}"#).await;
+        assert_eq!(status, 422, "{json}");
+        assert_eq!(json["paths"], serde_json::json!(["vornme"]), "{json}");
+    }
+
+    #[tokio::test]
+    async fn lenient_reads_what_json_refuses() {
+        let app = Router::new().route("/", post(|Lenient(_): Lenient<Kunde>| async { "ok" }));
+        let (status, _) = post_to(app.clone(), r#"{"vorname":"Erika","vornme":"x"}"#).await;
+        assert_eq!(status, 200);
+        let (status, json) = post_to(app, r#"{"vorname":7}"#).await;
+        assert_eq!(status, 422, "a malformed body is still refused: {json}");
+        assert!(json.get("detail").is_some(), "{json}");
+    }
+
+    /// The limit of the runtime check, measured: `serde` reads a `flatten`
+    /// member, an `untagged` enum and an internally tagged enum out of a
+    /// buffer it filled itself, and a key left over there never reaches
+    /// `serde_ignored`. These shapes stay `deny_unknown_fields`'s business.
+    #[tokio::test]
+    async fn flatten_and_untagged_leftovers_are_not_seen() {
+        let (status, json) =
+            post_to(strict::<Flattened>(), r#"{"name":"n","ort":"o","extra":1}"#).await;
+        assert_eq!(status, 200, "flatten: {json}");
+        let (status, json) = post_to(strict::<Untagged>(), r#"{"ort":"o","extra":1}"#).await;
+        assert_eq!(status, 200, "untagged: {json}");
+        let (status, json) =
+            post_to(strict::<Tagged>(), r#"{"art":"A","ort":"o","extra":1}"#).await;
+        assert_eq!(status, 200, "internally tagged: {json}");
+    }
+
+    /// What closes the gap the runtime check leaves: `deny_unknown_fields` on
+    /// the buffered shape itself — the rule `check-request-bodies` holds those
+    /// shapes to.
+    #[tokio::test]
+    async fn deny_on_the_buffered_shape_refuses_the_leftover() {
+        let (status, json) = post_to(
+            strict::<TaggedDenying>(),
+            r#"{"art":"A","ort":"o","extra":1}"#,
+        )
+        .await;
+        assert_eq!(status, 422, "internally tagged: {json}");
+        let (status, json) = post_to(strict::<UntaggedDenying>(), r#"{"ort":"o","extra":1}"#).await;
+        assert_eq!(status, 422, "untagged: {json}");
     }
 
     /// The same type answers on the way out, so a handler module swaps one

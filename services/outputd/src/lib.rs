@@ -30,8 +30,11 @@
 //! that the § 41f EnWG notice actually reached the customer. See `delivery`.
 
 pub mod config;
+pub mod daemon;
 pub mod delivery;
 pub mod document;
 pub mod error;
 pub mod handlers;
 pub mod template_store;
+
+pub use daemon::Outputd;

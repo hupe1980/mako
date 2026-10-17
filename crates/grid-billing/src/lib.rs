@@ -133,8 +133,7 @@ pub mod umsatzsteuer;
 
 /// A monetary amount in euro at 10⁻⁵-EUR resolution.
 ///
-/// `billing` 0.12 dropped its own `EuroAmount` alias — the engine is
-/// currency-agnostic and the name asserted a currency the type does not carry.
+/// `billing` is currency-agnostic and names no currency in its own types.
 /// Netznutzungsentgelte are euro-denominated by statute, so the alias is correct
 /// here; it just belongs to the domain crate rather than the engine.
 pub type EuroAmount = ::billing::Amount<5>;

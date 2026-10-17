@@ -45,7 +45,7 @@ pub(super) fn cmd_wim_geraetewechsel_aperak<'a>(
     // message could be processed (`BGM+312` Anerkennung, `BGM+313` Fehler), and
     // defaulting the flag would put an Anerkennung on the wire for a caller that
     // never stated one — a binding statement to the counterparty, made by
-    // omission. The field is required, the way `mabis-syncd` requires the
+    // omission. The field is required, the way `netzbilanzd` requires the
     // Prüfmitteilung's.
     let Some(positive) = p
         .get("positiv")

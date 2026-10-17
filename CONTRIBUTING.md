@@ -55,6 +55,28 @@ Each key can be overridden by `<SERVICE>_<KEY>`, nested keys joined with `__`
 (`MARKTD_DATABASE__URL`); `just infra-down` stops PostgreSQL and
 `just infra-reset` also deletes its volume.
 
+## The service shape
+
+Every daemon but `makod` has one shape, and a guard holds each part:
+
+- **A library with a one-line `main`.** The `Daemon` lives in `lib.rs` (or a
+  module of it); `main.rs` is `mako_service::run::<D>().await`
+  (`check-thin-main`), and `tests/it/router_builds.rs` builds the router the
+  binary mounts with `mako_service::build_for_test::<D>(cfg)`.
+- **Every failure is an `ApiError`.** Handlers return `ApiResult<T>` and use
+  `?`; a refusal is a variant written for the caller (`bad_request`,
+  `not_found`, `precondition_failed`, `too_many_requests`, …), with a stable
+  `code` and extra keys through `with_code` / `with_fields`. A 500 or an
+  upstream failure carries an `error_id` the log line carries and never the
+  error's own text. A hand-built `(StatusCode, …)` tuple fails
+  `check-error-tuples`.
+- **Bodies come through `mako_service::Json`**, which refuses a key the type
+  does not declare. `Lenient<T>` reads an externally specified schema without
+  that refusal; `check-request-bodies` names every use, and every flattened
+  or buffered shape the runtime check cannot see.
+- **One listen shape.** A config takes `[http] addr`; `dev/ports.toml` holds
+  every dev port, and the `dev_configs` tests hold every dev config to it.
+
 ## Run the gate
 
 ```bash

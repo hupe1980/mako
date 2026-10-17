@@ -139,17 +139,15 @@ pub use providers::{
     HemsProvider, MwStProvider, ServiceProvider, SolarProvider, WaterProvider,
 };
 
-// The arithmetic core — `Amount<P>` fixed-point money, the canonical
-// `RoundingStrategy` (kaufmännisch by convention in this workspace), and the
-// error reachable through [`EngineError::Arithmetic`]. `round_money` /
-// `RoundMoney` delegate their mode to this crate; use `Amount` directly
+// The arithmetic core — `Amount<P>` fixed-point money, the `Rounding` modes
+// (kaufmännisch, `HalfAwayFromZero`, by convention in this workspace), and the
+// error reachable through [`EngineError::Arithmetic`]. Use `Amount` directly
 // where the precision is statutory (cents, 10⁻⁵-EUR unit prices).
-pub use billing::{Amount, BillingError, RoundingStrategy};
+pub use billing::{Amount, Rounding};
 
 /// A monetary amount in euro at 10⁻⁵-EUR resolution.
 ///
-/// `billing` 0.12 dropped its own `EuroAmount` alias — the engine is
-/// currency-agnostic and the name asserted a currency the type does not carry.
+/// `billing` is currency-agnostic and names no currency in its own types.
 /// German retail energy billing *is* euro-denominated, so the alias is correct
 /// here; it just belongs to the domain crate rather than the engine.
 pub type EuroAmount = Amount<5>;

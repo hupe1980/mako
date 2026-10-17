@@ -61,6 +61,7 @@ use mako_engine::{
     deadline::DeadlineStore as _, metrics::EngineMetrics, outbox::OutboxStore as _,
     registry::ProcessRegistry as _, store_slatedb::SlateDbStore,
 };
+use mako_service::{ApiError, ApiResult};
 
 use crate::cedar_authz::{CedarAuthorizer, MetricsResource};
 
@@ -120,18 +121,12 @@ pub fn router(state: Arc<MetricsState>) -> Router {
 async fn handler(
     State(state): State<Arc<MetricsState>>,
     headers: axum::http::HeaderMap,
-) -> impl IntoResponse {
+) -> ApiResult<impl IntoResponse> {
     // ── Authentication ────────────────────────────────────────────────────────
-    let identity = match state.cedar.authenticate(&headers) {
-        Some(id) => id,
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                [(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"))],
-                "401 Unauthorized\n".to_owned(),
-            );
-        }
-    };
+    let identity = state
+        .cedar
+        .authenticate(&headers)
+        .ok_or(ApiError::Unauthorized)?;
 
     // ── Authorization: ReadMetrics ────────────────────────────────────────────
     if !state.cedar.authorize_metrics(
@@ -140,11 +135,7 @@ async fn handler(
             tenant: &state.tenant_id,
         },
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            [(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"))],
-            "403 Forbidden\n".to_owned(),
-        );
+        return Err(ApiError::forbidden("ReadMetrics permission denied"));
     }
 
     // Collect all metrics concurrently (independent reads).
@@ -172,7 +163,7 @@ async fn handler(
     // EngineMetrics instance (AtomicU64 reads, no I/O).
     let event_counters = EngineMetrics::global().snapshot().render_prometheus();
 
-    // The same series the runner exports on the fifteen daemons it hosts.
+    // The same series the runner exports on every daemon it hosts.
     // makod drives its own `main` and so renders it here instead — and it is
     // the daemon that reads the most BO4E, so a counterparty encoding amounts
     // as JSON numbers shows up here first.
@@ -207,12 +198,12 @@ async fn handler(
          {event_counters}",
     );
 
-    (
+    Ok((
         StatusCode::OK,
         [(
             header::CONTENT_TYPE,
             HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
         )],
         body,
-    )
+    ))
 }

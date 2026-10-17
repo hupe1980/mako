@@ -7,9 +7,11 @@
 
 allow_insecure_no_auth = true
 
-port     = 9080
 tenant   = "9900357000004"
 lf_mp_id = "9900357000004"
+
+[http]
+addr = "127.0.0.1:9080"
 
 [database]
 url = "postgres://dev:dev@localhost:5432/productd"

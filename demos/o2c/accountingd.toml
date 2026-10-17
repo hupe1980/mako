@@ -1,7 +1,6 @@
 # accountingd.toml — order-to-cash demo (auth disabled)
 # DO NOT use in production.
 
-port   = 9380
 tenant = "9912345000005"
 
 # Demo only. Without it accountingd refuses to start with no `[oidc]` and no
@@ -11,6 +10,9 @@ allow_insecure_no_auth = true
 
 # Receives de.accounting.payment.due and the Jahresabschluss refund events.
 erp_webhook_url = "http://webhook:8000/events"
+
+[http]
+addr = "0.0.0.0:9380"
 
 [database]
 url = "postgres://demo:demo-secret@postgres/accountingd"

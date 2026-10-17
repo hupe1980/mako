@@ -5,7 +5,7 @@
 
 ## Role
 
-`makod` is the only binary crate that assembles the domain workflow crates (`mako-gpke`, `mako-wim`, `mako-geli-gas`, `mako-gabi-gas`, `mako-mabis`, `mako-emob`, `mako-redispatch`) into a single `EngineContext`. `production_modules()` in `src/startup/mod.rs` is the list, and each entry is `#[cfg]`-gated on the Marktrolle features the build selected. It owns:
+`makod` is the only binary crate that assembles the domain workflow crates (`mako-gpke`, `mako-wim`, `mako-geli-gas`, `mako-gabi-gas`, `mako-mabis`, `mako-emob`, `mako-redispatch`) into a single `EngineContext`. `MODULE_TABLE` in `src/startup/mod.rs` is the list; each row names the `[deployment] rollen` that register it, and `modules_for` selects a deployment's rows at startup. makod has no role cargo features — `tests/it/startup_smoke.rs` pins each role's module set. It owns:
 - Persistence backend selection (in-memory vs. SlateDB)
 - Object store configuration (local / S3 / GCS)
 - OTLP instrumentation setup
@@ -59,7 +59,7 @@ The primary surface is **`makod.toml`**, deserialized into
 `makod::core::config::ConfigFile` (`src/core/config.rs`, `deny_unknown_fields`)
 and selected with `-c` / `--config <FILE>` or `MAKOD_CONFIG`. Several blocks
 exist only there and have no CLI equivalent: `[[party]]` (operator identity —
-at least one entry is required), `[storage.s3]`, `[authz]`, `[engine]`,
+at least one entry is required), `[deployment]` (`rollen` — required, checked against `[[party]]`), `[storage.s3]`, `[authz]`, `[engine]`,
 `[webdienste]`, `[marktd]`, `[maloid]`, and the `as4.*_pem_file` paths that keep
 key material off the command line and out of the environment.
 

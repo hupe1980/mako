@@ -137,8 +137,7 @@ impl AccountRow {
     ///
     /// `Cdtr/PstlAdr` when accountingd pays the account (EEG Vergütung, a
     /// Jahresabschluss-Erstattung), and the fallback for `Dbtr/PstlAdr` when a
-    /// mandate carries none. Mandatory from the EPC structured-address cut-over
-    /// on 15 November 2026; until then an empty set of parts emits no `PstlAdr`.
+    /// mandate carries none. An empty set of parts emits no `PstlAdr`.
     #[must_use]
     pub fn postal_address(&self) -> crate::sepa::AddressParts {
         crate::sepa::AddressParts {
@@ -1631,8 +1630,7 @@ pub struct SepaMandateRow {
 impl SepaMandateRow {
     /// The debtor's postal address, as the pain.008 builder wants it.
     ///
-    /// Mandatory from the EPC structured-address cut-over on 15 November 2026;
-    /// until then an empty set of parts emits no `PstlAdr` at all.
+    /// An empty set of parts emits no `PstlAdr` at all.
     #[must_use]
     pub fn debtor_address(&self) -> crate::sepa::AddressParts {
         crate::sepa::AddressParts {
@@ -1673,8 +1671,8 @@ pub struct CreateMandateRequest {
     #[serde(default = "default_scheme")]
     pub scheme: String,
     pub signed_at: String,
-    /// Debtor postal address (`Dbtr/PstlAdr`). Optional until 15 November 2026,
-    /// after which the EPC schemes require `town` + `country`.
+    /// Debtor postal address (`Dbtr/PstlAdr`). Optional; once any part is set,
+    /// `town` + `country` are required.
     #[serde(default)]
     pub debtor_address: crate::sepa::AddressParts,
 }
@@ -2430,8 +2428,8 @@ pub async fn anonymize_account(
     }
 
     let anonymized_at = OffsetDateTime::now_utc();
-    // A postal address is personal data in its own right — the EPC cut-over
-    // made mako store one, so erasure has to reach it. The address *snapshots*
+    // A postal address is personal data in its own right — mako stores one
+    // for `PstlAdr`, so erasure has to reach it. The address *snapshots*
     // on `eeg_payout_orders` are deliberately left alone: they are part of a
     // Buchungsbeleg and carry the statutory retention the ledger entries do.
     let anonymized_fields = serde_json::json!([
@@ -2851,7 +2849,7 @@ pub async fn mark_sperrankuendigung(
 ///
 /// The announced disconnection date (`geplantes_sperrdatum`, = Ankündigung +
 /// 8 Werktage per §41f Abs. 5) has arrived, the case is still unresolved and
-/// un-halted, and no Sperrauftrag has been handed to sperrd yet.
+/// un-halted, and no Sperrauftrag has been handed on yet.
 pub async fn list_sperrauftrag_candidates(
     pool: &PgPool,
     tenant: &str,

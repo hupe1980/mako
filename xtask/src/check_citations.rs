@@ -176,8 +176,7 @@ const RULE_SITES: &[&str] = &[
     "xtask/src/check_citations.rs",
     // States the same repeal as one of its own known-wrong phrases.
     "xtask/src/check_known_wrong.rs",
-    "services/sperrd/tests/it/authorization_guard.rs",
-    "services/sperrd/README.md",
+    "services/processd/tests/it/sperr/authorization_guard.rs",
 ];
 
 /// Scan the workspace for malformed regulatory citations.

@@ -162,18 +162,33 @@ impl DatabaseConfig {
     }
 }
 
-/// Standard HTTP listen-address configuration block.
-///
-/// Services that take `[http]` embed this struct rather than defining their own:
+/// The listen-address block every daemon's config takes:
 ///
 /// ```toml
 /// [http]
 /// addr = "0.0.0.0:8580"
 /// ```
-#[derive(Debug, Clone, serde::Deserialize)]
+///
+/// One shape for every service, so `dev/ports.toml` and the dev configs can be
+/// checked against each other, and an operator reading one service's config
+/// knows where every other one listens. A daemon embeds it as
+/// `#[serde(default = "…")] http: HttpConfig` with its default port from
+/// [`HttpConfig::on_port`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpConfig {
-    /// Socket address to bind.  Defaults to `"0.0.0.0:<default-port>"`.
+    /// Socket address to bind.
     pub addr: String,
+}
+
+impl HttpConfig {
+    /// Every interface on `port` — a daemon's default listen address.
+    #[must_use]
+    pub fn on_port(port: u16) -> Self {
+        Self {
+            addr: format!("0.0.0.0:{port}"),
+        }
+    }
 }
 
 // ── Loader ────────────────────────────────────────────────────────────────────
@@ -224,6 +239,14 @@ pub enum ConfigProblem {
     /// A layer could not be read at all: TOML syntax, an unset `env:` reference,
     /// an unreadable `_FILE`.
     Unreadable(String),
+    /// A `Required` operator setting (a [`crate::policy::PolicyChoice`] with no
+    /// default) is in neither the file nor the environment.
+    PolicyRequired {
+        /// Dotted key path, e.g. `policy.uev_boersenreferenz`.
+        path: String,
+        /// Every admissible option with its primary source.
+        options: Vec<(String, String)>,
+    },
     /// The checker stopped at a key it could not fill in to look further; more
     /// problems may sit behind the ones listed.
     Incomplete,
@@ -237,6 +260,19 @@ impl std::fmt::Display for ConfigProblem {
             Self::Invalid { path, message } => write!(f, "invalid value at `{path}`: {message}"),
             Self::FileNotFound(p) => write!(f, "config file {} does not exist", p.display()),
             Self::Unreadable(m) => write!(f, "{m}"),
+            Self::PolicyRequired { path, options } => {
+                write!(
+                    f,
+                    "missing policy setting `{path}`: it has no default, set one of "
+                )?;
+                for (i, (name, quelle)) in options.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str("; ")?;
+                    }
+                    write!(f, "`{name}` ({quelle})")?;
+                }
+                Ok(())
+            }
             Self::Incomplete => f.write_str(
                 "further problems may be hidden behind the ones above; fix them and re-run",
             ),
@@ -342,7 +378,8 @@ impl std::fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 /// The environment-variable prefix for service `name`: upper-cased, `-` → `_`,
-/// trailing `_` — `mabis-syncd` reads `MABIS_SYNCD_*`.
+/// trailing `_` — `netzbilanzd` reads `NETZBILANZD_*`, a `my-daemon` would read
+/// `MY_DAEMON_*`.
 #[must_use]
 pub fn env_prefix(name: &str) -> String {
     format!("{}_", name.to_uppercase().replace('-', "_"))
@@ -384,6 +421,8 @@ fn load<C: DeserializeOwned>(name: &str, file: ConfigFile) -> Result<C, ConfigEr
         )]));
     }
     let figment = layered(file.path(), &prefix, true);
+    // Clear what an earlier, unrelated deserialization left behind.
+    let _ = crate::policy::take_missing_required();
     match figment.extract::<C>() {
         Ok(cfg) => Ok(cfg),
         Err(first) => Err(fail(diagnose::<C>(&figment, &first))),
@@ -442,6 +481,7 @@ fn diagnose<C: DeserializeOwned>(
     };
     let mut data = original.clone();
     let mut problems = Vec::new();
+    let mut required = crate::policy::take_missing_required();
     for _ in 0..MAX_DIAGNOSE_ROUNDS {
         let Err(err) = try_extract::<C>(&data) else {
             return problems;
@@ -450,6 +490,24 @@ fn diagnose<C: DeserializeOwned>(
             Kind::MissingField(field) => {
                 let mut path = err.path.clone();
                 path.push(field.to_string());
+                required.extend(crate::policy::take_missing_required());
+                // A `Required` policy setting: name its options, and continue
+                // with its first option so the rest of the config is checked.
+                if let Some(r) = required.iter().find(|r| r.key == field.as_ref()) {
+                    problems.push(ConfigProblem::PolicyRequired {
+                        path: path.join("."),
+                        options: r.options.clone(),
+                    });
+                    if !insert(
+                        &mut data,
+                        &path,
+                        figment::value::Value::from(r.first.to_owned()),
+                    ) {
+                        problems.push(ConfigProblem::Incomplete);
+                        return problems;
+                    }
+                    continue;
+                }
                 problems.push(ConfigProblem::Missing(path.join(".")));
                 if !fill::<C>(&mut data, &path) {
                     problems.push(ConfigProblem::Incomplete);
@@ -742,10 +800,10 @@ mod tests {
 
     #[test]
     fn config_path_hyphen_service() {
-        // "mabis-syncd" -> MABIS_SYNCD_CONFIG (hyphens become underscores in env key).
-        let p = config_file("mabis-syncd");
-        assert_eq!(p.path(), std::path::Path::new("mabis-syncd.toml"));
-        assert_eq!(env_prefix("mabis-syncd"), "MABIS_SYNCD_");
+        // "my-daemon" -> MY_DAEMON_CONFIG (hyphens become underscores in env key).
+        let p = config_file("my-daemon");
+        assert_eq!(p.path(), std::path::Path::new("my-daemon.toml"));
+        assert_eq!(env_prefix("my-daemon"), "MY_DAEMON_");
     }
 }
 

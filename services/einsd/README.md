@@ -32,18 +32,22 @@ just dev einsd         # dev/config/einsd.toml against the dev PostgreSQL
 | Market data | `/api/v1/marktwert/{year}/{art}/{erzeugungsart}`, `/marktwert/{year}/nachbewertung`, `/epex-monthly/{year}/{month}`, `PUT /epex-spot`, `POST /verguetungssatz-lookup` |
 | For `processd` | `GET /api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform` — the `CCI+Z22` code plus an `ausfallverguetung` flag |
 
-## MCP server — `/mcp` (19 tools, 6 prompts)
+## MCP server — `/mcp` (20 tools, 6 prompts)
 
 Sixteen tools read; three write — `trigger_settle`, `import_marktwert` and
 `import_epex_monthly_price`. Money crosses the surface as exact decimals.
 
 ## Configuration
 
-Top-level: `tenant`, `port`, `edmd_url` / `edmd_api_key`,
+Top-level: `tenant`, `edmd_url` / `edmd_api_key`,
 `auto_settle_catchup_months`, `auto_settle_from_day`, `jahresmarktwert_url`,
-`erp_webhook_url` / `erp_hmac_secret`. Tables: `[database]`, `[oidc]`,
-`[beihilfevorbehalt]` (`politik = "verweigern"` or `"unter_vorbehalt"` for
-periods after 31.12.2026). DB suite: `just test-einsd-db`.
+`erp_webhook_url` / `erp_hmac_secret`. Tables: `[http]` (`addr`), `[database]`, `[oidc]`,
+`[beihilfevorbehalt]` (recorded state-aid approvals), `[policy]`
+(`beihilfe_politik = "verweigern"`, `"unter_vorbehalt"` or `"halten"` for an
+uncovered payment from 01.01.2027; `halten` stores a `gehalten` receipt with no
+Gutschrift and no payout until an approval releases it). The policy report is
+logged at startup, served at `GET /api/v1/policy` and by the MCP tool
+`get_policy`. DB suite: `just test-einsd-db`.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/einsd/)
 carries every statutory rule with its Fundstelle, the settlement formulas and

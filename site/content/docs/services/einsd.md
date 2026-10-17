@@ -1,6 +1,6 @@
 +++
 title = "einsd Operator Guide"
-description = "Operator guide for einsd, the EEG/KWKG feed-in settlement daemon: plant registry, §51 Negativpreisregel, §52 Pflichtzahlungen, 19 MCP tools, eeg-agent."
+description = "Operator guide for einsd, the EEG/KWKG feed-in settlement daemon: plant registry, §51 Negativpreisregel, §52 Pflichtzahlungen, 20 MCP tools, eeg-agent."
 weight = 28
 +++
 `einsd` is the **Einspeiser registry and EEG/KWKG settlement daemon** for the
@@ -250,16 +250,29 @@ supply period from **01.01.2027** — including a Marktprämie for an existing
 plant — therefore has no approval behind it until one is recorded. KWKG plants
 are outside it.
 
-| `politik` | Effect |
-|---|---|
-| `verweigern` (default) | The settlement is refused with `422` naming the reservation; no receipt is written and the sweep retries the month |
-| `unter_vorbehalt` | Settled and paid; the receipt and the Gutschrift carry a zero-euro position stating the reservation |
+### `[policy] beihilfe_politik` {#policy-beihilfe-politik}
 
-A recorded approval opens the supply periods it covers under either policy:
+What einsd does with an uncovered payment is the operator's reading; none of
+the three is a legal outcome mako asserts. Each option rests on the same
+source (BT-Drs. 21/7867 S. 248, Zu § 104).
+
+| `beihilfe_politik` | Effect |
+|---|---|
+| `verweigern` (default) | The settlement is refused with `422` naming the reservation and the setting; no receipt is written and the sweep retries the month. The default because paying cannot be taken back |
+| `unter_vorbehalt` | Settled and paid; the receipt and the Gutschrift carry a zero-euro position stating the reservation |
+| `halten` | Settled and held: the receipt is stored with status `gehalten`, no Gutschrift number is allocated and no payout CloudEvent is enqueued. The auto-settle worker re-settles every held month once a recorded approval covers it, however far back it lies, and pays it then |
+
+A receipt paid under reservation or held carries `policy_json` — the
+`{key, value, quelle}` of the reading — and the settlement result returns it
+as `policy`. The batch endpoint counts held plants under `gehalten`. The
+setting changes only by editing `einsd.toml` and restarting; the old key
+`[beihilfevorbehalt] politik` is refused at startup, naming this one.
+
+A recorded approval opens the supply periods it covers under every policy:
 
 ```toml
-[beihilfevorbehalt]
-politik = "verweigern"
+[policy]
+beihilfe_politik = "verweigern"
 
 [[beihilfevorbehalt.genehmigungen]]
 eingang        = "2027-…"   # Eingang bei der Bundesregierung
@@ -956,7 +969,7 @@ in `error`. Context: `principal_tenant` / `principal_roles` from `mako_tenant` /
 | Key | Default | Description |
 |---|---|---|
 | `[database] url` | — (required) | PostgreSQL (`env:…` supported) |
-| `port` | `9180` | Listen port |
+| `[http] addr` | `0.0.0.0:9180` | Listen address |
 | `tenant` | — (required) | Tenant identifier — data-isolation key written to every database row. Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid |
 | `erp_webhook_url` · `erp_hmac_secret` | — | ERP webhook and its signing secret |
 | `edmd_url` · `edmd_api_key` | — | Feed-in from edmd |
@@ -968,12 +981,15 @@ in `error`. Context: `principal_tenant` / `principal_roles` from `mako_tenant` /
 | `[mcp]` | — | MCP API key (`api_key = "env:EINSD_MCP_API_KEY"`) |
 | `[oidc]` | — (required) | REST token verification |
 | `allow_insecure_no_auth` | `false` | Development only |
-| `[beihilfevorbehalt]` | `politik = "verweigern"` | See [Beihilfevorbehalt](#beihilfevorbehalt-from-01-01-2027) |
+| `[beihilfevorbehalt]` | no approvals | Recorded state-aid approvals; see [Beihilfevorbehalt](#beihilfevorbehalt-from-01-01-2027) |
+| `[policy] beihilfe_politik` | `verweigern` | See [`beihilfe_politik`](#policy-beihilfe-politik); every operator setting is listed in [Operator policy](@/docs/reference/operator-policy.md) |
 
 ```toml
-port     = 9180
 tenant   = "9910000000002"
 edmd_url = "http://edmd:8380"
+
+[http]
+addr = "0.0.0.0:9180"
 
 [database]
 url = "postgresql://einsd:secret@db:5432/einsd"
@@ -1067,8 +1083,8 @@ they are null for `EIGENVERBRAUCH`. Deliveries are
 
 At `/mcp` (Streamable HTTP 2025-11-25), authenticated by `[mcp]`.
 
-**19 tools:**
-`list_plants` · `get_plant` · `list_expiring` · `list_settlements` ·
+**20 tools:**
+`get_policy` · `list_plants` · `get_plant` · `list_expiring` · `list_settlements` ·
 `lookup_verguetungssatz` · `lookup_statutory_rate` · `trigger_settle` ·
 `list_unsettled_plants` · `get_epex_monthly_price` · `import_epex_monthly_price` ·
 `get_compliance_status` · `list_plants_without_mastr` ·

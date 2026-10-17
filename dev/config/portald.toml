@@ -7,7 +7,6 @@
 
 allow_insecure_no_auth = true
 
-port     = 9480
 tenant   = "9900357000004"
 lf_mp_id = "9900357000004"
 
@@ -18,3 +17,6 @@ accountingd_url = "http://127.0.0.1:9380"
 einsd_url       = "http://127.0.0.1:9180"
 marktd_url      = "http://127.0.0.1:8180"
 outputd_url     = "http://127.0.0.1:9880"
+
+[http]
+addr = "127.0.0.1:9480"

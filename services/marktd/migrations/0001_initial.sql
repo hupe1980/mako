@@ -1773,7 +1773,7 @@ COMMENT ON TABLE msb_rahmenvertraege_gas IS
 --
 -- Master data rather than service configuration so that a territory with no
 -- assignment fails its submission loudly instead of silently substituting the
--- Bilanzierungsgebiet EIC. Read by `mabis-syncd` before every submission.
+-- Bilanzierungsgebiet EIC. Read by `netzbilanzd` before every submission.
 --
 -- BNetzA BK6-24-174 Anlage 3 (MaBiS); MSCONS AHB 3.2 SG6.
 

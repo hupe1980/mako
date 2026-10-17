@@ -178,7 +178,7 @@ pub fn redispatch_verguetung(
     // representable as an EuroAmount before it leaves the crate.
     for v in [entgangene, zusaetzliche, ersparte, total] {
         let _representable =
-            EuroAmount::checked_from_decimal(v).map_err(|_| BillingError::MonetaryOverflow {
+            EuroAmount::from_decimal(v).map_err(|_| BillingError::MonetaryOverflow {
                 input_value: Some(v),
             })?;
     }

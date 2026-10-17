@@ -14,7 +14,7 @@ An inbound message starts **two independent clocks**:
 
 A queue sized by the looser of the two reports a lapsed Frist as still
 running. The business windows are one table keyed by inbound PID
-(`mako_fristen::antwort`), so `makod`, `processd`, `obsd` and `agentd` cannot
+(`mako_fristen::antwort`), so `makod`, `processd` and `agentd` cannot
 disagree about a deadline:
 
 | Family | Shape | Examples |

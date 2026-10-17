@@ -57,8 +57,10 @@ pub enum Fired {
 
 /// The driver of every workflow this binary registers, by name.
 ///
-/// Built once from [`crate::startup::production_modules`] — the same list the
-/// engine is built from, so a role build sees exactly its own workflows.
+/// Built once from [`crate::startup::production_modules`] — every module the
+/// binary can register, of which the engine registers the declared roles'
+/// share. A deadline exists only for a registered workflow, so the extra
+/// drivers are never looked up.
 #[must_use]
 pub fn production_drivers() -> &'static HashMap<&'static str, WorkflowDriver> {
     static DRIVERS: OnceLock<HashMap<&'static str, WorkflowDriver>> = OnceLock::new();

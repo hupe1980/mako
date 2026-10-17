@@ -120,7 +120,7 @@ fn mixed_rate_invoice_renders_conformant_cii_and_ubl() {
     let invoice = mixed_rate_invoice();
     let model = einvoice::build(&invoice, &cfg()).expect("model builds");
 
-    let cii = einvoice::render_cii(&model);
+    let cii = einvoice::render_cii(&model).expect("writable");
     assert!(cii.contains("R-XR-9001"), "invoice number in CII");
     // Both VAT rates reach the wire — a single blended rate is exactly what the
     // hand-rolled renderer produced and this proves is gone.
@@ -129,7 +129,7 @@ fn mixed_rate_invoice_renders_conformant_cii_and_ubl() {
         "per-rate VAT in CII"
     );
 
-    let ubl = einvoice::render_ubl(&model);
+    let ubl = einvoice::render_ubl(&model).expect("writable");
     assert!(ubl.contains("R-XR-9001"), "invoice number in UBL");
     assert!(!ubl.is_empty());
 
@@ -382,7 +382,7 @@ fn the_render_request_carries_the_semantic_model() {
 /// mako fixed this on the buyer side (a MaLo-ID must not be dressed up as a
 /// GLN) and left the identical defect on the seller side, because
 /// `Identifier::eas` validates the scheme and accepts any content, and no
-/// business rule can test a claim about a registry. `Identifier::eas_checked`
+/// business rule can test a claim about a registry. `Identifier::eas`
 /// (en16931 0.4.0) can, and this pins both directions.
 #[test]
 fn the_seller_electronic_address_is_a_gln_or_absent() {
@@ -512,8 +512,8 @@ fn the_seller_steuernummer_reaches_the_model_and_the_wire() {
 
     // And it survives the mapping into both permitted EN 16931 syntaxes.
     for (syntax, xml) in [
-        ("CII", einvoice::render_cii(&model)),
-        ("UBL", einvoice::render_ubl(&model)),
+        ("CII", einvoice::render_cii(&model).expect("writable")),
+        ("UBL", einvoice::render_ubl(&model).expect("writable")),
     ] {
         assert!(
             xml.contains("123/456/78901"),

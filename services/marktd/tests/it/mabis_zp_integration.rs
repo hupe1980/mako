@@ -82,7 +82,7 @@ async fn an_unassigned_territory_returns_none_rather_than_a_fallback() {
     let repo = PgMabisZpRepository::new(pool);
 
     // The whole point of the store: absence is a distinct, actionable answer.
-    // `mabis-syncd` turns this into a refused submission — never into "use the
+    // `netzbilanzd` turns this into a refused submission — never into "use the
     // Bilanzierungsgebiet EIC".
     assert!(
         repo.find(EIC, TENANT).await.expect("query").is_none(),

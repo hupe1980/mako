@@ -42,8 +42,9 @@ Commands:
   check-routes        Refuse axum 0.7 `/:param` route literals, which panic at startup
   check-publish-order Refuse a crates.io publish order that precedes its own dependencies
   check-bo4e-attributes Refuse a ZusatzAttribut that is not `mako:`-namespaced and registered
-  check-request-bodies  Every `Json<T>` body denies unknown fields, and a BO4E document in
-                        one is a `Bo4e<T>` rather than an ungated `serde_json::Value`
+  check-request-bodies  No body reaches a handler past `mako_service::Json`'s unknown-key
+                        refusal unlisted (a flatten, an untagged/tagged enum, `Lenient`,
+                        `axum::Json`), and a BO4E document in one is a `Bo4e<T>`
   check-bo4e-discriminants  Refuse a hand-written BO4E `_typ` — the discriminant is the type's
   check-bo4e-examples  Refuse a documented BO4E example using a field BO4E does not define
   check-malo-ids       Refuse a MaLo-ID literal whose BDEW check digit is wrong
@@ -82,6 +83,11 @@ Commands:
                         names where it is consulted, or why nothing does
   check-frist-literals   Refuse a Werktage or clock-time literal in a string that also names
                         a Festlegung, an AHB or an AWH — the Frist renders from mako_fristen
+  policy-inventory       Generate the operator-policy page from the policy_choice! declarations
+                        (--check: refuse a page that differs; --json <file>: the evidence input)
+  check-policy-settings  Every operator policy option sourced, its docs anchor resolving, the
+                        generated page in sync, each key read, and no service config defaulting
+                        an enum outside a policy
   check-known-wrong      Refuse a claim AGENTS.md lists as known-wrong, and a tracked file
                         pointing into the untracked roadmap or specifications
   check-rounding         Refuse banker's rounding — money rounds kaufmännisch (DIN 1333)
@@ -104,6 +110,10 @@ Commands:
   check-tool-grants   Verify every agentd manifest tool grant names a real MCP tool and
                         agrees with that server's own `read_only_hint`
   check-clippy-bans   Every clippy.toml ban fires on its planted use in xtask/clippy-fixtures
+  check-thin-main     Refuse a services/*/src/main.rs that is more than
+                        `mako_service::run::<D>().await` — the daemon lives in the library
+  check-error-tuples  Refuse any hand-built `(StatusCode::<non-2xx>, …)` tuple outside
+                        `#[cfg(test)]` items under services/*/src — fail with an `ApiError`
   dep-age             Report each direct dependency's pin against crates.io (network; a
                         report, never a failure; --recorded <file> reads a saved response)
   import-profiles     Regenerate the profiles from the mirrored BDEW documents
@@ -142,6 +152,7 @@ mod check_controls_consulted;
 mod check_crate_lints;
 mod check_db_suites;
 mod check_dep_versions;
+mod check_error_tuples;
 mod check_event_payloads;
 mod check_expected_tenant;
 mod check_frist_literals;
@@ -150,6 +161,7 @@ mod check_licenses;
 mod check_malo_ids;
 mod check_occupancy;
 mod check_outbox_notify;
+mod check_policy_settings;
 mod check_prompt_tools;
 mod check_publish_order;
 mod check_release_coverage;
@@ -161,6 +173,7 @@ mod check_runner_routes;
 mod check_specs;
 mod check_sql;
 mod check_tenant_predicate;
+mod check_thin_main;
 mod check_tool_grants;
 mod check_vex;
 mod check_vorlauf_consulted;
@@ -173,6 +186,7 @@ mod dev_configs;
 mod evidence_pack;
 mod import_profiles;
 mod pid_overview;
+mod policy_inventory;
 mod profile_diff;
 mod profile_expressions;
 mod sync_regulatories;
@@ -207,6 +221,14 @@ fn main() {
         Some("check-business-dates") => check_business_dates(),
         Some("check-citations") => check_citations(),
         Some("check-known-wrong") => check_known_wrong(),
+        Some("check-policy-settings") => root_task(check_policy_settings::run),
+        Some("policy-inventory") => {
+            let (workspace_root, _) = workspace_info();
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            if !policy_inventory::run(std::path::Path::new(&workspace_root), &args) {
+                std::process::exit(1);
+            }
+        }
         Some("check-frist-literals") => check_frist_literals(),
         Some("check-controls-consulted") => check_controls_consulted(),
         Some("check-rounding") => check_rounding(),
@@ -240,6 +262,8 @@ fn main() {
         Some("check-answer-commands") => check_answer_commands(),
         Some("check-tool-grants") => check_tool_grants(),
         Some("check-clippy-bans") => root_task(check_clippy_bans::run),
+        Some("check-thin-main") => root_task(check_thin_main::run),
+        Some("check-error-tuples") => root_task(check_error_tuples::run),
         Some("validate-ebd-codes") => validate_ebd_codes(),
         Some("validate-profiles") => validate_profiles(),
         Some("import-profiles") => import_profiles(),
@@ -563,7 +587,6 @@ fn check_dep_versions() {
     }
 }
 
-/// Run a guard that takes only the workspace root, exiting 1 when it refuses.
 fn root_task(guard: fn(&std::path::Path) -> bool) {
     let (workspace_root, _) = workspace_info();
     if !guard(std::path::Path::new(&workspace_root)) {

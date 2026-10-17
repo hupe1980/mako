@@ -7,6 +7,7 @@ mod demo_config;
 mod demo_payloads;
 mod dev_config;
 mod mutating_tools;
+mod router_builds;
 mod schema_code_guard;
 mod settlement_integration;
 mod settlement_tests;

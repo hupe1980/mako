@@ -28,6 +28,8 @@ pub fn build_router(
 ) -> Router {
     Router::new()
         .merge(crate::mcp_server::router(mcp_state, shutdown))
+        // ── Operator policy: GET /api/v1/policy (read-only; Cedar `read-policy`)
+        .merge(mako_service::policy::router(cfg.policy_report()))
         // ── Anlage CRUD ────────────────────────────────────────────────────────
         .route(
             "/api/v1/anlagen",

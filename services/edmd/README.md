@@ -21,7 +21,7 @@ container `HEALTHCHECK`. Every other setting lives in `edmd.toml`
 
 | | |
 |---|---|
-| HTTP port | `:8380` · MCP `POST\|GET /mcp` (15 tools, 5 prompts) |
+| HTTP port | `:8380` · MCP `POST\|GET /mcp` (16 tools, 5 prompts) |
 | Database | PostgreSQL 17+ (`migrations/0001_schema.sql`); readings in `meter_reads`, `esa_typ2_reads`, `meter_readings` (meterstore-owned, created by `create_tables` at startup). meterstore connects over TLS — `verify-full` unless `[database] url` names an `sslmode` (`disable` for the dev and test PostgreSQL) |
 | Auth | OIDC + Cedar `policies/edmd.cedar` — reads tenant-scoped, writes role-gated; service keys via `[[oidc.service_keys]]`. Refuses to start without `[oidc]` unless `allow_insecure_no_auth` |
 | Validation | every door runs `metering::vee::validation`, one series per register, through `ValidatedReads`; findings annotate, never reject. Overlapping spans are refused by an `EXCLUDE` constraint (`422`) |
@@ -50,7 +50,11 @@ than 732 days; bulk history goes over Arrow IPC, SQL or Iceberg.
 
 Sections: `[http]`, `[database]`, `[identity]`, `[marktd]`, `[subscription]`,
 `[webhook]`, `[oidc]` / `[[oidc.service_keys]]`, `[rate_limit]`, `[mcp]`,
-`[smgw]`, `[surveillance]`, `[kafka_ingest]`, `[privacy]`, `[archive]`.
+`[smgw]`, `[surveillance]`, `[kafka_ingest]`, `[privacy]`, `[archive]`,
+`[policy]` (`physische_loeschung = false`: an Art. 17 erasure destroys the
+subject mapping and records a tombstone; `true` is refused at startup because
+this build removes no rows physically). The policy report is served at
+`GET /api/v1/policy` and by the MCP tool `get_policy`.
 `dev/config/edmd.toml` is a working example.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/edmd/)

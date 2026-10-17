@@ -507,7 +507,7 @@ pub async fn get_ubl(
             )
         })?;
     Ok(super::records::xml_download(
-        crate::einvoice::render_ubl(&model),
+        crate::einvoice::render_ubl(&model).map_err(super::records::not_writable)?,
         format!("peppol-bis-{id}.xml"),
     ))
 }

@@ -1,6 +1,7 @@
 //! Handlers for `GET|PUT /api/v1/preisblaetter/{nb_mp_id}` and
 //! `GET|PUT /api/v1/preisblaetter-messung/{msb_mp_id}`.
 
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{
@@ -149,7 +150,7 @@ pub async fn get_preisblatt(
         .check(&claims.principal(), "read-preisblatt", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     let billing_date = query.date.unwrap_or_else(today_iso);
@@ -185,11 +186,7 @@ pub async fn get_preisblatt(
             })
             .into_response()
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            format!("No Preisblatt found for NB GLN {nb_mp_id} on {billing_date}"),
-        )
-            .into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
         Err(e) => failure(e),
     }
 }
@@ -226,7 +223,7 @@ pub async fn put_preisblatt(
         .check(&claims.principal(), "write-preisblatt", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     // REST API calls always count as source='api' — operator override protection.
@@ -234,7 +231,7 @@ pub async fn put_preisblatt(
     // `preispositionen`, and malformed `zeitvariablePreispositionen` are all
     // refused before the insert.
     if let Err(e) = mako_markt::bo4e::decode::<PreisblattNetznutzung>(req.data.clone()) {
-        return (StatusCode::UNPROCESSABLE_ENTITY, Json(e.to_json())).into_response();
+        return super::bo4e_refusal(&e).into_response();
     }
 
     // ── Validate lastvariablePreispositionen (§14a Modul 3, BK8-22/010-A Tenor 3.) ──
@@ -258,14 +255,16 @@ pub async fn put_preisblatt(
             // this is, and BO4E producers do not reliably stamp `_typ` on a
             // nested COM — so the gate injects it. Every stage still runs.
             if let Err(e) = mako_markt::bo4e::decode::<LastvariablePreisposition>(item.clone()) {
-                let mut body = e.to_json();
-                if let Some(obj) = body.as_object_mut() {
-                    obj.insert(
-                        "at".into(),
-                        format!("lastvariablePreispositionen[{i}]").into(),
-                    );
-                }
-                return (StatusCode::UNPROCESSABLE_ENTITY, Json(body)).into_response();
+                let mut detail = e.detail();
+                detail.insert(
+                    "at".into(),
+                    format!("lastvariablePreispositionen[{i}]").into(),
+                );
+                return ApiError::unprocessable_with(
+                    e.to_string(),
+                    serde_json::Value::Object(detail),
+                )
+                .into_response();
             }
             // M7.2: tarifkalkulationsmethode must be SPOTPREIS for §14a Modul 3 NNE
             if let Some(method) = item
@@ -273,31 +272,21 @@ pub async fn put_preisblatt(
                 .and_then(|v| v.as_str())
                 && method != "SPOTPREIS"
             {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": format!(
-                            "lastvariablePreispositionen[{i}].tarifkalkulationsmethode must be \
+                return ApiError::unprocessable(format!(
+                    "lastvariablePreispositionen[{i}].tarifkalkulationsmethode must be \
                              \"SPOTPREIS\" for §14a Modul 3 NNE (got \"{method}\")"
-                        )
-                    })),
-                )
-                    .into_response();
+                ))
+                .into_response();
             }
             // M7.3: preisBezugseinheit must be KWH
             if let Some(unit) = item.get("preisBezugseinheit").and_then(|v| v.as_str())
                 && unit != "KWH"
             {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": format!(
-                            "lastvariablePreispositionen[{i}].preisBezugseinheit must be \
+                return ApiError::unprocessable(format!(
+                    "lastvariablePreispositionen[{i}].preisBezugseinheit must be \
                              \"KWH\" for §14a Modul 3 (got \"{unit}\")"
-                        )
-                    })),
-                )
-                    .into_response();
+                ))
+                .into_response();
             }
         }
     }
@@ -349,8 +338,8 @@ pub async fn put_preisblatt(
         Err(e) => return failure(e),
     };
 
-    // Emit de.markt.pricat.published so ERP webhook subscribers, the obsd
-    // observability daemon and the PRICAT dispatch worker are notified.
+    // Emit de.markt.pricat.published so ERP webhook subscribers and the PRICAT
+    // dispatch worker are notified.
     let evt = MarktEvent::new(
         &tenant,
         mako_events::markt::PRICAT_PUBLISHED,
@@ -383,7 +372,7 @@ pub async fn put_preisblatt(
 /// mapping away and tells the operator the server broke when what they need to
 /// change is a date.
 fn failure(e: impl Into<Failure>) -> axum::response::Response {
-    super::MdmErrorResponse(e.into().0).into_response()
+    super::mdm_error(e.into().0).into_response()
 }
 
 /// Every error a Preisblatt handler meets, as the [`MdmError`] it answers.
@@ -515,7 +504,7 @@ pub async fn get_preisblatt_messung(
         .check(&claims.principal(), "read-preisblatt", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     let billing_date = query.date.unwrap_or_else(today_iso);
@@ -566,11 +555,7 @@ pub async fn get_preisblatt_messung(
             })
             .into_response()
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            format!("No PreisblattMessung found for MSB MP-ID {msb_mp_id} on {billing_date}"),
-        )
-            .into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
         Err(e) => failure(e),
     }
 }
@@ -617,7 +602,7 @@ pub async fn put_preisblatt_messung(
         .check(&claims.principal(), "write-preisblatt", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     // ── The BO4E gate ────────────────────────────────────────────────────────
@@ -629,7 +614,7 @@ pub async fn put_preisblatt_messung(
     // map of `PreisblattMessung`, which typed deserialization does not reach —
     // they are validated separately below.
     if let Err(e) = mako_markt::bo4e::decode::<PreisblattMessung>(req.data.clone()) {
-        return (StatusCode::UNPROCESSABLE_ENTITY, Json(e.to_json())).into_response();
+        return super::bo4e_refusal(&e).into_response();
     }
 
     // ── Full ZeitvariablePreisposition validation ────────────────────────
@@ -657,18 +642,13 @@ pub async fn put_preisblatt_messung(
             // Reject `bandNummer` — it does not exist in BO4E v202607.
             // Fail loudly so operators fix their PRICAT import tooling.
             if item.get("bandNummer").is_some() {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": format!(
-                            "zeitvariablePreispositionen[{}]: 'bandNummer' is not a valid \
+                return ApiError::unprocessable(format!(
+                    "zeitvariablePreispositionen[{}]: 'bandNummer' is not a valid \
                              BO4E v202607 field — use 'zaehlzeitregister' instead \
                              (e.g. \"HT\", \"NT\", \"ST\")",
-                            i
-                        )
-                    })),
-                )
-                    .into_response();
+                    i
+                ))
+                .into_response();
             }
 
             // The BO4E gate. A nested COM need not stamp `_typ`; the gate
@@ -676,14 +656,16 @@ pub async fn put_preisblatt_messung(
             let zvp = match mako_markt::bo4e::decode::<ZeitvariablePreisposition>(item.clone()) {
                 Ok(z) => z,
                 Err(e) => {
-                    let mut body = e.to_json();
-                    if let Some(obj) = body.as_object_mut() {
-                        obj.insert(
-                            "at".into(),
-                            format!("zeitvariablePreispositionen[{i}]").into(),
-                        );
-                    }
-                    return (StatusCode::UNPROCESSABLE_ENTITY, Json(body)).into_response();
+                    let mut detail = e.detail();
+                    detail.insert(
+                        "at".into(),
+                        format!("zeitvariablePreispositionen[{i}]").into(),
+                    );
+                    return ApiError::unprocessable_with(
+                        e.to_string(),
+                        serde_json::Value::Object(detail),
+                    )
+                    .into_response();
                 }
             };
 
@@ -691,18 +673,13 @@ pub async fn put_preisblatt_messung(
             // Without it, `invoicd` / `invoic-checker` cannot route INVOIC positions to bands.
             match zvp.zaehlzeitregister.as_deref() {
                 None | Some("") => {
-                    return (
-                        StatusCode::UNPROCESSABLE_ENTITY,
-                        Json(serde_json::json!({
-                            "error": format!(
-                                "zeitvariablePreispositionen[{}]: 'zaehlzeitregister' is \
+                    return ApiError::unprocessable(format!(
+                        "zeitvariablePreispositionen[{}]: 'zaehlzeitregister' is \
                                  mandatory per §14a Modul 2 (BK8-22/010-A) — set it to the \
                                  TOU band code (e.g. \"HT\", \"NT\", \"ST\")",
-                                i
-                            )
-                        })),
-                    )
-                        .into_response();
+                        i
+                    ))
+                    .into_response();
                 }
                 _ => {}
             }
@@ -777,7 +754,7 @@ pub async fn get_preisblatt_ka(
         .check(&claims.principal(), "read-preisblatt", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     let billing_date = query.date.unwrap_or_else(today_iso);
@@ -801,11 +778,7 @@ pub async fn get_preisblatt_ka(
             updated_at: r.updated_at,
         })
         .into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            format!("No PreisblattKonzessionsabgabe for NB {nb_mp_id} on {billing_date}"),
-        )
-            .into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
         Err(e) => failure(e),
     }
 }
@@ -845,7 +818,7 @@ pub async fn put_preisblatt_ka(
         .check(&claims.principal(), "write-preisblatt", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     match repo
@@ -903,7 +876,7 @@ pub async fn get_preisblatt_dienstleistung(
         .check(&claims.principal(), "read-preisblatt", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
     let billing_date = query.date.unwrap_or_else(today_iso);
     match repo
@@ -917,11 +890,7 @@ pub async fn get_preisblatt_dienstleistung(
             updated_at: r.updated_at,
         })
         .into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            format!("No PreisblattDienstleistung for {msb_mp_id} on {billing_date}"),
-        )
-            .into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
         Err(e) => failure(e),
     }
 }
@@ -938,7 +907,7 @@ pub async fn put_preisblatt_dienstleistung(
         .check(&claims.principal(), "write-preisblatt", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
     match repo
         .upsert_dienstleistung(
@@ -993,7 +962,7 @@ pub async fn get_preisblatt_hardware(
         .check(&claims.principal(), "read-preisblatt", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
     let billing_date = query.date.unwrap_or_else(today_iso);
     match repo.find_hardware_for_date(&msb_mp_id, &billing_date).await {
@@ -1004,11 +973,7 @@ pub async fn get_preisblatt_hardware(
             updated_at: r.updated_at,
         })
         .into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            format!("No PreisblattHardware for {msb_mp_id} on {billing_date}"),
-        )
-            .into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
         Err(e) => failure(e),
     }
 }
@@ -1025,7 +990,7 @@ pub async fn put_preisblatt_hardware(
         .check(&claims.principal(), "write-preisblatt", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
     match repo
         .upsert_hardware(

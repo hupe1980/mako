@@ -34,7 +34,7 @@ fn specimen(profile: Profile) -> en16931::Invoice {
         model.buyer = Party {
             name: Some("Bundesamt für Musterverwaltung".to_owned()),
             // BT-49 under EAS 0204 (German Leitweg-ID).
-            electronic_address: Identifier::eas_checked(LEITWEG.to_owned(), "0204").ok(),
+            electronic_address: Identifier::eas(LEITWEG.to_owned(), "0204").ok(),
             address: PostalAddress {
                 line1: Some("Behördenstraße 2".to_owned()),
                 city: Some("Bonn".to_owned()),
@@ -62,23 +62,25 @@ fn specimen(profile: Profile) -> en16931::Invoice {
 
 /// The CII payload the carrier is built around — real, not a placeholder.
 ///
-/// A B2G document goes through `cii::to_string_for`, which **validates against
-/// the full CIUS before writing** and refuses to produce a rejectable file — so
-/// this returning at all is itself the proof that the XRechnung specimen is a
-/// valid XRechnung document.
+/// A B2G document is written from a `Validated<XRechnung>` proof, which
+/// **validates against the full CIUS before writing** — so this returning at
+/// all is itself the proof that the XRechnung specimen is a valid XRechnung
+/// document.
 fn payload(profile: Profile) -> String {
     let model = specimen(profile);
     match profile {
         Profile::XRechnung => {
-            en16931_formats::cii::to_string_for(&model, &en16931::profiles::XRECHNUNG)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "the XRechnung specimen must satisfy the CIUS: {e}\n{}",
-                        e.report()
-                    )
-                })
+            let proof =
+                en16931::validation::profile::Validated::<en16931::profiles::XRechnung>::new(model)
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "the XRechnung specimen must satisfy the CIUS:\n{:?}",
+                            e.report().findings()
+                        )
+                    });
+            en16931_formats::write(&proof, en16931_formats::Syntax::Cii).xml
         }
-        _ => en16931_formats::cii::to_string(&model),
+        _ => facturx::cii_payload(&model).expect("the specimen is writable"),
     }
 }
 
@@ -163,7 +165,7 @@ fn a_receiver_can_read_the_invoice_back_out() {
 
         assert_eq!(
             got.xml,
-            payload(profile),
+            payload(profile).into_bytes(),
             "the embedded invoice must be byte-identical to what went in",
         );
         assert_eq!(
@@ -173,19 +175,33 @@ fn a_receiver_can_read_the_invoice_back_out() {
         );
         assert_eq!(got.profile, profile, "BT-24 in the payload agrees");
 
-        let read = got.invoice.expect("the payload reads back as CII");
+        let read = en16931_formats::read(&got.xml).expect("the payload reads back as CII");
+        assert!(
+            read.entries.is_empty(),
+            "the payload is fully within the EN 16931 subset: {:?}",
+            read.entries,
+        );
+        let read = read.invoice;
         assert_eq!(read.number, specimen(profile).number, "same document");
         assert_eq!(
             read.totals.due,
             specimen(profile).totals.due,
             "the amount due survived the carrier",
         );
-        assert!(
-            got.syntax_findings.is_empty(),
-            "the payload is fully within the EN 16931 subset: {:?}",
-            got.syntax_findings,
-        );
     }
+}
+
+/// `ram:ApplicableHeaderTradeDelivery` is mandatory in the CII D16B sequence,
+/// and the specimen carries no BG-13 delivery term, so the payload holds it
+/// **empty**. KoSIT's CII form of PEPPOL-EN16931-R008 exempts exactly this
+/// element from the empty-element rule; omitting it would fail the XSD.
+#[test]
+fn the_cii_payload_keeps_the_mandatory_empty_delivery_element() {
+    let xml = payload(Profile::En16931);
+    assert!(
+        xml.contains("<ram:ApplicableHeaderTradeDelivery/>"),
+        "the D16B-mandatory delivery group must be written, empty for a model with no BG-13",
+    );
 }
 
 /// The carrier's metadata and its payload must not disagree about anything.

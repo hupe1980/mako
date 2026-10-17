@@ -55,6 +55,19 @@
 //! - The MSB-Wechsel PIDs the MSB answers: **55039** (Kündigung MSB, MSBN →
 //!   MSBA — it never reaches the NB) and **55168** (Verpflichtungsanfrage).
 //!
+//! ## Process read model (every role)
+//!
+//! Every `de.mako.*` lifecycle event is projected into `process_projections`
+//! ([`obs`]): per-PID KPIs, the overdue list against each process's business
+//! Antwortfrist, and the § 7a Abs. 5 EnWG Gleichbehandlung evidence. Two sweep
+//! workers emit `de.obs.deadline.approaching` and `de.obs.stp.parity.alert`.
+//!
+//! ## Sperrauftrag queue (`role-nb-strom`, `role-nb-gas`)
+//!
+//! An inbound ORDERS **17115** Sperrauftrag or **17117** Entsperrauftrag becomes
+//! a work order for the field team, and its outcome goes back as **IFTSTA
+//! 21039** (`sperr`).
+//!
 //! ## Fristen
 //!
 //! Every business answer window comes from [`mako_fristen::antwort`], the same
@@ -81,9 +94,13 @@
 )]
 
 pub mod config;
+mod daemon;
+pub use daemon::Processd;
 pub mod handler;
 pub mod mcp_server;
 pub mod metrics;
+/// The process read model — every `de.mako.*` event projected per process.
+pub mod obs;
 pub mod pg;
 pub mod server;
 /// One parser for every date shape a process payload carries.
@@ -94,6 +111,10 @@ pub mod einsd_client;
 
 #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
 pub mod nb_module;
+
+/// The Sperr-/Entsperrauftrag execution queue — an NB obligation.
+#[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+pub mod sperr;
 
 #[cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
 pub mod lf_module;

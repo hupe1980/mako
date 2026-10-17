@@ -543,6 +543,10 @@ All three are `O(log n)` and verifiable without this service.
 Prefer camt: `EndToEndId`, `NtryDtls/Btch` and return reasons do not survive
 flattening.
 
+Every ISO 20022 import — camt.05x, pain.002, camt.029 — is read only under a
+namespace the `sepa` reader supports, with exactly one matching message body;
+anything else is `422`.
+
 ```bash
 curl -X POST "http://accountingd:9380/api/v1/payments/import/camt053" \
   -H "Content-Type: application/xml" --data-binary @statement.xml
@@ -564,7 +568,15 @@ Response: `{ "accepted", "deduplicated", "skipped", "unmatched", "malformed",
 | `failed` | Lookup or ledger write errored (`error`) | Not applied — retry |
 
 **Only `BOOK` entries post.** `INFO`, `PDNG` and `FUTR` are counted `not_booked`;
-an append-only ledger cannot un-book a provisional entry.
+an append-only ledger cannot un-book a provisional entry. Status, direction and
+currency codes are read in their exact ISO spelling, so `book` or `crdt` is not
+recognised.
+
+**Only a determined EUR amount posts.** A booking whose `Amt`, `Amt/@Ccy` or
+`CdtDbtInd` is missing, unreadable or contradictory, that carries a significant
+sub-cent digit, or that is denominated in another currency is skipped with a
+`warn` naming what arrived (`sepa::camt_posting_ct`): an absent currency is not
+EUR and an absent direction is not a credit.
 
 **Sign.** camt is signed from the bank's side; `sepa::bank_to_ledger_ct` is the
 single negation every path uses. A row gives money back when it carries a return
@@ -599,7 +611,7 @@ Amounts parse with `sepa::ct_from_eur_str`, integer only.
 
 ## SEPA
 
-accountingd uses the [`sepa`](https://crates.io/crates/sepa) crate (0.7).
+accountingd uses the [`sepa`](https://crates.io/crates/sepa) crate (0.9).
 Defaults are `pain.008.001.08` and `pain.001.001.09`; `pain008_schema` /
 `pain001_schema` pin another (an unknown value is a startup error). Every
 message is validated before serialisation, and the crate's CI checks output
@@ -617,12 +629,13 @@ graph LR
     pain002 -->|EndToEndId| payouts
 ```
 
-### Structured addresses — 15 November 2026
+### Structured addresses
 
-Version 1.1 of the 2025 SEPA rulebooks (in force since 5 October 2025) ends
-unstructured addresses on **15 November 2026**; from then a scheme message must
-carry `TwnNm` and `Ctry`. `pain.001.001.09` and `pain.008.001.08` are mandatory
-since 19 November 2023.
+EPC153-22 v2.2 (30 September 2026) permits structured, hybrid and unstructured
+addresses, with no end date set for the unstructured form (EPC Payment Scheme
+Management Board decision of 9 September 2026, all five scheme rulebooks).
+accountingd emits the **structured** form — `TwnNm` and `Ctry` plus street,
+building number, post code and subdivision — or no `PstlAdr` at all.
 
 | Party | Element | Source |
 |---|---|---|
@@ -633,7 +646,7 @@ since 19 November 2023.
 A half-filled address is refused (`AddressParts::to_postal_address`); `Ctry` is
 checked against ISO 3166; the legacy DK schemas (`pain.008.003.02`,
 `pain.001.003.03`) carry no structured address, so it is dropped with a warning
-— move off them before the cut-over.
+— the stored address reaches the bank only on the current schema versions.
 
 ### pain.008 direct debit
 
@@ -663,8 +676,10 @@ scheduler holds an advisory lock so one replica builds the day's batch.
 ```
 
 - `creditor_id` (Gläubiger-ID, EPC AT-02) is checked by
-  `sepa::validate_creditor_id` and required; missing or invalid, or a missing or
-  invalid `creditor_iban`, is **`503`**.
+  `sepa::validate_creditor_id` and required. A missing `creditor_id` or
+  `creditor_iban` is a configuration gap and answers **`500`** with an
+  `error_id` the log line carries; an invalid one, or a run with no billable
+  mandate, is **`422`** naming it.
 - `Mandatsreferenz` is the `EndToEndId`, ≤ 35 characters (registration check and
   DB `CHECK`).
 - `Purp/Cd` follows the account's Sparte from `de.billing.rechnung.erstellt`:
@@ -712,7 +727,11 @@ curl -X POST "http://accountingd:9380/api/v1/sepa/pain002" \
 `OrgnlEndToEndId` or `OrgnlInstrId` is the key; a report naming neither is
 `unmatched`. A missing `TxSts` falls back to the group status; no status is not
 an acceptance; `PDNG` and verification statuses are not recorded as lifecycle
-steps. `NbOfTxsPerSts` is returned.
+steps. A status outside ISO 20022 — a lower-case `rjct` included — is applied to
+nothing and counted `unrecognised`. `NbOfTxsPerSts` is returned as
+`status_counts`, each row with `status`, `count` and `total_ct` beside the bank's
+own text (`status_raw`, `count_raw`, `total_raw`); an unreadable count is
+`null`, never `0`.
 
 **A rejected collection is not a Bankrücklastschrift**: no money moved, so no
 `BANKRUECKLAST` is booked and the receivable stays open. A settled-then-returned
@@ -725,11 +744,14 @@ collection arrives as a camt R-transaction (`de.accounting.bankruecklast`).
 |---|---|---|
 | `RCVC` | `MATCH` | Name matched |
 | `RVMC` | `CLOSE_MATCH` | Actual name in `AddtlInf`, stored in `vop_name` |
-| `RVNM` | `NO_MATCH` | Executing anyway shifts liability to the payer |
+| `RVNM` | `NO_MATCH` | Name did not match |
 | `RVNA` | `NOT_APPLICABLE` | No answer, timeout (`AB11`) or PSP outside the scheme (`AG03`) |
 | `RVCM` | group level | The file contains mismatches |
 
-Anything but a match emits `de.accounting.payee.verification-mismatch`.
+Anything but a match emits `de.accounting.payee.verification-mismatch`; whether
+to execute is the operator's decision. The codes are the Deutsche
+Kreditwirtschaft's pain.002 conventions (DFÜ-Abkommen Anlage 3 V3.9
+Kap. 2.2.6).
 
 ### camt.055 recall and pain.007 reversal
 
@@ -744,11 +766,11 @@ curl -X POST "http://accountingd:9380/api/v1/sepa/recalls" \
 `reason_code` is a `CancellationReason5Code` — `UPAY` (default), `DUPL`, `AGNT`,
 `CURR`, `CUST`, `CUTA`, `TECH`, `FRAD`. Without `end_to_end_ids` the whole
 message is recalled (`GrpCxl`). Nothing changes until the bank answers;
-`debtor_agent_bic` must be configured (`503` otherwise).
+`debtor_agent_bic` must be configured (`500` with an `error_id` otherwise).
 
 The camt.029 is matched on `RslvdCase/Id` (an unknown case is `404`): `CNCL` or
 all `ACCR` → `RECALLED`; `RJCR` leaves the collection; `PDCR` or an unknown
-outcome leaves the case open. Events: `de.accounting.sepa.recall-requested`,
+outcome (a lower-case `cncl` included) leaves the case open. Events: `de.accounting.sepa.recall-requested`,
 `de.accounting.sepa.recall-resolved`.
 
 A **reversal** gives back a `SETTLED` collection:
@@ -932,7 +954,6 @@ Every table block goes last: in TOML a bare key after a table header belongs to
 that table.
 
 ```toml
-port                  = 9380
 tenant                = "9910000000002"
 erp_webhook_url       = "http://erp:8000/webhooks/accounting"
 erp_hmac_secret       = "env:ACCOUNTINGD_INBOUND_HMAC_SECRET"
@@ -963,13 +984,16 @@ jahresabschluss_auto_enabled = false
 # jahresabschluss_start_day  = "02-01"
 
 # SEPA
-creditor_iban         = "DE89370400440532013000"   # required for pain.008 (503 otherwise)
+creditor_iban         = "DE89370400440532013000"   # required for pain.008 (500 otherwise)
 creditor_id           = "DE74ZZZ09999999999"       # Gläubiger-ID, required
 creditor_name         = "Muster Energie GmbH"      # defaults to tenant
 # debtor_agent_bic    = "…"                        # required for camt.055 recalls
 # pain008_schema      = "pain.008.001.02"          # default pain.008.001.08
 # pain001_schema      = "pain.001.001.03"          # default pain.001.001.09
 sepa_pre_notification_days = 14
+
+[http]
+addr = "0.0.0.0:9380"
 
 [creditor_address]   # optional until 2026-11-15; never half-filled
 street          = "Musterstraße"
@@ -1014,7 +1038,7 @@ service](@/docs/architecture/_index.md#what-metrics-carries-on-every-service).
 
 ## MCP server
 
-`accountingd` exposes **13 tools** at `/mcp` (Streamable HTTP 2025-11-25). Every
+`accountingd` exposes **14 tools** at `/mcp` (Streamable HTTP 2025-11-25). Every
 tool is authorized by `mcp_server::tool_action` against the Cedar action its
 REST twin enforces; a tool without a mapping is refused. An `[mcp]` key
 authorizes as `User::"<key name>"` with the roles its `roles` list declares.
@@ -1022,6 +1046,7 @@ authorizes as `User::"<key name>"` with the roles its `roles` list declares.
 | Tool | Description | Action |
 |---|---|---|
 | `get_balance` | Balance in ct | `read-account` |
+| `get_vorauszahlung` | The BO4E `Vorauszahlung` of a MaLo — the body of `GET /api/v1/accounts/{malo_id}/vorauszahlung` | `read-account` |
 | `list_ledger` | Ledger entries of a MaLo | `read-account` |
 | `suggest_payment_match` | Match a transfer: exact resolution first, amount ranking as fallback | `read-account` |
 | `trigger_jahresabschluss` | **Preview** of the annual settlement | `read-account` |
@@ -1036,7 +1061,7 @@ authorizes as `User::"<key name>"` with the roles its `roles` list declares.
 | `post_manual_booking` | Manual ledger entry | `post-entry` |
 
 One prompt: `check-customer-account`. agentd's `payment-reconciliation-agent`
-uses these tools.
+uses these tools, and `portald-agent` reads `get_balance`, `get_vorauszahlung` and `list_dunning`.
 
 ---
 

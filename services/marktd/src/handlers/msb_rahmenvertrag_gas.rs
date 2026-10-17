@@ -7,6 +7,7 @@
 //! `status = anpassung_erforderlich` until migrated. Every change emits
 //! `de.markt.msb-rahmenvertrag-gas.updated`.
 
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{
@@ -78,11 +79,7 @@ pub async fn upsert_msb_rv_gas(
     }
     rec.tenant = tenant.clone();
     if rec.gnb_mp_id.trim().is_empty() || rec.msb_mp_id.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "gnb_mp_id and msb_mp_id are required" })),
-        )
-            .into_response();
+        return ApiError::bad_request("gnb_mp_id and msb_mp_id are required").into_response();
     }
     if rec
         .valid_to

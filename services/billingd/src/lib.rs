@@ -12,6 +12,7 @@
 //! | `billing_runs` | § 40b EnWG scheduled monthly runs |
 //! | `clients` | productd / edmd / marktd / vertragd HTTP clients |
 //! | `config` | TOML + env configuration |
+//! | `daemon` | The [`mako_service::Daemon`] impl: migrations, router, workers |
 //! | `einvoice` | EN 16931 semantic model — built, stored, and rendered to CII / UBL |
 //! | `error` | `BillingError` — the one coded JSON error envelope every route answers with |
 //! | `handlers` | Axum HTTP handlers |
@@ -31,6 +32,7 @@
 pub mod billing_runs;
 pub mod clients;
 pub mod config;
+pub mod daemon;
 pub mod einvoice;
 pub mod error;
 pub mod handlers;

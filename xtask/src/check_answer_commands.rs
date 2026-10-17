@@ -44,7 +44,7 @@ const FAMILIES: &[&str] = &[
 /// with what they are.
 ///
 /// The shape `<family>.<subject>.<verb>` is not reserved: `agentd` keys a skill
-/// capability the same way and `sperrd` keys an obligation the same way. Neither
+/// capability the same way and `processd`'s Sperrauftrag queue keys an obligation the same way. Neither
 /// is posted to `POST /api/v1/commands`, so neither has — or should have — a
 /// constant in `mako_markt::commands`.
 const NOT_A_COMMAND: &[(&str, &str)] = &[
@@ -59,8 +59,8 @@ const NOT_A_COMMAND: &[(&str, &str)] = &[
     ),
     (
         "gpke.sperrauftrag.termingebunden",
-        "`sperrd`'s obligation key for a date-bound Sperrauftrag, stored on the \
-         order row and read back by the executor",
+        "the Sperrauftrag queue's obligation key for a date-bound Sperrauftrag, stored \
+         on the order row and read back by the executor",
     ),
 ];
 

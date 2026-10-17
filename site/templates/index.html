@@ -43,8 +43,8 @@
     <div><strong>469</strong><span>Prüfidentifikatoren routed</span></div>
     <div><strong>71</strong><span>MaKo workflows</span></div>
     <div><strong>17</strong><span>EDI@Energy message types</span></div>
-    <div><strong>17</strong><span>services</span></div>
-    <div><strong>4</strong><span>role-scoped deployments</span></div>
+    <div><strong>14</strong><span>services</span></div>
+    <div><strong>4</strong><span>deployable roles</span></div>
   </div>
   <p class="stats-note wrap">Three views of one catalogue. Every one of the 482
     Prüfidentifikatoren the BDEW Anwendungsübersicht publishes is imported; 469 are
@@ -59,9 +59,9 @@
   <div class="wrap">
     <h2 id="who">Who runs this</h2>
     <p class="section-lead">Every MaKo message names a Marktrolle on each end. The BDEW
-      Rollenmodell V2.2 defines twelve of them; these four carry the mass-market processes,
-      and mako builds each as its own binary — a role-scoped deployment contains no other
-      role's code, least privilege in support of § 6a EnWG informational unbundling.</p>
+      Rollenmodell V2.2 defines twelve of them; these four carry the mass-market processes.
+      A deployment declares the roles it plays and registers only their processes; which
+      principal may read which role's processes is a Cedar policy.</p>
     <div class="card-grid card-grid-4">
       <div class="card">
         <h3><span class="role-abbr">NB</span> Netzbetreiber</h3>
@@ -69,7 +69,7 @@
         <p>Answers supplier registrations and terminations from the published
           Entscheidungsbäume, bills network use (NNE), settles Mehr-/Mindermengen, reports
           MaBiS Summenzeitreihen and executes Sperrung orders.</p>
-        <a class="card-count" href="{{ get_url(path='@/docs/services/processd.md') | safe }}">processd · netzbilanzd · mabis-syncd →</a>
+        <a class="card-count" href="{{ get_url(path='@/docs/services/processd.md') | safe }}">processd · netzbilanzd →</a>
       </div>
       <div class="card">
         <h3><span class="role-abbr">LF</span> Lieferant</h3>
@@ -161,7 +161,7 @@ report.is_valid();                 // true
 <section class="features section-pad alt">
   <div class="wrap">
     <h2>The shape of the platform</h2>
-    <p class="section-lead">Seventeen services along one path: transport and protocol at the
+    <p class="section-lead">Fourteen services along one path: transport and protocol at the
       edge, master data in the middle, settlement, billing and the customer's documents at the
       end — each owning its own data, talking over typed REST and CloudEvents.</p>
 
@@ -169,8 +169,7 @@ report.is_valid();                 // true
 graph TB
     subgraph edge["Edge — protocol"]
       MAKOD["makod<br/>AS4 · EDIFACT · workflows"]
-      PROCESSD["processd<br/>STP decisions"]
-      SPERRD["sperrd<br/>Sperr-/Entsperraufträge"]
+      PROCESSD["processd<br/>STP decisions · BNetzA KPIs<br/>Sperr-/Entsperraufträge"]
     end
     subgraph core["Core — market data"]
       MARKTD["marktd<br/>BO4E hub · fan-out"]
@@ -178,28 +177,24 @@ graph TB
       EDMD["edmd<br/>metering · SMGW"]
     end
     subgraph money["Settlement and billing"]
-      NETZ["netzbilanzd<br/>NNE · MMM"]
+      NETZ["netzbilanzd<br/>NNE · MMM · MaBiS Summenzeitreihen"]
       EINSD["einsd<br/>EEG · KWKG"]
-      MABIS["mabis-syncd<br/>MaBiS Summenzeitreihen"]
       BILLINGD["billingd · invoicd<br/>retail · EN 16931"]
       ACCT["accountingd<br/>FI-CA ledger"]
       OUTPUTD["outputd<br/>documents · delivery"]
     end
     subgraph ops["Operations"]
-      OBSD["obsd<br/>BNetzA KPIs · Fristen"]
       AGENTD["agentd<br/>AI specialists"]
       PORTALD["portald<br/>customer portal"]
     end
 
     PROCESSD --> MAKOD
-    MAKOD --> SPERRD
     MAKOD --> MARKTD
     MARKTD --> VERTRAGD
     MARKTD --> EDMD
     EDMD --> NETZ
     EDMD --> EINSD
     EDMD --> BILLINGD
-    EDMD --> MABIS
     VERTRAGD --> BILLINGD
     NETZ --> ACCT
     BILLINGD --> ACCT
@@ -207,9 +202,9 @@ graph TB
     ACCT --> OUTPUTD
     EINSD --> ACCT
     PORTALD --> BILLINGD
-    OBSD -.->|"watches"| MAKOD
+    MARKTD -.->|"de.mako.*"| PROCESSD
     AGENTD -.->|"MCP reads"| MARKTD
-    AGENTD -.->|"MCP reads"| OBSD
+    AGENTD -.->|"MCP reads"| PROCESSD
     </pre>
     <p><a href="{{ get_url(path='@/docs/services/_index.md') | safe }}">One operator guide per service →</a></p>
   </div>
@@ -254,11 +249,11 @@ graph TB
         <p>BNetzA KPI observability with Fristen tracking, a customer portal, and an
           <!-- check-tool-grants pins the two phrases below verbatim; keep each on one
                line, and update the counts only via the guard's own numbers. -->
-          agent plane over the platform's 163 MCP tools.
+          agent plane over the platform's 160 MCP tools.
           Its 28 declarative specialists are advisory by
           construction: no active manifest grants a mutating tool, every model and tool call
           is a journaled effect, and a triage worklist carries what a person has to see.</p>
-        <a class="card-count" href="{{ get_url(path='@/docs/services/agentd.md') | safe }}">obsd · portald · agentd →</a>
+        <a class="card-count" href="{{ get_url(path='@/docs/services/agentd.md') | safe }}">processd · portald · agentd →</a>
       </div>
       <div class="card">
         <h3>Testable from Python</h3>
@@ -283,7 +278,7 @@ graph TB
         moves, the platform moves with an import run — not a rewrite.</p>
       <ul class="check">
         <li><strong>Auditable by construction</strong> — event-sourced processes, replayable state, hash-chained ledger with § 147 AO period seals.</li>
-        <li><strong>Four market roles, one engine</strong> — NB, LF, MSB and ESA answer from the published Entscheidungsbäume, and a role-scoped build contains only its own arm's code.</li>
+        <li><strong>Four market roles, one engine</strong> — NB, LF, MSB and ESA answer from the published Entscheidungsbäume, and a deployment registers only the processes of the roles it declares.</li>
         <li><strong>Validation that fails loudly</strong> — an unregistered Prüfidentifikator is reported, never quietly accepted.</li>
         <li><strong>Fristen that agree with each other</strong> — one BDEW Werktag calendar, from the APERAK clock to an agent's approval window.</li>
         <li><strong>Readable, verifiable, extensible</strong> — source you can audit and run.</li>

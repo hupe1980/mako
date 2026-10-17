@@ -30,3 +30,22 @@ fn the_demo_configs_name_no_key_the_service_ignores() {
         }
     }
 }
+
+/// Every demo declares its roles, and they agree with its `[[party]]` table —
+/// startup refuses a demo that does not.
+#[test]
+fn the_demo_configs_declare_roles_their_parties_hold() {
+    for rel in DEMO_CONFIGS {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(rel);
+        let cfg = makod::config::load(&path).unwrap_or_else(|e| panic!("{rel}: {e:#}"));
+        let rollen = cfg
+            .deployment
+            .as_ref()
+            .map(|d| d.rollen.clone())
+            .unwrap_or_default();
+        makod::deployment::validate_rollen(&rollen, cfg.party.as_deref().unwrap_or_default())
+            .unwrap_or_else(|e| panic!("{rel} [deployment] rollen: {e:#}"));
+    }
+}

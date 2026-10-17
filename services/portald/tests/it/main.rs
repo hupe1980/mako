@@ -4,3 +4,4 @@
 
 mod authorization_guard;
 mod dev_config;
+mod upstream_failure;

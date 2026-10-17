@@ -236,10 +236,7 @@ pub struct EdifactIngestDispatcher {
 /// (an ORDERS and an ORDCHG for one MaLo, say) landing together.
 ///
 /// An in-process lock is sufficient because `makod` is a single writer by
-/// construction — the exclusive data-directory lock refuses a second instance,
-/// and `--allow-multi-instance` already documents that inbox dedup is not shared
-/// across instances. A distributed deployment needs the same external lock for
-/// both.
+/// construction — the exclusive data-directory lock refuses a second instance.
 #[derive(Default)]
 pub(crate) struct BusinessKeyLocks {
     inner: std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -1358,7 +1355,7 @@ pub fn extract_malo_from_invoic(msg: &AnyMessage) -> String {
 /// The business answer Frist for an inbound PID.
 ///
 /// Single-sourced from [`mako_fristen::antwort`], the one table `processd` sizes
-/// its operator queue by and `obsd` raises breach alerts against — so the
+/// its operator queue by and raises breach alerts against — so the
 /// deadline makod registers on the process, the queue entry that expires
 /// against it and the alert that fires are three readings of one number.
 ///

@@ -1983,7 +1983,7 @@ fn golden_ggv_splits_pv_and_grid_and_taxes_only_the_grid() {
 
 /// A **year** of hourly intervals still reconciles exactly.
 ///
-/// `billing::DynamicPricing` accumulates the interval products as exact
+/// `billing::rate_series` accumulates the interval products as exact
 /// `Decimal` and reduces once at the end. Reducing each product to five
 /// decimals before adding instead accumulates a bias that a single billed day
 /// cannot show — the golden day above is 96 quarter-hours, and the drift only

@@ -7,5 +7,6 @@ mod demo_config;
 mod demo_payloads;
 mod dev_config;
 mod relay_signing;
+mod router_builds;
 mod store_integration;
 mod zugferd_carrier;

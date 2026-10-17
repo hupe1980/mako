@@ -34,9 +34,9 @@ pub struct AgentdConfig {
     /// Where the agentplane journal and case layer live.
     #[serde(default)]
     pub journal: JournalConfig,
-    /// HTTP listen port (default: 9580).
-    #[serde(default = "default_port")]
-    pub port: u16,
+    /// `[http]` — the listen address. Defaults to every interface on `9580`.
+    #[serde(default = "default_http")]
+    pub http: mako_service::config::HttpConfig,
     /// Operator tenant identifier.
     pub tenant: String,
     /// Permit unauthenticated API and unsigned inbound webhooks for local development.
@@ -205,7 +205,7 @@ impl mako_service::service::ServiceConfig for AgentdConfig {
     }
 
     fn bind_addr(&self) -> String {
-        format!("0.0.0.0:{}", self.port)
+        self.http.addr.clone()
     }
 }
 
@@ -493,9 +493,6 @@ impl std::fmt::Debug for ProviderConfig {
 fn default_journal_path() -> String {
     "/var/lib/agentd/journal.redb".to_owned()
 }
-fn default_port() -> u16 {
-    9580
-}
 fn default_public_base_url() -> String {
     "http://localhost:9580".to_owned()
 }
@@ -639,6 +636,10 @@ impl AgentdConfig {
             },
         })
     }
+}
+
+fn default_http() -> mako_service::config::HttpConfig {
+    mako_service::config::HttpConfig::on_port(9580)
 }
 
 #[cfg(test)]

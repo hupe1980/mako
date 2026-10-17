@@ -797,7 +797,7 @@ impl Workflow for GpkeEogWorkflow {
                         "transaktionsgrund": transaktionsgrund,
                     }),
                 );
-                // Notify observers (obsd, ERP) that the statutory fallback
+                // Notify observers (processd's read model, ERP) that the statutory fallback
                 // process has been initiated.
                 let initiated = PendingOutbox::new(
                     "ProcessInitiated",

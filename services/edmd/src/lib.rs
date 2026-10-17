@@ -57,3 +57,6 @@ pub mod smgw;
 pub mod smgw_model;
 pub mod store;
 pub mod surveillance;
+
+mod daemon;
+pub use daemon::Edmd;

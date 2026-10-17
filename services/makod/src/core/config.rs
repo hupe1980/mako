@@ -37,6 +37,7 @@
 //! | `http.auth_keys` | `http.auth_keys_file` |
 //! | `erp.webhook_secret` | `erp.webhook_secret_file` |
 //! | `marktd.api_key` | `marktd.api_key_file` |
+//! | `marktd.webhook_secret` | `marktd.webhook_secret_file` |
 //!
 //! ## Minimal example
 //!
@@ -52,7 +53,10 @@
 //! bucket = "my-makod-bucket"
 //! prefix = "makod"
 //!
-//! # Single Marktpartner-ID covering all roles (most common):
+//! # The roles this instance plays, and one Marktpartner-ID covering them:
+//! [deployment]
+//! rollen = ["nb-strom", "lf-strom", "msb-strom"]
+//!
 //! [[party]]
 //! mp_id = "9900000000001"
 //! roles = ["NB", "LF", "MSB"]
@@ -100,6 +104,8 @@ pub struct ConfigFile {
     pub erp: Option<ErpConfig>,
     pub marktd: Option<MarktdConfig>,
     pub maloid: Option<MaloIdConfig>,
+    /// `[deployment]` — the roles this instance plays. Required.
+    pub deployment: Option<DeploymentConfig>,
     /// `[[party]]` — one entry per BDEW market-participant identity.
     ///
     /// The single source of truth for operator identity — at least one entry is
@@ -171,6 +177,24 @@ pub struct PartyConfig {
 
 // ── Sections ─────────────────────────────────────────────────────────────────
 
+/// `[deployment]` — the Marktrollen this instance plays.
+///
+/// ```toml
+/// [deployment]
+/// rollen = ["nb-strom", "msb-strom"]
+/// ```
+///
+/// Selects the engine modules and is checked against `[[party]]`: each declared
+/// role has exactly one MP-ID, and no MP-ID names an undeclared role
+/// ([`crate::deployment::validate_rollen`]). Startup refuses without it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeploymentConfig {
+    /// Role tokens: `lf-strom`, `lf-gas`, `nb-strom`, `nb-gas`, `msb-strom`,
+    /// `msb-gas`, `esa-strom`.
+    pub rollen: Vec<crate::deployment::Rolle>,
+}
+
 /// `[logging]` — controls log verbosity and format.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -223,11 +247,6 @@ pub struct StorageConfig {
     /// whose replay cost would grow without bound. `0` disables it.
     /// Default: 100 000.
     pub max_stream_events: Option<u64>,
-
-    /// Acknowledge that an external distributed lock protects inbox
-    /// deduplication, suppressing the multi-instance startup warning.
-    #[serde(default)]
-    pub allow_multi_instance: bool,
 
     /// `[storage.s3]` — AWS S3 / S3-compatible settings.
     pub s3: Option<S3Config>,
@@ -641,8 +660,8 @@ pub struct ErpConfig {
     pub netzzugang_endpoint_url: Option<String>,
 }
 
-/// `[marktd]` — master-data service used for consent and Konfigurationsprodukt
-/// gates.
+/// `[marktd]` — master-data service: consent and Konfigurationsprodukt gates,
+/// and the source the MaLo-Ident cache follows through the fan-out.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MarktdConfig {
@@ -652,6 +671,14 @@ pub struct MarktdConfig {
     pub api_key: Option<String>,
     /// Path to a file holding the `marktd` API key. Preferred over `api_key`.
     pub api_key_file: Option<PathBuf>,
+    /// makod's own fan-out endpoint as `marktd` reaches it, e.g.
+    /// `"http://makod:8080/webhooks/marktd"`. Required with `url`: the MaLo
+    /// cache follows `marktd` through this subscription.
+    pub webhook_url: Option<String>,
+    /// Standard Webhooks secret `marktd` signs its deliveries to makod with.
+    pub webhook_secret: Option<String>,
+    /// Path to a file holding `webhook_secret`. Preferred over the inline form.
+    pub webhook_secret_file: Option<PathBuf>,
 }
 
 /// `[maloid]` — BDEW MaLo-ID Identifikationsverfahren (API-Webdienste Strom).
@@ -799,6 +826,9 @@ backend = "s3"
 bucket = "my-makod-bucket"
 prefix = "makod"
 
+[deployment]
+rollen = ["nb-strom", "lf-strom", "msb-strom"]
+
 [[party]]
 mp_id = "9900000000001"
 roles = ["NB", "LF", "MSB"]
@@ -818,6 +848,7 @@ partner_cert_files = ["9900000000002=/etc/makod/partners/9900000000002.pem"]
 "#;
         let cfg: ConfigFile = toml::from_str(src).expect("documented example parses");
         assert_eq!(cfg.party.expect("party").len(), 1);
+        assert_eq!(cfg.deployment.expect("deployment").rollen.len(), 3);
         assert!(cfg.otel.expect("otel").endpoint.is_some());
     }
 

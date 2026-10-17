@@ -21,7 +21,7 @@ just dev vertragd      # dev/config/vertragd.toml against the dev PostgreSQL
 | **Statutory rules** | pure functions in `src/domain.rs`, chosen by `vertragsart` (`GRUNDVERSORGUNG` / `ERSATZVERSORGUNG` / `SONDERVERTRAG`) and `haushaltskunde` (§ 3 Nr. 57 EnWG) |
 | **Product assignment** | half-open `[gueltig_von, gueltig_bis)` slices, no overlap (`kp_no_overlap`, GiST); `GET /api/v1/malo/{malo_id}/produkte` is what `billingd` bills from |
 | **Market side** | Anmeldung and Kündigung reach the market through `processd`; inbound `de.mako.*` and `de.tarif.angebot.angenommen` arrive at `POST /api/v1/events` / `/webhooks/angebot` (HMAC) |
-| **MCP** | 17 read-only tools + 4 prompts at `/mcp` |
+| **MCP** | 18 read-only tools + 4 prompts at `/mcp` |
 
 ## The rules
 
@@ -56,7 +56,6 @@ shows every reachable date first.
 
 ```toml
 # vertragd.toml
-port     = 9780
 tenant   = "9900357000004"   # data-isolation key (here: the operator's BDEW-Codenummer)
 lf_mp_id = "9900357000004"   # market identity registered on the UTILMD
 
@@ -78,6 +77,9 @@ outputd_api_key = "env:VERTRAGD_OUTPUTD_SERVICE_KEY"
 
 max_identitaeten_per_kunde = 50
 
+[http]
+addr = "0.0.0.0:9780"
+
 [database]
 url = "postgresql://vertragd:secret@db:5432/vertragd"
 
@@ -90,6 +92,13 @@ name      = "Beispiel Energie GmbH"
 post_code = "10115"
 city      = "Berlin"
 ```
+
+`[policy.dsr]` holds the data protection officer's readings for the DSGVO
+export: `portabel.<kategorie>` (Art. 20 Abs. 1) and `automatisiert.<prozess>`
+(Art. 15 Abs. 1 lit. h, Art. 22), each defaulting to `true`. The export states
+the Art. 20 subset and the automated-decision statement with the reading
+behind each; the policy report is served at `GET /api/v1/policy` and by the MCP
+tool `get_policy`.
 
 DB suite: `just test-vertragd-db`.
 

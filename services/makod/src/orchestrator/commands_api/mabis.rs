@@ -216,7 +216,7 @@ fn summenzeitreihe_message_ref(process_id: ProcessId) -> String {
 /// The reference of the message `command` filed under `process_id`, when that
 /// is fixed at acceptance.
 ///
-/// `mabis-syncd` records it on the acked series: the BIKO's Datenstatus and
+/// `netzbilanzd` records it on the acked series: the BIKO's Datenstatus and
 /// Prüfmitteilung name the Summenzeitreihe they answer by it, so a series acked
 /// without it cannot be matched to its answer.
 pub(super) fn filed_message_ref(command: &str, process_id: ProcessId) -> Option<String> {
@@ -234,7 +234,7 @@ pub(super) fn filed_message_ref(command: &str, process_id: ProcessId) -> Option<
 /// No workflow is spawned. A Summenzeitreihe is a statement of fact, not a
 /// request: the BIKO answers asynchronously with a Datenstatus (IFTSTA
 /// 21003/21004) or a Prüfmitteilung (21000/21001), and those land back in
-/// `mabis-syncd`, which owns the version history. Spawning a process here would
+/// `netzbilanzd`, which owns the version history. Spawning a process here would
 /// create a second place tracking the same state.
 ///
 /// # Payload fields
@@ -253,7 +253,7 @@ pub(super) fn filed_message_ref(command: &str, process_id: ProcessId) -> Option<
 /// # Why the Prüfidentifikator is checked rather than assumed
 ///
 /// The filer and this renderer agree on these payload keys by convention alone.
-/// `mabis-syncd` states the Prüfidentifikator it believes it is filing under, and
+/// `netzbilanzd` states the Prüfidentifikator it believes it is filing under, and
 /// a mismatch is refused here: a filer wired to the wrong command would otherwise
 /// have its Zeitreihe rendered as a 13003 Summenzeitreihe whatever it meant to
 /// send, and the BIKO would settle a Bilanzierungsgebiet from it.
@@ -711,7 +711,7 @@ mod summenzeitreihe_reference_tests {
 
     /// The reference the `202` names is the one the MSCONS goes out with.
     ///
-    /// `mabis-syncd` records it on the acked series, and the BIKO's answer
+    /// `netzbilanzd` records it on the acked series, and the BIKO's answer
     /// names the Summenzeitreihe by it; a `202` naming nothing left the filer
     /// recording a placeholder that matches no answer.
     #[tokio::test]

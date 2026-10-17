@@ -3,7 +3,6 @@
 //! Collects all `BillingPosition` items from the `BillingEngine` providers,
 //! computes totals, and can serialise to BO4E-compatible `Rechnung` JSON.
 
-use crate::EuroAmount;
 use crate::rates::RoundMoney;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
@@ -13,18 +12,9 @@ use crate::context::{AbschlagDeduction, BillingContext, Rechnungsempfaenger};
 use crate::error::EngineError;
 use crate::position::{BillingPosition, BillingWarning, PositionCategory};
 
-/// Split `total` across `fractions` so the shares sum back to `total` exactly.
-///
-/// [`billing::proportional_split`] is exact but refuses a negative total, and
-/// every reversal, Gutschrift and Abschlag deduction here carries one. The sign
-/// is lifted out and re-applied; negation is exact in `Decimal`.
-/// Normalise arbitrary non-negative weights into shares that sum to exactly one.
-///
-/// [`billing::proportional_split`] takes *shares* and refuses a set that does
-/// not sum to one; callers allocate by floor area, sub-meter reading or
-/// headcount. The last share absorbs the division residue, so the set sums to
-/// one exactly rather than within a rounding error.
-fn normalise_weights(weights: &[Decimal]) -> Result<Vec<Decimal>, EngineError> {
+/// Refuse weights no allocation can use: a negative one, or a set summing to
+/// zero.
+fn check_weights(weights: &[Decimal]) -> Result<(), EngineError> {
     let mut sum = Decimal::ZERO;
     for &w in weights {
         if w < Decimal::ZERO {
@@ -35,11 +25,18 @@ fn normalise_weights(weights: &[Decimal]) -> Result<Vec<Decimal>, EngineError> {
     if sum <= Decimal::ZERO {
         return Err(EngineError::AllocationWeightsInvalid { sum });
     }
-    let mut shares: Vec<Decimal> = weights.iter().map(|&w| w / sum).collect();
-    let last = shares.len() - 1;
-    let head: Decimal = shares[..last].iter().sum();
-    shares[last] = Decimal::ONE - head;
-    Ok(shares)
+    Ok(())
+}
+
+/// Split `total` by `weights` at `dp` decimals so the parts sum back to it
+/// exactly: [`billing::split`], largest remainder over the exact quotas
+/// `total · wᵢ / Σw`, ties to the lowest index, the sign mirrored for a
+/// reversal or a Gutschrift.
+///
+/// The total is put on the `dp` scale first (kaufmännisch): `billing::split`
+/// refuses a total finer than the scale it splits at instead of rounding it.
+fn split_at(total: Decimal, weights: &[Decimal], dp: u8) -> Result<Vec<Decimal>, EngineError> {
+    Ok(billing::split(total.round_kfm(u32::from(dp)), weights, dp)?)
 }
 
 /// Whether two advance deductions are the same payment.
@@ -52,22 +49,6 @@ fn is_same_abschlag(a: &AbschlagDeduction, b: &AbschlagDeduction) -> bool {
         && a.betrag_eur == b.betrag_eur
         && a.ust_satz == b.ust_satz
         && a.beschreibung == b.beschreibung
-}
-
-fn signed_split(
-    total: Decimal,
-    fractions: &[Decimal],
-    scale: u32,
-) -> Result<Vec<Decimal>, EngineError> {
-    let negative = total < Decimal::ZERO;
-    let magnitude = if negative { -total } else { total };
-    let mut shares = billing::proportional_split(magnitude, fractions, scale)?;
-    if negative {
-        for share in &mut shares {
-            *share = -*share;
-        }
-    }
-    Ok(shares)
 }
 
 /// A completed invoice — the immutable result of `BillingEngine::bill()`.
@@ -188,38 +169,39 @@ impl Invoice {
         tax_subtotals_of(&self.positions, default_rate)
     }
 
-    /// The advances on this invoice as [`billing::AdvancePayment`]s.
+    /// The advances on this invoice as [`billing::Advance`]s, each with its own
+    /// VAT treatment, net and tax.
     ///
     /// Empty unless the context carries `abschlage`.
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::Arithmetic`] if an advance's amounts overflow.
-    pub fn advance_payments(&self) -> Result<Vec<billing::AdvancePayment>, EngineError> {
+    /// Returns [`EngineError::Arithmetic`] for an advance whose rate no VAT
+    /// treatment has.
+    pub fn advance_payments(&self) -> Result<Vec<billing::Advance>, EngineError> {
         self.context
             .abschlage
             .iter()
-            .map(AbschlagDeduction::to_advance_payment)
+            .map(AbschlagDeduction::to_advance)
             .collect()
     }
 
-    /// The advances as a [`billing::Prepayment`], in the resolution this invoice
-    /// carries.
+    /// What was paid before this invoice, as `billing` [`billing::Payment`]s —
+    /// one itemised [`billing::Payment::Advance`] per advance.
     ///
     /// Itemised whenever advances are present: the per-advance tax is what makes
     /// the deduction lawful under §14 Abs. 5 Satz 2 UStG, so it is never collapsed
-    /// to a flat total here.
+    /// to a flat gross here.
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::Arithmetic`] if an advance's amounts overflow, or
-    /// if the set of advances is not a valid prepayment.
-    pub fn prepayment(&self) -> Result<billing::Prepayment, EngineError> {
-        let advances = self.advance_payments()?;
-        if advances.is_empty() {
-            return Ok(billing::Prepayment::None);
-        }
-        Ok(billing::Prepayment::itemised(advances)?)
+    /// As [`advance_payments`](Self::advance_payments).
+    pub fn payments(&self) -> Result<Vec<billing::Payment>, EngineError> {
+        Ok(self
+            .advance_payments()?
+            .into_iter()
+            .map(billing::Payment::Advance)
+            .collect())
     }
 
     /// The residual VAT breakdown for a **Restrechnung** — the whole supply per
@@ -229,28 +211,37 @@ impl Invoice {
     /// 15.10.2024, Rn. 48): bill the remainder and do not list the advances,
     /// because EN 16931's core profiles have nowhere to carry per-advance tax.
     ///
-    /// Returns the full breakdown unchanged when there are no advances.
+    /// Returns the full breakdown unchanged when there are no advances. Advances
+    /// above the supply leave a **negative** residual in their group — a
+    /// Guthaben, whose VAT the final invoice corrects downwards — the same
+    /// result `billing::Document::residual_vat` gives.
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::Arithmetic`] when an advance taxed a
-    /// `(category, rate)` group this supply does not contain, or when the
-    /// advances exceed the supply in any group — over-deduction would understate
-    /// the output tax owed.
+    /// [`EngineError::ReconciliationFailed`] when an advance taxed a
+    /// `(category, rate)` group this supply does not contain: its tax cannot be
+    /// deducted from a group that does not exist.
     pub fn residual_breakdown(
         &self,
         default_rate: Decimal,
-    ) -> Result<Vec<billing::TaxBreakdownEntry>, EngineError> {
-        let full: Vec<billing::TaxBreakdownEntry> = self
-            .tax_subtotals(default_rate)
-            .iter()
-            .map(TaxSubtotal::to_breakdown_entry)
-            .collect::<Result<_, _>>()?;
-        let advances = self.advance_payments()?;
-        if advances.is_empty() {
-            return Ok(full);
+    ) -> Result<Vec<TaxSubtotal>, EngineError> {
+        let mut residual = self.tax_subtotals(default_rate);
+        for advance in self.advance_payments()? {
+            let code = advance.vat.category().code();
+            let rate = advance.vat.rate_percent().value().normalize();
+            let group = residual
+                .iter_mut()
+                .find(|g| g.category.code() == code && g.rate_percent.normalize() == rate)
+                .ok_or_else(|| EngineError::ReconciliationFailed {
+                    reason: format!(
+                        "an advance taxed at {code} {rate} % has no group of that category \
+                         and rate in this supply"
+                    ),
+                })?;
+            group.taxable_base_eur -= advance.net;
+            group.tax_amount_eur -= advance.tax;
         }
-        Ok(billing::advance::residual_breakdown(&full, &advances)?)
+        Ok(residual)
     }
 
     /// Assemble an `Invoice` from a flat list of positions and warnings.
@@ -911,10 +902,11 @@ impl Invoice {
     /// who owes money. A dropped duplicate is reported as `ABSCHLAG_DOPPELT`
     /// rather than absorbed in silence.
     ///
-    /// ## Equivalent to `billing::merge_period_documents`
+    /// ## Derived once, like `billing::Document::concat`
     ///
-    /// This function applies the same logic as `billing::merge_period_documents` but
-    /// operates directly on `Invoice` without requiring a `BillingDocument` conversion.
+    /// The merged positions go through [`Invoice::from_positions`] again, so the
+    /// VAT of the whole period is derived once from its lines and never summed
+    /// from two separately rounded legs.
     ///
     /// ## Use case — Tarifwechsel (price change mid-period)
     ///
@@ -969,8 +961,9 @@ impl Invoice {
 
     /// Proportionally split this invoice across N recipients.
     ///
-    /// Uses `billing::proportional_split` for **penny-correct** arithmetic:
-    /// the sum of all recipient totals equals `self.brutto_eur` exactly.
+    /// Uses [`billing::split`] for **penny-correct** arithmetic: every amount
+    /// and quantity is split by the weights themselves, so the recipients'
+    /// figures sum to the source's exactly.
     ///
     /// ## Use cases
     ///
@@ -981,8 +974,8 @@ impl Invoice {
     /// ## Arguments
     ///
     /// - `fractions`: a non-negative weight per recipient — square metres, a
-    ///   sub-meter reading, a headcount. They need not sum to one; they are
-    ///   normalised into shares here.
+    ///   sub-meter reading, a headcount. They need not sum to one: each quota
+    ///   is `total · wᵢ / Σw`, an exact fraction.
     /// - `contexts`: one `BillingContext` per recipient (must match `fractions.len()`).
     ///   Each recipient gets their own rechnungsnummer, malo_id, etc.
     ///
@@ -1007,7 +1000,7 @@ impl Invoice {
         }
 
         let n = fractions.len();
-        let shares = normalise_weights(fractions)?;
+        check_weights(fractions)?;
         let mut recipient_positions: Vec<Vec<crate::position::BillingPosition>> =
             (0..n).map(|_| Vec::new()).collect();
 
@@ -1016,8 +1009,8 @@ impl Invoice {
             // Rounding each share on its own is exact only when the weights
             // divide evenly — three shares of 1000 kWh give 3 × 333.3333 —
             // so the recipients' volumes would stop adding up to the metered one.
-            let split_amounts = signed_split(pos.net_eur, &shares, 5)?;
-            let split_quantities = signed_split(pos.quantity, &shares, 4)?;
+            let split_amounts = split_at(pos.net_eur, fractions, 5)?;
+            let split_quantities = split_at(pos.quantity, fractions, 4)?;
             for i in 0..n {
                 let mut split_pos = pos.clone();
                 split_pos.net_eur = split_amounts[i];
@@ -1033,7 +1026,7 @@ impl Invoice {
         let mut recipient_advances: Vec<Vec<AbschlagDeduction>> =
             (0..n).map(|_| Vec::new()).collect();
         for advance in &self.context.abschlage {
-            let split = signed_split(advance.betrag_eur, &shares, 2)?;
+            let split = split_at(advance.betrag_eur, fractions, 2)?;
             for (i, betrag_eur) in split.into_iter().enumerate() {
                 recipient_advances[i].push(AbschlagDeduction {
                     betrag_eur,
@@ -1474,30 +1467,6 @@ pub struct TaxSubtotal {
 }
 
 impl TaxSubtotal {
-    /// Project into a [`billing::TaxBreakdownEntry`].
-    ///
-    /// The rate is carried as a fraction there and as a percentage here, so it is
-    /// scaled back down on the way across.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EngineError::Arithmetic`] if the base or tax overflows
-    /// [`EuroAmount`].
-    pub fn to_breakdown_entry(&self) -> Result<billing::TaxBreakdownEntry, EngineError> {
-        Ok(billing::TaxBreakdownEntry::new(
-            match self.category {
-                VatCategory::Standard => billing::TaxCategory::Standard,
-                VatCategory::ZeroRated => billing::TaxCategory::ZeroRated,
-                VatCategory::ReverseCharge => billing::TaxCategory::ReverseCharge,
-                VatCategory::Exempt => billing::TaxCategory::Exempt,
-                VatCategory::OutOfScope => billing::TaxCategory::OutOfScope,
-            },
-            self.rate_percent / Decimal::ONE_HUNDRED,
-            EuroAmount::checked_from_decimal(self.taxable_base_eur)?,
-            EuroAmount::checked_from_decimal(self.tax_amount_eur)?,
-        ))
-    }
-
     /// Project into the BO4E [`rubo4e::current::Steuerbetrag`].
     #[must_use]
     #[cfg(feature = "bo4e")]
@@ -2168,32 +2137,24 @@ mod settlement_tests {
     fn advance_carries_its_own_tax_across_the_boundary() {
         let advances = jahresabrechnung().advance_payments().unwrap();
         assert_eq!(advances.len(), 1);
+        assert_eq!(advances[0].net, dec!(750.00));
+        assert_eq!(advances[0].tax, dec!(142.50));
         assert_eq!(
-            advances[0].net(),
-            billing::Amount::parse("750.00000").unwrap()
-        );
-        assert_eq!(
-            advances[0].tax_total(),
-            billing::Amount::parse("142.50000").unwrap()
-        );
-        assert_eq!(
-            advances[0].gross(),
-            billing::Amount::parse("892.50000").unwrap()
+            advances[0].vat.rate_percent(),
+            billing::Percent::new(dec!(19))
         );
     }
 
-    /// Advances present → itemised, never collapsed to a flat total.
+    /// Advances present → itemised, never collapsed to a flat gross.
     #[test]
-    fn prepayment_is_itemised_when_advances_exist() {
+    fn payments_are_itemised_when_advances_exist() {
+        let payments = jahresabrechnung().payments().unwrap();
         assert!(matches!(
-            jahresabrechnung().prepayment().unwrap(),
-            billing::Prepayment::Itemised(_)
+            payments.as_slice(),
+            [billing::Payment::Advance(_)]
         ));
         let no_advances = Invoice::from_positions(BillingContext::default(), vec![], vec![]);
-        assert!(matches!(
-            no_advances.prepayment().unwrap(),
-            billing::Prepayment::None
-        ));
+        assert!(no_advances.payments().unwrap().is_empty());
     }
 
     /// Restrechnung: the residual is the supply less what the advances taxed.
@@ -2201,23 +2162,32 @@ mod settlement_tests {
     fn residual_breakdown_bills_only_the_remainder() {
         let residual = jahresabrechnung().residual_breakdown(dec!(0.19)).unwrap();
         assert_eq!(residual.len(), 1);
-        assert_eq!(
-            residual[0].taxable_base,
-            billing::Amount::parse("250.00000").unwrap()
-        );
-        assert_eq!(
-            residual[0].tax_amount,
-            billing::Amount::parse("47.50000").unwrap()
-        );
+        assert_eq!(residual[0].taxable_base_eur, dec!(250.00));
+        assert_eq!(residual[0].tax_amount_eur, dec!(47.50));
     }
 
-    /// Over-deduction is refused: it would understate the output tax owed on the
-    /// supply, which is the error §14c Abs. 1 exists to punish.
+    /// Advances above the supply are a Guthaben, not an error: 2000.00 gross
+    /// at 19 % is 1680.67 + 319.33, so the residual of a 1000.00 + 190.00
+    /// supply is −680.67 + −129.33, the VAT the final invoice gives back.
     #[test]
-    fn advances_exceeding_the_supply_are_refused() {
+    fn advances_exceeding_the_supply_leave_a_negative_residual() {
         let mut invoice = jahresabrechnung();
         invoice.context.abschlage[0].betrag_eur = dec!(2000.00);
-        assert!(invoice.residual_breakdown(dec!(0.19)).is_err());
+        let residual = invoice.residual_breakdown(dec!(0.19)).unwrap();
+        assert_eq!(residual[0].taxable_base_eur, dec!(-680.67));
+        assert_eq!(residual[0].tax_amount_eur, dec!(-129.33));
+    }
+
+    /// An advance taxed at a rate the supply does not carry has no group to be
+    /// deducted from, and is refused rather than dropped.
+    #[test]
+    fn an_advance_without_a_matching_group_is_refused() {
+        let mut invoice = jahresabrechnung();
+        invoice.context.abschlage[0].ust_satz = dec!(0.07);
+        assert!(matches!(
+            invoice.residual_breakdown(dec!(0.19)),
+            Err(EngineError::ReconciliationFailed { .. })
+        ));
     }
 }
 

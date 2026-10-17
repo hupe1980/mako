@@ -6,8 +6,10 @@
 # customer document renders with.
 allow_insecure_no_auth = true
 
-port   = 9880
 tenant = "9912345000005"
+
+[http]
+addr = "0.0.0.0:9880"
 
 [database]
 url = "postgres://demo:demo-secret@postgres/outputd"

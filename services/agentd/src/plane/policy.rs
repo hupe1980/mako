@@ -18,7 +18,7 @@
 
 use std::sync::Arc;
 
-use agentplane::core::{PolicyDecision, PolicyEngine, PolicyRequest};
+use agentplane::core::{PolicyDecision, PolicyEngine, PolicyRequest, PrincipalKind};
 use agentplane::policy::CedarEngine;
 
 /// mako's own rules, embedded at compile time.
@@ -85,6 +85,7 @@ pub fn caller_may(
     matches!(
         engine.authorize(&PolicyRequest {
             principal: subject,
+            principal_kind: PrincipalKind::Subject,
             action,
             resource: "agentd",
             context: &context,
@@ -163,6 +164,7 @@ mod tests {
         });
         let d = engine().authorize(&PolicyRequest {
             principal: "gabi-gas-agent",
+            principal_kind: PrincipalKind::Capability,
             action: "effect:perform",
             resource: "tool.call",
             context: &context,
@@ -205,6 +207,7 @@ mod tests {
         });
         let d = engine().authorize(&PolicyRequest {
             principal: "mako-agent",
+            principal_kind: PrincipalKind::Capability,
             action: "effect:perform",
             resource: "tool.call",
             context: &context,
@@ -241,6 +244,7 @@ mod tests {
                 });
                 !permitted(&engine.authorize(&PolicyRequest {
                     principal: "mako-agent",
+                    principal_kind: PrincipalKind::Capability,
                     action: "effect:perform",
                     resource: "tool.call",
                     context: &context,
@@ -274,6 +278,7 @@ mod tests {
         });
         let d = engine().authorize(&PolicyRequest {
             principal: "mako-agent",
+            principal_kind: PrincipalKind::Capability,
             action: "effect:perform",
             resource: "tool.call",
             context: &context,
@@ -293,6 +298,7 @@ mod tests {
         });
         let d = engine().authorize(&PolicyRequest {
             principal: "mako-agent",
+            principal_kind: PrincipalKind::Capability,
             action: "effect:perform",
             resource: "model.complete",
             context: &context,
@@ -306,6 +312,7 @@ mod tests {
         let context = json!({ "run": "r1", "step": 0, "tenant": "9900357000004" });
         let d = engine().authorize(&PolicyRequest {
             principal: "mako-agent",
+            principal_kind: PrincipalKind::Capability,
             action: "data:release",
             resource: "label.release",
             context: &context,
@@ -360,6 +367,7 @@ mod tests {
             ] {
                 let d = engine.authorize(&PolicyRequest {
                     principal: "user:reviewer",
+                    principal_kind: PrincipalKind::Subject,
                     action,
                     resource: "*",
                     context: &context,
@@ -378,6 +386,7 @@ mod tests {
         let lf = json!({ "roles": ["LF"], "tenant": "9900357000004" });
         let d = engine.authorize(&PolicyRequest {
             principal: "user:mallory",
+            principal_kind: PrincipalKind::Subject,
             action: "api:task.decide",
             resource: "*",
             context: &lf,
@@ -397,6 +406,7 @@ mod tests {
 
         let d = engine().authorize(&PolicyRequest {
             principal: "user:anna",
+            principal_kind: PrincipalKind::Subject,
             action: "api:task.decide",
             resource: "task-1",
             context: &allowed,
@@ -405,6 +415,7 @@ mod tests {
 
         let d = engine().authorize(&PolicyRequest {
             principal: "user:mallory",
+            principal_kind: PrincipalKind::Subject,
             action: "api:task.decide",
             resource: "task-1",
             context: &refused,
@@ -418,6 +429,7 @@ mod tests {
         let gas = json!({ "roles": ["gas-operations"], "tenant": "9900357000004" });
         let d = engine().authorize(&PolicyRequest {
             principal: "user:jan",
+            principal_kind: PrincipalKind::Subject,
             action: "api:run.read",
             resource: "run-1",
             context: &gas,
@@ -426,6 +438,7 @@ mod tests {
 
         let d = engine().authorize(&PolicyRequest {
             principal: "user:jan",
+            principal_kind: PrincipalKind::Subject,
             action: "api:run.cancel",
             resource: "run-1",
             context: &gas,
@@ -473,6 +486,7 @@ mod tests {
                     let context = json!({ "roles": [role], "tenant": "9900357000004" });
                     permitted(&engine.authorize(&PolicyRequest {
                         principal: "user:reviewer",
+                        principal_kind: PrincipalKind::Subject,
                         action,
                         resource: "*",
                         context: &context,
@@ -491,6 +505,90 @@ mod tests {
         );
     }
 
+    /// **The upstream bundle's on-call grants do not reach this plane.**
+    ///
+    /// agentplane's shipped `serve-policy.cedar` gives its `operator` role the
+    /// on-call verbs — halts, holds, abandonment, reconciliation, journal
+    /// history — and its `framework` role MCP prompt and resource reads. agentd
+    /// embeds its own set and never that one, so none of it may arrive here by
+    /// way of an upgrade: a domain reviewer reads and decides its own rows and
+    /// does not stop the plane, lift a preservation order or read every
+    /// matter's journal, and agentd serves no MCP surface at all.
+    #[test]
+    fn the_intervention_verbs_stay_with_their_narrow_audiences() {
+        let engine = engine();
+        let ask = |role: &str, action: &str| {
+            let context = json!({ "roles": [role], "tenant": "9900357000004" });
+            permitted(&engine.authorize(&PolicyRequest {
+                principal: "user:reviewer",
+                principal_kind: PrincipalKind::Subject,
+                action,
+                resource: "*",
+                context: &context,
+            }))
+        };
+
+        const DOMAIN_ROLES: &[&str] = &[
+            "gas-operations",
+            "billing-operations",
+            "billing-compliance",
+            "credit-control",
+            "eeg-operations",
+            "grid-operations",
+            "marktkommunikation",
+            "metering",
+            "netzbilanz",
+            "mako-service",
+        ];
+        for action in [
+            "api:halt.place",
+            "api:halt.lift",
+            "api:hold.place",
+            "api:hold.release",
+            "api:run.abandon",
+            "api:run.history",
+            "api:run.reopen",
+            "api:obligation.acknowledge",
+        ] {
+            for role in DOMAIN_ROLES {
+                assert!(
+                    !ask(role, action),
+                    "`{role}` was granted `{action}` — an intervention verb reached a \
+                     domain audience"
+                );
+            }
+        }
+
+        // Lifting a hold lets the next pass destroy the matter: the compliance
+        // function only, not the plane operator.
+        assert!(ask("regulatory", "api:hold.release"));
+        assert!(!ask("mako-operations", "api:hold.release"));
+        // The emergency stop is the plane operator's, both directions.
+        for action in ["api:halt.place", "api:halt.lift"] {
+            assert!(ask("mako-operations", action), "{action}");
+            assert!(!ask("regulatory", action), "{action}");
+        }
+
+        for action in [
+            "mcp:tool.list",
+            "mcp:tool.call",
+            "mcp:task.read",
+            "mcp:task.cancel",
+            "mcp:prompt.read",
+            "mcp:resource.read",
+        ] {
+            for role in DOMAIN_ROLES
+                .iter()
+                .chain(&["mako-operations", "regulatory"])
+            {
+                assert!(
+                    !ask(role, action),
+                    "`{role}` was granted `{action}` — agentd serves no MCP surface"
+                );
+            }
+        }
+    }
+
     /// The narrower verb stays narrow.
     ///
     /// `api:obligation.list` is its own action so *what did we miss* can be
@@ -504,6 +602,7 @@ mod tests {
             let context = json!({ "roles": [role], "tenant": "9900357000004" });
             permitted(&engine.authorize(&PolicyRequest {
                 principal: "user:reviewer",
+                principal_kind: PrincipalKind::Subject,
                 action,
                 resource: "*",
                 context: &context,
@@ -597,6 +696,7 @@ mod tests {
         for action in agentplane::api::action::ALL.iter().chain(action::ALL) {
             let d = engine().authorize(&PolicyRequest {
                 principal: "user:nobody",
+                principal_kind: PrincipalKind::Subject,
                 action,
                 resource: "*",
                 context: &none,

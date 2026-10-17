@@ -1,4 +1,4 @@
-# docker-bake.hcl — builds all 17 mako service images from one build graph.
+# docker-bake.hcl — builds all 16 mako service images from one build graph.
 #
 # This file is the **CI** build path: `_base` fixes `push-by-digest`, so every
 # target pushes to `$REGISTRY` and none of them loads an image into the local
@@ -16,8 +16,8 @@
 #     --metadata-file /tmp/bake-meta.json \
 #     --push
 #
-# The `_base` target is inherited by all 17 service targets.
-# BuildKit executes the shared `builder` stage once and fans out to 17 runtime stages.
+# The `_base` target is inherited by every service target.
+# BuildKit executes the shared `builder` stage once and fans out to one runtime stage per service.
 
 variable "REGISTRY" {
   default = "ghcr.io/hupe1980"
@@ -35,13 +35,13 @@ variable "OCI_CREATED" {
   default = "unknown"
 }
 
-# Build all 17 images
+# Build every service image
 group "default" {
   targets = [
-    "makod", "marktd", "processd", "invoicd", "edmd", "obsd",
-    "netzbilanzd", "sperrd", "einsd",
+    "makod", "marktd", "processd", "invoicd", "edmd",
+    "netzbilanzd", "einsd",
     "productd", "billingd", "outputd", "accountingd", "vertragd",
-    "portald", "agentd", "mabis-syncd",
+    "portald", "agentd",
   ]
 }
 
@@ -93,22 +93,10 @@ target "edmd" {
   tags     = ["${REGISTRY}/mako-edmd"]
 }
 
-target "obsd" {
-  inherits = ["_base"]
-  target   = "obsd-runtime"
-  tags     = ["${REGISTRY}/mako-obsd"]
-}
-
 target "netzbilanzd" {
   inherits = ["_base"]
   target   = "netzbilanzd-runtime"
   tags     = ["${REGISTRY}/mako-netzbilanzd"]
-}
-
-target "sperrd" {
-  inherits = ["_base"]
-  target   = "sperrd-runtime"
-  tags     = ["${REGISTRY}/mako-sperrd"]
 }
 
 target "einsd" {
@@ -157,10 +145,4 @@ target "agentd" {
   inherits = ["_base"]
   target   = "agentd-runtime"
   tags     = ["${REGISTRY}/mako-agentd"]
-}
-
-target "mabis-syncd" {
-  inherits = ["_base"]
-  target   = "mabis-syncd-runtime"
-  tags     = ["${REGISTRY}/mako-mabis-syncd"]
 }

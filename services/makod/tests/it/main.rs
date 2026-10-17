@@ -2,6 +2,7 @@
 //! file in this directory. A crate links its dependency graph once per test
 //! binary, so a file per binary multiplies link time and disk by the file count.
 
+mod admin_error_shape;
 mod anmeldung_stammdaten_extraction;
 mod as4_security;
 mod bo4e_version_guard;
@@ -59,6 +60,7 @@ mod engine_modules;
 mod erp_response_dispatch;
 mod health_probes;
 mod healthy_deadline_interleavings;
+mod malo_sync;
 mod meldepflicht_coverage;
 mod mscons_conformance;
 mod occupancy_verdicts;

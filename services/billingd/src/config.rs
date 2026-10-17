@@ -20,13 +20,12 @@ pub struct RatesConfig {
     /// Reduced MwSt rate as decimal fraction (§ 12 Abs. 2 UStG, default 0.07).
     /// Applies to the Anlage-2 supplies this platform bills — Trinkwasser.
     pub mwst_rate_reduced: Option<Decimal>,
-    /// Which law prices nEHS certificates in a year with no § 10 BEHG price —
-    /// `"rvo_bezugspreis"` (default; § 10 Abs. 3 Satz 2 Nr. 4/Nr. 5 BEHG, in
-    /// force) or `"korridor"` (55–65 EUR/t, 3. BEHG-ÄndG, BT-Drs. 21/7869).
+    /// Removed: the regime is `[policy] behg_regime`. Named so a config still
+    /// carrying it is refused at startup instead of running under the default.
     #[serde(default)]
-    pub behg_regime: energy_billing::BehgRegime,
+    pub behg_regime: Option<String>,
     /// Supplied nEHS prices (EUR/t) for periods with no § 10 BEHG price,
-    /// each checked against [`Self::behg_regime`].
+    /// each checked against `[policy] behg_regime`.
     #[serde(default)]
     pub behg_eur_per_t: Vec<DatierterSatz>,
     /// § 3 StromStG rates (ct/kWh) for years the statutory series does not cover.
@@ -59,13 +58,19 @@ impl RatesConfig {
     /// calendar year, carry a positive value, overlap no other row of its
     /// kind, and fill a gap: a row for a year the statutory series already
     /// covers would contradict the statute, and is refused rather than
-    /// silently ignored or preferred. A BEHG row is checked against the
-    /// configured regime.
+    /// silently ignored or preferred. A BEHG row is checked against `regime`,
+    /// the configured `[policy] behg_regime`.
     ///
     /// # Errors
     ///
     /// Names the key, the row and what is wrong with it.
-    pub fn validate(&self) -> anyhow::Result<()> {
+    pub fn validate(&self, regime: energy_billing::BehgRegime) -> anyhow::Result<()> {
+        if let Some(old) = &self.behg_regime {
+            anyhow::bail!(
+                "`[rates] behg_regime = {old:?}` is not read; the regime is \
+                 `[policy] behg_regime` (rvo_bezugspreis | korridor). Move the value there."
+            );
+        }
         let statutory_strom = |y| energy_billing::stromsteuer_for_year(y).is_some();
         let statutory_gas = |y| energy_billing::energiesteuer_gas_for_year(y).is_some();
         let statutory_behg = |y| {
@@ -104,7 +109,7 @@ impl RatesConfig {
                     z.von.year()
                 );
                 if key == "behg_eur_per_t" {
-                    self.behg_regime
+                    regime
                         .pruefe(z.wert, z.von.year())
                         .map_err(|e| anyhow::anyhow!("{at}: {e}"))?;
                 }
@@ -209,21 +214,81 @@ impl ERechnungConfig {
     }
 }
 
-/// `[billing]` — how a document is shaped, where the law offers a choice.
-#[derive(Debug, Deserialize, Default)]
-pub struct BillingConfig {
-    /// § 14 Abs. 5 Satz 2 UStG — the default settlement form for an invoice
-    /// that deducts advances.
+/// `[policy]` — billingd's operator settings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BillingdPolicy {
+    /// Which law prices nEHS certificates in a year with no § 10 BEHG price.
+    #[serde(default)]
+    pub behg_regime: mako_service::policy::Policy<BehgRegimeWahl>,
+    /// The default § 14 Abs. 5 Satz 2 UStG settlement form for an invoice that
+    /// deducts advances. A request may override it per invoice.
+    #[serde(default)]
+    pub settlement_form: mako_service::policy::Policy<Abrechnungsform>,
+}
+
+mako_service::policy_choice! {
+    /// Which law prices nEHS certificates in a year with no § 10 BEHG price.
     ///
-    /// `"ENDRECHNUNG"` (the default) states the whole supply and deducts the
-    /// advances together with the tax contained in them. `"RESTRECHNUNG"`
-    /// invoices only the remainder and lists no advances — what the BMF
-    /// recommends for e-invoices (Schreiben v. 15.10.2024, Rn. 48), because
-    /// EN 16931's core profiles have nowhere to carry per-advance tax.
+    /// The two candidates are incompatible and only one can bind. Neither
+    /// carries a 2027 price: no statute fixes one in advance, so a 2027 Gas
+    /// period refuses until a dated `[rates] behg_eur_per_t` row supplies it,
+    /// under either.
+    pub enum BehgRegimeWahl {
+        key: "behg_regime",
+        doc: "@/docs/services/billingd.md#policy-behg-regime",
+        default: tightening(RvoBezugspreis, "the law in force; the corridor is a Gesetzentwurf"),
+        review_by: (2027, 1, 1, "the 3. BEHG-ÄndG (BT-Drs. 21/7869) is enacted or lapses; once one regime binds, the setting is removed"),
+        options: {
+            /// § 10 Abs. 3 Satz 2 Nr. 4/Nr. 5 BEHG — the enacted
+            /// Verordnungsermächtigung; any positive supplied price.
+            RvoBezugspreis = "rvo_bezugspreis" => "§ 10 Abs. 3 Satz 2 Nr. 4/Nr. 5 BEHG (Bezugspreis der TEHG-Versteigerungen)",
+            /// The 55–65 EUR/t corridor of the 3. BEHG-ÄndG.
+            Korridor = "korridor" => "§ 10 Abs. 2 Satz 4 BEHG i. d. F. des 3. BEHG-ÄndG (BT-Drs. 21/7869)",
+        }
+    }
+}
+
+impl BehgRegimeWahl {
+    /// The engine's regime.
+    #[must_use]
+    pub const fn regime(self) -> energy_billing::BehgRegime {
+        match self {
+            Self::RvoBezugspreis => energy_billing::BehgRegime::RvoBezugspreis,
+            Self::Korridor => energy_billing::BehgRegime::Korridor,
+        }
+    }
+}
+
+mako_service::policy_choice! {
+    /// § 14 Abs. 5 Satz 2 UStG — how an invoice that deducts advances states them.
     ///
-    /// Both are lawful and the customer pays the same amount either way. A
-    /// request may override it per invoice.
-    pub settlement_form: Option<energy_billing::SettlementForm>,
+    /// Both are lawful and the customer pays the same amount either way.
+    pub enum Abrechnungsform {
+        key: "settlement_form",
+        doc: "@/docs/services/billingd.md#policy-settlement-form",
+        default: tightening(Endrechnung, "the German paper norm; switching it silently would change every Jahresrechnung an operator has issued"),
+        options: {
+            /// States the whole supply and deducts the advances together with
+            /// the tax contained in them.
+            Endrechnung = "endrechnung" => "§ 14 Abs. 5 Satz 2 UStG (Endrechnung: Abzug der vereinnahmten Entgelte und der darauf entfallenden Steuerbeträge)",
+            /// Invoices only the remainder and lists no advances — what the
+            /// BMF recommends for e-invoices, because EN 16931's core profiles
+            /// have nowhere to carry per-advance tax.
+            Restrechnung = "restrechnung" => "BMF-Schreiben v. 15.10.2024 (E-Rechnung), Rn. 48",
+        }
+    }
+}
+
+impl Abrechnungsform {
+    /// The engine's settlement form.
+    #[must_use]
+    pub const fn form(self) -> energy_billing::SettlementForm {
+        match self {
+            Self::Endrechnung => energy_billing::SettlementForm::Endrechnung,
+            Self::Restrechnung => energy_billing::SettlementForm::Restrechnung,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -232,8 +297,9 @@ pub struct BillingdConfig {
     /// connects a tuned pool (with `application_name = "billingd"`) from this.
     pub database: mako_service::config::DatabaseConfig,
 
-    /// HTTP listen port.  Defaults to `9280`.
-    pub port: Option<u16>,
+    /// `[http]` — the listen address. Defaults to every interface on `9280`.
+    #[serde(default = "default_http")]
+    pub http: mako_service::config::HttpConfig,
 
     /// Tenant identifier — data-isolation key written to every database row.
     /// Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid.
@@ -373,10 +439,14 @@ pub struct BillingdConfig {
     /// Statutory rate defaults.  Override here instead of per-product.
     pub rates: Option<RatesConfig>,
 
-    /// `[billing]` — document-shape defaults that are the operator's choice
-    /// rather than a statutory rate.
+    /// Removed: `[billing] settlement_form` is `[policy] settlement_form`.
+    /// Named so a config still carrying the section is refused at startup.
     #[serde(default)]
-    pub billing: Option<BillingConfig>,
+    pub billing: Option<serde_json::Value>,
+
+    /// `[policy]` — the operator readings this deployment bills under.
+    #[serde(default)]
+    pub policy: BillingdPolicy,
 
     /// `[e_rechnung]` — the facts § 27 Abs. 38 UStG decides the paper path on.
     #[serde(default)]
@@ -484,7 +554,7 @@ impl BillingdConfig {
             "[billing_runs] catch_up_periods must be at least 1, or the sweep bills nothing"
         );
         if let Some(rates) = &self.rates {
-            rates.validate()?;
+            rates.validate(self.behg_regime())?;
         }
         self.e_rechnung.validate()?;
         Ok(())
@@ -507,6 +577,11 @@ impl BillingdConfig {
                 "seller_contact",
                 "[seller] phone / email",
             ),
+            (
+                self.billing.is_some(),
+                "[billing]",
+                "[policy] settlement_form",
+            ),
         ];
         let found: Vec<String> = removed
             .iter()
@@ -515,11 +590,10 @@ impl BillingdConfig {
             .collect();
         anyhow::ensure!(
             found.is_empty(),
-            "billingd.toml uses configuration keys that no longer exist: {}. \
-             They were free-text lines that einvoice split on punctuation; the \
-             replacement states each EN 16931 term (BT-35/37/38, BT-42/43) on its \
-             own. Ignoring them would ship invoices without the § 40 Abs. 2 Nr. 1 \
-             EnWG supplier address.",
+            "billingd.toml uses configuration keys that are not read: {}. Move each \
+             value to the key named after the arrow; running on without it would bill \
+             under a default the operator did not choose, or ship invoices without the \
+             § 40 Abs. 2 Nr. 1 EnWG supplier address.",
             found.join(", ")
         );
         Ok(())
@@ -531,7 +605,7 @@ impl mako_service::ServiceConfig for BillingdConfig {
         Some(&self.database)
     }
     fn bind_addr(&self) -> String {
-        format!("0.0.0.0:{}", self.port.unwrap_or(9280))
+        self.http.addr.clone()
     }
 }
 
@@ -736,15 +810,84 @@ impl BillingdConfig {
 impl BillingdConfig {
     /// The operator's default § 14 Abs. 5 Satz 2 UStG settlement form.
     ///
-    /// `Endrechnung` unless `[billing] settlement_form = "RESTRECHNUNG"` — the
+    /// `Endrechnung` unless `[policy] settlement_form = "restrechnung"` — the
     /// German paper norm is to state the whole supply and deduct the advances
     /// with their tax, and switching that silently would change every
     /// Jahresrechnung an operator has ever issued.
     pub fn settlement_form(&self) -> energy_billing::SettlementForm {
-        self.billing
-            .as_ref()
-            .and_then(|b| b.settlement_form)
-            .unwrap_or_default()
+        self.policy.settlement_form.get().form()
+    }
+
+    /// The configured `[policy] behg_regime`.
+    #[must_use]
+    pub fn behg_regime(&self) -> energy_billing::BehgRegime {
+        self.policy.behg_regime.get().regime()
+    }
+
+    /// Refuse a posture that serves billing unauthenticated or emits unsigned
+    /// events, unless `allow_insecure_no_auth` asks for it by name.
+    ///
+    /// # Errors
+    ///
+    /// Names the missing control.
+    pub fn check_auth_posture(&self) -> anyhow::Result<()> {
+        // Fail closed: without `[oidc]` every billing endpoint (calculate,
+        // correction, VPP contract mutation) accepts any caller.
+        if !self.allow_insecure_no_auth && self.oidc.is_none() {
+            anyhow::bail!(
+                "refusing to start without [oidc]: the billing API would accept \
+                 unauthenticated calculate/correction/mutation requests. \
+                 Configure [oidc] or set allow_insecure_no_auth = true (dev only)."
+            );
+        }
+        // The VPP auto-billing webhook mutates billing state on inbound events;
+        // running it without HMAC verification is only allowed by name.
+        if !self.allow_insecure_no_auth
+            && self.vpp_auto_billing
+            && self.inbound_webhook_secret.is_none()
+        {
+            anyhow::bail!(
+                "refusing to start: vpp_auto_billing is enabled but inbound_webhook_secret \
+                 is not set — unsigned webhooks could trigger billing. Configure \
+                 inbound_webhook_secret or set allow_insecure_no_auth = true (dev only)."
+            );
+        }
+        // `OutboxWorker` signs only when it has a secret. With a webhook URL
+        // and no secret every de.billing.* CloudEvent — the Rechnung events
+        // accountingd books from among them — reaches the ERP unsigned, and the
+        // receiver has no way to tell one from a body anybody posted.
+        if !self.allow_insecure_no_auth
+            && self.erp_webhook_url.is_some()
+            && self.erp_hmac_secret.is_none()
+        {
+            anyhow::bail!(
+                "refusing to start: erp_webhook_url is set but erp_hmac_secret is not — \
+                 every de.billing.* CloudEvent would be delivered to the ERP unsigned. \
+                 Configure erp_hmac_secret or set allow_insecure_no_auth = true (dev only)."
+            );
+        }
+        Ok(())
+    }
+
+    /// The policy and posture billingd runs under — logged, exported,
+    /// recorded and served by the runner and `GET /api/v1/policy`.
+    #[must_use]
+    pub fn policy_report(&self) -> mako_service::policy::PolicyReport {
+        mako_service::policy::PolicyReport::new()
+            .with(&self.policy.behg_regime)
+            .with(&self.policy.settlement_form)
+            .posture_flag("allow_insecure_no_auth", self.allow_insecure_no_auth)
+            .posture_presence("oidc", self.oidc.is_some(), true)
+            .posture_presence(
+                "inbound_webhook_secret",
+                self.inbound_webhook_secret.is_some(),
+                self.vpp_auto_billing,
+            )
+            .posture_presence(
+                "erp_hmac_secret",
+                self.erp_hmac_secret.is_some(),
+                self.erp_webhook_url.is_some(),
+            )
     }
 
     /// The statutory rate boundaries inside a period, if any.
@@ -908,7 +1051,7 @@ impl BillingdConfig {
     ) -> (energy_billing::ResolvedRate, String) {
         let year = period_from.year();
         let cfg = self.rates_config();
-        let regime = cfg.behg_regime;
+        let regime = self.behg_regime();
         let statutory = energy_billing::RegulatoryRates::for_year(year);
         let tabled = statutory.behg_gas_ct_per_kwh.as_ref().ok().copied();
         let to_ct = |eur_per_t: Decimal| {
@@ -966,6 +1109,10 @@ pub struct StraddlesRateBoundary {
     pub period_to: time::Date,
     /// First day of each new regime inside the period.
     pub stichtage: Vec<time::Date>,
+}
+
+fn default_http() -> mako_service::config::HttpConfig {
+    mako_service::config::HttpConfig::on_port(9280)
 }
 
 #[cfg(test)]
@@ -1082,6 +1229,13 @@ mod dated_rate_tests {
     use super::*;
     use rust_decimal::dec;
     use time::macros::date;
+
+    /// `cfg` under `[policy] behg_regime = "korridor"`.
+    fn cfg_korridor(rates: serde_json::Value) -> BillingdConfig {
+        let mut c = cfg(rates);
+        c.policy.behg_regime = mako_service::policy::Policy::explicit(BehgRegimeWahl::Korridor);
+        c
+    }
 
     fn cfg(rates: serde_json::Value) -> BillingdConfig {
         serde_json::from_value(serde_json::json!({
@@ -1208,8 +1362,7 @@ mod dated_rate_tests {
                 .contains("§ 10 Abs. 3 Satz 2 Nr. 4/Nr. 5 BEHG")
         );
 
-        let korridor = cfg(serde_json::json!({
-            "behg_regime": "korridor",
+        let korridor = cfg_korridor(serde_json::json!({
             "behg_eur_per_t": [row("2027-01-01", "2027-03-31", "70")]
         }));
         assert!(korridor.validate().is_err(), "70 EUR/t is outside 55–65");
@@ -1221,8 +1374,7 @@ mod dated_rate_tests {
                 .is_err()
         );
 
-        let ok = cfg(serde_json::json!({
-            "behg_regime": "korridor",
+        let ok = cfg_korridor(serde_json::json!({
             "behg_eur_per_t": [row("2027-01-01", "2027-12-31", "60")]
         }));
         ok.validate().expect("60 lies inside the corridor");

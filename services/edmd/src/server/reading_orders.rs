@@ -103,11 +103,7 @@ pub(crate) async fn create_reading_order(
     Json(req): Json<CreateReadingOrderRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "write-reading-order", &state.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     // Refused, not defaulted: the Sparte decides the unit of the Zählerstand
@@ -118,14 +114,11 @@ pub(crate) async fn create_reading_order(
         Some(raw) => match crate::domain::parse_sparte(raw) {
             Some(s) => s,
             None => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": format!("unknown sparte `{raw}`"),
-                        "expected": crate::domain::Sparte::CODES,
-                    })),
+                return ApiError::unprocessable_with(
+                    format!("unknown sparte `{raw}`"),
+                    serde_json::json!({ "expected": crate::domain::Sparte::CODES }),
                 )
-                    .into_response();
+                .into_response();
             }
         },
     };
@@ -160,7 +153,7 @@ pub(crate) async fn create_reading_order(
             Json(serde_json::json!({ "id": id, "status": "OFFEN" })),
         )
             .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -172,11 +165,7 @@ pub(crate) async fn list_reading_orders(
     Query(q): Query<ListReadingOrdersQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-reading-order", &state.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let rows = sqlx::query_as::<_, ReadingOrderRow>(
@@ -202,7 +191,7 @@ pub(crate) async fn list_reading_orders(
 
     match rows {
         Ok(r) => Json(r).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -214,11 +203,7 @@ pub(crate) async fn get_reading_order(
     Path(id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-reading-order", &state.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let row = sqlx::query_as::<_, ReadingOrderRow>(
@@ -236,7 +221,7 @@ pub(crate) async fn get_reading_order(
     match row {
         Ok(Some(r)) => Json(r).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -263,11 +248,7 @@ pub(crate) async fn complete_reading_order(
     use sqlx::Row as _;
 
     if let Err(e) = enforcer.check(&claims.principal(), "write-reading-order", &state.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     // The instant the register *held* the value, not the instant it was typed
@@ -301,7 +282,7 @@ pub(crate) async fn complete_reading_order(
     let row = match res {
         Ok(Some(row)) => row,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let malo_id: String = row.try_get("malo_id").unwrap_or_default();
@@ -325,18 +306,13 @@ pub(crate) async fn complete_reading_order(
         _ => (req.zaehlerstand_kwh, req.zaehlerstand_qm3.is_some()),
     };
     if mismatched {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!(
-                    "the order is for {}, whose register counts {} — the other \
+        return ApiError::unprocessable(format!(
+            "the order is for {}, whose register counts {} — the other \
                      Zählerstand field belongs to a different commodity",
-                    sparte.as_str(),
-                    sparte.measured_unit().as_str(),
-                ),
-            })),
-        )
-            .into_response();
+            sparte.as_str(),
+            sparte.measured_unit().as_str(),
+        ))
+        .into_response();
     }
 
     // A Zählerstand is filed against a register of a meter, and the
@@ -355,19 +331,16 @@ pub(crate) async fn complete_reading_order(
         .flatten()
         .collect();
         if !missing.is_empty() {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": format!(
-                        "the order names no {} , so its Zählerstand cannot be filed: a reading \
+            return ApiError::unprocessable_with(
+                format!(
+                    "the order names no {} , so its Zählerstand cannot be filed: a reading \
                          belongs to one register of one meter, and stored without them a second \
                          meter's reading would overwrite the first",
-                        missing.join(" and no ")
-                    ),
-                    "missing": missing,
-                })),
+                    missing.join(" and no ")
+                ),
+                serde_json::json!({ "missing": missing }),
             )
-                .into_response();
+            .into_response();
         }
     }
 
@@ -401,15 +374,7 @@ pub(crate) async fn complete_reading_order(
                 order = %id, malo_id = %malo_id, error = %e,
                 "edmd: reading order completed but its Zählerstand could not be filed"
             );
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": e.to_string(),
-                    "status": "AUSGEFUEHRT",
-                    "zaehlerstand_filed": false,
-                })),
-            )
-                .into_response();
+            return ApiError::internal(e).into_response();
         }
     }
 
@@ -424,11 +389,7 @@ pub(crate) async fn cancel_reading_order(
     Path(id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "write-reading-order", &state.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let res = sqlx::query(
@@ -443,7 +404,7 @@ pub(crate) async fn cancel_reading_order(
     match res {
         Ok(r) if r.rows_affected() == 0 => StatusCode::NOT_FOUND.into_response(),
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -486,22 +447,15 @@ pub(crate) async fn fail_reading_order(
     Json(req): Json<FailReadingOrderRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "write-reading-order", &state.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     if !ABLESEHINDERNIS_GRUENDE.contains(&req.grund.as_str()) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!("unknown Ablesehindernis `{}`", req.grund),
-                "expected": ABLESEHINDERNIS_GRUENDE,
-            })),
+        return ApiError::unprocessable_with(
+            format!("unknown Ablesehindernis `{}`", req.grund),
+            serde_json::json!({ "expected": ABLESEHINDERNIS_GRUENDE }),
         )
-            .into_response();
+        .into_response();
     }
 
     let row = sqlx::query(
@@ -523,7 +477,7 @@ pub(crate) async fn fail_reading_order(
     let row = match row {
         Ok(Some(r)) => r,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     use sqlx::Row as _;

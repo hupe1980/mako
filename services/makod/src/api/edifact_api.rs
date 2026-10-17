@@ -529,11 +529,6 @@ pub(crate) fn unroutable_rejection(
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
-#[derive(Serialize)]
-struct ApiError {
-    error: &'static str,
-}
-
 /// Bearer-token authentication middleware.
 ///
 /// All routes require `Authorization: Bearer <token>`. The token is verified
@@ -545,15 +540,7 @@ async fn require_bearer_auth(
 ) -> Response {
     let identity = match state.cedar.authenticate(request.headers()) {
         Some(id) => id,
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(ApiError {
-                    error: "invalid or missing bearer token",
-                }),
-            )
-                .into_response();
-        }
+        None => return mako_service::ApiError::Unauthorized.into_response(),
     };
 
     // Authorization for EDIFACT ingest uses the instance tenant.
@@ -563,7 +550,8 @@ async fn require_bearer_auth(
             tenant: &state.tenant_id.to_string(),
         },
     ) {
-        return (StatusCode::FORBIDDEN, Json(ApiError { error: "forbidden" })).into_response();
+        return mako_service::ApiError::forbidden("EDIFACT ingest permission denied")
+            .into_response();
     }
 
     next.run(request).await
@@ -678,9 +666,12 @@ fn is_edifact_content_type(ct: &str) -> bool {
     tag = "edifact",
     request_body(content = String, description = "Raw EDIFACT interchange (UNA+UNB…UNZ)", content_type = "application/edifact"),
     responses(
-        (status = 200, description = "Ingest report", body = IngestResponse),
+        (status = 200, description = "Ingest report: at least one message accepted", body = IngestResponse),
+        (status = 400, description = "Empty body"),
         (status = 401, description = "Missing or invalid bearer token"),
         (status = 415, description = "Unsupported content type"),
+        (status = 422, description = "Ingest report: no message accepted", body = IngestResponse),
+        (status = 500, description = "A refusal's dead letter could not be written; resubmit"),
     ),
     security(
         (),
@@ -691,17 +682,53 @@ pub(crate) async fn ingest_edifact(
     State(state): State<Arc<EdifactApiState>>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
-) -> (StatusCode, Json<IngestResponse>) {
+) -> axum::response::Response {
     let mut unrecorded = None;
-    let (status, report) = ingest_report(&state, &headers, &body, &mut unrecorded).await;
+    let answer = ingest_report(&state, &headers, &body, &mut unrecorded).await;
     // A refusal whose dead letter could not be written has no record, so the
     // caller is told the request failed and resubmits it.
-    match unrecorded {
-        Some(e) => {
-            tracing::error!(error = %e, "EDIFACT REST ingest: a dead letter could not be written");
-            (StatusCode::INTERNAL_SERVER_ERROR, report)
+    if let Some(e) = unrecorded {
+        return mako_service::ApiError::internal(
+            anyhow::Error::new(e)
+                .context("EDIFACT REST ingest: a dead letter could not be written"),
+        )
+        .into_response();
+    }
+    match answer {
+        Ok(report) => report.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// The report answers with the status its own counts decide: `200` while any
+/// message was accepted, `422` when none was. A rejected message is still
+/// reported message by message, so the body is the report either way.
+impl IntoResponse for IngestResponse {
+    fn into_response(self) -> axum::response::Response {
+        let status = if self.accepted == 0 {
+            StatusCode::UNPROCESSABLE_ENTITY
+        } else {
+            StatusCode::OK
+        };
+        (status, Json(self)).into_response()
+    }
+}
+
+/// What the ingest door answers.
+enum Answer {
+    /// A BDEW interchange's report, answered with the status its counts decide.
+    Report(IngestResponse),
+    /// A DVGW interchange's report, answered `200` whatever its counts: the
+    /// DVGW door states its rejections per message and takes the interchange.
+    Dvgw(IngestResponse),
+}
+
+impl IntoResponse for Answer {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            Self::Report(r) => r.into_response(),
+            Self::Dvgw(r) => Json(r).into_response(),
         }
-        None => (status, report),
     }
 }
 
@@ -723,7 +750,7 @@ async fn ingest_report(
     headers: &axum::http::HeaderMap,
     body: &axum::body::Bytes,
     unrecorded: &mut Option<mako_engine::error::EngineError>,
-) -> (StatusCode, Json<IngestResponse>) {
+) -> Result<Answer, mako_service::ApiError> {
     // The ÜZ of every message in the body: arrival-anchored Fristen run from
     // the request, not from when each message reaches its dispatch arm.
     let received_at = time::OffsetDateTime::now_utc();
@@ -733,36 +760,16 @@ async fn ingest_report(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if !content_type.is_empty() && !is_edifact_content_type(content_type) {
-        return (
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            Json(IngestResponse {
-                accepted: 0,
-                rejected: 0,
-                messages: vec![MessageResult {
-                    message_type: None,
-                    pid: None,
-                    workflow: None,
-                    status: MessageStatus::ParseError,
-                    process_id: None,
-                    malo_id: None,
-                    error: Some(format!(
-                        "unsupported Content-Type '{content_type}'; \
-                         expected 'application/edifact' or 'text/plain'"
-                    )),
-                }],
-            }),
-        );
+        return Err(mako_service::ApiError::UnsupportedMediaType(format!(
+            "unsupported Content-Type '{content_type}'; \
+             expected 'application/edifact' or 'text/plain'"
+        )));
     }
 
     if body.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(IngestResponse {
-                accepted: 0,
-                rejected: 0,
-                messages: vec![],
-            }),
-        );
+        return Err(mako_service::ApiError::bad_request(
+            "the body is empty; send an EDIFACT interchange",
+        ));
     }
 
     // ── DVGW gas transport ──────────────────────────────────────────────────
@@ -845,14 +852,11 @@ async fn ingest_report(
             }
         }
 
-        return (
-            StatusCode::OK,
-            Json(IngestResponse {
-                accepted: report.accepted(),
-                rejected: report.rejected(),
-                messages,
-            }),
-        );
+        return Ok(Answer::Dvgw(IngestResponse {
+            accepted: report.accepted(),
+            rejected: report.rejected(),
+            messages,
+        }));
     }
 
     let mut messages = Vec::new();
@@ -899,22 +903,19 @@ async fn ingest_report(
             {
                 *unrecorded = Some(e);
             }
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(IngestResponse {
-                    accepted: 0,
-                    rejected: 1,
-                    messages: vec![MessageResult {
-                        message_type: None,
-                        pid: None,
-                        workflow: None,
-                        status: MessageStatus::ParseError,
-                        process_id: None,
-                        malo_id: None,
-                        error: Some(e.to_string()),
-                    }],
-                }),
-            );
+            return Ok(Answer::Report(IngestResponse {
+                accepted: 0,
+                rejected: 1,
+                messages: vec![MessageResult {
+                    message_type: None,
+                    pid: None,
+                    workflow: None,
+                    status: MessageStatus::ParseError,
+                    process_id: None,
+                    malo_id: None,
+                    error: Some(e.to_string()),
+                }],
+            }));
         }
     };
 
@@ -968,26 +969,23 @@ async fn ingest_report(
             )
             .await;
         }
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(IngestResponse {
-                accepted: 0,
-                rejected: 1,
-                messages: vec![MessageResult {
-                    message_type: None,
-                    pid: None,
-                    workflow: None,
-                    status: MessageStatus::ParseError,
-                    process_id: None,
-                    malo_id: None,
-                    error: Some(
-                        "test interchange rejected (UNB DE0035=1): \
-                         test messages must not reach a production endpoint"
-                            .to_owned(),
-                    ),
-                }],
-            }),
-        );
+        return Ok(Answer::Report(IngestResponse {
+            accepted: 0,
+            rejected: 1,
+            messages: vec![MessageResult {
+                message_type: None,
+                pid: None,
+                workflow: None,
+                status: MessageStatus::ParseError,
+                process_id: None,
+                malo_id: None,
+                error: Some(
+                    "test interchange rejected (UNB DE0035=1): \
+                     test messages must not reach a production endpoint"
+                        .to_owned(),
+                ),
+            }],
+        }));
     }
 
     // The UNB DE0010 recipient MP-ID drives commodity-aware routing of
@@ -1210,20 +1208,11 @@ async fn ingest_report(
     let accepted = messages.iter().filter(|m| !m.status.is_rejected()).count();
     let rejected = messages.len() - accepted;
 
-    let http_status = if messages.is_empty() || accepted == 0 {
-        StatusCode::UNPROCESSABLE_ENTITY
-    } else {
-        StatusCode::OK
-    };
-
-    (
-        http_status,
-        Json(IngestResponse {
-            accepted,
-            rejected,
-            messages,
-        }),
-    )
+    Ok(Answer::Report(IngestResponse {
+        accepted,
+        rejected,
+        messages,
+    }))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

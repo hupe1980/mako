@@ -4,6 +4,7 @@
 
 pub mod config;
 pub mod consent_lifecycle;
+pub mod daemon;
 pub mod fanout;
 pub mod handlers;
 pub mod mcp_server;

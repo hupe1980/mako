@@ -44,7 +44,7 @@ pub type SrRepoExt = Arc<PgSteuerbareRessourceRepository>;
 /// wire value to `Unknown`, which would reach `zaehler.zaehler_typ` as the
 /// literal `"UNKNOWN"` — a value the column's `CHECK` refuses, turning a
 /// caller's typo into a 500 at the database instead of a 422 naming the field.
-fn validate_typed<T>(data: serde_json::Value) -> Result<T, (StatusCode, serde_json::Value)>
+fn validate_typed<T>(data: serde_json::Value) -> mako_service::ApiResult<T>
 where
     T: serde::de::DeserializeOwned
         + mako_markt::bo4e::Bo4eTyped
@@ -53,7 +53,7 @@ where
         + rubo4e::json::Bo4eJsonExt
         + rubo4e::prelude::Validate<Context = ()>,
 {
-    mako_markt::bo4e::decode(data).map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))
+    mako_markt::bo4e::decode(data).map_err(|e| super::bo4e_refusal(&e))
 }
 
 pub type DeviceRepoExt = Arc<PgDeviceRepository>;
@@ -161,17 +161,13 @@ pub async fn get_steuerbare_ressource(
         .check(&claims.principal(), "read-sr", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     match repo.find_sr(&sr_id, &tenant).await {
         Ok(Some(rec)) => Json(serde_json::to_value(rec).unwrap_or_default()).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            format!("SteuerbareRessource {sr_id} not found"),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -188,14 +184,14 @@ pub async fn put_steuerbare_ressource(
         .check(&claims.principal(), "write-sr", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     // The BO4E gate. An empty object `{}` is valid — every BO4E field is
     // optional — but a payload naming another BO is not.
     let typed_sr: SteuerbareRessource = match validate_typed(req.data) {
         Ok(v) => v,
-        Err((status, body)) => return (status, Json(body)).into_response(),
+        Err(e) => return e.into_response(),
     };
     // Derived from the document, not taken beside it. `makod` reads this column
     // before confirming a `wim.steuerungsauftrag`, and an uncontracted
@@ -205,20 +201,12 @@ pub async fn put_steuerbare_ressource(
         None => None,
         Some(kp) => match serde_json::to_value(kp) {
             Ok(v) => Some(v),
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({
-                        "error": format!("could not serialise konfigurationsprodukte: {e}")
-                    })),
-                )
-                    .into_response();
-            }
+            Err(e) => return ApiError::internal(e).into_response(),
         },
     };
     let data = match super::serialise_or_500(&typed_sr) {
         Ok(v) => v,
-        Err((status, body)) => return (status, Json(body)).into_response(),
+        Err(e) => return e.into_response(),
     };
 
     match repo
@@ -234,7 +222,7 @@ pub async fn put_steuerbare_ressource(
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -272,7 +260,7 @@ pub async fn get_konfigurationsprodukte(
         .check(&claims.principal(), "read-sr", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     match repo.find_sr(&sr_id, &tenant).await {
@@ -305,12 +293,8 @@ pub async fn get_konfigurationsprodukte(
             }))
             .into_response()
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            format!("SteuerbareRessource {sr_id} not found"),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -353,17 +337,14 @@ pub async fn put_konfigurationsprodukte(
         .check(&claims.principal(), "write-sr", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     // Body must be a JSON array of Konfigurationsprodukt objects.
     let arr = match body.as_array() {
         Some(a) => a.clone(),
         None => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": "body must be a JSON array of Konfigurationsprodukt" })),
-            )
+            return ApiError::unprocessable("body must be a JSON array of Konfigurationsprodukt")
                 .into_response();
         }
     };
@@ -376,30 +357,23 @@ pub async fn put_konfigurationsprodukte(
         let kp = match serde_json::from_value::<Konfigurationsprodukt>(item.clone()) {
             Ok(k) => k,
             Err(e) => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": format!("element [{}] is not a valid Konfigurationsprodukt: {}", i, e)
-                    })),
-                )
-                    .into_response();
+                return ApiError::unprocessable(format!(
+                    "element [{}] is not a valid Konfigurationsprodukt: {}",
+                    i, e
+                ))
+                .into_response();
             }
         };
         // BK6-24-174 §4.3: produktcode is mandatory — every contracted product
         // must be uniquely identifiable by its code.
         match kp.produktcode.as_deref() {
             None | Some("") => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": format!(
-                            "element [{}]: 'produktcode' is mandatory per BK6-24-174 §4.3 \
+                return ApiError::unprocessable(format!(
+                    "element [{}]: 'produktcode' is mandatory per BK6-24-174 §4.3 \
                              — every Konfigurationsprodukt must carry a non-empty produktcode",
-                            i
-                        )
-                    })),
-                )
-                    .into_response();
+                    i
+                ))
+                .into_response();
             }
             _ => {}
         }
@@ -413,7 +387,7 @@ pub async fn put_konfigurationsprodukte(
         // not happen.
         match super::serialise_or_500(&kp) {
             Ok(v) => validated.push(v),
-            Err((status, body)) => return (status, Json(body)).into_response(),
+            Err(e) => return e.into_response(),
         }
     }
 
@@ -439,12 +413,8 @@ pub async fn put_konfigurationsprodukte(
             }
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            format!("SteuerbareRessource {sr_id} not found"),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(false) => ApiError::NotFound.into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -473,19 +443,15 @@ pub async fn delete_konfigurationsprodukt(
         .check(&claims.principal(), "write-sr", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     let rec = match repo.find_sr(&sr_id, &tenant).await {
         Ok(Some(r)) => r,
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                format!("SteuerbareRessource {sr_id} not found"),
-            )
-                .into_response();
+            return ApiError::NotFound.into_response();
         }
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     // Filter out the matching produktcode from the existing list.
@@ -526,7 +492,7 @@ pub async fn delete_konfigurationsprodukt(
             }
             StatusCode::NO_CONTENT.into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -542,7 +508,7 @@ pub async fn list_zaehler(
         .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     match repo.list_zaehler_by_melo(&melo_id, &tenant).await {
@@ -572,7 +538,7 @@ pub async fn list_zaehler(
                 .collect();
             Json(responses).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -589,13 +555,13 @@ pub async fn put_zaehler(
         .check(&claims.principal(), "write-device", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     // The gate injects `_typ` itself, and refuses a payload that names another BO.
     let zaehler = match validate_typed::<Zaehler>(req.data) {
         Ok(v) => v,
-        Err((status, body)) => return (status, Json(body)).into_response(),
+        Err(e) => return e.into_response(),
     };
 
     match repo
@@ -609,7 +575,7 @@ pub async fn put_zaehler(
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -635,13 +601,13 @@ pub async fn get_zaehlwerke(
         .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     let zaehler = match repo.find_zaehler(&zaehler_id, &tenant).await {
         Ok(Some(z)) => z,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     // Extract zaehlwerke array from BO4E Zaehler JSONB payload.
@@ -682,7 +648,7 @@ pub async fn list_geraete(
         .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     match repo.list_geraete_by_zaehler(&zaehler_id, &tenant).await {
@@ -712,7 +678,7 @@ pub async fn list_geraete(
                 .collect();
             Json(responses).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -729,13 +695,13 @@ pub async fn put_geraet(
         .check(&claims.principal(), "write-device", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     // The gate injects `_typ` itself, and refuses a payload that names another BO.
     let geraet = match validate_typed::<Geraet>(req.data) {
         Ok(v) => v,
-        Err((status, body)) => return (status, Json(body)).into_response(),
+        Err(e) => return e.into_response(),
     };
 
     match repo
@@ -749,7 +715,7 @@ pub async fn put_geraet(
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -819,7 +785,7 @@ pub async fn get_geraet(
         .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     match repo.find_geraet(&geraet_id, &tenant).await {
@@ -828,11 +794,7 @@ pub async fn get_geraet(
                 Ok(g) => g,
                 Err(e) => {
                     tracing::warn!(geraet_id, error = %e, "schema drift: stored Geraet cannot be deserialised");
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "schema drift — re-PUT to fix",
-                    )
-                        .into_response();
+                    return ApiError::internal(e).into_response();
                 }
             };
             Json(GeraetResponse {
@@ -846,12 +808,8 @@ pub async fn get_geraet(
             })
             .into_response()
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            format!("Geraet {geraet_id} not found"),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -880,17 +838,13 @@ pub async fn get_geraet_konfigurationen(
         .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     match repo.find_geraet(&geraet_id, &tenant).await {
         Ok(Some(r)) => Json(r.konfigurationen).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            format!("Geraet {geraet_id} not found"),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -926,7 +880,7 @@ pub async fn put_geraet_konfigurationen(
         .check(&claims.principal(), "write-device", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     // ── Deduplication: last occurrence of each parameter wins. ────────────────
@@ -978,12 +932,8 @@ pub async fn put_geraet_konfigurationen(
             }
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            format!("Geraet {geraet_id} not found"),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(false) => ApiError::NotFound.into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1036,7 +986,7 @@ pub async fn put_technische_ressource(
         .check(&claims.principal(), "write-device", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     // No hand-written whitelist for `nutzung` / `verbrauchsart`: they are the
@@ -1048,7 +998,7 @@ pub async fn put_technische_ressource(
     // The gate also supplies every queryable column below.
     let typed_tr: TechnischeRessource = match validate_typed(req.data) {
         Ok(v) => v,
-        Err((status, body)) => return (status, Json(body)).into_response(),
+        Err(e) => return e.into_response(),
     };
     // Every queryable column, derived from the one object the gate validated.
     let ist_fernschaltbar = typed_tr.ist_fernschaltbar;
@@ -1061,7 +1011,7 @@ pub async fn put_technische_ressource(
     // the typed columns derived above come from one object.
     let data = match super::serialise_or_500(&typed_tr) {
         Ok(v) => v,
-        Err((status, body)) => return (status, Json(body)).into_response(),
+        Err(e) => return e.into_response(),
     };
 
     match repo
@@ -1079,7 +1029,7 @@ pub async fn put_technische_ressource(
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1106,13 +1056,13 @@ pub async fn get_technische_ressource(
         .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     match repo.find_tr(&tr_id, &tenant).await {
         Ok(Some(record)) => Json(record).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1138,12 +1088,12 @@ pub async fn list_technische_ressourcen_by_malo(
         .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     match repo.list_tr_by_malo(&malo_id, &tenant).await {
         Ok(records) => Json(records).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1171,7 +1121,7 @@ pub async fn put_zaehler_register(
         .check(&claims.principal(), "write-device", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
     rec.zaehler_id = zaehler_id;
     rec.tenant = tenant;
@@ -1180,7 +1130,7 @@ pub async fn put_zaehler_register(
     }
     match repo.upsert_register(&rec).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => ApiError::unprocessable(e.to_string()).into_response(),
     }
 }
 
@@ -1199,11 +1149,11 @@ pub async fn list_zaehler_register(
         .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
     match repo.list_registers_by_zaehler(&zaehler_id, &tenant).await {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1223,7 +1173,7 @@ pub async fn put_zaehler_saison(
         .check(&claims.principal(), "write-device", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
     rec.register_id = register_id;
     if rec.id == uuid::Uuid::nil() {
@@ -1231,7 +1181,7 @@ pub async fn put_zaehler_saison(
     }
     match repo.upsert_saison(&rec).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => ApiError::unprocessable(e.to_string()).into_response(),
     }
 }
 
@@ -1249,11 +1199,11 @@ pub async fn list_zaehler_saisons(
         .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
     match repo.list_saisons_by_register(register_id, &tenant).await {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1320,13 +1270,13 @@ pub async fn get_zaehlzeitdefinitionen(
         .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     // ── 1. Fetch all registers for this Zähler ────────────────────────────────
     let registers = match repo.list_registers_by_zaehler(&zaehler_id, &tenant).await {
         Ok(r) => r,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     // Optionally filter to currently valid registers only.
@@ -1360,7 +1310,7 @@ pub async fn get_zaehlzeitdefinitionen(
     for reg in &registers {
         let saisons = match repo.list_saisons_by_register(reg.id, &tenant).await {
             Ok(s) => s,
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Err(e) => return ApiError::internal(e).into_response(),
         };
         for saison in saisons {
             // Normalize wochentage to a sorted fingerprint for grouping.

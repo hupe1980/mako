@@ -2,8 +2,8 @@
 //!
 //! A domain crate becomes part of the platform in two places that never meet.
 //! It implements `mako_engine::builder::EngineModule`, which declares the
-//! Prüfidentifikatoren it routes and the workflows it owns; and
-//! `makod::startup::production_modules()` pushes it into the engine. The impl
+//! Prüfidentifikatoren it routes and the workflows it owns; and a row of
+//! `makod::startup::MODULE_TABLE` registers it with the engine. The impl
 //! is what makes the module *possible*; the push is what makes it *run*.
 //!
 //! Every other module-level check in this suite enumerates
@@ -18,9 +18,9 @@
 //! crate's `lib.rs` is the declaration; the `<Type>` must be named in
 //! `services/makod/src/startup/mod.rs`.
 //!
-//! The `#[cfg(feature = "role-…")]` gate above each push is not read: a module
-//! wired for one role is wired, and which builds select it is the roles'
-//! question, not this one's.
+//! The roles a `MODULE_TABLE` row names are not read: a module wired for one
+//! role is wired, and which deployments register it is the roles' question,
+//! pinned by `startup_smoke::each_role_registers_its_module_set`.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

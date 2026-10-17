@@ -16,16 +16,13 @@
 #   processd:    postgres://dev:dev@localhost:5432/processd
 #   invoicd:     postgres://dev:dev@localhost:5432/invoicd
 #   edmd:        postgres://dev:dev@localhost:5432/edmd?sslmode=disable
-#   obsd:        postgres://dev:dev@localhost:5432/obsd
 #   netzbilanzd: postgres://dev:dev@localhost:5432/netzbilanzd
-#   sperrd:      postgres://dev:dev@localhost:5432/sperrd
 #   einsd:       postgres://dev:dev@localhost:5432/einsd
 #   accountingd: postgres://dev:dev@localhost:5432/accountingd
 #   billingd:    postgres://dev:dev@localhost:5432/billingd
 #   outputd:     postgres://dev:dev@localhost:5432/outputd
 #   productd:    postgres://dev:dev@localhost:5432/productd
 #   vertragd:    postgres://dev:dev@localhost:5432/vertragd
-#   mabis-syncd: postgres://dev:dev@localhost:5432/mabis_syncd
 #   agentd:      postgres://dev:dev@localhost:5432/agentd
 
 services:

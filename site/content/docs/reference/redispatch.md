@@ -396,8 +396,8 @@ Each workflow has its own event type (`VerfuegbarkeitEvent`,
 `RedispatchModule` implements `mako_engine::builder::EngineModule` and is the
 single registration point for all Redispatch 2.0 handling in `makod`.
 
-`makod::startup::production_modules` includes it behind the `role-nb-strom`
-feature (part of the default set). The module contributes:
+`makod::startup::MODULE_TABLE` registers it for `[deployment] rollen`
+`nb-strom`. The module contributes:
 
 1. `build_router()` — all 8 workflows into a `RedispatchRouter` (XML
    document-type routing);

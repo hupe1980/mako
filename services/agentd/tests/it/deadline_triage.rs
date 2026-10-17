@@ -9,7 +9,7 @@
 //! specialist whose whole job is *a regulatory window has closed* was the one
 //! that told no one it had.
 //!
-//! This suite runs it on the production wiring with an overdue row from obsd and
+//! This suite runs it on the production wiring with an overdue row from processd and
 //! asserts the row lands: on the right worklist, at the right priority, with the
 //! window bounded by an obligation the calendar resolved, and widening rather
 //! than expiring when nobody answers.
@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use agentplane::core::{OnExpiry, Priority, TaskState};
+use agentplane::core::{OnExpiry, Priority, TaskState, Trust};
 use agentplane::store::RedbStore;
 use agentplane::tools::{ToolClient, ToolError, ToolId};
 use serde_json::{Value, json};
@@ -44,17 +44,17 @@ fn ce<'a>(id: &'a str) -> Envelope<'a> {
     }
 }
 
-/// obsd's overdue list, with a deadline placed relative to now.
+/// processd's overdue list, with a deadline placed relative to now.
 ///
 /// A fixture with a literal timestamp would classify differently depending on
 /// the day the suite runs — which is the one thing a severity test must not do.
 #[derive(Debug)]
-struct ObsdWith {
+struct ProcessdWith {
     offset_secs: i64,
 }
 
 #[async_trait::async_trait]
-impl ToolClient for ObsdWith {
+impl ToolClient for ProcessdWith {
     /// A stub opens no connection, so the allowlist has no host to judge.
     fn destination(&self, _tool: &ToolId) -> agentplane::tools::Destination {
         agentplane::tools::Destination::Local
@@ -81,8 +81,8 @@ impl ToolClient for ObsdWith {
     }
 }
 
-/// The production wiring, with obsd substituted and no model at all.
-fn plane(obsd: Arc<ObsdWith>) -> Plane {
+/// The production wiring, with processd substituted and no model at all.
+fn plane(processd: Arc<ProcessdWith>) -> Plane {
     let tenant = agentplane::core::TenantId::new("9900357000004").expect("a usable key scope");
     let policy = agentd::plane::policy::engine(agentd::plane::policy::DEFAULT_POLICY)
         .expect("the embedded policy set compiles");
@@ -99,7 +99,7 @@ fn plane(obsd: Arc<ObsdWith>) -> Plane {
             // A specialist that asks no model needs no provider, and wiring one
             // would hide a regression where it started asking.
             providers: Vec::new(),
-            tool_servers: vec![("obsd".to_owned(), obsd as Arc<dyn ToolClient>)],
+            tool_servers: vec![("processd".to_owned(), processd as Arc<dyn ToolClient>)],
             policy,
             keyring: None,
         },
@@ -107,7 +107,7 @@ fn plane(obsd: Arc<ObsdWith>) -> Plane {
     .expect("the plane assembles")
 }
 
-/// The event obsd's warning carries: a process and the instant it is due.
+/// The event processd's warning carries: a process and the instant it is due.
 fn event(offset_secs: i64) -> Value {
     let at = OffsetDateTime::now_utc() + time::Duration::seconds(offset_secs);
     json!({
@@ -133,8 +133,8 @@ async fn worklist(plane: &Plane, roles: &[&str]) -> Vec<agentplane::core::Task> 
 /// decision left to gate and suspending a run per breach would buy nothing.
 #[tokio::test]
 async fn a_breach_opens_a_worklist_row_and_does_not_suspend_the_run() {
-    // Ninety minutes past due: BREACH on both the event and obsd's row.
-    let plane = plane(Arc::new(ObsdWith {
+    // Ninety minutes past due: BREACH on both the event and processd's row.
+    let plane = plane(Arc::new(ProcessdWith {
         offset_secs: -90 * 60,
     }));
 
@@ -181,9 +181,20 @@ async fn a_breach_opens_a_worklist_row_and_does_not_suspend_the_run() {
          window rather than an open-ended item"
     );
     assert!(
-        task.justification.summary.contains("past their Frist"),
+        task.justification
+            .summary
+            .peek()
+            .contains("past their Frist"),
         "a reviewer must be able to act on the row without opening the journal: {}",
-        task.justification.summary
+        task.justification.summary.peek()
+    );
+    // The sentence is agentd's own — counts it computed, no tool or model text —
+    // so the worklist must show it as the runtime's note, not as prose a
+    // counterparty could have written.
+    assert_eq!(
+        task.justification.summary.label().trust,
+        Trust::Trusted,
+        "the triage summary is the skill's own sentence and must carry a trusted label"
     );
 }
 
@@ -195,7 +206,7 @@ async fn a_breach_opens_a_worklist_row_and_does_not_suspend_the_run() {
 #[tokio::test]
 async fn an_approaching_deadline_opens_no_row() {
     // Six hours out: COMPLIANT on both rows.
-    let plane = plane(Arc::new(ObsdWith {
+    let plane = plane(Arc::new(ProcessdWith {
         offset_secs: 6 * 60 * 60,
     }));
 
@@ -215,7 +226,7 @@ async fn an_approaching_deadline_opens_no_row() {
 /// instead of the original desk.
 #[tokio::test]
 async fn the_escalation_audience_is_a_widening_not_a_reassignment() {
-    let plane = plane(Arc::new(ObsdWith {
+    let plane = plane(Arc::new(ProcessdWith {
         offset_secs: -90 * 60,
     }));
     plane

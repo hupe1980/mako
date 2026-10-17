@@ -1,14 +1,16 @@
 +++
 title = "netzbilanzd Operator Guide"
-description = "Operator guide for netzbilanzd, the NB billing daemon: Netznutzungsentgelt, Konzessionsabgabe and Mehr-/Mindermengen settlement into INVOIC drafts."
+description = "Operator guide for netzbilanzd, the NB billing daemon: Netznutzungsentgelt, Konzessionsabgabe and Mehr-/Mindermengen settlement into INVOIC drafts, and the MaBiS Summenzeitreihen filed with the BIKO."
 weight = 25
 +++
 `netzbilanzd` settles, checks and dispatches every invoice a network operator owes its
-counterparties, and carries the Redispatch 2.0 cost sheets.
+counterparties, carries the Redispatch 2.0 cost sheets, and files the MaBiS Summenzeitreihen
+(MSCONS 13003) with the BIKO.
 
-**Port:** `:8680` · **Role:** NB / GNB (and MSB for PID 31009) ·
+**Port:** `:8680` · **Role:** NB / GNB (and MSB for PID 31009; NB / ÜNB for MaBiS) ·
 **Storage:** PostgreSQL — `invoice_drafts`, `invoice_number_seq`, `abschlag_verrechnungen`,
-`kostenblatt_records`, `fremdkosten_records`
+`kostenblatt_records`, `fremdkosten_records`, `submission_runs`, `submission_series`,
+`submission_malo_log`, `pruefmitteilung`
 
 1. TOC
 {:toc}
@@ -72,7 +74,7 @@ graph LR
     ERP -->|settle · dispatch · correct| nd
     nd -->|MMM prices · Lastprofil| marktd
     nd -->|imbalance · Lastgang| edmd
-    nd -->|INVOIC| makod
+    nd -->|INVOIC · MSCONS 13003| makod
     nd -.->|CloudEvents via outbox| ERP
     nd -.->|CloudEvents| agent
 ```
@@ -648,6 +650,236 @@ Every JSON request body here rejects unknown fields; query strings are not stric
 
 ---
 
+## MaBiS Summenzeitreihen
+
+**MaBiS** settles electricity Bilanzkreise after the fact. A **Summenzeitreihe**
+is the monthly ¼-h series a grid operator files for one **Bilanzierungsgebiet**,
+summed from each
+[MaLo](@/docs/architecture/domain-model.md#malo-vs-melo-the-critical-distinction)'s
+Lastgang. `netzbilanzd` files it with the BIKO (Bilanzkoordinator) when its
+configuration carries a `[mabis]` section; without one the `/api/v1/mabis/*`
+routes are not mounted and no submission is scheduled. Metering comes from
+[`edmd`](@/docs/services/edmd.md), master data from
+[`marktd`](@/docs/services/marktd.md), and the message leaves through
+[`makod`](@/docs/services/makod.md). Strom only — Gas balances under GaBi Gas.
+
+A Summenzeitreihe is an **MSCONS** message, Prüfidentifikator **13003**
+("Übertragung Summenzeitreihe", MSCONS AHB 3.2 §8.3.1). UTILTS carries
+Berechnungsformel and Zählzeit-/Schaltzeitdefinitionen and has no Summenzeitreihe
+use case. Submission goes out through `makod` as
+`mabis.summenzeitreihe.uebermitteln` (Marktrolle `NB`/`ÜNB`), which enqueues the
+MSCONS directly rather than spawning a workflow; the BIKO's Datenstatus (IFTSTA
+21003/21004) and Prüfmitteilung (21000/21001) are recorded here, where the
+version history lives. The wire message carries the identifying 3-tuple as `LOC`
+(MaBiS-Zählpunkt), `DTM+492` (Bilanzierungsmonat, `CCYYMM`) and `DTM+293`
+(Versionsangabe, `CCYYMMDDHHMMSSZZZ`), and one `QTY+220` per settlement slot
+bounded by `DTM+163`/`DTM+164`; how `makod` renders the other MSCONS
+Anwendungsfälle is in its [operator guide](@/docs/services/makod.md).
+
+```mermaid
+flowchart LR
+    edmd["edmd :8380<br/>per-MaLo Lastgang<br/>(¼-h register projection)"]
+    nd["netzbilanzd :8680<br/>mabis module"]
+    makod["makod :8080<br/>MSCONS command API"]
+    biko["BIKO<br/>(Bilanzkoordinator)"]
+
+    subgraph pg["PostgreSQL"]
+        runs["submission_runs · submission_series<br/>submission_malo_log · pruefmitteilung"]
+    end
+
+    edmd -->|"GET /api/v1/energy/{malo_id}?direction=BEZUG"| nd
+    nd -->|"POST /api/v1/commands<br/>mabis.summenzeitreihe.uebermitteln"| makod
+    makod -->|"MSCONS 13003 via AS4"| biko
+    nd --> pg
+
+    sched["Scheduler<br/>(10. Werktag at 05:00 UTC)"] -->|triggers| nd
+    operator["Operator / agentd"] -->|"POST /api/v1/mabis/sync"| nd
+```
+
+### Aggregation is per Bilanzierungsgebiet
+
+MaBiS settles per territory, so a run builds **one Summenzeitreihe per
+Bilanzierungsgebiet** and files one MSCONS per territory. Each MaLo's territory
+comes from `marktd` (`GET /api/v1/malos/{id}` → `bilanzierungsgebiet`). A MaLo
+whose master data names none is excluded and **fails the run** — never folded
+into another zone. `[mabis] bilanzierungsgebiet_id` keys the run itself (the
+`submission_runs` row, the live-run check, the failure event).
+
+The 13003 column of the MSCONS AHB marks `SG6 LOC` with qualifier `172` only: the
+series is filed under its **MaBiS-Zählpunkt**, and the Bilanzierungsgebiet EIC
+selects which Zählpunkt to send. The assignment is `marktd` master data, resolved
+before each submission:
+
+```
+GET /api/v1/bilanzierungsgebiete/{eic}/mabis-zp   → { "mabis_zp_id": "DE0004030099000000000000000012345", ... }
+PUT /api/v1/bilanzierungsgebiete/{eic}/mabis-zp   (NB role, Cedar `write-mabis-zp`)
+GET /api/v1/mabis-zp                             → every assignment for the tenant
+```
+
+Every failure path **refuses**: an unassigned territory (`404`), an unreachable
+`marktd`, a malformed response, or a response echoing the EIC as the Meldepunkt
+aborts the submission. A submission that discovers **no** MaLos fails the run: an
+empty series would settle the territory at zero.
+
+### Aggregation is quarter-hourly
+
+MaBiS settles on a **¼-h grid**, so each Lastgang is read from
+`GET /api/v1/energy/{malo_id}?direction=BEZUG` — `edmd`'s register projection,
+one entry per slot. The BO4E `/api/v1/lastgang` export is not used: on a
+dual-tariff MaLo `1-0:1.8.0` and its `1.8.1`/`1.8.2` decomposition would all be
+summed. Three checks fail the run rather than file a wrong series:
+
+- `SummenzeitreiheBuilder` is constructed with the slot length it expects
+  (`MABIS_SLOT` = 15 min) and returns `SlotResolutionError` for any interval that
+  does not match.
+- `Summenzeitreihe::missing_slot_count()` > 0 — slots no MaLo covered.
+- The Meldepunkt is a validating newtype (`MabisZaehlpunktId`), and
+  `Summenzeitreihe::validate_identifiers()` refuses a Meldepunkt equal to its
+  Bilanzierungsgebiet — `SG6 LOC+172` is free text at the MIG level, and
+  `marktd`'s `mabis_zp_not_the_gebiet` CHECK guards only its own table.
+
+Discovery reads `edmd`'s billing periods — every MaLo with readings in the
+period. It asks for up to 5 000 (`edmd`'s cap) and fails the run on a `truncated`
+(or unstated) answer. Only `sparte` Strom is kept, and only the Bezugsregister
+(OBIS `1.x.y`) contributes. Quality flags map conservatively: anything not
+plainly `ABGELESEN` counts as non-measured.
+
+### Versionierung and Datenstatus
+
+A Summenzeitreihe is identified by **(MaBiS-Zählpunkt, Bilanzierungsmonat,
+Version)**, and §3.8.2 requires only that the version ascend: *"Die Version einer
+Summenzeitreihe ist jeweils aufsteigend zu vergeben und ist über die gesamte BKA
+beizubehalten."* A correction is the same series under a higher version. The
+version is a timestamp (`SG6 DTM+293`, format 304); `BGM 1225` is always `9`.
+
+**Datenstatus** is the separate, inbound axis. It is assigned exclusively by the
+BIKO (§3.8.3: *"Der Datenstatus wird ausschließlich vom BIKO vergeben"*) and
+arrives via IFTSTA `SG7 STS+Z04`:
+
+| Datenstatus | Meaning |
+|---|---|
+| `Prüfdaten` | received, not yet accepted for settlement |
+| `Abrechnungsdaten` | accepted for the ordinary BKA |
+| `Abrechnungsdaten KBKA` | accepted for the Korrekturbilanzkreisabrechnung |
+| `abgerechnete Daten` | settled in the BKA |
+| `abgerechnete Daten KBKA` | settled in the KBKA |
+
+Settlement uses the **highest version carrying `Abrechnungsdaten`** (or
+`Abrechnungsdaten KBKA`). `netzbilanzd` only records what the BIKO sent.
+
+### Fristen (§3.10, Tabelle 2)
+
+Werktage after the end of the Bilanzierungsmonat, measured at **arrival at the
+BIKO**; executable as `mako_mabis::Bilanzierungsmonat`. `netzbilanzd` files a
+**BG-SZR (Kategorie B)**:
+
+| Zeitreihe | BKA Erstaufschlag | BKA Clearing | KBKA |
+|---|---|---|---|
+| **BG-SZR (Kategorie B)** · NZR | **1.–10. WT** | **11.–30. WT** | 31. WT – end of month 7 |
+| BK-SZR (Kategorie A und B) | 1.–**12.** WT | **13.**–30. WT | 31. WT – end of month 7 |
+| DZÜ | — | 31.–34. WT | 1.–8. WT of month 8 |
+
+| Abrechnungsstichtag | BKA | KBKA |
+|---|---|---|
+| Vorläufige Bilanzierung | 18. WT, Datenstand 15. WT | 8. WT of month 5, Datenstand end of month 4 |
+| Abrechnungsrelevante Bilanzierung | 42. WT, Datenstand 30. WT | end of month 8, Datenstand end of month 7 |
+
+The Redispatch-Ausfallarbeit series have their own windows (Kap. 17.3.1.3);
+`netzbilanzd` files none of them.
+
+Within the Erstaufschlag a new version is assigned `Abrechnungsdaten`
+automatically; after it a new version starts as `Prüfdaten` and needs a positive
+Prüfmitteilung (§3.8.3). A BG-SZR filed on the 11. WT is already in the
+Clearingphase, so the scheduler submits on the **10. Werktag** by default, at
+`run_hour_utc`.
+
+**There is no Prüfmitteilung deadline.** §9.8.2 Nr. 1 leaves the Frist cell
+empty — the receiving party „kann" answer — and §13.8.2 defines no answer at
+all; its two rows are the BIKO's own dispatch dates above. What bounds a
+Prüfmitteilung is the clearing window. The two genuine 1-Werktag Fristen are the
+BIKO's: forwarding a Prüfmitteilung (§9.8.2 Nr. 3) and dispatching the
+Datenstatus (§9.9.2 Nr. 1).
+
+### Submission target
+
+`[mabis] submission_target` selects where Summenzeitreihen are filed. One value is
+accepted, `"biko-bilateral"` (the default). `"mabis-hub"` (BK6-24-210) parses
+and then **refuses at startup**: no Beschluss publishes a wire format, endpoint
+or payload shape.
+
+### Routes and run lifecycle
+
+| Route | Cedar action | Purpose |
+|---|---|---|
+| `POST /api/v1/mabis/sync` | `trigger-mabis-run` | trigger an aggregation run; refuses a period with a live run |
+| `GET /api/v1/mabis/runs` · `/runs/{id}` | `read-mabis-run` | recent runs; one run with its per-territory `series` |
+| `PUT /api/v1/mabis/runs/{id}/retry` | `trigger-mabis-run` | retry a failed run (≤ 3 attempts) |
+| `POST /api/v1/mabis/datenstatus` | `record-biko-response` | record the BIKO Datenstatus (IFTSTA 21003/21004) |
+| `POST /api/v1/mabis/pruefmitteilung` | `record-biko-response` | record a Prüfmitteilung (IFTSTA 21000/21001) |
+| `GET /api/v1/mabis/korrekturbedarf` | `read-mabis-run` | negative Prüfmitteilungen not yet corrected (§9.8.1) |
+
+```
+pending ──► submitted ──► acked      (terminal — every territory filed)
+   │            │
+   └────────────┴──► failed          (retry allowed, attempt_count < 3)
+```
+
+A retry carries the original's `corrects_run_id`. One MSCONS goes out per
+Bilanzierungsgebiet, so a run may be **partly filed**: `submission_series`
+records each territory's `message_ref` or failure, a retry skips the acked ones,
+and the run still fails as a whole. A re-filing of a period with a live run is a
+correction under `corrects_run_id`.
+
+The three write bodies are typed. An unknown key, or a value that does not
+parse — a `period_from` that is no ISO-8601 date, an `as_of` that is no RFC 3339
+instant, a `corrects_run_id` that is no UUID — is a `422` naming the field, never
+a default: a dropped `corrects_run_id` would turn a correction into a first
+filing. A Prüfmitteilung requires `sender_mp_id` and a `pid` of `21000` (LF → NB)
+or `21001` (benachbarter NB → NB); anything else is a `422`.
+
+```bash
+# Trigger a submission for May 2026. The version is assigned by the service —
+# it must ascend (§3.8.2) — and the phase follows from the Werktag calendar.
+curl -X POST http://netzbilanzd:8680/api/v1/mabis/sync \
+  -H "Content-Type: application/json" \
+  -d '{ "period_from": "2026-05-01", "period_to": "2026-05-31" }'
+
+# Record the Datenstatus the BIKO assigned (IFTSTA 21003/21004)
+curl -X POST http://netzbilanzd:8680/api/v1/mabis/datenstatus \
+  -H "Content-Type: application/json" \
+  -d '{ "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
+        "period_from": "2026-05-01", "period_to": "2026-05-31",
+        "version": "2026-06-15T05:00:00Z", "datenstatus": "Abrechnungsdaten" }'
+
+# Record a Prüfmitteilung (IFTSTA 21000/21001). A negative one requires a
+# corrected Summenzeitreihe under a higher version.
+curl -X POST http://netzbilanzd:8680/api/v1/mabis/pruefmitteilung \
+  -H "Content-Type: application/json" \
+  -d '{ "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
+        "period_from": "2026-05-01", "period_to": "2026-05-31",
+        "version": "2026-06-15T05:00:00Z", "positiv": false,
+        "sender_mp_id": "9900077000006", "pid": 21000,
+        "begruendung": "Abweichung MaLo 51238696012" }'
+
+# Send the correction, naming the run it corrects
+curl -X POST http://netzbilanzd:8680/api/v1/mabis/sync \
+  -H "Content-Type: application/json" \
+  -d '{ "period_from": "2026-05-01", "period_to": "2026-05-31",
+        "corrects_run_id": "550e8400-e29b-41d4-a716-446655440000" }'
+```
+
+### Monitoring
+
+| Metric / Alert | Target |
+|---|---|
+| `submission_runs.status = failed` older than 24 h | Immediate escalation — regulatory deadline at risk |
+| `submission_series.status <> 'acked'` on an otherwise finished run | A territory was not filed; the month is settled short |
+| No acked submission by the 10. Werktag | Erstaufschlag window closed — a later version starts as `Prüfdaten` (§3.10) |
+| Open Korrekturbedarf after the 30. Werktag | Clearingphase for the ordinary BKA closing (§3.10) |
+| MaLo coverage < 95 % in `submission_malo_log` | Missing data — check `edmd` quality warnings |
+
+---
+
 ## Calculation audit trail
 
 Every position carries a `CalculationTrace` — inputs, arithmetic, paragraphs and rate source —
@@ -752,6 +984,10 @@ All three run only when `erp_webhook_url` is set, and stop promptly on shutdown:
 | Undispatched-draft alert | 1 h (`dispatch_alert_interval_secs`) | `de.netzbilanz.invoic.dispatch-overdue` — two clocks: a draft older than `dispatch_stale_hours`, **or** one whose own `due_date` falls inside that window |
 | Kostenblatt deadline alert | 1 d (`kostenblatt_alert_interval_secs`) | `de.netzbilanz.kostenblatt.deadline-approaching` on days 10–14 with pending records |
 
+With `[mabis]`, a fourth worker runs regardless of `erp_webhook_url`: the MaBiS scheduler,
+which wakes every five minutes and files the previous Bilanzierungsmonat at `run_hour_utc` on
+the `erstaufschlag_werktag`, skipping a period that already has a live run.
+
 Both alerts enqueue on the outbox. The overdue alert reports `zu_zahlen_eur` and `due_date`, and
 skips drafts the checker disputed (blocked, not overdue).
 
@@ -769,6 +1005,8 @@ of the change they describe.
 | `de.netzbilanz.invoic.dispatch-overdue` | hourly worker | `stale_hours`, `undispatched_count`, `drafts[]` (each with `due_date` and `zu_zahlen_eur`) |
 | `de.netzbilanz.kostenblatt.computed` | an activation is quantified | `record_id`, `einsatzkosten_eur`, `dispatch_source` |
 | `de.netzbilanz.kostenblatt.deadline-approaching` | daily worker | `period_year`, `period_month`, `pending_count`, `days_until_deadline` |
+| `de.mabis.submission.failed` | a MaBiS aggregation or BIKO submission failed | `run_id`, `bilanzierungsgebiet_id`, period, `phase`, `attempt_count` (at 3 the scheduler stops retrying) |
+| `de.mabis.korrekturbedarf.opened` | a negative Prüfmitteilung was recorded | `pruefmitteilung_id`, `bilanzierungsgebiet_id`, period, `version` — a corrected Summenzeitreihe is owed within the Clearing window |
 
 Inbound REMADV events arrive on `POST /api/v1/webhooks/remadv`, HMAC-verified against
 `inbound_secret`, and are idempotent.
@@ -777,7 +1015,7 @@ Inbound REMADV events arrive on `POST /api/v1/webhooks/remadv`, HMAC-verified ag
 
 ## MCP server
 
-At `/mcp` (Streamable HTTP), behind OIDC (`use-mcp`) or `[mcp] api_key`. **Read-only**, eight
+At `/mcp` (Streamable HTTP), behind OIDC (`use-mcp`) or `[mcp] api_key`. **Read-only**, twelve
 tools:
 
 | Tool | Purpose |
@@ -790,12 +1028,17 @@ tools:
 | `get_billing_summary` | monthly totals by PID, Sparte, status, Rechnungsart |
 | `list_pending_kostenblatt` | cost sheets awaiting the 15th |
 | `list_kostenblatt_gaps` | activations registered but never quantified |
+| `get_submission_status` | MaBiS: recent runs + failed / retry-exhausted / open-Korrekturbedarf counts |
+| `list_failed_submissions` | MaBiS: failed runs, newest first, with `attempt_count` and `error_msg` |
+| `get_submission_run` | MaBiS: one run by UUID (version as RFC 3339) |
+| `list_korrekturbedarf` | MaBiS: open negative Prüfmitteilungen (§9.8.1 obligations) |
 
-Settling, dispatching, rejecting and correcting live on REST, where the action is attributable
-to an operator.
+Settling, dispatching, rejecting, correcting and filing a Summenzeitreihe live on REST, where
+the action is attributable to an operator. `agentd`'s `mabis-agent` reads the four MaBiS tools.
 
-Six prompts walk the common workflows: `nb-invoic-overview`, `run-nne-billing`,
-`mmm-monthly-run`, `investigate-dispute`, `ggv-nne-billing`, `redispatch-monthly-submit`.
+Seven prompts walk the common workflows: `nb-invoic-overview`, `run-nne-billing`,
+`mmm-monthly-run`, `investigate-dispute`, `ggv-nne-billing`, `redispatch-monthly-submit`,
+`submission-triage`.
 
 ---
 
@@ -806,22 +1049,26 @@ Six prompts walk the common workflows: `nb-invoic-overview`, `run-nne-billing`,
 
 | Door | Guard | What it protects |
 |---|---|---|
-| REST | `[oidc]` — every route extracts `Claims` | dispatch, Storno, mark-paid, the § 147 AO export, Kostenblatt submission |
+| REST | `[oidc]` — every route extracts `Claims` | dispatch, Storno, mark-paid, the § 147 AO export, Kostenblatt submission, the binding Summenzeitreihe filing |
 | MCP | `[oidc]` or `[mcp] api_key` | the tenant's whole invoice register and its Redispatch cost sheets |
 | `POST /api/v1/webhooks/remadv` | `inbound_secret` HMAC over the raw body | a forged REMADV marking an invoice paid, or disputing one that was not |
 
-`services/netzbilanzd/policies/netzbilanzd.cedar` states 13 actions in four grants:
+`services/netzbilanzd/policies/netzbilanzd.cedar` states 16 actions in seven grants:
 
 | Grant | Actions | Requires |
 |---|---|---|
 | Reads and the stateless calculators | `read-settlement`, `export-audit`, `read-kostenblatt`, `compute-ausfallarbeit` | a matching tenant only — so an auditor's role-less token reads the export and can change nothing |
 | Invoicing | `run-settlement`, `amend-settlement`, `dispatch-settlement`, `correct-settlement`, `record-payment` | `NB` or `MSB` — the NB bills Netznutzung, the MMM-Saldo and the GeLi-Gas Handlungen; the MSB bills the Messstellenbetrieb (PID 31009) |
 | Redispatch 2.0 | `compute-kostenblatt`, `submit-kostenblatt`, `compute-verguetung` | `NB` or `UENB` — the money moves between the NB that steered the resource and the ÜNB that asked for it |
+| MaBiS — reading run state | `read-mabis-run` | a matching tenant — run history discloses which Bilanzierungsgebiete a tenant settles |
+| MaBiS — recording what the BIKO said | `record-biko-response` | a matching tenant — it states what arrived and files nothing, so the relaying ingest identity holds no filing power |
+| MaBiS — filing a Summenzeitreihe | `trigger-mabis-run` | `NB` or `UENB` — the roles that aggregate a Bilanzierungsgebiet; an acked filing cannot be withdrawn |
 | MCP | `use-mcp` | a matching tenant; the tools are read-only by construction |
 
 `tests/it/authorization_guard.rs` pins every handler to a `Claims` extractor and an
 authorization call, and the action sets of code and policy to each other; the REMADV webhook is
-the documented HMAC exception. There is no four-eyes split: `mako_roles` carries market roles
+the documented HMAC exception; `tests/it/mabis/authorization_guard.rs` asserts the two BIKO
+ingest routes do **not** require `trigger-mabis-run`. There is no four-eyes split: `mako_roles` carries market roles
 only, so "may settle" and "may dispatch" are one grant. Denials are logged with `sub` and action.
 
 ---
@@ -830,7 +1077,6 @@ only, so "may settle" and "may dispatch" are one grant. Denials are logged with 
 
 ```toml
 # netzbilanzd.toml
-port   = 8680
 tenant = "9900357000004"
 
 marktd_url     = "http://marktd:8180"
@@ -848,6 +1094,9 @@ dispatch_alert_interval_secs    = 3600
 dispatch_stale_hours            = 48
 kostenblatt_alert_interval_secs = 86400
 
+[http]
+addr = "0.0.0.0:8680"
+
 [database]
 url = "postgres://nb:secret@db:5432/netzbilanzd"
 
@@ -857,7 +1106,23 @@ audience  = "netzbilanzd"
 
 [mcp]
 api_key = "env:NETZBILANZD_MCP_API_KEY"
+
+# MaBiS Summenzeitreihen. Absent, no filing is scheduled and /api/v1/mabis/* is
+# not mounted. Requires edmd_url above.
+[mabis]
+sender_mp_id           = "9900357000004"     # NB / ÜNB, MSCONS NAD+MS
+receiver_mp_id         = "9900077000006"     # BIKO, MSCONS NAD+MR
+bilanzierungsgebiet_id = "11YMAKO-TEST-01U"  # Y-type (Area) EIC; keys the run
+submission_target      = "biko-bilateral"    # default; the only implemented target
+
+[mabis.schedule]
+erstaufschlag_werktag = 10   # Werktag after the Bilanzierungsmonat to submit on
+run_hour_utc          = 5    # 05:00 UTC = 06:00 CET / 07:00 CEST
 ```
+
+Every key is refused when unknown, `[mabis]` included. Startup refuses a `[mabis]` whose
+`bilanzierungsgebiet_id` is not a 16-character EIC of object type **`Y` (Area)** (a Bilanzkreis
+is type `X`), an unimplemented `submission_target`, and a `[mabis]` without `edmd_url`.
 
 All keys support a `_FILE` suffix for Kubernetes secrets
 (`NETZBILANZD_MAKOD_API_KEY_FILE=/run/secrets/makod-key`); nested keys use a double
@@ -885,6 +1150,18 @@ Migrations run at startup; every table is tenant-scoped. `invoice_drafts` enforc
 `kostenblatt_records` is unique per `tenant, activation_id, tr_id` with a generated
 `einsatzkosten_eur`; `fremdkosten_records` holds one row per draft.
 
+The MaBiS tables:
+
+| Table | Purpose |
+|---|---|
+| `submission_runs` | One row per aggregation + submission attempt: status, period, version, Datenstatus. Unique per tenant × Bilanzierungsgebiet × period × version. |
+| `submission_series` | One row per **Bilanzierungsgebiet** per run — the MSCONS that actually went out, with its `message_ref` or its failure reason; an `acked` row names its reference. |
+| `submission_malo_log` | One row per MaLo per run: coverage and gap analysis. |
+| `pruefmitteilung` | Inbound BIKO objections (IFTSTA 21000/21001) and the run that corrected each. |
+
+`just test-netzbilanzd-db` runs the invoice-draft store and the MaBiS schema suites against
+PostgreSQL.
+
 ---
 
 ## Regulatory basis
@@ -901,6 +1178,8 @@ Migrations run at startup; every table is tenant-scoped. `invoice_drafts` enforc
 | GeLi Gas 3.0 (BK7-24-01-009) §5.4 | AWH Sperrprozesse, billed per action |
 | §42b EnWG | GGV: each tenant Marktlokation billed for its own metered Netzentgelt |
 | §§13, 13a EnWG · BK6-20-061 §4.2 · BK6-23-241 | Redispatch Kostenblatt, angemessene Vergütung, BilAReM Ausfallarbeit |
+| BK6-24-174 Anlage 3 (MaBiS) §§3.8.2, 3.8.3, 3.10, 9.8.1 | Summenzeitreihe versioning, BIKO-assigned Datenstatus, the Tabelle 2 windows, the correction after a negative Prüfmitteilung |
+| MSCONS AHB 3.2 §8.3.1 · IFTSTA AHB 2.1 | PID 13003 Summenzeitreihe; 21000/21001 Prüfmitteilung, 21003/21004 Datenstatus |
 | §14 Abs. 4 Nr. 4 UStG | consecutive, single-use invoice numbering |
 | § 147 Abs. 3 AO · § 14b UStG | invoices are Buchungsbelege — 8 years, reduced from 10 with effect from 01.01.2025 |
 

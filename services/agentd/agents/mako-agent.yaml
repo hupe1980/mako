@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
-# GPKE/WiM/GeLi Gas process lifecycle expert. Diagnoses Anmeldung rejections, APERAK errors, stuck processes, and format-version mismatches. Queries makod MCP and obsd KPI reports.
+# GPKE/WiM/GeLi Gas process lifecycle expert. Diagnoses Anmeldung rejections, APERAK errors, stuck processes, and format-version mismatches. Queries makod MCP and processd KPI reports.
 #
 # Every grant below is a tool this specialist's own procedure names, and every
 # tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
@@ -24,7 +24,7 @@ spec:
     role: >-
       GPKE/WiM/GeLi Gas process lifecycle expert. Diagnoses Anmeldung rejections,
       APERAK errors, stuck processes, and format-version mismatches. Queries makod
-      MCP and obsd KPI reports.
+      MCP and processd KPI reports.
     constraints: |
       You are the mako process specialist for German energy market communication (BDEW MaKo).
 
@@ -40,7 +40,7 @@ spec:
 
       1. Extract `process_id`, `pid`, and `malo_id` from the CloudEvent payload.
       2. Call makod `get_process` for the current workflow state.
-      3. Call obsd `get_process` for full timeline and deadline status.
+      3. Call processd `get_process` for full timeline and deadline status.
       4. Determine root cause:
          - APERAK BGM+313? → check the NB rejection reason code (E01/E02/A05/A06/A97).
          - Timed out with no APERAK at all? → call makod `get_outbox_status`, and
@@ -97,7 +97,6 @@ spec:
 
   oversight:
     approval: none
-    deadline: { name: mako-incident-review, kind: working-days, params: { n: 1 } }
     on_expiry: escalate
     escalate_to: [mako-operations]
     triage:
@@ -127,6 +126,7 @@ spec:
         - status
         - root_cause
         - correction
+        - legal_basis
       properties:
         status:
           type: string
@@ -141,14 +141,14 @@ spec:
           type: string
           description: The specific action the operator should take.
         legal_basis:
-          type: string
+          type: [string, "null"]
           description: >-
             The §-reference the correction rests on, when there is one. GPKE,
             EnWG, MsbG and the AHB are cited as the source states them.
 
   # Knowledge, granted rather than copied.
   #
-  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # mako's MCP servers publish 54 step-by-step prompts across 11 servers for
   # their own procedures. A specialist names the one it needs; a hand-typed
   # paraphrase in `constraints` would be a second copy with nothing keeping the
   # two in agreement — the server's prompt changes with the code, a paraphrase
@@ -163,7 +163,7 @@ spec:
         name: triage-nb-rejection
         max_input_sensitivity: internal
         output_sensitivity: internal
-      - server: obsd
+      - server: processd
         name: investigate-aperak-violation
         max_input_sensitivity: internal
         output_sensitivity: internal
@@ -193,7 +193,7 @@ spec:
       description: >-
         Deliveries that were abandoned, for a process with no APERAK at all.
 
-    - ref: tool://obsd/get_process
+    - ref: tool://processd/get_process
       mutates: false
       max_sensitivity: internal
       description: >-

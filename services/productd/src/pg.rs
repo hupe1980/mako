@@ -1169,8 +1169,69 @@ pub async fn accept_angebot(
     row.ok_or(AcceptError::Wettlauf)
 }
 
+/// Why an Angebot could not be moved to ABGELEHNT or VERSANDT.
+///
+/// The handler answers each kind on its own: a storage failure is not a
+/// business conflict, and answering it as one tells the caller the Angebot is
+/// in the wrong state when nothing was read.
+#[derive(Debug)]
+pub enum TransitionError {
+    /// No Angebot with this id in this tenant.
+    NotFound,
+    /// The Angebot is in a status the transition does not start from.
+    Status {
+        /// Its status.
+        status: String,
+        /// The statuses the transition starts from, for the sentence.
+        from: &'static str,
+    },
+    /// The database failed.
+    Storage(anyhow::Error),
+}
+
+impl std::fmt::Display for TransitionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => write!(f, "Angebot not found"),
+            Self::Status { status, from } => {
+                write!(
+                    f,
+                    "Angebot is in status '{status}' — only {from} can be moved"
+                )
+            }
+            Self::Storage(e) => write!(f, "storage failure: {e:#}"),
+        }
+    }
+}
+
+impl From<sqlx::Error> for TransitionError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Storage(anyhow::Error::new(e).context("angebot transition"))
+    }
+}
+
+/// `UPDATE` touched no row: name the reason — the Angebot is unknown, or its
+/// status is not one the transition starts from.
+async fn untouched(pool: &PgPool, id: Uuid, tenant: &str, from: &'static str) -> TransitionError {
+    let status: Result<Option<String>, sqlx::Error> =
+        sqlx::query_scalar("SELECT status FROM angebote WHERE id = $1 AND tenant = $2")
+            .bind(id)
+            .bind(tenant)
+            .fetch_optional(pool)
+            .await;
+    match status {
+        Ok(Some(status)) => TransitionError::Status { status, from },
+        Ok(None) => TransitionError::NotFound,
+        Err(e) => e.into(),
+    }
+}
+
 /// Transition Angebot to ABGELEHNT.
-pub async fn decline_angebot(pool: &PgPool, id: Uuid, tenant: &str) -> anyhow::Result<()> {
+///
+/// # Errors
+///
+/// [`TransitionError`] — unknown, not ANGELEGT/VERSANDT, or the database failed.
+pub async fn decline_angebot(pool: &PgPool, id: Uuid, tenant: &str) -> Result<(), TransitionError> {
     let updated = sqlx::query(
         r"UPDATE angebote
           SET status = 'ABGELEHNT', declined_at = now(), updated_at = now()
@@ -1180,19 +1241,24 @@ pub async fn decline_angebot(pool: &PgPool, id: Uuid, tenant: &str) -> anyhow::R
     .bind(id)
     .bind(tenant)
     .execute(pool)
-    .await
-    .context("decline_angebot")?
+    .await?
     .rows_affected();
-
-    anyhow::ensure!(
-        updated > 0,
-        "Angebot {id} not found or not in a declinable state"
-    );
+    if updated == 0 {
+        return Err(untouched(pool, id, tenant, "ANGELEGT or VERSANDT").await);
+    }
     Ok(())
 }
 
 /// Transition Angebot to VERSANDT (mark as sent to customer).
-pub async fn mark_angebot_versandt(pool: &PgPool, id: Uuid, tenant: &str) -> anyhow::Result<()> {
+///
+/// # Errors
+///
+/// [`TransitionError`] — unknown, not ANGELEGT, or the database failed.
+pub async fn mark_angebot_versandt(
+    pool: &PgPool,
+    id: Uuid,
+    tenant: &str,
+) -> Result<(), TransitionError> {
     let updated = sqlx::query(
         r"UPDATE angebote
           SET status = 'VERSANDT', updated_at = now()
@@ -1201,14 +1267,11 @@ pub async fn mark_angebot_versandt(pool: &PgPool, id: Uuid, tenant: &str) -> any
     .bind(id)
     .bind(tenant)
     .execute(pool)
-    .await
-    .context("mark_angebot_versandt")?
+    .await?
     .rows_affected();
-
-    anyhow::ensure!(
-        updated > 0,
-        "Angebot {id} not found or not in ANGELEGT state"
-    );
+    if updated == 0 {
+        return Err(untouched(pool, id, tenant, "ANGELEGT").await);
+    }
     Ok(())
 }
 

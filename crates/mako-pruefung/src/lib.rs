@@ -70,13 +70,15 @@
 //! boolean — decides whether the answer rides the Bestätigungs- or the
 //! Ablehnungs-PID.
 //!
-//! Role separation stays available where it is load-bearing: the `role-nb`,
-//! `role-lf`, `role-msb`, `role-esa`, `role-mabis` and `role-emob` Cargo
-//! features compile only their own trees, so a role-gated `processd` binary
-//! cannot form a decision it is not entitled to make — the informatorische
-//! Entflechtung of § 6a EnWG, enforced at compile time. (§ 7 EnWG, the
-//! *rechtliche* Entflechtung, asks for separate legal entities; no Cargo
-//! feature satisfies that.)
+//! The `role-nb`, `role-lf`, `role-msb`, `role-esa`, `role-mabis` and
+//! `role-emob` Cargo features compile only their own trees, so a role-gated
+//! `processd` binary cannot answer as a role it was not built for: a
+//! misconfiguration fails closed instead of putting an unauthorised answer on
+//! the market. No unbundling duty is discharged by a build flag. The
+//! information-access duty of § 6a Abs. 1 EnWG — that „die Vertraulichkeit
+//! wirtschaftlich sensibler Informationen … gewahrt wird" — is met by the
+//! access policy of the deployment (makod's Cedar policy set), and § 7 EnWG,
+//! the *rechtliche* Entflechtung, asks for separate legal entities.
 //!
 //! # Antwortcode, not ERC
 //!

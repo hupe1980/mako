@@ -19,13 +19,14 @@ use crate::config::BillingdConfig;
 ///
 /// A BDEW-Codenummer is issued through GS1 and *is* a GLN, so declaring the
 /// operator's MP-ID under EAS `0088` is true for a correctly configured tenant.
-/// It is false for a mistyped one, and `Identifier::eas` cannot tell the
-/// difference: it validates the *scheme* code and accepts any content. That is
+/// It is false for a mistyped one, and a scheme code alone cannot tell the
+/// difference: `BR-CL-25` validates the *scheme* and accepts any content. That is
 /// the same defect this crate already fixed on the buyer side — a MaLo-ID
 /// dressed up as a GLN — and it was still here on the seller side, unnoticed,
 /// because nothing checks a claim no rule can test.
 ///
-/// `eas_checked` verifies the GS1 check digit and length. On failure the term is
+/// `Identifier::eas` verifies the GS1 check digit and length for `0088`. On
+/// failure the term is
 /// **omitted**: BT-34 is optional in EN 16931 core, so a retail invoice stays
 /// valid, and omitting is the honest encoding of "we do not have one". A
 /// misconfigured operator therefore ships documents without BT-34 rather than
@@ -33,7 +34,7 @@ use crate::config::BillingdConfig;
 /// B2G path, where XRechnung requires the term and `render_xrechnung_cii`
 /// refuses to write a rejectable file.
 fn seller_electronic_address(tenant: &str) -> Option<Identifier> {
-    match Identifier::eas_checked(tenant, "0088") {
+    match Identifier::eas(tenant, "0088") {
         Ok(id) => Some(id),
         Err(e) => {
             tracing::warn!(
@@ -65,8 +66,9 @@ fn seller_party(cfg: &BillingdConfig) -> Party {
         tax_registration: cfg.seller_tax_number.clone(),
         // BT-34 electronic address: the LF's own MP-ID under EAS 0088 (GLN).
         // A BDEW-Codenummer *is* a GLN — BDEW issues them through GS1 — so the
-        // claim is true for a correctly configured operator, and `eas_checked`
-        // is what makes "correctly configured" checkable rather than assumed.
+        // claim is true for a correctly configured operator, and `eas` checking
+        // the GLN is what makes "correctly configured" checkable rather than
+        // assumed.
         electronic_address: seller_electronic_address(&cfg.tenant),
         address: PostalAddress {
             line1: s.and_then(|s| s.street.clone()),
@@ -104,9 +106,9 @@ fn seller_party(cfg: &BillingdConfig) -> Party {
 /// A MaLo-ID is an **11-digit BDEW Marktlokations-ID**. It is not a GS1 GLN, and
 /// the EAS code list has no entry for it. Emitting it under EAS `0088` (GLN)
 /// would be a false claim about the identifier's registry — syntactically
-/// valid, since `Identifier::eas` and BR-CL-25 both check only that the
-/// *scheme code* exists, but semantically wrong and unresolvable for any
-/// receiver that takes it at face value. `Identifier::eas_checked` refuses an
+/// valid, since BR-CL-25 checks only that the *scheme code* exists, but
+/// semantically wrong and unresolvable for any receiver that takes it at face
+/// value. `Identifier::eas` refuses an
 /// 11-digit value for scheme `0088`: *"a GS1 GLN is exactly 13 digits, and this
 /// is 11"*. [`seller_electronic_address`] applies it on the seller side.
 ///
@@ -343,34 +345,48 @@ pub fn to_credit_note(
 }
 
 /// Render CII (XRechnung 3.0 / ZUGFeRD CII) XML from the stored model.
-#[must_use]
-pub fn render_cii(model: &en16931::Invoice) -> String {
-    en16931_formats::cii::to_string(model)
+///
+/// Written as the model declares its BT-24; validity is checked where the
+/// profile is known ([`render_xrechnung_cii`], [`validate`]).
+///
+/// # Errors
+/// [`en16931_formats::Unwritable`] when CII's schema has no form for the model
+/// (no BT-1 or BT-2) — refused rather than written as a file every receiver's
+/// schema check rejects.
+pub fn render_cii(model: &en16931::Invoice) -> Result<String, en16931_formats::Unwritable> {
+    Ok(en16931_formats::write_unchecked(model, en16931_formats::Syntax::Cii)?.xml)
 }
 
 /// Render PEPPOL BIS 3.0 UBL XML from the stored model.
-#[must_use]
-pub fn render_ubl(model: &en16931::Invoice) -> String {
-    en16931_formats::ubl::to_string(model)
+///
+/// # Errors
+/// [`en16931_formats::Unwritable`] when UBL's schema has no form for the model
+/// (no BT-1, BT-2, seller, buyer or line).
+pub fn render_ubl(model: &en16931::Invoice) -> Result<String, en16931_formats::Unwritable> {
+    Ok(en16931_formats::write_unchecked(model, en16931_formats::Syntax::Ubl)?.xml)
 }
 
 /// Validate against the **XRechnung 3.0** profile and render CII in one step.
 ///
-/// `en16931-formats::cii::to_string_for` proves the document against the profile
-/// before writing, so a B2G submission cannot ship a rejectable file — on failure
-/// it returns the findings (`[BR-DE-…] BG-…/BT-… — …`) the ZRE/OZG-RE portal would
-/// raise, most-severe first.
+/// The document is proven against the profile (`Validated<XRechnung>`) before
+/// it is written, so a B2G submission cannot ship a rejectable file — on
+/// failure it returns the findings (`[BR-DE-…] BG-…/BT-… — …`) the ZRE/OZG-RE
+/// portal would raise. BT-24 is stamped from the profile that was proven.
 ///
 /// # Errors
 /// The list of violated XRechnung rules when the model is not profile-valid.
 pub fn render_xrechnung_cii(model: &en16931::Invoice) -> Result<String, Vec<String>> {
-    en16931_formats::cii::to_string_for(model, &en16931::profiles::XRECHNUNG).map_err(|nv| {
-        nv.report()
-            .findings()
-            .iter()
-            .map(|f| format!("[{}] {} — {}", f.rule, f.path, f.message))
-            .collect()
-    })
+    let proof =
+        en16931::validation::profile::Validated::<en16931::profiles::XRechnung>::new(model.clone())
+            .map_err(|rejected| {
+                rejected
+                    .report()
+                    .findings()
+                    .iter()
+                    .map(|f| format!("[{}] {} — {}", f.rule, f.path, f.message))
+                    .collect::<Vec<_>>()
+            })?;
+    Ok(en16931_formats::write(&proof, en16931_formats::Syntax::Cii).xml)
 }
 
 /// The XRechnung terms the **buyer** party is still missing — the customer master
@@ -434,10 +450,10 @@ pub fn apply_b2g_buyer(mut model: en16931::Invoice, buyer: &B2gBuyer) -> en16931
         name: Some(buyer.name.clone()),
         vat_identifier: buyer.vat_id.clone(),
         // BT-49 under EAS 0204 (German Leitweg-ID); omitted if not supplied.
-        // `eas_checked` rather than `eas`: 0204 has no published shape check
-        // today, so the two behave identically — but the day the crate learns
-        // one, this call picks it up instead of continuing to accept anything.
-        electronic_address: eas.and_then(|a| Identifier::eas_checked(a, "0204").ok()),
+        // `eas` checks the value for the schemes whose shape the crate knows;
+        // 0204 has none published today, and the day the crate learns one,
+        // this call picks it up instead of continuing to accept anything.
+        electronic_address: eas.and_then(|a| Identifier::eas(a, "0204").ok()),
         address: PostalAddress {
             line1: buyer.line1.clone(),
             city: buyer.city.clone(),

@@ -26,6 +26,18 @@ use crate::{
     },
 };
 
+/// A write refused for what it was asked to store answers `422` with the
+/// refusal; a database failure underneath is a `500` with an `error_id`, never
+/// its text.
+fn refusal(e: impl Into<anyhow::Error>) -> ApiError {
+    let e = e.into();
+    if e.chain().any(|c| c.is::<sqlx::Error>()) {
+        ApiError::internal(e)
+    } else {
+        ApiError::unprocessable(format!("{e:#}"))
+    }
+}
+
 // ── edmd auto-fetch helper ────────────────────────────────────────────────────
 
 /// Fetch the month's **Einspeisemenge** from `edmd` for a MaLo.
@@ -588,16 +600,12 @@ pub async fn post_anlage(
     Json(req): Json<AnlageUpsertRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "write-anlage", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     match upsert_anlage(&pool, &cfg.tenant, req).await {
         Ok(()) => StatusCode::CREATED.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -611,17 +619,13 @@ pub async fn put_anlage(
     Json(mut req): Json<AnlageUpsertRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "write-anlage", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     req.tr_id = tr_id;
     match upsert_anlage(&pool, &cfg.tenant, req).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -634,17 +638,13 @@ pub async fn get_anlage(
     Path(tr_id): Path<String>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-anlage", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(Some(row)) => Json(row).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -674,11 +674,7 @@ pub async fn get_veraeusserungsform_by_malo(
     Path(malo_id): Path<String>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-anlage", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     // Every plant on the Marktlokation, newest first: the first row answers the
@@ -724,29 +720,16 @@ pub async fn get_veraeusserungsform_by_malo(
                 // Mieterstrom, GGV, Eigenverbrauch, Post-EEG and the
                 // Flexibilitäts-models are settlement models, not
                 // Veräußerungsformen — `CCI+Z22` has no code for them.
-                None => (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({
-                        "error": "NO_VERAEUSSERUNGSFORM",
-                        "message": format!(
-                            "settlement_model {model:?} is not a Veräußerungsform in the \
-                             CCI+Z22 sense"
-                        ),
-                        "settlement_model": model,
-                    })),
-                )
-                    .into_response(),
+                None => ApiError::not_found(format!(
+                    "settlement_model {model:?} is not a Veräußerungsform in the CCI+Z22 sense"
+                ))
+                .with_code("NO_VERAEUSSERUNGSFORM")
+                .with_fields(serde_json::json!({ "settlement_model": model }))
+                .into_response(),
             }
         }
-        Ok(_) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "NOT_REGISTERED",
-                "message": "no plant with that MaLo-ID in this EEG-/KWKG-Register",
-            })),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Ok(_) => ApiError::NotFound.into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -803,16 +786,12 @@ pub async fn get_anlagen(
     Query(q): Query<AnlagenQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-anlage", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     match list_anlagen(&pool, &cfg.tenant, &q).await {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -825,17 +804,13 @@ pub async fn delete_anlage(
     Path(tr_id): Path<String>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "write-anlage", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     match decommission_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -853,17 +828,13 @@ pub async fn get_foerderung_auslaufend(
     Query(q): Query<HorizonQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-anlage", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let days = q.days.unwrap_or(180);
     match list_expiring(&pool, &cfg.tenant, days).await {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -930,11 +901,7 @@ pub async fn post_settle(
     Json(req): Json<SettleTriggerRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "run-settlement", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     match crate::settle::settle_by_tr_id(
@@ -957,7 +924,7 @@ pub async fn post_settle(
     {
         Ok(Some(result)) => (StatusCode::OK, Json(result)).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (crate::settle::settle_error_status(&e), format!("{e:#}")).into_response(),
+        Err(e) => crate::settle::settle_error(e).into_response(),
     }
 }
 
@@ -971,24 +938,13 @@ pub async fn get_settlements(
     Query(q): Query<SettlementsQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-settlement", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     if let Some(month) = q.month
         && !(1..=12).contains(&month)
     {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "INVALID_MONTH",
-                "message": "month must be 1–12",
-            })),
-        )
-            .into_response();
+        return ApiError::bad_request("month must be 1–12").into_response();
     }
 
     match list_settlement_receipts(
@@ -1002,7 +958,7 @@ pub async fn get_settlements(
     .await
     {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1080,38 +1036,24 @@ pub async fn put_marktwert(
     Json(body): Json<MarktwertBody>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "write-marktdaten", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let Some(serie) = marktwertserie_aus_pfad(&art) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "UNKNOWN_MARKTWERT_ART",
-                "message": "art must be `monat` (Anlage 1 Nr. 3) or `jahr` (Nr. 4)",
-            })),
-        )
+        return ApiError::bad_request("art must be `monat` (Anlage 1 Nr. 3) or `jahr` (Nr. 4)")
             .into_response();
     };
     match (serie, body.billing_month) {
         (eeg_billing::Marktwertserie::Monatsmarktwert, Some(m)) if (1..=12).contains(&m) => {}
         (eeg_billing::Marktwertserie::Monatsmarktwert, _) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                "a Monatsmarktwert needs a billing_month of 1–12",
-            )
+            return ApiError::bad_request("a Monatsmarktwert needs a billing_month of 1–12")
                 .into_response();
         }
         (eeg_billing::Marktwertserie::Jahresmarktwert, None) => {}
         (eeg_billing::Marktwertserie::Jahresmarktwert, Some(_)) => {
-            return (
-                StatusCode::BAD_REQUEST,
+            return ApiError::bad_request(
                 "a Jahresmarktwert has no month — Anlage 1 Nr. 4 is one figure per year",
             )
-                .into_response();
+            .into_response();
         }
     }
     let source = body.source.as_deref().unwrap_or("manual");
@@ -1130,7 +1072,7 @@ pub async fn put_marktwert(
     .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -1144,14 +1086,10 @@ pub async fn get_marktwert(
     Query(q): Query<MarktwertQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-marktdaten", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let Some(serie) = marktwertserie_aus_pfad(&art) else {
-        return (StatusCode::BAD_REQUEST, "art must be `monat` or `jahr`").into_response();
+        return ApiError::bad_request("art must be `monat` or `jahr`").into_response();
     };
     match crate::pg::fetch_marktwert_single(&pool, year, serie, q.billing_month, &erzeugungsart)
         .await
@@ -1166,7 +1104,7 @@ pub async fn get_marktwert(
         }))
         .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1186,11 +1124,7 @@ pub async fn get_marktwert_nachbewertung(
     Path(year): Path<i16>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-marktdaten", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match crate::pg::list_marktwert_nachbewertung(&pool, &cfg.tenant, year).await {
         Ok(rows) => Json(serde_json::json!({
@@ -1203,7 +1137,7 @@ pub async fn get_marktwert_nachbewertung(
                         binding figure is published.",
         }))
         .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1226,17 +1160,13 @@ pub async fn put_epex_price(
     Json(body): Json<EpexPriceBody>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "write-marktdaten", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let source = body.source.as_deref().unwrap_or("manual");
     match upsert_epex_price(&pool, year, month, body.avg_ct_kwh, source).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -1270,11 +1200,7 @@ pub async fn put_epex_spot(
     Json(body): Json<SpotPriceLoadBody>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "write-marktdaten", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let mut prices = Vec::with_capacity(body.prices.len());
     for e in &body.prices {
@@ -1282,11 +1208,11 @@ pub async fn put_epex_spot(
             &e.delivery_start,
             &time::format_description::well_known::Rfc3339,
         ) else {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                format!("invalid delivery_start (RFC 3339): {}", e.delivery_start),
-            )
-                .into_response();
+            return ApiError::unprocessable(format!(
+                "invalid delivery_start (RFC 3339): {}",
+                e.delivery_start
+            ))
+            .into_response();
         };
         prices.push(crate::pg::SpotPrice {
             delivery_start: start,
@@ -1297,7 +1223,7 @@ pub async fn put_epex_spot(
     let source = body.source.as_deref().unwrap_or("manual");
     match crate::pg::upsert_spot_prices(&pool, &prices, source).await {
         Ok(n) => (StatusCode::OK, Json(serde_json::json!({ "upserted": n }))).into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -1319,11 +1245,7 @@ pub async fn get_epex_price(
     Path((year, month)): Path<(i16, i16)>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-marktdaten", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     match fetch_epex_price(&pool, year, month).await {
@@ -1334,7 +1256,7 @@ pub async fn get_epex_price(
         }))
         .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1388,18 +1310,13 @@ pub async fn post_wind_reevaluation(
     Json(req): Json<WindReevaluationRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     if !matches!(req.wirksam_ab_jahr, 6 | 11 | 16) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "wirksam_ab_jahr must be 6, 11, or 16 (§36h Abs. 2 Satz 1)".to_owned(),
+        return ApiError::unprocessable(
+            "wirksam_ab_jahr must be 6, 11, or 16 (§36h Abs. 2 Satz 1)",
         )
-            .into_response();
+        .into_response();
     }
     match crate::pg::record_wind_reevaluation(
         &pool,
@@ -1423,7 +1340,7 @@ pub async fn post_wind_reevaluation(
         )
             .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1460,11 +1377,7 @@ pub async fn post_repowering(
     Json(req): Json<RepoweringRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     use time::format_description::well_known::Iso8601;
@@ -1472,10 +1385,7 @@ pub async fn post_repowering(
     let repowering_datum = match time::Date::parse(&req.repowering_datum, &Iso8601::DEFAULT) {
         Ok(d) => d,
         Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                "invalid repowering_datum, expected ISO 8601",
-            )
+            return ApiError::bad_request("invalid repowering_datum, expected ISO 8601")
                 .into_response();
         }
     };
@@ -1483,14 +1393,14 @@ pub async fn post_repowering(
     let anlage = match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     // §25 Abs. 1 Satz 2 EEG 2023: statutory plants extend to Dec 31 of the 20th
     // year, not to the exact +20 y anniversary (which is the Ausschreibung rule).
     let foerderendedatum_neu = match eeg_billing::foerderendedatum_repowering(repowering_datum) {
         Ok(d) => d,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     // Auto-lookup new Vergütungssatz when not supplied.
@@ -1505,11 +1415,8 @@ pub async fn post_repowering(
             &req.repowering_datum,
         ).await {
             Ok(Some(ct)) => ct,
-            Ok(None) => return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "No Vergütungssatz found for this plant type and repowering date — supply verguetungssatz_ct_neu explicitly",
-            ).into_response(),
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+            Ok(None) => return ApiError::unprocessable("No Vergütungssatz found for this plant type and repowering date — supply verguetungssatz_ct_neu explicitly").into_response(),
+            Err(e) => return ApiError::internal(e).into_response(),
         }
     };
 
@@ -1546,7 +1453,7 @@ pub async fn post_repowering(
         }))
         .into_response(),
         Ok(_) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1609,11 +1516,7 @@ pub async fn post_mastr_registrierung(
     Json(req): Json<MastrRegistrierungRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     use time::format_description::well_known::Iso8601;
@@ -1622,7 +1525,7 @@ pub async fn post_mastr_registrierung(
         match time::Date::parse(ds, &Iso8601::DEFAULT) {
             Ok(d) => d,
             Err(_) => {
-                return (StatusCode::UNPROCESSABLE_ENTITY, "invalid mastr_datum").into_response();
+                return ApiError::unprocessable("invalid mastr_datum").into_response();
             }
         }
     } else {
@@ -1635,7 +1538,7 @@ pub async fn post_mastr_registrierung(
     // drains `event_outbox` (persist-before-dispatch).
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let rows = sqlx::query(
@@ -1655,7 +1558,7 @@ pub async fn post_mastr_registrierung(
     .await;
 
     match rows {
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
         Ok(r) if r.rows_affected() == 0 => return StatusCode::NOT_FOUND.into_response(),
         Ok(_) => {}
     }
@@ -1675,12 +1578,12 @@ pub async fn post_mastr_registrierung(
         );
         if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
             tracing::error!(tr_id, error = %e, "einsd: MaStR registriert outbox enqueue failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response();
+            return ApiError::internal(e).into_response();
         }
     }
 
     if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response();
+        return ApiError::internal(e).into_response();
     }
     StatusCode::NO_CONTENT.into_response()
 }
@@ -1698,11 +1601,7 @@ pub async fn post_verguetungssatz_lookup(
     Json(req): Json<VerguetungssatzLookupRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-marktdaten", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let verguetungsform = req.verguetungsform.as_deref().unwrap_or("UEBERSCHUSS");
@@ -1723,8 +1622,9 @@ pub async fn post_verguetungssatz_lookup(
             "verguetungssatz_ct": ct,
         }))
         .into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
+        // The inputs name no seeded rate: the caller's fix is to state the value
+        // on the plant, which only a sentence can tell it.
+        Ok(None) => ApiError::unprocessable(
             "No matching EEG tariff rate found. `eeg_verguetungssaetze` is statutory \
              reference data seeded from `eeg_billing::seed` — there is no import API, \
              and rows are not added per operator. Wind and KWKG are absent from the \
@@ -1733,8 +1633,8 @@ pub async fn post_verguetungssatz_lookup(
              `verguetungssatz_ct` — or `zuschlagswert_ct` for an awarded value — on \
              POST /api/v1/anlagen.",
         )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        .into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1772,11 +1672,7 @@ pub async fn post_batch_settle(
     Json(req): Json<BatchSettleRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "run-settlement", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     // Resolve EPEX price once for the whole batch.
@@ -1784,14 +1680,14 @@ pub async fn post_batch_settle(
         Some(p) => Some(p),
         None => match fetch_epex_price(&pool, year, month).await {
             Ok(p) => p,
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+            Err(e) => return ApiError::internal(e).into_response(),
         },
     };
 
     let limit = req.limit.unwrap_or(500).min(2000);
     let plants = match list_unsettled(&pool, &cfg.tenant, year, month).await {
         Ok(p) => p,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let plants: Vec<_> = plants.into_iter().take(limit as usize).collect();
@@ -1799,6 +1695,7 @@ pub async fn post_batch_settle(
     let mut settled = 0u32;
     let mut skipped_no_data = 0u32;
     let mut skipped_price_missing = 0u32;
+    let mut gehalten = 0u32;
     let mut errors = 0u32;
     let mut total_settlement_eur = rust_decimal::Decimal::ZERO;
     let mut results: Vec<serde_json::Value> = Vec::with_capacity(plants.len().min(100));
@@ -1876,6 +1773,9 @@ pub async fn post_batch_settle(
                     }
                     "no_data" => skipped_no_data += 1,
                     "price_missing" => skipped_price_missing += 1,
+                    // `[policy] beihilfe_politik = "halten"`: computed, stored,
+                    // not paid — counted apart, never as settled or failed.
+                    "gehalten" => gehalten += 1,
                     _ => errors += 1,
                 },
                 Ok((tr_id, _, Err(e))) => {
@@ -1900,6 +1800,7 @@ pub async fn post_batch_settle(
             "settled": settled,
             "skipped_no_data": skipped_no_data,
             "skipped_price_missing": skipped_price_missing,
+            "gehalten": gehalten,
             "errors": errors,
             "total_settlement_eur": total_settlement_eur.to_string(),
             "results_sample": results,
@@ -1965,19 +1866,11 @@ pub async fn post_zusammenlegen(
     Json(req): Json<ZusammenlegungRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     if child_tr_id == req.parent_tr_id {
-        return (
-            StatusCode::BAD_REQUEST,
-            "child and parent tr_id must differ",
-        )
-            .into_response();
+        return ApiError::bad_request("child and parent tr_id must differ").into_response();
     }
 
     match zusammenlegen(
@@ -2001,8 +1894,8 @@ pub async fn post_zusammenlegen(
             })),
         )
             .into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, format!("plant {child_tr_id} not found or not aktiv")).into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
+        Ok(false) => ApiError::NotFound.into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -2056,11 +1949,7 @@ pub async fn post_switch_veraeusserungsform(
     Json(req): Json<VeraeusserungsformWechselRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     use eeg_billing::direktverm::{Wechsel, WechselAblehnung, validate_wechsel};
@@ -2069,31 +1958,27 @@ pub async fn post_switch_veraeusserungsform(
     let anlage = match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let effective_date = match time::Date::parse(&req.effective_date, &Iso8601::DEFAULT) {
         Ok(d) => d,
         Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
+            return ApiError::bad_request(
                 "invalid effective_date — use ISO 8601 format (YYYY-MM-DD)",
             )
-                .into_response();
+            .into_response();
         }
     };
 
     let Some((new_model, ziel)) = wechselziel(&req.new_model) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            format!(
-                "§21b Abs. 1 Satz 1 EEG 2023 lists four Veräußerungsformen — expected one of \
-                 VERGUETUNG, AUSFALLVERGUETUNG, DIREKTVERMARKTUNG or \
-                 SONSTIGE_DIREKTVERMARKTUNG, got {}",
-                req.new_model
-            ),
-        )
-            .into_response();
+        return ApiError::bad_request(format!(
+            "§21b Abs. 1 Satz 1 EEG 2023 lists four Veräußerungsformen — expected one of \
+             VERGUETUNG, AUSFALLVERGUETUNG, DIREKTVERMARKTUNG or \
+             SONSTIGE_DIREKTVERMARKTUNG, got {}",
+            req.new_model
+        ))
+        .into_response();
     };
 
     // The Mitteilung is dated today: that is when the notification is enqueued.
@@ -2135,14 +2020,14 @@ pub async fn post_switch_veraeusserungsform(
                     .to_owned()
             }
         };
-        return (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
+        return ApiError::unprocessable(msg).into_response();
     }
 
     // ── Transactional outbox: the Veräußerungsform switch (eeg_anlagen UPDATE) and
     // its §21c notification CloudEvent commit atomically. ─────────────────────────
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     // `direktvermarktung` moves with the model. Left behind, the plant read back
     // as "in Direktvermarktung" while settling as Einspeisevergütung, and the
@@ -2175,7 +2060,7 @@ pub async fn post_switch_veraeusserungsform(
             let notification_sent = ce.is_some();
             if let Some(ce) = &ce {
                 if let Err(e) = mako_service::outbox::enqueue(&mut tx, ce).await {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response();
+                    return ApiError::internal(e).into_response();
                 }
                 // Record the notification timestamp in the same tx.
                 if let Err(e) = sqlx::query(
@@ -2188,11 +2073,11 @@ pub async fn post_switch_veraeusserungsform(
                 .execute(&mut *tx)
                 .await
                 {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response();
+                    return ApiError::internal(e).into_response();
                 }
             }
             if let Err(e) = tx.commit().await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response();
+                return ApiError::internal(e).into_response();
             }
             (
                 StatusCode::OK,
@@ -2212,8 +2097,8 @@ pub async fn post_switch_veraeusserungsform(
                 .into_response()
         }
         // rows_affected == 0 → plant not found; tx dropped (nothing changed).
-        Ok(_) => (StatusCode::NOT_FOUND, format!("plant {tr_id} not found")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Ok(_) => ApiError::NotFound.into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -2342,11 +2227,7 @@ pub async fn post_correction_settle(
     Json(req): Json<CorrectionSettleRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "correct-settlement", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     // The link points at the period's **initial** receipt, not at whichever row
@@ -2397,7 +2278,7 @@ pub async fn post_correction_settle(
         Ok(Some(r)) => r,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => {
-            return (crate::settle::settle_error_status(&e), format!("{e:#}")).into_response();
+            return crate::settle::settle_error(e).into_response();
         }
     };
 
@@ -2434,20 +2315,18 @@ pub async fn post_jahresabrechnung(
     Path((tr_id, year)): Path<(String, i16)>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "run-settlement", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
+    // An unknown plant is the caller's 404, not a failure of the year's run.
+    match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return ApiError::NotFound.into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
+    }
     match crate::pg::run_jahresabrechnung(&pool, &cfg.tenant, &tr_id, year).await {
         Ok(ja) => (StatusCode::OK, Json(ja)).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -2719,15 +2598,11 @@ pub async fn post_regionalnachweis(
     Json(req): Json<RegionalnachweisRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let (from, until) = match parse_period(&req.effective_from, req.effective_until.as_deref()) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiError::bad_request(e).into_response(),
     };
     match crate::pg::record_regionalnachweis(
         &pool,
@@ -2750,7 +2625,7 @@ pub async fn post_regionalnachweis(
             })),
         )
             .into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -2769,15 +2644,11 @@ pub async fn post_stromsteuerbefreiung(
     Json(req): Json<StromsteuerbefreiungRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let (from, until) = match parse_period(&req.effective_from, req.effective_until.as_deref()) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiError::bad_request(e).into_response(),
     };
     match crate::pg::record_stromsteuerbefreiung(
         &pool,
@@ -2800,7 +2671,7 @@ pub async fn post_stromsteuerbefreiung(
             })),
         )
             .into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -2820,15 +2691,11 @@ pub async fn post_sect54_defekt(
     Json(req): Json<Sect54DefektRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let (from, until) = match parse_period(&req.effective_from, req.effective_until.as_deref()) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiError::bad_request(e).into_response(),
     };
     let defekte = eeg_billing::Sect54SolarReduction {
         zahlungsberechtigung_nach_18_monaten: req.zahlungsberechtigung_nach_18_monaten,
@@ -2837,11 +2704,10 @@ pub async fn post_sect54_defekt(
         landesverordnung_nicht_erfuellt: req.landesverordnung_nicht_erfuellt,
     };
     if defekte.is_clean() {
-        return (
-            StatusCode::BAD_REQUEST,
+        return ApiError::bad_request(
             "at least one §54 defect must be set — a row recording none deducts nothing",
         )
-            .into_response();
+        .into_response();
     }
     match crate::pg::record_sect54_defekt(
         &pool,
@@ -2860,7 +2726,7 @@ pub async fn post_sect54_defekt(
             Json(serde_json::json!({ "id": id, "tr_id": tr_id, "paragraph": "§54 EEG 2023" })),
         )
             .into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -2881,11 +2747,7 @@ pub async fn post_sect54_nachweis_erbracht(
     Json(req): Json<Sect54NachweisRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let until = match parse_iso_date("effective_until", &req.effective_until) {
         Ok(d) => d,
@@ -2902,8 +2764,8 @@ pub async fn post_sect54_nachweis_erbracht(
             })),
         )
             .into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "no open §54 defect with that id").into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
+        Ok(false) => ApiError::NotFound.into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -2931,11 +2793,7 @@ pub async fn get_aw_reduktionen(
     axum::extract::Query(q): axum::extract::Query<AwReduktionenQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-anlage", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let on = match q.on.as_deref() {
         Some(s) => match parse_iso_date("on", s) {
@@ -2946,7 +2804,7 @@ pub async fn get_aw_reduktionen(
     };
     match crate::pg::aw_reduktionen_am(&pool, &cfg.tenant, &tr_id, on).await {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -3071,21 +2929,16 @@ pub struct PflichtverstossBehobenRequest {
     pub behoben_am: String,
 }
 
-fn parse_sanktionstyp(s: &str) -> Result<eeg_billing::SanktionsTyp, Box<Response>> {
+fn parse_sanktionstyp(s: &str) -> Result<eeg_billing::SanktionsTyp, ApiError> {
     eeg_billing::SanktionsTyp::from_db_str(s).ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "UNKNOWN_PFLICHTVERSTOSS",
-                "message": format!("{s:?} is not a §52 Abs. 1 EEG 2023 Pflichtverstoß"),
-                "erlaubt": eeg_billing::SanktionsTyp::ALL
-                    .iter()
-                    .map(|t| serde_json::json!({ "typ": t.as_db_str(), "nummer": t.nummer() }))
-                    .collect::<Vec<_>>(),
-            })),
-        )
-            .into_response()
-            .into()
+        let erlaubt = eeg_billing::SanktionsTyp::ALL
+            .iter()
+            .map(|t| format!("{} (Nr. {})", t.as_db_str(), t.nummer()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        ApiError::bad_request(format!(
+            "{s:?} is not a §52 Abs. 1 EEG 2023 Pflichtverstoß — expected one of {erlaubt}"
+        ))
     })
 }
 
@@ -3102,15 +2955,11 @@ pub async fn get_pflichtverstoesse(
     Path(tr_id): Path<String>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-anlage", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let mut conn = match pool.acquire().await {
         Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     match crate::pg::list_pflichtverstoesse(&mut conn, &cfg.tenant, &tr_id).await {
         Ok(rows) => Json(serde_json::json!({
@@ -3129,7 +2978,7 @@ pub async fn get_pflichtverstoesse(
                 .collect::<Vec<_>>(),
         }))
         .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -3156,15 +3005,11 @@ pub async fn post_pflichtverstoss(
     Json(req): Json<PflichtverstossAnlegenRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let typ = match parse_sanktionstyp(&req.typ) {
         Ok(t) => t,
-        Err(r) => return *r,
+        Err(e) => return e.into_response(),
     };
     let beginn = match parse_iso_date("beginn", &req.beginn) {
         Ok(d) => d,
@@ -3172,7 +3017,7 @@ pub async fn post_pflichtverstoss(
     };
     let mut conn = match pool.acquire().await {
         Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     match crate::pg::open_pflichtverstoss(
         &mut conn,
@@ -3197,7 +3042,7 @@ pub async fn post_pflichtverstoss(
             })),
         )
             .into_response(),
-        Err(e) => pflichtverstoss_write_error(&e, &tr_id, typ),
+        Err(e) => pflichtverstoss_write_error(e, &tr_id, typ),
     }
 }
 
@@ -3219,15 +3064,11 @@ pub async fn put_pflichtverstoss_behoben(
     Json(req): Json<PflichtverstossBehobenRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let typ = match parse_sanktionstyp(&typ) {
         Ok(t) => t,
-        Err(r) => return *r,
+        Err(e) => return e.into_response(),
     };
     let behoben_am = match parse_iso_date("behoben_am", &req.behoben_am) {
         Ok(d) => d,
@@ -3235,7 +3076,7 @@ pub async fn put_pflichtverstoss_behoben(
     };
     let mut conn = match pool.acquire().await {
         Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     match crate::pg::close_pflichtverstoss(&mut conn, &cfg.tenant, &tr_id, typ, behoben_am).await {
         Ok(Some(rec)) => Json(serde_json::json!({
@@ -3250,18 +3091,8 @@ pub async fn put_pflichtverstoss_behoben(
                         via POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction",
         }))
         .into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "KEIN_OFFENER_PFLICHTVERSTOSS",
-                "message": format!(
-                    "no open §52 Abs. 1 Nr. {} breach on plant {tr_id}",
-                    typ.nummer()
-                ),
-            })),
-        )
-            .into_response(),
-        Err(e) => pflichtverstoss_write_error(&e, &tr_id, typ),
+        Ok(None) => ApiError::NotFound.into_response(),
+        Err(e) => pflichtverstoss_write_error(e, &tr_id, typ),
     }
 }
 
@@ -3270,44 +3101,23 @@ pub async fn put_pflichtverstoss_behoben(
 /// The partial unique index is the „already open" case and the CHECK is
 /// „behoben_am before beginn"; everything else is a `500`.
 fn pflichtverstoss_write_error(
-    e: &sqlx::Error,
+    e: sqlx::Error,
     tr_id: &str,
     typ: eeg_billing::SanktionsTyp,
 ) -> Response {
-    let Some(db) = e.as_database_error() else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response();
+    let refusal = match e.as_database_error() {
+        Some(db) if db.constraint() == Some("ep_offen") => ApiError::conflict(format!(
+            "a §52 Abs. 1 Nr. {} breach is already open on plant {tr_id} — record its cure \
+             before opening another",
+            typ.nummer()
+        )),
+        Some(db) if db.constraint() == Some("ep_behoben_nach_beginn") => {
+            ApiError::unprocessable("behoben_am precedes the recorded beginn")
+        }
+        Some(db) if db.is_foreign_key_violation() => ApiError::NotFound,
+        _ => ApiError::from(e),
     };
-    match db.constraint() {
-        Some("ep_offen") => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "PFLICHTVERSTOSS_BEREITS_OFFEN",
-                "message": format!(
-                    "a §52 Abs. 1 Nr. {} breach is already open on plant {tr_id} — record its \
-                     cure before opening another",
-                    typ.nummer()
-                ),
-            })),
-        )
-            .into_response(),
-        Some("ep_behoben_nach_beginn") => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "BEHOBEN_VOR_BEGINN",
-                "message": "behoben_am precedes the recorded beginn",
-            })),
-        )
-            .into_response(),
-        _ if db.is_foreign_key_violation() => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "NOT_REGISTERED",
-                "message": format!("no plant {tr_id} in this EEG-/KWKG-Register"),
-            })),
-        )
-            .into_response(),
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
-    }
+    refusal.into_response()
 }
 
 #[cfg(test)]

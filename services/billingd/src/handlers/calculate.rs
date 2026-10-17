@@ -103,7 +103,7 @@ pub struct CalculateRequest {
     /// per `(VAT category, rate)` group, so the residual base per rate is
     /// exact even when an advance was invoiced at a different rate.
     ///
-    /// Absent, the operator's `[billing] settlement_form` default applies.
+    /// Absent, the operator's `[policy] settlement_form` default applies.
     #[serde(default)]
     pub settlement_form: Option<energy_billing::SettlementForm>,
 }

@@ -519,10 +519,16 @@ CREATE TABLE settlement_receipts (
     -- | 'jahreskontingent_erschoepft' (§ 8 Abs. 4 KWKG: the calendar year's
     -- Vollbenutzungsstunden are used up; the Förderung resumes in January)
     -- | 'sanctioned' | 'kein_anspruch' | 'unknown'
+    -- | 'gehalten' ([policy] beihilfe_politik = 'halten': computed, not paid —
+    --   no Gutschrift, no payout event — until an approval covers the period)
     status                      TEXT        NOT NULL DEFAULT 'calculated',
     -- Active | Reduced | Suspended | PostEeg | Ended (at time of settlement)
     settlement_state            TEXT,
     error_detail                TEXT,
+    -- {key, value, quelle} of the operator policy the result branched on
+    -- (beihilfe_politik for a payment made under, or held for, the
+    -- Beihilfevorbehalt); NULL where no policy was consulted.
+    policy_json                 JSONB,
 
     -- Correction chain support (§ 147 AO / GoBD)
     is_correction               BOOLEAN     NOT NULL DEFAULT false,

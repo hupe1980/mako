@@ -27,7 +27,7 @@ use crate::domain::virtual_meter::VirtualMeterRule;
 ///
 /// # Errors
 ///
-/// A ready response: `503` when the read failed — a read that failed is not a
+/// A ready response: `500` when the read failed — a read that failed is not a
 /// source that is missing — and `422` when the Messlokation has no series in
 /// the window, which a formula cannot be evaluated without.
 pub(crate) async fn melo_series(
@@ -49,14 +49,10 @@ pub(crate) async fn melo_series(
         })
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, malo = %malo_id, "edmd: virtual meter source query failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({
-                    "error": format!("source series {malo_id} could not be read: {e}"),
-                })),
-            )
-                .into_response()
+            ApiError::internal(anyhow::anyhow!(
+                "virtual meter source series {malo_id} could not be read: {e}"
+            ))
+            .into_response()
         })?;
     let reads: Vec<MeterRead> = reads
         .into_iter()
@@ -71,16 +67,11 @@ pub(crate) async fn melo_series(
         },
     );
     crate::domain::vee::energy_series(sparte, &projected).map_err(|defect| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!(
-                    "Messlokation {melo_id} ({} via MaLo {malo_id}) has no series in the window: {defect}",
-                    direction.as_str()
-                ),
-            })),
-        )
-            .into_response()
+        ApiError::unprocessable(format!(
+            "Messlokation {melo_id} ({} via MaLo {malo_id}) has no series in the window: {defect}",
+            direction.as_str()
+        ))
+        .into_response()
     })
 }
 
@@ -101,13 +92,7 @@ async fn load_rule(
         StatusCode::INTERNAL_SERVER_ERROR.into_response()
     })?
     .ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": format!("virtual meter {virtual_malo_id:?} not found")
-            })),
-        )
-            .into_response()
+        ApiError::NotFound.into_response()
     })?;
     let rule_json: serde_json::Value = sqlx::Row::try_get(&row, "rule_json").map_err(|e| {
         tracing::warn!(error = %e, "edmd: failed to decode virtual meter rule_json");
@@ -115,12 +100,10 @@ async fn load_rule(
     })?;
     // A stored rule that no longer deserialises is a row edmd did not write.
     VirtualMeterRule::from_json(&rule_json).map_err(|e| {
-        tracing::warn!(error = %e, "edmd: failed to deserialise VirtualMeterRule");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("invalid rule_json: {e}") })),
-        )
-            .into_response()
+        ApiError::internal(anyhow::anyhow!(
+            "stored rule_json of {virtual_malo_id} does not deserialise: {e}"
+        ))
+        .into_response()
     })
 }
 
@@ -141,11 +124,7 @@ pub(crate) async fn get_virtual_lastgang(
 ) -> impl IntoResponse {
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let rule = match load_rule(&state, &virtual_malo_id).await {
@@ -158,11 +137,11 @@ pub(crate) async fn get_virtual_lastgang(
     };
 
     let unprocessable = |error: String| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({ "error": error, "virtual_malo_id": virtual_malo_id })),
+        ApiError::unprocessable_with(
+            error,
+            serde_json::json!({ "virtual_malo_id": virtual_malo_id }),
         )
-            .into_response()
+        .into_response()
     };
     let series = match &rule {
         VirtualMeterRule::Formula { formula, sources } => {
@@ -251,11 +230,7 @@ pub(crate) async fn list_virtual_meters(
         "read-timeseries",
         state.tenant.as_str(),
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match sqlx::query("SELECT virtual_malo_id, display_name, rule_type, legal_basis, sparte, valid_from, valid_to, created_at FROM virtual_meter_configs WHERE tenant = $1 ORDER BY virtual_malo_id")
         .bind(&state.tenant)
@@ -296,11 +271,7 @@ pub(crate) async fn create_virtual_meter(
         "write-meter-reads",
         state.tenant.as_str(),
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     // `rule_type` is **derived** from the rule, never taken from the caller
     // beside it. Two fields describing the same thing drift: a body claiming one
@@ -311,25 +282,14 @@ pub(crate) async fn create_virtual_meter(
     ) {
         Ok(r) => r,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": format!("invalid rule_json: {e}")
-                })),
-            )
-                .into_response();
+            return ApiError::bad_request(format!("invalid rule_json: {e}")).into_response();
         }
     };
     if let Some(melo) = rule.unsourced() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!(
-                    "rule_json reads Messlokation {melo} but names no MaLo for it in `sources`"
-                )
-            })),
-        )
-            .into_response();
+        return ApiError::unprocessable(format!(
+            "rule_json reads Messlokation {melo} but names no MaLo for it in `sources`"
+        ))
+        .into_response();
     }
     let rule_type = rule.kind();
     let virtual_malo_id = body
@@ -355,11 +315,7 @@ pub(crate) async fn create_virtual_meter(
     let legal_basis: Option<&str> = body.get("legal_basis").and_then(|v| v.as_str());
 
     if virtual_malo_id.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "virtual_malo_id is required" })),
-        )
-            .into_response();
+        return ApiError::bad_request("virtual_malo_id is required").into_response();
     }
 
     match sqlx::query(
@@ -405,11 +361,7 @@ pub(crate) async fn get_virtual_meter(
         "read-timeseries",
         state.tenant.as_str(),
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match sqlx::query("SELECT virtual_malo_id, display_name, rule_type, rule_json, legal_basis, sparte, valid_from, valid_to, created_at FROM virtual_meter_configs WHERE virtual_malo_id = $1 AND tenant = $2")
         .bind(&virtual_malo_id)
@@ -427,7 +379,7 @@ pub(crate) async fn get_virtual_meter(
                 "sparte": r.try_get::<String, _>("sparte").unwrap_or_default(),
             })).into_response()
         }
-        Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "not found" }))).into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
         Err(e) => {
             tracing::warn!(error = %e, "edmd: get_virtual_meter failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -447,11 +399,7 @@ pub(crate) async fn delete_virtual_meter(
         "write-meter-reads",
         state.tenant.as_str(),
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match sqlx::query(
         "DELETE FROM virtual_meter_configs WHERE virtual_malo_id = $1 AND tenant = $2",
@@ -462,11 +410,7 @@ pub(crate) async fn delete_virtual_meter(
     .await
     {
         Ok(res) if res.rows_affected() > 0 => StatusCode::NO_CONTENT.into_response(),
-        Ok(_) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "not found" })),
-        )
-            .into_response(),
+        Ok(_) => ApiError::NotFound.into_response(),
         Err(e) => {
             tracing::warn!(error = %e, "edmd: delete_virtual_meter failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()

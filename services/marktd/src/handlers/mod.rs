@@ -5,7 +5,7 @@
 //! Axum handler utilities shared across all endpoint modules.
 //!
 //! - `Claims` — JWT bearer extraction via `FromRequestParts`
-//! - `IntoResponse for MdmError` — maps domain errors to HTTP status codes
+//! - `mdm_error` — maps a domain refusal to its `ApiError`
 //! - `parse_if_match` — `If-Match` header → [`IfMatch`]
 //! - `etag` — `i64` version → ETag header value
 
@@ -37,53 +37,51 @@ pub mod tranche;
 pub mod versorgung;
 
 use axum::{
-    http::{HeaderMap, StatusCode, header},
+    http::HeaderMap,
     response::{IntoResponse, Response},
 };
 use mako_markt::error::MdmError;
+use mako_service::{ApiError, ApiResult};
 
 // Re-export Claims from mako-service so handlers use the shared implementation.
 pub use mako_service::oidc::Claims;
 
-// ── MdmError → axum response ──────────────────────────────────────────────────
+// ── MdmError → ApiError ───────────────────────────────────────────────────────
 
-/// Local newtype so we can impl `IntoResponse` for the foreign `MdmError`.
+/// The [`ApiError`] a domain refusal answers with — the one problem shape every
+/// mako service renders, with the stable [`MdmError::error_code`] in `code`.
 ///
-/// Use `.into_response()` via the `IntoMdmResponse` extension trait (below),
-/// which avoids having to wrap at every call site.
-pub struct MdmErrorResponse(pub MdmError);
-
-impl IntoResponse for MdmErrorResponse {
-    fn into_response(self) -> Response {
-        let status =
-            StatusCode::from_u16(self.0.status_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        // RFC 7807 Problem Details for HTTP APIs
-        let body = serde_json::json!({
-            "type":   format!("https://docs.mako.energy/problems/{}", self.0.error_code()),
-            "title":  self.0.error_title(),
-            "status": self.0.status_u16(),
-            "detail": self.0.to_string(),
-        });
-        let mut resp = (status, axum::Json(body)).into_response();
-        resp.headers_mut().insert(
-            header::CONTENT_TYPE,
-            "application/problem+json"
-                .parse()
-                .expect("valid header value"),
-        );
-        resp
+/// A server-side failure keeps `ApiError`'s rules: its text — a SQL fragment,
+/// a makod response — goes to the log beside an `error_id` and never into the
+/// body. An `If-Match` mismatch is `412` (RFC 9110 § 13.1.1).
+#[must_use]
+pub fn mdm_error(e: MdmError) -> ApiError {
+    let code = e.error_code();
+    match e {
+        e @ (MdmError::Internal(_) | MdmError::WebhookDelivery { .. }) => ApiError::internal(e),
+        e @ MdmError::MakodSync(_) => ApiError::upstream("makod", e),
+        e @ (MdmError::InvalidMaloId { .. }
+        | MdmError::InvalidMeloId { .. }
+        | MdmError::InvalidMpId { .. }
+        | MdmError::Unprocessable { .. }) => ApiError::unprocessable(e.to_string()).with_code(code),
+        e @ MdmError::NotFound { .. } => ApiError::not_found(e.to_string()).with_code(code),
+        e @ MdmError::VersionConflict { .. } => {
+            ApiError::precondition_failed(e.to_string()).with_code(code)
+        }
+        e @ MdmError::Forbidden { .. } => ApiError::forbidden(e.to_string()).with_code(code),
+        e @ MdmError::MakodConflict { .. } => ApiError::conflict(e.to_string()).with_code(code),
     }
 }
 
-/// Extension trait that lets `MdmError` turn itself into an axum `Response`
-/// without the orphan newtype boilerplate at every call site.
+/// Extension trait that lets `MdmError` answer a request directly, as the
+/// [`ApiError`] [`mdm_error`] maps it to.
 pub trait IntoMdmResponse {
     fn into_response(self) -> Response;
 }
 
 impl IntoMdmResponse for MdmError {
     fn into_response(self) -> Response {
-        MdmErrorResponse(self).into_response()
+        mdm_error(self).into_response()
     }
 }
 
@@ -165,23 +163,21 @@ pub fn etag(version: i64) -> String {
 /// Serialise a validated BO4E object for storage, or fail the request.
 ///
 /// The rule and the reasoning live in [`mako_markt::bo4e::to_canonical_json`];
-/// this adapts its error to the `(StatusCode, Json)` shape marktd's handlers
-/// return, so every BO4E write in the service refuses the same way. The BO is
-/// named by the type rather than by an argument, so the message cannot drift
+/// a failure is this service's own fault — the value already passed the gate —
+/// so it is a `500` with an `error_id`, its text only in the log. The BO is
+/// named by the type rather than by an argument, so the log line cannot drift
 /// from the value that failed.
-pub(crate) fn serialise_or_500<T>(
-    value: &T,
-) -> Result<serde_json::Value, (axum::http::StatusCode, serde_json::Value)>
+pub(crate) fn serialise_or_500<T>(value: &T) -> ApiResult<serde_json::Value>
 where
     T: mako_markt::bo4e::Bo4eTyped + serde::Serialize,
 {
-    mako_markt::bo4e::to_canonical_json(value).map_err(|e| {
-        tracing::error!(bo = e.typ, error = %e, "validated BO4E object is not serialisable");
-        (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            serde_json::json!({ "error": e.to_string() }),
-        )
-    })
+    mako_markt::bo4e::to_canonical_json(value).map_err(ApiError::internal)
+}
+
+/// The `422` for a payload the BO4E gate refused: the sentence as `detail`,
+/// and the stage's `code`, `paths` or `failures` beside it.
+pub(crate) fn bo4e_refusal(e: &mako_markt::bo4e::Bo4eRejection) -> ApiError {
+    ApiError::unprocessable_with(e.to_string(), serde_json::Value::Object(e.detail()))
 }
 
 #[cfg(test)]

@@ -400,14 +400,29 @@ fn id_literal(object: &lopdf::Object) -> String {
     out
 }
 
+/// The CII payload of `model`, as every ZUGFeRD carrier mako writes embeds it.
+///
+/// [`en16931_formats::write_unchecked`]: the model is written as it carries
+/// BT-24, and validity stays the caller's (billingd validates what it renders,
+/// the publish gate validates its specimen). A model CII's schema has no form
+/// for — no BT-1 or BT-2 — is refused, naming the term, rather than written.
+///
+/// # Errors
+///
+/// [`en16931_formats::Unwritable`] for such a model.
+pub fn cii_payload(model: &en16931::Invoice) -> Result<String> {
+    Ok(en16931_formats::write_unchecked(model, en16931_formats::Syntax::Cii)?.xml)
+}
+
 /// Read the invoice back out of a finished ZUGFeRD PDF.
 ///
-/// A thin wrapper over [`en16931_formats::zugferd::extract`], which walks the
-/// catalogue's `/Names` `/EmbeddedFiles` tree exactly as a receiver's reader
-/// does, resolves the filename by the profile-preference order, parses the
-/// payload back into an [`en16931::Invoice`], reads the `/AFRelationship` and
-/// the `fx:` XMP, and reports any [`Divergence`] between what the PDF *declares*
-/// and what it *contains*.
+/// A thin wrapper over [`en16931_formats::zugferd::extract`] under its default
+/// [`Limits`](en16931_formats::zugferd::Limits), which walks the catalogue's
+/// `/Names` `/EmbeddedFiles` tree exactly as a receiver's reader does,
+/// resolves the filename by the profile-preference order, reads the
+/// `/AFRelationship` and the `fx:` XMP, and reports any [`Divergence`] between
+/// what the PDF *declares* and what it *contains*. The payload comes back as
+/// bytes; [`en16931_formats::read`] parses it.
 ///
 /// mako had its own name-tree walk here. Deleting it removed about a hundred
 /// lines and gained three checks it never made — see [`crate::document::gate`],
@@ -418,9 +433,9 @@ fn id_literal(object: &lopdf::Object) -> String {
 ///
 /// Propagates [`en16931_formats::zugferd::Error`]: not a readable PDF, no
 /// embedded invoice under any recognised name (naming what *was* attached), or
-/// a payload that is not UTF-8.
+/// a stream or object walk beyond the limits.
 pub fn extract(pdf: &[u8]) -> Result<Extracted, en16931_formats::zugferd::Error> {
-    en16931_formats::zugferd::extract(pdf)
+    en16931_formats::zugferd::extract(pdf, &en16931_formats::zugferd::Limits::default())
 }
 
 #[cfg(test)]

@@ -322,10 +322,10 @@ pub fn berlin_mtu_count(date: &str, mtu_minutes: u32) -> PyResult<u32> {
 
 /// One published answer obligation: who owes what, by when, and where it says so.
 ///
-/// Bound rather than re-tabulated because four services already share this
-/// table — `makod` registers the deadline, `processd` sizes its operator queue,
-/// `obsd` raises the breach and `agentd` classifies it. A harness with its own
-/// copy would disagree with all four.
+/// Bound rather than re-tabulated because three services already share this
+/// table — `makod` registers the deadline, `processd` sizes its operator queue
+/// and raises the breach, and `agentd` classifies it. A harness with its own
+/// copy would disagree with all three.
 #[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone)]
 pub struct AntwortObligation {

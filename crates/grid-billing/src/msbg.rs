@@ -67,6 +67,7 @@ pub enum MessstellenKategorie {
 /// Leistung, an Erzeugungsanlage the other way round, and a §14a
 /// Vereinbarung is a fact about the Zählpunkt on its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PflichtEinstufung {
     /// Jahresstromverbrauch in kWh at this Abnahmestelle.
     #[serde(default)]

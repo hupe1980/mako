@@ -8,9 +8,10 @@
 //!
 //! ## Access control
 //!
-//! - `GET` — any authenticated caller in the same tenant (processd, obsd, ERP)
+//! - `GET` — any authenticated caller in the same tenant (processd, ERP)
 //! - `PUT` — NB role only (`write-grundversorger` Cedar action)
 
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{
@@ -30,7 +31,7 @@ use tracing::info;
 
 use mako_service::cedar::CedarEnforcer;
 
-use crate::handlers::{Claims, MdmErrorResponse, Tenant};
+use crate::handlers::{Claims, Tenant, mdm_error};
 use crate::pg::PgGrundversorgerRepository;
 
 /// Extension alias — concrete type so AFIT dispatches statically.
@@ -92,34 +93,20 @@ pub async fn get_grundversorger(
     Query(q): Query<GrundversorgerQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-grundversorger", &tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let sparte: Sparte = match q.sparte.as_deref().unwrap_or("STROM").parse() {
         Ok(s) => s,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("invalid sparte: {e}") })),
-            )
-                .into_response();
+            return ApiError::bad_request(format!("invalid sparte: {e}")).into_response();
         }
     };
 
     match repo.find(&tenant, &nb_mp_id, sparte).await {
         Ok(Some(rec)) => Json(GrundversorgerResponse::from(rec)).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "no Grundversorger recorded for this Netzbetreiber/Sparte"
-            })),
-        )
-            .into_response(),
-        Err(e) => MdmErrorResponse(e).into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
+        Err(e) => mdm_error(e).into_response(),
     }
 }
 
@@ -133,21 +120,13 @@ pub async fn put_grundversorger(
     Json(body): Json<PutGrundversorgerBody>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "write-grundversorger", &tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let sparte: Sparte = match body.sparte.parse() {
         Ok(s) => s,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("invalid sparte: {e}") })),
-            )
-                .into_response();
+            return ApiError::bad_request(format!("invalid sparte: {e}")).into_response();
         }
     };
     let festgestellt_am = match body
@@ -161,11 +140,7 @@ pub async fn put_grundversorger(
     {
         Ok(d) => d,
         Err(reason) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": reason })),
-            )
-                .into_response();
+            return ApiError::bad_request(reason).into_response();
         }
     };
 
@@ -188,6 +163,6 @@ pub async fn put_grundversorger(
 
     match repo.upsert(&rec).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => MdmErrorResponse(e).into_response(),
+        Err(e) => mdm_error(e).into_response(),
     }
 }

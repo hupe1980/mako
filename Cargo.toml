@@ -22,7 +22,6 @@ members = [
     "crates/mako-nbw",
     "crates/mako-markt",
     "crates/mako-events",
-    "crates/mako-obs",
     "crates/mako-service",
     "crates/invoic-checker",
     "crates/mako-invoic",
@@ -34,10 +33,8 @@ members = [
     "services/makod",
     "services/marktd",
     "services/edmd",
-    "services/obsd",
     "services/processd",
     "services/netzbilanzd",
-    "services/sperrd",
     "services/einsd",
     "services/productd",
     "services/agentd",
@@ -46,7 +43,6 @@ members = [
     "services/accountingd",
     "services/portald",
     "services/vertragd",
-    "services/mabis-syncd",
     "xtask",
 ]
 exclude = ["fuzz"]
@@ -72,7 +68,6 @@ default-members = [
     "crates/mako-nbw",
     "crates/mako-markt",
     "crates/mako-events",
-    "crates/mako-obs",
     "crates/mako-service",
     "crates/invoic-checker",
     "crates/mako-invoic",
@@ -84,10 +79,8 @@ default-members = [
     "services/makod",
     "services/marktd",
     "services/edmd",
-    "services/obsd",
     "services/processd",
     "services/netzbilanzd",
-    "services/sperrd",
     "services/einsd",
     "services/productd",
     "services/agentd",
@@ -96,7 +89,6 @@ default-members = [
     "services/accountingd",
     "services/portald",
     "services/vertragd",
-    "services/mabis-syncd",
     "xtask",
 ]
 
@@ -140,16 +132,16 @@ rubo4e       = { version = "0.14.0", features = ["versioned", "identifiers", "de
 # counted — `mako_service::metrics` exports
 # `mako_bo4e_decimal_from_json_number_total` for exactly that.
 rust_decimal = { version = "1", features = ["db-postgres", "macros", "serde-str"] }
-billing      = { version = "0.15.0", features = ["serde"] }
+billing      = { version = "0.16.0", features = ["serde"] }
 # EN 16931 semantic invoice model + business-rule validation (the `billing`
 # adapter bridges the shared money core); en16931-formats renders XRechnung/CII +
 # PEPPOL UBL, and its `zugferd` feature *reads* a finished ZUGFeRD PDF — the
 # catalogue walk, the CII re-parse and the metadata/payload `Divergence` checks
-# outputd's publish gate runs. Writing the carrier is mako's
-# (`outputd::document::facturx`), because that crate deliberately ships no
-# writer — a position upstream holds by design (fed back to its authors).
-en16931         = { version = "0.7.0", features = ["billing", "serde", "time"] }
-en16931-formats = { version = "0.7.0", features = ["cii", "ubl", "serde", "zugferd"] }
+# outputd's publish gate runs. outputd writes the carrier itself
+# (`outputd::document::facturx`); 0.8's `zugferd::embed` is the upstream writer
+# it can move onto.
+en16931         = { version = "0.8.0", features = ["billing", "serde", "time"] }
+en16931-formats = { version = "0.8.0", features = ["cii", "ubl", "serde", "zugferd"] }
 serde        = { version = "1", features = ["derive"] }
 # Jaro-Winkler for the `E_0624` Prüfschritt-50 name comparison. Already in the
 # tree via clap and darling, so it adds no supply-chain surface.
@@ -192,7 +184,6 @@ mako-markt       = { path = "crates/mako-markt",       version = "0.22" }
 mako-events      = { path = "crates/mako-events",      version = "0.22" }
 grid-billing     = { path = "crates/grid-billing",     version = "0.22" }
 eeg-billing      = { path = "crates/eeg-billing",      version = "0.22" }
-mako-obs         = { path = "crates/mako-obs",         version = "0.22" }
 mako-wim         = { path = "crates/mako-wim",         version = "0.22" }
 mako-gpke        = { path = "crates/mako-gpke",        version = "0.22" }
 # The INVOIC settle/dispute state machine, shared by every billing family.
@@ -220,7 +211,7 @@ mako-mabis       = { path = "crates/mako-mabis",       version = "0.22" }
 energy-billing   = { path = "crates/energy-billing",   version = "0.22" }
 dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.22" }
 metering         = { version = "0.25" }
-sepa             = { version = "0.7" }
+sepa             = { version = "0.9" }
 # Immutable, tamper-evident double-entry ledger kernel (sibling repo). accountingd's
 # storage/accounting base. Domain-neutral by design — the BillingDocument→Entry and
 # SKR mapping live in accountingd, never in the crate.

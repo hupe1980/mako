@@ -7,4 +7,5 @@ mod demo_config;
 mod demo_payloads;
 mod dev_config;
 mod meterstore_integration;
+mod router_builds;
 mod schema_code_guard;

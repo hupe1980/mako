@@ -993,10 +993,10 @@ pub struct SettleInput {
     ///   Höchstanteil → `KeinAnspruch` (EUR 0)
     /// - **§44 Güllekleinanlage**: `ist_guellebonusanlage` recorded in audit positions
     pub biomasse: Option<eeg_billing::biomasse::BiomassSettlementData>,
-    /// Set when the payment is made under the open Beihilfevorbehalt by the
-    /// operator's `unter_vorbehalt` policy: the text of the zero-euro position
-    /// that states the reservation on the receipt and the Gutschrift.
-    pub beihilfevorbehalt_hinweis: Option<String>,
+    /// What the Beihilfevorbehalt decided for the period: covered, paid under
+    /// reservation (a zero-euro position states it on the receipt and the
+    /// Gutschrift), or held (receipt `gehalten`, no Gutschrift, no payout).
+    pub beihilfe: crate::settle::Beihilfeentscheidung,
 }
 
 #[derive(Debug, Serialize)]
@@ -1025,6 +1025,10 @@ pub struct SettleResult {
     /// `settlement_eur` — §52 Abs. 6 Satz 2 permits the Aufrechnung, but that is
     /// a decision for the ledger, not for the settlement.
     pub pflichtzahlung_kumuliert_eur: Option<Decimal>,
+    /// The operator policy this result branched on — `[policy]
+    /// beihilfe_politik` for a payment made under, or held for, the
+    /// Beihilfevorbehalt. `None` where no policy was consulted.
+    pub policy: Option<mako_service::policy::PolicyTriple>,
 }
 
 // ── §44b quota computation ─────────────────────────────────────────────────────
@@ -1539,9 +1543,8 @@ pub struct SettleOverrides {
     /// Höchstdauer check; read from the receipts by
     /// [`crate::pg::ausfallverguetung_nutzung`].
     pub ausfallverguetung: crate::sect52::AusfallverguetungNutzung,
-    /// The Beihilfevorbehalt position for a payment made under it — see
-    /// [`SettleInput::beihilfevorbehalt_hinweis`].
-    pub beihilfevorbehalt_hinweis: Option<String>,
+    /// The Beihilfevorbehalt decision — see [`SettleInput::beihilfe`].
+    pub beihilfe: crate::settle::Beihilfeentscheidung,
 }
 
 /// Build a [`SettleInput`] from a plant row and a billing period.
@@ -1703,7 +1706,7 @@ pub fn build_settle_input(
         // §§42–44 EEG 2023: derive biomass fuel composition from the three typed
         // DB columns. `None` for non-biomass plants.
         biomasse: derive_biomasse(anlage),
-        beihilfevorbehalt_hinweis: overrides.beihilfevorbehalt_hinweis,
+        beihilfe: overrides.beihilfe,
     })
 }
 
@@ -1818,8 +1821,7 @@ fn build_gutschrift(
     Option<Decimal>,
     Option<Decimal>,
 ) {
-    use billing::{Currency, DocumentMeta, Period};
-    use eeg_billing::gutschrift::settlement_to_gutschrift_with_document;
+    use eeg_billing::gutschrift::{GutschriftHeader, settlement_to_gutschrift_with_document};
 
     let (year, month) = (input.billing_year, input.billing_month);
     // The feed-in Gutschrift VAT is the operator's declared status (§19
@@ -1829,32 +1831,34 @@ fn build_gutschrift(
     let vat = input.vat_status;
 
     let nummer = format!("GS-EEG-{}-{year:04}-{month:02}", input.tr_id);
-    let m = time::Month::try_from(month as u8).unwrap_or(time::Month::January);
-    let last_day = m.length(year as i32);
-    let period = Period::new(
-        format!("{year:04}-{month:02}-01"),
-        format!("{year:04}-{month:02}-{last_day:02}"),
-    );
+    // The settled month, first to last day. A month the calendar does not have
+    // leaves the period off rather than inventing one.
+    let zeitraum = u8::try_from(month)
+        .ok()
+        .and_then(|m| time::Month::try_from(m).ok())
+        .and_then(|m| {
+            let y = i32::from(year);
+            let first = Date::from_calendar_date(y, m, 1).ok()?;
+            let last = Date::from_calendar_date(y, m, m.length(y)).ok()?;
+            Some((first, last))
+        });
 
-    let meta = DocumentMeta {
-        invoice_number: nummer.clone(),
-        currency: Currency::EUR,
-        period_label: format!("{year:04}-{month:02}"),
-        period: Some(period),
-        issue_date: Some(mako_fristen::heute().to_string()),
-        due_date: output.faelligkeitsdatum.map(|d| d.to_string()),
-        // `PartyIdentifier` carries an optional ISO 6523 ICD
-        // `scheme`. Both values are left scheme-less on purpose: the tenant is a
-        // BDEW/DVGW Codenummer (not every one of which is a GLN) and the MaLo-ID
-        // is an 11-digit BDEW identifier with no ICD at all. A scheme is
-        // optional, and BR-CL-10 only constrains it when present — asserting
-        // `"0088"` here would put an unverified claim into a regulated document.
-        issuer_id: Some(billing::PartyIdentifier::new(input.tenant.clone())), // NB issues the Gutschrift
-        recipient_id: Some(billing::PartyIdentifier::new(input.malo_id.clone())), // Anlagenbetreiber
-        ..Default::default()
+    let header = GutschriftHeader {
+        nummer: nummer.clone(),
+        titel: format!("{year:04}-{month:02}"),
+        zeitraum,
+        rechnungsdatum: Some(mako_fristen::heute()),
+        faelligkeitsdatum: output.faelligkeitsdatum,
+        // Both identifiers go out scheme-less on purpose: the tenant is a
+        // BDEW/DVGW Codenummer (not every one of which is a GLN) and the
+        // MaLo-ID is an 11-digit BDEW identifier with no ISO 6523 ICD at all.
+        // Asserting `"0088"` would put an unverified claim into a regulated
+        // document.
+        aussteller: Some(input.tenant.clone()), // NB issues the Gutschrift
+        empfaenger: Some(input.malo_id.clone()), // Anlagenbetreiber
     };
 
-    match settlement_to_gutschrift_with_document(output, vat, meta) {
+    match settlement_to_gutschrift_with_document(output, vat, &header) {
         Ok((rechnung, doc)) => {
             // The outbound gate. `eeg-billing` checks its own emissions in
             // tests, but this Gutschrift is assembled from a settlement run's
@@ -1878,11 +1882,10 @@ fn build_gutschrift(
             (
                 serde_json::to_value(&rechnung).ok(),
                 Some(nummer),
-                // BT-110 VAT total (not `tax_total()`, which would also fold in
-                // any non-VAT levy layer). A validated single-layer Gutschrift
-                // never errs.
-                doc.vat_total().ok().map(|a| a.into_decimal()),
-                Some(doc.gross_total().into_decimal()),
+                // BT-110 and BT-112, derived once by `billing` at two
+                // decimals: the cent figures the Gutschrift itself states.
+                Some(doc.vat_total().to_decimal()),
+                Some(doc.tax_inclusive_total().to_decimal()),
             )
         }
         Err(e) => {
@@ -1912,6 +1915,8 @@ struct ReceiptRow<'a> {
     rechnung_json: Option<serde_json::Value>,
     gutschrift_nummer: Option<String>,
     marktwert_vorlaeufig: bool,
+    /// The `{key, value, quelle}` of the policy the result branched on.
+    policy_json: Option<serde_json::Value>,
 }
 
 /// Snapshot the initial receipt it is about to overwrite, then upsert `row`;
@@ -1983,9 +1988,9 @@ async fn persist_receipt(
                pflichtzahlung_eur, faelligkeitsdatum,
                verlaengerungsanspruch_qh, billing_days_fraction, positions_json,
                is_correction, correction_of, correction_reason,
-               rechnung_json, gutschrift_nummer, marktwert_vorlaeufig)
+               rechnung_json, gutschrift_nummer, marktwert_vorlaeufig, policy_json)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                  $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+                  $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
           ON CONFLICT (tr_id, tenant, billing_year, billing_month) WHERE is_correction = false DO UPDATE
           SET settlement_model          = EXCLUDED.settlement_model,
               einspeisemenge_kwh        = EXCLUDED.einspeisemenge_kwh,
@@ -2002,6 +2007,7 @@ async fn persist_receipt(
               correction_reason         = EXCLUDED.correction_reason,
               rechnung_json             = EXCLUDED.rechnung_json,
               gutschrift_nummer         = EXCLUDED.gutschrift_nummer,
+              policy_json               = EXCLUDED.policy_json,
               settled_at                = now()
           RETURNING id",
     )
@@ -2025,6 +2031,7 @@ async fn persist_receipt(
     .bind(row.rechnung_json.clone())
     .bind(row.gutschrift_nummer.clone())
     .bind(row.marktwert_vorlaeufig)
+    .bind(row.policy_json.clone())
     .fetch_one(&mut *conn)
     .await
     .context("persist settlement")?;
@@ -2236,6 +2243,8 @@ pub async fn run_settlement(
                 rechnung_json: None,
                 gutschrift_nummer: None,
                 marktwert_vorlaeufig: false,
+                // Nothing is paid or held: the expiry, not the policy, decides.
+                policy_json: None,
             },
         )
         .await?;
@@ -2256,6 +2265,7 @@ pub async fn run_settlement(
             // The award lapsed before the §52 derivation ran, so no claim is
             // stated here either — the receipt's own columns are cleared with it.
             pflichtzahlung_kumuliert_eur: None,
+            policy: None,
         });
     }
 
@@ -2653,7 +2663,7 @@ pub async fn run_settlement(
     // A payment made under the open Beihilfevorbehalt says so on the receipt
     // and on the Gutschrift: a zero-euro position, so the amount is unchanged
     // and the reservation travels with the document.
-    if let Some(hinweis) = &input.beihilfevorbehalt_hinweis
+    if let crate::settle::Beihilfeentscheidung::UnterVorbehalt { hinweis, .. } = &input.beihilfe
         && output.settlement_eur.is_some()
     {
         output.positions.push(eeg_billing::SettlePosition {
@@ -2683,6 +2693,18 @@ pub async fn run_settlement(
         // Forward-compatible: any future status variant stores as "unknown" and does not block
         _ => "unknown",
     };
+    // `[policy] beihilfe_politik = "halten"`: a computed payment no approval
+    // covers is stored, not paid. `gehalten` is outside `SETTLED_STATUSES`, so
+    // the sweep re-settles the period, and pays it once an approval covers it.
+    let gehalten = matches!(
+        input.beihilfe,
+        crate::settle::Beihilfeentscheidung::Halten { .. }
+    ) && output.settlement_eur.is_some();
+    let status = if gehalten { "gehalten" } else { status };
+    let policy_json = input
+        .beihilfe
+        .policy()
+        .and_then(|t| serde_json::to_value(t).ok());
     let settlement_eur = output.settlement_eur;
     let effective_kwh = output.eligible_kwh;
     let pflichtzahlung_eur = output.pflichtzahlung_eur;
@@ -2723,7 +2745,7 @@ pub async fn run_settlement(
     // that needs its §14 UStG document. `NoData` and `PriceMissing` have no
     // amount at all and issue none.
     let (rechnung_json, gutschrift_nummer, gutschrift_steuer_eur, gutschrift_brutto_eur) =
-        if output.settlement_eur.is_some_and(|e| e > Decimal::ZERO) {
+        if !gehalten && output.settlement_eur.is_some_and(|e| e > Decimal::ZERO) {
             build_gutschrift(&input, &output)
         } else {
             (None, None, None, None)
@@ -2744,6 +2766,7 @@ pub async fn run_settlement(
             rechnung_json: rechnung_json.clone(),
             gutschrift_nummer: gutschrift_nummer.clone(),
             marktwert_vorlaeufig,
+            policy_json,
         },
     )
     .await?;
@@ -2864,6 +2887,7 @@ pub async fn run_settlement(
         gutschrift_steuer_eur,
         gutschrift_brutto_eur,
         pflichtzahlung_kumuliert_eur: pflichtzahlung_eur,
+        policy: input.beihilfe.policy().cloned(),
     })
 }
 
@@ -2924,6 +2948,27 @@ pub async fn list_unsettled(
     .fetch_all(pool)
     .await
     .context("list_unsettled")
+}
+
+/// The supply months that hold a `gehalten` receipt — payments held under
+/// `[policy] beihilfe_politik = "halten"` — oldest first.
+///
+/// The auto-settle worker re-settles each once an approval covers it, however
+/// far back it lies: the catch-up window bounds how far a *missed* month is
+/// looked for, and a held payment is not missed but waiting.
+pub async fn list_gehalten_perioden(
+    pool: &PgPool,
+    tenant: &str,
+) -> anyhow::Result<Vec<(i16, i16)>> {
+    sqlx::query_as::<_, (i16, i16)>(
+        "SELECT DISTINCT billing_year, billing_month FROM settlement_receipts
+          WHERE tenant = $1 AND status = 'gehalten' AND is_correction = false
+          ORDER BY billing_year, billing_month",
+    )
+    .bind(tenant)
+    .fetch_all(pool)
+    .await
+    .context("list_gehalten_perioden")
 }
 
 /// §24 EEG 2023 — Zusammenlegung: merge a child plant into a parent entity.

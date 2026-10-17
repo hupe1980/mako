@@ -18,7 +18,7 @@ entity state in a MaKo deployment, on port **8180**. It stores:
 
 It also runs the **durable fan-out**: inbound `de.mako.*` events from `makod`
 and its own `de.markt.*` events reach every registered subscriber (ERP,
-`processd`, `invoicd`, `edmd`, `obsd`) as signed webhooks.
+`processd`, `invoicd`, `edmd`) as signed webhooks.
 
 `marktd` holds **no domain policy**. Automated Anmeldung decisions belong to
 [`processd`](@/docs/services/processd.md), which reads `marktd` and decides with
@@ -32,16 +32,14 @@ graph TB
     erp["ERP"]
     invoicd["invoicd :8280"]
     edmd["edmd :8380"]
-    obsd["obsd :8480"]
     pg["PostgreSQL"]
 
     makod -->|"de.mako.process.*<br/>signed POST"| marktd
     marktd --- pg
     marktd -->|"de.mako.* + de.markt.*"| erp
-    marktd -->|"de.mako.process.initiated"| processd
+    marktd -->|"de.mako.* · de.markt.versorgung.*"| processd
     marktd -->|"de.mako.process.initiated"| invoicd
     marktd -->|"de.mako.*"| edmd
-    marktd -->|"de.mako.*"| obsd
     erp -->|"PUT /api/v1/malos/{id}<br/>PUT /api/v1/partners/{mp_id}"| marktd
     invoicd -->|"GET /api/v1/preisblaetter/{nb_mp_id}"| marktd
     processd -->|"GET /api/v1/versorgung/{malo_id}<br/>GET /api/v1/malos/{id}/grid"| marktd
@@ -233,6 +231,20 @@ A custom policy that drops an action therefore fails the build.
 OpenAPI: `GET /api/v1/openapi.json`; interactive browser at `/api/v1/docs/`.
 Every request body denies unknown fields.
 
+### Failures
+
+A failure of `marktd` itself — a database error, a stored document that no
+longer deserialises, an outbox write — is a `500` whose body carries only
+`"detail": "internal server error"` and an `error_id`; the error's own text is
+logged beside the same id. A failed call to `makod` is a `502` naming it. A
+`POST /api/v1/subscriptions/{id}/test` probe the subscriber refuses is a `502`
+(a `503` when unreachable, a `504` on timeout) naming the subscriber; its
+status is in the log under the `error_id`. Client errors carry a sentence in
+`detail`; a domain refusal raised by the repositories (an invalid identifier,
+a validity overlap, an `If-Match` mismatch as `412`) carries its stable reason
+in `code` — `invalid_malo_id`, `unprocessable`, `not_found`,
+`version_conflict`, `makod_conflict`.
+
 ### The BO4E gate
 
 Every `PUT` carrying a BO4E payload runs `mako_markt::bo4e::decode` — see
@@ -241,9 +253,10 @@ is a `422` naming the stage in `code`:
 
 ```json
 {
-  "error": "MARKTLOKATION carries 1 out-of-schema enum value(s) at: sparte",
-  "code":  "bo4e.unknown_enum",
-  "paths": ["sparte"]
+  "error":  "Unprocessable Entity",
+  "detail": "MARKTLOKATION carries 1 out-of-schema enum value(s) at: sparte",
+  "code":   "bo4e.unknown_enum",
+  "paths":  ["sparte"]
 }
 ```
 
@@ -264,7 +277,7 @@ is a `422` naming the stage in `code`:
 |---|---|---|---|
 | `GET` | `/health/live` · `/health/ready` | — | Liveness; readiness with a bounded DB ping |
 | `GET` | `/metrics` | — | Prometheus |
-| `PUT` | `/api/v1/malos/{malo_id}` | `write-malo` | Upsert a Marktlokation through the gate; pushes NB/MSB to makod's MaLo cache |
+| `PUT` | `/api/v1/malos/{malo_id}` | `write-malo` | Upsert a Marktlokation through the gate; emits `de.markt.malo.updated` |
 | `GET` | `/api/v1/malos/{malo_id}` | `read-malo` | Typed `Marktlokation` plus the typed columns |
 | `GET` | `/api/v1/malos/{malo_id}/lastprofil` | `read-malo` | Lastprofil (SLP/TLP) of the MaLo |
 | `GET` | `/api/v1/malos` | `read-malo` | List MaLos (records that do not decode are skipped) |
@@ -299,7 +312,7 @@ is a `422` naming the stage in `code`:
 | `GET` | `/api/v1/esa/subscriptions/{bestellung_ref}` | `read-einwilligung` | Messprodukt behind an ORDERS 17007 Belegnummer, for edmd's Typ-2 surveillance; `404` → configured threshold |
 | `GET` | `/api/v1/esa/consent-check` | `read-einwilligung` | `?esa_mp_id=&msb_mp_id=&location_id=&perspective=` → `{allowed, code, reason}`; `msb_inbound` (default, lenient) or `esa_outbound` (strict) |
 | `GET` | `/api/v1/mabis-zp` | `read-mabis-zp` | Every Bilanzierungsgebiet → MaBiS-Zählpunkt |
-| `GET` | `/api/v1/bilanzierungsgebiete/{eic}/mabis-zp` | `read-mabis-zp` | MaBiS-Zählpunkt (`LOC+172`); `404` makes `mabis-syncd` refuse, never fall back to the EIC |
+| `GET` | `/api/v1/bilanzierungsgebiete/{eic}/mabis-zp` | `read-mabis-zp` | MaBiS-Zählpunkt (`LOC+172`); `404` makes `netzbilanzd` refuse the MaBiS filing, never fall back to the EIC |
 | `PUT` | `/api/v1/bilanzierungsgebiete/{eic}/mabis-zp` | `write-mabis-zp` | Assign it; `400` for a value equal to the EIC or not 33 characters |
 | `PUT` | `/api/v1/netzzugang/antraege` | `write-netzzugang` | Upsert a §20b EnWG request; emits `de.markt.netzzugang.antrag.updated` |
 | `GET` | `/api/v1/netzzugang/antraege` · `/{id}` | `read-netzzugang` | List (`?status=&netzanschluss_id=`); one |
@@ -651,10 +664,13 @@ has no BO4E field. The `Bilanzierung` resource and the UTILMD
 Stammdatenänderung (`TM+Z10`, `CCI+Z24++Z96/Z97`, `CCI+ZA2++ZE9/ZF0`) write
 them. `lokationsbuendel_objektcode` on `malo` and `melo` is validated on write.
 
-The `PUT` also pushes to makod's MaLo cache (`PUT /admin/malo/{malo_id}`,
-fire-and-forget): `nb_mp_id` and `msb_mp_id` from `rollenzuordnung[]`
-(`NB`/`GNB`, `MSB`/`GMSB`), `bilanzierungsgebiet`, `netzgebiet`
-(`netzgebietsnr`) and `sparte`.
+The `PUT` calls no other service. It enqueues `de.markt.malo.updated` (data
+`{"version"}`) in the write's transaction, and makod's MaLo-Ident cache follows
+it through the durable fan-out like any subscriber: makod reads the record back
+with `GET /api/v1/malos/{malo_id}`, and a makod that is down when the record
+changes receives it on the fan-out's retry (or finds it in
+[`/admin/fanout/dlq`](#fan-out) once the attempts run out) —
+see [makod's MaLo cache](@/docs/services/makod.md#malo-cache-follows-marktd).
 
 ```json
 {
@@ -800,7 +816,9 @@ constraint:
 
 ```json
 {
-  "error": "conflicting key value violates exclusion constraint \"melo_msb_no_overlap\": the row's [valid_from, valid_to) window overlaps one already stored. Close the existing row at the new start date, or move valid_from."
+  "error":  "Unprocessable Entity",
+  "code":   "unprocessable",
+  "detail": "unprocessable: conflicting key value violates exclusion constraint \"melo_msb_no_overlap\": the row's [valid_from, valid_to) window overlaps one already stored. Close the existing row at the new start date, or move valid_from."
 }
 ```
 
@@ -1400,5 +1418,5 @@ the principal is then checked against the single Cedar action `use-mcp`.
 
 ## See also
 
-- [`makod`](@/docs/services/makod.md) · [`processd`](@/docs/services/processd.md) · [`netzbilanzd`](@/docs/services/netzbilanzd.md) · [`invoicd`](@/docs/services/invoicd.md) · [`edmd`](@/docs/services/edmd.md) · [`obsd`](@/docs/services/obsd.md) · [`sperrd`](@/docs/services/sperrd.md)
+- [`makod`](@/docs/services/makod.md) · [`processd`](@/docs/services/processd.md) · [`netzbilanzd`](@/docs/services/netzbilanzd.md) · [`invoicd`](@/docs/services/invoicd.md) · [`edmd`](@/docs/services/edmd.md)
 - [ERP Integration](@/docs/architecture/erp-integration.md) · [Domain Model](@/docs/architecture/domain-model.md) · [Getting Started](@/docs/guide/getting-started.md)

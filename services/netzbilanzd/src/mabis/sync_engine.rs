@@ -1,0 +1,1601 @@
+//! Core aggregation + submission engine of the `mabis` module.
+//!
+//! Orchestrates the full MaBiS Summenzeitreihe pipeline:
+//! 1. Discover MaLos in Bilanzierungsgebiet (edmd `/api/v1/billing-periods`, then
+//!    `/api/v1/energy/{malo_id}?direction=BEZUG` — the projected series, not the
+//!    `/lastgang` export)
+//! 2. Aggregate using `mako-mabis::SummenzeitreiheBuilder`
+//! 3. Build the MSCONS 13003 command payload for makod
+//! 4. Submit via makod command API
+//! 5. Persist run status to PostgreSQL
+
+use anyhow::{Context, Result};
+use mako_engine::types::Pruefidentifikator;
+use mako_mabis::BilanzierungsgebietId;
+use mako_mabis::{Summenzeitreihe, SummenzeitreiheBuilder};
+use rust_decimal::Decimal;
+use time::{Date, Duration, OffsetDateTime};
+use tracing::{error, info, warn};
+use uuid::Uuid;
+
+use super::config::Settings;
+use super::pg;
+use super::pg::{Abrechnungslauf, SubmissionPhase};
+use mako_service::http::Upstream;
+
+/// How many `marktd` master-data lookups run at once.
+///
+/// High enough that a tenant with thousands of MaLos resolves inside the
+/// submission window; low enough that the aggregation does not become the load
+/// that takes `marktd` down.
+const MARKTD_CONCURRENCY: usize = 16;
+
+/// Prüfidentifikator for "Übertragung Summenzeitreihe" (MSCONS AHB 3.2 §8.3.1).
+pub const MSCONS_SUMMENZEITREIHE_PID: Pruefidentifikator = Pruefidentifikator::const_new(13003);
+
+/// Bilanzierungsmonat as EDIFACT format 610 (`CCYYMM`).
+fn fmt_edifact_month(d: OffsetDateTime) -> String {
+    format!("{:04}{:02}", d.year(), u8::from(d.month()))
+}
+
+/// Versionsangabe as EDIFACT format 304 (`CCYYMMDDHHMMSSZZZ`).
+///
+/// The offset is written explicitly because the version orders submissions; a
+/// value whose zone is implied cannot be compared across a DST boundary.
+fn fmt_edifact_version(t: OffsetDateTime) -> String {
+    let t = t.to_offset(time::UtcOffset::UTC);
+    format!(
+        "{:04}{:02}{:02}{:02}{:02}{:02}+00",
+        t.year(),
+        u8::from(t.month()),
+        t.day(),
+        t.hour(),
+        t.minute(),
+        t.second()
+    )
+}
+
+/// The settlement window `[from, to)` for a Bilanzierungsmonat, as UTC instants.
+///
+/// `period_to` is the **inclusive** last day of the month, so the exclusive end
+/// is the following Berlin midnight. The grid MaBiS settles on is the German
+/// calendar day, which [`mako_fristen::berlin_midnight`] tiles across both DST
+/// transitions; a window of UTC midnights is an hour out of phase with it and
+/// four slots short or long in the two months that change offset.
+#[must_use]
+pub fn aggregation_window(period_from: Date, period_to: Date) -> (OffsetDateTime, OffsetDateTime) {
+    let end = period_to.next_day().unwrap_or(period_to);
+    (
+        mako_fristen::berlin_midnight(period_from),
+        mako_fristen::berlin_midnight(end),
+    )
+}
+
+/// Idempotency key for one Summenzeitreihe submission.
+///
+/// `makod` requires the header on every command and rejects the request with
+/// 422 `missing_idempotency_key` otherwise, so an omitted key failed every run.
+/// It never compares the key, but a retry must still present the same one: the
+/// key ties the attempts of one submission together in makod's log, and the
+/// identity of a submission is exactly (run, Bilanzierungsgebiet, Version).
+#[must_use]
+pub fn idempotency_key(
+    run_id: Uuid,
+    bilanzierungsgebiet_id: &str,
+    version: OffsetDateTime,
+) -> String {
+    format!(
+        "mabis-szr-{run_id}-{bilanzierungsgebiet_id}-{}",
+        fmt_edifact_version(version)
+    )
+}
+
+/// Truncate a version timestamp to whole seconds.
+///
+/// The wire value (MSCONS SG6 DTM+293, format 304) carries seconds and no more,
+/// so a stored version with sub-second precision can never be matched again when
+/// the BIKO echoes it back in a Datenstatus or Prüfmitteilung.
+#[must_use]
+pub fn truncate_to_seconds(t: OffsetDateTime) -> OffsetDateTime {
+    t.replace_nanosecond(0).unwrap_or(t)
+}
+
+/// Interval bound as EDIFACT format 303 (`CCYYMMDDHHMMZZZ`).
+fn fmt_edifact_instant(t: OffsetDateTime) -> String {
+    let t = t.to_offset(time::UtcOffset::UTC);
+    format!(
+        "{:04}{:02}{:02}{:02}{:02}+00",
+        t.year(),
+        u8::from(t.month()),
+        t.day(),
+        t.hour(),
+        t.minute()
+    )
+}
+
+/// Deadlines for a Bilanzierungsgebiets-Summenzeitreihe (BG-SZR, Kategorie B),
+/// counted in Werktagen after the end of the Bilanzierungsmonat.
+///
+/// BK6-24-174 Anlage 3 §3.10, Tabelle 2.
+mod fristen {
+    /// Last Werktag of the Erstaufschlag window for a BG-SZR.
+    ///
+    /// Within it a new version is assigned `Abrechnungsdaten` directly; after
+    /// it a new version starts as `Prüfdaten` and needs a positive
+    /// Prüfmitteilung to be promoted.
+    pub const ERSTAUFSCHLAG_LAST_WT: u32 = 10;
+
+    /// Last Werktag of the Clearingphase for the ordinary BKA.
+    ///
+    /// A submission arriving after this belongs to the KBKA, whose own window
+    /// runs to the end of the seventh month.
+    pub const CLEARING_LAST_WT_BKA: u32 = 30;
+}
+
+/// Which submission window `today` falls in, for a period ending `period_to`.
+///
+/// The Datenstatus the BIKO will assign follows from this, so the phase is
+/// derived from the calendar rather than passed in by the caller.
+#[must_use]
+pub fn phase_for(period_to: Date, today: Date) -> (Abrechnungslauf, SubmissionPhase) {
+    use mako_fristen::{HolidayCalendar, add_werktage};
+
+    let cal = HolidayCalendar::BdewMaKo;
+    let erstaufschlag_ends = add_werktage(period_to, fristen::ERSTAUFSCHLAG_LAST_WT, cal);
+    let clearing_ends = add_werktage(period_to, fristen::CLEARING_LAST_WT_BKA, cal);
+
+    if today <= erstaufschlag_ends {
+        (Abrechnungslauf::Bka, SubmissionPhase::Erstaufschlag)
+    } else if today <= clearing_ends {
+        (Abrechnungslauf::Bka, SubmissionPhase::Clearing)
+    } else {
+        // Past the BKA Clearingfrist the submission enters the KBKA, where it
+        // starts as Prüfdaten regardless of how early in that window it lands.
+        (Abrechnungslauf::Kbka, SubmissionPhase::Clearing)
+    }
+}
+
+/// One Bilanzierungsgebiet's aggregate, plus how many MaLos went into it.
+///
+/// `Summenzeitreihe` is a sum over slots; it cannot say how many MaLos it came
+/// from, and that count is what an operator reads to see whether a territory
+/// was fully covered.
+pub struct TerritorySeries {
+    /// The aggregate filed for this territory.
+    pub series: Summenzeitreihe,
+    /// MaLos folded into it.
+    pub malo_count: usize,
+}
+
+/// What a submission pass actually put on the wire.
+///
+/// A run that files nothing because the BIKO already holds every territory of
+/// the month is a **success**, not an empty submission: it is the state a retry
+/// of a fully-filed month reaches, and reporting it as "no Summenzeitreihe to
+/// submit" would fail the run for having correctly declined to file a second
+/// binding copy.
+pub enum Filed {
+    /// At least one territory was filed in this run. Carries the first one's
+    /// reference, which is what the run row records.
+    Submitted {
+        message_ref: String,
+        process_id: Option<Uuid>,
+    },
+    /// Every territory was already acked for this Bilanzierungsmonat, so this
+    /// run sent nothing.
+    AlreadyWithBiko,
+}
+
+// ── SyncEngine ────────────────────────────────────────────────────────────────
+
+/// Core aggregation and submission engine.
+/// The most MaLos one discovery asks `edmd` for — `edmd`'s own hard cap. A
+/// grid area with more is refused rather than filed short.
+const DISCOVERY_LIMIT: usize = 5_000;
+
+pub struct SyncEngine {
+    pool: sqlx::PgPool,
+    edmd: Upstream,
+    marktd: Upstream,
+    makod: Upstream,
+    cfg: std::sync::Arc<Settings>,
+}
+
+impl SyncEngine {
+    /// Create a new engine over the host's upstreams.
+    ///
+    /// A Lastgang fetch reads a month of quarter-hourly values, so the caller
+    /// gives `edmd` a longer request timeout than the shared default; the
+    /// master-data and command calls keep it. All three carry the no-redirect
+    /// SSRF guard of `mako_service::http`.
+    #[must_use]
+    pub fn new(
+        pool: sqlx::PgPool,
+        cfg: std::sync::Arc<Settings>,
+        edmd: Upstream,
+        marktd: Upstream,
+        makod: Upstream,
+    ) -> Self {
+        Self {
+            edmd,
+            marktd,
+            makod,
+            pool,
+            cfg,
+        }
+    }
+
+    /// Run the MaBiS aggregation pipeline for a given period and version.
+    ///
+    /// Returns the run ID of the created submission record.
+    pub async fn run_aggregation(
+        &self,
+        period_from: Date,
+        period_to: Date,
+        corrects_run_id: Option<Uuid>,
+        as_of: Option<OffsetDateTime>,
+    ) -> Result<Uuid> {
+        let cfg = &self.cfg;
+        let bilanzierungsgebiet_id = &cfg.mabis.bilanzierungsgebiet_id;
+
+        // The window decides the Datenstatus the BIKO will assign, so it is
+        // derived from the settlement calendar rather than chosen by the caller.
+        // The Bilanzierungsmonat is civil, so the phase runs off the Berlin date
+        // — a UTC date is a day behind for the first hour of every local day.
+        let (abrechnungslauf, phase) = phase_for(period_to, mako_fristen::heute());
+
+        // The version is ascending per §3.8.2 and truncated to whole seconds,
+        // because that is all the wire carries. A resubmission for the same
+        // period is a new version rather than a replacement of the previous row.
+        let version = truncate_to_seconds(OffsetDateTime::now_utc());
+        let run_id = pg::insert_run(
+            &self.pool,
+            pg::InsertRunParams {
+                bilanzierungsgebiet_id,
+                period_from,
+                period_to,
+                version,
+                abrechnungslauf,
+                phase,
+                corrects_run_id,
+                sender_mp_id: &cfg.mabis.sender_mp_id,
+                receiver_mp_id: &cfg.mabis.receiver_mp_id,
+                tenant: &cfg.tenant,
+            },
+        )
+        .await
+        .context("failed to create submission_run record")?;
+
+        info!(
+            run_id = %run_id,
+            bilanzierungsgebiet_id,
+            period_from = %period_from,
+            period_to = %period_to,
+            abrechnungslauf = abrechnungslauf.as_str(),
+            phase = phase.as_str(),
+            "netzbilanzd mabis: starting Summenzeitreihe aggregation run"
+        );
+
+        // Discover MaLos and aggregate
+        match self
+            .aggregate(run_id, period_from, period_to, version, as_of)
+            .await
+        {
+            Ok(series) if series.is_empty() => {
+                // No MaLos discovered. Failing loudly beats acking an empty
+                // submission as though it were a successful one.
+                let msg = "no MaLos discovered for the period — nothing to submit";
+                warn!(run_id = %run_id, "netzbilanzd mabis: {msg}");
+                self.mark_failed_and_emit(
+                    run_id,
+                    period_from,
+                    period_to,
+                    abrechnungslauf,
+                    phase,
+                    msg,
+                )
+                .await;
+                anyhow::bail!("{msg}");
+            }
+            Ok(series) => {
+                // One submission per Bilanzierungsgebiet.
+                let total_kwh: Decimal = series.iter().map(|t| t.series.total_kwh()).sum();
+                let malo_count = self.malo_count_for_run(run_id).await;
+                let interval_count: i32 = series
+                    .iter()
+                    .map(|t| t.series.interval_count() as i32)
+                    .sum();
+                let has_substituted = series.iter().any(|t| t.series.has_substituted_values());
+
+                // Update run with aggregation result
+                pg::update_run_aggregated(
+                    &self.pool,
+                    run_id,
+                    malo_count,
+                    interval_count,
+                    &total_kwh,
+                    has_substituted,
+                )
+                .await
+                .context("failed to update submission_run")?;
+
+                // A retry of a partly-filed run must not re-file the
+                // territories the BIKO already acked: an acked Summenzeitreihe
+                // cannot be withdrawn, and resending one under a new version is
+                // a correction, not a retry.
+                //
+                // The lookup is keyed on the *period and the filing lineage*,
+                // not on this run: a retry is a new run and has no series rows
+                // of its own yet, so a run-keyed skip list is empty by
+                // construction and skips nothing. A correction carries a
+                // `corrects_run_id` of its own and so sees an empty set, which
+                // is right — re-filing under a new version is what a correction
+                // *is*.
+                //
+                // A failure here is not an empty skip list. "I cannot find out
+                // what has been filed" and "nothing has been filed" lead to
+                // opposite actions, and the safe one is to file nothing: the
+                // month can be retried, an over-filed month cannot be
+                // withdrawn.
+                let already_acked = match pg::acked_territories_for_period(
+                    &self.pool,
+                    &cfg.tenant,
+                    period_from,
+                    period_to,
+                    corrects_run_id,
+                )
+                .await
+                {
+                    Ok(t) => t,
+                    Err(e) => {
+                        let msg = format!(
+                            "cannot read which Bilanzierungsgebiete the BIKO has already \
+                             acked for this period ({e}) — refusing to file, because \
+                             re-filing an acked Summenzeitreihe cannot be undone"
+                        );
+                        warn!(run_id = %run_id, "netzbilanzd mabis: {msg}");
+                        self.mark_failed_and_emit(
+                            run_id,
+                            period_from,
+                            period_to,
+                            abrechnungslauf,
+                            phase,
+                            &msg,
+                        )
+                        .await;
+                        anyhow::bail!("{msg}");
+                    }
+                };
+
+                // Submit to BIKO via makod — one MSCONS 13003 per Bilanzierungsgebiet.
+                match self
+                    .submit_all_to_makod(&series, run_id, &already_acked)
+                    .await
+                {
+                    Ok(filed) => {
+                        let (message_ref, process_id) = match &filed {
+                            Filed::Submitted {
+                                message_ref,
+                                process_id,
+                            } => (Some(message_ref.as_str()), *process_id),
+                            // Nothing went out, so there is no reference of
+                            // this run's to record. Inventing one would point
+                            // an auditor at a message that was never sent; the
+                            // filings that settle the month are the earlier
+                            // runs' `submission_series` rows.
+                            Filed::AlreadyWithBiko => (None, None),
+                        };
+                        pg::mark_acked(&self.pool, run_id, message_ref, process_id)
+                            .await
+                            .context("failed to mark run as acked")?;
+                        // §9.8.1: the corrected BG-SZR is the answer to the
+                        // negative Prüfmitteilung, so the obligation closes here
+                        // — otherwise it stays open on /korrekturbedarf forever.
+                        if let Some(corrected) = corrects_run_id {
+                            match pg::close_korrekturbedarf(&self.pool, corrected, run_id).await {
+                                Ok(n) => info!(
+                                    run_id = %run_id, corrects_run_id = %corrected, closed = n,
+                                    "netzbilanzd mabis: Korrekturbedarf closed by correcting submission"
+                                ),
+                                Err(e) => warn!(
+                                    run_id = %run_id, error = %e,
+                                    "netzbilanzd mabis: failed to close Korrekturbedarf"
+                                ),
+                            }
+                        }
+                        match &filed {
+                            Filed::Submitted { message_ref, .. } => info!(
+                                run_id = %run_id,
+                                message_ref,
+                                total_kwh = %total_kwh,
+                                malo_count,
+                                "netzbilanzd mabis: Summenzeitreihe submission succeeded"
+                            ),
+                            Filed::AlreadyWithBiko => info!(
+                                run_id = %run_id,
+                                total_kwh = %total_kwh,
+                                malo_count,
+                                "netzbilanzd mabis: every Bilanzierungsgebiet of this month was \
+                                 already acked by the BIKO — nothing re-filed"
+                            ),
+                        }
+                    }
+                    Err(e) => {
+                        warn!(run_id = %run_id, error = %e, "netzbilanzd mabis: Summenzeitreihe submission failed");
+                        self.mark_failed_and_emit(
+                            run_id,
+                            period_from,
+                            period_to,
+                            abrechnungslauf,
+                            phase,
+                            &e.to_string(),
+                        )
+                        .await;
+                        return Err(e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(run_id = %run_id, error = %e, "netzbilanzd mabis: aggregation failed");
+                self.mark_failed_and_emit(
+                    run_id,
+                    period_from,
+                    period_to,
+                    abrechnungslauf,
+                    phase,
+                    &e.to_string(),
+                )
+                .await;
+                return Err(e);
+            }
+        }
+
+        Ok(run_id)
+    }
+
+    /// Aggregate all MaLo Lastgänge via edmd API, **one Summenzeitreihe per
+    /// Bilanzierungsgebiet**.
+    ///
+    /// MaBiS settles per territory. Emitting a single series for the whole
+    /// tenant put every MaLo into whichever zone the config happened to name,
+    /// which misfiles the submission for any tenant spanning more than one.
+    async fn aggregate(
+        &self,
+        run_id: Uuid,
+        period_from: Date,
+        period_to: Date,
+        version: OffsetDateTime,
+        as_of: Option<OffsetDateTime>,
+    ) -> Result<Vec<TerritorySeries>> {
+        let cfg = &self.cfg;
+        let (from_ts, to_ts) = aggregation_window(period_from, period_to);
+
+        // Discover MaLo list from edmd — query all billing periods in this period
+        let malo_ids = self.discover_malos(period_from, period_to).await?;
+        info!(
+            malo_count = malo_ids.len(),
+            "netzbilanzd mabis: discovered MaLos for aggregation"
+        );
+
+        let (by_gebiet, missing_gebiet) = self.resolve_bilanzierungsgebiete(&malo_ids).await;
+        info!(
+            gebiet_count = by_gebiet.len(),
+            "netzbilanzd mabis: MaLos grouped by Bilanzierungsgebiet"
+        );
+
+        // MaLos excluded from the aggregate, by reason. A Summenzeitreihe missing
+        // a MaLo's energy is indistinguishable from a correct one once the BIKO
+        // has acked it, so the run fails rather than filing a short submission.
+        let mut excluded: Vec<String> = missing_gebiet
+            .into_iter()
+            .map(|m| format!("{m}: no Bilanzierungsgebiet in marktd master data"))
+            .collect();
+
+        // Territories whose grid still has holes after every MaLo aggregated.
+        let mut incomplete: Vec<String> = Vec::new();
+        let mut series: Vec<TerritorySeries> = Vec::with_capacity(by_gebiet.len());
+        for (gebiet, gebiet_malos) in &by_gebiet {
+            // A Summenzeitreihe is submitted under its MaBiS-Zählpunkt
+            // (SG6 LOC+172); the Bilanzierungsgebiet EIC is a separate
+            // LOC+107. Refuse rather than substitute: a Summenzeitreihe filed
+            // against the wrong Meldepunkt is indistinguishable, to the BIKO,
+            // from a correct one.
+            let mabis_zp = self.resolve_mabis_zp(gebiet).await?;
+
+            // The territory is a 16-character EIC of ENTSO-E object type `Y`
+            // (Area). A Bilanzkreis (`X`, Party) is the same length, so only the
+            // object type separates them, and `LOC+107` carries the value as
+            // free text — the BIKO would accept either. Refuse here, inside the
+            // submission window and naming the territory, rather than filing a
+            // series against an object that is not a Bilanzierungsgebiet.
+            let gebiet_id = BilanzierungsgebietId::new(gebiet).map_err(|e| {
+                anyhow::anyhow!(
+                    "Bilanzierungsgebiet {gebiet} (from marktd master data) is not a \
+                     Bilanzierungsgebiet-EIC: {e}"
+                )
+            })?;
+
+            let mut builder = SummenzeitreiheBuilder::new(
+                gebiet_id,
+                mabis_zp,
+                from_ts,
+                to_ts,
+                version,
+                cfg.mabis.sender_mp_id.clone(),
+                cfg.mabis.receiver_mp_id.clone(),
+                mako_mabis::MABIS_SLOT,
+            );
+
+            for malo_id in gebiet_malos {
+                match self.fetch_lastgang(malo_id, from_ts, to_ts, as_of).await {
+                    Ok(intervals) => {
+                        let interval_count = intervals.len() as i32;
+                        let total_kwh: Decimal =
+                            intervals.iter().map(metering::MeterInterval::value).sum();
+                        let has_gaps = intervals.is_empty();
+                        let substituted_count = intervals
+                            .iter()
+                            .filter(|iv| {
+                                matches!(
+                                    iv.quality(),
+                                    metering::QualityFlag::Substituted
+                                        | metering::QualityFlag::Estimated
+                                        | metering::QualityFlag::Preliminary
+                                )
+                            })
+                            .count() as i32;
+
+                        if let Err(e) = builder.add_malo(&intervals) {
+                            warn!(
+                                malo_id,
+                                error = %e,
+                                "netzbilanzd mabis: Lastgang resolution does not match the settlement grid"
+                            );
+                            excluded.push(format!("{malo_id}: {e}"));
+                            continue;
+                        }
+
+                        // Log per-MaLo contribution. Non-fatal — the MaLo is
+                        // already in the Summenzeitreihe and aborting would
+                        // settle the month short over a bookkeeping row — but
+                        // not silent: this table *is* the audit trail behind a
+                        // binding filing (which MaLos were summed, which had
+                        // gaps, which carried Ersatzwerte), and
+                        // `submission_runs.malo_count` is a COUNT over it, so a
+                        // lost row makes the run under-report its own scope
+                        // while the Summenzeitreihe on the wire says otherwise.
+                        if let Err(e) = pg::insert_malo_log(
+                            &self.pool,
+                            run_id,
+                            malo_id,
+                            interval_count,
+                            &total_kwh,
+                            has_gaps,
+                            substituted_count,
+                        )
+                        .await
+                        {
+                            error!(
+                                run_id = %run_id, malo_id, error = %e,
+                                "netzbilanzd mabis: MaLo contribution not logged — it is summed into \
+                                 the Summenzeitreihe but missing from the run's audit trail \
+                                 and from its malo_count"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!(malo_id, error = %e, "netzbilanzd mabis: failed to fetch Lastgang for MaLo");
+                        excluded.push(format!("{malo_id}: fetch failed: {e}"));
+                    }
+                }
+            }
+
+            let szr = builder.build();
+            // No Meldepunkt/territory swap check is needed here: the parse
+            // refuses one. A Zählpunktbezeichnung is 33 characters and a
+            // Bilanzierungsgebiet a 16-character Y-type EIC, so neither value can
+            // inhabit the other's type.
+            // MaBiS settles against a gap-free grid, so an empty slot omits energy
+            // rather than reporting zero for it. That under-reports the territory,
+            // and the BIKO cannot tell a short series from a complete one — the
+            // same reason the excluded-MaLo check below fails the run. Warning and
+            // filing anyway would settle the territory low, irreversibly once acked.
+            if !szr.is_complete() {
+                incomplete.push(format!(
+                    "{gebiet}: {} of {} settlement slots carry no value",
+                    szr.missing_slot_count(),
+                    szr.expected_slot_count()
+                ));
+            }
+            series.push(TerritorySeries {
+                series: szr,
+                malo_count: gebiet_malos.len(),
+            });
+        }
+
+        // A MaBiS filing cannot be withdrawn once acked, and the BIKO cannot
+        // tell a short Summenzeitreihe from a complete one. Discovering MaLos
+        // and then omitting some of them is therefore a failed run, not a
+        // partial success.
+        if !excluded.is_empty() {
+            anyhow::bail!(
+                "{} of {} discovered MaLos could not be aggregated, so the Summenzeitreihe \
+                 would under-report energy: {}",
+                excluded.len(),
+                malo_ids.len(),
+                excluded.join("; ")
+            );
+        }
+
+        // Every MaLo aggregated, yet the grid still has holes: the missing energy
+        // is real absence, not an aggregation failure. It under-reports exactly
+        // as an excluded MaLo does, so it fails the run for the same reason.
+        if !incomplete.is_empty() {
+            anyhow::bail!(
+                "{} Summenzeitreihe(n) would be filed with gaps in the settlement grid, \
+                 under-reporting the territory: {}",
+                incomplete.len(),
+                incomplete.join("; ")
+            );
+        }
+
+        Ok(series)
+    }
+
+    /// Resolve each MaLo's Bilanzierungsgebiet from `marktd`.
+    ///
+    /// MaBiS aggregates per Bilanzierungsgebiet, so this determines which
+    /// Summenzeitreihe a MaLo belongs to. A MaLo whose master data names no
+    /// territory is reported rather than silently folded into the configured
+    /// fallback — misfiling energy into the wrong zone is a settlement error the
+    /// BIKO cannot detect.
+    /// Returns the per-Bilanzierungsgebiet grouping plus the MaLos whose master
+    /// data names **no** territory — those must be excluded and the run failed,
+    /// never folded into a fallback zone (misfiling energy the BIKO cannot detect).
+    /// The MaBiS-Zählpunkt a Bilanzierungsgebiet's Summenzeitreihen are filed
+    /// under, from `marktd` master data.
+    ///
+    /// A Summenzeitreihe is submitted under its MaBiS-Zählpunkt (SG6 `LOC+172`);
+    /// the Bilanzierungsgebiet EIC is a separate `LOC+107`. Both are free text
+    /// at the MIG level, so a Summenzeitreihe filed against the wrong Meldepunkt
+    /// is, to the BIKO, indistinguishable from a correct one.
+    ///
+    /// Every failure path therefore **refuses** rather than substituting: an
+    /// unassigned territory, an unreachable marktd, and a malformed response all
+    /// abort the submission. Falling back to the EIC would produce exactly the
+    /// misfiled message this lookup exists to prevent.
+    async fn resolve_mabis_zp(
+        &self,
+        gebiet: &str,
+    ) -> anyhow::Result<mako_mabis::MabisZaehlpunktId> {
+        let path = format!("/api/v1/bilanzierungsgebiete/{gebiet}/mabis-zp");
+        let body: serde_json::Value = self
+            .marktd
+            .json(self.marktd.get(&path))
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "resolving the MaBiS-Zählpunkt for Bilanzierungsgebiet {gebiet}: {e}"
+                )
+            })?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no MaBiS-Zählpunkt assigned to Bilanzierungsgebiet {gebiet} — assign one via \
+                     PUT /api/v1/bilanzierungsgebiete/{gebiet}/mabis-zp on marktd; the \
+                     Summenzeitreihe cannot be submitted without the SG6 LOC+172 Meldepunkt"
+                )
+            })?;
+        let zp = body["mabis_zp_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("marktd returned no mabis_zp_id for Bilanzierungsgebiet {gebiet}")
+            })?;
+
+        // marktd rejects a malformed Meldepunkt on write, but the submission
+        // path is the one with the irreversible consequence, so it does not take
+        // that on trust. Parsing here is the boundary: past this point the
+        // identifier is a `MabisZaehlpunktId`, and putting a territory code in
+        // its place stops being expressible.
+        let zp = mako_mabis::MabisZaehlpunktId::new(zp).map_err(|e| {
+            anyhow::anyhow!("marktd returned an unusable MaBiS-Zählpunkt for {gebiet}: {e}")
+        })?;
+        if zp.as_str() == gebiet {
+            anyhow::bail!(
+                "marktd returned the Bilanzierungsgebiet EIC as the MaBiS-Zählpunkt for \
+                 {gebiet} — refusing to file the Summenzeitreihe under a territory code"
+            );
+        }
+        Ok(zp)
+    }
+
+    async fn resolve_bilanzierungsgebiete(
+        &self,
+        malo_ids: &[String],
+    ) -> (std::collections::BTreeMap<String, Vec<String>>, Vec<String>) {
+        use std::collections::BTreeMap;
+        let mut by_gebiet: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut missing_gebiet: Vec<String> = Vec::new();
+
+        // Resolved in bounded-concurrency batches. A territory lookup is one
+        // round-trip per MaLo, and a tenant of any size has thousands: run
+        // sequentially, that alone outlasts the submission window it is
+        // supposed to fit inside. The cap keeps `marktd` from being the thing
+        // that fails instead.
+        for chunk in malo_ids.chunks(MARKTD_CONCURRENCY) {
+            let looked_up = futures::future::join_all(chunk.iter().map(|malo_id| async move {
+                let path = format!("/api/v1/malos/{malo_id}");
+                let gebiet = match self
+                    .marktd
+                    .json::<serde_json::Value>(self.marktd.get(&path))
+                    .await
+                {
+                    Ok(Some(v)) => v["bilanzierungsgebiet"]
+                        .as_str()
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned),
+                    Ok(None) => None,
+                    Err(e) => {
+                        warn!(malo_id, error = %e, "netzbilanzd mabis: marktd MaLo lookup failed");
+                        None
+                    }
+                };
+                (malo_id.clone(), gebiet)
+            }))
+            .await;
+
+            for (malo_id, gebiet) in looked_up {
+                match gebiet {
+                    Some(key) => by_gebiet.entry(key).or_default().push(malo_id),
+                    None => {
+                        warn!(
+                            malo_id,
+                            "netzbilanzd mabis: MaLo has no Bilanzierungsgebiet in marktd — excluded \
+                             from the run rather than misfiled into a fallback zone"
+                        );
+                        missing_gebiet.push(malo_id);
+                    }
+                }
+            }
+        }
+        (by_gebiet, missing_gebiet)
+    }
+
+    /// Discover MaLo IDs from edmd billing periods for the given time window.
+    async fn discover_malos(&self, from: Date, to: Date) -> Result<Vec<String>> {
+        let cfg = &self.cfg;
+        let request = self.edmd.get("/api/v1/billing-periods").query(&[
+            ("from", from.to_string()),
+            ("to", to.to_string()),
+            ("tenant", cfg.tenant.clone()),
+            ("limit", DISCOVERY_LIMIT.to_string()),
+        ]);
+        let data: serde_json::Value = self
+            .edmd
+            .json(request)
+            .await
+            .context("edmd MaLo discovery")?
+            .context("edmd has no billing periods for the tenant in this period")?;
+        // edmd returns `{"billing_periods": [{malo_id, messtyp, sparte, ...}], "count": n}`.
+        // Reading a `malo_ids` array that the response never contained yielded an
+        // empty set on every run — and an empty Summenzeitreihe still submits and
+        // acks, so a zero-energy MaBiS submission looked like a successful one.
+        let Some(periods) = data["billing_periods"].as_array() else {
+            anyhow::bail!(
+                "edmd billing-periods response has no `billing_periods` array; got keys: {:?}",
+                data.as_object().map(|o| o.keys().collect::<Vec<_>>())
+            );
+        };
+        // A capped list reads as „that is all of them", and a Summenzeitreihe
+        // filed from it is short by every MaLo past the cap — a figure the BIKO
+        // accepts and nobody detects. `truncated` is how edmd says so; an
+        // absent flag is not „complete".
+        match data["truncated"].as_bool() {
+            Some(false) => {}
+            Some(true) => anyhow::bail!(
+                "edmd truncated the MaLo discovery at {DISCOVERY_LIMIT} — refusing to file a \
+                 Summenzeitreihe that omits the rest of the grid area"
+            ),
+            None => anyhow::bail!(
+                "edmd billing-periods response does not say whether it is complete \
+                 (no `truncated` flag) — refusing to file a Summenzeitreihe from it"
+            ),
+        }
+
+        // MaBiS is a **Strom** process. The Bilanzkreisabrechnung it feeds
+        // exists only for electricity — gas balances through GaBi Gas, on the
+        // 06:00 Gastag and against a Marktgebiet, not a Bilanzierungsgebiet.
+        // `edmd` serves both commodities from one endpoint, so an unfiltered
+        // discovery folded every gas MaLo of the tenant into the electricity
+        // Summenzeitreihe: energy that is not the BIKO's to settle, on a grid
+        // it does not use, and the BIKO cannot tell an over-reported territory
+        // from a correct one.
+        let mut skipped_sparten: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
+        let mut malo_ids: Vec<String> = Vec::new();
+        for p in periods {
+            let sparte = p["sparte"].as_str().unwrap_or_default();
+            if !sparte.eq_ignore_ascii_case("STROM") {
+                skipped_sparten.insert(sparte.to_owned());
+                continue;
+            }
+            if let Some(id) = p["malo_id"].as_str() {
+                malo_ids.push(id.to_owned());
+            }
+        }
+        if !skipped_sparten.is_empty() {
+            info!(
+                sparten = ?skipped_sparten,
+                "netzbilanzd mabis: non-Strom MaLos excluded — MaBiS settles electricity only"
+            );
+        }
+        malo_ids.sort_unstable();
+        malo_ids.dedup();
+
+        Ok(malo_ids)
+    }
+
+    /// Read a decimal that edmd may serialise as either a JSON string or number.
+    fn parse_decimal(v: &serde_json::Value) -> Option<Decimal> {
+        match v {
+            serde_json::Value::String(s) => s.parse().ok(),
+            serde_json::Value::Number(n) => n.to_string().parse().ok(),
+            _ => None,
+        }
+    }
+
+    // `/energy` carries RFC 3339 instants and the stored `QualityFlag`
+    // vocabulary directly, so this side needs neither a BO4E `Zeitraum`
+    // re-assembler nor a lossy inverse of edmd's own `Messwertstatus` mapping.
+
+    /// Fetch a MaLo's quarter-hourly **Bezug** series from edmd.
+    ///
+    /// Reads `GET /api/v1/energy/{malo_id}?direction=BEZUG` — edmd's canonical
+    /// register projection, one entry per metered slot. MaBiS settles on that
+    /// grid, so the resampled endpoints are not interchangeable here: a coarser
+    /// bucket preserves the period total but destroys the shape the BIKO settles
+    /// against.
+    ///
+    /// # Why not `/api/v1/lastgang`
+    ///
+    /// That endpoint returns one BO4E object **per OBIS register**, which is the
+    /// right shape for a BO4E export and the wrong input for a settlement
+    /// figure: folding it back into one series *is* the projection. An
+    /// `ObisCode::is_import` filter, the obvious way to do it, admits the total
+    /// register `1-0:1.8.0` **and** the `1-0:1.8.1`/`1-0:1.8.2` that decompose
+    /// it — the consumption enters the Summenzeitreihe twice, in a filing the
+    /// BIKO cannot withdraw — plus `1-0:1.6.0`, a Jahreshöchstleistung in kW,
+    /// and the Fehlerregister `…63`.
+    ///
+    /// edmd's `domain::register` decides all of that once and serves the answer,
+    /// so this side reads a series rather than rebuilding one.
+    async fn fetch_lastgang(
+        &self,
+        malo_id: &str,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+        as_of: Option<OffsetDateTime>,
+    ) -> Result<Vec<metering::MeterInterval>> {
+        use time::format_description::well_known::Rfc3339;
+        let mut query = vec![
+            ("from", from.format(&Rfc3339).unwrap_or_default()),
+            ("to", to.format(&Rfc3339).unwrap_or_default()),
+            ("direction", "BEZUG".to_owned()),
+        ];
+        // `as_of` reconstructs the data as it stood when an earlier version was
+        // filed. A correction under the KBKA has to be able to say what changed
+        // since the version the BIKO settled, which requires the earlier state
+        // and not just the current one.
+        if let Some(ts) = as_of {
+            query.push(("as_of", ts.format(&Rfc3339).unwrap_or_default()));
+        }
+
+        let path = format!("/api/v1/energy/{malo_id}");
+        let data: serde_json::Value = self
+            .edmd
+            .json(self.edmd.get(&path).query(&query))
+            .await
+            .with_context(|| format!("edmd energy series for {malo_id}"))?
+            .with_context(|| format!("edmd has no Bezugs-series for {malo_id} in this period"))?;
+
+        Self::parse_energy_series(malo_id, &data)
+    }
+
+    /// Turn edmd's projected energy series into typed intervals.
+    ///
+    /// No register logic here, deliberately: the response is already one series
+    /// in one direction, and re-deriving anything from it is how the previous
+    /// version came to double-count. The only judgement left is that a MaLo the
+    /// BG-SZR needs must actually have a Bezugs-series — reporting nothing would
+    /// look like a MaLo without data and short the territory silently.
+    fn parse_energy_series(
+        malo_id: &str,
+        data: &serde_json::Value,
+    ) -> Result<Vec<metering::MeterInterval>> {
+        use time::format_description::well_known::Rfc3339;
+
+        let entries = data["intervals"]
+            .as_array()
+            .with_context(|| format!("edmd /energy/{malo_id} carried no `intervals` array"))?;
+
+        let mut intervals: Vec<metering::MeterInterval> = Vec::with_capacity(entries.len());
+        for iv in entries {
+            let (Some(from), Some(to)) = (
+                iv["start"]
+                    .as_str()
+                    .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok()),
+                iv["end"]
+                    .as_str()
+                    .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok()),
+            ) else {
+                continue;
+            };
+            let Some(value) = Self::parse_decimal(&iv["kwh"]) else {
+                continue;
+            };
+            let quality = iv["quality"]
+                .as_str()
+                .and_then(|q| q.parse().ok())
+                .unwrap_or(metering::QualityFlag::Unknown);
+            // An empty or reversed span is a defective series, not a slot to
+            // skip: dropping it would short the territory by its energy.
+            intervals.push(
+                metering::MeterInterval::new(from, to, value, quality).with_context(|| {
+                    format!("edmd /energy/{malo_id} carried a defective interval")
+                })?,
+            );
+        }
+        intervals.sort_by_key(metering::MeterInterval::from);
+
+        if intervals.is_empty() {
+            anyhow::bail!(
+                "edmd returned no Bezugs-series for {malo_id}: the point reports \
+                 {count} interval(s) in that direction",
+                count = intervals.len()
+            );
+        }
+
+        Ok(intervals)
+    }
+
+    /// File one MSCONS 13003 per Bilanzierungsgebiet, recording each.
+    ///
+    /// # Why every territory is recorded
+    ///
+    /// A Summenzeitreihe the BIKO has acked **cannot be withdrawn**. When
+    /// territory 4 of 4 fails, the first three are already filed, so "the run
+    /// failed" is only half true and acting on it as though nothing went out
+    /// re-files three binding submissions.
+    ///
+    /// Each territory therefore gets a `submission_series` row saying `acked`
+    /// or `failed` with its reference or its reason. `skip` is what the caller
+    /// read out of that table for the whole Bilanzierungsmonat — see
+    /// [`pg::acked_territories_for_period`] — and this function files no
+    /// territory named in it. The run still fails as a whole, because a month
+    /// settled short is not a success.
+    ///
+    /// Returns the first territory's `(message_ref, process_id)` for the run
+    /// row — the whole story in a single-territory deployment — or
+    /// [`Filed::AlreadyWithBiko`] when every territory was skipped.
+    async fn submit_all_to_makod(
+        &self,
+        series: &[TerritorySeries],
+        run_id: Uuid,
+        skip: &[String],
+    ) -> Result<Filed> {
+        let mut first: Option<(String, Option<Uuid>)> = None;
+        let mut failures: Vec<String> = Vec::new();
+
+        for territory in series {
+            let szr = &territory.series;
+            let gebiet = szr.bilanzierungsgebiet_id.as_ref().to_owned();
+            if skip.contains(&gebiet) {
+                info!(
+                    run_id = %run_id, gebiet,
+                    "netzbilanzd mabis: territory already acked by the BIKO — not re-filed"
+                );
+                continue;
+            }
+
+            let series_id = pg::insert_series(
+                &self.pool,
+                run_id,
+                &gebiet,
+                szr.mabis_zp_id.as_str(),
+                territory.malo_count as i32,
+                szr.interval_count() as i32,
+                &szr.total_kwh(),
+            )
+            .await
+            .with_context(|| format!("record the series for {gebiet}"))?;
+
+            match self.submit_to_makod(szr, run_id).await {
+                Ok((message_ref, process_id)) => {
+                    pg::mark_series_acked(&self.pool, series_id, &message_ref, process_id)
+                        .await
+                        .with_context(|| format!("record the ack for {gebiet}"))?;
+                    info!(
+                        run_id = %run_id, gebiet, message_ref,
+                        "netzbilanzd mabis: Summenzeitreihe filed"
+                    );
+                    if first.is_none() {
+                        first = Some((message_ref, process_id));
+                    }
+                }
+                Err(e) => {
+                    // Recorded, then the loop continues: the remaining
+                    // territories are independent filings, and stopping here
+                    // would leave them unfiled *and* unexplained. That rules out
+                    // propagating a failure of the *record* too.
+                    let msg = e.to_string();
+                    warn!(run_id = %run_id, gebiet, error = %msg, "netzbilanzd mabis: territory not filed");
+                    let mut note = format!("{gebiet}: {msg}");
+                    if let Err(record_err) =
+                        pg::mark_series_failed(&self.pool, series_id, &msg).await
+                    {
+                        // The territory's row stays at 'pending' with no
+                        // error_msg, and that row is what `GET /api/v1/mabis/runs`
+                        // serves per territory — so an operator reading the run
+                        // sees a filing that looks still in flight rather than
+                        // one that failed. Nothing sweeps it back: a retry is a
+                        // *new* run with new series rows, so this row keeps
+                        // lying for as long as it is kept. The run-level failure
+                        // below is the one record that still lands, so the
+                        // territory's reason is carried into it, and the log
+                        // names the row so it can be corrected by hand.
+                        error!(
+                            run_id = %run_id, gebiet, series_id = %series_id,
+                            error = %record_err, submission_error = %msg,
+                            "netzbilanzd mabis: could not mark the territory's series failed — its \
+                             submission_series row still reads 'pending' and misreports a failed \
+                             filing as one still in flight"
+                        );
+                        note.push_str(&format!(
+                            " (submission_series {series_id} still reads 'pending': {record_err})"
+                        ));
+                    }
+                    failures.push(note);
+                }
+            }
+        }
+
+        if !failures.is_empty() {
+            anyhow::bail!(
+                "{} of {} Bilanzierungsgebiete were not filed — the month is settled short. \
+                 Territories already acked are recorded in submission_series and are NOT \
+                 re-filed by a retry: {}",
+                failures.len(),
+                series.len(),
+                failures.join("; ")
+            );
+        }
+        // Nothing left in `first` and nothing in `failures` means every
+        // territory was in `skip`: the BIKO already holds this month's filing.
+        // That is a completed run, not an empty one — the empty-aggregate case
+        // is caught before this function is called.
+        Ok(match first {
+            Some((message_ref, process_id)) => Filed::Submitted {
+                message_ref,
+                process_id,
+            },
+            None => Filed::AlreadyWithBiko,
+        })
+    }
+
+    async fn submit_to_makod(
+        &self,
+        summenzeitreihe: &Summenzeitreihe,
+        run_id: Uuid,
+    ) -> Result<(String, Option<Uuid>)> {
+        let cfg = &self.cfg;
+
+        // Re-checked per submission, not only at startup: the target selects the
+        // routing key (Bilanzierungsgebiet today, MaLo-ID under BK6-24-210), so a
+        // future Hub arm must not fall through to the bilateral payload.
+        cfg.mabis.submission_target.ensure_supported()?;
+
+        // Build the makod command payload.
+        //
+        // A Summenzeitreihe is an MSCONS message, Prüfidentifikator 13003
+        // ("Übertragung Summenzeitreihe", MSCONS AHB 3.2 §8.3.1). UTILTS carries
+        // Berechnungsformel and Zählzeitdefinitionen and has no Summenzeitreihe
+        // use case at all.
+        //
+        // The Prüfidentifikator travels on the payload rather than being left
+        // for the renderer to infer from the command name: the two sides agree
+        // on these keys by convention, and a filer that cannot state what it
+        // filed cannot be audited against the AHB it filed under.
+        //
+        // EDIFACT wants its own date formats: the Bilanzierungsmonat is
+        // `CCYYMM` (DTM+492, format 610), the Versionsangabe
+        // `CCYYMMDDHHMMSSZZZ` (DTM+293, format 304), and each slot bound
+        // `CCYYMMDDHHMMZZZ` (format 303).
+        let command = serde_json::json!({
+            "command": mako_markt::commands::MABIS_SUMMENZEITREIHE_UEBERMITTELN,
+            "marktrolle": "ÜNB",
+            "payload": {
+                "pruefidentifikator": MSCONS_SUMMENZEITREIHE_PID.as_u32(),
+                "mabis_zp_id": summenzeitreihe.mabis_zp_id,
+                "bilanzierungsgebiet_id": summenzeitreihe.bilanzierungsgebiet_id.as_ref(),
+                "balancing_period": fmt_edifact_month(summenzeitreihe.period_from),
+                "version": fmt_edifact_version(summenzeitreihe.version),
+                "sender_mp_id": summenzeitreihe.sender_mp_id,
+                "receiver_mp_id": summenzeitreihe.receiver_mp_id,
+                "intervals": summenzeitreihe.intervals.iter().map(|iv| serde_json::json!({
+                    "from": fmt_edifact_instant(iv.from),
+                    "to": fmt_edifact_instant(iv.to),
+                    "quantity_kwh": iv.quantity_kwh.to_string(),
+                })).collect::<Vec<_>>(),
+            }
+        });
+
+        let idempotency_key = idempotency_key(
+            run_id,
+            summenzeitreihe.bilanzierungsgebiet_id.as_ref(),
+            summenzeitreihe.version,
+        );
+
+        let request = self
+            .makod
+            .post("/api/v1/commands")
+            .header("Idempotency-Key", &idempotency_key)
+            .json(&command);
+        let result: serde_json::Value = self
+            .makod
+            .json(request)
+            .await
+            .context("makod command submission")?
+            .context("makod accepted the command without a response body")?;
+        accepted_reference(&result)
+    }
+
+    /// Mark a run failed and announce it, in one transaction.
+    ///
+    /// The failure row and the `de.mabis.submission.failed` outbox record
+    /// commit together (persist-before-dispatch): a failure nothing announces
+    /// reads as a submission still pending — which is exactly how this
+    /// service's failures were invisible to the agent plane before the event
+    /// existed. Write errors are logged rather than dropped; swallowing one
+    /// left the run in `pending`, where the retry list picks it up forever and
+    /// nothing records why the submission never went out.
+    async fn mark_failed_and_emit(
+        &self,
+        run_id: Uuid,
+        period_from: Date,
+        period_to: Date,
+        abrechnungslauf: pg::Abrechnungslauf,
+        phase: pg::SubmissionPhase,
+        error_msg: &str,
+    ) {
+        let result = async {
+            let mut tx = self.pool.begin().await?;
+            let attempt_count = pg::mark_failed(&mut tx, run_id, error_msg).await?;
+            let ce = mako_service::CloudEvent::new(
+                mako_service::source("netzbilanzd", &self.cfg.tenant),
+                mako_events::mabis::SUBMISSION_FAILED,
+                run_id.to_string(),
+                serde_json::json!({
+                    "run_id": run_id.to_string(),
+                    "bilanzierungsgebiet_id": self.cfg.mabis.bilanzierungsgebiet_id,
+                    "period_from": period_from.to_string(),
+                    "period_to": period_to.to_string(),
+                    "abrechnungslauf": abrechnungslauf.as_str(),
+                    "phase": phase.as_str(),
+                    "attempt_count": attempt_count,
+                    "error": error_msg,
+                }),
+            );
+            mako_service::outbox::enqueue(&mut tx, &ce).await?;
+            tx.commit().await
+        }
+        .await;
+        if let Err(e) = result {
+            warn!(
+                run_id = %run_id, error = %e,
+                "netzbilanzd mabis: could not record the run failure — the run stays in 'pending' \
+                 and no de.mabis.submission.failed event was enqueued"
+            );
+        }
+    }
+
+    /// Helper: count MaLos logged for a run.
+    async fn malo_count_for_run(&self, run_id: Uuid) -> i32 {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM submission_malo_log WHERE run_id = $1")
+            .bind(run_id)
+            .fetch_one(&self.pool)
+            .await
+            .unwrap_or(0) as i32
+    }
+}
+
+// ── Schedule helpers ──────────────────────────────────────────────────────────
+
+/// Determine the billing period for the previous calendar month.
+///
+/// Called on the `erstaufschlag_werktag` Werktag after the Bilanzierungsmonat.
+/// Returns `(period_from, period_to)` where `period_to` is the last day of
+/// the previous month and `period_from` is the first day.
+#[must_use]
+pub fn previous_month_period(today: Date) -> (Date, Date) {
+    let (year, month) = if today.month() == time::Month::January {
+        (today.year() - 1, time::Month::December)
+    } else {
+        (today.year(), today.month().previous())
+    };
+    let first = Date::from_calendar_date(year, month, 1).expect("valid calendar date");
+    let last = {
+        let next_month_first = if month == time::Month::December {
+            Date::from_calendar_date(year + 1, time::Month::January, 1)
+        } else {
+            Date::from_calendar_date(year, month.next(), 1)
+        }
+        .expect("valid calendar date");
+        next_month_first - Duration::days(1)
+    };
+    (first, last)
+}
+
+/// What `makod`'s `202` says was filed: the message reference and the process.
+fn accepted_reference(body: &serde_json::Value) -> Result<(String, Option<Uuid>)> {
+    // No placeholder: a series is recorded as acked only under the reference
+    // makod filed it as, because that is what the BIKO's answer will name.
+    let Some(message_ref) = body["message_ref"].as_str().filter(|r| !r.is_empty()) else {
+        anyhow::bail!(
+            "makod accepted the Summenzeitreihe without naming the message reference it \
+             filed — the series cannot be recorded as acked: {body}"
+        );
+    };
+    let message_ref = message_ref.to_owned();
+    let process_id = body["process_id"]
+        .as_str()
+        .and_then(|s| Uuid::parse_str(s).ok());
+    Ok((message_ref, process_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::macros::date;
+
+    /// A `202` that names no message reference is not an acknowledgement of a
+    /// filing: recording a placeholder satisfies „an acked series names what
+    /// was filed" with a name that names nothing.
+    #[test]
+    fn an_ack_without_a_message_reference_is_refused() {
+        let body = serde_json::json!({
+            "status": "accepted",
+            "process_id": "3181967a-02d1-4d0e-9105-0cc46f3b25c9",
+        });
+        assert!(accepted_reference(&body).is_err());
+
+        let body = serde_json::json!({
+            "status": "accepted",
+            "process_id": "3181967a-02d1-4d0e-9105-0cc46f3b25c9",
+            "message_ref": "3181967a02d14d",
+        });
+        let (message_ref, process_id) = accepted_reference(&body).expect("names what was filed");
+        assert_eq!(message_ref, "3181967a02d14d");
+        assert!(process_id.is_some());
+    }
+
+    /// An `edmd` stand-in serving `n` Strom MaLos through
+    /// `GET /api/v1/billing-periods`, capped at the caller's `limit` (default
+    /// 1000, as `edmd` defaults it) and saying when it truncated.
+    async fn edmd_with(n: usize) -> String {
+        use axum::{Json, extract::Query, routing::get};
+        use std::collections::HashMap;
+        let app = axum::Router::new().route(
+            "/api/v1/billing-periods",
+            get(move |Query(q): Query<HashMap<String, String>>| async move {
+                let limit: usize = q.get("limit").map_or(1000, |l| l.parse().unwrap());
+                let rows: Vec<_> = (0..n.min(limit))
+                    .map(
+                        |i| serde_json::json!({ "malo_id": format!("M{i:05}"), "sparte": "STROM" }),
+                    )
+                    .collect();
+                Json(serde_json::json!({
+                    "billing_periods": rows,
+                    "count": rows.len(),
+                    "truncated": n > limit,
+                    "limit": limit,
+                }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        format!("http://{addr}")
+    }
+
+    fn engine(edmd_url: String) -> SyncEngine {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused@127.0.0.1:9/none")
+            .expect("lazy pool");
+        let settings = Settings {
+            tenant: "t".to_owned(),
+            mabis: serde_json::from_value(serde_json::json!({
+                "sender_mp_id": "9900000000001",
+                "receiver_mp_id": "9900000000002",
+                "bilanzierungsgebiet_id": "11YR00000000000U"
+            }))
+            .expect("config"),
+        };
+        let client = mako_service::http::default_client();
+        let up = |name: &'static str, url: &str| {
+            Upstream::new(
+                name,
+                url,
+                Some(secrecy::SecretString::from("k".to_owned())),
+                client.clone(),
+            )
+        };
+        SyncEngine::new(
+            pool,
+            std::sync::Arc::new(settings),
+            up("edmd", &edmd_url),
+            up("marktd", "http://127.0.0.1:9"),
+            up("makod", "http://127.0.0.1:9"),
+        )
+    }
+
+    /// More than 1000 MaLos are discovered in full: a capped list reads as
+    /// „that is all of them", and the Summenzeitreihe filed from it is short
+    /// by every MaLo past the cap — accepted by the BIKO, detected by nobody.
+    #[tokio::test]
+    async fn more_than_a_thousand_malos_are_discovered_in_full() {
+        let e = engine(edmd_with(1_001).await);
+        let malos = e
+            .discover_malos(date!(2026 - 01 - 01), date!(2026 - 01 - 31))
+            .await
+            .expect("discovers");
+        assert_eq!(malos.len(), 1_001);
+    }
+
+    /// A discovery `edmd` reports as truncated is refused, never filed short.
+    #[tokio::test]
+    async fn a_truncated_discovery_is_refused() {
+        let e = engine(edmd_with(DISCOVERY_LIMIT + 1).await);
+        assert!(
+            e.discover_malos(date!(2026 - 01 - 01), date!(2026 - 01 - 31))
+                .await
+                .is_err(),
+            "a truncated MaLo list must not become a Summenzeitreihe"
+        );
+    }
+
+    /// The filer states the Prüfidentifikator it is filing under, and it is the
+    /// one MSCONS AHB 3.2 §8.3.1 defines for a Summenzeitreihe.
+    ///
+    /// `makod`'s `mabis.summenzeitreihe.uebermitteln` refuses a payload that
+    /// states any other, so this constant and that renderer are one fact rather
+    /// than two — the seam where a filer wired to the wrong command would
+    /// otherwise have its Zeitreihe rendered as a 13003 whatever it meant.
+    #[test]
+    fn the_filed_pruefidentifikator_is_the_summenzeitreihe_one() {
+        assert_eq!(MSCONS_SUMMENZEITREIHE_PID.as_u32(), 13_003);
+    }
+
+    #[test]
+    fn previous_month_january() {
+        let today = date!(2026 - 01 - 03);
+        let (from, to) = previous_month_period(today);
+        assert_eq!(from, date!(2025 - 12 - 01));
+        assert_eq!(to, date!(2025 - 12 - 31));
+    }
+
+    #[test]
+    fn previous_month_june() {
+        let today = date!(2026 - 06 - 08);
+        let (from, to) = previous_month_period(today);
+        assert_eq!(from, date!(2026 - 05 - 01));
+        assert_eq!(to, date!(2026 - 05 - 31));
+    }
+
+    #[test]
+    fn previous_month_march_end() {
+        let today = date!(2026 - 04 - 03);
+        let (from, to) = previous_month_period(today);
+        assert_eq!(from, date!(2026 - 03 - 01));
+        assert_eq!(to, date!(2026 - 03 - 31));
+    }
+
+    #[test]
+    fn previous_month_feb_non_leap() {
+        let today = date!(2026 - 03 - 03);
+        let (from, to) = previous_month_period(today);
+        assert_eq!(from, date!(2026 - 02 - 01));
+        assert_eq!(to, date!(2026 - 02 - 28));
+    }
+
+    #[test]
+    fn previous_month_feb_leap() {
+        let today = date!(2024 - 03 - 08);
+        let (from, to) = previous_month_period(today);
+        assert_eq!(from, date!(2024 - 02 - 01));
+        assert_eq!(to, date!(2024 - 02 - 29));
+    }
+}
+
+#[cfg(test)]
+mod edifact_format_tests {
+    use super::*;
+    use time::macros::datetime;
+
+    /// The three EDIFACT date formats MSCONS 13003 requires are distinct, and
+    /// sending one where another is expected is not detectable downstream.
+    #[test]
+    fn each_edifact_date_uses_its_own_format() {
+        let t = datetime!(2026-06-14 05:07:09 UTC);
+        assert_eq!(fmt_edifact_month(t), "202606", "DTM+492 is CCYYMM");
+        assert_eq!(
+            fmt_edifact_version(t),
+            "20260614050709+00",
+            "DTM+293 is CCYYMMDDHHMMSSZZZ"
+        );
+        assert_eq!(
+            fmt_edifact_instant(t),
+            "202606140507+00",
+            "DTM+163/164 is CCYYMMDDHHMMZZZ — no seconds"
+        );
+    }
+
+    /// A non-UTC input must be converted, not truncated: the version orders
+    /// submissions, so a mis-zoned value can invert two corrections.
+    #[test]
+    fn a_non_utc_instant_is_converted_before_formatting() {
+        let berlin_summer = datetime!(2026-06-14 07:07:09 +02:00);
+        assert_eq!(fmt_edifact_version(berlin_summer), "20260614050709+00");
+        assert_eq!(fmt_edifact_instant(berlin_summer), "202606140507+00");
+    }
+
+    /// The stored version is what the BIKO echoes back in a Datenstatus, and it
+    /// is matched by equality. Anything the wire cannot carry must therefore be
+    /// gone before the row is written.
+    #[test]
+    fn the_stored_version_round_trips_through_the_wire_format() {
+        let raw = datetime!(2026-06-14 05:07:09.123456 UTC);
+        let stored = truncate_to_seconds(raw);
+
+        assert_eq!(stored, datetime!(2026-06-14 05:07:09 UTC));
+        assert_eq!(stored.nanosecond(), 0);
+        // The wire value is identical either way — which is exactly why an
+        // untruncated row could never be found again.
+        assert_eq!(fmt_edifact_version(raw), fmt_edifact_version(stored));
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+    use time::macros::{date, datetime};
+
+    /// Number of MaBiS quarter-hour slots the window spans — the same
+    /// derivation `Summenzeitreihe::expected_slot_count` performs.
+    fn slots(period_from: Date, period_to: Date) -> i64 {
+        let (from, to) = aggregation_window(period_from, period_to);
+        (to - from).whole_seconds() / (15 * 60)
+    }
+
+    /// `period_to` is the inclusive last day of the month, so the window has to
+    /// run to the *following* midnight. Ending at `period_to` itself dropped the
+    /// last day of every Bilanzierungsmonat — 96 slots of energy.
+    #[test]
+    fn a_plain_month_spans_every_slot_including_the_last_day() {
+        assert_eq!(slots(date!(2026 - 06 - 01), date!(2026 - 06 - 30)), 30 * 96);
+        let (from, to) = aggregation_window(date!(2026 - 06 - 01), date!(2026 - 06 - 30));
+        assert_eq!(
+            from,
+            datetime!(2026-05-31 22:00 UTC),
+            "Berlin midnight, CEST"
+        );
+        assert_eq!(to, datetime!(2026-06-30 22:00 UTC));
+    }
+
+    /// The MaBiS grid is a Berlin-local grid. A UTC window keeps every month at
+    /// 24 h a day, which is wrong for exactly the two DST months — and the BIKO
+    /// cannot tell a short series from a complete one.
+    #[test]
+    fn the_dst_months_are_short_and_long_by_one_hour() {
+        // 2026-03-29: 02:00 → 03:00, so March holds 31 × 96 − 4 slots.
+        assert_eq!(slots(date!(2026 - 03 - 01), date!(2026 - 03 - 31)), 2972);
+        // 2026-10-25: 03:00 → 02:00, so October holds 31 × 96 + 4 slots.
+        assert_eq!(slots(date!(2026 - 10 - 01), date!(2026 - 10 - 31)), 2980);
+    }
+
+    /// A January period must start in the previous UTC year (CET is +01).
+    #[test]
+    fn a_winter_window_starts_the_evening_before() {
+        let (from, to) = aggregation_window(date!(2026 - 01 - 01), date!(2026 - 01 - 31));
+        assert_eq!(from, datetime!(2025-12-31 23:00 UTC));
+        assert_eq!(to, datetime!(2026-01-31 23:00 UTC));
+        assert_eq!(slots(date!(2026 - 01 - 01), date!(2026 - 01 - 31)), 31 * 96);
+    }
+}
+
+#[cfg(test)]
+mod lastgang_tests {
+    use super::*;
+
+    fn series(intervals: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "malo_id": "50123456789",
+            "direction": "BEZUG",
+            "resolution_min": 15,
+            "coverage_pct": 100.0,
+            "billable_pct": 100.0,
+            "interval_count": 1,
+            "intervals": intervals,
+        })
+    }
+
+    fn slot(start: &str, end: &str, kwh: &str) -> serde_json::Value {
+        serde_json::json!({ "start": start, "end": end, "kwh": kwh, "quality": "MEASURED" })
+    }
+
+    /// The projected series is taken as given — no register logic here.
+    #[test]
+    fn the_projected_series_is_parsed_slot_for_slot() {
+        let data = series(serde_json::json!([
+            slot("2026-06-01T00:00:00Z", "2026-06-01T00:15:00Z", "12.5"),
+            slot("2026-06-01T00:15:00Z", "2026-06-01T00:30:00Z", "13.5"),
+        ]));
+        let intervals = SyncEngine::parse_energy_series("50123456789", &data).expect("parses");
+        assert_eq!(intervals.len(), 2);
+        assert_eq!(intervals[0].value(), Decimal::new(125, 1));
+        assert_eq!(intervals[0].quality(), metering::QualityFlag::Measured);
+        assert_eq!(
+            intervals[0].to(),
+            time::macros::datetime!(2026-06-01 00:15:00 UTC),
+            "the interval's own end, not an assumed grid"
+        );
+    }
+
+    /// A MaLo with no Bezugs-series would otherwise look like a MaLo without
+    /// data, and short the territory without saying so.
+    #[test]
+    fn a_malo_with_no_bezug_series_is_an_error() {
+        let data = series(serde_json::json!([]));
+        let err = SyncEngine::parse_energy_series("50123456789", &data).expect_err("refuses");
+        assert!(err.to_string().contains("50123456789"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod idempotency_tests {
+    use super::*;
+    use time::macros::datetime;
+
+    /// `makod` rejects a command without the header (422
+    /// `missing_idempotency_key`), so the key must exist — and a retry must
+    /// present the same one, which means it derives only from the submission's
+    /// identity and never from the clock.
+    #[test]
+    fn the_key_is_stable_for_one_submission_and_distinct_across_them() {
+        let run = uuid::uuid!("2f1a5b6c-0d3e-4f50-8a91-b2c3d4e5f607");
+        let other_run = uuid::uuid!("3f1a5b6c-0d3e-4f50-8a91-b2c3d4e5f607");
+        let version = datetime!(2026-07-14 05:07:09 UTC);
+
+        let key = idempotency_key(run, "11XBG-DEMO-----9", version);
+        assert_eq!(
+            key,
+            idempotency_key(run, "11XBG-DEMO-----9", version),
+            "a retry must reuse the key"
+        );
+        assert_eq!(
+            key,
+            "mabis-szr-2f1a5b6c-0d3e-4f50-8a91-b2c3d4e5f607-11XBG-DEMO-----9-20260714050709+00"
+        );
+
+        // Each territory files its own MSCONS, and each version is a distinct
+        // filing — neither may share a key with another.
+        assert_ne!(key, idempotency_key(run, "11XBG-OTHER----2", version));
+        assert_ne!(key, idempotency_key(other_run, "11XBG-DEMO-----9", version));
+        assert_ne!(
+            key,
+            idempotency_key(run, "11XBG-DEMO-----9", datetime!(2026-07-14 05:07:10 UTC))
+        );
+    }
+}

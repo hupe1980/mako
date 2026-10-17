@@ -1,11 +1,10 @@
 //! Guard: a JSON request body refuses what it cannot store, and gates what is
 //! BO4E.
 //!
-//! Two rules, one scan, because both are about the same moment — the instant an
-//! untrusted body becomes a Rust value — and both failed the same way: silently.
+//! Four rules, one scan, because all are about the same moment — the instant an
+//! untrusted body becomes a Rust value — and all failed the same way: silently.
 //!
-//! ## Rule 1 — every `Json<T>` body type, and everything inside it, denies
-//! unknown fields
+//! ## Rule 1 — no body reaches a handler past the unknown-key refusal
 //!
 //! `serde` ignores a key no field declares, so a request naming a field the API
 //! does not have succeeds and the value goes nowhere. A customer posted as
@@ -18,19 +17,31 @@
 //! to an endpoint taking a BO4E `geschaeftspartner` is created with no name and
 //! no address, and the invoice that follows names nobody.
 //!
-//! `#[serde(deny_unknown_fields)]` makes it a `422` naming the field — well-formed
-//! JSON that the schema refuses, which is what 422 is for.
+//! `mako_service::Json` refuses that at runtime: it deserialises through
+//! `serde_ignored` and answers a `422` naming every undeclared key by its JSON
+//! path, at any depth, whatever attributes the type carries. The rule is
+//! therefore not "every body type carries `deny_unknown_fields`" — the
+//! extractor already holds every type it reads — but the places the runtime
+//! check does not reach:
 //!
-//! **The rule follows the body inwards.** The moment untrusted JSON becomes a
-//! Rust value is the same moment one level in, and the element types are where
-//! it was being missed: `DirectInterval` — one 15-minute reading of an `edmd`
-//! direct push — absorbed a misspelt `quality` in silence and stored the
-//! reading with no Messwertstatus, and `SpotPriceEntry` did the same to a
-//! mistyped field of an EPEX bulk load, settling the period against a default
-//! nobody chose. The scan therefore closes over the field types of every body,
-//! transitively, through `services/` and the workspace crates under `crates/` —
-//! `energy-billing`'s `GridInput` is a `billingd` body field — so a type is in
-//! scope because something reachable from a handler signature holds it, not
+//! - **A shape `serde` buffers.** A `#[serde(flatten)]` field, an
+//!   `#[serde(untagged)]` enum and an internally tagged (`tag = "…"`) enum are
+//!   read out of a buffer `serde` filled itself, out of `serde_ignored`'s
+//!   sight (`mako_service` `json.rs`:
+//!   `flatten_and_untagged_leftovers_are_not_seen`). Such an enum, and every
+//!   type reached through one or through a flattened field, carries
+//!   `#[serde(deny_unknown_fields)]` (`deny_on_the_buffered_shape_refuses_the_leftover`).
+//!   A struct holding a flattened field cannot — `serde` refuses the
+//!   combination — so it declares the fields instead, or the buffer is listed
+//!   in [`BUFFER_EXEMPT`] with its reason.
+//! - **A body extracted past `mako_service::Json`.** `Lenient<T>` skips the
+//!   refusal on purpose and `axum::Json` never had it; each use is listed in
+//!   [`LENIENT_USES`] or [`AXUM_JSON_USES`] with its reason, and a listed use
+//!   that is gone fails until its entry goes too.
+//!
+//! The walk follows a body inwards — every struct field, every enum variant —
+//! through `services/` and the workspace crates under `crates/`, so a type is
+//! in scope because something reachable from a handler signature holds it, not
 //! because of how it is named or where it is declared.
 //!
 //! ## Rule 2 — a BO4E document in a request body is a `Bo4e<T>`
@@ -77,163 +88,63 @@
 //!
 //! ## Exemptions
 //!
-//! Each is a claim that has to be argued in writing, so both lists carry a
-//! reason per entry and both are short.
+//! Each is a claim that has to be argued in writing, so every list carries a
+//! reason per entry and every list is short.
 
 use std::path::Path;
 
-/// Body types that may not deny unknown fields, with the reason.
+/// Buffers a body reaches — a struct with a `#[serde(flatten)]` field, an
+/// untagged or internally tagged enum — whose contents are not held to
+/// `deny_unknown_fields`, with the reason. Keyed by file and name. An entry
+/// covers everything read out of that buffer, so it is a claim about the whole
+/// subtree and has to say why.
+const BUFFER_EXEMPT: &[(&str, &str, &str)] = &[(
+    "crates/energy-billing/src/tariff.rs",
+    "Product",
+    "the variant structs are also read from billingd's productd mapping \
+     (`services/billingd/src/clients.rs`), which builds one object carrying every \
+     category's keys for whichever variant the product is, so they cannot deny the keys \
+     of the others — and two of them flatten an `ElectricityProduct`. A misspelt key in a \
+     `tariff` posted to billingd is therefore not refused",
+)];
+
+/// Every `Lenient<T>` extraction, by file and body type, with the reason the
+/// body is read without the unknown-key refusal.
+const LENIENT_USES: &[(&str, &str, &str)] = &[(
+    "services/edmd/src/server/lastgang.rs",
+    "SmgwTyp2Push",
+    "BSI TR-03109 defines this payload, not mako — a conformant Smart-Meter-Gateway one \
+     revision ahead must be read, not refused",
+)];
+
+/// Every typed `axum::Json<T>` extraction — a body read by `serde` alone, with
+/// no unknown-key refusal — with the reason.
 ///
-/// Keyed by name **and** the file that declares it: two different services
-/// have an `UpsertRequest`, and a name-only key exempted the one that has no
-/// reason to be exempt along with the one that does.
-const DENY_EXEMPT: &[(&str, &str, &str)] = &[
+/// The four are BDEW **Energy API** types (MaLo-Identifikation, the
+/// API-Verzeichnis). The schema is the BDEW's, and forward compatibility is its
+/// property, not mako's: a counterparty on a later minor version adds fields,
+/// and refusing their whole document over one would be mako failing an
+/// interoperability requirement it does not get to redefine.
+const AXUM_JSON_USES: &[(&str, &str, &str)] = &[
     (
-        "services/outputd/src/handlers.rs",
-        "IssueDocumentRequest",
-        "carries a `#[serde(flatten)]` field; serde rejects the combination",
-    ),
-    (
-        "services/outputd/src/handlers.rs",
-        "RenderApiRequest",
-        "carries a `#[serde(flatten)]` field; serde rejects the combination",
-    ),
-    (
-        "services/edmd/src/server/lastgang.rs",
-        "SmgwTyp2Push",
-        "BSI TR-03109 defines this payload, not mako — a conformant \
-         Smart-Meter-Gateway one revision ahead must be read, not refused",
-    ),
-    (
-        "services/edmd/src/server/lastgang.rs",
-        "SmgwTyp2Interval",
-        "an element of SmgwTyp2Push, and the same document: refusing the \
-         interval refuses the push, so the TR-03109 reason above covers it",
-    ),
-    // The four below are BDEW **Energy API** types (MaLo-Identifikation, the
-    // API-Verzeichnis). The schema is the BDEW's, and forward compatibility is
-    // its property, not mako's: a counterparty on a later minor version adds
-    // fields, and refusing their whole document over one would be mako failing
-    // an interoperability requirement it does not get to redefine.
-    (
-        "crates/energy-api/src/models/electricity.rs",
+        "crates/energy-api/src/server/malo_ident.rs",
         "IdentificationParameter",
         "BDEW Energy API request schema — a later minor version may add fields",
     ),
     (
-        "crates/energy-api/src/models/electricity.rs",
+        "crates/energy-api/src/server/malo_ident.rs",
         "MaloIdentResultPositive",
         "BDEW Energy API response schema — a later minor version may add fields",
     ),
     (
-        "crates/mako-markt/src/makod_client.rs",
-        "MaloIdentResultPositive",
-        "the client-side mirror of the same BDEW Energy API response",
-    ),
-    (
-        "crates/energy-api/src/models/electricity.rs",
+        "crates/energy-api/src/server/malo_ident.rs",
         "MaloIdentResultNegative",
         "BDEW Energy API response schema — a later minor version may add fields",
     ),
-    // Reached by name, not by use: Rule 1 matches body types across the tree,
-    // and `outputd`'s own `PostalAddress` — an element of the `Recipient` a
-    // document is issued to — carries the same name. That one denies; this one
-    // is the BDEW's schema and cannot.
     (
-        "crates/energy-api/src/models/electricity.rs",
-        "PostalAddress",
-        "BDEW Energy API schema — a later minor version may add fields",
-    ),
-    (
-        "crates/energy-api/src/models/directory.rs",
+        "crates/energy-api/src/directory/server.rs",
         "ApiRecord",
         "BDEW API-Verzeichnis entry — a later minor version may add fields",
-    ),
-    (
-        "crates/energy-api/src/models/electricity.rs",
-        "IdentificationParameterId",
-        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
-         version may add fields",
-    ),
-    (
-        "crates/energy-api/src/models/electricity.rs",
-        "IdentificationParameterAddress",
-        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
-         version may add fields",
-    ),
-    (
-        "crates/energy-api/src/models/electricity.rs",
-        "PersonName",
-        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
-         version may add fields",
-    ),
-    (
-        "crates/energy-api/src/models/electricity.rs",
-        "DataMarketLocation",
-        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
-         version may add fields",
-    ),
-    (
-        "crates/energy-api/src/models/electricity.rs",
-        "TimeSlicedMarketPartner",
-        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
-         version may add fields",
-    ),
-    (
-        "crates/energy-api/src/models/electricity.rs",
-        "MarketLocationProperties",
-        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
-         version may add fields",
-    ),
-    (
-        "crates/energy-api/src/models/electricity.rs",
-        "DataMeterLocation",
-        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
-         version may add fields",
-    ),
-    (
-        "crates/energy-api/src/models/electricity.rs",
-        "DataTechnicalResource",
-        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
-         version may add fields",
-    ),
-    (
-        "crates/energy-api/src/models/electricity.rs",
-        "DataControllableResource",
-        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
-         version may add fields",
-    ),
-    (
-        "crates/energy-api/src/models/electricity.rs",
-        "SrMarketPartner",
-        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
-         version may add fields",
-    ),
-    (
-        "crates/energy-api/src/models/electricity.rs",
-        "DataNetworkLocation",
-        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
-         version may add fields",
-    ),
-    (
-        "crates/energy-api/src/models/electricity.rs",
-        "DataTranche",
-        "BDEW Energy API schema, reached through a body the BDEW defines — a later minor \
-         version may add fields",
-    ),
-    // The two below are reached from `marktd` bodies and also decoded from the
-    // JSONB column that stores them. Denying there would make a row written by
-    // an older schema fail its own read — `pg/malo.rs` falls back to an empty
-    // list on a decode error, so the assignments would vanish without a word.
-    (
-        "crates/mako-markt/src/repository.rs",
-        "Rollenzuordnung",
-        "decoded from stored JSONB (`marktd` pg/malo.rs) as well as from a body",
-    ),
-    (
-        "crates/mako-markt/src/repository.rs",
-        "LfZuordnung",
-        "decoded from stored JSONB (`marktd` pg/versorgung.rs) as well as from a body",
     ),
 ];
 
@@ -275,17 +186,17 @@ const BO4E_FIELD_NAMES: &[&str] = &[
     "zeitreihe",
 ];
 
-/// Run both rules. Returns `true` when the tree is clean.
+/// Run every rule. Returns `true` when the tree is clean.
 pub fn run(workspace_root: &Path) -> bool {
     let mut files = Vec::new();
     for dir in ["crates", "services"] {
         collect_rs(&workspace_root.join(dir), workspace_root, &mut files);
     }
 
-    // Rule 1 holds every type the document becomes, not only the one axum
-    // extracts: the element types of a body are deserialised from the same
-    // untrusted JSON and were where the silent drops lived.
-    let extracted = json_body_types(&files);
+    // Every type a handler extracts, and how; Rule 2 holds the closure of all
+    // of them, Rule 1 the places the runtime refusal cannot see.
+    let found_extractions = extractions(&files);
+    let extracted: Vec<String> = json_body_types(&files);
     let body_types = reachable_body_types(&extracted, &files);
 
     // Both counts are what the success line reports. A scan that found no
@@ -301,7 +212,7 @@ pub fn run(workspace_root: &Path) -> bool {
         return false;
     }
 
-    let mut missing_deny = Vec::new();
+    let missing_deny = rule_one(&found_extractions, &files);
     let mut ungated = Vec::new();
     let mut escapes = Vec::new();
 
@@ -318,26 +229,11 @@ pub fn run(workspace_root: &Path) -> bool {
 
     for (rel, src) in &files {
         for s in structs(src) {
-            // Body types are matched by name across the tree, so a *client-side*
-            // request builder that happens to share a name with an inbound body
-            // — `accountingd`'s `IssueDocumentRequest`, which it serialises and
-            // posts to `outputd` — would be flagged for a rule about
-            // deserialising. A struct that does not derive `Deserialize` is not
-            // something anyone can send.
-            // Matched by **name**, so a same-named type elsewhere is held to the
-            // rule too — `mako_markt::PartnerRecord` alongside `makod`'s. That
-            // errs in the conservative direction: a record that absorbs unknown
-            // keys in silence is not better for being a read row. Rule 2, whose
-            // remedy is a type change, is scoped more tightly below.
+            // A struct that does not derive `Deserialize` is not something
+            // anyone can send: a *client-side* request builder sharing a name
+            // with an inbound body — `accountingd`'s `IssueDocumentRequest`,
+            // which it serialises and posts to `outputd` — is no body.
             let is_body = body_types.contains(&s.name) && s.attrs.contains("Deserialize");
-            if is_body
-                && !s.attrs.contains("deny_unknown_fields")
-                && !DENY_EXEMPT
-                    .iter()
-                    .any(|(file, n, _)| *n == s.name && rel == file)
-            {
-                missing_deny.push(format!("{rel}  {}", s.name));
-            }
             // Rule 2 is about what a **caller** sends. A repository record or a
             // read row deserialises from storage, where the document is
             // whatever an older schema series wrote and refusing it would fail
@@ -407,10 +303,14 @@ pub fn run(workspace_root: &Path) -> bool {
         && undocumented_gate.is_empty()
     {
         println!(
-            "check-request-bodies: {} JSON body type(s) deny unknown fields, \
-             no ungated BO4E field, no escaped comment ({} + {} documented exemption(s))",
+            "check-request-bodies: {} body type(s) reached from {} extraction(s), none past the \
+             unknown-key refusal unlisted, no ungated BO4E field, no escaped comment \
+             ({} buffer + {} Lenient + {} axum::Json + {} gate exemption(s))",
             body_types.len(),
-            DENY_EXEMPT.len(),
+            found_extractions.len(),
+            BUFFER_EXEMPT.len(),
+            LENIENT_USES.len(),
+            AXUM_JSON_USES.len(),
             GATE_EXEMPT.len()
         );
         return true;
@@ -418,16 +318,19 @@ pub fn run(workspace_root: &Path) -> bool {
 
     if !missing_deny.is_empty() {
         eprintln!(
-            "ERROR: {} JSON request body type(s) accept fields they do not have:\n",
+            "ERROR: {} body shape(s) the unknown-key refusal cannot see:\n",
             missing_deny.len()
         );
         for f in &missing_deny {
             eprintln!("  {f}");
         }
         eprintln!(
-            "\nAdd `#[serde(deny_unknown_fields)]`. Without it a caller naming a field\n\
-             the API does not have gets a 2xx and the value goes nowhere — a customer\n\
-             created with no name, and an invoice issued to nobody."
+            "\n`mako_service::Json` refuses an undeclared key at runtime, except where serde\n\
+             buffers — a flattened field, an untagged or internally tagged enum — and for\n\
+             a body extracted past it. Add `#[serde(deny_unknown_fields)]` to the buffered\n\
+             shape, replace a flatten by its fields, or list the use with its reason.\n\
+             Without it a caller naming a field the API does not have gets a 2xx and the\n\
+             value goes nowhere."
         );
     }
     if !undocumented_gate.is_empty() {
@@ -645,23 +548,14 @@ fn disclaims_bo4e(doc: &str) -> bool {
         .any(|n| flat.contains(n))
 }
 
-/// Close a set of body-type names over the field types they hold.
+/// Close a set of body-type names over the field types they hold — Rule 2's
+/// scope.
 ///
 /// A request body is not only the type axum extracts: every struct reachable
-/// from it by a field is deserialised from the same untrusted document, so it
-/// carries the same rule.
-///
-/// **The walk stops at `services/`.** A type declared in a domain crate is
-/// reachable from a body — `energy_billing::MeterInput` is what `billingd`'s
-/// `meter` block deserialises into — but it is not only that: the same type is
-/// built in Rust, stored as JSONB and read back, and the read is where denying
-/// does harm. This guard already says so for Rule 2 ("a read row deserialises
-/// from storage, where the document is whatever an older schema series wrote
-/// and refusing it would fail a `GET` on a row that merely got old"), and the
-/// reasoning does not change for Rule 1. Widening the walk across the crate
-/// boundary would make the rule demand something it cannot justify for 35
-/// domain types, half of them the BDEW Energy API's own schema, where forward
-/// compatibility is the counterparty's property and not mako's.
+/// from it by a field is deserialised from the same untrusted document. Rule 2
+/// then narrows to the structs declared in `services/`, because a domain-crate
+/// type reached by a body is also built in Rust, stored as JSONB and read back,
+/// and that read is where a type change does harm.
 fn reachable_body_types(seed: &[String], files: &[(String, String)]) -> Vec<String> {
     use std::collections::{HashMap, HashSet};
     // Every definition of a name is followed, not the first one found: which
@@ -718,22 +612,393 @@ fn innermost_type(ty: &str) -> String {
     head.rsplit("::").next().unwrap_or(head).trim().to_owned()
 }
 
-/// Every type named as `Json<T>` in a handler signature, de-generic'd.
-fn json_body_types(files: &[(String, String)]) -> Vec<String> {
-    let mut out = Vec::new();
-    for (_, src) in files {
-        let mut rest = src.as_str();
-        while let Some(i) = rest.find("): Json<") {
-            let after = &rest[i + "): Json<".len()..];
-            let Some(end) = after.find('>') else { break };
-            let mut ty = after[..end].trim();
-            ty = ty.strip_prefix("Vec<").unwrap_or(ty);
-            let ty = ty.rsplit("::").next().unwrap_or(ty).trim();
-            if ty != "Value" && !ty.is_empty() && !out.iter().any(|t| t == ty) {
-                out.push(ty.to_owned());
-            }
-            rest = after;
+/// How a handler reads its body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Via {
+    /// `mako_service::Json` — refuses an undeclared key at runtime.
+    Strict,
+    /// `mako_service::Lenient` — reads without the refusal, on purpose.
+    Lenient,
+    /// `axum::Json` — `serde` alone, no refusal.
+    Axum,
+}
+
+/// One body extraction in a handler signature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Extraction {
+    file: String,
+    ty: String,
+    via: Via,
+}
+
+/// Does `src` bring `axum`'s `Json` into scope (outside test modules)?
+fn imports_axum_json(src: &str) -> bool {
+    let mut rest = src;
+    while let Some(i) = rest.find("use axum") {
+        let stmt = &rest[i..];
+        let end = stmt.find(';').unwrap_or(stmt.len());
+        let words = stmt[..end].split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'));
+        if words.into_iter().any(|w| w == "Json") {
+            return true;
         }
+        rest = &stmt[end..];
+    }
+    false
+}
+
+/// Every typed body extraction — `Json<T>`, `Lenient<T>`, `axum::Json<T>` — in
+/// a handler signature or closure, de-generic'd. A `serde_json::Value` body
+/// declares no field and is left out.
+fn extractions(files: &[(String, String)]) -> Vec<Extraction> {
+    let mut out: Vec<Extraction> = Vec::new();
+    for (rel, src) in files {
+        let plain = if imports_axum_json(src) {
+            Via::Axum
+        } else {
+            Via::Strict
+        };
+        for (needle, via) in [
+            ("): axum::Json<", Via::Axum),
+            ("): mako_service::Json<", Via::Strict),
+            ("): Json<", plain),
+            ("): Lenient<", Via::Lenient),
+            ("): mako_service::Lenient<", Via::Lenient),
+        ] {
+            let mut rest = src.as_str();
+            while let Some(i) = rest.find(needle) {
+                let after = &rest[i + needle.len()..];
+                let Some(end) = after.find('>') else { break };
+                let mut ty = after[..end].trim();
+                ty = ty.strip_prefix("Vec<").unwrap_or(ty);
+                let ty = ty.rsplit("::").next().unwrap_or(ty).trim();
+                let e = Extraction {
+                    file: rel.clone(),
+                    ty: ty.to_owned(),
+                    via,
+                };
+                if ty != "Value" && !ty.is_empty() && !out.contains(&e) {
+                    out.push(e);
+                }
+                rest = after;
+            }
+        }
+    }
+    out
+}
+
+/// Every type named as a body in a handler signature, de-generic'd, however
+/// it is extracted.
+fn json_body_types(files: &[(String, String)]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for e in extractions(files) {
+        if !out.contains(&e.ty) {
+            out.push(e.ty);
+        }
+    }
+    out
+}
+
+/// Rule 1: the body shapes the unknown-key refusal does not reach, unlisted.
+fn rule_one(found: &[Extraction], files: &[(String, String)]) -> Vec<String> {
+    use std::collections::{HashMap, HashSet};
+    let mut out = Vec::new();
+
+    // Extractions past the refusal: listed, and every listing still true.
+    for (via, list, what) in [
+        (Via::Lenient, LENIENT_USES, "LENIENT_USES"),
+        (Via::Axum, AXUM_JSON_USES, "AXUM_JSON_USES"),
+    ] {
+        for e in found.iter().filter(|e| e.via == via) {
+            if !list.iter().any(|(f, t, _)| *f == e.file && *t == e.ty) {
+                out.push(format!(
+                    "{}  {}: extracted with {} — past the unknown-key refusal; take \
+                     `mako_service::Json`, or list it in {what} with its reason",
+                    e.file,
+                    e.ty,
+                    if via == Via::Axum {
+                        "axum::Json"
+                    } else {
+                        "Lenient"
+                    }
+                ));
+            }
+        }
+        for (f, t, _) in list {
+            if !found
+                .iter()
+                .any(|e| e.via == via && e.file == *f && e.ty == *t)
+            {
+                out.push(format!(
+                    "{f}  {t}: listed in {what}, and no such extraction remains"
+                ));
+            }
+        }
+    }
+
+    // The shapes serde buffers, walked from every strict body.
+    let mut struct_defs: HashMap<String, Vec<(String, StructDef)>> = HashMap::new();
+    let mut enum_defs: HashMap<String, Vec<(String, EnumDef)>> = HashMap::new();
+    for (rel, src) in files {
+        for d in structs(src) {
+            struct_defs
+                .entry(d.name.clone())
+                .or_default()
+                .push((rel.clone(), d));
+        }
+        for d in enums(src) {
+            enum_defs
+                .entry(d.name.clone())
+                .or_default()
+                .push((rel.clone(), d));
+        }
+    }
+    // Where a type is read from: in the runtime refusal's sight, out of a
+    // buffer (the flattening struct or the enum that opened it), or out of a
+    // buffer BUFFER_EXEMPT lists — whose whole subtree is that entry's claim.
+    #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+    enum Seen {
+        Checked,
+        Exempt,
+        Buffered(String),
+    }
+    let listed = |name: &str| BUFFER_EXEMPT.iter().any(|(_, n, _)| *n == name);
+    let mut reached: HashMap<String, Seen> = HashMap::new();
+    let mut stack: Vec<(String, Seen)> = found
+        .iter()
+        .filter(|e| e.via == Via::Strict)
+        .map(|e| (e.ty.clone(), Seen::Checked))
+        .collect();
+    while let Some((name, seen)) = stack.pop() {
+        // A stronger reading replaces a weaker one — buffered over exempt over
+        // checked — so a type an exemption covers on one path is still held
+        // where another path reads it out of an unlisted buffer.
+        if reached.get(&name).is_some_and(|was| *was >= seen) {
+            continue;
+        }
+        reached.insert(name.clone(), seen.clone());
+        let open = |by: &str, opens: bool| -> Seen {
+            match &seen {
+                Seen::Checked if opens && listed(by) => Seen::Exempt,
+                Seen::Checked if opens => Seen::Buffered(by.to_owned()),
+                other => other.clone(),
+            }
+        };
+        for (_, d) in struct_defs.get(&name).into_iter().flatten() {
+            for (field, ty) in &d.fields {
+                stack.push((
+                    innermost_type(ty),
+                    open(&d.name, d.flattened.contains(field)),
+                ));
+            }
+        }
+        for (_, d) in enum_defs.get(&name).into_iter().flatten() {
+            let child = open(&d.name, d.buffers());
+            for ty in &d.inner {
+                stack.push((innermost_type(ty), child.clone()));
+            }
+        }
+    }
+    let mut flagged: HashSet<String> = HashSet::new();
+    let mut names: Vec<_> = reached.iter().collect();
+    names.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, seen) in names {
+        let opened_by = match seen {
+            Seen::Exempt => continue,
+            Seen::Buffered(by) => Some(by.as_str()),
+            Seen::Checked => None,
+        };
+        for (rel, d) in struct_defs.get(name).into_iter().flatten() {
+            if !d.attrs.contains("Deserialize") {
+                continue;
+            }
+            if !d.flattened.is_empty() && !listed(&d.name) {
+                out.push(format!(
+                    "{rel}  {}: flattens `{}` — a key left over beside it is unseen; declare \
+                     the fields instead of flattening, or list it in BUFFER_EXEMPT",
+                    d.name,
+                    d.flattened.join("`, `")
+                ));
+            }
+            if let Some(by) = opened_by
+                && !d.attrs.contains("deny_unknown_fields")
+                && flagged.insert(format!("{rel}{}", d.name))
+            {
+                out.push(format!(
+                    "{rel}  {}: read out of `{by}`'s buffer without `deny_unknown_fields`",
+                    d.name
+                ));
+            }
+        }
+        for (rel, d) in enum_defs.get(name).into_iter().flatten() {
+            // A unit or newtype variant has no key of its own; a newtype's
+            // member is walked, and held, as a type of its own.
+            if !d.attrs.contains("Deserialize")
+                || d.attrs.contains("deny_unknown_fields")
+                || !d.struct_variants
+                || listed(&d.name)
+            {
+                continue;
+            }
+            if (opened_by.is_some() || d.buffers()) && flagged.insert(format!("{rel}{}", d.name)) {
+                out.push(format!(
+                    "{rel}  {}: {} without `deny_unknown_fields`",
+                    d.name,
+                    match opened_by {
+                        Some(by) if !d.buffers() => format!("an enum read out of `{by}`'s buffer"),
+                        _ => "an untagged or internally tagged enum".to_owned(),
+                    }
+                ));
+            }
+        }
+    }
+    for (f, n, _) in BUFFER_EXEMPT {
+        let flattens = struct_defs
+            .get(*n)
+            .into_iter()
+            .flatten()
+            .any(|(rel, d)| rel == f && !d.flattened.is_empty());
+        let buffers = enum_defs
+            .get(*n)
+            .into_iter()
+            .flatten()
+            .any(|(rel, d)| rel == f && d.buffers());
+        if !reached.contains_key(*n) || !(flattens || buffers) {
+            out.push(format!(
+                "{f}  {n}: listed in BUFFER_EXEMPT, and no body reaches a buffer there"
+            ));
+        }
+    }
+    out
+}
+
+struct EnumDef {
+    name: String,
+    attrs: String,
+    /// Every type a variant holds — tuple-variant members and struct-variant
+    /// field types.
+    inner: Vec<String>,
+    /// Whether a variant declares named fields — the only keys the enum's own
+    /// `deny_unknown_fields` governs.
+    struct_variants: bool,
+}
+
+impl EnumDef {
+    /// `untagged`, or internally tagged (`tag` without `content`): the two
+    /// enum shapes `serde` reads out of its own buffer.
+    fn buffers(&self) -> bool {
+        let serde: String = self
+            .attrs
+            .lines()
+            .filter(|l| l.contains("serde("))
+            .collect::<Vec<_>>()
+            .join(" ");
+        serde.contains("untagged") || (serde.contains("tag =") && !serde.contains("content ="))
+    }
+}
+
+/// Every `enum Name { … }` with its attribute block and the types its
+/// variants hold. Line-based, like [`structs`].
+fn enums(src: &str) -> Vec<EnumDef> {
+    let lines: Vec<&str> = src.lines().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let t = lines[i].trim_start();
+        let is_decl = t.starts_with("enum ")
+            || t.starts_with("pub enum ")
+            || (t.starts_with("pub(") && t.contains(") enum "));
+        if !is_decl || !lines[i].trim_end().ends_with('{') {
+            i += 1;
+            continue;
+        }
+        let Some(name) = lines[i]
+            .split("enum ")
+            .nth(1)
+            .and_then(|r| r.split(|c: char| c.is_whitespace() || c == '<').next())
+            .map(|n| n.trim_end_matches('{').trim().to_owned())
+        else {
+            i += 1;
+            continue;
+        };
+        let mut start = i;
+        while start > 0 {
+            let p = lines[start - 1].trim_start();
+            if p.starts_with("#[") || p.starts_with("///") || p.starts_with(')') {
+                start -= 1;
+            } else if !p.starts_with("//") && (p.ends_with(',') || p.starts_with('"')) {
+                // A wrapped attribute argument line.
+                start -= 1;
+            } else {
+                break;
+            }
+        }
+        let attrs = lines[start..i].join("\n");
+        let indent = lines[i].len() - lines[i].trim_start().len();
+        let mut inner = Vec::new();
+        let mut struct_variants = false;
+        let mut j = i + 1;
+        while j < lines.len() {
+            let l = lines[j];
+            if l.trim() == "}" && (l.len() - l.trim_start().len()) == indent {
+                break;
+            }
+            let v = l.trim();
+            if v.starts_with("//") || v.starts_with('#') {
+                j += 1;
+                continue;
+            }
+            if let Some(open) = v.find('(')
+                && v[..open]
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                let close = v.rfind(')').unwrap_or(v.len());
+                for ty in split_top_level(&v[open + 1..close.max(open + 1)]) {
+                    inner.push(ty);
+                }
+            } else if let Some((field, ty)) = v.split_once(':')
+                && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && !field.is_empty()
+            {
+                inner.push(ty.trim().trim_end_matches(',').to_owned());
+            } else if v.ends_with('{') {
+                struct_variants = true;
+            }
+            j += 1;
+        }
+        out.push(EnumDef {
+            name,
+            attrs,
+            inner,
+            struct_variants,
+        });
+        i = j;
+    }
+    out
+}
+
+/// `a, B<c, d>, e` → `["a", "B<c, d>", "e"]`.
+fn split_top_level(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut cur = String::new();
+    for c in s.chars() {
+        match c {
+            '<' | '(' | '[' => depth += 1,
+            '>' | ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                if !cur.trim().is_empty() {
+                    out.push(cur.trim().to_owned());
+                }
+                cur.clear();
+                continue;
+            }
+            _ => {}
+        }
+        cur.push(c);
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur.trim().to_owned());
     }
     out
 }
@@ -742,6 +1007,8 @@ struct StructDef {
     name: String,
     attrs: String,
     fields: Vec<(String, String)>,
+    /// The fields carrying `#[serde(flatten)]`.
+    flattened: Vec<String>,
 }
 
 /// Every `struct Name { … }` with its preceding attribute block and its fields.
@@ -793,6 +1060,8 @@ fn structs(src: &str) -> Vec<StructDef> {
         // Fields, to the closing brace at the declaration's indent.
         let indent = lines[i].len() - lines[i].trim_start().len();
         let mut fields = Vec::new();
+        let mut flattened = Vec::new();
+        let mut pending_flatten = false;
         let mut j = i + 1;
         while j < lines.len() {
             let l = lines[j];
@@ -800,6 +1069,9 @@ fn structs(src: &str) -> Vec<StructDef> {
                 break;
             }
             let ft = l.trim_start();
+            if ft.starts_with("#[") && ft.contains("serde(") && ft.contains("flatten") {
+                pending_flatten = true;
+            }
             if let Some(rest) = ft
                 .strip_prefix("pub ")
                 .or_else(|| (!ft.starts_with('#') && !ft.starts_with("//")).then_some(ft))
@@ -811,6 +1083,9 @@ fn structs(src: &str) -> Vec<StructDef> {
                     name.trim().to_owned(),
                     ty.trim().trim_end_matches(',').to_owned(),
                 ));
+                if std::mem::take(&mut pending_flatten) {
+                    flattened.push(name.trim().to_owned());
+                }
             }
             j += 1;
         }
@@ -818,6 +1093,7 @@ fn structs(src: &str) -> Vec<StructDef> {
             name,
             attrs,
             fields,
+            flattened,
         });
         i = j;
     }
@@ -1011,6 +1287,139 @@ pub struct AlsoKept { pub b: u8 }
         assert!(stripped.contains("Kept"));
         assert!(stripped.contains("AlsoKept"));
         assert!(!stripped.contains("Hidden"), "{stripped}");
+    }
+
+    /// Rule 1 over a synthetic tree, without the real lists' staleness
+    /// findings (those name files the synthetic tree does not have).
+    fn rule_one_on(files: &[(&str, &str)]) -> Vec<String> {
+        let files: Vec<(String, String)> = files
+            .iter()
+            .map(|(f, s)| ((*f).to_owned(), (*s).to_owned()))
+            .collect();
+        super::rule_one(&super::extractions(&files), &files)
+            .into_iter()
+            .filter(|f| !f.contains("listed in"))
+            .collect()
+    }
+
+    /// The runtime refusal holds a plain body: a type without
+    /// `deny_unknown_fields` is no finding, because `mako_service::Json`
+    /// answers an undeclared key with a 422 naming it
+    /// (`an_undeclared_key_is_refused_with_its_path`).
+    #[test]
+    fn a_plain_body_without_the_attribute_is_the_extractors_business() {
+        let out = rule_one_on(&[(
+            "services/a/src/h.rs",
+            "async fn h(Json(r): Json<Req>) {}\n\
+             #[derive(Deserialize)]\npub struct Req {\n    pub inner: Inner,\n}\n\
+             #[derive(Deserialize)]\npub struct Inner {\n    pub n: u8,\n}\n",
+        )]);
+        assert!(out.is_empty(), "{out:?}");
+    }
+
+    /// A flattened field is a buffer: the flattening struct is named, and so
+    /// is a member read out of it without the attribute.
+    #[test]
+    fn a_flatten_is_named_and_its_member_must_deny() {
+        let out = rule_one_on(&[(
+            "services/a/src/h.rs",
+            "async fn h(Json(r): Json<Req>) {}\n\
+             #[derive(Deserialize)]\npub struct Req {\n    #[serde(flatten)]\n    pub inner: Inner,\n}\n\
+             #[derive(Deserialize)]\npub struct Inner {\n    pub n: u8,\n}\n",
+        )]);
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert!(
+            out.iter().any(|f| f.contains("Req: flattens `inner`")),
+            "{out:?}"
+        );
+        assert!(
+            out.iter()
+                .any(|f| f.contains("Inner: read out of `Req`'s buffer")),
+            "{out:?}"
+        );
+    }
+
+    /// An internally tagged enum with named-field variants denies, and the
+    /// struct a newtype variant holds is read out of its buffer.
+    #[test]
+    fn a_tagged_enum_and_what_it_holds_must_deny() {
+        let src = "async fn h(Json(r): Json<Req>) {}\n\
+             #[derive(Deserialize)]\npub struct Req {\n    pub art: Art,\n}\n\
+             #[derive(Deserialize)]\n#[serde(tag = \"art\")]\npub enum Art {\n    A(Teil),\n    B {\n        n: u8,\n    },\n}\n\
+             #[derive(Deserialize)]\npub struct Teil {\n    pub m: u8,\n}\n";
+        let out = rule_one_on(&[("services/a/src/h.rs", src)]);
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert!(
+            out.iter()
+                .any(|f| f.contains("Art: an untagged or internally tagged")),
+            "{out:?}"
+        );
+        assert!(
+            out.iter()
+                .any(|f| f.contains("Teil: read out of `Art`'s buffer")),
+            "{out:?}"
+        );
+
+        let fixed = src
+            .replace(
+                "#[serde(tag = \"art\")]",
+                "#[serde(tag = \"art\", deny_unknown_fields)]",
+            )
+            .replace(
+                "#[derive(Deserialize)]\npub struct Teil",
+                "#[derive(Deserialize)]\n#[serde(deny_unknown_fields)]\npub struct Teil",
+            );
+        assert!(rule_one_on(&[("services/a/src/h.rs", &fixed)]).is_empty());
+    }
+
+    /// A body read past the refusal — `Lenient<T>` or `axum::Json<T>` — is
+    /// named until it is listed.
+    #[test]
+    fn an_extraction_past_the_refusal_is_named() {
+        let files = vec![
+            (
+                "services/a/src/h.rs".to_owned(),
+                "async fn h(Lenient(r): Lenient<Push>) {}\n".to_owned(),
+            ),
+            (
+                "services/b/src/h.rs".to_owned(),
+                "use axum::{Json, Router};\nasync fn h(Json(r): Json<Ident>) {}\n".to_owned(),
+            ),
+        ];
+        let found = super::extractions(&files);
+        assert!(
+            found
+                .iter()
+                .any(|e| e.ty == "Push" && e.via == super::Via::Lenient)
+        );
+        assert!(
+            found
+                .iter()
+                .any(|e| e.ty == "Ident" && e.via == super::Via::Axum)
+        );
+        let out = super::rule_one(&found, &files);
+        assert!(
+            out.iter()
+                .any(|f| f.contains("Push: extracted with Lenient")),
+            "{out:?}"
+        );
+        assert!(
+            out.iter()
+                .any(|f| f.contains("Ident: extracted with axum::Json")),
+            "{out:?}"
+        );
+    }
+
+    /// Today's tree: no buffered shape unlisted, every listed use still there.
+    #[test]
+    fn the_real_tree_has_no_unlisted_blind_spot() {
+        let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/.."));
+        let mut files = Vec::new();
+        for dir in ["crates", "services"] {
+            super::collect_rs(&root.join(dir), root, &mut files);
+        }
+        let out = super::rule_one(&super::extractions(&files), &files);
+        assert!(out.is_empty(), "{out:#?}");
     }
 
     #[test]

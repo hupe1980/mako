@@ -82,20 +82,11 @@ pub(crate) async fn post_gdpr_erasure(
 ) -> impl IntoResponse {
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "write-gdpr-erasure", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     if req.reason.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(
-                serde_json::json!({ "error": "an erasure reason is required for the audit trail" }),
-            ),
-        )
+        return ApiError::bad_request("an erasure reason is required for the audit trail")
             .into_response();
     }
 
@@ -122,11 +113,7 @@ pub(crate) async fn post_gdpr_erasure(
         Ok(tx) => tx,
         Err(e) => {
             tracing::error!(malo_id = %malo_id, error = %e, "edmd: GDPR erasure could not begin");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
+            return ApiError::internal(e).into_response();
         }
     };
 
@@ -140,15 +127,7 @@ pub(crate) async fn post_gdpr_erasure(
                         malo_id = %malo_id, step = $step, error = %e,
                         "edmd: GDPR Art. 17 erasure failed — rolled back"
                     );
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({
-                            "error": e.to_string(),
-                            "failed_step": $step,
-                            "status": "not_erased",
-                        })),
-                    )
-                        .into_response();
+                    return ApiError::internal(e).into_response();
                 }
             }
         };
@@ -349,6 +328,8 @@ pub(crate) async fn post_gdpr_erasure(
                            authoritative store and the ESA Typ-2 one alike, and the § 147 AO \
                            trail survives in edmd, but none of them identifies the MaLo. \
                            Derived and operational rows deleted outright.",
+            // The reading this erasure was performed under.
+            "policy": state.physische_loeschung,
         })),
     )
         .into_response()
@@ -431,11 +412,7 @@ pub(crate) async fn get_gdpr_erasures(
 ) -> impl IntoResponse {
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-gdpr-erasures", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     fn instant(field: &str, raw: &str) -> Result<OffsetDateTime, String> {
@@ -460,11 +437,7 @@ pub(crate) async fn get_gdpr_erasures(
         Ok(())
     })();
     if let Err(detail) = parsed {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": detail })),
-        )
-            .into_response();
+        return ApiError::bad_request(detail).into_response();
     }
 
     let Some(registry) = state.repo.store().subject_registry() else {
@@ -498,11 +471,7 @@ pub(crate) async fn get_gdpr_erasures(
                 .into_response()
         }
         Err(e) => {
-            tracing::error!(error = %e, "edmd: erasure trail query failed");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
+            ApiError::internal(anyhow::Error::new(e).context("edmd: erasure trail query failed"))
                 .into_response()
         }
     }

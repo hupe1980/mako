@@ -66,7 +66,7 @@ use rubo4e::convenience::{BetragExt, MengeExt, PreisExt};
 use rubo4e::current::{Rechnung, Rechnungsposition};
 
 use crate::{
-    amount::{EuroAmount, euro_from_decimal},
+    amount::{EuroAmount, WithinTolerance as _, euro_from_decimal, reduce_product},
     tariff::PreisblattStore,
 };
 
@@ -731,7 +731,7 @@ impl InvoicCheckEngine {
     /// Stage 5: For each position with quantity + unit_price, verify
     /// `positions_menge × einzelpreis ≈ gesamtpreis` (BO4E v202607).
     ///
-    /// Uses `billing::Amount::checked_sub` + `checked_mul_qty` — no `f64`
+    /// Uses one exact product rounded once (`reduce_product`) — no `f64`
     /// intermediate — satisfying the §40 EnWG itemised-billing accuracy requirement.
     /// One currency across every monetary field on the document.
     ///
@@ -812,12 +812,11 @@ impl InvoicCheckEngine {
                 let (line_no, malo) = pos_ident(pos);
                 // The quantity comes off the wire and nothing has range-checked
                 // it — the price has been through `euro_from_decimal`, the
-                // quantity has not. `mul_qty` panics on a product outside the
-                // representable range, so a counterparty document stating
-                // `menge = 1e15` would take down the request that validates it.
-                // An unrepresentable product is a finding about the document,
-                // not a fault in the checker.
-                let Ok(computed) = price.checked_mul_qty(qty) else {
+                // quantity has not. A counterparty document stating
+                // `menge = 1e15` must not take down the request that validates
+                // it: an unrepresentable product is a finding about the
+                // document, not a fault in the checker.
+                let Some(computed) = reduce_product(price, qty) else {
                     findings.push(Finding {
                         kind: FindingKind::ArithmeticError,
                         is_dispute: true,
@@ -1023,9 +1022,9 @@ impl InvoicCheckEngine {
             };
             // The rate arrives off the wire unchecked, so the product is taken
             // in the checked form rather than panicking the request.
-            let Ok(computed) = basis
-                .checked_mul_qty(satz)
-                .and_then(|x| x.checked_div(rust_decimal::Decimal::ONE_HUNDRED))
+            let Some(computed) = satz
+                .checked_div(rust_decimal::Decimal::ONE_HUNDRED)
+                .and_then(|rate| reduce_product(basis, rate))
             else {
                 findings.push(Finding::dispute(
                     FindingKind::SteuerMismatch,
@@ -2012,8 +2011,8 @@ mod tests {
             1,
             "DE001",
             Some("1000.0"),
-            Some(EuroAmount::from_raw_units(3_456)),
-            Some(EuroAmount::from_raw_units(3_456_000)),
+            Some(EuroAmount::from_raw(3_456)),
+            Some(EuroAmount::from_raw(3_456_000)),
         );
         let r = make_rechnung(vec![pos], None);
         let report =
@@ -2033,8 +2032,8 @@ mod tests {
             1,
             "DE001",
             Some("1000.0"),
-            Some(EuroAmount::from_raw_units(3_456)),
-            Some(EuroAmount::from_raw_units(4_000_000)),
+            Some(EuroAmount::from_raw(3_456)),
+            Some(EuroAmount::from_raw(4_000_000)),
         );
         let r = make_rechnung(vec![pos], None);
         let report =
@@ -2055,8 +2054,8 @@ mod tests {
             1,
             "DE001",
             Some("1000.0"),
-            Some(EuroAmount::from_raw_units(3_456)),
-            Some(EuroAmount::from_raw_units(3_490_000)),
+            Some(EuroAmount::from_raw(3_456)),
+            Some(EuroAmount::from_raw(3_490_000)),
         );
         let config = CheckConfig {
             arithmetic_tolerance_ppm: 10_000,
@@ -2081,9 +2080,9 @@ mod tests {
             "DE001",
             None,
             None,
-            Some(EuroAmount::from_raw_units(3_456_000)),
+            Some(EuroAmount::from_raw(3_456_000)),
         );
-        let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(3_456_000)));
+        let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(3_456_000)));
         let report =
             InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
         assert!(
@@ -2101,9 +2100,9 @@ mod tests {
             "DE001",
             None,
             None,
-            Some(EuroAmount::from_raw_units(3_456_000)),
+            Some(EuroAmount::from_raw(3_456_000)),
         );
-        let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(5_000_000)));
+        let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(5_000_000)));
         let report =
             InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
         assert!(!report.has_dispute()); // warn only
@@ -2124,14 +2123,8 @@ mod tests {
     /// which is the receiving LF's money.
     #[test]
     fn an_invoice_without_a_tax_block_is_disputed() {
-        let pos = make_pos(
-            1,
-            "DE001",
-            None,
-            None,
-            Some(EuroAmount::from_raw_units(100_000)),
-        );
-        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(100_000)));
+        let pos = make_pos(1, "DE001", None, None, Some(EuroAmount::from_raw(100_000)));
+        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(100_000)));
         r.gesamtsteuer = None;
         r.gesamtbrutto = None;
         r.steuerbetraege = None;
@@ -2150,16 +2143,10 @@ mod tests {
     /// A reverse charge states no tax, and that is correct rather than missing.
     #[test]
     fn a_reverse_charge_without_a_tax_amount_is_accepted() {
-        let pos = make_pos(
-            1,
-            "DE001",
-            None,
-            None,
-            Some(EuroAmount::from_raw_units(100_000)),
-        );
-        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(100_000)));
+        let pos = make_pos(1, "DE001", None, None, Some(EuroAmount::from_raw(100_000)));
+        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(100_000)));
         r.gesamtsteuer = Some(betrag(EuroAmount::ZERO));
-        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(100_000)));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw(100_000)));
         r.steuerbetraege = Some(vec![rubo4e::current::Steuerbetrag {
             steuerart: Some(rubo4e::current::Steuerart::Rcv),
             steuersatz: Some(Decimal::ZERO),
@@ -2185,16 +2172,10 @@ mod tests {
     /// recipient owes it too under §13b — the worst of both.
     #[test]
     fn a_reverse_charge_stating_tax_is_disputed() {
-        let pos = make_pos(
-            1,
-            "DE001",
-            None,
-            None,
-            Some(EuroAmount::from_raw_units(100_000)),
-        );
-        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(100_000)));
-        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw_units(19_000)));
-        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(119_000)));
+        let pos = make_pos(1, "DE001", None, None, Some(EuroAmount::from_raw(100_000)));
+        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(100_000)));
+        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw(19_000)));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw(119_000)));
         r.steuerbetraege = Some(vec![rubo4e::current::Steuerbetrag {
             steuerart: Some(rubo4e::current::Steuerart::Rcv),
             steuersatz: Some(Decimal::ZERO),
@@ -2219,15 +2200,9 @@ mod tests {
     /// catches by reading it.
     #[test]
     fn a_gross_that_does_not_equal_net_plus_tax_is_disputed() {
-        let pos = make_pos(
-            1,
-            "DE001",
-            None,
-            None,
-            Some(EuroAmount::from_raw_units(100_000)),
-        );
-        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(100_000)));
-        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(999_999)));
+        let pos = make_pos(1, "DE001", None, None, Some(EuroAmount::from_raw(100_000)));
+        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(100_000)));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw(999_999)));
 
         let report =
             InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
@@ -2247,18 +2222,12 @@ mod tests {
     /// that only reasons about positive amounts would block them all.
     #[test]
     fn a_storno_with_negative_amounts_passes_the_tax_stage() {
-        let pos = make_pos(
-            1,
-            "DE001",
-            None,
-            None,
-            Some(EuroAmount::from_raw_units(-100_000)),
-        );
-        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(-100_000)));
+        let pos = make_pos(1, "DE001", None, None, Some(EuroAmount::from_raw(-100_000)));
+        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(-100_000)));
         r.ist_storno = Some(true);
         r.original_rechnungsnummer = Some("NNE-2026-000001".to_owned());
-        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw_units(-19_000)));
-        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(-119_000)));
+        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw(-19_000)));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw(-119_000)));
         r.steuerbetraege = Some(vec![rubo4e::current::Steuerbetrag {
             steuerart: Some(rubo4e::current::Steuerart::Ust),
             steuersatz: Some(Decimal::from(19)),
@@ -2294,9 +2263,9 @@ mod tests {
             "DE001",
             None,
             None,
-            Some(EuroAmount::from_raw_units(3_456_000)),
+            Some(EuroAmount::from_raw(3_456_000)),
         );
-        let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(3_456_000)));
+        let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(3_456_000)));
         let report =
             InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
         assert!(!report.has_dispute());
@@ -2321,13 +2290,13 @@ mod tests {
 
     #[test]
     fn tariff_match_no_finding() {
-        let price = EuroAmount::from_raw_units(3_456);
+        let price = EuroAmount::from_raw(3_456);
         let pos = make_pos(
             1,
             "DE001",
             Some("1000.0"),
             Some(price),
-            Some(EuroAmount::from_raw_units(3_456_000)),
+            Some(EuroAmount::from_raw(3_456_000)),
         );
         let r = make_rechnung(vec![pos], None);
         let report = InvoicCheckEngine::check(
@@ -2384,13 +2353,13 @@ mod tests {
     /// falls in, so the position is measured against 0.30 and disputed.
     #[test]
     fn a_position_billed_at_the_wrong_staffel_is_a_deviation() {
-        let invoic_price = EuroAmount::from_raw_units(20_000); // 0.20 EUR/kWh — the 2001+ tier
+        let invoic_price = EuroAmount::from_raw(20_000); // 0.20 EUR/kWh — the 2001+ tier
         let pos = make_pos(
             1,
             "DE001",
             Some("500.0"), // …but only 500 kWh, which is the 0 – 1000 tier
             Some(invoic_price),
-            Some(EuroAmount::from_raw_units(10_000_000)), // 500 × 0.20
+            Some(EuroAmount::from_raw(10_000_000)), // 500 × 0.20
         );
         let r = make_rechnung(vec![pos], None);
         let report =
@@ -2407,13 +2376,13 @@ mod tests {
     /// The tier the quantity really falls in passes.
     #[test]
     fn a_position_billed_at_its_own_staffel_is_clean() {
-        let invoic_price = EuroAmount::from_raw_units(30_000); // 0.30 EUR/kWh
+        let invoic_price = EuroAmount::from_raw(30_000); // 0.30 EUR/kWh
         let pos = make_pos(
             1,
             "DE001",
             Some("500.0"),
             Some(invoic_price),
-            Some(EuroAmount::from_raw_units(15_000_000)), // 500 × 0.30
+            Some(EuroAmount::from_raw(15_000_000)), // 500 × 0.30
         );
         let r = make_rechnung(vec![pos], None);
         let report =
@@ -2431,13 +2400,13 @@ mod tests {
     /// no tier at all.
     #[test]
     fn a_quantity_in_the_gap_between_two_staffeln_bills_at_the_upper_one() {
-        let invoic_price = EuroAmount::from_raw_units(25_000); // the 1001 – 2000 tier
+        let invoic_price = EuroAmount::from_raw(25_000); // the 1001 – 2000 tier
         let pos = make_pos(
             1,
             "DE001",
             Some("1000.6"),
             Some(invoic_price),
-            Some(EuroAmount::from_raw_units(25_015_000)), // 1000.6 × 0.25
+            Some(EuroAmount::from_raw(25_015_000)), // 1000.6 × 0.25
         );
         let r = make_rechnung(vec![pos], None);
         let report =
@@ -2459,10 +2428,10 @@ mod tests {
     #[test]
     fn a_tax_breakdown_that_does_not_sum_to_gesamtsteuer_is_a_dispute() {
         use rust_decimal::Decimal;
-        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw_units(100_000_000)));
+        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw(100_000_000)));
         // gesamtsteuer says 19.00; the single entry says 5.00.
-        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw_units(1_900_000)));
-        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(101_900_000)));
+        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw(1_900_000)));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw(101_900_000)));
         r.steuerbetraege = Some(vec![rubo4e::current::Steuerbetrag {
             steuerart: Some(rubo4e::current::Steuerart::Ust),
             steuersatz: Some(Decimal::from(19)),
@@ -2494,9 +2463,9 @@ mod tests {
     fn a_tax_amount_that_is_not_the_rate_times_the_base_is_a_dispute() {
         use rust_decimal::Decimal;
         // netto 10 000, steuer 100, brutto 10 100 — internally consistent.
-        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw_units(1_000_000_000)));
-        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw_units(10_000_000)));
-        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(1_010_000_000)));
+        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw(1_000_000_000)));
+        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw(10_000_000)));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw(1_010_000_000)));
         r.steuerbetraege = Some(vec![rubo4e::current::Steuerbetrag {
             steuerart: Some(rubo4e::current::Steuerart::Ust),
             steuersatz: Some(Decimal::from(19)),
@@ -2527,9 +2496,9 @@ mod tests {
     #[test]
     fn a_tax_amount_that_is_the_rate_times_the_base_is_silent() {
         use rust_decimal::Decimal;
-        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw_units(1_000_000_000)));
-        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw_units(190_000_000)));
-        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(1_190_000_000)));
+        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw(1_000_000_000)));
+        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw(190_000_000)));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw(1_190_000_000)));
         r.steuerbetraege = Some(vec![rubo4e::current::Steuerbetrag {
             steuerart: Some(rubo4e::current::Steuerart::Ust),
             steuersatz: Some(Decimal::from(19)),
@@ -2563,10 +2532,10 @@ mod tests {
             "DE001",
             // 10^15 kWh at 1.00 EUR/kWh overflows the 5-dp fixed-point range.
             Some("1000000000000000"),
-            Some(EuroAmount::from_raw_units(100_000)),
-            Some(EuroAmount::from_raw_units(100_000)),
+            Some(EuroAmount::from_raw(100_000)),
+            Some(EuroAmount::from_raw(100_000)),
         );
-        let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(100_000)));
+        let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(100_000)));
         let report =
             InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
         assert!(
@@ -2591,16 +2560,13 @@ mod tests {
                 1,
                 text,
                 Some("1.0"),
-                Some(EuroAmount::from_raw_units(-500_000)),
-                Some(EuroAmount::from_raw_units(-500_000)),
+                Some(EuroAmount::from_raw(-500_000)),
+                Some(EuroAmount::from_raw(-500_000)),
             )
         };
         let contracted = ["".to_owned(), "   ".to_owned(), "winterrabatt".to_owned()];
         let disputed = |text: &str| {
-            let r = make_rechnung(
-                vec![discount(text)],
-                Some(EuroAmount::from_raw_units(-500_000)),
-            );
+            let r = make_rechnung(vec![discount(text)], Some(EuroAmount::from_raw(-500_000)));
             InvoicCheckEngine::check_msb_rechnung_with_aufabschlaege(
                 31_009,
                 SENDER,
@@ -2639,9 +2605,9 @@ mod tests {
             "Messstellenbetrieb",
             None,
             None,
-            Some(EuroAmount::from_raw_units(100_000)),
+            Some(EuroAmount::from_raw(100_000)),
         );
-        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(100_000)));
+        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(100_000)));
         r.gesamtsteuer = None;
         r.gesamtbrutto = None;
         r.steuerbetraege = None;
@@ -2677,11 +2643,11 @@ mod tests {
             "Messstellenbetrieb",
             None,
             None,
-            Some(EuroAmount::from_raw_units(100_000)),
+            Some(EuroAmount::from_raw(100_000)),
         );
-        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(100_000)));
+        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(100_000)));
         r.gesamtsteuer = Some(betrag(EuroAmount::ZERO));
-        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(100_000)));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw(100_000)));
         r.steuerbetraege = Some(vec![rubo4e::current::Steuerbetrag {
             steuerart: Some(rubo4e::current::Steuerart::Rcv),
             steuersatz: Some(Decimal::ZERO),
@@ -2711,7 +2677,7 @@ mod tests {
     /// to be checked.
     #[test]
     fn an_msb_invoice_due_before_it_was_issued_is_disputed() {
-        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw_units(100_000)));
+        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw(100_000)));
         r.rechnungsdatum = Some(parse_dt("2026-07-15"));
         r.faelligkeitsdatum = Some(parse_dt("2026-07-01"));
 
@@ -2738,7 +2704,7 @@ mod tests {
     /// the MSB can correct it.
     #[test]
     fn an_msb_invoice_with_an_overlong_zahlungsziel_warns() {
-        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw_units(100_000)));
+        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw(100_000)));
         r.rechnungsdatum = Some(parse_dt("2026-07-01"));
         r.faelligkeitsdatum = Some(parse_dt("2026-09-01")); // 62 days
 
@@ -2761,7 +2727,7 @@ mod tests {
 
     /// A Rechnung whose period ends and whose date is `days_after` Werktage on.
     fn wim_dienstleistung(period_end: &str, rechnungsdatum: &str) -> Rechnung {
-        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw_units(100_000_000)));
+        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw(100_000_000)));
         r.rechnungsperiode = Some(periode("2026-06-01", period_end));
         r.rechnungsdatum = Some(parse_dt(rechnungsdatum));
         r
@@ -2918,9 +2884,9 @@ mod tests {
     #[test]
     fn a_tax_breakdown_split_across_rates_that_sums_is_clean() {
         use rust_decimal::Decimal;
-        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw_units(100_000_000)));
-        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw_units(2_600_000))); // 26.00
-        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(102_600_000)));
+        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw(100_000_000)));
+        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw(2_600_000))); // 26.00
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw(102_600_000)));
         let entry = |satz: i64, basis: i64, wert: i64| rubo4e::current::Steuerbetrag {
             steuerart: Some(rubo4e::current::Steuerart::Ust),
             steuersatz: Some(Decimal::from(satz)),
@@ -2942,14 +2908,14 @@ mod tests {
 
     #[test]
     fn tariff_deviation_is_dispute() {
-        let tariff_price = EuroAmount::from_raw_units(3_456); // 0.03456 EUR/kWh (PRICAT)
-        let invoic_price = EuroAmount::from_raw_units(4_000); // 0.04000 EUR/kWh (INVOIC, +15.7%)
+        let tariff_price = EuroAmount::from_raw(3_456); // 0.03456 EUR/kWh (PRICAT)
+        let invoic_price = EuroAmount::from_raw(4_000); // 0.04000 EUR/kWh (INVOIC, +15.7%)
         let pos = make_pos(
             1,
             "DE001",
             Some("1000.0"),
             Some(invoic_price),
-            Some(EuroAmount::from_raw_units(4_000_000)),
+            Some(EuroAmount::from_raw(4_000_000)),
         );
         let r = make_rechnung(vec![pos], None);
         let report = InvoicCheckEngine::check(
@@ -2970,8 +2936,8 @@ mod tests {
 
     #[test]
     fn clean_invoice_outcome_is_ok() {
-        let price = EuroAmount::from_raw_units(3_456);
-        let net = EuroAmount::from_raw_units(3_456_000);
+        let price = EuroAmount::from_raw(3_456);
+        let net = EuroAmount::from_raw(3_456_000);
         let pos = make_pos(1, "DE001", Some("1000.0"), Some(price), Some(net));
         let r = make_rechnung(vec![pos], Some(net));
         let report = InvoicCheckEngine::check(
@@ -2999,8 +2965,8 @@ mod tests {
     fn stornierung_with_reference_skips_tariff_check() {
         // A valid Storno: ist_storno=true + original_rechnungsnummer present.
         // Tariff stage must be skipped — no TariffNotFound finding expected.
-        let price = EuroAmount::from_raw_units(3_456);
-        let net = EuroAmount::from_raw_units(3_456_000);
+        let price = EuroAmount::from_raw(3_456);
+        let net = EuroAmount::from_raw(3_456_000);
         let pos = make_pos(1, "DE001", Some("1000.0"), Some(price), Some(net));
         let mut r = make_rechnung(vec![pos], Some(net));
         r.ist_storno = Some(true);
@@ -3054,8 +3020,8 @@ mod tests {
 
     #[test]
     fn check_storno_clean_returns_ok() {
-        let price = EuroAmount::from_raw_units(3_456);
-        let net = EuroAmount::from_raw_units(3_456_000);
+        let price = EuroAmount::from_raw(3_456);
+        let net = EuroAmount::from_raw(3_456_000);
         let pos = make_pos(1, "DE001", Some("1000.0"), Some(price), Some(net));
         let mut r = make_rechnung(vec![pos], Some(net));
         r.ist_storno = Some(true);
@@ -3098,9 +3064,9 @@ mod tests {
         let r = Rechnung {
             ist_storno: Some(true),
             original_rechnungsnummer: Some("31001-2026-001".to_owned()),
-            gesamtnetto: Some(betrag(EuroAmount::from_raw_units(-100_000))),
-            gesamtsteuer: Some(betrag(EuroAmount::from_raw_units(-19_000))),
-            gesamtbrutto: Some(betrag(EuroAmount::from_raw_units(-119_000))),
+            gesamtnetto: Some(betrag(EuroAmount::from_raw(-100_000))),
+            gesamtsteuer: Some(betrag(EuroAmount::from_raw(-19_000))),
+            gesamtbrutto: Some(betrag(EuroAmount::from_raw(-119_000))),
             steuerbetraege: Some(vec![rubo4e::current::Steuerbetrag {
                 steuersatz: Some(Decimal::from(19)),
                 steuerwert: Some(Decimal::from(-190)),
@@ -3126,16 +3092,10 @@ mod tests {
     /// §19 UStG Kleinunternehmer invoice may carry its ground in free text.
     #[test]
     fn zero_tax_with_no_stated_ground_is_reported() {
-        let pos = make_pos(
-            1,
-            "DE001",
-            None,
-            None,
-            Some(EuroAmount::from_raw_units(100_000)),
-        );
-        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(100_000)));
+        let pos = make_pos(1, "DE001", None, None, Some(EuroAmount::from_raw(100_000)));
+        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw(100_000)));
         r.gesamtsteuer = Some(betrag(EuroAmount::ZERO));
-        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(100_000)));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw(100_000)));
         r.steuerbetraege = None;
 
         let mut findings = Vec::new();
@@ -3259,7 +3219,7 @@ mod tests {
     /// `EuroAmount` is fixed-point at 5 decimal places, so one cent is 1 000
     /// raw units.
     fn cents(n: i64) -> EuroAmount {
-        EuroAmount::from_raw_units(n * 1_000)
+        EuroAmount::from_raw(n * 1_000)
     }
 
     fn agreed() -> Vec<(String, EuroAmount)> {

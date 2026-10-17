@@ -824,9 +824,9 @@ mod tests {
         assert_eq!(o.ebd, Some(ERSTEINBAU_EBD));
 
         // Being in that table is also what makes the window observable:
-        // `obsd::derive_family` reads `antwort_obligation` first, so the
-        // Ersteinbau breach is bucketed as WiM without obsd knowing this
-        // workflow exists.
+        // processd's `obs::project::derive_family` reads `antwort_obligation`
+        // first, so the Ersteinbau breach is bucketed as WiM without the read
+        // model knowing this workflow exists.
         let via_lookup = mako_fristen::antwort::antwort_obligation(VORABINFORMATION_PID)
             .expect("21029 is discoverable by PID");
         assert_eq!(via_lookup.family.as_str(), "wim");

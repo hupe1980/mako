@@ -145,11 +145,11 @@ pub async fn post_direct_reads_rlm(
         state.tenant.as_str(),
     ) {
         tracing::warn!(malo_id, error = %e, "edmd: direct push RBAC denied");
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     if req.intervals.is_empty() {
-        return (StatusCode::BAD_REQUEST, "intervals must not be empty").into_response();
+        return ApiError::bad_request("intervals must not be empty").into_response();
     }
 
     post_direct_reads_inner(&state, &malo_id, req, "STROM", IngestionSource::DirectPush).await
@@ -171,11 +171,11 @@ pub async fn post_direct_reads_gas(
         "write-meter-reads",
         state.tenant.as_str(),
     ) {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     if req.intervals.is_empty() {
-        return (StatusCode::BAD_REQUEST, "intervals must not be empty").into_response();
+        return ApiError::bad_request("intervals must not be empty").into_response();
     }
 
     post_direct_reads_inner(&state, &malo_id, req, "GAS", IngestionSource::DirectGas).await
@@ -217,11 +217,11 @@ pub(crate) async fn post_direct_reads_inner(
     // path for every other tenant.
     const MAX_BATCH: usize = 50_000;
     if req.intervals.len() > MAX_BATCH {
-        return (
-            StatusCode::PAYLOAD_TOO_LARGE,
-            format!("batch too large: {} > {MAX_BATCH}", req.intervals.len()),
-        )
-            .into_response();
+        return ApiError::payload_too_large(format!(
+            "batch too large: {} > {MAX_BATCH}",
+            req.intervals.len()
+        ))
+        .into_response();
     }
 
     let pool = state.repo.pool();
@@ -239,15 +239,12 @@ pub(crate) async fn post_direct_reads_inner(
         Some(raw) => match IngestionSource::parse_db_str(raw) {
             Some(s) => s,
             None => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": format!("unknown source `{raw}`"),
-                        "expected": IngestionSource::ALL
-                            .iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-                    })),
+                return ApiError::unprocessable_with(
+                    format!("unknown source `{raw}`"),
+                    serde_json::json!({ "expected": IngestionSource::ALL
+                            .iter().map(|s| s.as_str()).collect::<Vec<_>>() }),
                 )
-                    .into_response();
+                .into_response();
             }
         },
     };
@@ -408,14 +405,11 @@ pub(crate) async fn post_direct_reads_inner(
     }
 
     if accepted.is_empty() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "all intervals failed validation",
-                "validation_errors": validation_errors,
-            })),
+        return ApiError::unprocessable_with(
+            "all intervals failed validation",
+            serde_json::json!({ "validation_errors": validation_errors }),
         )
-            .into_response();
+        .into_response();
     }
 
     // ── Quality scoring ─────────────────────────────────────────────────────
@@ -512,7 +506,7 @@ pub(crate) async fn post_direct_reads_inner(
 
     if let Err(e) = state.repo.store_reads(validated).await {
         tracing::error!(malo_id, error = %e, "edmd: direct push batch insert failed");
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return ApiError::internal(e).into_response();
     }
 
     // Recorded once the readings are stored. Written first, the verdict stands
@@ -904,64 +898,44 @@ pub async fn post_corrections(
 ) -> impl IntoResponse {
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "write-timeseries", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     if req.corrections.is_empty() {
-        return (
-            axum::http::StatusCode::BAD_REQUEST,
-            "corrections array must not be empty",
-        )
-            .into_response();
+        return ApiError::bad_request("corrections array must not be empty").into_response();
     }
 
     // Validate: all corrections must reference the path MaLo
     for (i, rec) in req.corrections.iter().enumerate() {
         if rec.malo_id != malo_id {
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                format!(
-                    "correction[{}].malo_id {:?} does not match path malo_id {:?}",
-                    i, rec.malo_id, malo_id
-                ),
-            )
-                .into_response();
+            return ApiError::bad_request(format!(
+                "correction[{}].malo_id {:?} does not match path malo_id {:?}",
+                i, rec.malo_id, malo_id
+            ))
+            .into_response();
         }
         if rec.reason.trim().is_empty() {
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                format!(
+            return ApiError::bad_request(format!(
                     "correction[{i}].reason must not be empty (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit requirement)"
-                ),
-            )
+                ))
                 .into_response();
         }
         // The boundary checks the ingest paths run: a corrected interval must
         // still be a valid interval, and a correction cannot claim energy for
         // time that has not happened yet.
         if rec.dtm_from >= rec.dtm_to {
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                format!(
-                    "correction[{}]: dtm_from {} must be before dtm_to {}",
-                    i, rec.dtm_from, rec.dtm_to
-                ),
-            )
-                .into_response();
+            return ApiError::bad_request(format!(
+                "correction[{}]: dtm_from {} must be before dtm_to {}",
+                i, rec.dtm_from, rec.dtm_to
+            ))
+            .into_response();
         }
         if rec.dtm_from > OffsetDateTime::now_utc() + time::Duration::minutes(15) {
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                format!(
-                    "correction[{}]: dtm_from {} lies in the future",
-                    i, rec.dtm_from
-                ),
-            )
-                .into_response();
+            return ApiError::bad_request(format!(
+                "correction[{}]: dtm_from {} lies in the future",
+                i, rec.dtm_from
+            ))
+            .into_response();
         }
     }
 
@@ -983,7 +957,10 @@ pub async fn post_corrections(
             )
                 .into_response()
         }
-        Err(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(anyhow::Error::new(e).context(format!(
+            "edmd: corrections for MaLo {malo_id} could not be stored"
+        )))
+        .into_response(),
     }
 }
 
@@ -1091,35 +1068,26 @@ pub async fn post_bulk_reads(
 
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "write-timeseries", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     if req.reads.is_empty() {
-        return (StatusCode::BAD_REQUEST, "reads array must not be empty").into_response();
+        return ApiError::bad_request("reads array must not be empty").into_response();
     }
     const MAX_BATCH: usize = 50_000;
     if req.reads.len() > MAX_BATCH {
-        return (
-            StatusCode::BAD_REQUEST,
-            format!("batch too large: {} > {MAX_BATCH}", req.reads.len()),
-        )
-            .into_response();
+        return ApiError::bad_request(format!(
+            "batch too large: {} > {MAX_BATCH}",
+            req.reads.len()
+        ))
+        .into_response();
     }
 
     // Sparte determines the storage unit, so an unrecognised value is rejected
     // rather than defaulted.
     let Some(sparte_enum) = crate::domain::parse_sparte(&req.sparte) else {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!("unknown sparte `{}`", req.sparte),
-                "expected": EdmSparte::CODES,
-            })),
-        )
+        return ApiError::unprocessable(format!("unknown sparte `{}`", req.sparte))
+            .with_fields(serde_json::json!({ "expected": EdmSparte::CODES }))
             .into_response();
     };
     let sparte = sparte_enum.as_str();
@@ -1133,14 +1101,9 @@ pub async fn post_bulk_reads(
         Some(raw) => match IngestionSource::parse_db_str(raw) {
             Some(s) => s,
             None => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": format!("unknown source `{raw}`"),
-                        "expected": IngestionSource::ALL
-                            .iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-                    })),
-                )
+                return ApiError::unprocessable(format!("unknown source `{raw}`"))
+                    .with_fields(serde_json::json!({ "expected": IngestionSource::ALL
+                            .iter().map(|s| s.as_str()).collect::<Vec<_>>() }))
                     .into_response();
             }
         },
@@ -1185,31 +1148,28 @@ pub async fn post_bulk_reads(
         let dtm_from = match OffsetDateTime::parse(&entry.dtm_from, &Rfc3339) {
             Ok(t) => t,
             Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid dtm_from {:?}: {e}", entry.dtm_from),
-                )
-                    .into_response();
+                return ApiError::bad_request(format!(
+                    "invalid dtm_from {:?}: {e}",
+                    entry.dtm_from
+                ))
+                .into_response();
             }
         };
         let dtm_to = match OffsetDateTime::parse(&entry.dtm_to, &Rfc3339) {
             Ok(t) => t,
             Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid dtm_to {:?}: {e}", entry.dtm_to),
-                )
+                return ApiError::bad_request(format!("invalid dtm_to {:?}: {e}", entry.dtm_to))
                     .into_response();
             }
         };
         let qty: rust_decimal::Decimal = match entry.quantity_kwh.parse() {
             Ok(d) => d,
             Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid quantity {:?}: {e}", entry.quantity_kwh),
-                )
-                    .into_response();
+                return ApiError::bad_request(format!(
+                    "invalid quantity {:?}: {e}",
+                    entry.quantity_kwh
+                ))
+                .into_response();
             }
         };
         // An unrecognised flag is refused rather than coerced: binding it raw
@@ -1220,18 +1180,13 @@ pub async fn post_bulk_reads(
             Some(q) => match quality_flag_from_wire(q) {
                 Some(f) => f,
                 None => {
-                    return (
-                        StatusCode::UNPROCESSABLE_ENTITY,
-                        Json(serde_json::json!({
-                            "error": format!(
-                                "interval {}: unknown quality `{q}`; expected one of MEASURED, \
+                    return ApiError::unprocessable(format!(
+                        "interval {}: unknown quality `{q}`; expected one of MEASURED, \
                                  ESTIMATED, SUBSTITUTED, CALCULATED, CORRECTED, PRELIMINARY, \
                                  FAULTY, UNKNOWN",
-                                entry.dtm_from
-                            )
-                        })),
-                    )
-                        .into_response();
+                        entry.dtm_from
+                    ))
+                    .into_response();
                 }
             },
         };
@@ -1274,16 +1229,13 @@ pub async fn post_bulk_reads(
     // One batched statement, so the count reported is the count committed.
     let stored = validated.len();
     if let Err(e) = state.repo.store_reads(validated).await {
-        tracing::error!(malo_id = %malo_id, error = %e, "edmd: bulk import batch insert failed");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": e.to_string(),
-                "stored_count": 0,
-                "session_id": session_id,
-            })),
-        )
-            .into_response();
+        // Nothing committed: the batch is one statement. The body says so, so
+        // the caller resubmits under the same `session_id`.
+        return ApiError::internal(anyhow::Error::new(e).context(format!(
+            "edmd: bulk import batch insert for MaLo {malo_id} failed"
+        )))
+        .with_fields(serde_json::json!({ "stored_count": 0, "session_id": session_id }))
+        .into_response();
     }
 
     if let Some(q) = &hampel {

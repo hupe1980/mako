@@ -122,9 +122,9 @@ CREATE TABLE accounts (
     -- `Dbtr/PstlAdr` when a mandate carries none. BO4E's Zahlungsinformation COM
     -- has no address, so it cannot come from `zahlungsinformation`.
     --
-    -- Version 1.1 of the 2025 SEPA rulebooks ends the unstructured address on
-    -- 2026-11-15; `town` + `country` are what the schemes then require. Nullable
-    -- until the cut-over, refused half-filled at build time.
+    -- Emitted in the structured ISO 20022 form, whose required elements are
+    -- `town` + `country`. Nullable (no PstlAdr is emitted), refused half-filled
+    -- at build time.
     -- BO4E Sparte, learned from the `de.billing.rechnung.erstellt` CloudEvent.
     -- Drives the ISO 20022 `Purp/Cd` on a direct debit: `ELEC` for an
     -- electricity bill, `GASB` for gas, `WTER` for water. The code is
@@ -253,9 +253,8 @@ CREATE TABLE sepa_mandates (
     signed_at       DATE        NOT NULL,
     revoked_at      DATE,
     -- ── Debtor postal address (ISO 20022 PstlAdr) ────────────────────────────
-    -- Version 1.1 of the 2025 SEPA rulebooks ends the unstructured address on
-    -- 2026-11-15, so from then a scheme message must carry TwnNm + Ctry. Both
-    -- are nullable until the cut-over; a *partially* filled address is refused
+    -- Emitted in the structured form, which carries TwnNm + Ctry. Both are
+    -- nullable (no PstlAdr is emitted); a *partially* filled address is refused
     -- at pain.008 build time rather than silently emitting nothing.
     debtor_town             TEXT,
     debtor_country          TEXT CHECK (debtor_country IS NULL OR debtor_country ~ '^[A-Z]{2}$'),
@@ -602,7 +601,7 @@ CREATE TABLE eeg_payout_orders (
     creditor_iban   TEXT        NOT NULL,
     creditor_name   TEXT        NOT NULL,
     -- Creditor postal address (ISO 20022 PstlAdr) — see the note on
-    -- `sepa_mandates.debtor_*`; mandatory from the EPC cut-over on 2026-11-15.
+    -- `sepa_mandates.debtor_*`.
     creditor_town             TEXT,
     creditor_country          TEXT CHECK (creditor_country IS NULL OR creditor_country ~ '^[A-Z]{2}$'),
     creditor_street           TEXT,

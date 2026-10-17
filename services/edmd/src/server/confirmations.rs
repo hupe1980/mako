@@ -31,11 +31,7 @@ pub(crate) async fn list_confirmations(
         "read-timeseries",
         state.tenant.as_str(),
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let limit = params.limit.unwrap_or(200).clamp(1, 2000);
     // An unrecognised status is refused rather than returning an empty list: an
@@ -44,14 +40,11 @@ pub(crate) async fn list_confirmations(
     const STATUSES: [&str; 3] = ["OFFEN", "BESTAETIGT", "UEBERFAELLIG"];
     let status = params.status.as_deref().map(str::trim);
     if let Some(s) = status.filter(|s| !STATUSES.contains(s)) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!("unknown status `{s}`"),
-                "expected": STATUSES,
-            })),
+        return ApiError::unprocessable_with(
+            format!("unknown status `{s}`"),
+            serde_json::json!({ "expected": STATUSES }),
         )
-            .into_response();
+        .into_response();
     }
     let rows = sqlx::query(
         // The parentheses are load-bearing: `AND` binds tighter than `OR`, so

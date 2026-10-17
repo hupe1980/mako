@@ -1,6 +1,6 @@
 [package]
 name        = "netzbilanzd"
-description = "Grid operator billing daemon: issues INVOIC 31001, 31002, 31005, 31009 and 31011, tracks REMADV and computes Redispatch Kostenblätter"
+description = "Grid operator daemon: issues INVOIC 31001, 31002, 31005, 31009 and 31011, tracks REMADV, computes Redispatch Kostenblätter and files MaBiS Summenzeitreihen (MSCONS 13003) with the BIKO"
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
@@ -16,6 +16,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "netzbilanzd"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 mako-fristen = { workspace = true }
@@ -25,6 +26,12 @@ grid-billing    = { workspace = true, features = ["bo4e"] }
 # add to exactly 100 %, which per-share rounding does not give.
 billing = { workspace = true }
 mako-redispatch = { path = "../../crates/mako-redispatch" }
+# MaBiS: the Summenzeitreihe builder, the Prüfidentifikator type and the
+# metering interval model the aggregate sums.
+mako-mabis      = { workspace = true }
+mako-engine     = { workspace = true }
+metering        = { workspace = true, features = ["serde"] }
+futures         = "0.3"
 mako-markt      = { workspace = true, features = ["makod-client", "marktd-client"] }
 mako-service    = { workspace = true, features = ["oidc", "cedar", "otel", "metrics"] }
 invoic-checker  = { workspace = true }

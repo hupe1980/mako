@@ -69,7 +69,8 @@ fn plane(provider: &Arc<FakeProvider>, signer: Option<Arc<Ed25519Signer>>) -> Pl
     let tenant = agentplane::core::TenantId::new(TENANT).expect("a usable key scope");
     let mut store = RedbStore::open_in_memory()
         .expect("store")
-        .origin(agentd::plane::attest::ORIGIN);
+        .origin(agentd::plane::attest::ORIGIN)
+        .expect("a usable origin");
     let record_signer = signer
         .as_ref()
         .map(|s| Arc::clone(s) as Arc<dyn agentplane::core::Signer>);
@@ -118,6 +119,7 @@ fn event() -> Value {
 fn completion(structured: Value) -> Completion {
     Completion {
         text: String::new(),
+        model: None,
         structured: Some(structured),
         tool_calls: Vec::new(),
         usage: Usage::default(),
@@ -198,14 +200,14 @@ async fn an_attested_plane_writes_records_an_auditor_can_verify() {
         "a run that produced no records proves nothing either way"
     );
     assert!(
-        records.iter().all(|r| r.attestation.is_some()),
-        "a record with no attestation: signing is wired on the runtime and not on the store"
+        records.iter().all(|r| r.signature.is_some()),
+        "a record with no signature: signing is wired on the runtime and not on the store"
     );
 
     let verifier = Ed25519Verifier::new()
         .trust(KEY_ID, &public)
         .expect("a valid public key");
-    Record::verify_attested(&records, Digest::ZERO, &verifier, true)
+    Record::verify_signed(&records, Digest::ZERO, &verifier, true)
         .expect("every record must verify against the workload's published key");
 }
 
@@ -233,7 +235,7 @@ async fn a_record_does_not_verify_under_a_key_that_did_not_write_it() {
     let verifier = Ed25519Verifier::new()
         .trust(KEY_ID, &impostor.verifying_key())
         .expect("a valid public key");
-    Record::verify_attested(&records, Digest::ZERO, &verifier, true)
+    Record::verify_signed(&records, Digest::ZERO, &verifier, true)
         .expect_err("a signature from another key must not verify");
 }
 
@@ -256,15 +258,15 @@ async fn an_unattested_plane_fails_a_verification_that_requires_signatures() {
     let records = records_of(&plane, &decision.run_id).await;
 
     assert!(
-        records.iter().all(|r| r.attestation.is_none()),
+        records.iter().all(|r| r.signature.is_none()),
         "an unconfigured plane must not mint an identity of its own"
     );
     let verifier = Ed25519Verifier::new();
-    Record::verify_attested(&records, Digest::ZERO, &verifier, true)
+    Record::verify_signed(&records, Digest::ZERO, &verifier, true)
         .expect_err("unsigned records must fail a verification that requires signatures");
     // The chain is still sound, which is the honest statement of what an
     // unattested plane gives you: tamper-evidence without attribution.
-    Record::verify_attested(&records, Digest::ZERO, &verifier, false)
+    Record::verify_signed(&records, Digest::ZERO, &verifier, false)
         .expect("the hash chain holds whether or not anybody signed it");
 }
 

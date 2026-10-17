@@ -927,14 +927,15 @@ name is a BO4E type's own — `vertrag`, `kosten_json`, `standort_adresse`,
 
 ### A request body refuses what it cannot store
 
-Every `Json<T>` request body carries `#[serde(deny_unknown_fields)]`, so a key no
-field declares is a `422` naming it rather than a value that goes nowhere. The
-same guard enforces it, with eight
-documented exemptions: `IssueDocumentRequest` and `RenderApiRequest` (a
-`#[serde(flatten)]` field), `SmgwTyp2Push` (a BSI TR-03109 payload), and five
-BDEW **Energy API** schemas — `IdentificationParameter`,
-`MaloIdentResultPositive` (model and client mirror), `MaloIdentResultNegative`
-and `ApiRecord` — whose forward compatibility is the BDEW's.
+`mako_service::Json` refuses a key no field declares with a `422` naming it,
+rather than a value that goes nowhere. The same guard names what that runtime
+check cannot see, each with a documented reason: `SmgwTyp2Push` is read
+`Lenient` (a BSI TR-03109 payload); the BDEW **Energy API** schemas —
+`IdentificationParameter`, `MaloIdentResultPositive`, `MaloIdentResultNegative`
+and `ApiRecord` — are read by `axum::Json`, because their forward compatibility
+is the BDEW's; and the `energy-billing` `Product` family, an internally tagged
+enum, does not deny, because `billingd`'s productd mapping builds one object
+carrying every category's keys.
 
 **A nested value is not a third case.** A COM or standalone BO read out of the
 extension map of the object that carried it — `ZeitvariablePreisposition` under

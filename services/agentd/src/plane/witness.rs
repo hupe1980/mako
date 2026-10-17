@@ -35,8 +35,7 @@ use std::time::Duration;
 
 use agentplane::core::CheckpointSigner;
 use agentplane::journal::{
-    HttpWitness, JournalStore, NoteSignature, TrustedWitness, Witness, WitnessQuorum,
-    cosign_quorum, key_id,
+    HttpWitness, JournalStore, LogKey, TrustedWitness, Witness, WitnessQuorum, cosign_quorum,
 };
 use agentplane::policy::Ed25519Signer;
 use tokio_util::sync::CancellationToken;
@@ -44,21 +43,12 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::WitnessConfig;
 
-/// C2SP `signed-note`'s algorithm byte for a plain Ed25519 signature.
-///
-/// **Not `0x04`**, which names a `tlog-cosignature` — the timestamped
-/// construction a *witness* produces. The log's own signature on its checkpoint
-/// is the plain kind, and deriving the key id with the wrong byte yields four
-/// bytes no conforming witness matches, so every submission comes back as an
-/// unknown key. Named rather than inlined, because the two are one digit apart.
-const ED25519_NOTE_SIGNATURE: u8 = 0x01;
-
 /// Submits this plane's checkpoints to the witnesses an operator configured.
 ///
 /// Holds the peers rather than built clients because a [`HttpWitness`] carries
-/// **the log's signature over one specific checkpoint** — the witness needs it
-/// to recognise which log is speaking — so the client is a per-submission
-/// object, not a long-lived one.
+/// the log's note identity, whose name is **the checkpoint's origin** — read
+/// with the checkpoint on each submission, so the client is built per
+/// submission rather than once.
 pub struct Submitter {
     journal: Arc<dyn JournalStore>,
     signer: Arc<Ed25519Signer>,
@@ -205,35 +195,26 @@ impl Submitter {
             return Ok(());
         }
 
-        // The signature the witness uses to recognise *which log* is speaking.
-        // Over the note bytes, not over a digest of them: C2SP `signed-note`
-        // specifies pure Ed25519 over the note text, and signing a hash of it
-        // produces 64 bytes that verify against nothing any witness computes.
-        let note = checkpoint.to_note();
-        let signature = CheckpointSigner::sign(self.signer.as_ref(), note.as_bytes())
-            .await
-            .map_err(|e| format!("sign the checkpoint note: {e}"))?;
-        let log_signature = NoteSignature {
-            // The C2SP convention: a log's key name is its origin, so a witness
-            // that has one entry per origin can find the key without a second
-            // identifier that could disagree with the note it is attached to.
-            name: checkpoint.origin.clone(),
-            key_id: key_id(
-                &checkpoint.origin,
-                ED25519_NOTE_SIGNATURE,
-                &self.signer.verifying_key(),
-            ),
-            signature,
-        };
+        // The identity the witness uses to recognise *which log* is speaking.
+        // The C2SP convention: a log's key name is its origin, so a witness
+        // that has one entry per origin can find the key without a second
+        // identifier that could disagree with the note it is attached to.
+        // `LogKey` holds the signer, not a signature: the client signs the
+        // note text of each checkpoint it submits (pure Ed25519 over the note,
+        // as C2SP `signed-note` specifies) and derives the key id under the
+        // plain-signature algorithm byte itself.
+        let log_key = LogKey::ed25519(
+            checkpoint.origin.clone(),
+            self.signer.verifying_key(),
+            Arc::clone(&self.signer) as Arc<dyn CheckpointSigner>,
+        )
+        .map_err(|e| format!("the checkpoint origin is not a note key name: {e}"))?;
 
         let mut witnesses: Vec<Arc<dyn Witness>> = Vec::with_capacity(self.peers.len());
         for peer in &self.peers {
-            let client = HttpWitness::new(
-                &peer.prefix,
-                log_signature.clone(),
-                vec![peer.trusted.clone()],
-            )
-            .map_err(|e| format!("witness '{}': {e}", peer.trusted.name()))?;
+            let client =
+                HttpWitness::new(&peer.prefix, log_key.clone(), vec![peer.trusted.clone()])
+                    .map_err(|e| format!("witness '{}': {e}", peer.trusted.name()))?;
             witnesses.push(Arc::new(client) as Arc<dyn Witness>);
         }
 
@@ -329,6 +310,7 @@ mod tests {
             agentplane::store::RedbStore::open_in_memory()
                 .expect("store")
                 .origin(super::super::attest::ORIGIN)
+                .expect("a usable origin")
                 .for_tenant(tenant),
         )
     }

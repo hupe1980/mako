@@ -227,7 +227,7 @@ pub const fn zuordnungs_stunde(sparte: Sparte) -> u8 {
 ///
 /// A view on [`mako_fristen::antwort::WIM`], which is the same table
 /// `makod` registers the deadline from, `processd` sizes its operator queue by
-/// and `obsd` raises the breach alert against.
+/// and raises the breach alert against.
 ///
 /// Distinct from the APERAK window, which is **45 minutes** for UTILMD in Strom
 /// (APERAK AHB §2.4.1) — see [`ANTWORT_FRIST_WINDOW_LABEL`].

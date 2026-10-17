@@ -17,9 +17,8 @@
 //! Marktlokation is making a mistake the door has to name rather than silently
 //! file under the first MaLo.
 
-use axum::http::StatusCode;
 use axum::response::{IntoResponse as _, Response};
-use mako_service::Json;
+use mako_service::ApiError;
 use serde_json::Value;
 use time::OffsetDateTime;
 
@@ -153,29 +152,23 @@ pub(crate) async fn commit(
 }
 
 /// The response a door owes when it cannot establish whether a session is new.
+///
+/// A database failure is this service's: a `500` with an `error_id`, which the
+/// emitter retries like any 5xx, and the database's text only in the log.
 pub(crate) fn unverifiable(malo_id: &str, door: &str, e: &sqlx::Error) -> Response {
-    tracing::error!(malo_id, door, error = %e, "edmd: push session claim failed");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(serde_json::json!({
-            "error": "could not verify whether this session was already committed",
-        })),
-    )
-        .into_response()
+    ApiError::internal(anyhow::anyhow!(
+        "{door}: could not verify whether push session for MaLo {malo_id} was already \
+         committed: {e}"
+    ))
+    .into_response()
 }
 
 /// The response a door owes when the session id belongs to another MaLo.
 pub(crate) fn malo_mismatch(session_id: &str, asked: &str, recorded: &str) -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(serde_json::json!({
-            "error": "session_id already in use for a different Marktlokation",
-            "session_id": session_id,
-            "requested_malo_id": asked,
-            "recorded_malo_id": recorded,
-        })),
-    )
-        .into_response()
+    ApiError::conflict(format!(
+        "session_id {session_id:?} is already in use for Marktlokation {recorded}, not {asked}"
+    ))
+    .into_response()
 }
 
 /// The response a door owes when the commit record could not be written.
@@ -184,13 +177,9 @@ pub(crate) fn malo_mismatch(session_id: &str, asked: &str, recorded: &str) -> Re
 /// would ingest them again and re-raise the events. Reporting success would make
 /// the door's idempotency claim untrue.
 pub(crate) fn commit_failed(malo_id: &str, door: &str, e: &sqlx::Error) -> Response {
-    tracing::error!(malo_id, door, error = %e, "edmd: push session commit failed");
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(serde_json::json!({
-            "error": "readings were stored but the session could not be committed; \
-                      retry with the same session_id",
-        })),
-    )
-        .into_response()
+    ApiError::internal(anyhow::anyhow!(
+        "{door}: readings for MaLo {malo_id} were stored but the push session could not be \
+         committed; a retry with the same session_id is safe: {e}"
+    ))
+    .into_response()
 }

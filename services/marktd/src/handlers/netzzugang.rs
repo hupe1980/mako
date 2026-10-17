@@ -12,6 +12,7 @@
 //!
 //! Every state change emits `de.markt.netzzugang.antrag.updated`.
 
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{
@@ -89,13 +90,7 @@ pub async fn upsert_antrag(
     }
     rec.tenant = tenant.clone();
     if rec.netzanschluss_id.trim().is_empty() || rec.nb_mp_id.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "netzanschluss_id and nb_mp_id are required"
-            })),
-        )
-            .into_response();
+        return ApiError::bad_request("netzanschluss_id and nb_mp_id are required").into_response();
     }
     match repo.upsert(&rec).await {
         Ok((id, version)) => {

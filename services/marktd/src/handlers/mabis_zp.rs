@@ -8,14 +8,14 @@
 //! Meldepunkt yields a message that parses, validates, and is indistinguishable
 //! to the BIKO from a correct one.
 //!
-//! `mabis-syncd` reads this before every submission and **refuses** to submit a
+//! `netzbilanzd` reads this before every submission and **refuses** to submit a
 //! territory with no assignment rather than substituting the Bilanzierungsgebiet
 //! EIC. Holding it as master data instead of service configuration is what makes
 //! that refusal possible across deployments.
 //!
 //! ## Access control
 //!
-//! - `GET` — any authenticated caller in the same tenant (`mabis-syncd`, ERP)
+//! - `GET` — any authenticated caller in the same tenant (`netzbilanzd`, ERP)
 //! - `PUT` — NB role only
 //!
 //! ## Strom only
@@ -25,6 +25,7 @@
 //! there is no `sparte` on this resource — an earlier one accepted `GAS` and
 //! recorded an assignment that cannot exist.
 
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{Extension, extract::Path, http::StatusCode, response::IntoResponse};
@@ -36,7 +37,7 @@ use tracing::info;
 
 use mako_service::cedar::CedarEnforcer;
 
-use crate::handlers::{Claims, MdmErrorResponse, Tenant};
+use crate::handlers::{Claims, Tenant, mdm_error};
 use crate::pg::PgMabisZpRepository;
 
 /// Extension alias — concrete type so AFIT dispatches statically.
@@ -89,27 +90,15 @@ pub async fn get_mabis_zp(
     Path(eic): Path<String>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-mabis-zp", &tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     match repo.find(&eic, &tenant).await {
         Ok(Some(rec)) => Json(MabisZpResponse::from(rec)).into_response(),
-        // 404 is the signal `mabis-syncd` turns into a refused submission — it
+        // 404 is the signal `netzbilanzd` turns into a refused submission — it
         // must never be read as "use the Bilanzierungsgebiet EIC instead".
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": format!(
-                    "no MaBiS-Zählpunkt assigned to Bilanzierungsgebiet {eic}"
-                )
-            })),
-        )
-            .into_response(),
-        Err(e) => MdmErrorResponse(e).into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
+        Err(e) => mdm_error(e).into_response(),
     }
 }
 
@@ -121,11 +110,7 @@ pub async fn list_mabis_zp(
     Extension(Tenant(tenant)): Extension<Tenant>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-mabis-zp", &tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     match repo.list(&tenant).await {
@@ -135,7 +120,7 @@ pub async fn list_mabis_zp(
                 .collect::<Vec<_>>(),
         )
         .into_response(),
-        Err(e) => MdmErrorResponse(e).into_response(),
+        Err(e) => mdm_error(e).into_response(),
     }
 }
 
@@ -151,35 +136,24 @@ pub async fn put_mabis_zp(
     Json(body): Json<PutMabisZpBody>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "write-mabis-zp", &tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let mabis_zp_id = body.mabis_zp_id.trim().to_owned();
     if mabis_zp_id.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "mabis_zp_id must not be empty" })),
-        )
-            .into_response();
+        return ApiError::bad_request("mabis_zp_id must not be empty").into_response();
     }
 
     // Rejected here as well as by the table CHECK: this is the exact
     // substitution the assignment exists to prevent, and a 400 naming it is more
     // useful than a constraint violation surfaced as a 500.
     if mabis_zp_id == eic {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "the MaBiS-Zählpunkt must not be the Bilanzierungsgebiet EIC — \
+        return ApiError::bad_request(
+            "the MaBiS-Zählpunkt must not be the Bilanzierungsgebiet EIC — \
                           they are different identifiers (LOC+172 vs LOC+107), and \
-                          substituting one for the other is invisible on the wire"
-            })),
+                          substituting one for the other is invisible on the wire",
         )
-            .into_response();
+        .into_response();
     }
 
     // Not this territory's EIC, and not any other's either. A
@@ -189,15 +163,9 @@ pub async fn put_mabis_zp(
     // reading as valid until a submission run refused it.
     let len = mabis_zp_id.chars().count();
     if len != 33 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": format!(
+        return ApiError::bad_request(format!(
                     "the MaBiS-Zählpunkt must be a 33-character Zählpunktbezeichnung,                      got {len} characters — a 16-character value is a                      Bilanzierungsgebiet EIC and must not be filed as the Meldepunkt"
-                )
-            })),
-        )
-            .into_response();
+                )).into_response();
     }
 
     let rec = MabisZpRecord {
@@ -213,6 +181,6 @@ pub async fn put_mabis_zp(
             info!(bilanzierungsgebiet = %eic, tenant = %tenant, "mabis-zp assignment upserted");
             StatusCode::NO_CONTENT.into_response()
         }
-        Err(e) => MdmErrorResponse(e).into_response(),
+        Err(e) => mdm_error(e).into_response(),
     }
 }

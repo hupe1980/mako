@@ -21,13 +21,17 @@ to do.
 
 ## Find it by market role
 
-A deployment is scoped to the roles it plays — a role build contains no other
-role's code, least privilege in support of § 6a EnWG. `makod`, `marktd`, `edmd`, `obsd` and `agentd` are
-role-neutral and run everywhere; the rest are role-specific.
+A deployment is scoped to the roles it plays: `makod` registers the engine
+modules of the roles its `[deployment] rollen` declares, and a role-built
+`processd` cannot answer as a role it was not built for. Neither is an
+unbundling control — which principal may read which role's processes (§ 6a
+Abs. 1 EnWG) is the deployment's Cedar policy. `makod`, `marktd`, `edmd`,
+`processd` (whose process read model serves every role) and `agentd` run
+everywhere; the rest are role-specific.
 
 | Role | Also runs | Starts at |
 |---|---|---|
-| **NB** — Netzbetreiber | `processd` · `netzbilanzd` · `sperrd` · `einsd` · `mabis-syncd` | [processd](@/docs/services/processd.md) — the STP auto-responder |
+| **NB** — Netzbetreiber | `processd` (incl. the Sperrauftrag queue) · `netzbilanzd` · `einsd` | [processd](@/docs/services/processd.md) — the STP auto-responder |
 | **LF** — Lieferant | `processd` · `vertragd` · `productd` · `billingd` · `invoicd` · `accountingd` · `outputd` · `portald` · `einsd` | [billingd](@/docs/services/billingd.md) — retail billing and EN 16931 |
 | **MSB** — Messstellenbetreiber | `processd` · `vertragd` | [edmd](@/docs/services/edmd.md) — metering and SMGW lifecycle |
 | **ESA** — Energieserviceanbieter | — | [makod](@/docs/services/makod.md#esa-messages) — the §34 MsbG Wertebestellung |

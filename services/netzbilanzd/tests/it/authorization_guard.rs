@@ -26,8 +26,15 @@ use std::path::{Path, PathBuf};
 
 const POLICY: &str = include_str!("../../policies/netzbilanzd.cedar");
 
-/// The modules the router mounts handlers from.
-const HANDLER_MODULES: [&str; 4] = ["handlers", "autorun", "kostenblatt", "ausfallarbeit_api"];
+/// The modules the router mounts handlers from, as the path `daemon.rs` names
+/// them and the file under `src/` that defines them.
+const HANDLER_MODULES: [(&str, &str); 5] = [
+    ("handlers", "handlers.rs"),
+    ("autorun", "autorun.rs"),
+    ("kostenblatt", "kostenblatt.rs"),
+    ("ausfallarbeit_api", "ausfallarbeit_api.rs"),
+    ("mabis::server", "mabis/server.rs"),
+];
 
 /// `POST /api/v1/webhooks/remadv` carries no bearer token: it is authenticated
 /// by the inbound HMAC (`inbound_secret`), which startup refuses to run
@@ -59,12 +66,12 @@ fn identifiers_after(text: &str, needle: &str) -> Vec<String> {
 /// Every handler the domain router mounts, as `(module, function)`.
 ///
 /// Read out of the routing calls themselves rather than every `module::name`
-/// mention, so the background workers `main` also names are not mistaken for
+/// mention, so the background workers `daemon.rs` also names are not mistaken for
 /// routes.
 fn routed_handlers() -> Vec<(&'static str, String)> {
-    let main = src("main.rs");
+    let main = src("daemon.rs");
     let mut routed = Vec::new();
-    for module in HANDLER_MODULES {
+    for (module, _) in HANDLER_MODULES {
         for verb in ["get(", "post(", "put(", "patch(", "delete("] {
             for name in identifiers_after(&main, &format!("{verb}{module}::")) {
                 routed.push((module, name));
@@ -77,8 +84,8 @@ fn routed_handlers() -> Vec<(&'static str, String)> {
 /// Every `"…"` literal passed as the action argument of an `authorize` call.
 fn actions_used_in_code() -> BTreeSet<String> {
     let mut found = BTreeSet::new();
-    for module in HANDLER_MODULES {
-        let text = src(&format!("{module}.rs"));
+    for (_, file) in HANDLER_MODULES {
+        let text = src(file);
         let mut rest = text.as_str();
         while let Some(idx) = rest.find("authorize(&cedar, &claims, \"") {
             rest = &rest[idx + "authorize(&cedar, &claims, \"".len()..];
@@ -108,7 +115,7 @@ fn every_rest_handler_authenticates_and_authorizes() {
     let routed = routed_handlers();
     assert!(
         routed.len() >= 25,
-        "only {} routed handlers found — the extractor has drifted from main.rs",
+        "only {} routed handlers found — the extractor has drifted from daemon.rs",
         routed.len()
     );
 
@@ -117,7 +124,11 @@ fn every_rest_handler_authenticates_and_authorizes() {
         if HMAC_AUTHENTICATED.contains(&name.as_str()) {
             continue;
         }
-        let text = src(&format!("{module}.rs"));
+        let file = HANDLER_MODULES
+            .iter()
+            .find_map(|(m, f)| (*m == module).then_some(*f))
+            .expect("a routed module is a handler module");
+        let text = src(file);
         let Some(start) = text.find(&format!("pub async fn {name}(")) else {
             offenders.push(format!("{module}::{name}: routed but not defined"));
             continue;
@@ -220,6 +231,7 @@ fn an_auditor_reads_the_export_and_dispatches_nothing() {
         "submit-kostenblatt",
         "compute-kostenblatt",
         "compute-verguetung",
+        "trigger-mabis-run",
     ] {
         assert!(
             cedar.check(&auditor, action, "9900357000004").is_err(),
@@ -250,10 +262,9 @@ fn the_tenant_boundary_holds_for_every_action() {
 /// into request extensions, so `Extension<Claims>` is a guaranteed 500.
 #[test]
 fn no_handler_extracts_claims_as_a_request_extension() {
-    for module in HANDLER_MODULES {
-        let file = format!("{module}.rs");
+    for (_, file) in HANDLER_MODULES {
         assert!(
-            !src(&file).contains("Extension<Claims>"),
+            !src(file).contains("Extension<Claims>"),
             "src/{file} extracts `Extension<Claims>`, but no layer inserts it, so every \
              request to those handlers returns 500 — take `claims: Claims` instead"
         );

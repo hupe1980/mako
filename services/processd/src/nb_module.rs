@@ -20,7 +20,7 @@
 //! The Anwendungsübersicht der Prüfidentifikatoren 4.0 (lfd. Nr. 20030) has it
 //! going **LFN → LFA**, answered 55017/55018 by the *Altlieferant* under EBD
 //! `E_0614`. Evaluating it here would make an `nb-only` binary answer a
-//! supplier-role message — the § 6a EnWG separation the Cargo features exist for
+//! supplier-role message — the misconfiguration the role features fail closed
 //! — with grid-topology checks the LFA has no basis for. The answer belongs to
 //! the supplier role and is decided there.
 //!

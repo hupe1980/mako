@@ -4,8 +4,7 @@
 )]
 //! HTTP client for `makod` admin APIs.
 //!
-//! The MDM calls `makod` on three paths:
-//! - `PUT /admin/malo/{malo_id}` — push `MaloIdentResultPositive` to the MaLo cache
+//! The MDM calls `makod` on these paths:
 //! - `PUT /admin/partners/{mp_id}` — upsert a trading-partner record
 //! - `POST /api/v1/commands` — forward an ERP command with enriched context
 //!
@@ -17,25 +16,6 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use crate::error::MdmError;
-
-// ── MaloIdentResultPositive ───────────────────────────────────────────────────
-
-/// Subset of the BDEW API-Webdienste Strom `MaloIdentResultPositive` that the
-/// MDM needs to push to `makod PUT /admin/malo/{malo_id}`.
-///
-/// The full schema is defined in `energy-api`; we use a compatible subset here
-/// to avoid a cross-crate dependency on `energy-api` from `mako-markt`.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MaloIdentResultPositive {
-    pub malo_id: String,
-    pub nb_mp_id: String,
-    pub msb_mp_id: Option<String>,
-    pub sender_market_partner_id: String,
-    pub bilanzierungsgebiet: Option<String>,
-    pub netzgebiet: Option<String>,
-    pub sparte: String,
-}
 
 // ── ForwardCommand ────────────────────────────────────────────────────────────
 
@@ -155,49 +135,6 @@ impl MakodClient {
         }
     }
 
-    /// Push a `MaloIdentResultPositive` to `makod`'s MaLo cache.
-    ///
-    /// `PUT /admin/malo/{malo_id}`
-    ///
-    /// Constructs the `energy_api::MaloIdentResultPositive`-compatible JSON
-    /// from the flat [`MaloIdentResultPositive`] fields.  The nested
-    /// `dataMarketLocation` shape is the minimum required by makod's
-    /// `UpsertRequest { result, source }` serde contract.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MdmError::MakodSync`] on HTTP error or network failure.
-    pub async fn put_malo(
-        &self,
-        malo_id: &str,
-        record: &MaloIdentResultPositive,
-    ) -> Result<(), MdmError> {
-        let url = format!("{}/admin/malo/{malo_id}", self.base_url);
-        debug!(malo_id, "pushing MaLo to makod admin cache");
-
-        let body = upsert_body(record);
-
-        let resp = self
-            .client
-            .put(&url)
-            .bearer_auth(self.api_key.expose_secret())
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| MdmError::MakodSync(e.to_string()))?;
-
-        if resp.status().is_success() {
-            Ok(())
-        } else {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
-            warn!(malo_id, status, %body, "makod PUT /admin/malo failed");
-            Err(MdmError::MakodSync(format!(
-                "PUT /admin/malo/{malo_id} returned HTTP {status}: {body}"
-            )))
-        }
-    }
-
     /// Upsert a trading partner in `makod`'s partner directory.
     ///
     /// `PUT /admin/partners/{mp_id}`
@@ -262,7 +199,7 @@ impl MakodClient {
             // is an idempotent success. Note that `makod` does **not** dedupe on
             // the `Idempotency-Key` header — it requires the header but never
             // compares it. Both 409s come from business-level guards, so the
-            // discriminator has to be the `error` field, not the status code.
+            // discriminator has to be the body's `code`, not the status code.
             //
             //   duplicate_process — an active process already exists for this
             //     business key. This is the at-least-once redelivery case: the
@@ -353,7 +290,9 @@ fn classify_conflict(
     command: &str,
     idempotency_key: &str,
 ) -> Result<CommandAccepted, MdmError> {
-    let kind = body.get("error").and_then(|v| v.as_str()).unwrap_or("");
+    // `error` is the status's reason phrase; the machine-readable reason is
+    // `code`, the key `mako_service::ApiError` renders it under.
+    let kind = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
     let detail = body
         .get("detail")
         .and_then(|v| v.as_str())
@@ -402,7 +341,7 @@ mod conflict_tests {
     fn duplicate_process_with_an_id_is_an_idempotent_success() {
         let id = "018f3c1e-0000-7000-8000-0000000000aa";
         let accepted = classify_conflict(
-            &json!({ "error": "duplicate_process", "process_id": id }),
+            &json!({ "error": "Conflict", "code": "duplicate_process", "process_id": id }),
             "gpke.lieferbeginn.anmelden",
             "k-1",
         )
@@ -422,7 +361,8 @@ mod conflict_tests {
     fn invalid_state_is_an_error_not_a_nil_uuid_success() {
         let err = classify_conflict(
             &json!({
-                "error":  "invalid_state",
+                "error":  "Conflict",
+                "code":   "invalid_state",
                 "detail": "cannot bestaetigen a process in state Abgeschlossen",
             }),
             "gpke.lieferbeginn.bestaetigen",
@@ -443,8 +383,8 @@ mod conflict_tests {
     #[test]
     fn duplicate_process_without_a_usable_id_is_an_error() {
         for body in [
-            json!({ "error": "duplicate_process" }),
-            json!({ "error": "duplicate_process", "process_id": "not-a-uuid" }),
+            json!({ "code": "duplicate_process" }),
+            json!({ "code": "duplicate_process", "process_id": "not-a-uuid" }),
         ] {
             let err = classify_conflict(&body, "cmd", "k")
                 .expect_err("an uncorrelatable duplicate is not a success");
@@ -454,6 +394,25 @@ mod conflict_tests {
                 "unexpected: {err:?}"
             );
         }
+    }
+
+    /// The reason phrase in `error` is not the code: a body naming
+    /// `duplicate_process` only there is not an adoptable duplicate.
+    #[test]
+    fn the_reason_phrase_is_not_read_as_the_code() {
+        let err = classify_conflict(
+            &json!({
+                "error": "duplicate_process",
+                "process_id": "018f3c1e-0000-7000-8000-0000000000aa",
+            }),
+            "cmd",
+            "k",
+        )
+        .expect_err("a code only in `error` is not a duplicate");
+        assert!(
+            matches!(err, MdmError::MakodConflict { ref kind, .. } if kind == "unknown"),
+            "unexpected: {err:?}"
+        );
     }
 
     /// An empty or unrecognised body must not fall through to success either.
@@ -475,134 +434,5 @@ mod conflict_tests {
         };
         assert_eq!(err.status_u16(), 409);
         assert_eq!(err.error_code(), "makod_conflict");
-    }
-}
-
-/// The `PUT /admin/malo/{id}` body makod's `UpsertRequest { result, source }`
-/// deserialises.
-///
-/// Separated from [`MakodClient::put_malo`] so the cross-service wire contract
-/// can be asserted without a server. The push is deliberately non-fatal, so a
-/// shape makod rejects shows up only as a WARN while the record itself saves —
-/// which is why the shape is pinned by a test rather than by the caller.
-fn upsert_body(record: &MaloIdentResultPositive) -> serde_json::Value {
-    // Build the camelCase nested structure that makod's UpsertRequest expects:
-    //   { "result": { "dataMarketLocation": { ... } }, "source": "mdm-sync" }
-    //
-    // `marketPartnerId` deserialises as `rubo4e::identifiers::MarktpartnerId`,
-    // which reads a **string**: a number answers `invalid type: integer ...
-    // expected a 13-digit Marktpartner-ID`. It is a 13-character identifier
-    // whose leading digits are significant, not a quantity.
-    let operator = |mp_id: &str| -> Option<serde_json::Value> {
-        // A malformed ID is skipped rather than defaulted: `0` is not a valid
-        // GLN, and pushing it would attribute the Marktlokation to a
-        // Marktpartner that does not exist.
-        let id: rubo4e::identifiers::MarktpartnerId = mp_id
-            .parse()
-            .map_err(|e| {
-                warn!(mp_id, error = %e, "makod push: skipping unparseable Marktpartner-ID");
-            })
-            .ok()?;
-        Some(serde_json::json!({
-            "marketPartnerId": id.to_string(),
-            "executionTimeFrom": "2000-01-01T00:00:00Z"
-        }))
-    };
-
-    let mut nb_operators = Vec::new();
-    if !record.nb_mp_id.is_empty() {
-        nb_operators.extend(operator(&record.nb_mp_id));
-    }
-    let mut mpo = Vec::new();
-    if let Some(msb) = &record.msb_mp_id
-        && !msb.is_empty()
-    {
-        mpo.extend(operator(msb));
-    }
-
-    serde_json::json!({
-        "result": {
-            "dataMarketLocation": {
-                "maloId": record.malo_id,
-                "energyDirection": "consumption",
-                "measurementTechnologyClassification": "conventionalMeasuringSystem",
-                "optionalChangeForecastBasis": "notPossible",
-                "dataMarketLocationProperties": [],
-                "dataMarketLocationNetworkOperators": nb_operators,
-                "dataMarketLocationTransmissionSystemOperators": [],
-                "dataMarketLocationMeasuringPointOperators": mpo
-            }
-        },
-        "source": "mdm-sync"
-    })
-}
-
-#[cfg(test)]
-mod upsert_body_tests {
-    use super::{MaloIdentResultPositive, upsert_body};
-
-    fn record() -> MaloIdentResultPositive {
-        MaloIdentResultPositive {
-            malo_id: "51238696012".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            msb_mp_id: Some("4012345000023".to_owned()),
-            sender_market_partner_id: "9900357000004".to_owned(),
-            bilanzierungsgebiet: None,
-            netzgebiet: None,
-            sparte: "STROM".to_owned(),
-        }
-    }
-
-    /// The body marktd sends must deserialise into the type makod reads.
-    ///
-    /// The push is non-fatal, so a mismatch never surfaces as a failed request —
-    /// makod's MaLo cache simply stays empty. Only this assertion catches it.
-    #[test]
-    fn the_body_deserialises_into_makods_own_type() {
-        let body = upsert_body(&record());
-        let dml = &body["result"]["dataMarketLocation"];
-        let parsed: energy_api::models::electricity::DataMarketLocation =
-            serde_json::from_value(dml.clone())
-                .expect("makod must be able to read what marktd sends");
-
-        assert_eq!(
-            parsed.data_market_location_network_operators[0]
-                .market_partner_id
-                .to_string(),
-            "9900357000004"
-        );
-        assert_eq!(
-            parsed
-                .data_market_location_measuring_point_operators
-                .as_ref()
-                .expect("the MSB operator list is present")[0]
-                .market_partner_id
-                .to_string(),
-            "4012345000023"
-        );
-    }
-
-    /// A Marktpartner-ID is a 13-character identifier, not a number.
-    #[test]
-    fn market_partner_ids_go_out_as_strings() {
-        let body = upsert_body(&record());
-        let nb = &body["result"]["dataMarketLocation"]["dataMarketLocationNetworkOperators"][0]["marketPartnerId"];
-        assert!(
-            nb.is_string(),
-            "marketPartnerId must be a string, got {nb:?}"
-        );
-    }
-
-    /// An unparseable ID is dropped, never defaulted to `0`.
-    ///
-    /// `0` is not a valid GLN, and emitting it would attribute the
-    /// Marktlokation to a Marktpartner that does not exist.
-    #[test]
-    fn an_unparseable_market_partner_id_is_omitted() {
-        let mut r = record();
-        r.nb_mp_id = "not-a-gln".to_owned();
-        let body = upsert_body(&r);
-        let ops = &body["result"]["dataMarketLocation"]["dataMarketLocationNetworkOperators"];
-        assert_eq!(ops.as_array().map(Vec::len), Some(0), "got {ops:?}");
     }
 }

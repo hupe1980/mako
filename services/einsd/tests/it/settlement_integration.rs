@@ -23,7 +23,6 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use eeg_billing::RoundMoney;
 use sqlx::PgPool;
 use tower::ServiceExt as _;
 
@@ -76,7 +75,7 @@ fn test_config() -> einsd::config::EinsdConfig {
             idle_timeout_secs: 600,
             max_lifetime_secs: 1_800,
         },
-        port: None,
+        http: mako_service::config::HttpConfig::on_port(9180),
         tenant: TENANT.to_owned(),
         erp_webhook_url: None,
         erp_hmac_secret: None,
@@ -91,6 +90,7 @@ fn test_config() -> einsd::config::EinsdConfig {
         oidc: None,
         allow_insecure_no_auth: true,
         beihilfevorbehalt: Default::default(),
+        policy: Default::default(),
     }
 }
 
@@ -550,11 +550,12 @@ async fn the_operators_ust_status_drives_the_gutschrift_vat_for_all_its_plants()
     let (status, body) = post_json(&app, "/api/v1/anlagen", anlage_json("P-B")).await;
     assert!(status.is_success(), "register P-B: {status} {body}");
 
-    // (1) Regelbesteuerung — 500 kWh x 8.11 ct = 40.55 EUR net x 19 % = 7.70 EUR.
+    // (1) Regelbesteuerung — 500 kWh x 8.11 ct = 40.55 EUR net x 19 % = 7.7045,
+    // stored as the 7.70 EUR the Gutschrift states (BT-110 derived once).
     for tr_id in ["P-A", "P-B"] {
         let steuer = settle_and_read_steuer(&app, tr_id, 7).await;
         assert_eq!(
-            steuer.round_kfm(2),
+            steuer,
             rust_decimal::Decimal::new(770, 2),
             "{tr_id}: Regelbesteuerung bills 19 %"
         );
@@ -2043,13 +2044,18 @@ async fn the_foerderende_alert_is_emitted_once_per_plant() {
     assert_eq!(all.len(), 1);
 }
 
-/// §100 EEG — the Solarspitzengesetz opt-in only starts running once the plant
-/// has an iMSys, and then it changes both the §51 regime and the rate.
+/// §100 EEG — the Solarspitzengesetz opt-in changes nothing while § 101 Abs. 1
+/// reserves it.
 ///
 /// The operator declares in Textform that §§ 51 and 51a shall apply; the
 /// declaration takes effect at the earliest at the end of the calendar year in
-/// which the iMSys goes in. From then the Bestandsanlage forgoes payment during
-/// negative prices and is paid 0,6 ct/kWh more for everything else.
+/// which the iMSys goes in, and then the Bestandsanlage would forgo payment
+/// during negative prices and be paid 0,6 ct/kWh more for everything else. But
+/// § 101 Abs. 1 Satz 1 EEG 2023: „… und § 100 Absatz 35 und 47 dürfen erst nach
+/// der beihilferechtlichen Genehmigung durch die Europäische Kommission … angewandt
+/// werden" — so without a recorded approval January 2027 settles like December
+/// 2026. The approved branch is pinned in `eeg-billing`
+/// (`sect100_abs47_anwendbar_ab`).
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_sect100_optin_starts_running_after_the_imsys_year() {
@@ -2117,17 +2123,17 @@ async fn the_sect100_optin_starts_running_after_the_imsys_year() {
         "and still the unmodified rate"
     );
 
-    // January 2027 — the opt-in is in force.
+    // January 2027 — the declaration would run, but § 100 Abs. 47 is reserved.
     let nachher = settle(2027, 1).await;
     assert_eq!(
         nachher.einspeisemenge_kwh,
-        Some(dec!(900)),
-        "§51 now bites from the first negative quarter-hour"
+        Some(dec!(1000)),
+        "no approval: the EEG 2017 regime still applies, § 51 does not bite"
     );
     assert_eq!(
         nachher.settlement_eur,
-        Some(dec!(77.40)),
-        "900 kWh × (8,00 + 0,60) ct — the §100 uplift is on the AW"
+        Some(dec!(80.00)),
+        "no approval: no 0,6 ct uplift"
     );
 }
 
@@ -4028,7 +4034,8 @@ async fn an_approval_or_the_vorbehalt_policy_opens_january_2027() {
     assert_eq!(r.status, "calculated");
 
     let mut vorbehalt = test_config();
-    vorbehalt.beihilfevorbehalt.politik = einsd::config::BeihilfePolitik::UnterVorbehalt;
+    vorbehalt.policy.beihilfe_politik =
+        mako_service::policy::Policy::explicit(einsd::config::BeihilfePolitik::UnterVorbehalt);
     let anlage = einsd::pg::fetch_anlage(&pool, TENANT, "P-VOR")
         .await
         .unwrap()
@@ -4046,6 +4053,107 @@ async fn an_approval_or_the_vorbehalt_policy_opens_january_2027() {
     assert!(
         positions.to_string().contains("Beihilfevorbehalt"),
         "the receipt states the reservation: {positions}"
+    );
+    assert_eq!(
+        r.policy.as_ref().map(|t| t.value.as_str()),
+        Some("unter_vorbehalt"),
+        "the receipt names the reading it was paid under"
+    );
+}
+
+/// `[policy] beihilfe_politik = "halten"`: a January-2027 payment no approval
+/// covers is settled and held — the receipt is `gehalten`, carries the policy
+/// triple, has no Gutschrift number, and no payout CloudEvent is enqueued.
+/// Recording an approval releases it: the sweep finds the held period
+/// unsettled, and the re-settle pays with its Gutschrift and its event.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_halten_policy_holds_a_payment_until_an_approval_releases_it() {
+    let Some((pool, _pg)) = test_pool("beihilfe_halten").await else {
+        return;
+    };
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
+    seed_plant(&pool, "P-HALT", TENANT, "", "").await;
+    let http = reqwest::Client::new();
+    let req = || einsd::settle::SettleRequest {
+        einspeisemenge_kwh: Some(rust_decimal::Decimal::from(500)),
+        ..Default::default()
+    };
+    let outbox = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM event_outbox WHERE envelope->>'subject' = 'P-HALT'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+
+    let mut halten = test_config();
+    halten.erp_webhook_url = Some("http://127.0.0.1:1/erp".to_owned());
+    halten.policy.beihilfe_politik =
+        mako_service::policy::Policy::explicit(einsd::config::BeihilfePolitik::Halten);
+    let anlage = einsd::pg::fetch_anlage(&pool, TENANT, "P-HALT")
+        .await
+        .unwrap()
+        .unwrap();
+    let r = einsd::settle::settle_plant(&pool, &halten, &http, &anlage, 2027, 1, req())
+        .await
+        .expect("the halten policy settles without paying");
+    assert_eq!(r.status, "gehalten");
+    assert!(
+        r.gutschrift_nummer.is_none(),
+        "a held payment has no Gutschrift"
+    );
+    let triple = r.policy.as_ref().expect("the receipt names the policy");
+    assert_eq!(triple.key, "beihilfe_politik");
+    assert_eq!(triple.value, "halten");
+    let (status, nummer, policy): (String, Option<String>, serde_json::Value) = sqlx::query_as(
+        "SELECT status, gutschrift_nummer, policy_json FROM settlement_receipts
+          WHERE tr_id = 'P-HALT' AND billing_year = 2027 AND billing_month = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "gehalten");
+    assert!(nummer.is_none());
+    assert_eq!(policy["value"], "halten", "{policy}");
+    assert_eq!(
+        outbox(pool.clone()).await,
+        0,
+        "no payout event for a held payment"
+    );
+
+    let unsettled = einsd::pg::list_unsettled(&pool, TENANT, 2027, 1)
+        .await
+        .unwrap();
+    assert!(
+        unsettled.iter().any(|a| a.tr_id == "P-HALT"),
+        "the sweep retries a held period"
+    );
+
+    let mut released = halten;
+    released.beihilfevorbehalt.genehmigungen = vec![eeg_billing::Beihilfegenehmigung {
+        eingang: time::macros::date!(2027 - 02 - 10),
+        gilt_ab: time::macros::date!(2027 - 01 - 01),
+        gilt_bis: None,
+        bundesanzeiger: "BAnz AT (Fixture)".to_owned(),
+        umfang: "Teil 3".to_owned(),
+    }];
+    let r = einsd::settle::settle_plant(&pool, &released, &http, &anlage, 2027, 1, req())
+        .await
+        .expect("an approval releases the held payment");
+    assert_eq!(r.status, "calculated");
+    assert!(r.gutschrift_nummer.is_some());
+    assert!(
+        r.policy.is_none(),
+        "a covered payment branches on no policy"
+    );
+    assert_eq!(
+        outbox(pool.clone()).await,
+        1,
+        "the released payment is paid out"
     );
 }
 

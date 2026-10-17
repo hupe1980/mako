@@ -7,10 +7,12 @@
 
 allow_insecure_no_auth = true
 
-port   = 9580
 tenant = "9900357000004"
 
 mcp_api_key = "dev-mcp-key"
+
+[http]
+addr = "127.0.0.1:9580"
 
 # One specialist, so the plane has an agent to admit. Its manifest names the
 # provider `anthropic`; here that name is backed by an OpenAI-compatible server
@@ -23,6 +25,9 @@ enable = ["deadline-alert-agent"]
 backend  = "chat-completions"
 api_base = "http://127.0.0.1:11434/v1"
 
+# An agentplane upgrade that changes a durable format recreates this database
+# (`docker compose -f dev/docker-compose.yml exec postgres dropdb -U dev agentd`,
+# then `createdb`); startup refuses a journal the running build cannot verify.
 [journal]
 backend = "postgres"
 url     = "postgres://dev:dev@localhost:5432/agentd"
@@ -35,14 +40,10 @@ makod       = "http://127.0.0.1:8080/mcp"
 marktd      = "http://127.0.0.1:8180/mcp"
 invoicd     = "http://127.0.0.1:8280/mcp"
 edmd        = "http://127.0.0.1:8380/mcp"
-obsd        = "http://127.0.0.1:8480/mcp"
 processd    = "http://127.0.0.1:8580/mcp"
 netzbilanzd = "http://127.0.0.1:8680/mcp"
-sperrd      = "http://127.0.0.1:8780/mcp"
-mabis_syncd = "http://127.0.0.1:8880/mcp"
 productd    = "http://127.0.0.1:9080/mcp"
 einsd       = "http://127.0.0.1:9180/mcp"
 billingd    = "http://127.0.0.1:9280/mcp"
 accountingd = "http://127.0.0.1:9380/mcp"
-portald     = "http://127.0.0.1:9480/mcp"
 vertragd    = "http://127.0.0.1:9780/mcp"

@@ -37,7 +37,6 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    http::StatusCode,
     middleware::{self, Next},
     response::IntoResponse,
 };
@@ -318,6 +317,16 @@ impl EinsdMcpHandler {
     }
 
     #[tool(
+        description = "The operator policy and posture this einsd deployment runs under: each [policy] setting (e.g. beihilfe_politik) with its value, whether it was set or defaulted, and the primary source of the value. Read-only; a setting changes only by editing the config and restarting.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_policy(&self) -> Result<CallToolResult, McpError> {
+        ContentBlock::json(serde_json::to_value(self.state.cfg.policy_report()).unwrap_or_default())
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    #[tool(
         description = "List EEG/KWKG plants. Filter by malo_id, erzeugungsart (SOLAR/WIND_ONSHORE/KWKG/etc.), or status (aktiv/abgemeldet/foerderung_beendet/repowered).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -480,9 +489,7 @@ impl EinsdMcpHandler {
         .await
         .map_err(|e| {
             // A state-aid refusal is the plant's or period's state, not a fault.
-            if crate::settle::settle_error_status(&e)
-                == axum::http::StatusCode::UNPROCESSABLE_ENTITY
-            {
+            if crate::settle::is_refusal(&e) {
                 McpError::invalid_params(format!("{e:#}"), None)
             } else {
                 McpError::internal_error(format!("{e:#}"), None)
@@ -693,7 +700,7 @@ impl EinsdMcpHandler {
 
         match result {
             Ok(rate) => {
-                let rate_ct = rate.into_decimal() * rust_decimal::Decimal::from(100u32);
+                let rate_ct = rate.to_decimal() * rust_decimal::Decimal::from(100u32);
                 Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                     "Statutory rate for {erzeugungsart} {kwp} kWp (EEG {eeg_year}{ms}): \
                     {rate_ct:.2} ct/kWh ({rate} EUR/kWh).\n\
@@ -794,7 +801,7 @@ impl EinsdMcpHandler {
                 "registriert": anlage.mastr_registriert,
                 "nummer": anlage.mastr_nummer,
                 // ISO 8601, not `time::Date`'s derived `[year, ordinal]` array —
-                // see the note in obsd's MCP server. A date a consumer cannot
+                // see the note in processd's read-model MCP tools. A date a consumer cannot
                 // read must not look like one it can.
                 "datum": anlage.mastr_datum.map(|d| d.to_string()),
             },
@@ -1808,7 +1815,10 @@ async fn mcp_auth_middleware(
     let bytes = match axum::body::to_bytes(body, MAX_MCP_BODY).await {
         Ok(b) => b,
         Err(_) => {
-            return (StatusCode::PAYLOAD_TOO_LARGE, "MCP request body too large").into_response();
+            return mako_service::ApiError::payload_too_large(format!(
+                "MCP request body exceeds {MAX_MCP_BODY} bytes"
+            ))
+            .into_response();
         }
     };
     match classify(&bytes) {
@@ -1820,14 +1830,11 @@ async fn mcp_auth_middleware(
         }
         McpCall::UnmappedMutation(name) => {
             tracing::warn!(tool = %name, "einsd: mutating MCP tool carries no Cedar action");
-            return (
-                StatusCode::FORBIDDEN,
-                format!(
-                    "403 Forbidden: MCP tool {name:?} mutates but carries no Cedar action, so \
+            return mako_service::error::ApiError::forbidden(format!(
+                "403 Forbidden: MCP tool {name:?} mutates but carries no Cedar action, so \
                      it cannot be authorized — add it to `mutating_tool_action`"
-                ),
-            )
-                .into_response();
+            ))
+            .into_response();
         }
     }
     let request = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));

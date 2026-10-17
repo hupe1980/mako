@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// `#[allow(` / `#![allow(` attributes in `crates/`, `services/`, `xtask/` and
 /// `makotest/src`. Only shrinks.
-const CEILING: usize = 88;
+const CEILING: usize = 79;
 
 /// The `#[allow(` attributes in `src` — attribute lines, not prose that names
 /// one.

@@ -4,7 +4,7 @@
 //! process-dispatch helpers live in `super`.
 
 use super::*;
-use mako_service::Json;
+use mako_service::{ApiError, Json};
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
@@ -46,18 +46,8 @@ pub(crate) async fn handle_command(
     Json(envelope): Json<ErpCommand>,
 ) -> impl IntoResponse {
     // ── Authentication ────────────────────────────────────────────────────────
-    let identity = match state.cedar.authenticate(&headers) {
-        Some(id) => id,
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({
-                    "error": "Unauthorized",
-                    "detail": "Authorization: Bearer <token> header required"
-                })),
-            )
-                .into_response();
-        }
+    let Some(identity) = state.cedar.authenticate(&headers) else {
+        return ApiError::Unauthorized.into_response();
     };
 
     // ── Resolve and validate Marktrolle ────────────────────────────────────────
@@ -78,16 +68,16 @@ pub(crate) async fn handle_command(
     ) {
         Ok(role) => role,
         Err(e) => {
-            let (code, detail) = match e {
+            let (reason, detail) = match e {
                 CommandError::UnknownCommand => (
-                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "unknown_command",
                     format!(
                         "Unknown command {:?}. See module documentation for the command registry.",
                         envelope.command
                     ),
                 ),
                 CommandError::MarktrolleRequired => (
-                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "marktrolle_required",
                     format!(
                         "Command {:?} is permitted for multiple Marktrollen — \
                          supply \"marktrolle\" in the request body to disambiguate.",
@@ -95,14 +85,14 @@ pub(crate) async fn handle_command(
                     ),
                 ),
                 CommandError::RoleNotPermitted => (
-                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "role_not_permitted",
                     format!(
                         "Marktrolle {:?} is not permitted to issue command {:?}.",
                         envelope.marktrolle, envelope.command
                     ),
                 ),
                 CommandError::RoleNotConfigured => (
-                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "role_not_configured",
                     format!(
                         "This makod instance is not configured for the Marktrolle \
                          required by command {:?}. Set --marktrollen at startup.",
@@ -110,11 +100,11 @@ pub(crate) async fn handle_command(
                     ),
                 ),
             };
-            return (
-                code,
-                Json(serde_json::json!({ "error": "command_rejected", "detail": detail })),
+            return ApiError::unprocessable_with(
+                detail,
+                serde_json::json!({ "code": "command_rejected", "reason": reason }),
             )
-                .into_response();
+            .into_response();
         }
     };
 
@@ -128,14 +118,7 @@ pub(crate) async fn handle_command(
             tenant: &state.tenant_id.to_string(),
         },
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error":  "Forbidden",
-                "detail": "Cedar policy denied this command"
-            })),
-        )
-            .into_response();
+        return ApiError::forbidden("Cedar policy denied this command").into_response();
     }
 
     // ── Idempotency key ───────────────────────────────────────────────────────
@@ -154,30 +137,21 @@ pub(crate) async fn handle_command(
     let supplied_key = match mako_service::headers::single_str(&headers, "idempotency-key") {
         Ok(key) => key.map(str::to_owned),
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error":  "duplicate_idempotency_key_header",
-                    "detail": e.to_string(),
-                })),
-            )
+            return ApiError::bad_request(e.to_string())
+                .with_code("duplicate_idempotency_key_header")
                 .into_response();
         }
     };
     let idempotency_key = match supplied_key {
         Some(key) if !key.is_empty() => key,
         _ => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error":  "missing_idempotency_key",
-                    "detail": "The Idempotency-Key header is required for all commands. \
-                               Use one stable value per business request (e.g. your ERP \
-                               order ID): the accepted response is stored under it for \
-                               24 hours and replayed on a retry.",
-                })),
+            return ApiError::unprocessable(
+                "The Idempotency-Key header is required for all commands. Use one stable \
+                 value per business request (e.g. your ERP order ID): the accepted response \
+                 is stored under it for 24 hours and replayed on a retry.",
             )
-                .into_response();
+            .with_code("missing_idempotency_key")
+            .into_response();
         }
     };
 
@@ -203,30 +177,23 @@ pub(crate) async fn handle_command(
                 command         = %cmd_lower,
                 "ERP command rejected — Idempotency-Key reused for a different request",
             );
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error":  "idempotency_key_reuse",
-                    "detail": "This Idempotency-Key was already used for a different \
-                               command or payload. Use a fresh key per business \
-                               request; reusing one would make the replayed response \
-                               refer to another process.",
-                })),
+            return ApiError::unprocessable(
+                "This Idempotency-Key was already used for a different command or payload. \
+                 Use a fresh key per business request; reusing one would make the replayed \
+                 response refer to another process.",
             )
-                .into_response();
+            .with_code("idempotency_key_reuse")
+            .into_response();
         }
         Ok(idempotency::Lookup::Fresh) => {}
         Err(e) => {
             tracing::error!(error = %e, "idempotency lookup failed");
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({
-                    "error":  "idempotency_unavailable",
-                    "detail": "The idempotency record could not be read, so this \
-                               request cannot be safely dispatched. Retry.",
-                })),
+            return ApiError::unavailable(
+                "The idempotency record could not be read, so this request cannot be safely \
+                 dispatched. Retry.",
             )
-                .into_response();
+            .with_code("idempotency_unavailable")
+            .into_response();
         }
     }
 
@@ -259,46 +226,34 @@ pub(crate) async fn handle_command(
             process_id
         }
         Err(DispatchError::MaloNotFound(malo_id)) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error":  "malo_not_found",
-                    "detail": format!(
-                        "MaLo {malo_id:?} is not in the cache. \
-                         Seed it first via PUT /admin/malo/{malo_id}."
-                    ),
-                    "malo_id": malo_id,
-                })),
+            return ApiError::unprocessable_with(
+                format!(
+                    "MaLo {malo_id:?} is not in the cache. \
+                     Seed it first via PUT /admin/malo/{malo_id}."
+                ),
+                serde_json::json!({ "code": "malo_not_found", "malo_id": malo_id }),
             )
-                .into_response();
+            .into_response();
         }
         Err(DispatchError::InvalidPayload(msg)) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error":  "invalid_payload",
-                    "detail": msg,
-                })),
-            )
+            return ApiError::unprocessable(msg)
+                .with_code("invalid_payload")
                 .into_response();
         }
         Err(DispatchError::ProcessNotFound {
             business_key,
             workflow_name,
         }) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({
-                    "error":        "process_not_found",
-                    "detail":       format!(
-                        "No active {workflow_name} process found for business key {business_key:?}. \
-                         Initiate the Anmeldung first via the corresponding anmelden command."
-                    ),
-                    "business_key":  business_key,
-                    "workflow_name": workflow_name,
-                })),
-            )
-                .into_response();
+            return ApiError::not_found(format!(
+                "No active {workflow_name} process found for business key {business_key:?}. \
+                 Initiate the Anmeldung first via the corresponding anmelden command."
+            ))
+            .with_code("process_not_found")
+            .with_fields(serde_json::json!({
+                "business_key":  business_key,
+                "workflow_name": workflow_name,
+            }))
+            .into_response();
         }
         Err(DispatchError::AmbiguousProcess {
             business_key,
@@ -309,19 +264,15 @@ pub(crate) async fn handle_command(
                 count        = count,
                 "ERP dispatch: multiple active processes for business key — data integrity issue",
             );
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error":        "ambiguous_process",
-                    "detail":       format!(
-                        "{count} active processes found for business key {business_key:?}; \
-                         expected exactly one. This indicates a data integrity issue."
-                    ),
-                    "business_key": business_key,
-                    "count":        count,
-                })),
+            return ApiError::conflict_with(
+                "ambiguous_process",
+                format!(
+                    "{count} active processes found for business key {business_key:?}; \
+                     expected exactly one. This indicates a data integrity issue."
+                ),
+                serde_json::json!({ "business_key": business_key, "count": count }),
             )
-                .into_response();
+            .into_response();
         }
         Err(DispatchError::DuplicateProcess {
             process_id,
@@ -332,21 +283,17 @@ pub(crate) async fn handle_command(
                 process_id = %process_id,
                 "ERP dispatch: duplicate anmelden rejected — active process exists",
             );
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error":      "duplicate_process",
-                    "detail":     format!(
-                        "An active process for MaLo {malo_id:?} already exists. \
-                         Route follow-up commands (bestaetigen/ablehnen/aktivieren) \
-                         to the existing process, or wait until it reaches a terminal \
-                         state before re-initiating."
-                    ),
-                    "malo_id":    malo_id,
-                    "process_id": process_id.to_string(),
-                })),
+            return ApiError::conflict_with(
+                "duplicate_process",
+                format!(
+                    "An active process for MaLo {malo_id:?} already exists. \
+                     Route follow-up commands (bestaetigen/ablehnen/aktivieren) \
+                     to the existing process, or wait until it reaches a terminal \
+                     state before re-initiating."
+                ),
+                serde_json::json!({ "malo_id": malo_id, "process_id": process_id.to_string() }),
             )
-                .into_response();
+            .into_response();
         }
         Err(DispatchError::Engine(e)) => {
             // InvalidState is a business-logic conflict (e.g. bestaetigen on an
@@ -359,46 +306,34 @@ pub(crate) async fn handle_command(
                     error           = %e,
                     "ERP dispatch: command rejected — invalid state transition",
                 );
-                return (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({
-                        "error":  "invalid_state",
-                        "detail": e.to_string(),
-                    })),
+                return ApiError::conflict_with(
+                    "invalid_state",
+                    e.to_string(),
+                    serde_json::json!({}),
                 )
-                    .into_response();
-            }
-            tracing::error!(
-                idempotency_key = %idempotency_key,
-                command         = %cmd_lower,
-                error           = %e,
-                "ERP dispatch: engine error",
-            );
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error":  "engine_error",
-                    "detail": e.to_string(),
-                })),
-            )
                 .into_response();
+            }
+            // The engine's own text names stores and keys; it is logged under
+            // the `error_id` the body carries and never echoed.
+            return ApiError::internal(anyhow::Error::new(e).context(format!(
+                "ERP dispatch of {cmd_lower} (Idempotency-Key {idempotency_key}): engine error"
+            )))
+            .into_response();
         }
         Err(DispatchError::NotImplemented(cmd)) => {
             tracing::warn!(
                 command = %cmd,
                 "ERP dispatch: command not yet implemented — returning 501",
             );
-            return (
-                StatusCode::NOT_IMPLEMENTED,
-                Json(serde_json::json!({
-                    "error":  "not_implemented",
-                    "detail": format!("command '{cmd}' is not yet dispatchable — do not retry automatically"),
-                    "hint":   "This command is registered but its workflow is not yet implemented \
-                               in this release. Check the makod release notes for the planned \
-                               delivery milestone, or open a support request."
-                })),
-            )
-                .into_response();
+            return ApiError::not_implemented(format!(
+                "command '{cmd}' is not dispatchable in this build — do not retry automatically"
+            ))
+            .with_code("not_implemented")
+            .with_fields(serde_json::json!({
+                "hint": "This command is registered but its workflow is not implemented in \
+                         this release. Check the makod release notes, or open a support request.",
+            }))
+            .into_response();
         }
     };
 

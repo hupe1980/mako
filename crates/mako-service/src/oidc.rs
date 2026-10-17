@@ -45,7 +45,7 @@ use std::sync::{Arc, RwLock};
 use axum::{
     Extension,
     extract::FromRequestParts,
-    http::{StatusCode, header, request::Parts},
+    http::{header, request::Parts},
     response::{IntoResponse, Response},
 };
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, jwk::JwkSet};
@@ -623,20 +623,7 @@ impl IntoResponse for AuthError {
                 "rejected a validly signed token issued for another tenant"
             );
         }
-        let body = serde_json::json!({
-            "type":   "https://docs.mako.energy/problems/unauthorized",
-            "title":  "Unauthorized",
-            "status": 401u16,
-            "detail": self.0.client_detail(),
-        });
-        let mut resp = (StatusCode::UNAUTHORIZED, axum::Json(body)).into_response();
-        resp.headers_mut().insert(
-            header::CONTENT_TYPE,
-            "application/problem+json"
-                .parse()
-                .expect("valid header value"),
-        );
-        resp
+        crate::ApiError::unauthorized(self.0.client_detail()).into_response()
     }
 }
 

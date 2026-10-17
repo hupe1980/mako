@@ -143,9 +143,18 @@ pub async fn get_xrechnung(
     // `en16931-formats`.
     let (_, model) = record_with_model(&pool, cfg, id).await?;
     Ok(xml_download(
-        crate::einvoice::render_cii(&model),
+        crate::einvoice::render_cii(&model).map_err(not_writable)?,
         format!("xrechnung-{id}.xml"),
     ))
+}
+
+/// A stored model the target syntax's schema has no form for: refused, naming
+/// the missing terms, instead of written as a file every receiver rejects.
+pub(crate) fn not_writable(e: en16931_formats::Unwritable) -> BillingError {
+    BillingError::unprocessable(
+        "MODEL_NOT_WRITABLE",
+        format!("{e} — re-run the billing calculation"),
+    )
 }
 
 /// An XML document as an attachment download.
@@ -236,7 +245,7 @@ pub fn prepare_payload(
                     serde_json::json!({ "violated_rules": fatal }),
                 ));
             }
-            crate::einvoice::render_cii(model)
+            crate::einvoice::render_cii(model).map_err(not_writable)?
         }
     };
     let specification_id = model.specification_id.clone().ok_or_else(|| {

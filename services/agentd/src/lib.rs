@@ -23,3 +23,6 @@ pub mod config;
 pub mod handlers;
 pub mod plane;
 pub mod skills;
+
+mod daemon;
+pub use daemon::Agentd;

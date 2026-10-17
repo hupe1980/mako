@@ -282,6 +282,31 @@ const NO_TRUSTED_INPUT: &str = "The event carried no identifier this plane could
 
 /// Whether this dispatch is the one that admitted the run.
 ///
+/// Why [`Plane::erase`] did not complete.
+///
+/// Two kinds, because they are two answers: a deployment without a key ring
+/// cannot erase a case however often it is asked (`409`), while a key service
+/// or memory store that failed is this service's fault, and its text names
+/// store internals the caller is not shown (`500`).
+#[derive(Debug)]
+pub enum EraseError {
+    /// Case erasure was asked for and no `[keyring]` is configured.
+    NoKeyRing,
+    /// The key service or the memory store failed.
+    Store(anyhow::Error),
+}
+
+impl std::fmt::Display for EraseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoKeyRing => f.write_str("case erasure requires a configured key ring"),
+            Self::Store(error) => write!(f, "{error:#}"),
+        }
+    }
+}
+
+impl std::error::Error for EraseError {}
+
 /// Recorded rather than inferred: "the same decision twice in the log" and "a
 /// redelivery answered with the original run" look identical without it, and
 /// only the first is a fault.
@@ -316,7 +341,8 @@ pub struct AgentDecision {
     pub event_id: String,
     pub event_type: String,
     /// `completed` · `failed` · `suspended` · `exhausted` · `quarantined` ·
-    /// `replanning` · `cancelled` · `running` · `not-admitted`
+    /// `replanning` · `cancelled` · `abandoned` · `withheld` · `running` ·
+    /// `not-admitted`
     pub outcome: String,
     pub summary: String,
     /// Whether this dispatch admitted the run or met one already admitted.
@@ -462,6 +488,48 @@ impl Stores {
     #[must_use]
     pub fn postgres(store: agentplane::store::PostgresStore, tenant: &TenantId) -> Self {
         Self::from_arc(Arc::new(store.for_tenant(tenant.clone())))
+    }
+
+    /// Refuse a journal this build cannot read, before anything appends to it.
+    ///
+    /// Before its format freeze agentplane changes durable formats between
+    /// minors without a migration — id spellings, chain digests, effect keys,
+    /// store schemas — and each such cut is answered by recreating the store.
+    /// The redb backend refuses an older file at open on its own, as a
+    /// table-type mismatch; the Postgres backend opens an older schema in
+    /// place, adding what is missing, so the first new run would seal into a
+    /// log whose earlier entries hash under other rules. One probe covers both: the newest run must list and verify end
+    /// to end under this build. An empty journal passes.
+    ///
+    /// # Errors
+    ///
+    /// When the newest run cannot be listed, read or verified — named with the
+    /// two causes it can have, an earlier build or an altered record, and the
+    /// remedy for the first.
+    pub async fn refuse_an_unreadable_journal(&self) -> Result<(), String> {
+        let explain = |what: &str, e: &dyn std::fmt::Display| {
+            format!(
+                "the agent journal's newest run {what} under this agentplane build: {e}. \
+                 Either an earlier agentplane build wrote it — its record and schema \
+                 formats are not this build's, and a journal is recreated rather than \
+                 migrated across such a cut — or a record was altered after it was \
+                 written, which an audit of the store must settle before anything \
+                 appends to it. agentd holds no state a recreate loses beyond the \
+                 runs themselves: see the upgrade runbook on the agentd service page"
+            )
+        };
+        let newest = self
+            .journal
+            .recent_runs(None, 1)
+            .await
+            .map_err(|e| explain("cannot be listed", &e))?;
+        if let Some((run, _)) = newest.first() {
+            self.journal
+                .verify(*run)
+                .await
+                .map_err(|e| explain(&format!("{run} does not verify"), &e))?;
+        }
+        Ok(())
     }
 
     /// One backend, eight seams.
@@ -716,24 +784,21 @@ impl Plane {
         case: Option<CaseId>,
         memory_subject: Option<&str>,
         reason: &str,
-    ) -> Result<usize, String> {
+    ) -> Result<usize, EraseError> {
         if let Some(case) = case {
-            let keyring = self
-                .keyring
-                .as_ref()
-                .ok_or_else(|| "case erasure requires a configured key ring".to_owned())?;
+            let keyring = self.keyring.as_ref().ok_or(EraseError::NoKeyRing)?;
             let scope = agentplane::keyring::scope(&self.tenant, &case.to_string());
             keyring
                 .destroy(&scope, time::OffsetDateTime::now_utc(), reason)
                 .await
-                .map_err(|error| format!("destroy case wrapping key: {error}"))?;
+                .map_err(|error| {
+                    EraseError::Store(anyhow::anyhow!("destroy case wrapping key: {error}"))
+                })?;
         }
         match memory_subject {
-            Some(subject) => self
-                .memory
-                .forget_subject(subject)
-                .await
-                .map_err(|error| format!("forget memory subject: {error}")),
+            Some(subject) => self.memory.forget_subject(subject).await.map_err(|error| {
+                EraseError::Store(anyhow::anyhow!("forget memory subject: {error}"))
+            }),
             None => Ok(0),
         }
     }
@@ -1150,6 +1215,19 @@ impl Plane {
             // establish and leaves whatever it did standing. Distinct label,
             // because the two need opposite follow-up.
             RunStatus::Abandoned { .. } => "abandoned",
+            // A pause, not a fault: the authority the run acts for was
+            // withdrawn by a `subject:` halt, its completed work stands, and
+            // lifting the halt resumes it.
+            RunStatus::Withheld { .. } => "withheld",
+            // Runs the plane opens over its own state — a sweep, a break-glass
+            // crossing, a lifted halt or hold, an observed session. None is an
+            // admitted agent run, so none reaches here from a dispatch; the
+            // arm spells them as the journal does rather than inventing a word.
+            status @ (RunStatus::Swept
+            | RunStatus::BrokeGlass { .. }
+            | RunStatus::HaltLifted { .. }
+            | RunStatus::HoldReleased { .. }
+            | RunStatus::Observed) => status.as_str(),
         };
 
         // Why it is waiting, not merely that it is. A run suspended on an
@@ -1157,6 +1235,9 @@ impl Plane {
         // or a counterparty chased. Both read as "suspended" without this.
         let waiting_for = match &status {
             RunStatus::Suspended(reason) => Some(reason.to_string()),
+            RunStatus::Withheld { subject, .. } => Some(format!(
+                "the withdrawn authority '{subject}' to be restored"
+            )),
             _ => None,
         };
 

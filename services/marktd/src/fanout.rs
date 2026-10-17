@@ -378,6 +378,11 @@ where
                  SELECT d.event_id, d.subscriber_id FROM event_delivery d
                   WHERE d.delivered_at IS NULL AND d.dead_lettered_at IS NULL
                     AND d.next_attempt_at <= now()
+                    -- A spent budget is never claimed again: the sweep above and
+                    -- this claim each read their own now(), so a lease that runs
+                    -- out between them would otherwise buy one more POST. Only
+                    -- the sweep may take an exhausted row, and it dead-letters it.
+                    AND d.attempts < $3
                     -- Per-aggregate FIFO: hold this delivery back while an
                     -- earlier event about the same Marktlokation is still
                     -- outstanding to the same subscriber. Dead-lettered rows do
@@ -412,6 +417,7 @@ where
         )
         .bind(lease_secs)
         .bind(self.config.deliver_batch)
+        .bind(self.config.max_attempts)
         .fetch_all(&self.pool)
         .await?;
 
@@ -663,7 +669,7 @@ mod tests {
     #[test]
     fn jitter_stays_within_an_eighth_of_the_base_delay() {
         let base = 300;
-        for subscriber in ["erp", "processd", "invoicd", "edmd", "obsd"] {
+        for subscriber in ["erp", "processd", "invoicd", "edmd", "makod"] {
             for attempt in 1..5 {
                 let d = jittered(base, subscriber, attempt);
                 assert!(

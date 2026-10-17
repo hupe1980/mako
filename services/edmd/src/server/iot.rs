@@ -135,42 +135,28 @@ pub(crate) async fn post_iot_reads(
 
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "write-meter-reads", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     if req.intervals.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "intervals must not be empty" })),
-        )
-            .into_response();
+        return ApiError::bad_request("intervals must not be empty").into_response();
     }
     if req.session_id.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "session_id is required — use devEUI:fCnt (LoRaWAN) or the \
-                          telegram access number (OMS/M-Bus)"
-            })),
+        return ApiError::bad_request(
+            "session_id is required — use devEUI:fCnt (LoRaWAN) or the \
+                          telegram access number (OMS/M-Bus)",
         )
-            .into_response();
+        .into_response();
     }
 
     let sparte = match crate::domain::parse_sparte(&req.sparte) {
         Some(s) => s,
         None => {
             let other = req.sparte.as_str();
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": format!("unknown sparte `{other}`; expected STROM, GAS, WAERME or WASSER")
-                })),
-            )
-                .into_response();
+            return ApiError::unprocessable(format!(
+                "unknown sparte `{other}`; expected STROM, GAS, WAERME or WASSER"
+            ))
+            .into_response();
         }
     };
 
@@ -178,35 +164,25 @@ pub(crate) async fn post_iot_reads(
     // decimal multiple; water submeters commonly report litres. The scale is an
     // exact rational, so GJ→kWh (2500/9) stays exact.
     let Some(scale) = Unit::parse_scaled(&req.unit) else {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!(
-                    "unknown unit `{}`; expected kWh/MWh/GJ/MJ/Wh (energy) or m³/l (volume)",
-                    req.unit
-                )
-            })),
-        )
-            .into_response();
+        return ApiError::unprocessable(format!(
+            "unknown unit `{}`; expected kWh/MWh/GJ/MJ/Wh (energy) or m³/l (volume)",
+            req.unit
+        ))
+        .into_response();
     };
     let unit = scale.unit();
 
     // A reading may arrive in the unit the meter registers, or already converted
     // to the settlement unit. Anything else is a decode error.
     if unit != sparte.measured_unit() && unit != sparte.billing_unit() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!(
-                    "unit {} is not valid for sparte {} — expected {} (as measured) or {} (as billed)",
-                    unit.as_str(),
-                    sparte.as_str(),
-                    sparte.measured_unit().as_str(),
-                    sparte.billing_unit().as_str()
-                )
-            })),
-        )
-            .into_response();
+        return ApiError::unprocessable(format!(
+            "unit {} is not valid for sparte {} — expected {} (as measured) or {} (as billed)",
+            unit.as_str(),
+            sparte.as_str(),
+            sparte.measured_unit().as_str(),
+            sparte.billing_unit().as_str()
+        ))
+        .into_response();
     }
 
     // Gas is metered in m³ and billed in kWh, so a raw gas uplink needs the
@@ -214,14 +190,11 @@ pub(crate) async fn post_iot_reads(
     // varies by supply area and month, so it is required rather than defaulted.
     let conversion = if sparte.requires_conversion() && unit == sparte.measured_unit() {
         let Some(hs) = req.brennwert_kwh_per_m3 else {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": "brennwert_kwh_per_m3 is required when submitting gas in m³ \
-                              (§25 Nr. 4 MessEV); submit unit=KWH to supply pre-converted values"
-                })),
+            return ApiError::unprocessable(
+                "brennwert_kwh_per_m3 is required when submitting gas in m³ \
+                              (§25 Nr. 4 MessEV); submit unit=KWH to supply pre-converted values",
             )
-                .into_response();
+            .into_response();
         };
         Some((hs, req.zustandszahl.unwrap_or(rust_decimal::Decimal::ONE)))
     } else {
@@ -439,11 +412,7 @@ pub(crate) async fn post_iot_reads(
         && let Err(e) = state.repo.store_reads(validated).await
     {
         tracing::error!(malo_id = %malo_id, error = %e, "edmd: IoT batch insert failed");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::internal(e).into_response();
     }
 
     // Recorded once the readings are stored, for the same reason every other

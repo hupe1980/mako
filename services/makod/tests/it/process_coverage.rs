@@ -26,7 +26,7 @@
 //! token whose first segment is the first segment of some declared name. So
 //! `gpke-lieferbeginn` is checked and `mako-markt` is not, without a hard-coded
 //! vocabulary that would drift from the crates. Service directory names are
-//! excluded — `mabis-syncd` fits the shape and is a daemon.
+//! excluded — `redispatch-xml` fits the shape and is a crate.
 //!
 //! Prose naming a *process* without a workflow is deliberate, and stays prose:
 //! only a backticked name is read as a claim about a constant.
@@ -88,8 +88,8 @@ fn workflow_name_constants(root: &Path) -> BTreeSet<String> {
 
 /// Every directory under `services/` and `crates/`.
 ///
-/// A service or crate name can fit the workflow shape — `mabis-syncd` shares
-/// `mabis-zp-lifecycle`'s first segment — and naming one in the document is
+/// A service or crate name can fit the workflow shape — `redispatch-xml` shares
+/// `redispatch-aktivierung`'s first segment — and naming one in the document is
 /// not a claim about a workflow.
 fn workspace_member_names(root: &Path) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
@@ -213,18 +213,18 @@ fn every_declared_workflow_has_a_row_in_the_process_map() {
 /// both fit the shape.
 #[test]
 fn a_row_for_a_workflow_that_does_not_exist_is_caught() {
-    let declared: BTreeSet<String> = ["gpke-lf-anmeldung", "mabis-zp-lifecycle"]
+    let declared: BTreeSet<String> = ["gpke-lf-anmeldung", "redispatch-aktivierung"]
         .into_iter()
         .map(str::to_owned)
         .collect();
-    let members: BTreeSet<String> = ["mabis-syncd", "mako-markt"]
+    let members: BTreeSet<String> = ["redispatch-xml", "mako-markt"]
         .into_iter()
         .map(str::to_owned)
         .collect();
 
     let doc = "| `gpke-lf-anmeldung` | runs |\n\
                | `gpke-lieferbeginn` | renamed away |\n\
-               | `mabis-zp-lifecycle` | runs, via `mabis-syncd` in `mako-markt` |\n\
+               | `redispatch-aktivierung` | runs, via `redispatch-xml` in `mako-markt` |\n\
                plain gpke-lieferende prose is not a claim\n";
     assert_eq!(
         undeclared_names(doc, &declared, &members),

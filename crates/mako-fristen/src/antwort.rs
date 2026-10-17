@@ -1,9 +1,10 @@
 //! The **business answer Frist** per inbound Prüfidentifikator.
 //!
 //! Four services need this number and must agree on it: `makod` registers the
-//! deadline on the process, `processd` sizes its operator queue by it, `obsd`
-//! raises the breach alert and reports the KPI, and `agentd`'s deadline
-//! specialist classifies what `obsd` returns. One table, so they cannot disagree.
+//! deadline on the process, `processd` sizes its operator queue by it and its
+//! process read model raises the breach alert and reports the KPI, and
+//! `agentd`'s deadline specialist classifies what that read model returns. One
+//! table, so they cannot disagree.
 //!
 //! Two plausible misreadings are recorded as constants because both are easy to
 //! re-introduce: [`GPKE_IS_NOT_TWENTY_FOUR_HOURS`] and
@@ -1944,9 +1945,8 @@ mod tests {
 
     /// A GPKE Anmeldung is due 11:00 on the next Werktag — **not** 24 hours on.
     ///
-    /// The failure this pins is the one `obsd` shipped: a Friday-afternoon
-    /// Anmeldung breached on Saturday, and a Tuesday-evening one reported
-    /// healthy nine hours after its Frist lapsed.
+    /// A flat 24 hours breaches a Friday-afternoon Anmeldung on Saturday and
+    /// reports a Tuesday-evening one healthy nine hours after its Frist lapsed.
     #[test]
     fn a_gpke_anmeldung_is_a_clock_time_not_a_duration() {
         let received = utc(2026, Month::March, 6, 14); // Friday

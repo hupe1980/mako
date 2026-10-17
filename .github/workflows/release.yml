@@ -341,7 +341,7 @@ jobs:
           if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
       
       # Leaf crate (no internal deps) — depended on by mako-engine, mako-markt,
-      # mako-obs, mako-gabi-gas. Must be published before any of them.
+      # mako-gabi-gas. Must be published before any of them.
       - name: crates.io token for mako-events
         id: auth-mako-events
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
@@ -431,18 +431,6 @@ jobs:
           echo "$out"
           if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
 
-
-      - name: crates.io token for mako-obs
-        id: auth-mako-obs
-        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
-
-      - name: Publish mako-obs
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth-mako-obs.outputs.token }}
-        run: |
-          out=$(cargo publish -p mako-obs 2>&1) && rc=0 || rc=$?
-          echo "$out"
-          if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
 
       # The shared INVOIC settle/dispute state machine. mako-gpke, mako-wim,
       # mako-gabi-gas and mako-geli-gas each register a family against it, so it
@@ -556,7 +544,7 @@ jobs:
   #    GHA cache has evicted them, so the runtime stages recompile no Rust.
   #
   # 3. `docker-bake` is one job per platform: `docker buildx bake` shares the
-  #    builder stage across all 17 service targets, so the builder compiles once
+  #    builder stage across every service target, so the builder compiles once
   #    per platform rather than once per service. It needs `publish` (the semver
   #    tag) and `guards`, so no image is built for a release a guard refused.
   #
@@ -754,7 +742,7 @@ jobs:
           cache-from: type=gha,scope=mako-demo-builder-${{ matrix.platform }}
           cache-to:   type=gha,scope=mako-demo-builder-${{ matrix.platform }},mode=max
 
-  # One bake invocation per platform builds all 17 service images from one build
+  # One bake invocation per platform builds every service image from one build
   # graph, sharing the builder stage. Digests are exported for manifest merging.
   docker-bake:
     name: Docker — bake ${{ matrix.platform }}
@@ -802,7 +790,7 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      # Build all 17 runtime images in one bake invocation.
+      # Build all 16 runtime images in one bake invocation.
       # cache-from=type=registry restores from the pushed builder image — guaranteed hit.
       # --metadata-file captures per-service OCI digests for the manifest job.
       - name: Bake all service images (${{ matrix.platform }})
@@ -845,7 +833,7 @@ jobs:
       # substituted as *text* before bash parses the line, so one `'` anywhere in
       # the blob ends the quoted string and the remainder is executed — which
       # with `provenance: mode=max` is a megabyte of SLSA material, base64 source
-      # maps and build arguments for 17 targets. That is a shell-injection shape
+      # maps and build arguments for 16 targets. That is a shell-injection shape
       # as much as a syntax one, and an environment variable cannot have it: the
       # value never reaches the parser.
       - name: Export per-service digests
@@ -862,10 +850,10 @@ jobs:
           # bake builds but this loop omits is pushed by digest and then never
           # tagged: no manifest job runs for it, so the image exists in the
           # registry under no name anyone can pull.
-          for service in makod marktd processd invoicd edmd obsd \
-                        netzbilanzd sperrd einsd \
+          for service in makod marktd processd invoicd edmd \
+                        netzbilanzd einsd \
                         productd billingd outputd accountingd vertragd \
-                        portald agentd mabis-syncd; do
+                        portald agentd; do
             digest=$(jq -r --arg svc "$service" '.[$svc]["containerimage.digest"] // empty' \
                         /tmp/bake-metadata.json)
             # An empty digest means the bake did not produce that image. Writing
@@ -906,17 +894,13 @@ jobs:
           - service: marktd
             description: "Market Data Hub daemon — MaLo/MeLo/VersorgungsStatus/preisblaetter/EventBus fan-out"
           - service: processd
-            description: "Process Decision Engine — NB STP (mako-pruefung) + LF E_0624 auto-response"
+            description: "Process Decision Engine — NB STP (mako-pruefung) + LF E_0624 auto-response, process read model and KPIs, Sperrauftrag queue (IFTSTA 21039)"
           - service: invoicd
             description: "INVOIC plausibility-check daemon — LF role, § 147 AO / GoBD receipt retention"
           - service: edmd
             description: "Energy Data Management daemon — MSCONS meter readings, MeterBillingPeriod"
-          - service: obsd
-            description: "Business-process observability daemon — KPI reports, §20 EnWG parity"
           - service: netzbilanzd
-            description: "NNE/KA/MMM/MSB/AWH billing daemon — NB role, GridSettlement, CalculationTrace"
-          - service: sperrd
-            description: "Sperrung execution tracking daemon — NB role, IFTSTA 21039 auto-dispatch"
+            description: "NNE/KA/MMM/MSB/AWH billing and MaBiS Summenzeitreihen (MSCONS 13003) — NB role, GridSettlement, CalculationTrace"
           - service: einsd
             description: "Einspeiser Registry + EEG/KWKG Settlement daemon — 10 settlement schemes, EEG/KWKG Gutschrift"
           - service: productd
@@ -933,8 +917,6 @@ jobs:
             description: "Customer Portal gateway — LF role, REST+SSE, §41 EnWG self-service"
           - service: agentd
             description: "Multi-agent LLM orchestration daemon — 28 declarative specialist manifests on the agentplane durable runtime, MCP tools"
-          - service: mabis-syncd
-            description: "MaBiS UTILTS synchronisation daemon — ÜNB/NB role, Summenzeitreihe day-3/day-8"
     steps:
       - name: Download amd64 digests
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -1244,6 +1226,11 @@ jobs:
             extraction_fidelity::the_silent_permit_is_measured_per_pruefidentifikator \
             > evidence/fidelity.log 2>&1 || true
           grep -E 'distinct conditions|unreadable Voraussetzung' evidence/fidelity.log || true
+
+      # Every operator policy setting with its default and the source of each
+      # option, as of this release.
+      - name: Operator policy defaults
+        run: cargo xtask policy-inventory --json evidence/policy-inventory.json
 
       # The verdicts were taken before anything was published: `guards` ran
       # every xtask recipe of `_ci`, and `preflight` the workspace-building

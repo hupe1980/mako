@@ -10,43 +10,23 @@
 use super::*;
 use crate::store::TENANT_COL;
 
-/// A refusal, small enough to sit in an `Err` without carrying a whole response.
-struct Refusal {
-    status: StatusCode,
-    error: String,
-}
-
-impl Refusal {
-    fn into_response(self) -> axum::response::Response {
-        (
-            self.status,
-            Json(serde_json::json!({ "error": self.error })),
-        )
-            .into_response()
-    }
-}
-
 /// Parse a path MaLo-ID, answering `400` rather than failing inside the store.
 ///
 /// `metering::MaloId` enforces the BDEW Bildungsvorschrift (eleven digits,
 /// Vergabestelle 1–9, Anwendungshilfe check digit). A value that cannot be a
 /// MaLo is a bad request, not a lookup that happened to find nothing.
-fn parse_malo(malo_id: &str) -> Result<metering::MaloId, Refusal> {
-    malo_id.parse().map_err(|e: metering::ParseError| Refusal {
-        status: StatusCode::BAD_REQUEST,
-        error: format!("{malo_id}: {e}"),
-    })
+fn parse_malo(malo_id: &str) -> Result<metering::MaloId, ApiError> {
+    malo_id
+        .parse()
+        .map_err(|e: metering::ParseError| ApiError::bad_request(format!("{malo_id}: {e}")))
 }
 
 /// Open a series query for `malo`, answering `500` if the store refuses.
 fn open_series(
     store: &meterstore::MeterStore,
     malo: metering::MaloId,
-) -> Result<meterstore::SeriesQuery<'_>, Refusal> {
-    store.series(malo).map_err(|e| Refusal {
-        status: StatusCode::INTERNAL_SERVER_ERROR,
-        error: e.to_string(),
-    })
+) -> Result<meterstore::SeriesQuery<'_>, ApiError> {
+    store.series(malo).map_err(ApiError::internal)
 }
 
 // ── Archive endpoint handlers ─────────────────────────────────────────────────
@@ -61,11 +41,7 @@ pub(crate) async fn get_archive_status(
 ) -> impl IntoResponse {
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-archive-status", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     // Archival is owned by meterstore (hot Postgres + cold Iceberg). Report the
@@ -117,11 +93,7 @@ pub(crate) async fn get_archive_olap(
 ) -> impl IntoResponse {
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-archive-olap", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
@@ -167,11 +139,7 @@ pub(crate) async fn get_archive_olap(
             }))
             .into_response()
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "no data for this MaLo / period" })),
-        )
-            .into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
         Err(e) => {
             tracing::warn!(error = %e, malo_id, "edmd: archive OLAP query failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -229,11 +197,7 @@ pub(crate) async fn get_archive_portfolio(
 
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-archive-olap", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
@@ -480,11 +444,7 @@ pub(crate) async fn get_archive_timeseries(
 ) -> impl IntoResponse {
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-archive-olap", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
@@ -523,11 +483,7 @@ pub(crate) async fn get_archive_timeseries(
                 .collect();
             Json(serde_json::json!({ "malo_id": malo_id, "rows": rows })).into_response()
         }
-        Ok(_) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "no data for this MaLo / period" })),
-        )
-            .into_response(),
+        Ok(_) => ApiError::NotFound.into_response(),
         Err(e) => {
             tracing::warn!(error = %e, malo_id, "edmd: archive timeseries query failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -606,11 +562,7 @@ pub(crate) async fn post_sql_query(
     // Caller-supplied SQL runs against the archive tier, so it is gated by the
     // archive capability, not the generic hot-tier read action.
     if let Err(e) = enforcer.check(&claims.principal(), "read-archive-olap", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     // Reject obviously dangerous SQL (allow only SELECT/WITH/SHOW).
@@ -620,12 +572,7 @@ pub(crate) async fn post_sql_query(
         && !sql_upper.starts_with("SHOW")
         && !sql_upper.starts_with("DESCRIBE")
     {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "Only SELECT/WITH/SHOW/DESCRIBE queries are allowed"
-            })),
-        )
+        return ApiError::bad_request("Only SELECT/WITH/SHOW/DESCRIBE queries are allowed")
             .into_response();
     }
 
@@ -668,14 +615,11 @@ pub(crate) async fn post_sql_query(
         .iter()
         .find(|(name, _)| sql_upper.contains(&name.to_uppercase()))
     {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": format!("query references `{relation}`: {why}"),
-                "use_instead": store.resolved_table(),
-            })),
-        )
-            .into_response();
+        return ApiError::forbidden(format!(
+            "query references `{relation}`: {why}; query `{}` instead",
+            store.resolved_table()
+        ))
+        .into_response();
     }
 
     // Every typed read scopes to the tenant with `column_eq`; caller-supplied SQL
@@ -744,11 +688,7 @@ pub(crate) async fn post_sql_query(
                 }
             }
         }
-        Err(e) => (
-            // A planning/type error is the caller's SQL, not an edmd fault.
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": e.to_string(), "sql": req.sql })),
-        )
-            .into_response(),
+        // A planning/type error is the caller's SQL, not an edmd fault.
+        Err(e) => ApiError::bad_request(e.to_string()).into_response(),
     }
 }

@@ -5,7 +5,6 @@
 # endpoints issue invoices, which is the act that creates a receivable.
 allow_insecure_no_auth = true
 
-port   = 9280
 tenant = "9912345000005"
 
 # Where the price comes from. `POST /api/v1/products/{lf}/resolve` returns the
@@ -51,6 +50,8 @@ erp_webhook_url = "http://accountingd:9380/webhook"
 seller_name   = "Demo Energie GmbH"
 seller_vat_id = "DE123456789"
 
+[http]
+addr = "0.0.0.0:9280"
 
 [database]
 url = "postgres://demo:demo-secret@postgres/billingd"

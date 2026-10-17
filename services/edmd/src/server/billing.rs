@@ -40,11 +40,7 @@ pub(crate) async fn get_deliveries(
     // Cedar check — resource tenant is the service-level tenant injected at startup.
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
@@ -99,21 +95,17 @@ pub(crate) async fn get_imbalance(
 
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-imbalance", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let month_enum = match Month::try_from(month) {
         Ok(m) => m,
-        Err(_) => return (StatusCode::BAD_REQUEST, "invalid month").into_response(),
+        Err(_) => return ApiError::bad_request("invalid month").into_response(),
     };
 
     let from = match Date::from_calendar_date(year, month_enum, 1) {
         Ok(d) => d,
-        Err(_) => return (StatusCode::BAD_REQUEST, "invalid date").into_response(),
+        Err(_) => return ApiError::bad_request("invalid date").into_response(),
     };
     // The last day of the month, from `Month::length`, which already knows about
     // leap years. Rolling forward to the first of the next month and stepping
@@ -121,22 +113,14 @@ pub(crate) async fn get_imbalance(
     // only avoided panicking because of it.
     let to = match Date::from_calendar_date(year, month_enum, month_enum.length(year)) {
         Ok(d) => d,
-        Err(_) => return (StatusCode::BAD_REQUEST, "date calculation failed").into_response(),
+        Err(_) => return ApiError::bad_request("date calculation failed").into_response(),
     };
 
     let Some(bilanziert_kwh) = params.bilanziert_kwh else {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "bilanziert_kwh is required",
-                "hinweis": "Der Mehr-/Mindermengensaldo vergleicht die gemessene mit der \
+        return ApiError::unprocessable_with("bilanziert_kwh is required", serde_json::json!({ "hinweis": "Der Mehr-/Mindermengensaldo vergleicht die gemessene mit der \
                             bilanzierten Menge. edmd hält nur die gemessene Hälfte; die \
                             bilanzierte Menge stammt aus der Bilanzkreisabrechnung und ist \
-                            als Parameter zu übergeben.",
-                "legal_basis": IMBALANCE_LEGAL_BASIS,
-            })),
-        )
-            .into_response();
+                            als Parameter zu übergeben.", "legal_basis": IMBALANCE_LEGAL_BASIS })).into_response();
     };
 
     match state
@@ -173,19 +157,16 @@ pub(crate) async fn get_imbalance(
             }
             Json(body).into_response()
         }
-        Err(crate::domain::error::EdmError::NoData { .. }) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "no billable reading for this MaLo in the period",
-                "hinweis": "Ohne gemessene Menge ist der Saldo unbekannt, nicht null.",
-            })),
-        )
-            .into_response(),
-        Err(crate::domain::error::EdmError::InvalidMaloId { malo_id, reason }) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("{malo_id}: {reason}") })),
-        )
-            .into_response(),
+        Err(crate::domain::error::EdmError::NoData { .. }) => {
+            ApiError::not_found("no billable reading for this MaLo in the period")
+                .with_fields(serde_json::json!({
+                    "hinweis": "Ohne gemessene Menge ist der Saldo unbekannt, nicht null.",
+                }))
+                .into_response()
+        }
+        Err(crate::domain::error::EdmError::InvalidMaloId { malo_id, reason }) => {
+            ApiError::bad_request(format!("{malo_id}: {reason}")).into_response()
+        }
         Err(err) => {
             tracing::warn!(%err, malo_id, "edmd: get_imbalance failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -226,11 +207,7 @@ pub(crate) async fn get_billing_period(
 
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-billing-period", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let fmt = format_description!("[year]-[month]-[day]");
@@ -239,19 +216,12 @@ pub(crate) async fn get_billing_period(
         Some(s) => match time::Date::parse(s, &fmt) {
             Ok(d) => d,
             Err(_) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": "invalid 'from' date — use YYYY-MM-DD" })),
-                )
+                return ApiError::bad_request("invalid 'from' date — use YYYY-MM-DD")
                     .into_response();
             }
         },
         None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "'from' query parameter is required" })),
-            )
-                .into_response();
+            return ApiError::bad_request("'from' query parameter is required").into_response();
         }
     };
 
@@ -259,22 +229,14 @@ pub(crate) async fn get_billing_period(
         Some(s) => match time::Date::parse(s, &fmt) {
             Ok(d) => d,
             Err(_) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": "invalid 'to' date — use YYYY-MM-DD" })),
-                )
-                    .into_response();
+                return ApiError::bad_request("invalid 'to' date — use YYYY-MM-DD").into_response();
             }
         },
         None => period_from, // Default: single-day period
     };
 
     if period_to < period_from {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "'to' must be >= 'from'" })),
-        )
-            .into_response();
+        return ApiError::bad_request("'to' must be >= 'from'").into_response();
     }
 
     let q = BillingPeriodQuery {
@@ -287,11 +249,7 @@ pub(crate) async fn get_billing_period(
 
     match state.repo.billing_period(&q).await {
         Ok(Some(period)) => Json(serde_json::to_value(period).unwrap_or_default()).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "no meter reads found for this MaLo / period" })),
-        )
-            .into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
         Err(err) => {
             tracing::warn!(%err, %malo_id, "edmd: get_billing_period failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -299,14 +257,14 @@ pub(crate) async fn get_billing_period(
     }
 }
 
-// ── Billing periods collection (mabis-syncd MaLo discovery) ──────────────────
+// ── Billing periods collection (netzbilanzd MaLo discovery) ──────────────────
 
 /// `GET /api/v1/billing-periods?from=YYYY-MM-DD&to=YYYY-MM-DD&tenant=...`
 ///
 /// Every MaLo that **has meter data** in the requested window, with its
 /// commodity and the observed extent of that data.
 ///
-/// Used by `mabis-syncd` to discover which MaLo IDs to submit Summenzeitreihen
+/// Used by `netzbilanzd` to discover which MaLo IDs to submit Summenzeitreihen
 /// for. That is a question about readings, so it is answered from the readings:
 /// a cross-MaLo `SELECT DISTINCT` over meterstore's version-resolved relation,
 /// evaluated across both tiers in one plan.
@@ -344,11 +302,7 @@ pub(crate) async fn list_billing_periods(
     use time::macros::format_description;
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-billing-period", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     // Cedar authorised the caller against `resource_tenant`, so the query must
@@ -358,12 +312,7 @@ pub(crate) async fn list_billing_periods(
     if let Some(requested) = params.tenant.as_deref()
         && requested != resource_tenant
     {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "tenant parameter does not match the authorised tenant",
-            })),
-        )
+        return ApiError::forbidden("tenant parameter does not match the authorised tenant")
             .into_response();
     }
 
@@ -383,20 +332,11 @@ pub(crate) async fn list_billing_periods(
     ) {
         (Ok(Some(f)), Ok(Some(t))) if f <= t => (f, t),
         (Err(bad), _) | (_, Err(bad)) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": format!("invalid date {bad:?}; expected YYYY-MM-DD")
-                })),
-            )
+            return ApiError::bad_request(format!("invalid date {bad:?}; expected YYYY-MM-DD"))
                 .into_response();
         }
         _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "`to` must be on or after `from`" })),
-            )
-                .into_response();
+            return ApiError::bad_request("`to` must be on or after `from`").into_response();
         }
     };
 
@@ -405,10 +345,7 @@ pub(crate) async fn list_billing_periods(
         metering::DayBoundary::Strom.day(from_date),
         metering::DayBoundary::Strom.day(to_date),
     ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "the window lies outside the supported calendar" })),
-        )
+        return ApiError::bad_request("the window lies outside the supported calendar")
             .into_response();
     };
     let (from_ts, to_ts) = (first.start(), last.end());
@@ -498,7 +435,7 @@ mod discovery_cap_tests {
             .collect()
     }
 
-    /// A list that exactly fills the cap is complete — `mabis-syncd` refuses a
+    /// A list that exactly fills the cap is complete — `netzbilanzd` refuses a
     /// truncated discovery, so calling it truncated would refuse a filing whose
     /// MaLos are all there.
     #[test]

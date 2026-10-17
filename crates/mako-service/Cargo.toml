@@ -56,6 +56,9 @@ thiserror  = { workspace = true }
 anyhow     = { workspace = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }
+# `Json<T>` refuses a key no field declares: `serde_ignored` wraps the
+# deserializer and reports every key serde would otherwise skip.
+serde_ignored = "0.1"
 tracing    = "0.1"
 tracing-subscriber = { workspace = true }
 tower-http = { workspace = true }

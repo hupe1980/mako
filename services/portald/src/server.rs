@@ -11,7 +11,7 @@ use mako_service::{Daemon, ServiceContext};
 use crate::{
     clients::{PortalClients, UpstreamClient},
     config::PortaldConfig,
-    handlers, mcp_server,
+    handlers,
 };
 
 /// The `portald` daemon — stateless, so no pool and no migrations.
@@ -39,27 +39,10 @@ impl Daemon for Portald {
                  deployment that serves them unauthorised."
             );
         }
-        // The MCP surface is the second door and fails closed the same way. Its
-        // tools take a `malo_id` and carry no customer token, so `vertragd`
-        // never sees the request and cannot decide ownership — whoever reaches
-        // `/mcp` reads every customer in the tenant. With no key configured
-        // `McpAuth` runs in dev mode and accepts a request with no
-        // `Authorization` header at all, which is a posture reached by leaving
-        // `[mcp]` out rather than by asking for it.
-        if !cfg.has_mcp_key() && !cfg.allow_insecure_no_auth {
-            anyhow::bail!(
-                "no `[mcp] api_key` configured. The MCP tools take a `malo_id` and carry \
-                 no customer token, so /mcp serves every customer's consumption, account \
-                 statement and invoices in this tenant to any caller that reaches the \
-                 port. Set `[mcp] api_key`, or set `allow_insecure_no_auth = true` to \
-                 accept a deployment that serves them unauthenticated."
-            );
-        }
         if cfg.allow_insecure_no_auth {
             tracing::warn!(
                 "portald: allow_insecure_no_auth is set — every caller can read every \
-                 customer's consumption, account statement and invoices in this tenant, \
-                 over both the portal routes and /mcp"
+                 customer's consumption, account statement and invoices in this tenant"
             );
         }
 
@@ -105,15 +88,7 @@ impl Daemon for Portald {
             auth_client: ctx.http.clone(),
         });
 
-        let mcp_state = Arc::new(mcp_server::PortaldMcpState {
-            clients: Arc::clone(&clients),
-            auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
-        });
-
-        Ok(router()
-            .merge(mcp_server::router(mcp_state, ctx.shutdown.clone()))
-            .layer(Extension(cfg))
-            .layer(Extension(clients)))
+        Ok(router().layer(Extension(cfg)).layer(Extension(clients)))
     }
 }
 

@@ -376,7 +376,7 @@ fn test_dedup_hash_is_deterministic() {
     );
 }
 
-// ── Structured postal addresses (EPC cut-over, 15 November 2026) ──────────────
+// ── Structured postal addresses ───────────────────────────────────────────────
 
 #[test]
 fn address_parts_empty_emits_nothing() {
@@ -389,7 +389,7 @@ fn address_parts_empty_emits_nothing() {
             .to_postal_address()
             .expect("empty is not an error")
             .is_none(),
-        "no parts → no PstlAdr at all, which is still legal before 2026-11-15"
+        "no parts → no PstlAdr at all"
     );
 }
 
@@ -397,8 +397,8 @@ fn address_parts_empty_emits_nothing() {
 fn address_parts_half_filled_is_an_error() {
     use accountingd::sepa::AddressParts;
 
-    // A street with no town and no country is exactly the case the cut-over
-    // will surface: it looks configured and emits nothing.
+    // A street with no town and no country looks configured and would emit
+    // nothing.
     let partial = AddressParts {
         street: Some("Musterstrasse".into()),
         post_code: Some("10115".into()),
@@ -1088,4 +1088,395 @@ fn camt_entry_status_drives_whether_money_moved() {
         EntryStatus::Booked,
         "an absent Sts means the bank booked it"
     );
+}
+
+// ── What a camt booking posts ─────────────────────────────────────────────────
+
+/// One camt.054 entry with the given `Amt` attributes/text and `CdtDbtInd`
+/// element (empty string: no element).
+fn camt054_with_entry(amt: &str, indicator: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.054.001.08">
+  <BkToCstmrDbtCdtNtfctn>
+    <GrpHdr><MsgId>NTF-AMT</MsgId><CreDtTm>2026-10-14T20:00:00</CreDtTm></GrpHdr>
+    <Ntfctn>
+      <Id>N-1</Id>
+      <Acct><Id><IBAN>DE89370400440532013000</IBAN></Id></Acct>
+      <Ntry>
+        {amt}{indicator}
+        <Sts><Cd>BOOK</Cd></Sts>
+      </Ntry>
+    </Ntfctn>
+  </BkToCstmrDbtCdtNtfctn>
+</Document>"#
+    )
+}
+
+fn posting_of(amt: &str, indicator: &str) -> Result<i64, accountingd::sepa::UnpostableAmount> {
+    let doc = accountingd::sepa::parse_camt054(&camt054_with_entry(amt, indicator))
+        .expect("camt.054 parses");
+    let entry = &doc.notifications[0].entries[0];
+    assert!(entry.details.is_empty());
+    accountingd::sepa::camt_posting_ct(entry, None)
+}
+
+/// A camt booking posts only what the statement itself determines, in EUR.
+///
+/// The ledger holds EUR cents and an append-only entry cannot be un-booked, so
+/// every fact the figure rests on must have arrived: an absent `Ccy` is not
+/// EUR, an absent or unrecognised `CdtDbtInd` is not a credit, a lower-case
+/// code is not its upper-case ISO spelling, and a sub-cent magnitude is not a
+/// rounded one. Each of these is a booking an operator has to look at.
+#[test]
+fn camt_posting_requires_a_determined_eur_amount() {
+    use accountingd::sepa::UnpostableAmount;
+
+    let crdt = "<CdtDbtInd>CRDT</CdtDbtInd>";
+    assert_eq!(
+        posting_of(r#"<Amt Ccy="EUR">155.42</Amt>"#, crdt),
+        Ok(15_542)
+    );
+    assert_eq!(
+        posting_of(
+            r#"<Amt Ccy="EUR">155.42</Amt>"#,
+            "<CdtDbtInd>DBIT</CdtDbtInd>"
+        ),
+        Ok(-15_542)
+    );
+    assert_eq!(
+        posting_of("<Amt>155.42</Amt>", crdt),
+        Err(UnpostableAmount::Undetermined),
+        "an absent Amt/@Ccy is not EUR"
+    );
+    assert_eq!(
+        posting_of(r#"<Amt Ccy="EUR">155.42</Amt>"#, ""),
+        Err(UnpostableAmount::Undetermined),
+        "an absent CdtDbtInd is not a credit"
+    );
+    assert_eq!(
+        posting_of(
+            r#"<Amt Ccy="EUR">155.42</Amt>"#,
+            "<CdtDbtInd>crdt</CdtDbtInd>"
+        ),
+        Err(UnpostableAmount::Undetermined),
+        "CdtDbtInd is matched by its exact ISO spelling"
+    );
+    assert_eq!(
+        posting_of(r#"<Amt Ccy="eur">155.42</Amt>"#, crdt),
+        Err(UnpostableAmount::Undetermined),
+        "Ccy is matched by its exact ISO 4217 spelling"
+    );
+    assert_eq!(
+        posting_of(r#"<Amt Ccy="EUR">1.005</Amt>"#, crdt),
+        Err(UnpostableAmount::Undetermined),
+        "a significant sub-cent digit is refused, not truncated"
+    );
+    assert_eq!(
+        posting_of(r#"<Amt Ccy="USD">155.42</Amt>"#, crdt),
+        Err(UnpostableAmount::NotEuro("USD".to_owned())),
+        "a foreign-currency booking is not EUR cents"
+    );
+}
+
+/// A batch booking posts per itemised detail; a detail without an amount of
+/// its own in a batch of several posts nothing rather than the entry total.
+#[test]
+fn camt_batch_details_post_their_own_amounts() {
+    use accountingd::sepa::{UnpostableAmount, camt_posting_ct, parse_camt054};
+
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.054.001.08">
+  <BkToCstmrDbtCdtNtfctn>
+    <GrpHdr><MsgId>NTF-BATCH</MsgId><CreDtTm>2026-10-14T20:00:00</CreDtTm></GrpHdr>
+    <Ntfctn>
+      <Id>N-1</Id>
+      <Acct><Id><IBAN>DE89370400440532013000</IBAN></Id></Acct>
+      <Ntry>
+        <Amt Ccy="EUR">125.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts><Cd>BOOK</Cd></Sts>
+        <NtryDtls>
+          <TxDtls><Amt Ccy="EUR">100.00</Amt></TxDtls>
+          <TxDtls><Amt Ccy="EUR">25.00</Amt></TxDtls>
+        </NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="EUR">125.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts><Cd>BOOK</Cd></Sts>
+        <NtryDtls>
+          <TxDtls><Refs><EndToEndId>E2E-1</EndToEndId></Refs></TxDtls>
+          <TxDtls><Refs><EndToEndId>E2E-2</EndToEndId></Refs></TxDtls>
+        </NtryDtls>
+      </Ntry>
+    </Ntfctn>
+  </BkToCstmrDbtCdtNtfctn>
+</Document>"#;
+    let doc = parse_camt054(xml).expect("camt.054 parses");
+    let entries = &doc.notifications[0].entries;
+
+    let itemised = &entries[0];
+    let posted: Vec<_> = itemised
+        .details
+        .iter()
+        .map(|d| camt_posting_ct(itemised, Some(d)))
+        .collect();
+    assert_eq!(posted, vec![Ok(10_000), Ok(2_500)]);
+    assert!(itemised.details_reconcile());
+
+    let unitemised = &entries[1];
+    for detail in &unitemised.details {
+        assert_eq!(
+            camt_posting_ct(unitemised, Some(detail)),
+            Err(UnpostableAmount::Undetermined),
+            "reusing the entry total per detail would post 250.00 for 125.00"
+        );
+    }
+}
+
+/// `Ntry/Sts` is matched by its exact ISO spelling: `book` is not `BOOK`, so
+/// the entry is reported as an unrecognised status and not posted.
+#[test]
+fn camt_booking_status_spelling_is_exact() {
+    use accountingd::sepa::{EntryStatus, parse_camt054};
+
+    let xml = camt054_with_entry(
+        r#"<Amt Ccy="EUR">10.00</Amt>"#,
+        "<CdtDbtInd>CRDT</CdtDbtInd>",
+    )
+    .replace("<Cd>BOOK</Cd>", "<Cd>book</Cd>");
+    let doc = parse_camt054(&xml).expect("camt.054 parses");
+    let status = &doc.notifications[0].entries[0].status;
+    assert_eq!(status, &EntryStatus::Other("book".to_owned()));
+    assert_ne!(status, &EntryStatus::Booked);
+}
+
+/// A bank file is read only under a namespace the reader supports.
+#[test]
+fn camt_without_a_supported_namespace_is_refused() {
+    use accountingd::sepa::parse_camt054;
+
+    let ok = camt054_with_entry(
+        r#"<Amt Ccy="EUR">10.00</Amt>"#,
+        "<CdtDbtInd>CRDT</CdtDbtInd>",
+    );
+    let bare = ok.replace(
+        r#" xmlns="urn:iso:std:iso:20022:tech:xsd:camt.054.001.08""#,
+        "",
+    );
+    assert!(parse_camt054(&bare).is_err(), "no namespace, no camt.054");
+    let foreign = ok.replace("camt.054.001.08", "camt.054.001.99");
+    assert!(
+        parse_camt054(&foreign).is_err(),
+        "an unknown version is refused"
+    );
+}
+
+// ── What a pain.002 status means ──────────────────────────────────────────────
+
+fn pain002_with_tx_status(code: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.002.001.10">
+  <CstmrPmtStsRpt>
+    <GrpHdr><MsgId>STS-1</MsgId><CreDtTm>2026-10-14T10:00:00</CreDtTm></GrpHdr>
+    <OrgnlGrpInfAndSts><OrgnlMsgId>DD-2026-10-20</OrgnlMsgId><OrgnlMsgNmId>pain.008.001.08</OrgnlMsgNmId></OrgnlGrpInfAndSts>
+    <OrgnlPmtInfAndSts>
+      <OrgnlPmtInfId>DD-2026-10-20-RCUR</OrgnlPmtInfId>
+      <TxInfAndSts>
+        <OrgnlEndToEndId>E2E-1</OrgnlEndToEndId>
+        <TxSts>{code}</TxSts>
+      </TxInfAndSts>
+    </OrgnlPmtInfAndSts>
+  </CstmrPmtStsRpt>
+</Document>"#
+    )
+}
+
+/// `RJCT` on a collection is a rejection and nothing else — not an acceptance
+/// and not a settlement, so the import marks the entry `REJECTED` and books no
+/// payment. A status is matched by its exact ISO spelling: `rjct` is a code
+/// outside ISO 20022, neither a rejection nor an acceptance, and the import
+/// applies nothing for it.
+#[test]
+fn pain002_rejection_is_exact_and_is_not_a_payment() {
+    use accountingd::sepa::{PaymentStatus, parse_pain002};
+
+    let doc = parse_pain002(&pain002_with_tx_status("RJCT")).expect("pain.002 parses");
+    let status = doc.payment_info_statuses[0].transactions[0]
+        .status
+        .clone()
+        .expect("TxSts present");
+    assert_eq!(status, PaymentStatus::Rjct);
+    assert!(status.is_rejected());
+    assert!(!status.is_accepted());
+    assert!(doc.has_rejections());
+    assert!(!doc.is_fully_accepted());
+
+    let doc = parse_pain002(&pain002_with_tx_status("rjct")).expect("pain.002 parses");
+    let status = doc.payment_info_statuses[0].transactions[0]
+        .status
+        .clone()
+        .expect("TxSts present");
+    assert_eq!(status, PaymentStatus::Other("rjct".to_owned()));
+    assert!(!status.is_rejected());
+    assert!(!status.is_accepted());
+}
+
+// ── What a camt.029 answer resolves to ────────────────────────────────────────
+
+fn camt029_with_confirmation(conf: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.029.001.06">
+  <RsltnOfInvstgtn>
+    <Assgnmt>
+      <Id>RSL-1</Id>
+      <Assgnr><Agt><FinInstnId><BICFI>COBADEFFXXX</BICFI></FinInstnId></Agt></Assgnr>
+      <Assgne><Pty><Nm>Test Energie GmbH</Nm></Pty></Assgne>
+      <CreDtTm>2026-10-14T10:00:00</CreDtTm>
+    </Assgnmt>
+    <RslvdCase><Id>RC-1</Id><Cretr><Pty><Nm>Test Energie GmbH</Nm></Pty></Cretr></RslvdCase>
+    <Sts><Conf>{conf}</Conf></Sts>
+  </RsltnOfInvstgtn>
+</Document>"#
+    )
+}
+
+/// The message-level confirmation is matched by its exact ISO spelling: `CNCL`
+/// closes the recall, `cncl` leaves it `PENDING` for a person to look at.
+#[test]
+fn camt029_confirmation_spelling_is_exact() {
+    use accountingd::sepa::{parse_camt029, recall_status_of};
+
+    let doc = parse_camt029(&camt029_with_confirmation("CNCL")).expect("camt.029 parses");
+    assert_eq!(recall_status_of(&doc), "ACCEPTED");
+    let doc = parse_camt029(&camt029_with_confirmation("RJCR")).expect("camt.029 parses");
+    assert_eq!(recall_status_of(&doc), "REJECTED");
+    let doc = parse_camt029(&camt029_with_confirmation("cncl")).expect("camt.029 parses");
+    assert_eq!(recall_status_of(&doc), "PENDING");
+}
+
+// ── Flat bank-export amounts ──────────────────────────────────────────────────
+
+/// `amount_eur` is an exact decimal in cents: a significant sub-cent digit is
+/// refused rather than truncated, trailing zeros below the cent are not
+/// significant, and one leading `+` is legal decimal syntax.
+#[test]
+fn bank_row_amount_is_exact_to_the_cent() {
+    use accountingd::sepa::BankStatementEntry;
+
+    let row = |amount: &str| {
+        BankStatementEntry::parse(&serde_json::json!({
+            "iban": "DE89370400440532013000",
+            "amount_eur": amount,
+            "date": "2026-07-10",
+        }))
+    };
+    assert!(row("1.005").is_err(), "1.005 EUR is not a cent amount");
+    assert_eq!(row("1.500").expect("parses").signed_ct, 150);
+    assert_eq!(row("+5.00").expect("parses").signed_ct, 500);
+}
+
+// ── pain.008 text fields ──────────────────────────────────────────────────────
+
+fn mandate_named(name: &str, sparte: &str) -> accountingd::pg::SepaMandateRow {
+    accountingd::pg::SepaMandateRow {
+        mandate_id: uuid::Uuid::new_v4(),
+        account_id: uuid::Uuid::new_v4(),
+        tenant: "test".into(),
+        iban: "DE89370400440532013000".into(),
+        bic: None,
+        kontoinhaber: Some(name.to_owned()),
+        mandatsref: "REF-TEXT-1".to_owned(),
+        sequence_type: "RCUR".into(),
+        scheme: "CORE".to_owned(),
+        signed_at: time::Date::from_calendar_date(2024, time::Month::January, 1).unwrap(),
+        revoked_at: None,
+        last_presented_at: None,
+        sparte: Some(sparte.to_owned()),
+        debtor_town: None,
+        debtor_country: None,
+        debtor_street: None,
+        debtor_building_number: None,
+        debtor_post_code: None,
+        debtor_country_subdivision: None,
+        updated_at: time::OffsetDateTime::now_utc(),
+    }
+}
+
+fn pain008_for(mandate: &accountingd::pg::SepaMandateRow) -> anyhow::Result<String> {
+    accountingd::sepa::build_pain_008(
+        &TEST_CREDITOR,
+        time::Date::from_calendar_date(2026, time::Month::October, 20).unwrap(),
+        &[(mandate, 1_000i64)],
+        Default::default(),
+    )
+    .map(|run| run.xml)
+}
+
+/// `Nm` is `Max70Text` measured on the value as emitted, padding included: a
+/// 70-character name with a trailing space is 71 characters and is refused.
+#[test]
+fn pain008_name_length_counts_padding() {
+    let seventy = "A".repeat(70);
+    assert!(pain008_for(&mandate_named(&seventy, "STROM")).is_ok());
+    assert!(
+        pain008_for(&mandate_named(&format!("{seventy} "), "STROM")).is_err(),
+        "the trailing space is part of the emitted value"
+    );
+}
+
+/// A carriage return in a name never reaches the wire: the SEPA character set
+/// has no control characters, so it is transliterated before escaping.
+#[test]
+fn pain008_name_carries_no_carriage_return() {
+    let xml = pain008_for(&mandate_named("Test\rKunde", "STROM")).expect("builds");
+    assert!(!xml.contains('\r'));
+    assert!(!xml.contains("&#13;"));
+}
+
+/// The generic energy purpose `ENRG` is emitted in its canonical spelling.
+#[test]
+fn pain008_emits_the_generic_energy_purpose() {
+    let xml = pain008_for(&mandate_named("Test Kunde", "FERNWAERME")).expect("builds");
+    assert!(xml.contains("<Purp><Cd>ENRG</Cd></Purp>"), "{xml}");
+}
+
+/// A `NbOfTxsPerSts` bucket is reported even when the bank wrote its count
+/// unreadably: the typed value is `null`, the bank's text survives in the
+/// `*_raw` field, and an absent count is never a zero. A status outside
+/// ISO 20022 — including a lower-case spelling of an ISO code — is reported
+/// verbatim and is not a verification.
+#[test]
+fn pain002_status_counts_keep_what_the_bank_wrote() {
+    use accountingd::handlers::pain002_status_counts_json;
+    use accountingd::sepa::parse_pain002;
+
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.002.001.10">
+  <CstmrPmtStsRpt>
+    <GrpHdr><MsgId>STS-2</MsgId><CreDtTm>2026-10-14T10:00:00</CreDtTm></GrpHdr>
+    <OrgnlGrpInfAndSts>
+      <OrgnlMsgId>CT-2026-10-14</OrgnlMsgId><OrgnlMsgNmId>pain.001.001.09</OrgnlMsgNmId>
+      <NbOfTxsPerSts><DtldNbOfTxs>3</DtldNbOfTxs><DtldSts>RCVC</DtldSts><DtldCtrlSum>30.00</DtldCtrlSum></NbOfTxsPerSts>
+      <NbOfTxsPerSts><DtldNbOfTxs>x</DtldNbOfTxs><DtldSts>rvnm</DtldSts></NbOfTxsPerSts>
+    </OrgnlGrpInfAndSts>
+  </CstmrPmtStsRpt>
+</Document>"#;
+    let doc = parse_pain002(xml).expect("pain.002 parses");
+    let rows = pain002_status_counts_json(&doc);
+    assert_eq!(rows.len(), 2);
+
+    assert_eq!(rows[0]["status"], "RCVC");
+    assert_eq!(rows[0]["count"], 3);
+    assert_eq!(rows[0]["total_ct"], 3_000);
+    assert_eq!(rows[0]["is_verification"], true);
+
+    // `rvnm` is a code outside ISO 20022, reported verbatim — not `RVNM`.
+    assert_eq!(rows[1]["status"], "rvnm");
+    assert_eq!(rows[1]["status_raw"], "rvnm");
+    assert!(
+        rows[1]["count"].is_null(),
+        "an unreadable count is not zero"
+    );
+    assert_eq!(rows[1]["count_raw"], "x");
+    assert_eq!(rows[1]["is_verification"], false);
 }

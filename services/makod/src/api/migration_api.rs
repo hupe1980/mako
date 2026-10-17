@@ -51,12 +51,11 @@ use axum::{
     Router,
     extract::State,
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
     routing::post,
 };
 use mako_engine::migration::MigrationReport;
 use mako_engine::store_slatedb::SlateDbStore;
-use mako_service::Json;
+use mako_service::{ApiError, ApiResult, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::cedar_authz::CedarAuthorizer;
@@ -116,15 +115,6 @@ pub struct MigrateResponse {
     pub workflows: Vec<String>,
 }
 
-#[derive(Serialize)]
-struct ErrorResponse {
-    error: String,
-}
-
-// ── Auth helper ───────────────────────────────────────────────────────────────
-
-// (Auth is handled via CedarAuthorizer in the handler directly.)
-
 // ── Migration dispatch ────────────────────────────────────────────────────────
 
 /// Run every registered workflow's migration for the given `(from, to)` FV
@@ -172,16 +162,11 @@ async fn handle_migrate(
     State(state): State<Arc<MigrationApiState>>,
     headers: HeaderMap,
     Json(req): Json<MigrateRequest>,
-) -> Response {
-    let Some(identity) = state.cedar.authenticate(&headers) else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse {
-                error: "unauthorized".to_owned(),
-            }),
-        )
-            .into_response();
-    };
+) -> ApiResult<(StatusCode, Json<MigrateResponse>)> {
+    let identity = state
+        .cedar
+        .authenticate(&headers)
+        .ok_or(ApiError::Unauthorized)?;
     // A migration mutates every in-flight process — authentication alone is
     // not authorization. Cedar action: AdminMigrations.
     if !state.cedar.authorize_migrations(
@@ -190,13 +175,7 @@ async fn handle_migrate(
             tenant: &state.tenant,
         },
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: "AdminMigrations permission denied".to_owned(),
-            }),
-        )
-            .into_response();
+        return Err(ApiError::forbidden("AdminMigrations permission denied"));
     }
 
     tracing::info!(
@@ -206,16 +185,10 @@ async fn handle_migrate(
     );
 
     match dispatch_migrations(&req.from, &req.to, &state.store).await {
-        None => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ErrorResponse {
-                error: format!(
-                    "no migration registered for FV pair ({} → {}); known pairs: {:?}",
-                    req.from, req.to, KNOWN_FV_TRANSITIONS,
-                ),
-            }),
-        )
-            .into_response(),
+        None => Err(ApiError::unprocessable(format!(
+            "no migration registered for FV pair ({} → {}); known pairs: {:?}",
+            req.from, req.to, KNOWN_FV_TRANSITIONS,
+        ))),
 
         Some((report, runners)) => {
             let has_errors = !report.errors.is_empty();
@@ -245,7 +218,7 @@ async fn handle_migrate(
                 );
             }
             let errors: Vec<String> = report.errors.iter().map(|e| e.to_string()).collect();
-            (
+            Ok((
                 status,
                 Json(MigrateResponse {
                     from: req.from,
@@ -256,8 +229,7 @@ async fn handle_migrate(
                     runners_executed: runners.len(),
                     workflows: runners.iter().map(|w| (*w).to_owned()).collect(),
                 }),
-            )
-                .into_response()
+            ))
         }
     }
 }

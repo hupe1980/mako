@@ -45,13 +45,16 @@ Each port is enabled on its own. Every enabled port serves `/health/live`,
 holds every document that states the totals to it. The PID-level map is the
 [PID reference](https://hupe1980.github.io/mako/docs/regulatory/pid-reference/).
 
-## Role features
+## Deployment roles
 
-The build's role features decide which modules compile in, so a binary cannot
-answer as a role it was not built for. Default:
-`role-lf`, `role-nb`, `role-msb`, `role-esa-strom`. Granular flags are
-`role-{lf,nb,msb}-{strom,gas}` and `role-esa-strom`. SlateDB is enabled through
-the `mako-engine` dependency; no `--features` flag is needed.
+`[deployment] rollen` in `makod.toml` decides which modules register:
+`lf-strom`, `lf-gas`, `nb-strom`, `nb-gas`, `msb-strom`, `msb-gas`,
+`esa-strom`. Startup refuses a configuration that declares none, a declared
+role without exactly one `[[party]]` MP-ID, and an MP-ID for a role the
+deployment does not declare. `startup::MODULE_TABLE` maps each role to its
+modules. makod has no role cargo features, and SlateDB is enabled through the
+`mako-engine` dependency, so a plain `cargo build -p makod` is the binary every
+deployment runs.
 
 ## Security and integration
 
@@ -63,12 +66,16 @@ the `mako-engine` dependency; no `--features` flag is needed.
   is the Cedar principal.
 - **ERP:** commands in at `POST /api/v1/commands`; CloudEvents out to
   `--erp-webhook-url`.
+- **marktd:** with `[marktd] url`, the MaLo-Ident cache follows marktd's durable
+  fan-out (`de.markt.malo.updated` at `POST /webhooks/marktd`, signed with
+  `[marktd] webhook_secret`) and a startup backfill that `/health/ready` waits
+  for.
 - **MCP:** 12 tools and 6 prompts at `/mcp`, behind the same Cedar layer.
 
 ## Configuration
 
-`makod.toml` (`--config`, `MAKOD_CONFIG`) requires at least one `[[party]]`
-(`mp_id`, `roles`, `primary`). Other blocks: `[storage]` (+ `.s3`/`.gcs`/
+`makod.toml` (`--config`, `MAKOD_CONFIG`) requires `[deployment] rollen` and at
+least one `[[party]]` (`mp_id`, `roles`, `primary`). Other blocks: `[storage]` (+ `.s3`/`.gcs`/
 `.azure`), `[http]`, `[authz]`, `[oidc]`, `[engine]`, `[as4]`, `[erp]`,
 `[webdienste]`, `[marktd]`, `[maloid]`, `[logging]`. Precedence is CLI flag →
 `MAKOD_*` environment variable → file → default; `makod --help` lists every

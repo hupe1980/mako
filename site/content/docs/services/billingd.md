@@ -187,8 +187,12 @@ CO₂/kWh_Hs**; EBeV 2022 (`0,056`) → 0.18204480 for 2021–2022. § 3 Abs. 2
 CO2KostAufG requires the BEHG Standardwerte, so only the price is the
 operator's.
 
-**2027 has no statutory price.** `[rates] behg_regime` names the regime that
-binds:
+#### `[policy] behg_regime` {#policy-behg-regime}
+
+**2027 has no statutory price.** `[policy] behg_regime` names the regime that
+binds. It carries the review date 01.01.2027: from then the startup log warns
+until the 3. BEHG-ÄndG (BT-Drs. 21/7869) is enacted or lapses and one regime
+is fixed; the value never changes by itself.
 
 | `behg_regime` | Legal basis | A supplied 2027 price must |
 |---|---|---|
@@ -530,9 +534,10 @@ missing; nothing rebuilds it from BO4E.
 Leitweg-ID (BT-10) and a Peppol endpoint (BT-49) a household lacks, and § 14
 UStG requires EN 16931 conformance.
 
-`POST …/submit-b2g` supplies the buyer and the `reference` Leitweg-ID, renders
-with `cii::to_string_for(&model, &XRECHNUNG)` — which validates against the full
-XRechnung 3.0 profile first — and on success emits
+`POST …/submit-b2g` supplies the buyer and the `reference` Leitweg-ID, proves
+the model against the full XRechnung 3.0 profile (`Validated<XRechnung>`),
+writes CII from that proof with `en16931_formats::write` — so BT-24 names the
+profile whose rules ran — and on success emits
 `de.billing.xrechnung.b2g.ready` for the ERP's PEPPOL gateway; a violation is
 `422` with `violated_rules` and `buyer_gaps`.
 
@@ -555,8 +560,14 @@ kunden.stromwiederverkaeufer`); a request flag cannot switch it off.
 `Vorauszahlung`; in CII, BT-113 `TotalPrepaidAmount` is their gross sum and
 BT-115 `DuePayableAmount` = BT-112 − BT-113 (BR-CO-16).
 `Invoice::abschlag_ust_eur` is the tax § 14 Abs. 5 Satz 2 UStG requires an
-Endrechnung to state. `[billing] settlement_form` chooses `ENDRECHNUNG`
-(default) or `RESTRECHNUNG`; a request may override it.
+Endrechnung to state.
+
+#### `[policy] settlement_form` {#policy-settlement-form}
+
+`[policy] settlement_form` chooses `endrechnung` (default: the German paper
+norm, § 14 Abs. 5 Satz 2 UStG) or `restrechnung` (BMF-Schreiben v. 15.10.2024,
+Rn. 48 — only the remainder, no advances listed); a request may override it per
+invoice. Both are lawful and the customer pays the same amount.
 
 **Buyer (BG-7).** One recipient on the `BillingContext` feeds both the BO4E
 document and the EN 16931 model. A partly known address is dropped to the name
@@ -573,8 +584,8 @@ supply site.
 address/contact (BR-DE-2..7) are stamped from config; BT-9 is issue + 14 days (§
 40c Abs. 1 EnWG); BG-14 carries the Leistungszeitraum (§ 14 Abs. 4 Nr. 6 UStG).
 
-BT-34 is the operator's MP-ID under EAS `0088` only when
-`Identifier::eas_checked` accepts it as a GLN; otherwise it is omitted and
+BT-34 is the operator's MP-ID under EAS `0088` only when `Identifier::eas`
+accepts it as a GLN (length and GS1 check digit); otherwise it is omitted and
 logged (the B2G path then refuses). billingd runs `einvoice::validate` on every
 model against its declared profile and logs findings.
 
@@ -844,12 +855,13 @@ The VPP webhook is signature-authenticated and carries no Cedar action.
 
 ## MCP server
 
-`/mcp` (Streamable HTTP 2025-11-25): **eleven tools** and six prompts, every
+`/mcp` (Streamable HTTP 2025-11-25): **twelve tools** and six prompts, every
 tool **read-only**, run in process. There is no `calculate_billing`: issuing a
 Rechnung is a legally binding act for an OIDC identity, not a model.
 
 | Tool | Description |
 |---|---|
+| `get_policy` | The operator policy and posture the deployment runs under |
 | `list_billing_records` | Records of a MaLo (summary) |
 | `get_billing_record` | Full `Rechnung` of one record |
 | `preview_billing` | The `/preview` pipeline |
@@ -887,7 +899,6 @@ outputd's append-only template store keeps it resolvable.
 ## Configuration
 
 ```toml
-port          = 9280
 tenant        = "9910000000002"
 
 productd_url  = "http://productd:9080"    # required
@@ -908,6 +919,9 @@ erp_webhook_url        = "http://erp:8000/webhooks/billing"
 vpp_auto_billing       = false
 inbound_webhook_secret = "env:BILLINGD_INBOUND_HMAC_SECRET"
 
+[http]
+addr = "0.0.0.0:9280"
+
 # ── Tables follow; TOML binds a bare key to the most recent header ──────
 [seller]   # BG-5 / BG-6, one EN 16931 term per key (BR-DE-2..7)
 street    = "Musterweg 1"
@@ -917,12 +931,16 @@ country   = "DE"
 phone     = "+49 30 123456"
 email     = "rechnung@example.de"
 
+[policy]
+behg_regime     = "rvo_bezugspreis"   # or "korridor"
+settlement_form = "endrechnung"       # or "restrechnung"
+
 [rates]
 mwst_rate    = "0.19"
-behg_regime  = "rvo_bezugspreis"   # or "korridor"
 # A dated, sourced row fills a period no statutory series covers. A row for a
 # covered year, an overlapping row or a row without `quelle` is refused at
-# startup; a BEHG row is checked against behg_regime.
+# startup — by `--print-config` as well; a BEHG row is checked against
+# [policy] behg_regime.
 # [[rates.behg_eur_per_t]]
 # von    = "2027-01-01"
 # bis    = "2027-03-31"
@@ -940,12 +958,19 @@ url = "postgresql://billingd:secret@db:5432/billingd"
 
 Further keys: `*_api_key` for each upstream, `erp_hmac_secret`,
 `min_meter_coverage_pct`, `vergleichsgruppe_kwh_pro_jahr` /
-`vergleichsgruppe_label`, `[billing] settlement_form`, `[e_rechnung]`, `[risk]`
+`vergleichsgruppe_label`, `[e_rechnung]`, `[risk]`
 (`enabled`, `hold_dispatch`, `sample_at`, `review_at`, `hold_at`), `[mcp]`,
 `[oidc]`, `allow_insecure_no_auth`.
 
-`[rates]`, `[seller]`, `[e_rechnung]`, `[billing_runs]` and `[risk]` deny
-unknown fields — a year-less
+The removed keys `[rates] behg_regime` and `[billing]` are refused at startup,
+naming `[policy] behg_regime` and `[policy] settlement_form`. Every setting
+under `[policy]` is listed in
+[Operator policy](@/docs/reference/operator-policy.md), logged at startup with
+its origin and source, exported as `mako_policy_info` and served at
+`GET /api/v1/policy` (Cedar `read-policy`).
+
+`[rates]`, `[seller]`, `[e_rechnung]`, `[billing_runs]`, `[risk]` and
+`[policy]` deny unknown fields — a year-less
 `stromsteuer_ct_per_kwh = "2.05"` is refused at startup. The top level does not:
 a `mwst_rate` written above the first table header binds to nothing. The removed
 free-text `seller_address` / `seller_contact` keys are refused at startup, naming

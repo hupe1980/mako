@@ -11,4 +11,5 @@ mod oversight;
 mod plane_golden_run;
 mod procedure_contract;
 mod regulatory;
+mod router_builds;
 mod specialist_smoke;

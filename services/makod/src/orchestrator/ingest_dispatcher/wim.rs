@@ -654,7 +654,7 @@ impl EdifactIngestDispatcher {
                         .dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_orders(msg);
                     // One Werktag, from the same table `processd` sizes its
-                    // operator queue by and `obsd` raises the breach against.
+                    // operator queue by and raises the breach against.
                     let process_due_at = mako_fristen::antwort::antwort_deadline(pid, received_at)
                         .unwrap_or_else(|| {
                             fristen::deadline_at_werktage(received_at, 1, HolidayCalendar::BdewMaKo)
@@ -696,7 +696,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::wim_ersteinbau_registry().dispatch(raw, &fv)?;
                     let melo_id = extract_malo_from_msg(msg);
                     // Three Werktage, from the same table `processd` sizes its
-                    // operator queue by and `obsd` raises the breach against.
+                    // operator queue by and raises the breach against.
                     let process_due_at = mako_fristen::antwort::antwort_deadline(pid, received_at)
                         .unwrap_or_else(|| {
                             fristen::deadline_at_werktage(

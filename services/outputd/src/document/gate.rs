@@ -357,7 +357,7 @@ fn prove_invoice(source: &str, pdf_standard: Option<&str>) -> Result<Proven> {
     // Real CII, produced by the same function production uses — not a stub.
     // A gate that embeds a placeholder proves the carrier moves *bytes*; it
     // cannot prove the bytes an invoice actually consists of survive it.
-    let xml = en16931_formats::cii::to_string(&model);
+    let xml = facturx::cii_payload(&model)?;
 
     let request = RenderRequest {
         template: source.to_owned(),
@@ -413,7 +413,7 @@ fn check_carrier(
 
     // 1. The bytes. Byte-identical, not merely equivalent: a receiver archives
     //    what it was sent, and a re-serialised payload is a different document.
-    if got.xml != sent {
+    if got.xml != sent.as_bytes() {
         bail!(
             "the embedded invoice came back out changed ({} bytes in, {} out); the visual \
              and machine representations of this document would disagree",
@@ -435,19 +435,30 @@ fn check_carrier(
     }
 
     // 3. The payload must read back *as CII*, not merely as bytes. Byte equality
-    //    would hold just as well for a payload no parser accepts.
-    let Some(read) = got.invoice else {
+    //    would hold just as well for a payload no parser accepts. Every entry
+    //    the reader reports — an element outside the EN 16931 subset, a value
+    //    it could not represent, a duplicated element — is content the
+    //    receiver's model does not hold, so any one of them fails the gate.
+    let read =
+        en16931_formats::read(&got.xml).context("the embedded invoice does not parse as CII")?;
+    if read.syntax != en16931_formats::Syntax::Cii {
         bail!(
-            "the embedded invoice does not parse as CII: {}",
-            got.syntax_findings.join("; "),
-        );
-    };
-    if !got.syntax_findings.is_empty() {
-        bail!(
-            "the embedded invoice carries content outside the EN 16931 subset: {}",
-            got.syntax_findings.join("; "),
+            "the embedded invoice is {}, and ZUGFeRD carries CII",
+            read.syntax
         );
     }
+    if !read.entries.is_empty() {
+        let found: Vec<String> = read
+            .entries
+            .iter()
+            .map(|e| format!("{} {}: {}", e.kind, e.path, e.message))
+            .collect();
+        bail!(
+            "the embedded invoice carries content outside the EN 16931 subset: {}",
+            found.join("; "),
+        );
+    }
+    let read = read.invoice;
 
     // 4. And it must be *this* invoice. The terms checked are the ones a
     //    receiver posts to a ledger; if any of them changed in transit through
@@ -555,7 +566,7 @@ pub const SPECIMEN_DATE: time::Date = time::macros::date!(2026 - 03 - 01);
 /// view the template renders comes from [`DocumentView::of`], the production
 /// projection, so the gate exercises it instead of a stand-in that could drift
 /// from it; and the payload embedded in the carrier is real CII from
-/// `en16931_formats::cii::to_string`, so "the invoice survives the carrier" is a
+/// `facturx::cii_payload`, so "the invoice survives the carrier" is a
 /// statement about an invoice rather than about a placeholder.
 ///
 /// It is chosen to be the awkward cases rather than the easy one, because a
@@ -657,10 +668,10 @@ pub fn specimen_invoice() -> en16931::Invoice {
         email: Some("service@stadtwerke-musterstadt.example".to_owned()),
     };
     // BT-34, through the same checked constructor production uses. The value is
-    // a real GLN — check digit included — because `eas_checked` refuses one that
+    // a real GLN — check digit included — because `eas` refuses one that
     // is not, which is the whole point of using it here rather than `eas`.
     seller.electronic_address =
-        Some(en16931::Identifier::eas_checked("9900000000004", "0088").expect("a valid GLN"));
+        Some(en16931::Identifier::eas("9900000000004", "0088").expect("a valid GLN"));
 
     let mut inv = Invoice::builder(
         EN16931_SPEC_ID,

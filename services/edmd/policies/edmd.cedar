@@ -16,6 +16,7 @@
 //   "write-gdpr-erasure"  — DELETE /api/v1/gdpr/erasure/:malo_id (GDPR Art. 17)
 //   "read-gdpr-erasures"  — GET /api/v1/gdpr/erasures (the erasure audit trail)
 //   "use-mcp"             — /mcp (Streamable HTTP MCP server)
+//   "read-policy"         — GET /api/v1/policy (the operator policy report)
 
 // Same-tenant read: any authenticated caller may read their own meter data.
 permit(
@@ -27,7 +28,8 @@ permit(
         Action::"read-corrections",
         Action::"read-archive-olap",
         Action::"read-archive-status",
-        Action::"use-mcp"
+        Action::"use-mcp",
+        Action::"read-policy"
     ],
     resource
 ) when {

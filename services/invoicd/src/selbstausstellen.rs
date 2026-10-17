@@ -35,9 +35,9 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;
+use mako_service::{ApiError, ApiResult, Json};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use time::Date;
@@ -90,48 +90,23 @@ pub async fn post_selbstausstellen(
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Json(req): Json<SelbstausstellenRequest>,
-) -> Response {
-    if let Err(e) = cedar.check(
-        &claims.principal(),
-        "dispatch-selbstausstellen",
-        &state.tenant,
-    ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
+) -> ApiResult<Response> {
+    cedar
+        .check(
+            &claims.principal(),
+            "dispatch-selbstausstellen",
+            &state.tenant,
         )
-            .into_response();
-    }
-
-    match build_and_dispatch(&state, &req).await {
-        Ok(resp) => resp,
-        Err(e) => e.into_response(),
-    }
-}
-
-/// A refusal with the status the caller should see.
-struct Refusal(StatusCode, String);
-
-impl Refusal {
-    fn into_response(self) -> Response {
-        (self.0, Json(serde_json::json!({ "error": self.1 }))).into_response()
-    }
-}
-
-fn unprocessable(msg: impl Into<String>) -> Refusal {
-    Refusal(StatusCode::UNPROCESSABLE_ENTITY, msg.into())
-}
-
-fn bad_gateway(msg: impl Into<String>) -> Refusal {
-    Refusal(StatusCode::BAD_GATEWAY, msg.into())
+        .map_err(|e| ApiError::forbidden(e.to_string()))?;
+    build_and_dispatch(&state, &req).await
 }
 
 async fn build_and_dispatch(
     state: &HandlerState,
     req: &SelbstausstellenRequest,
-) -> Result<Response, Refusal> {
+) -> ApiResult<Response> {
     let (period_from, period_to) = month_bounds(req.year, req.month)
-        .ok_or_else(|| Refusal(StatusCode::BAD_REQUEST, "month must be 1–12".to_owned()))?;
+        .ok_or_else(|| ApiError::bad_request("month must be 1–12"))?;
 
     // ── The measured quantity ────────────────────────────────────────────────
     let gemessen_kwh = fetch_gemessen(state, req).await?;
@@ -145,9 +120,9 @@ async fn build_and_dispatch(
         .marktd
         .get_mmm_strom(req.year, req.month)
         .await
-        .map_err(|e| bad_gateway(format!("marktd MMM price lookup failed: {e}")))?
+        .map_err(|e| ApiError::upstream("marktd", e))?
         .ok_or_else(|| {
-            unprocessable(format!(
+            ApiError::unprocessable(format!(
                 "no Strom Mehr-/Mindermengenpreise imported for {}-{:02} — import them via \
                  PUT /api/v1/mmm-preise/strom/{}/{} on marktd before settling the month",
                 req.year, req.month, req.year, req.month
@@ -156,7 +131,7 @@ async fn build_and_dispatch(
 
     // ── The settlement ───────────────────────────────────────────────────────
     let period = grid_billing::SettlementPeriod::new(period_from, period_to)
-        .map_err(|e| unprocessable(format!("invalid settlement period: {e}")))?;
+        .map_err(|e| ApiError::unprocessable(format!("invalid settlement period: {e}")))?;
     let input = grid_billing::MmmInput {
         malo_id: req.malo_id.clone(),
         // The NB is the counterparty even though it does not write the
@@ -187,13 +162,13 @@ async fn build_and_dispatch(
             .map(|w| format!("[{}] {}", w.code, w.message))
             .collect::<Vec<_>>()
             .join("; ");
-        return Err(unprocessable(format!(
+        return Err(ApiError::unprocessable(format!(
             "MMM settlement for MaLo {} is not billable: {findings}",
             req.malo_id
         )));
     }
     let settlement = grid_billing::settle_mmm(&input)
-        .map_err(|e| unprocessable(format!("settlement failed: {e}")))?;
+        .map_err(|e| ApiError::unprocessable(format!("settlement failed: {e}")))?;
 
     let invoice_date = mako_fristen::heute();
     let rechnungsnummer = rechnungsnummer(&state.tenant, &req.malo_id, req.year, req.month);
@@ -222,10 +197,10 @@ async fn build_and_dispatch(
     // rules (`invoic-checker` stage 3) and answers a document that does not
     // reconcile with a REMADV rejection. mako refuses a received document that
     // breaks a BO4E-stated rule; it must not issue one.
-    mako_markt::bo4e::ensure_conformant(&rechnung)
-        .map_err(|e| unprocessable(format!("the self-issued Rechnung is not valid BO4E: {e}")))?;
-    let rechnung_json = serde_json::to_value(&rechnung)
-        .map_err(|e| unprocessable(format!("Rechnung does not serialise: {e}")))?;
+    mako_markt::bo4e::ensure_conformant(&rechnung).map_err(|e| {
+        ApiError::unprocessable(format!("the self-issued Rechnung is not valid BO4E: {e}"))
+    })?;
+    let rechnung_json = serde_json::to_value(&rechnung).map_err(ApiError::internal)?;
 
     // ── Dispatch, then record under makod's process id ───────────────────────
     //
@@ -252,7 +227,7 @@ async fn build_and_dispatch(
         .makod
         .post_command(&idempotency_key, &cmd)
         .await
-        .map_err(|e| bad_gateway(format!("makod dispatch failed: {e}")))?;
+        .map_err(|e| ApiError::upstream("makod", e))?;
 
     let now = time::OffsetDateTime::now_utc();
     let row = pg::ReceiptRow {
@@ -289,14 +264,7 @@ async fn build_and_dispatch(
             "invoicd: selbstausstellen dispatched but the receipt was not persisted — \
              § 147 AO gap requiring manual reconciliation"
         );
-        return Err(Refusal(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!(
-                "invoice {rechnungsnummer} was dispatched as process {} but its receipt \
-                 could not be persisted: {e}",
-                accepted.process_id
-            ),
-        ));
+        return Err(ApiError::internal(e));
     }
 
     crate::handler::emit_receipt_event(
@@ -334,14 +302,13 @@ async fn build_and_dispatch(
 }
 
 /// Read the measured quantity for the month from `edmd`.
-async fn fetch_gemessen(
-    state: &HandlerState,
-    req: &SelbstausstellenRequest,
-) -> Result<Decimal, Refusal> {
+async fn fetch_gemessen(state: &HandlerState, req: &SelbstausstellenRequest) -> ApiResult<Decimal> {
     let edmd = state.edmd.as_ref().ok_or_else(|| {
-        Refusal(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "edmd not configured — add [edmd] url to invoicd.toml to settle Mehrmengen".to_owned(),
+        ApiError::upstream_unreachable(
+            "edmd",
+            anyhow::anyhow!(
+                "edmd not configured — add [edmd] url to invoicd.toml to settle Mehrmengen"
+            ),
         )
     })?;
 
@@ -361,10 +328,10 @@ async fn fetch_gemessen(
     ]);
     edmd.json::<Imbalance>(request)
         .await
-        .map_err(|e| bad_gateway(e.to_string()))?
+        .map_err(|e| ApiError::upstream("edmd", e))?
         .map(|i| i.gemessen_kwh)
         .ok_or_else(|| {
-            unprocessable(format!(
+            ApiError::unprocessable(format!(
                 "edmd has no metering data for MaLo {} in {}-{:02}",
                 req.malo_id, req.year, req.month
             ))

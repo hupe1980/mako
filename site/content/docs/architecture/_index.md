@@ -8,8 +8,8 @@ page_template = "page.html"
 +++
 The design of `mako-engine` and the service mesh around it: the event-sourced
 process runtime, the inbound and outbound transports, ERP integration over
-BO4E + CloudEvents 1.0, the SlateDB persistence layer, and the **seventeen**
-daemons built on the `mako-service` SDK.
+BO4E + CloudEvents 1.0, the SlateDB persistence layer, and the daemons built
+on the `mako-service` SDK.
 
 ---
 
@@ -50,7 +50,7 @@ marktd's durable fan-out, not a service.
 A daemon that authorises evaluates Cedar against a resource it fully
 understands — `MaKo::Command` carries `marktrolle` and `pid`. What belongs at the
 edge (TLS termination, IP allowlisting, rate limits beyond the per-peer GCRA each
-port applies) is the deployment's ingress. Fourteen daemons evaluate their own
+port applies) is the deployment's ingress. The other daemons evaluate their own
 policy through `mako_service::cedar::CedarEnforcer`; three do not:
 
 | Daemon | Gate |
@@ -87,13 +87,10 @@ graph LR
     end
 
     subgraph consumers ["Consuming services"]
-        PROC["processd<br/>process decisions · STP"]
-        SETTLE["Billing &amp; settlement<br/>invoicd · netzbilanzd<br/>einsd · accountingd"]
+        PROC["processd<br/>process decisions · STP<br/>KPIs · deadlines · §7a parity<br/>Sperrauftrag queue · IFTSTA 21039"]
+        SETTLE["Billing &amp; settlement<br/>invoicd · netzbilanzd (+ MaBiS → BIKO)<br/>einsd · accountingd"]
         RETAIL["Retail — LF<br/>vertragd · productd · billingd"]
         EDMD["edmd<br/>metering data · hot + cold"]
-        OBSD["obsd<br/>KPIs · deadlines · §7a parity"]
-        SPERRD["sperrd<br/>Sperr-/Entsperrauftrag queue · IFTSTA 21039"]
-        MABIS["mabis-syncd<br/>Summenzeitreihen → BIKO"]
     end
 
     OUTPUTD["outputd<br/>templates · ZUGFeRD PDF/A-3<br/>Textform proofs"]
@@ -102,11 +99,10 @@ graph LR
 
     EXT <-->|"AS4 · REST · iMS"| MAKOD
     MAKOD -->|"CloudEvents 1.0"| MARKTD
-    MARKTD --> PROC & SETTLE & EDMD & OBSD & RETAIL & SPERRD
+    MARKTD --> PROC & SETTLE & EDMD & RETAIL
     MARKTD -->|"CloudEvents · HMAC"| ERP
-    EDMD --> MABIS
-    MABIS -->|"POST /commands"| MAKOD
-    PROC & SETTLE & RETAIL & SPERRD -->|"POST /commands"| MAKOD
+    EDMD -->|"Lastgang → Summenzeitreihen"| SETTLE
+    PROC & SETTLE & RETAIL -->|"POST /commands"| MAKOD
     RETAIL -->|"billingd: render · pin template hash"| OUTPUTD
     RETAIL & SETTLE & EDMD --> PORTALD
     AGENTD -.->|"MCP tools"| MAKOD
@@ -152,9 +148,8 @@ The pure, zero-I/O crates domain logic lives in:
 | `mako-invoic` | The INVOIC settle/dispute process, shared by GPKE, WiM, GaBi Gas and GeLi Gas | `InvoicFamily`, `InvoicWorkflow<F>` |
 | `invoic-checker` | INVOIC plausibility, eight stages | `InvoicCheckEngine::check`, `CheckOutcome` |
 | `mako-pruefung` | The published Antwortcode decision trees, executable | `nb`/`lf`/`msb`/`mabis` behind `role-*` features; `codes::lookup`; `Cluster` picks the answer PID; unknown facts escalate |
-| `mako-obs` | Process observability types | `ProcessProjection`, `KpiReport`, `DeadlineRisk` |
 | `mako-events` | Catalogue of every CloudEvents `type` — zero dependencies | one `pub const` per type in 16 modules; `all()`; `matches()` |
-| `mako-service` | Service SDK for all 17 daemons | see [below](#mako-service-service-sdk) |
+| `mako-service` | Service SDK for every daemon | see [below](#mako-service-service-sdk) |
 
 ### `mako-events` — one catalogue, no transport
 
@@ -176,7 +171,7 @@ HTTP client or serialisation — `mako_service::CloudEvent` is the envelope,
 ```mermaid
 graph TD
     subgraph pure ["Pure calculation crates (zero I/O)"]
-        billing["billing 0.15 (crates.io)<br/>PricingModel · RateSchedule · TimeOfUsePricing<br/>EN 16931 line items — BG-23 VAT breakdown · BG-27/28 line<br/>allowances · BG-29 price detail · BT-130 unit code<br/>AmountScale · AdvancePayment · integer-cent money"]
+        billing["billing 0.16 (crates.io)<br/>Document · Line · Tariff/Tiers · rate_series<br/>VAT per line — BG-23 groups derived once<br/>split · Advance/Payment · residual_vat<br/>AmountScale · integer-cent money"]
         metering["metering 0.25 (crates.io)<br/>Series · vee validate / substitute<br/>Formula · community allocate · G 685"]
         eeg["eeg-billing<br/>10 EEG/KWKG schemes · §51/§52/§36h<br/>§14 UStG Gutschrift → BO4E Rechnung (bo4e)"]
         grid["grid-billing<br/>NNE · KA · MMM · MSB · §13a<br/>CalculationTrace · into_rechnung (bo4e)"]
@@ -186,7 +181,7 @@ graph TD
     subgraph daemons ["Production daemons"]
         netzbilanzd["netzbilanzd :8680<br/>NB billing"]
         einsd["einsd :9180<br/>EEG settlement"]
-        billingd["billingd :9280<br/>LF retail billing<br/>VPP auto-billing webhook<br/>EN 16931 — XRechnung 3.0 CII / PEPPOL UBL<br/>11 MCP tools"]
+        billingd["billingd :9280<br/>LF retail billing<br/>VPP auto-billing webhook<br/>EN 16931 — XRechnung 3.0 CII / PEPPOL UBL<br/>12 MCP tools"]
         outputd["outputd :9880<br/>customer documents<br/>Typst templates · ZUGFeRD carrier"]
         invoicd["invoicd :8280<br/>INVOIC plausibility"]
     end
@@ -237,15 +232,15 @@ Pass 5  Cancellation sign reversal   (Stornorechnung)
 
 | Crate | Version | Purpose |
 |---|---|---|
-| [`billing`](https://crates.io/crates/billing) | `0.15` | Generic billing engine — fixed-point `Amount`, pricing models, document assembly, sum-exact allocation |
-| [`en16931`](https://crates.io/crates/en16931) | `0.7` | EN 16931 semantic invoice model and business-rule validation |
-| [`en16931-formats`](https://crates.io/crates/en16931-formats) | `0.7` | EN 16931 renderers — XRechnung/CII, PEPPOL UBL and the ZUGFeRD carrier |
-| [`sepa`](https://crates.io/crates/sepa) | `0.7` | IBAN/BIC validation, pain.001/008/007 generation, camt.05x and pain.002 parsing |
+| [`billing`](https://crates.io/crates/billing) | `0.16` | Generic billing engine — fixed-point `Amount`, `Tariff`/`Tiers` pricing, a `Document` whose EN 16931 totals are derived once from its lines, exact largest-remainder `split` |
+| [`en16931`](https://crates.io/crates/en16931) | `0.8` | EN 16931 semantic invoice model, business-rule validation and the invoice header and code lists `billing` does not carry |
+| [`en16931-formats`](https://crates.io/crates/en16931-formats) | `0.8` | EN 16931 syntaxes — `write` of a validated invoice, `write_unchecked`, `read` of CII/UBL/ZUGFeRD with a typed entry for everything not mapped, and the ZUGFeRD reader |
+| [`sepa`](https://crates.io/crates/sepa) | `0.9` | IBAN/BIC validation, pain.001/008/007 generation, camt.05x and pain.002 parsing |
 | [`metering`](https://crates.io/crates/metering) | `0.25` | German energy metering quantities over a validated `Series` — validation and Ersatzwertbildung (`vee`), aggregation and resampling, the UTILTS Berechnungsformel and the § 42b/§ 42c community allocation, session splits, gas conversion |
 | [`meterstore`](https://crates.io/crates/meterstore) | `0.15` | Metering time-series store beneath `edmd` — hot PostgreSQL window over TLS (`verify-full` unless the URL names a `sslmode`), settled Iceberg V2 history, version resolution, the delivery and provenance types |
 | [`doubleentry`](https://crates.io/crates/doubleentry) | `0.7` | Double-entry ledger — append-only BLAKE3 Merkle log, inclusion and consistency proofs, period seals |
 | [`rubo4e`](https://crates.io/crates/rubo4e) | `0.14` | BO4E business-object types — the `rubo4e::current` versioned schema with validation |
-| [`agentplane`](https://crates.io/crates/agentplane) | `0.29` | Durable agent runtime behind `agentd` — journaled effects, typed manifests, human triage |
+| [`agentplane`](https://crates.io/crates/agentplane) | `0.47` | Durable agent runtime behind `agentd` — journaled effects, typed manifests, human triage |
 | [`asx-rs`](https://crates.io/crates/asx-rs) | `0.15` | AS4/ebMS3 stack under the BDEW MaKo profile — signer pins, claim/accept/abandon dedup store |
 | [`edifact-rs`](https://crates.io/crates/edifact-rs) | `~0.17` | EDIFACT syntax layer beneath `edi-energy` — parse, serialise, directory validation |
 
@@ -275,12 +270,10 @@ AS4 ingest and the deadline scheduler.
 | Daemon | Port | Role in the mesh |
 |---|---|---|
 | [`marktd`](@/docs/services/marktd.md) | `:8180` | Market master data; derives `VersorgungsStatus` from the answer PID; durable persist-before-fan-out to subscribers with a status-column DLQ |
-| [`processd`](@/docs/services/processd.md) | `:8580` | Automated NB/LF answers via `mako-pruefung`; ambiguous cases go to an approval queue |
+| [`processd`](@/docs/services/processd.md) | `:8580` | Automated NB/LF answers via `mako-pruefung`; ambiguous cases go to an approval queue. Keeps the rebuildable process projection (deadline risk, BNetzA KPIs, § 7a Abs. 5 EnWG evidence) and the NB Sperr-/Entsperrauftrag queue that reports back as IFTSTA 21039 |
 | [`invoicd`](@/docs/services/invoicd.md) | `:8280` | INVOIC plausibility (eight stages) and the accept/reject command of the PID's own family |
 | [`edmd`](@/docs/services/edmd.md) | `:8380` | Metering data — MSCONS, direct pushes, validation, substitute values, BO4E reads |
-| [`obsd`](@/docs/services/obsd.md) | `:8480` | Rebuildable process projection, deadline risk, BNetzA KPIs |
 | [`netzbilanzd`](@/docs/services/netzbilanzd.md) | `:8680` | NB outbound billing — NNE, KA, MMM, MSB — with self-validation and an operator review step |
-| [`sperrd`](@/docs/services/sperrd.md) | `:8780` | Sperr-/Entsperrauftrag work queue; reports back as IFTSTA 21039 |
 
 ### Every JSON request body, everywhere
 
@@ -290,9 +283,50 @@ AS4 ingest and the deadline scheduler.
 - **Every body denies unknown fields** — a misspelt key is a `422` naming the
   field, not a setting that does nothing.
 
-`cargo xtask check-request-bodies` holds both. `mako_service::Json` is the
-extractor, so both refusals render the platform's `{error, detail, …}` problem
-body rather than `axum::Json`'s `text/plain`.
+`mako_service::Json` is the extractor, so both refusals render the platform's
+`{error, detail, …}` problem body rather than `axum::Json`'s `text/plain`. It
+refuses an undeclared key itself, at any depth, whatever attributes the type
+carries: the `422` carries `code: "unknown_field"` and the keys' JSON paths in
+`paths` (`["adresse.plz", "intervalle.3.qualitaet"]`). A key left over inside
+a `#[serde(flatten)]` member, an `#[serde(untagged)]` or an internally tagged
+enum is read from a buffer `serde` filled itself and is out of the extractor's
+sight, so a body declares its fields rather than flattening them, and a
+buffered enum and everything read out of it carry
+`#[serde(deny_unknown_fields)]`. `mako_service::Lenient` is the same extractor
+without the unknown-key refusal, for a body whose schema a published external
+specification defines. `cargo xtask check-request-bodies` walks every body
+inwards and names a buffered shape that does not deny, and a `Lenient` or
+`axum::Json` extraction, unless its list carries it with a reason; it holds
+the BO4E rule too.
+
+### Every failure, everywhere
+
+A handler returns `ApiResult<T>`, and every failure leaves it as an
+`ApiError` in the same problem shape:
+
+| Failure | Status | Body |
+|---|---|---|
+| the caller's mistake — `bad_request`, `unprocessable`, `conflict`, `not_found`, `forbidden`, `unauthorized`, `precondition_failed` (412, an `If-Match` that does not hold), `payload_too_large` | 4xx | `{ "error", "detail" }`, `detail` written for the caller |
+| not now, or not in this build — `too_many_requests` (429, resend), `unavailable` (503, retry), `not_implemented` (501, do not retry) | 429 / 501 / 503 | `{ "error", "detail" }` |
+| this service's fault — `ApiError::internal(e)`, or `?` on an `anyhow::Error` / `sqlx::Error` (`RowNotFound` is a 404) | 500 | `{ "error": "Internal Server Error", "detail": "internal server error", "error_id" }` |
+| a service this one calls — `ApiError::upstream_status`, `upstream_request`, `upstream`, `upstream_unreachable` | 502 / 503 / 504 | `{ "error", "detail": "upstream service <name> failed", "upstream", "error_id" }` |
+
+`error` is the status's reason phrase. A client that branches on *why* reads
+`code`, the stable machine reason any variant can carry beside the sentence
+(`.with_code("duplicate_process")`), and the identifiers the refusal is about
+ride in the same body (`.with_fields(json!({ "process_id": … }))`,
+`ApiError::conflict_with(code, msg, fields)`); `error`, `detail`, `error_id`
+and `upstream` are never overwritten.
+
+The error's own text — a database message, a constraint name, the body an
+upstream answered with — never reaches the response. It is logged at `error`
+level with the same `error_id` (a UUID v4, fresh per response), so the id a
+caller reports finds the log line. `cargo xtask check-error-tuples` refuses
+any hand-built `(StatusCode::<non-2xx>, …)` tuple in `services/*/src` outside
+a `#[cfg(test)]` item. A report whose status follows from its own content — a
+readiness probe, `makod`'s EDIFACT ingest report counting its rejections —
+answers through its own `IntoResponse`, which picks the status from the
+report.
 
 ### `mako-service` — Service SDK
 
@@ -338,8 +372,13 @@ graph TD
 
 #### The daemon runner
 
-Sixteen of the seventeen daemons are `mako_service::run::<D>()` in `main`. The
-runner initialises tracing, loads `NAME.toml` plus `NAME_…` env vars, connects
+Every daemon but `makod` is a library: its `Daemon` lives in `lib.rs` (or a
+module of it, `daemon.rs`), and `main.rs` is the one line
+`mako_service::run::<D>().await`. `cargo xtask check-thin-main` refuses
+anything more, and `[[bin]] test = false` keeps the binary out of the test
+build. A test under `tests/it/router_builds.rs` builds the router the binary
+mounts through `mako_service::build_for_test::<D>(cfg)`, runner routes
+included. The runner initialises tracing, loads `NAME.toml` plus `NAME_…` env vars, connects
 a tuned pool with `application_name = NAME`, runs `Daemon::migrate`, wires the
 shutdown token, mounts health/metrics/trace routes, and serves with graceful
 drain:
@@ -362,6 +401,10 @@ impl Daemon for Productd {
 async fn main() -> anyhow::Result<()> { mako_service::run::<Productd>().await }
 ```
 
+Every config takes its listen address as `[http] addr` (`HttpConfig`, with
+the daemon's default from `HttpConfig::on_port`), and `dev/ports.toml` is the
+one table of dev ports the dev configs are checked against.
+
 `ServiceConfig::database()` returning `None` marks a stateless daemon: no pool,
 no migrations, readiness is `Daemon::ready` alone, and `ServiceContext::pool()`
 panics. Domain routes, workers, the OIDC verifier and MCP auth live in
@@ -380,8 +423,8 @@ panics. Domain routes, workers, the OIDC verifier and MCP auth live in
 | `mako_bo4e_decimal_from_json_number_total` | counter | BO4E amounts read from a JSON **number** rather than a string |
 
 `makod` renders the third itself beside its own `makod_*` gauges. `marktd` and
-`processd` register their gauges on the same registry; `invoicd`, `obsd` and
-`accountingd` serve theirs from their own path (`/invoicd/metrics`,
+`processd` register their gauges on the same registry; `invoicd`, `processd`'s
+read model and `accountingd` serve theirs from their own path (`/invoicd/metrics`,
 `/obs/metrics`, `/accountingd/metrics`). No daemon may route `/metrics` a second
 time — `Router::merge` panics on the overlap at startup — and `cargo xtask
 check-runner-routes` holds every runner daemon to that.
@@ -408,11 +451,11 @@ across single-purpose daemons around one metered-data spine (`edmd`):
 | Substitute values (§ 60 Abs. 1 MsbG) | `metering::vee::substitute` + `edmd` REST/MCP | Interpolation up to two hours, else the Vergleichswert of comparable days (MeteringCode 2006 A8.2.2); refused, never invented; `substitute_value_log` audit |
 | Calculation engine | `metering`: aggregation, HT/NT, Spitzenleistung, G685 gas conversion, the UTILTS Berechnungsformel, the § 42b/§ 42c allocation, Mehr-/Mindermengen | Typed rules; a virtual meter's formula is the UTILTS step graph |
 | Forecasting | `edmd /forecast` — § 40a Abs. 2 EnWG Verbrauchsschätzung | No ML runtime in-core |
-| Balancing / settlement | `mabis-syncd` (Summenzeitreihen, PID 13003), `netzbilanzd`, `mako-gabi-gas` in makod | edmd serves `/summenzeitreihe` and `/billing-period` |
+| Balancing / settlement | `netzbilanzd` (grid invoices; Summenzeitreihen, PID 13003), `mako-gabi-gas` in makod | edmd serves `/summenzeitreihe` and `/billing-period` |
 | Market communication | `makod` — 17 EDIFACT message types, deadline scheduler, CONTRL/APERAK | Business state lives in the daemons |
 | Billing interface | `billingd` (LF retail) and `invoicd` (INVOIC plausibility) read edmd's `MeterBillingPeriod` and Lastgang | edmd answers "what flowed", never "what it costs" |
-| Reporting & analytics | `obsd`, edmd OLAP (`/archive/*`, `/query/sql`, Arrow IPC), `portald`, `agentd` | Headless |
-| Workflow automation | Config-gated workers: edmd archival, billingd §40b runs, accountingd Abschlag/SEPA/dunning, mabis-syncd windows | Hourly tick, gated, idempotent via SQL claim |
+| Reporting & analytics | `processd`'s process read model, edmd OLAP (`/archive/*`, `/query/sql`, Arrow IPC), `portald`, `agentd` | Headless |
+| Workflow automation | Config-gated workers: edmd archival, billingd §40b runs, accountingd Abschlag/SEPA/dunning, netzbilanzd MaBiS windows | Hourly tick, gated, idempotent via SQL claim |
 
 **Not in scope:** SCADA/Leittechnik acquisition (grid systems push through the
 IoT/bulk APIs); in-core ML forecasting or weather ingestion; a water market
@@ -505,8 +548,8 @@ See [Compensation](@/docs/architecture/compensation.md).
 Each domain crate defines its `Command`, `Event` and `State` types, implements
 `Workflow` with pure `handle` and `apply`, and exposes an `EngineModule` that
 registers its PIDs with the `PidRouter` and its workflows through
-`drivers()`. `makod::startup::production_modules` is the one list of modules,
-each gated by the `role-*` features that need it:
+`drivers()`. `makod::startup::MODULE_TABLE` is the one list of modules, each
+registered for the `[deployment] rollen` that need it:
 
 | Module | Scope |
 |---|---|
@@ -534,7 +577,7 @@ Four crates, cut by legal regime and counterparty pair:
 
 | Crate | Regime | Parties | Core |
 |---|---|---|---|
-| [`billing`](https://crates.io/crates/billing) (crates.io) | none — generic | any | `Amount<P>` fixed-point money, `RoundingStrategy`, tariff schedules, proration, penny-exact allocation |
+| [`billing`](https://crates.io/crates/billing) (crates.io) | none — generic | any | `Amount<P>` fixed-point money, sign-symmetric `Rounding`, `Tariff`/`Tiers`, `rate_series`, exact largest-remainder `split` |
 | `energy-billing` | §§40–41b EnWG, StromStG, EnergieStG, BEHG | LF → end customer | retail invoices for 13 product categories |
 | `grid-billing` | StromNEV/GasNEV, KAV, MsbG, §§13a/14a EnWG | NB ↔ LF/MSB/ANB | network settlement (NNE/KA/MMM/MSB/AWH, §13a Redispatch-Vergütung) |
 | `eeg-billing` | EEG (2000–2024), KWKG 2023 | NB → Anlagenbetreiber | statutory subsidy settlement, 10 schemes |
@@ -556,9 +599,9 @@ through `EuroAmount` (= `Amount<5>`, an `i64` scaled by 10⁻⁵):
 - **Results must be representable money.** Every EUR amount leaving a billing
   crate is rounded and range-checked through `EuroAmount`; a value outside the
   `Amount<5>` range is refused, not truncated.
-- **Statutory-precision paths use `Amount<5>` directly** — §41a EPEX hourly
-  pricing in `energy-billing` runs in `Amount<5>` with
-  `RoundingStrategy::MidpointAwayFromZero`.
+- **Statutory-precision paths use `billing` directly** — §41a EPEX interval
+  pricing in `energy-billing` sums Σ qᵢ·pᵢ exactly through
+  `billing::rate_series` and reduces the total once, half away from zero.
 
 ---
 

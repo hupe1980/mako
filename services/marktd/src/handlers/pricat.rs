@@ -5,6 +5,7 @@
 //! - `GET  /api/v1/pricat/{nb_mp_id}/dispatch-log/{version_id}` — dispatch audit log
 //! - `POST /api/v1/pricat/{nb_mp_id}/dispatch` — trigger immediate (re-)dispatch
 
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{Extension, extract::Path, http::StatusCode, response::IntoResponse};
@@ -105,7 +106,7 @@ pub async fn get_pricat_history(
         .check(&claims.principal(), "read-pricat", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     match repo.list_versions(&nb_mp_id, &tenant).await {
@@ -114,7 +115,7 @@ pub async fn get_pricat_history(
                 versions.iter().map(PriCatVersionSummary::from).collect();
             Json(summaries).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -145,7 +146,7 @@ pub async fn get_dispatch_log(
         .check(&claims.principal(), "read-pricat", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     match repo.dispatch_log(version_id).await {
@@ -163,7 +164,7 @@ pub async fn get_dispatch_log(
                 .collect();
             Json(out).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -201,24 +202,20 @@ pub async fn post_pricat_dispatch(
         .check(&claims.principal(), "dispatch-pricat", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     let latest = match repo.find_latest(&nb_mp_id, &tenant).await {
         Ok(Some(v)) => v,
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                format!("No PRICAT version found for NB GLN {nb_mp_id}"),
-            )
-                .into_response();
+            return ApiError::NotFound.into_response();
         }
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     // Reset dispatch state so the background scan picks it up.
     if let Err(e) = repo.mark_queued(latest.id).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return ApiError::internal(e).into_response();
     }
 
     (

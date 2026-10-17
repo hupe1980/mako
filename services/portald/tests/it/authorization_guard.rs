@@ -114,7 +114,6 @@ async fn app(vertragd_verdict: StatusCode) -> axum::Router {
     let base = stub_upstreams(vertragd_verdict).await;
     let toml_src = format!(
         r#"
-port   = 9480
 tenant = "9900357000004"
 vertragd_url    = "{base}"
 edmd_url        = "{base}"
@@ -122,12 +121,6 @@ billingd_url    = "{base}"
 accountingd_url = "{base}"
 einsd_url       = "{base}"
 marktd_url      = "{base}"
-
-# Last, because every bare key above is top-level and TOML binds a bare key to
-# the table header preceding it. The MCP door is a second door with its own
-# credential; these tests drive the portal routes, which is the first one.
-[mcp]
-api_key = "mcp-test-key"
 "#
     );
     let cfg: portald::config::PortaldConfig = toml::from_str(&toml_src).expect("config parses");
@@ -219,7 +212,7 @@ async fn an_unreachable_vertragd_fails_closed() {
 #[tokio::test]
 async fn a_deployment_without_an_authorization_authority_refuses_to_start() {
     let cfg: portald::config::PortaldConfig =
-        toml::from_str("port = 9480\ntenant = \"9900357000004\"\n").expect("config parses");
+        toml::from_str("tenant = \"9900357000004\"\n").expect("config parses");
     let err = mako_service::build_for_test::<portald::server::Portald>(cfg)
         .await
         .expect_err("must refuse to start");
@@ -231,46 +224,26 @@ async fn a_deployment_without_an_authorization_authority_refuses_to_start() {
     );
 }
 
-/// Starting without an `[mcp]` key is refused too.
+/// `portald` serves no MCP.
 ///
-/// The MCP tools take a `malo_id` and carry no customer token, so `vertragd`
-/// never sees the request and the ownership check above does not apply. With no
-/// key, `McpAuth` accepts a request with no `Authorization` header at all — a
-/// posture reached by leaving a config section out, which is why it has to be
-/// refused rather than warned about.
+/// An MCP tool takes a `malo_id` and carries no customer token, so it cannot go
+/// through the `vertragd` ownership gate every portal route goes through: a
+/// `/mcp` here would read every customer in the tenant. Agents read the same
+/// data from the service that owns it, behind that service's Cedar policy.
 #[tokio::test]
-async fn a_deployment_without_an_mcp_key_refuses_to_start() {
-    let cfg: portald::config::PortaldConfig = toml::from_str(
-        "port = 9480\ntenant = \"9900357000004\"\nvertragd_url = \"http://vertragd:9780\"\n",
-    )
-    .expect("config parses");
-    let err = mako_service::build_for_test::<portald::server::Portald>(cfg)
-        .await
-        .expect_err("must refuse to start");
-    let msg = err.to_string();
-    assert!(msg.contains("api_key"), "{msg}");
-    assert!(
-        msg.contains("allow_insecure_no_auth"),
-        "the refusal must name the way to opt out deliberately: {msg}"
-    );
-}
-
-/// A configured key is what makes the door a door — an empty string is not one.
-#[test]
-fn an_empty_mcp_key_does_not_count_as_configured() {
-    let with_key: portald::config::PortaldConfig =
-        toml::from_str("port = 9480\ntenant = \"t\"\n[mcp]\napi_key = \"s3cret\"\n")
-            .expect("config parses");
-    assert!(with_key.has_mcp_key());
-
-    let empty: portald::config::PortaldConfig =
-        toml::from_str("port = 9480\ntenant = \"t\"\n[mcp]\napi_key = \"\"\n")
-            .expect("config parses");
-    assert!(
-        !empty.has_mcp_key(),
-        "`McpAuth` skips an empty key, so reporting it as configured names a locked \
-         door that is open"
-    );
+async fn mcp_is_not_served() {
+    let app = app(StatusCode::OK).await;
+    for method in [Method::GET, Method::POST] {
+        let (status, body) = call(
+            &app,
+            &method,
+            "/mcp",
+            Some(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#),
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} /mcp: {body}");
+    }
 }
 
 /// The table above must not drift behind the router.

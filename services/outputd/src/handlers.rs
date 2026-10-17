@@ -214,9 +214,9 @@ pub async fn post_template_preview(
     // publishing would produce rather than an approximation of it.
     let model = gate::specimen_invoice();
     let profile = crate::document::facturx::profile_of(&model);
+    let xml = crate::document::facturx::cii_payload(&model).map_err(OutputError::Internal)?;
     let attachment =
-        crate::document::facturx::attachment(profile, en16931_formats::cii::to_string(&model))
-            .map_err(OutputError::Internal)?;
+        crate::document::facturx::attachment(profile, xml).map_err(OutputError::Internal)?;
     let request = crate::document::RenderRequest {
         template: req.source,
         data: Some(
@@ -527,15 +527,21 @@ mod tests {
 // ── The render API ────────────────────────────────────────────────────────────
 
 /// `POST /api/v1/render/{kind}` body.
+///
+/// The subject is `model` or `view` — exactly one ([`RenderApiRequest::subject`]).
+/// Both are plain fields rather than a flattened enum, so the body denies a key
+/// it does not declare like every other: `serde` reads a flattened member out
+/// of a buffer the unknown-key refusal never sees.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RenderApiRequest {
-    /// What the document says.
-    ///
-    /// For `INVOICE` this is the **EN 16931 semantic model** and outputd
-    /// projects the page view from it; for the Textform kinds it is the kind's
-    /// own view, verbatim. See [`RenderSubject`].
-    #[serde(flatten)]
-    pub subject: RenderSubject,
+    /// For `INVOICE`: the **EN 16931 semantic model**; outputd projects the
+    /// page view from it. See [`RenderSubject`].
+    #[serde(default)]
+    pub model: Option<Box<en16931::Invoice>>,
+    /// For the Textform kinds: the kind's own view, verbatim.
+    #[serde(default)]
+    pub view: Option<serde_json::Value>,
     /// A specific published template, or `None` for the tenant's current one.
     #[serde(default)]
     pub template_hash: Option<String>,
@@ -548,6 +554,25 @@ pub struct RenderApiRequest {
     pub date: String,
     /// Stable identity for the PDF `/ID` — the caller's record id, typically.
     pub ident: String,
+}
+
+impl RenderApiRequest {
+    /// What the render is about: `model` or `view`, and never both.
+    ///
+    /// # Errors
+    ///
+    /// `422 SUBJECT_REQUIRED` when neither or both are present.
+    pub fn subject(&self) -> OutputResult<RenderSubject<'_>> {
+        match (&self.model, &self.view) {
+            (Some(model), None) => Ok(RenderSubject::Model(model)),
+            (None, Some(view)) => Ok(RenderSubject::View(view)),
+            _ => Err(OutputError::unprocessable(
+                "SUBJECT_REQUIRED",
+                "a render takes exactly one of `model` (the EN 16931 semantic model, for an \
+                 INVOICE) and `view` (a Textform view)",
+            )),
+        }
+    }
 }
 
 /// What a render is *about*, in the only two shapes outputd accepts.
@@ -566,15 +591,12 @@ pub struct RenderApiRequest {
 /// The Textform kinds keep sending their view directly: their producer
 /// (`accountingd`, for a Mahnung) has no EN 16931 model to send, and their view
 /// *is* the contract.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub enum RenderSubject {
+#[derive(Debug, Clone, Copy)]
+pub enum RenderSubject<'a> {
     /// The EN 16931 semantic model. outputd projects the page view from it.
-    #[serde(rename = "model")]
-    Model(Box<en16931::Invoice>),
+    Model(&'a en16931::Invoice),
     /// A Textform view, serialised by its producer.
-    #[serde(rename = "view")]
-    View(serde_json::Value),
+    View(&'a serde_json::Value),
 }
 
 /// The invoice payload to embed.
@@ -701,7 +723,7 @@ pub async fn render_with_stored_template(
     // semantic model, a Textform document from its own view. Mixing them would
     // hand the template a dictionary whose every field lookup fails, with a
     // diagnostic that blamed the operator's layout for the caller's mistake.
-    let data = match (kind, &req.subject) {
+    let data = match (kind, req.subject()?) {
         (TemplateKind::Invoice, RenderSubject::Model(model)) => {
             serde_json::to_string(&crate::document::DocumentView::of(model))
                 .map_err(|e| OutputError::Internal(e.into()))?
@@ -808,11 +830,30 @@ pub async fn render_with_stored_template(
 // this?" a question with an answer.
 
 /// `POST /api/v1/documents/issue/{kind}` body — a render plus who it goes to.
+///
+/// The render fields are the ones `POST /render/{kind}` takes, declared here
+/// rather than flattened in, so the body denies a key it does not declare
+/// ([`RenderApiRequest`] says why); [`IssueDocumentRequest::take_render`]
+/// hands them to the shared render path.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IssueDocumentRequest {
-    /// Everything `POST /render/{kind}` takes.
-    #[serde(flatten)]
-    pub render: RenderApiRequest,
+    /// [`RenderApiRequest::model`].
+    #[serde(default)]
+    pub model: Option<Box<en16931::Invoice>>,
+    /// [`RenderApiRequest::view`].
+    #[serde(default)]
+    pub view: Option<serde_json::Value>,
+    /// [`RenderApiRequest::template_hash`].
+    #[serde(default)]
+    pub template_hash: Option<String>,
+    /// [`RenderApiRequest::attachment`].
+    #[serde(default)]
+    pub attachment: Option<RenderAttachment>,
+    /// [`RenderApiRequest::date`].
+    pub date: String,
+    /// [`RenderApiRequest::ident`].
+    pub ident: String,
     /// What this document is *about*, in the issuing service's own terms: a
     /// Rechnungsnummer, a dunning-case id, a Vertragsnummer.
     ///
@@ -849,6 +890,21 @@ pub struct IssueDocumentRequest {
     /// before the supply, EUR. Read only where § 27 Abs. 38 Nr. 2 UStG decides.
     #[serde(default)]
     pub gesamtumsatz_vorjahr_eur: Option<rust_decimal::Decimal>,
+}
+
+impl IssueDocumentRequest {
+    /// The render half of the request, moved out — the body `POST
+    /// /render/{kind}` would have taken.
+    pub fn take_render(&mut self) -> RenderApiRequest {
+        RenderApiRequest {
+            model: self.model.take(),
+            view: self.view.take(),
+            template_hash: self.template_hash.take(),
+            attachment: self.attachment.take(),
+            date: std::mem::take(&mut self.date),
+            ident: std::mem::take(&mut self.ident),
+        }
+    }
 }
 
 /// Refuse an `INVOICE` that would reach an Unternehmer on paper alone where
@@ -919,7 +975,7 @@ pub async fn post_document(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<OutputdConfig>>,
     Path(kind): Path<String>,
-    Json(req): Json<IssueDocumentRequest>,
+    Json(mut req): Json<IssueDocumentRequest>,
 ) -> OutputResult<impl IntoResponse> {
     authorize(&cedar, &claims, "issue-document", &cfg.tenant)?;
     let kind = parse_kind(&kind)?;
@@ -962,7 +1018,8 @@ pub async fn post_document(
         ));
     }
 
-    let rendered = render_with_stored_template(&pool, &cfg, kind, &req.render).await?;
+    let render = req.take_render();
+    let rendered = render_with_stored_template(&pool, &cfg, kind, &render).await?;
     let (issued, created) = crate::delivery::store::issue(
         &pool,
         &crate::delivery::store::NewDocument {

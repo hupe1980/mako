@@ -535,6 +535,15 @@ fn a_credit_note_states_positive_line_amounts() {
             line.net_amount
         );
     }
+    // A credit note is 381 **or** negative, never both: the type carries the
+    // direction, so BT-115 is stated positive too. Both at once reverses the
+    // document twice, and PEPPOL rejects it (DK-R-016: no negative
+    // PayableAmount).
+    assert!(
+        en.totals.due.into_decimal() >= dec!(0),
+        "BT-115 on a 381 is stated positive: {:?}",
+        en.totals.due
+    );
     let report = validate(&en);
     assert!(
         report.is_valid(),

@@ -323,13 +323,7 @@ pub async fn test_subscription(
 
     let body = match serde_json::to_vec(&ping) {
         Ok(b) => b,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     // A test delivery is signed exactly like a real one, so a subscriber that
@@ -363,23 +357,15 @@ pub async fn test_subscription(
             })),
         )
             .into_response(),
-        Ok(resp) => (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({
-                "subscriber_id": sub.subscriber_id,
-                "delivered": false,
-                "webhook_status": resp.status().as_u16(),
-            })),
+        // The subscriber's own status goes to the log beside the
+        // `error_id`; the probe's caller sees which subscriber refused.
+        Ok(resp) => ApiError::upstream_status(
+            format!("subscriber {}", sub.subscriber_id),
+            resp.status(),
+            "",
         )
-            .into_response(),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({
-                "subscriber_id": sub.subscriber_id,
-                "delivered": false,
-                "error": e.to_string(),
-            })),
-        )
+        .into_response(),
+        Err(e) => ApiError::upstream_request(format!("subscriber {}", sub.subscriber_id), e)
             .into_response(),
     }
 }

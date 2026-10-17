@@ -5,12 +5,12 @@
 //! | IBAN validation | `validate_iban` | mandate PUT, payment import, creditor check |
 //! | BIC validation | `validate_bic` | mandate PUT |
 //! | SEPA Creditor ID (EPC AT-02) | `validate_creditor_id` | pain.008 `CdtrSchmeId` (mandatory) |
-//! | Structured postal address | `PostalAddress` | `PstlAdr` on both sides (EPC cut-over) |
+//! | Structured postal address | `PostalAddress` | `PstlAdr` on both sides |
 //! | pain.008 CORE + B2B | `Pain008Builder` + `DirectDebitGroup` | N-5 scheduler, `/sepa/run` |
 //! | Multi-group messages | one `PmtInf` per `SequenceType` in **one file** | single submission + single audit row |
 //! | pain.001 SCT + SCT Inst | `Pain001Builder` + `CreditTransferGroup` | EEG Vergütung payout |
 //! | pain.007 SDD reversal | `Pain007Builder` + `ReversalGroup` | `/sepa/reversals` |
-//! | pain.002 status report | `parse_pain002` | `/sepa/pain002` — RJCT → BANKRUECKLAST, VoP |
+//! | pain.002 status report | `parse_pain002` | `/sepa/pain002` — RJCT → `REJECTED` (no booking), VoP |
 //! | camt.052 report | `parse_camt052` | `/payments/import/camt052` (intraday, booked entries only) |
 //! | camt.053 statement | `parse_camt053` | `/payments/import/camt053` (end-of-day) |
 //! | camt.054 notification | `parse_camt054` | `/payments/import/camt054` |
@@ -36,7 +36,7 @@ pub use sepa::camt029::{Camt029Document, CancellationStatus, ResolutionOutcome, 
 pub use sepa::camt055::{
     Camt055Builder, CancellationEntry, CancellationGroup, CancellationReason, OriginalMessage,
 };
-pub use sepa::pain001::{ExecutionMoment, LocalInstrument};
+pub use sepa::pain001::{CreditTransferKind, ExecutionMoment};
 pub use sepa::pain002::{ReasonCode, TransactionStatus, VerificationOutcome};
 pub use sepa::pain007::{
     OriginalCollection, Pain007Builder, ReversalEntry, ReversalGroup, ReversalReason,
@@ -74,31 +74,76 @@ pub const fn bank_to_ledger_ct(signed_ct: i64) -> i64 {
     -signed_ct
 }
 
-// ── Postal addresses (EPC structured-address cut-over) ────────────────────────
+/// Why a camt booking cannot be posted to the ledger.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum UnpostableAmount {
+    /// The statement does not determine the figure: `Amt`, its `Ccy` or the
+    /// `CdtDbtInd` is missing, unreadable or contradicts another observation,
+    /// or a batch detail carries no amount of its own.
+    #[error(
+        "the statement does not determine the amount (Amt, Ccy or CdtDbtInd missing, \
+         unreadable or contradictory)"
+    )]
+    Undetermined,
+    /// The booking is denominated in a currency other than EUR.
+    #[error("the booking is denominated in {0}; the ledger holds EUR cents")]
+    NotEuro(String),
+}
+
+/// The bank-signed amount in EUR **ct** (camt convention: positive = credit to
+/// our account) that one camt transaction posts — the detail when the bank
+/// itemised the entry, the entry itself when it did not.
+///
+/// The ledger holds EUR cents, so a booking the statement does not determine,
+/// or one in another currency, is refused here rather than posted: a missing
+/// `Ccy` is not EUR and a missing `CdtDbtInd` is not a credit. A detail in a
+/// currency other than its entry's resolves to no amount at all, so checking the
+/// entry's denomination covers both paths.
+///
+/// # Errors
+///
+/// [`UnpostableAmount::Undetermined`] when the statement leaves the signed
+/// figure open; [`UnpostableAmount::NotEuro`] when it is not a EUR booking.
+pub fn camt_posting_ct(
+    entry: &CashEntry,
+    detail: Option<&EntryDetail>,
+) -> Result<i64, UnpostableAmount> {
+    let signed = match detail {
+        Some(d) => d.signed_ct(),
+        None => entry.signed_ct(),
+    }
+    .ok_or(UnpostableAmount::Undetermined)?;
+    match entry.amount.currency.as_deref() {
+        Some("EUR") => Ok(signed),
+        Some(other) => Err(UnpostableAmount::NotEuro(other.to_owned())),
+        None => Err(UnpostableAmount::Undetermined),
+    }
+}
+
+// ── Postal addresses (ISO 20022 PstlAdr) ──────────────────────────────────────
 
 /// The parts of an ISO 20022 `PstlAdr` that accountingd stores and emits.
 ///
-/// ## The 15 November 2026 cut-over
+/// ## Which form
 ///
-/// Version 1.1 of the 2025 SEPA rulebooks, in force since 5 October 2025, ends
-/// the unstructured address at **15 November 2026** (version 1.0 said the 22nd;
-/// the date moved to land with that year's Swift Standards MX release). From
-/// then a scheme message must carry `TwnNm` and `Ctry`, so both are required
-/// here — [`PostalAddress::new`] takes them and the unstructured form is
-/// unrepresentable. It is an address deadline, not a message-version one:
-/// `pain.001.001.09` and `pain.008.001.08` have been mandatory since
-/// 19 November 2023.
+/// EPC153-22 v2.2 (30 September 2026) describes three address forms —
+/// structured, hybrid (`TwnNm` + `Ctry` plus free-text lines) and unstructured
+/// — and permits all three, with no end date set for the unstructured form
+/// (EPC Payment Scheme Management Board decision of 9 September 2026, applied
+/// to all five scheme rulebooks). accountingd emits the **structured** form only:
+/// [`PostalAddress::new`] takes `TwnNm` and `Ctry`, so the unstructured form is
+/// unrepresentable here. `pain.001.001.09` and `pain.008.001.08` carry it.
 ///
-/// An address is optional until the cut-over. Absent parts emit no `PstlAdr` at
-/// all; a **partially** filled address is an error rather than a silent
-/// omission, because "we thought we sent the address" is exactly the failure the
-/// cut-over will surface.
+/// An address is optional. Absent parts emit no `PstlAdr` at all; a
+/// **partially** filled address is an error rather than a silent omission,
+/// because an address someone entered and the bank never received is a
+/// failure nobody sees.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AddressParts {
-    /// `TwnNm` — mandatory from the cut-over.
+    /// `TwnNm` — required whenever any part is set.
     pub town: Option<String>,
-    /// `Ctry` — ISO 3166-1 alpha-2, mandatory from the cut-over.
+    /// `Ctry` — ISO 3166-1 alpha-2, required whenever any part is set.
     pub country: Option<String>,
     /// `StrtNm`.
     pub street: Option<String>,
@@ -114,10 +159,10 @@ pub struct AddressParts {
 #[derive(Debug, thiserror::Error)]
 pub enum AddressPartsError {
     /// Street, post code or building number was given without both `TwnNm` and
-    /// `Ctry` — the two the EPC schemes require from 15 November 2026.
+    /// `Ctry` — the two every structured address carries.
     #[error(
         "incomplete postal address: town and country are both required \
-         (EPC structured address, mandatory from 2026-11-15), got town={town:?} country={country:?}"
+         (ISO 20022 structured address), got town={town:?} country={country:?}"
     )]
     Incomplete {
         /// The `TwnNm` that was supplied, if any.
@@ -184,7 +229,7 @@ impl AddressParts {
 /// emitting something its own XSD rejects. Dropping the address is the right
 /// answer there: the operator pinned that schema deliberately, and an address
 /// the wire format cannot carry must not block a collection run. It is logged,
-/// because it stops being acceptable on 15 November 2026.
+/// because the address the operator stored does not reach the bank.
 fn address_for_schema(
     parts: Option<&AddressParts>,
     supported: bool,
@@ -200,8 +245,8 @@ fn address_for_schema(
         tracing::warn!(
             party,
             "accountingd: the pinned SEPA schema has no structured address type — \
-             PstlAdr omitted. The EPC schemes require a structured address from \
-             2026-11-15; move to the current schema version before then."
+             PstlAdr omitted. Move to the current schema version for the stored \
+             address to reach the bank."
         );
         return Ok(None);
     }
@@ -715,7 +760,7 @@ pub fn build_pain_001(
 
     let mut group = CreditTransferGroup::new(debtor.name, &debtor_iban, execution_iso);
     if instant {
-        group = group.local_instrument(LocalInstrument::Inst);
+        group = group.kind(CreditTransferKind::Instant);
     }
     if let Some(address) = debtor_address {
         group = group.debtor_address(address);

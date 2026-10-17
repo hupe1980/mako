@@ -84,7 +84,7 @@ graph TB
         biz["meter_billing_periods<br/>ablese_auftraege<br/>direct_push_sessions<br/>gdpr_deletions"]
     end
 
-    erp["ERP / netzbilanzd<br/>mabis-syncd"]
+    erp["ERP / netzbilanzd"]
     duckdb["DuckDB / Spark<br/>Trino / PyIceberg"]
     catalog["/api/v1/iceberg<br/>meterstore CatalogFacade<br/>(read-only · Cedar read-archive-olap)"]
     qa["quality engine<br/>metering vee::validation<br/>per register"]
@@ -123,7 +123,7 @@ graph TB
 │  GET  /api/v1/energy/{malo_id}?direction=                  ← the projected series             │
 │  GET  /api/v1/summenzeitreihe/{malo_id}                    ← MaBiS monthly aggregate          │
 │  GET  /api/v1/billing-period/{malo_id}                     ← MeterBillingPeriod               │
-│  GET  /api/v1/billing-periods                              ← collection (mabis-syncd)         │
+│  GET  /api/v1/billing-periods                              ← collection (netzbilanzd)         │
 │  GET  /api/v1/imbalance/{malo_id}/{y}/{m}?bilanziert_kwh=  ← MMM saldo                        │
 │  GET  /api/v1/forecast/{malo_id}                           ← § 40a Abs. 2 EnWG Schätzung      │
 │  GET  /api/v1/gas-quality/{malo_id}                        ← Brennwert + Zustandszahl         │
@@ -267,6 +267,7 @@ roles  = ["nb"]
 | `[smgw]` | `enabled` (true), `cert_warning_days` (30), `comm_fault_threshold_hours` (2), `sweep_interval_secs` (86400) | [SMGW compliance](#smgw-compliance) |
 | `[surveillance]` | `enabled` (true), `silent_after_hours` (36), `min_coverage_pct` (95.0), `coverage_window_days` (7), `sweep_interval_secs` (3600), `max_events_per_sweep` (500), `typ2_enabled` (true), `typ2_silent_after_hours` (36) | [Delivery surveillance](#delivery-surveillance) |
 | `[privacy]` | `erasure_secret`, `retired_erasure_secrets` | [Erasure suppression](#erasure-suppression-privacy) |
+| `[policy]` | `physische_loeschung` (`false`) | [Physical deletion](#policy-physische-loeschung) |
 | `[mcp]` | `api_key`, `named_keys`, `api_key_roles` | MCP key fallback beside OIDC |
 
 **TLS to PostgreSQL.** meterstore reads `[database] url` for its Iceberg
@@ -516,8 +517,8 @@ RLM, Gas, IoT and Zählerstandsgang share `direct_push_sessions`, keyed
 | Row `committed` | `200`, recorded result replayed |
 | Row `partial` | this request takes it over — an uncommitted batch stays retryable |
 | Row for a **different** `malo_id` | `409`, naming both |
-| Claim unreadable/unwritable | `503` |
-| Commit not written | `500` — retry under the same key |
+| Claim unreadable/unwritable | `500` with an `error_id` — the emitter retries it like any 5xx |
+| Commit not written | `500` with an `error_id` — retry under the same key |
 
 ### Kafka batch ingest (head-end systems)
 
@@ -826,7 +827,7 @@ duration, before filtering, that is billable; absent when the point reports no
 register in that direction) and `interval_count`. `?as_of=` reads it at a past
 transaction time.
 
-Consumers: `mabis-syncd` (Summenzeitreihe), `billingd` (§41a),
+Consumers: `netzbilanzd` (Summenzeitreihe), `billingd` (§41a),
 `einsd` (§51 EEG, Einspeisemenge). The BO4E exports are not inputs to a figure.
 
 ### Read windows
@@ -1077,7 +1078,9 @@ Bilanzkreis- or Mehr-/Mindermengenabrechnung.
   (a QUOTES 15003 names 1–23 OBIS codes, QUOTES AHB 1.1a §4.3 `[2073]`).
 - Kap. 4.6.2 deliveries arrive straight from the iMS over SM-PKI:
   `POST /api/v1/esa/typ2/{malo_id}` (Cedar `write-esa-typ2`). edmd does not
-  terminate SM-PKI.
+  terminate SM-PKI. The body is read leniently: a gateway on a newer BSI
+  TR-03109 profile may carry keys edmd does not model, and they are ignored
+  rather than refused; every field edmd reads stays required.
 - The SQL endpoint refuses both Typ-2 relations.
 - Both stores enrol the same `(tenant, MaLo)` erasure subject, so one Art. 17
   erasure unlinks both (§ 60 Abs. 6 MsbG makes no exception for Typ-2).
@@ -1106,7 +1109,7 @@ Orders live in `ablese_auftraege`, linked to their origin by
 | `LIEFERENDE` | LF | GPKE 55004 / 55007 completion, or `vertragd` |
 | `JAHRESABLESUNG` | LF, NB | Campaign or ERP (§40 EnWG) |
 | `ZWISCHENABLESUNG` | LF, ESA | On demand; an ESA may order value delivery (WiM Strom Teil 2 Kap. 4 / § 60 Abs. 1 MsbG) |
-| `SPERRUNG` · `ENTSPERRUNG` | NB | `sperrd` (§41f EnWG; Wiederherstellung §41f Abs. 7) |
+| `SPERRUNG` · `ENTSPERRUNG` | NB | `processd` Sperrauftrag queue (§41f EnWG; Wiederherstellung §41f Abs. 7) |
 | `SONDERABLESUNG` | MSB | INSRPT 23003/23004/23008, Gas 23005/23009 |
 | `INSRPT_STOERUNG` | MSB | INSRPT 23001 — `geplant_am` tomorrow, `ausfuehrt_bis` +7 days, idempotent on `insrpt_process_id` |
 | `ISMS_AUSLESUNG` | MSB | iMSys auto-readout |
@@ -1185,7 +1188,8 @@ has no source for is refused at the door. A source series is the MaLo's
 projected register in the operand's direction (Z71 Verbrauch → Bezug, Z72
 Erzeugung → Einspeisung) — readings naming another Messlokation are left out —
 built into one series on its observed grid. Every input must share that grid; a
-source with no series in the window is `422`, a failed read `503`.
+source with no series in the window is `422`, a failed read `500` with an
+`error_id`.
 
 **`FORMULA`** is the UTILTS step graph: Rechenschritte keyed by number, each a
 `SUM` of Z69/Z70 terms, a `QUOTIENT` (Z81 ÷ Z80, cut to six places toward zero;
@@ -1240,7 +1244,8 @@ MeLo; participants are the `COMMUNITY_SHARE` rules naming it. Per interval it
 reports the generation, each participant's consumption, nominal share,
 allocation and net grid draw (`max(0, consumption) == allocated + net_grid_draw`),
 `capped`, and the residual that fed the grid
-(`Σ allocated + residual == generation`). A failed source read is `503`.
+(`Σ allocated + residual == generation`). A failed source read is `500` with an
+`error_id`.
 
 `GET /api/v1/sharing/readiness` answers whether the quarter-hour series §42c
 Abs. 1 EnWG requires is **arriving** (marktd
@@ -1460,6 +1465,25 @@ key to `retired_erasure_secrets`, which stay as long as their erasures must stay
 suppressed. Retired keys without a current one are refused at startup; omitting
 the section disables suppression (logged at startup).
 
+### `[policy] physische_loeschung` {#policy-physische-loeschung}
+
+Whether an Art. 17 erasure also removes the erased rows physically is the data
+protection officer's reading. Physical removal serves Art. 17 Abs. 1 DSGVO most
+literally and can collide with the § 147 Abs. 1 AO duty to keep the same values
+as Buchungsbelege, which Art. 17 Abs. 3 lit. b DSGVO exempts.
+
+| `physische_loeschung` | Effect |
+|---|---|
+| `false` (default) | The erasure above: the subject mapping is destroyed in both tiers and a tombstone refuses re-linking; the readings survive, attributable to no one |
+| `true` | Physical removal from the cold tier as well. This build performs none, so the value is refused at startup rather than reporting a deletion that did not happen |
+
+Every erasure response names the reading in `policy` (`{key, value, quelle}`).
+The startup report also states whether `[privacy] erasure_secret` is present —
+never its value — and logs its absence at `warn`. The report is served at
+`GET /api/v1/policy` (Cedar `read-policy`) and by the MCP tool `get_policy`;
+every operator setting is listed in
+[Operator policy](@/docs/reference/operator-policy.md).
+
 ### The trail
 
 `GET /api/v1/gdpr/erasures?since=&until=&trigger=&limit=` (`read-gdpr-erasures`)
@@ -1477,6 +1501,7 @@ the REST write action.
 
 | Tool | Description |
 |------|-------------|
+| `get_policy` | The operator policy and posture the deployment runs under |
 | `get_timeseries` | Meter data for a MaLo in a date range |
 | `get_imbalance` | Mehr-/Mindermengen report (`metering::billing::imbalance::ImbalanceSaldo`; an unknown Sparte is refused) |
 | `get_billing_period` | `MeterBillingPeriod` |
@@ -1541,10 +1566,10 @@ not install; `GET /api/v1/archive/status` is the tiering signal it serves.
   and its routing workflow.
 - [makod](@/docs/services/makod.md) — produces the `de.mako.process.*` events edmd
   consumes.
-- [netzbilanzd](@/docs/services/netzbilanzd.md) — reads `MeterBillingPeriod`.
+- [netzbilanzd](@/docs/services/netzbilanzd.md) — reads `MeterBillingPeriod`, and the
+  Summenzeitreihe it files with the BIKO.
 - [billingd](@/docs/services/billingd.md) — reads the projected series for §41a
   dynamic billing.
-- [mabis-syncd](@/docs/services/mabis-syncd.md) — reads the Summenzeitreihe.
 - [einsd](@/docs/services/einsd.md) — reads the Einspeisung for the §51 EEG
   reduction.
 - [agentd](@/docs/services/agentd.md) — the specialists consuming

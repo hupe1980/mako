@@ -37,7 +37,6 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    http::StatusCode,
     middleware::{self, Next},
     response::IntoResponse,
 };
@@ -81,6 +80,8 @@ pub struct EdmdMcpState {
     pub marktd_url: String,
     /// `marktd` bearer token.
     pub marktd_api_key: secrecy::SecretString,
+    /// The operator policy and posture this deployment runs under.
+    pub policy: Arc<mako_service::policy::PolicyReport>,
 }
 
 // ── Tool parameters ───────────────────────────────────────────────────────────
@@ -311,6 +312,16 @@ impl EdmdMcpHandler {
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
         }
+    }
+
+    #[tool(
+        description = "The operator policy and posture this edmd deployment runs under: each [policy] setting (physische_loeschung) with its value, whether it was set or defaulted, and its source, and whether the erasure suppression key and [oidc] are configured. Read-only; a setting changes only by editing the config and restarting.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_policy(&self) -> Result<CallToolResult, McpError> {
+        ContentBlock::json(serde_json::to_value(&*self.state.policy).unwrap_or_default())
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None))
     }
 
     /// Read meter data time-series for a MaLo in a given date-time range.
@@ -1573,10 +1584,18 @@ Returns grade (A/B/C/F), outlier/capacity timestamps, gaps detected, and coverag
             Ok(body) => serde_json::to_string_pretty(&body)
                 .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
                 .map_err(|e| McpError::internal_error(e.to_string(), None)),
-            Err((status, error)) if status.is_server_error() => {
-                Err(McpError::internal_error(error, None))
+            // The store's own text stays in the log, as it does for the REST door.
+            Err(error) if error.status().is_server_error() => {
+                tracing::error!(error = ?error, malo_id = p.malo_id, "edmd: forecast failed");
+                Err(McpError::internal_error("the annual forecast failed", None))
             }
-            Err((_, error)) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            Err(mako_service::ApiError::NotFound) => {
+                Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                    "No annual forecast for {}: no meter reads in the requested window",
+                    p.malo_id
+                ))]))
+            }
+            Err(error) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                 "No annual forecast for {}: {error}",
                 p.malo_id
             ))])),
@@ -1920,7 +1939,10 @@ async fn mcp_auth_middleware(
     let bytes = match axum::body::to_bytes(body, MAX_MCP_BODY).await {
         Ok(b) => b,
         Err(_) => {
-            return (StatusCode::PAYLOAD_TOO_LARGE, "MCP request body too large").into_response();
+            return mako_service::ApiError::payload_too_large(format!(
+                "MCP request body exceeds {MAX_MCP_BODY} bytes"
+            ))
+            .into_response();
         }
     };
     if let Some(action) = destructive_tool_action(&bytes)

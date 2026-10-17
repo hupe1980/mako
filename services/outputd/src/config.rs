@@ -7,7 +7,9 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub struct OutputdConfig {
     pub database: mako_service::config::DatabaseConfig,
-    pub port: Option<u16>,
+    /// `[http]` — the listen address. Defaults to every interface on `9880`.
+    #[serde(default = "default_http")]
+    pub http: mako_service::config::HttpConfig,
     /// The operator's MP-ID — the tenant every template row is scoped to.
     pub tenant: String,
     /// OIDC verification for the HTTP API. Fail closed: without it, anyone can
@@ -164,6 +166,10 @@ impl mako_service::ServiceConfig for OutputdConfig {
         Some(&self.database)
     }
     fn bind_addr(&self) -> String {
-        format!("0.0.0.0:{}", self.port.unwrap_or(9880))
+        self.http.addr.clone()
     }
+}
+
+fn default_http() -> mako_service::config::HttpConfig {
+    mako_service::config::HttpConfig::on_port(9880)
 }

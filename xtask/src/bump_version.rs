@@ -298,7 +298,7 @@ mako-engine      = { path = \"crates/mako-engine\", version = \"0.9\" }
 mako-markt       = { path = \"crates/mako-markt\", version = \"0.9\" }
 grid-billing     = { path = \"crates/grid-billing\", version = \"0.9\" }
 eeg-billing      = { path = \"crates/eeg-billing\", version = \"0.9\" }
-mako-obs         = { path = \"crates/mako-obs\", version = \"0.9\" }
+mako-wim         = { path = \"crates/mako-wim\", version = \"0.9\" }
 mako-service     = { path = \"crates/mako-service\", version = \"0.9\" }
 invoic-checker   = { path = \"crates/invoic-checker\", version = \"0.9\" }
 mako-pruefung    = { path = \"crates/mako-pruefung\", version = \"0.9\" }

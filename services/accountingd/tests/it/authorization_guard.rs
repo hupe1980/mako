@@ -13,7 +13,7 @@
 //!    usually means an endpoint lost its guard.
 //! 4. **An exemption whose justification is only a comment.** Exempting the MCP
 //!    surface as "read-only by construction" is not true of it: five of its
-//!    thirteen tools write — they post a Buchung, raise the month's
+//!    fourteen tools write — they post a Buchung, raise the month's
 //!    Abschlagsforderungen, book a CAMT.054 payment, rewrite a customer's
 //!    advance, or emit a bank-submittable pain.008. The last three tests below
 //!    make the claim that replaces it — every tool is held to the action its
@@ -33,7 +33,7 @@ const HANDLERS: &str = include_str!("../../src/handlers.rs");
 /// "is served to any caller without a token" is the guard misreading its own
 /// input. Cross-checking the router is also strictly stronger: it is the thing
 /// that actually decides what is exposed.
-const MAIN: &str = include_str!("../../src/main.rs");
+const MAIN: &str = include_str!("../../src/daemon.rs");
 /// The MCP surface, whose tools are authorized by `mcp_server::tool_action`
 /// rather than by a `cedar.check` in `handlers.rs`.
 const MCP: &str = include_str!("../../src/mcp_server.rs");
@@ -122,7 +122,7 @@ fn unauthenticated_by_design(handler: &str) -> Option<&'static str> {
 /// Every **routed** `pub async fn` in `handlers.rs`, paired with its parameter
 /// list.
 ///
-/// Routed means `main.rs` passes it to a method filter as
+/// Routed means `daemon.rs` passes it to a method filter as
 /// `get(handlers::<name>)` / `post(handlers::<name>)` — the only definition of
 /// "reachable over HTTP" that cannot drift, since it reads the router itself.
 /// Matched with the closing parenthesis on purpose: a worker *calling* a
@@ -275,7 +275,7 @@ fn mcp_tool_body(name: &str) -> &'static str {
 fn the_tool_extractor_still_finds_the_surface() {
     let tools = mcp_tools();
     assert!(
-        tools.len() >= 13,
+        tools.len() >= 14,
         "only {} MCP tools found — the extractor has drifted from the `#[tool(…)]` \
          attribute shape, and the two guards below are now vacuous: {tools:?}",
         tools.len()

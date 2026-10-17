@@ -26,7 +26,10 @@
 //
 // The request shape, for reference:
 //
-//   principal  Agent::"<the acting agent>"       (an operator's `sub` for api:*)
+//   principal  Subject::"<chain subject>"        (an operator's `sub` for api:*)
+//            | Capability::"<capability>"        (a run admitted under no chain)
+//              Typed, so a rule for the person `alice` never admits a capability
+//              named `alice`; every rule below matches `principal` unscoped.
 //   action     Action::"effect:perform" | "run:admit" | "data:release" | "api:*"
 //   resource   Resource::"<effect kind>"         — tool.call, model.complete, …
 //   context    { run, step, tenant, mutates, args, label?, owner, subject,
@@ -99,23 +102,21 @@ permit(principal, action == Action::"effect:perform", resource);
 // deployment-configured transport, so a mis-typed `[mcp_servers]` entry pointing
 // at somebody else's endpoint is a configuration error this refuses rather than
 // calls. `context.args.server` is what makes this expressible without naming the
-// 150 granted tools one by one.
+// 151 granted tools one by one.
 //
 // **This list must cover every server the manifests grant.** A granted server
 // missing from it is not a narrower policy — it is a specialist that boots, runs
-// and has every tool call denied, for the lifetime of the deployment. That
-// shipped: `mabis_syncd` was absent while `mabis-syncd-agent` granted four tools
-// on it, so the one specialist the mabis-syncd MCP surface was built for could
-// not call any of it. `every_granted_server_is_reachable` in `plane::policy`
-// reads the manifests and fails when this list falls behind them.
+// and has every tool call denied, for the lifetime of the deployment — and
+// nothing at startup says so. `every_granted_server_is_reachable` in
+// `plane::policy` reads the manifests and fails when this list falls behind
+// them.
 //
 // Note the spelling: agentplane reserves `-` in a `tool://` server component, so
 // a hyphenated service is granted — and named here — with an underscore.
 forbid(principal, action == Action::"effect:perform", resource == Resource::"tool.call")
 unless {
-  ["makod", "marktd", "processd", "obsd", "billingd", "invoicd", "accountingd",
-   "edmd", "einsd", "netzbilanzd", "portald", "sperrd", "productd", "vertragd",
-   "mabis_syncd"]
+  ["makod", "marktd", "processd", "billingd", "invoicd", "accountingd",
+   "edmd", "einsd", "netzbilanzd", "productd", "vertragd"]
   .contains(context.args.server)
 };
 
@@ -123,8 +124,12 @@ unless {
 // `max_sensitivity_egress: internal`, which is stricter still; this is the floor
 // that survives a manifest edit — a prompt assembled from a secret is an
 // exfiltration whether or not anyone meant it.
+//
+// `label` is guarded like `delegation_depth` below: the runtime supplies it at
+// every sink, and probes the compiled set at build time with requests that
+// carry none, so an unguarded read is a refusal to boot.
 forbid(principal, action == Action::"effect:perform", resource == Resource::"model.complete")
-when { context.label.sensitivity == "secret" };
+when { context has label && context.label.sensitivity == "secret" };
 
 // No specialist delegates. Every manifest declares `max_delegation_depth: 0`,
 // and mako's fan-out is one independent run per subscribing specialist rather
@@ -200,6 +205,33 @@ when {
     .containsAny(context.roles)
 };
 
+// What is executing now, what is waiting and for what, and the one roll-up of
+// everything that needs a person. Listings of run ids, agents and conditions —
+// no payloads — so they carry the read audience: the same operator who cannot
+// see a stuck run cannot see why it is stuck either.
+permit(
+  principal,
+  action in [Action::"api:run.live", Action::"api:run.waiting", Action::"api:attention",
+             Action::"api:halt.list"],
+  resource
+)
+when {
+  ["mako-operations", "gas-operations", "billing-operations", "billing-compliance",
+   "credit-control", "eeg-operations", "grid-operations", "marktkommunikation",
+   "metering", "netzbilanz", "regulatory"]
+    .containsAny(context.roles)
+};
+
+// A run's journal, record by record: its inputs, its model exchanges and every
+// argument it sent. Not a widened `api:run.read` — the status view answers
+// *why is this not finishing* from a few fields, this answers it with the
+// counterparty data the run read — and the route does not narrow by domain,
+// so it carries the plane-wide audience the breach listing does.
+permit(principal, action == Action::"api:run.history", resource)
+when {
+  ["mako-operations", "regulatory"].containsAny(context.roles)
+};
+
 // What this plane missed: obligations in the `breached` state, plane-wide.
 //
 // Its own verb rather than a widened `api:case.list`, and granted to a
@@ -220,6 +252,37 @@ permit(principal, action == Action::"api:obligation.list", resource)
 when {
   ["mako-operations", "regulatory"].containsAny(context.roles)
 };
+
+// Accounting for a breach takes it off that listing, so it is the same
+// compliance audience — and a verb of its own, because seeing what a plane
+// missed is not declaring it answered.
+//
+// The last recovery rehearsal's verdict is an auditor's question, read by the
+// same two roles.
+permit(
+  principal,
+  action in [Action::"api:obligation.acknowledge", Action::"api:drill.read"],
+  resource
+)
+when {
+  ["mako-operations", "regulatory"].containsAny(context.roles)
+};
+
+// Legal holds. Placing one preserves a matter an order names; listing them is
+// how the parties who place and lift them see what stands. Lifting one is what
+// lets the next retention or erasure pass destroy the matter, so it is the
+// narrowest grant in this file: the compliance function that answers for the
+// preservation order, and nobody who merely runs the plane.
+permit(
+  principal,
+  action in [Action::"api:hold.list", Action::"api:hold.place"],
+  resource
+)
+when {
+  ["mako-operations", "regulatory"].containsAny(context.roles)
+};
+permit(principal, action == Action::"api:hold.release", resource)
+when { context.roles.contains("regulatory") };
 
 // Cryptographic erasure is irreversible and belongs to privacy/compliance
 // operations, not to every role that may read a case.
@@ -263,6 +326,17 @@ permit(
   principal,
   action in [Action::"api:run.cancel", Action::"api:task.takeover",
              Action::"api:push.rearm"],
+  resource
+)
+when { context.roles.contains("mako-operations") };
+
+// The emergency stop. Throwing and lifting are separate verbs so that the
+// power to stop the plane says nothing about who may start it again; both are
+// the plane operator's, and every halt and every lift is journaled with the
+// actor who asked.
+permit(
+  principal,
+  action in [Action::"api:halt.place", Action::"api:halt.lift"],
   resource
 )
 when { context.roles.contains("mako-operations") };

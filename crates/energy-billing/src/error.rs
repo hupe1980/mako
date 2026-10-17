@@ -125,9 +125,10 @@ pub enum EngineError {
     RateRefused(crate::rates::RateRefusal),
 
     /// An arithmetic or document error from the `billing` core —
-    /// monetary overflow, invalid schedule, tax-layer failure.
+    /// monetary overflow, excess precision, an invalid tier ladder or VAT
+    /// treatment.
     #[error(transparent)]
-    Arithmetic(#[from] billing::BillingError),
+    Arithmetic(#[from] billing::Error),
 }
 
 impl EngineError {
@@ -201,11 +202,10 @@ mod tests {
     /// Arithmetic errors pass through transparently, keeping their message.
     #[test]
     fn arithmetic_passthrough() {
-        let inner = billing::BillingError::InvalidInput {
-            reason: "negative quantity".into(),
-        };
+        let inner = billing::Error::from(billing::ErrorKind::Overflow);
+        let message = inner.to_string();
         let err: EngineError = inner.into();
         assert_eq!(err.code(), "ARITHMETIC");
-        assert!(err.to_string().contains("negative quantity"));
+        assert_eq!(err.to_string(), message);
     }
 }

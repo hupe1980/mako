@@ -586,23 +586,14 @@ pub async fn get_delivery_surveillance(
         "read-timeseries",
         state.tenant.as_str(),
     ) {
-        return (
-            axum::http::StatusCode::FORBIDDEN,
-            axum::Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return mako_service::ApiError::forbidden(e.to_string()).into_response();
     }
 
     if let Some(s) = params.state.as_deref()
         && !["SILENT", "UNDER_COVERED"].contains(&s.to_uppercase().as_str())
     {
-        return (
-            axum::http::StatusCode::BAD_REQUEST,
-            axum::Json(serde_json::json!({
-                "error": format!("unknown state {s:?}"),
-                "expected": ["SILENT", "UNDER_COVERED"],
-            })),
-        )
+        return mako_service::ApiError::bad_request(format!("unknown state {s:?}"))
+            .with_fields(serde_json::json!({ "expected": ["SILENT", "UNDER_COVERED"] }))
             .into_response();
     }
 
@@ -697,11 +688,7 @@ pub async fn post_delivery_surveillance_scan(
         "write-quality-rescore",
         state.tenant.as_str(),
     ) {
-        return (
-            axum::http::StatusCode::FORBIDDEN,
-            axum::Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return mako_service::ApiError::forbidden(e.to_string()).into_response();
     }
 
     let report = run_surveillance_sweep(&state.repo, &state.surveillance, &state.tenant).await;

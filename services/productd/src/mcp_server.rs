@@ -561,16 +561,9 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
                  PUT /api/v1/products/{{lf}}/{{code}} (preistyp whitelist, _typ/_version, \
                  scalar preisstaffeln, sparte↔category, BO4E Tarifpreisblatt roundtrip)."
             ))])),
-            Err((_status, body)) => {
-                let msg = body
-                    .get("error")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("validation failed")
-                    .to_owned();
-                Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                    "INVALID: {msg}"
-                ))]))
-            }
+            Err(e) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "INVALID: {e}"
+            ))])),
         }
     }
 
@@ -622,14 +615,14 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
                  Grundversorgung the price term is §5 StromGVV.".to_owned(),
             "ARBEITSPREIS_EINTARIF" => "ARBEITSPREIS_EINTARIF: Single-rate consumption charge.\n\
                  Formula: arbeitspreis_ct_per_kwh / 100 × billable_kwh = EUR\n\
-                 Graduated products (block_tiers) go through billing::RateSchedule instead.\n\
+                 Graduated products (block_tiers) go through billing::Tariff::Graduated instead.\n\
                  energy-billing: ElectricityProvider::bill()\n\
                  BO4E: Rechnungsposition { preistyp: ArbeitspreisEintarif }\n\
                  §41a guard: If dyn_source=epex-spot-day-ahead, customer MaLo MUST have iMSys=true or BillingError.".to_owned(),
             "ARBEITSPREIS_HT" | "ARBEITSPREIS_NT" => format!(
                 "{preistyp}: Dual-rate (HT/NT) consumption charge.\n\
                  Formula: arbeitspreis_{{ht,nt}}_ct_per_kwh / 100 × kwh_in_that_band = EUR\n\
-                 energy-billing: ElectricityProvider::bill() → billing::TimeOfUsePricing\n\
+                 energy-billing: ElectricityProvider::bill(), one position per register\n\
                  Selected only when the METER reports both registers AND the PRODUCT \
                  prices both bands; a half-priced Zweitarif is refused by validate_warnings.\n\
                  Requires ZaehlzeitRegister TOU definition from marktd GET /zaehler/{{id}}/zaehlzeitdefinitionen."

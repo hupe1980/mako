@@ -36,7 +36,7 @@ pub(crate) struct CommunityAllocation {
 /// # Errors
 ///
 /// A ready response: `404` for a plant no rule names, `422` for rules that
-/// disagree or series that do not share a grid, `503` for a failed read.
+/// disagree or series that do not share a grid, `500` for a failed read.
 pub(crate) async fn community_allocation(
     state: &HandlerState,
     plant: &metering::MeloId,
@@ -47,10 +47,7 @@ pub(crate) async fn community_allocation(
     use sqlx::Row as _;
 
     let unprocessable = |error: String| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({ "error": error, "community_id": plant.as_str() })),
-        )
+        ApiError::unprocessable_with(error, serde_json::json!({ "community_id": plant.as_str() }))
             .into_response()
     };
 
@@ -71,17 +68,16 @@ pub(crate) async fn community_allocation(
         StatusCode::INTERNAL_SERVER_ERROR.into_response()
     })?;
     if rows.is_empty() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "no community participants are configured against this plant",
-                "community_id": plant.as_str(),
-                "hint": "`community_id` is the shared plant's MeLo. Create one rule per \
-                         participant via POST /api/v1/virtual with a COMMUNITY_SHARE \
-                         rule_json naming it as `plant`.",
-            })),
+        return Err(ApiError::not_found(
+            "no community participants are configured against this plant",
         )
-            .into_response());
+        .with_fields(serde_json::json!({
+            "community_id": plant.as_str(),
+            "hint": "`community_id` is the shared plant's MeLo. Create one rule per \
+                     participant via POST /api/v1/virtual with a COMMUNITY_SHARE \
+                     rule_json naming it as `plant`.",
+        }))
+        .into_response());
     }
 
     let legal_basis: Option<String> = rows[0].try_get("legal_basis").unwrap_or(None);
@@ -94,15 +90,10 @@ pub(crate) async fn community_allocation(
         let rule = VirtualMeterRule::from_json(&rule_json).map_err(|e| {
             // A stored rule that no longer deserialises is a config fault, and
             // silently dropping a participant under-allocates the settlement.
-            tracing::error!(error = %e, %plant, "edmd: undeserialisable community rule");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": format!("a stored community rule could not be read: {e}"),
-                    "community_id": plant.as_str(),
-                })),
-            )
-                .into_response()
+            ApiError::internal(anyhow::anyhow!(
+                "a stored community rule of plant {plant} could not be read: {e}"
+            ))
+            .into_response()
         })?;
         let VirtualMeterRule::CommunityShare {
             tenant,
@@ -204,11 +195,7 @@ pub(crate) async fn get_sharing_allocation(
 
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
@@ -218,12 +205,7 @@ pub(crate) async fn get_sharing_allocation(
     let plant: metering::MeloId = match community_id.parse() {
         Ok(m) => m,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": format!("community_id is the plant's MeLo: {e}"),
-                })),
-            )
+            return ApiError::bad_request(format!("community_id is the plant's MeLo: {e}"))
                 .into_response();
         }
     };
@@ -383,19 +365,9 @@ pub(crate) async fn get_sharing_readiness(
 
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
-    let unprocessable = |error: String| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response()
-    };
+    let unprocessable = |error: String| ApiError::unprocessable(error).into_response();
 
     let now = OffsetDateTime::now_utc();
     let (year, month) = match params.month.as_deref() {
@@ -476,7 +448,7 @@ pub(crate) async fn get_sharing_readiness(
                     .collect(),
                 Err(e) => {
                     tracing::warn!(error = %e, "sharing readiness: candidate scan failed");
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                    return ApiError::internal(e).into_response();
                 }
             }
         }

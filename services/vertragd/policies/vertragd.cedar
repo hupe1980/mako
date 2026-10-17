@@ -42,6 +42,9 @@
 //   "export-kunde"                 — GET  /api/v1/kunden/{id}/export (DSGVO Art. 15/20)
 //   "anonymize-kunde"              — POST /api/v1/kunden/{id}/anonymize (DSGVO Art. 17)
 //
+// Operator, deployment:
+//   "read-policy"                  — GET  /api/v1/policy (the operator policy report)
+//
 // Operator, Verträge:
 //   "read-vertrag"                 — every contract GET, incl. /malo/{id}/produkte,
 //                                    billing-candidates, expiring, Kündigungsfrist,
@@ -109,7 +112,8 @@ permit(
         Action::"read-rahmenvertrag",
         Action::"read-stammdaten",
         Action::"read-outbound-tasks",
-        Action::"use-mcp"
+        Action::"use-mcp",
+        Action::"read-policy"
     ],
     resource
 ) when {

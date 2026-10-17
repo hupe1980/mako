@@ -22,7 +22,7 @@ just dev billingd      # dev/config/billingd.toml against the dev PostgreSQL
 | **Rechnungsnummer** | fortlaufend per tenant (§ 14 Abs. 4 Nr. 4 UStG): `RE-` invoice, `SR-` Sammelrechnung, `ST-` Storno, `VG-` § 41e Gutschrift |
 | **Errors** | one envelope with a stable code — `{"error":{"code":"PERIOD_ALREADY_BILLED",…}}` |
 | **Events** | CloudEvents to `erp_webhook_url` through the transactional outbox, HMAC-signed |
-| **MCP** | 11 read-only tools at `/mcp` |
+| **MCP** | 12 read-only tools at `/mcp` |
 
 ## Routes
 
@@ -46,15 +46,17 @@ BEHG rate is not in a dated series is refused, naming tax and year.
 
 `dev/config/billingd.toml` is a working example.
 
-- **Top level:** `tenant`, `port`; upstream URLs `productd_url`, `edmd_url`,
+- **Top level:** `tenant`; upstream URLs `productd_url`, `edmd_url`,
   `marktd_url`, `vertragd_url`, `outputd_url`; the § 40 Abs. 2 Nr. 1 EnWG
   supplier identity `seller_name` plus `seller_vat_id` and/or
   `seller_tax_number`; `erp_webhook_url` / `erp_hmac_secret`;
   `min_meter_coverage_pct`.
-- **Tables:** `[database]`, `[rates]` (`mwst_rate`, `behg_regime`, dated
-  statutory rows), `[billing] settlement_form` (`ENDRECHNUNG` or
-  `RESTRECHNUNG`), `[seller]` (BG-5/BG-6 address), `[e_rechnung]`,
-  `[billing_runs]`, `[oidc]`, `[mcp]`.
+- **Tables:** `[http]` (`addr`), `[database]`, `[policy]` (`behg_regime` — `rvo_bezugspreis` or
+  `korridor`; `settlement_form` — `endrechnung` or `restrechnung`), `[rates]`
+  (`mwst_rate`, dated statutory rows), `[seller]` (BG-5/BG-6 address),
+  `[e_rechnung]`, `[billing_runs]`, `[oidc]`, `[mcp]`. `--print-config` runs the
+  same validation as startup and prints the policy report; the report is also
+  served at `GET /api/v1/policy` and by the MCP tool `get_policy`.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/billingd/)
 covers the billing arithmetic, § 40–§ 40c EnWG compliance, the risk gate,

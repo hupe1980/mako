@@ -34,12 +34,10 @@
 //! | [`clients`] | Thin upstream HTTP clients |
 //! | [`config`] | `portald.toml` shape |
 //! | [`handlers`] | Route handlers |
-//! | [`mcp_server`] | Operator-facing read-only MCP surface |
 //! | [`server`] | Router assembly + [`mako_service::Daemon`] impl |
 
 pub mod auth;
 pub mod clients;
 pub mod config;
 pub mod handlers;
-pub mod mcp_server;
 pub mod server;

@@ -322,25 +322,24 @@ impl Invoice {
             // key the map and parsing it back needed a fallback for a parse that
             // cannot fail, and the fallback was a **zero rate** — the one value
             // that turns a lost rate into a plausible-looking untaxed allowance
-            // rather than an error. `group_key` already normalises trailing
-            // zeros, so `0.19` and `0.190` still group together.
+            // rather than an error. The percentage is normalised, so `19` and
+            // `19.0` still group together.
             let mut groups: std::collections::BTreeMap<(&'static str, Decimal), Decimal> =
                 std::collections::BTreeMap::new();
             for advance in &advances {
-                for entry in advance.tax() {
-                    let (cat, rate) = entry.group_key();
-                    *groups.entry((cat.code(), rate)).or_insert(Decimal::ZERO) +=
-                        entry.taxable_base.into_decimal();
-                }
+                let rate = advance.vat.rate_percent().value().normalize();
+                *groups
+                    .entry((advance.vat.category().code(), rate))
+                    .or_insert(Decimal::ZERO) += advance.net;
             }
-            for ((cat, rate), base) in groups {
+            for ((cat, pct), base) in groups {
                 builder = builder.allowance(en16931::invoice::DocumentAllowanceCharge {
                     amount: amount("BT-92 (Nachlass auf Dokumentenebene)", base.round_kfm(2))?,
                     base_amount: None,
                     percentage: None,
                     vat: LineVat {
                         category: Code::from(cat),
-                        rate: Some(Percentage::from((rate * Decimal::ONE_HUNDRED).normalize())),
+                        rate: Some(Percentage::from(pct)),
                     },
                     reason: Some(ABSCHLAG_ALLOWANCE_REASON.to_owned()),
                     // UNCL 5189 code 95 — "Discount". EN 16931 has no advance-

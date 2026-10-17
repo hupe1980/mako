@@ -11,12 +11,12 @@
 //! what reaches the `partners.geschaeftspartner` JSONB column.
 
 use crate::state::AppState;
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{
     Extension,
     extract::{Path, Query, State},
-    http::StatusCode,
     response::IntoResponse,
 };
 use mako_markt::{
@@ -162,23 +162,15 @@ pub async fn put_partner(
     // bad role never reaches the store silently. (`is_unknown()` is the v0.8
     // one-call detector for a lenient-decode fall-through.)
     if record.marktrolle.is_some_and(|r| r.is_unknown()) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "invalid marktrolle: expected a BO4E Marktrolle code \
+        return ApiError::unprocessable(
+            "invalid marktrolle: expected a BO4E Marktrolle code \
                           (e.g. LF, NB, MSB, UENB, BKV); gas suppliers use LF \
-                          with rollencodetyp DVGW"
-            })),
+                          with rollencodetyp DVGW",
         )
-            .into_response();
+        .into_response();
     }
     if record.rollencodetyp.is_some_and(|r| r.is_unknown()) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "invalid rollencodetyp: expected BDEW, DVGW or GLN"
-            })),
-        )
+        return ApiError::unprocessable("invalid rollencodetyp: expected BDEW, DVGW or GLN")
             .into_response();
     }
 
@@ -198,11 +190,7 @@ pub async fn put_partner(
             });
             if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
                 tracing::error!(error = %e, "partner: durable enqueue failed");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "event enqueue failed"})),
-                )
-                    .into_response();
+                return ApiError::internal(e).into_response();
             }
 
             // Phase 2: when a new LF partner is registered, auto-dispatch the
@@ -423,17 +411,13 @@ pub async fn get_as4_address(
         .check(&claims.principal(), "read-partner", &state.tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     let mp_id = match mp_id_str.parse::<MarktpartnerId>() {
         Ok(id) => id,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                axum::Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
+            return ApiError::bad_request(e.to_string()).into_response();
         }
     };
 
@@ -444,11 +428,7 @@ pub async fn get_as4_address(
             "makoadresse":    p.makoadresse,
         }))
         .into_response(),
-        Ok(_) => (
-            StatusCode::NOT_FOUND,
-            format!("No AS4 address registered for {mp_id_str}"),
-        )
-            .into_response(),
+        Ok(_) => ApiError::NotFound.into_response(),
         Err(e) => e.into_response(),
     }
 }

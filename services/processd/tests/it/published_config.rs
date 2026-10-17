@@ -5,7 +5,8 @@
 //! `[subscription] event_types` to one type registers `processd` with `marktd`
 //! for that type alone, so `de.markt.versorgung.gap-detected` is never
 //! delivered and the §§ 36/38 EnWG Ersatz-/Grundversorgung module the same
-//! page documents never runs — silently, because the service is running
+//! page documents never runs, and a `de.mako.process.completed` never closes a
+//! row of the process read model — silently, because the service is running
 //! exactly as configured.
 
 use std::path::Path;
@@ -28,22 +29,12 @@ fn reference_defects(block: &str) -> Vec<String> {
         Ok(cfg) => cfg,
         Err(e) => return vec![format!("processd refuses the block: {e}")],
     };
-    let subscribed: Vec<&str> = cfg
-        .subscription
-        .event_types
-        .split(',')
-        .map(str::trim)
-        .collect();
-    [
-        mako_events::mako::PROCESS_INITIATED,
-        mako_events::markt::VERSORGUNG_GAP_DETECTED,
-        mako_events::markt::VERSORGUNG_EOG_BEGONNEN,
-        mako_events::markt::VERSORGUNG_CHANGED,
-    ]
-    .into_iter()
-    .filter(|t| !subscribed.contains(t))
-    .map(|t| format!("`[subscription] event_types` leaves out {t}"))
-    .collect()
+    let subscribed = &cfg.subscription.event_types;
+    processd::config::default_event_types()
+        .into_iter()
+        .filter(|t| !subscribed.contains(t))
+        .map(|t| format!("`[subscription] event_types` leaves out {t}"))
+        .collect()
 }
 
 #[test]
@@ -70,7 +61,7 @@ fn a_reference_that_narrows_the_subscription_is_refused() {
                    [identity]\nown_mp_id = \"9900357000004\"\n\
                    [makod]\nurl = \"http://makod:8080\"\napi_key = \"k\"\n\
                    [marktd]\nurl = \"http://marktd:8180\"\napi_key = \"k\"\n\
-                   [subscription]\nevent_types = \"de.mako.process.initiated\"\n";
+                   [subscription]\nevent_types = [\"de.mako.process.initiated\"]\n";
     let defects = reference_defects(planted);
     assert!(
         defects

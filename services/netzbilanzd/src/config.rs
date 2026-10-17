@@ -3,12 +3,18 @@
 use serde::Deserialize;
 
 /// Top-level configuration loaded from `netzbilanzd.toml` / env vars.
+///
+/// Unknown keys are refused: a misspelt key is otherwise a setting that does
+/// nothing, and for `[mabis]` that is a Summenzeitreihe filed under a default
+/// nobody chose.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NetzbilanzConfig {
     /// PostgreSQL connection + pool tuning (`[database]` block).
     pub database: mako_service::config::DatabaseConfig,
-    /// HTTP port (default 8680).
-    pub port: Option<u16>,
+    /// `[http]` — the listen address. Defaults to every interface on `8680`.
+    #[serde(default = "default_http")]
+    pub http: mako_service::config::HttpConfig,
     /// Tenant identifier for multi-tenant deployments. Defaults to `"default"`.
     #[serde(default = "default_tenant")]
     pub tenant: String,
@@ -20,7 +26,9 @@ pub struct NetzbilanzConfig {
     pub makod_url: String,
     /// `makod` API key.
     pub makod_api_key: String,
-    /// `edmd` base URL — auto-fetches imbalance data for MMM auto-run.
+    /// `edmd` base URL — auto-fetches imbalance data for MMM auto-run, and the
+    /// Lastgänge a MaBiS Summenzeitreihe aggregates. Required when `[mabis]`
+    /// is present.
     pub edmd_url: Option<String>,
     /// `edmd` bearer token.
     pub edmd_api_key: Option<String>,
@@ -71,6 +79,10 @@ pub struct NetzbilanzConfig {
     /// How often (seconds) to check for pending Kostenblatt near the 15th-of-month deadline.
     /// Default: 86400 (1 day). Set to 0 to disable.
     pub kostenblatt_alert_interval_secs: Option<u64>,
+    /// MaBiS Summenzeitreihen filed with the BIKO. Absent, the MaBiS routes
+    /// are not mounted and no submission is scheduled.
+    #[serde(default)]
+    pub mabis: Option<crate::mabis::config::MabisConfig>,
 }
 
 fn default_tenant() -> String {
@@ -106,8 +118,9 @@ impl NetzbilanzConfig {
                  PUT /api/v1/billing/drafts/{id}/dispatch sends an INVOIC to a market \
                  partner over AS4, POST …/storno reverses one, PUT …/mark-paid falsifies \
                  a receivable, GET /api/v1/billing/audit exports the § 147 AO / § 14b UStG \
-                 record, and POST /api/v1/redispatch/kostenblatt/submit/{year}/{month} \
-                 files the month's Redispatch costs"
+                 record, POST /api/v1/redispatch/kostenblatt/submit/{year}/{month} \
+                 files the month's Redispatch costs, and POST /api/v1/mabis/sync files a \
+                 binding Summenzeitreihe with the BIKO"
                     .to_owned(),
             );
         }
@@ -145,6 +158,30 @@ impl NetzbilanzConfig {
         Ok(())
     }
 
+    /// Refuse a `[mabis]` section that cannot produce a valid submission.
+    ///
+    /// Run at startup, so a misconfigured filing fails here and not at 05:00 on
+    /// the Erstaufschlag-Werktag, after a month of metering data has been
+    /// aggregated and the run's version number consumed.
+    ///
+    /// # Errors
+    ///
+    /// When `[mabis]` is present and its submission target is unimplemented,
+    /// its Bilanzierungsgebiet is not a Y-type EIC, or `edmd_url` — where every
+    /// Lastgang the aggregate sums comes from — is unset.
+    pub fn check_mabis(&self) -> anyhow::Result<()> {
+        let Some(mabis) = &self.mabis else {
+            return Ok(());
+        };
+        mabis.validate()?;
+        anyhow::ensure!(
+            self.edmd_url.is_some(),
+            "[mabis] is configured but edmd_url is not: every Lastgang a Summenzeitreihe \
+             aggregates is read from edmd, so the filing cannot be built without it"
+        );
+        Ok(())
+    }
+
     /// Whether `[mcp]` carries a usable API key — primary or named.
     ///
     /// An empty string is not a key: `McpAuth::from_auth_config_oidc` skips it,
@@ -177,6 +214,10 @@ impl mako_service::ServiceConfig for NetzbilanzConfig {
         Some(&self.database)
     }
     fn bind_addr(&self) -> String {
-        format!("0.0.0.0:{}", self.port.unwrap_or(8680))
+        self.http.addr.clone()
     }
+}
+
+fn default_http() -> mako_service::config::HttpConfig {
+    mako_service::config::HttpConfig::on_port(8680)
 }

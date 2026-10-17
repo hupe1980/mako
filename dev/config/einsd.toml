@@ -7,11 +7,13 @@
 
 allow_insecure_no_auth = true
 
-port   = 9180
 tenant = "9900357000004"
 
 edmd_url     = "http://127.0.0.1:8380"
 edmd_api_key = "dev-edmd-key"
+
+[http]
+addr = "127.0.0.1:9180"
 
 [database]
 url = "postgres://dev:dev@localhost:5432/einsd"

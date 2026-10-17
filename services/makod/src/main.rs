@@ -4,9 +4,10 @@
 //! Redispatch 2.0) into one [`EngineContext`], opens the configured transports,
 //! and runs until a shutdown signal arrives.
 //!
-//! Which modules are compiled in is a build-time choice — see the `role-*`
-//! features in `Cargo.toml`. A build that selects no role fails at startup
-//! rather than shipping a daemon whose router is empty.
+//! Which modules register is a runtime choice: `[deployment] rollen` in
+//! `makod.toml`, checked against `[[party]]` ([`core::deployment`]). A
+//! configuration that declares no role refuses to start rather than running a
+//! daemon whose router is empty.
 //!
 //! ## Where the reference lives
 //!
@@ -60,7 +61,8 @@ mod transport;
 // lib target). Mirrors the re-export block in lib.rs.
 use crate::api::{edifact_api, malo_admin_api, migration_api, partner_api};
 use crate::core::{
-    cedar_authz, config, erp_adapter, health, malo_cache, party_registry, preflight, worker_health,
+    cedar_authz, config, deployment, erp_adapter, health, malo_cache, malo_sync, party_registry,
+    preflight, worker_health,
 };
 use crate::orchestrator::{
     adapters, commands_api, deadline_dispatch, dvgw_ingest, edifact_renderer, ingest_dispatcher,
@@ -426,20 +428,6 @@ struct Cli {
     /// Can also be set via the `MAKOD_API_WEBDIENSTE_ADDR` environment variable.
     #[arg(long, value_name = "ADDR", env = "MAKOD_API_WEBDIENSTE_ADDR")]
     api_webdienste_addr: Option<std::net::SocketAddr>,
-
-    /// Acknowledge that an external distributed lock (e.g. S3 conditional-put
-    /// or DynamoDB conditional write) protects against concurrent multi-instance
-    /// inbox duplication.
-    ///
-    /// By default makod logs a `WARN` at startup when the inbox store is wired,
-    /// because two instances on one store do not share the inbox's
-    /// serializable isolation, so the same AS4 message can be processed twice.
-    /// With this flag the warning becomes an `INFO` acknowledging the external
-    /// lock. Pass it only when your infrastructure provides that guarantee.
-    ///
-    /// Can also be set via the `MAKOD_ALLOW_MULTI_INSTANCE` environment variable.
-    #[arg(long, env = "MAKOD_ALLOW_MULTI_INSTANCE", default_value_t = false)]
-    allow_multi_instance: bool,
 
     /// TCP address on which the AS4 inbound transport listens.
     ///
@@ -895,6 +883,21 @@ struct Cli {
     #[arg(long, value_name = "TOKEN", env = "MAKOD_MARKTD_API_KEY")]
     marktd_api_key: Option<String>,
 
+    /// makod's own fan-out endpoint as marktd reaches it, e.g.
+    /// `http://makod:8080/webhooks/marktd`.
+    ///
+    /// Required with `--marktd-url`: makod subscribes to marktd's durable
+    /// fan-out for `de.markt.malo.updated` at this address, reads each changed
+    /// record back and keeps the MaLo-Ident cache current; `/health/ready`
+    /// waits for the subscription and a backfill of marktd's MaLo list.
+    #[arg(long, value_name = "URL", env = "MAKOD_MARKTD_WEBHOOK_URL")]
+    marktd_webhook_url: Option<String>,
+
+    /// Standard Webhooks secret marktd signs its fan-out deliveries to makod
+    /// with. Without it deliveries are accepted unsigned (development).
+    #[arg(long, value_name = "SECRET", env = "MAKOD_MARKTD_WEBHOOK_SECRET")]
+    marktd_webhook_secret: Option<String>,
+
     /// Shared secret for Standard Webhooks signing on ERP webhook POSTs.
     ///
     /// When set alongside `--erp-webhook-url`, every webhook POST includes an
@@ -990,6 +993,13 @@ struct Cli {
     /// precedence over the primary `[[party]]` MP-ID for MP-ID routing.
     #[arg(skip)]
     parties: Vec<config::PartyConfig>,
+
+    /// `[deployment] rollen` loaded from `makod.toml`.
+    ///
+    /// Not settable via CLI flags, like `[[party]]`, against which it is
+    /// checked. Empty refuses startup.
+    #[arg(skip)]
+    rollen: Vec<deployment::Rolle>,
 
     /// Subcommand to run instead of the daemon.
     #[command(subcommand)]
@@ -1173,6 +1183,18 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         "MP-ID registry built from [[party]] entries",
     );
 
+    // ── [deployment] rollen — which engine modules register ──────────────────
+    //
+    // Checked against [[party]] before anything opens the store: a declared
+    // role without exactly one MP-ID, or an MP-ID for an undeclared role,
+    // refuses startup (and `--check`).
+    let rollen = deployment::validate_rollen(&cli.rollen, &cli.parties)
+        .context("invalid [deployment] rollen")?;
+    info!(
+        rollen = ?rollen.iter().map(|r| r.token()).collect::<Vec<_>>(),
+        "deployment roles declared",
+    );
+
     // ── Auto-derive engine roles from [[party]] ───────────────────────────────
     //
     // When --deployment-roles / MAKOD_DEPLOYMENT_ROLES is not set explicitly,
@@ -1236,7 +1258,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     let dl_sink_ingest = dl_sink.clone();
     let dl_sink_workers = dl_sink.clone();
 
-    let ctx = startup::build_engine(&store, dl_sink, effective_deployment_roles);
+    let ctx = startup::build_engine(&store, dl_sink, effective_deployment_roles, &rollen);
 
     let inbox_store = store.as_inbox_store();
     // Clone for the daily purge worker below; the original may be moved into
@@ -1258,26 +1280,9 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     );
     info!(
         "AS4 inbox deduplication store wired (SlateDbInboxStore); \
-         SSI transactions provide linearisable dedup within this process"
+         SSI transactions provide linearisable dedup within this process, \
+         and the data-directory lock keeps it the only writer"
     );
-    if !cli.allow_multi_instance {
-        tracing::warn!(
-            "SlateDbInboxStore uses SSI (Serializable Snapshot Isolation) within a \
-             single SlateDB Db handle. This is safe and linearisable within one makod \
-             instance. Multi-instance scale-out (horizontal scaling) WILL cause duplicate \
-             AS4 message processing because two independent Db handles on the same storage \
-             path do not share SSI isolation boundaries. \
-             Do NOT run multiple makod instances against the same --data-dir without an \
-             external distributed lock (e.g. object-storage conditional-put or DynamoDB \
-             conditional writes). Use --allow-multi-instance to suppress this warning when \
-             a distributed lock is in place."
-        );
-    } else {
-        tracing::info!(
-            "Multi-instance mode acknowledged via --allow-multi-instance. \
-             Ensure an external distributed lock protects inbox deduplication."
-        );
-    }
 
     // ── Startup: validate MessageAdapter coverage ─────────────────
     //
@@ -1344,6 +1349,24 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         oidc_audience: cli.oidc_audience.as_deref(),
     };
     let mut checked = preflight::preflight(&preflight_input)?;
+
+    // The MaLo-Ident cache follows marktd through the fan-out, which delivers
+    // to the HTTP port. A marktd without the subscription address would leave
+    // the cache answering counterparties from whatever it last held.
+    if cli.marktd_url.is_some() {
+        anyhow::ensure!(
+            cli.marktd_webhook_url.is_some(),
+            "[marktd] url is set without [marktd] webhook_url (MAKOD_MARKTD_WEBHOOK_URL): \
+             makod's MaLo cache follows marktd through its fan-out and needs the address \
+             marktd delivers to, e.g. http://makod:8080{}",
+            malo_sync::WEBHOOK_PATH,
+        );
+        anyhow::ensure!(
+            cli.http_addr.is_some(),
+            "[marktd] webhook_url needs the HTTP port (--http-addr): the fan-out delivers to {}",
+            malo_sync::WEBHOOK_PATH,
+        );
+    }
     preflight::warn_on_degraded_config(&preflight_input, cli.data_dir.is_some());
 
     // ── --check mode early exit ────────────────────────────────────────
@@ -1427,6 +1450,24 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             mako_service::http::default_client(),
         ))
     });
+
+    // ── MaLo cache ← marktd fan-out ───────────────────────────────────────────
+    //
+    // Subscribes to `de.markt.malo.updated`, backfills the cache from marktd's
+    // MaLo list, and holds `/health/ready` at 503 until both are done.
+    let malo_sync = match (&cli.marktd_url, &cli.marktd_webhook_url) {
+        (Some(url), Some(webhook_url)) => Some(Arc::new(malo_sync::MaloSync::new(
+            mako_service::http::default_client(),
+            url.clone(),
+            SecretString::from(cli.marktd_api_key.clone().unwrap_or_default()),
+            webhook_url.clone(),
+            cli.marktd_webhook_secret.clone().map(SecretString::from),
+            malo_cache::SlateDbMaloCache::new(store.clone()),
+            mp_id_registry.primary_mp_id(),
+            Arc::clone(&mp_id_registry),
+        ))),
+        _ => None,
+    };
 
     // ── Phase 2 ingest dispatcher ─────────────────────────────────────────────
     //
@@ -1599,12 +1640,19 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
                     marktrollen: effective_marktrollen.clone(),
                     malo_cache: Arc::clone(&malo_cache),
                     marktd_client: marktd_client.clone(),
+                    malo_sync: malo_sync.clone(),
                     as4_partner: &cli.as4_partner,
                     volatile_mode: cli.data_dir.is_none() && cli.allow_volatile,
                 },
             )
             .await?,
         );
+    }
+    if let Some(sync) = &malo_sync {
+        let ready = health_state.readiness_gate("malo_backfill");
+        server_handles.push(tokio::spawn(
+            Arc::clone(sync).run_startup(ready, shutdown_token.clone()),
+        ));
     }
 
     // ── Optional: AS4 inbound transport (--as4-addr) ──────────────────────────
@@ -1928,9 +1976,6 @@ fn apply_config_file(
         if storage.allow_volatile {
             cli.allow_volatile = true;
         }
-        if storage.allow_multi_instance {
-            cli.allow_multi_instance = true;
-        }
         if is_default("max_stream_events")
             && let Some(n) = storage.max_stream_events
         {
@@ -2239,6 +2284,16 @@ fn apply_config_file(
             )?
             .map(|s| s.trim().to_owned());
         }
+        if cli.marktd_webhook_url.is_none() {
+            cli.marktd_webhook_url = marktd.webhook_url;
+        }
+        if cli.marktd_webhook_secret.is_none() {
+            cli.marktd_webhook_secret = either_inline_or_file(
+                "marktd.webhook_secret",
+                marktd.webhook_secret,
+                marktd.webhook_secret_file.as_ref(),
+            )?;
+        }
     }
 
     // ── MaLo-ID / Verzeichnisdienst ───────────────────────────────────────────
@@ -2261,6 +2316,11 @@ fn apply_config_file(
         && !parties.is_empty()
     {
         cli.parties = parties;
+    }
+
+    // ── [deployment] — the roles this instance plays ─────────────────────────
+    if let Some(deployment) = cfg.deployment {
+        cli.rollen = deployment.rollen;
     }
 
     Ok(())
@@ -2747,6 +2807,8 @@ mod config_surface_tests {
             "command",
             // Populated from the file's `[[party]]` array, not from a flag.
             "parties",
+            // Populated from the file's `[deployment]` section, not from a flag.
+            "rollen",
         ];
 
         let struct_body = SOURCE

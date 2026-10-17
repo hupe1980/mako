@@ -573,8 +573,9 @@ per-stream cursor map; `0` means replay from the beginning.
 cargo run -p makod -- --config makod.toml --allow-volatile --http-addr 127.0.0.1:8080
 ```
 
-`makod.toml` needs at least one `[[party]]` entry (`mp_id` + `roles`). Without
-`--data-dir`, state is in memory and lost on restart.
+`makod.toml` needs `[deployment] rollen` and at least one `[[party]]` entry
+(`mp_id` + `roles`) for each declared role. Without `--data-dir`, state is in
+memory and lost on restart.
 
 ---
 

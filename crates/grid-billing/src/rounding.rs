@@ -16,11 +16,10 @@ use rust_decimal::Decimal;
 /// keeps a Storno symmetric to what it reverses: round(-0.005) = -0.01 mirrors
 /// round(0.005) = 0.01.
 ///
-/// The mode is [`billing::RoundingStrategy::MidpointAwayFromZero`] — the
-/// strategy the `billing` arithmetic core applies inside every `Amount`
-/// conversion, multiplication and division. Use `billing::Amount` where the
-/// precision is statutory; this helper is for a runtime `dp` on a raw
-/// `Decimal`.
+/// The mode is [`billing::Rounding::HalfAwayFromZero`] — the rounding of
+/// [`billing::AmountScale::EN16931`], which reduces every derived document
+/// total once. Use `billing::Amount` where the precision is statutory; this
+/// helper is for a runtime `dp` on a raw `Decimal`.
 ///
 /// ```rust
 /// use grid_billing::rounding::round_money;
@@ -32,7 +31,7 @@ use rust_decimal::Decimal;
 /// ```
 #[must_use]
 pub fn round_money(value: Decimal, dp: u32) -> Decimal {
-    value.round_dp_with_strategy(dp, ::billing::RoundingStrategy::MidpointAwayFromZero.into())
+    value.round_dp_with_strategy(dp, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
 }
 
 /// Method-call form of [`round_money`] — `x.round_kfm(2)`.

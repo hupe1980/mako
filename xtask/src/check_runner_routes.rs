@@ -15,7 +15,7 @@
 //! because the handler tests build handlers rather than the assembled router.
 //!
 //! A service that wants its own metrics gives them their own path — `invoicd`
-//! serves `/invoicd/metrics` and `obsd` `/obs/metrics`. This holds every
+//! serves `/invoicd/metrics` and `processd` `/obs/metrics`. This holds every
 //! `run::<D>()` daemon to that.
 //!
 //! `makod` is exempt and named as such: it predates the runner, drives its own
@@ -158,7 +158,7 @@ pub fn run(workspace_root: &Path) -> bool {
     }
     eprintln!(
         "\nGive the service's own handler its own path — `invoicd` serves\n\
-         `/invoicd/metrics`, `obsd` serves `/obs/metrics`."
+         `/invoicd/metrics`, `processd` serves `/obs/metrics`."
     );
     false
 }

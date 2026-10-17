@@ -38,7 +38,7 @@
 //! five, so only a key explicitly narrowed to `NB` would 403.
 
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use mako_service::{ApiError, ApiResult};
 
 use crate::{clients::PortalClients, config::PortaldConfig};
 
@@ -70,7 +70,7 @@ pub async fn authorize(
     clients: &PortalClients,
     headers: &HeaderMap,
     malo_id: &str,
-) -> Result<PortalAuthCtx, Response> {
+) -> ApiResult<PortalAuthCtx> {
     let Some(vertragd_url) = cfg.vertragd_url.as_deref() else {
         // Reachable only with `allow_insecure_no_auth`; startup refuses
         // otherwise (see `server::build`). Logged per request rather than once,
@@ -90,9 +90,9 @@ pub async fn authorize(
     // vertragd authenticates the token this reads, and an intermediary picking
     // the other occurrence would authorize a different customer.
     let header = mako_service::headers::single_str(headers, header::AUTHORIZATION.as_str())
-        .map_err(|_| unauthorized("Authorization must appear exactly once"))?;
+        .map_err(|_| ApiError::Unauthorized)?;
     let Some(token) = header else {
-        return Err(unauthorized("Authorization: Bearer required"));
+        return Err(ApiError::Unauthorized);
     };
 
     let mut req = clients
@@ -114,7 +114,7 @@ pub async fn authorize(
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(malo_id, error = %e, "portald: vertragd unreachable");
-            return Err(unavailable("authorization service unavailable"));
+            return Err(unavailable(e));
         }
     };
 
@@ -133,7 +133,9 @@ pub async fn authorize(
                     malo_id,
                     "portald: vertragd authorised without a kunden_id — refusing"
                 );
-                return Err(unavailable("authorization service returned no customer"));
+                return Err(unavailable(anyhow::anyhow!(
+                    "vertragd authorised without a kunden_id"
+                )));
             };
             Ok(PortalAuthCtx {
                 kunden_id,
@@ -141,27 +143,23 @@ pub async fn authorize(
                 malo_id: malo_id.to_owned(),
             })
         }
-        StatusCode::UNAUTHORIZED => Err(unauthorized("not authenticated")),
+        // No customer profile behind the token is as unauthenticated as no token.
+        StatusCode::UNAUTHORIZED | StatusCode::NOT_FOUND => Err(ApiError::Unauthorized),
         StatusCode::FORBIDDEN => {
             tracing::warn!(malo_id, "portald: customer not authorized for this MaLo");
-            Err((
-                StatusCode::FORBIDDEN,
+            Err(ApiError::forbidden(
                 "not authorized to access this delivery point",
-            )
-                .into_response())
+            ))
         }
-        StatusCode::NOT_FOUND => Err(unauthorized("no customer profile found for this identity")),
         s => {
             tracing::warn!(malo_id, status = %s, "portald: vertragd auth check failed");
-            Err(unavailable("authorization service unavailable"))
+            Err(unavailable(anyhow::anyhow!("vertragd answered {s}")))
         }
     }
 }
 
-fn unauthorized(msg: &'static str) -> Response {
-    (StatusCode::UNAUTHORIZED, msg).into_response()
-}
-
-fn unavailable(msg: &'static str) -> Response {
-    (StatusCode::SERVICE_UNAVAILABLE, msg).into_response()
+/// `503` naming `vertragd`: an authorization service that cannot answer is
+/// not an answer of yes. `cause` is logged beside the `error_id`.
+fn unavailable(cause: impl Into<anyhow::Error>) -> ApiError {
+    ApiError::upstream_unreachable("vertragd", cause)
 }

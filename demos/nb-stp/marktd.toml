@@ -3,7 +3,7 @@
 #
 # marktd is a **pure market-data hub**: MaLo/MeLo/contracts/VersorgungsStatus/PRICAT.
 # It receives CloudEvents from makod via the inbound webhook and fans them out
-# to registered subscribers (processd, invoicd, edmd, obsd, ...).
+# to registered subscribers (processd, invoicd, edmd, ...).
 #
 # Automated NB decisions (bestaetigen/ablehnen) are made by processd, NOT by
 # marktd.  Start a processd instance pointed at this marktd to enable the NB

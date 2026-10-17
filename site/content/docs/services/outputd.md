@@ -261,8 +261,9 @@ ZUGFeRD 2.3 requires four things of the carrier:
 
 The XMP is added by **incremental update** — the renderer's bytes stay in place
 and a new metadata object is appended, the mechanism a digital signature uses.
-Reading a finished document back is `en16931-formats::zugferd::extract`, with
-that crate's `Profile`. The profile is derived from BT-24, never configured:
+Reading a finished document back is `en16931-formats::zugferd::extract` under
+its default `Limits`, with that crate's `Profile`; the payload comes back as
+bytes and `en16931_formats::read` parses it. The profile is derived from BT-24, never configured:
 plain EN 16931 gets `factur-x.xml` and level `EN 16931`; the XRechnung CIUS gets
 `xrechnung.xml` and `XRECHNUNG`.
 
@@ -276,9 +277,9 @@ then:
 1. enforces the declared PDF/A level (one that cannot embed a file is refused);
 2. stamps the Factur-X XMP;
 3. reads the document back with **the counterparty's reader**
-   (`en16931-formats::zugferd::extract`): the payload must be byte-identical,
-   re-parse as CII, carry the same BT-1 and BT-115, and produce **no
-   `Divergence`** (XMP profile ≠ BT-24, XMP filename ≠ attachment,
+   (`en16931-formats::zugferd::extract`, then `en16931_formats::read`): the
+   payload must be byte-identical, re-parse as CII with **no reader entry**,
+   carry the same BT-1 and BT-115, and produce **no `Divergence`** (XMP profile ≠ BT-24, XMP filename ≠ attachment,
    supplementary `/AFRelationship`, missing XMP);
 4. reads the **page** text and requires the invoice number (§ 14 Abs. 4 Nr. 4
    UStG), both party names (Nr. 1) and the USt-IdNr. (BT-31) *or* Steuernummer
@@ -287,7 +288,8 @@ then:
    Preisanpassung).
 
 The specimen is a real `en16931::Invoice`, rendered through
-`DocumentView::of` and `en16931_formats::cii` like production; a two-sided test
+`DocumentView::of` and `facturx::cii_payload` (`en16931_formats::write_unchecked`
+to CII) like production; a two-sided test
 pins its BT-23, BT-34, BG-14 and BG-16 to what billingd's `einvoice::build`
 stamps. A failing template answers `422` with diagnostics.
 `document_templates.proof` records `RENDERED_PDFA` or `RENDERED_TEXTFORM`, and a
@@ -371,17 +373,24 @@ property to be declared in the fx extension schema, requires the
 Mustang raises `PEPPOL-EN16931-R008` on the core-profile file for the empty
 `<ram:ApplicableHeaderTradeDelivery/>`. It is a false positive: the element is
 mandatory in the CII D16B XSD and KoSIT's Schematron carves it out of R008. Do
-not omit the element.
+not omit the element. `en16931-formats` writes it empty whenever the model
+carries no BG-13 delivery term, which the specimen does not;
+`zugferd_carrier::the_cii_payload_keeps_the_mandatory_empty_delivery_element`
+pins it.
 
-`en16931` / `en16931-formats` are on 0.7; `document::facturx` writes the carrier
-and the `zugferd` feature is the reader the gate checks it with.
+`document::facturx` writes the carrier, and `en16931-formats`' `zugferd`
+reader plus `en16931_formats::read` of the extracted payload are what the gate
+checks it with: any entry the reader reports — an element outside the EN 16931
+subset, a value it could not represent, a duplicate — fails the publish.
 
 ## Configuration
 
 ```toml
 # outputd.toml
-port   = 9880
 tenant = "9900357000004"   # the operator's MP-ID — every template row is scoped to it
+
+[http]
+addr = "0.0.0.0:9880"
 
 [database]
 url = "postgresql://outputd:secret@db:5432/outputd"

@@ -7,7 +7,6 @@
 
 allow_insecure_no_auth = true
 
-port   = 9280
 tenant = "9900357000004"
 
 productd_url    = "http://127.0.0.1:9080"
@@ -20,6 +19,9 @@ erp_webhook_url = "http://127.0.0.1:9380/webhook"
 
 seller_name   = "Dev Energie GmbH"
 seller_vat_id = "DE123456789"
+
+[http]
+addr = "127.0.0.1:9280"
 
 [database]
 url = "postgres://dev:dev@localhost:5432/billingd"

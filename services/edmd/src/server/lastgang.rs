@@ -55,11 +55,7 @@ pub(crate) async fn get_lastgang(
 
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
@@ -79,13 +75,10 @@ pub(crate) async fn get_lastgang(
         Some(s) => match OffsetDateTime::parse(s, &Rfc3339) {
             Ok(ts) => Some(ts),
             Err(_) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({
-                        "error": format!("invalid as_of timestamp {s:?}; expected RFC 3339")
-                    })),
-                )
-                    .into_response();
+                return ApiError::bad_request(format!(
+                    "invalid as_of timestamp {s:?}; expected RFC 3339"
+                ))
+                .into_response();
             }
         },
     };
@@ -111,13 +104,7 @@ pub(crate) async fn get_lastgang(
     };
 
     if reads.is_empty() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(
-                serde_json::json!({ "error": "no meter reads for this MaLo in requested window" }),
-            ),
-        )
-            .into_response();
+        return ApiError::NotFound.into_response();
     }
 
     // One Lastgang per register, keyed on the **canonical** OBIS spelling:
@@ -136,7 +123,7 @@ pub(crate) async fn get_lastgang(
     // ── Arrow IPC response path ────────────────────────────────────────────────
     // If the caller sends `Accept: application/vnd.apache.arrow.stream`, return
     // the raw reads as an Arrow IPC stream instead of BO4E JSON. This gives
-    // mabis-syncd and billingd a 10× throughput improvement for bulk reads
+    // netzbilanzd and billingd a 10× throughput improvement for bulk reads
     // without requiring gRPC.
     if request_wants_arrow(&reads_headers) {
         return match reads_to_arrow_ipc(&reads) {
@@ -186,7 +173,7 @@ pub(crate) struct EnergyParams {
 /// `GET /api/v1/lastgang` is the BO4E **export** and returns one object per
 /// register — the right shape for an export and the wrong input to a figure,
 /// because folding it back into one series *is* the register projection. Serving
-/// the projection made is what keeps `mabis-syncd`, `billingd` and `einsd` from
+/// the projection made is what keeps `netzbilanzd`, `billingd` and `einsd` from
 /// each deriving their own.
 ///
 /// `?as_of=` reads through meterstore's transaction-time axis, exactly as
@@ -217,11 +204,7 @@ pub(crate) async fn get_energy_series(
 
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     // Refused, not defaulted: a caller that mistypes the direction would
@@ -231,14 +214,11 @@ pub(crate) async fn get_energy_series(
         None | Some("") | Some("BEZUG") => EnergyDirection::Bezug,
         Some("EINSPEISUNG") => EnergyDirection::Einspeisung,
         Some(other) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": format!("unknown direction `{other}`"),
-                    "expected": ["BEZUG", "EINSPEISUNG"],
-                })),
+            return ApiError::unprocessable_with(
+                format!("unknown direction `{other}`"),
+                serde_json::json!({ "expected": ["BEZUG", "EINSPEISUNG"] }),
             )
-                .into_response();
+            .into_response();
         }
     };
 
@@ -251,13 +231,10 @@ pub(crate) async fn get_energy_series(
         Some(s) => match OffsetDateTime::parse(s, &Rfc3339) {
             Ok(ts) => Some(ts),
             Err(_) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({
-                        "error": format!("invalid as_of timestamp {s:?}; expected RFC 3339")
-                    })),
-                )
-                    .into_response();
+                return ApiError::bad_request(format!(
+                    "invalid as_of timestamp {s:?}; expected RFC 3339"
+                ))
+                .into_response();
             }
         },
     };
@@ -451,7 +428,7 @@ pub(crate) fn request_wants_arrow(headers: &axum::http::HeaderMap) -> bool {
 ///
 /// `meter_reads.quantity_kwh` is `NUMERIC(18,5)` because a settled energy figure
 /// is a Buchungsbeleg (§ 147 AO / GoBD) and must be exact. The bulk transport has
-/// to carry the same type: `mabis-syncd` and `billingd` read Lastgang and
+/// to carry the same type: `netzbilanzd` and `billingd` read Lastgang and
 /// Zeitreihe over this stream precisely *because* it is the high-volume path.
 /// `Float64` cannot represent 0.1 kWh, so it would round every value on the
 /// wire and a month of quarter-hours would sum to a total the store disagrees
@@ -659,7 +636,12 @@ pub(crate) async fn post_esa_typ2(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Path(malo_id): Path<String>,
-    Json(req): Json<SmgwTyp2Push>,
+    // `Lenient`, not `Json`: this body is what an SM-PKI gateway decoded from a
+    // BSI TR-03109 SMGW, and a gateway on a newer TR-03109 profile may carry
+    // fields this struct has not modelled yet. Refusing such a push would drop
+    // valid Typ-2 values (Codeliste der Konfigurationen 1.4 Kap. 4.6.2) over a
+    // key edmd does not read; every field it does read is still required.
+    Lenient(req): Lenient<SmgwTyp2Push>,
 ) -> impl IntoResponse {
     use time::format_description::well_known::Rfc3339;
 
@@ -668,21 +650,15 @@ pub(crate) async fn post_esa_typ2(
     // `write-meter-reads` would both refuse it (that policy demands the MSB
     // role) and grant it too much — a Typ-2 value may never reach `meter_reads`.
     if let Err(e) = enforcer.check(&claims.principal(), "write-esa-typ2", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     if req.bestellung_ref.trim().is_empty() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "bestellung_ref is required — it names the ORDERS 17007 that ordered                           these values (SG1 RFF+AGI), and a Meldepunkt may carry several                           subscriptions",
-            })),
+        return ApiError::unprocessable(
+            "bestellung_ref is required — it names the ORDERS 17007 that ordered these values \
+             (SG1 RFF+AGI), and a Meldepunkt may carry several subscriptions",
         )
-            .into_response();
+        .into_response();
     }
     // There is no ESA in the Gas Rollenmodell (BDEW Rollenmodell V2.2), so a
     // Sparte other than Strom is a mis-addressed push rather than a default to
@@ -692,15 +668,11 @@ pub(crate) async fn post_esa_typ2(
         Some(raw) => match crate::domain::parse_sparte(raw) {
             Some(crate::domain::Sparte::Strom) => crate::domain::Sparte::Strom,
             _ => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": format!(
-                            "sparte {raw:?} is not orderable by an ESA — Kapitel 4.6 is Strom                              only and there is no ESA in the Gas Rollenmodell"
-                        ),
-                    })),
-                )
-                    .into_response();
+                return ApiError::unprocessable(format!(
+                    "sparte {raw:?} is not orderable by an ESA — Kapitel 4.6 is Strom only and \
+                     there is no ESA in the Gas Rollenmodell"
+                ))
+                .into_response();
             }
         },
     };
@@ -711,22 +683,17 @@ pub(crate) async fn post_esa_typ2(
             time::OffsetDateTime::parse(&w.dtm_from, &Rfc3339),
             time::OffsetDateTime::parse(&w.dtm_to, &Rfc3339),
         ) else {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": format!("werte[{i}]: dtm_from/dtm_to must be RFC 3339"),
-                })),
-            )
-                .into_response();
+            return ApiError::unprocessable(format!(
+                "werte[{i}]: dtm_from/dtm_to must be RFC 3339"
+            ))
+            .into_response();
         };
         let Ok(quantity_kwh) = w.quantity_kwh.parse::<rust_decimal::Decimal>() else {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": format!("werte[{i}]: quantity_kwh {:?} is not a decimal", w.quantity_kwh),
-                })),
-            )
-                .into_response();
+            return ApiError::unprocessable(format!(
+                "werte[{i}]: quantity_kwh {:?} is not a decimal",
+                w.quantity_kwh
+            ))
+            .into_response();
         };
         reads.push(crate::domain::Typ2Read {
             malo_id: malo_id.clone(),
@@ -752,20 +719,17 @@ pub(crate) async fn post_esa_typ2(
 
     let stored = reads.len();
     if let Err(err) = state.typ2_repo.store_typ2_reads(&reads).await {
-        let status = if err.is_retryable() {
-            StatusCode::INTERNAL_SERVER_ERROR
+        // A retryable failure is the store's and its text stays in the log; a
+        // permanent one is the push's own content, and the caller is told why.
+        return if err.is_retryable() {
+            ApiError::internal(anyhow::anyhow!(
+                "edmd: ESA Typ-2 SMGW push for MaLo {malo_id} could not be stored: {err}"
+            ))
         } else {
-            StatusCode::UNPROCESSABLE_ENTITY
-        };
-        tracing::error!(
-            %err, malo_id, retryable = err.is_retryable(),
-            "edmd: ESA Typ-2 SMGW push store failed"
-        );
-        return (
-            status,
-            Json(serde_json::json!({ "error": err.to_string() })),
-        )
-            .into_response();
+            tracing::warn!(%err, malo_id, "edmd: ESA Typ-2 SMGW push refused by the store");
+            ApiError::unprocessable(err.to_string())
+        }
+        .into_response();
     }
 
     tracing::info!(
@@ -800,11 +764,7 @@ pub(crate) async fn get_esa_typ2(
 ) -> impl IntoResponse {
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
@@ -848,11 +808,7 @@ pub(crate) async fn get_zeitreihe(
 
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
@@ -866,13 +822,10 @@ pub(crate) async fn get_zeitreihe(
         Some(s) => match OffsetDateTime::parse(s, &Rfc3339) {
             Ok(ts) => Some(ts),
             Err(_) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({
-                        "error": format!("invalid as_of timestamp {s:?}; expected RFC 3339")
-                    })),
-                )
-                    .into_response();
+                return ApiError::bad_request(format!(
+                    "invalid as_of timestamp {s:?}; expected RFC 3339"
+                ))
+                .into_response();
             }
         },
     };
@@ -898,13 +851,7 @@ pub(crate) async fn get_zeitreihe(
     };
 
     if reads.is_empty() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(
-                serde_json::json!({ "error": "no meter reads for this MaLo in requested window" }),
-            ),
-        )
-            .into_response();
+        return ApiError::NotFound.into_response();
     }
 
     // One Zeitreihe per register, on the same canonical key as `get_lastgang`.
@@ -996,11 +943,7 @@ pub(crate) async fn get_lastgang_resampled(
 ) -> impl IntoResponse {
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
@@ -1019,13 +962,10 @@ pub(crate) async fn get_lastgang_resampled(
         "MONTH" => metering::Resolution::Month,
         "YEAR" => metering::Resolution::Year,
         other => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": format!("unknown resolution {other:?} — use HOUR, DAY, MONTH, or YEAR")
-                })),
-            )
-                .into_response();
+            return ApiError::bad_request(format!(
+                "unknown resolution {other:?} — use HOUR, DAY, MONTH, or YEAR"
+            ))
+            .into_response();
         }
     };
 
@@ -1046,13 +986,7 @@ pub(crate) async fn get_lastgang_resampled(
     };
 
     if reads.is_empty() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "no meter reads for this MaLo in requested window"
-            })),
-        )
-            .into_response();
+        return ApiError::NotFound.into_response();
     }
 
     // Project onto one canonical energy series before resampling. A resolved read
@@ -1065,11 +999,7 @@ pub(crate) async fn get_lastgang_resampled(
     let response = match resampled_buckets(sparte, &intervals, target) {
         Ok(buckets) => buckets,
         Err(error) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": error })),
-            )
-                .into_response();
+            return ApiError::unprocessable(error).into_response();
         }
     };
 
@@ -1152,11 +1082,7 @@ pub(crate) async fn get_summenzeitreihe(
         "read-timeseries",
         state.tenant.as_str(),
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
         Ok(w) => w,
@@ -1187,11 +1113,7 @@ pub(crate) async fn get_summenzeitreihe(
     let months = match resampled_buckets(sparte, &intervals, metering::Resolution::Month) {
         Ok(buckets) => buckets,
         Err(error) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": error })),
-            )
-                .into_response();
+            return ApiError::unprocessable(error).into_response();
         }
     };
     let total_kwh: rust_decimal::Decimal = months
@@ -1247,7 +1169,7 @@ mod arrow_transport_tests {
     /// The bulk path carries the stored value exactly, not a float of it.
     ///
     /// `0.1` has no binary floating-point representation, so an `f64` column
-    /// handed `mabis-syncd` and `billingd` a different number than the store
+    /// handed `netzbilanzd` and `billingd` a different number than the store
     /// holds — on the transport chosen *because* it is the high-volume one, and
     /// for a figure § 147 AO requires to be exact.
     #[test]
@@ -1351,5 +1273,68 @@ mod arrow_transport_tests {
             .expect("serialises");
         assert_eq!(json["_typ"], "LASTGANG");
         assert!(json.get("_version").is_none());
+    }
+}
+
+#[cfg(test)]
+mod smgw_push_body_tests {
+    use super::*;
+    use tower::ServiceExt as _;
+
+    /// A push as a gateway on a newer TR-03109 profile sends it: every field
+    /// edmd reads, plus `zaehlerstand_signatur` and `pruefsumme` it does not.
+    fn push_with_extra_fields() -> String {
+        serde_json::json!({
+            "bestellung_ref": "ORD-17007-1",
+            "msb_mp_id": "9900987654329",
+            "melo_id": "DE0001234567890123456789012345678",
+            "pruefsumme": "a1b2",
+            "werte": [{
+                "dtm_from": "2026-07-01T00:00:00Z",
+                "dtm_to": "2026-07-01T00:15:00Z",
+                "quantity_kwh": "1.25",
+                "obis_code": "1-0:1.8.0",
+                "zaehlerstand_signatur": "MEUCIQ…",
+            }],
+        })
+        .to_string()
+    }
+
+    async fn status_of(app: axum::Router) -> StatusCode {
+        app.oneshot(
+            axum::http::Request::post("/")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(push_with_extra_fields()))
+                .expect("request"),
+        )
+        .await
+        .expect("response")
+        .status()
+    }
+
+    /// The extractor `post_esa_typ2` takes admits the extra keys a TR-03109
+    /// gateway may carry, and still decodes every field edmd reads.
+    #[tokio::test]
+    async fn a_smgw_push_with_fields_edmd_does_not_model_is_accepted() {
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::post(|Lenient(push): Lenient<SmgwTyp2Push>| async move {
+                assert_eq!(push.bestellung_ref, "ORD-17007-1");
+                assert_eq!(push.werte.len(), 1);
+                StatusCode::OK
+            }),
+        );
+        assert_eq!(status_of(app).await, StatusCode::OK);
+    }
+
+    /// The contrast that makes the choice of extractor load-bearing: the strict
+    /// one refuses the very same push.
+    #[tokio::test]
+    async fn the_strict_extractor_would_refuse_that_push() {
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::post(|Json(_): Json<SmgwTyp2Push>| async { StatusCode::OK }),
+        );
+        assert_eq!(status_of(app).await, StatusCode::UNPROCESSABLE_ENTITY);
     }
 }

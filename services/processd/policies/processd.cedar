@@ -23,7 +23,10 @@
 //
 // The decision log, the approval queue and the EoG case log are operational
 // evidence: § 20 Abs. 1 EnWG parity audits and the § 38 EnWG timer both have to
-// be readable by whoever is answering for them.
+// be readable by whoever is answering for them. The process read model —
+// `read-process` (`/obs/processes`), `read-kpi` (`/obs/kpis` and the § 7a Abs. 5
+// EnWG Gleichbehandlung report), `read-overdue` (`/obs/overdue`) — is the same
+// kind of evidence, read by the same callers.
 
 permit(
     principal,
@@ -32,6 +35,9 @@ permit(
         Action::"read-queue",
         Action::"read-eog",
         Action::"read-neuanlage",
+        Action::"read-process",
+        Action::"read-kpi",
+        Action::"read-overdue",
         Action::"use-mcp"
     ],
     resource
@@ -91,4 +97,51 @@ permit(
 ) when {
     context.principal_tenant == context.resource_tenant &&
     context.principal_roles.contains("LF")
+};
+
+// ── Rebuilding the process read model — ADMIN only ───────────────────────────
+//
+// `POST /api/v1/obs/rebuild` replays marktd's CloudEvent log into
+// `process_projections`. It rewrites the evidence the Gleichbehandlungsbericht
+// is drawn from, so it is an operator capability, not a market role's.
+
+permit(
+    principal,
+    action == Action::"rebuild-projection",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.contains("ADMIN")
+};
+
+// ── The Sperr-/Entsperrauftrag queue — NB only ───────────────────────────────
+//
+//   "read-sperr-order"    — GET the queue, a single order, or /stats, and the
+//                           four Sperrauftrag MCP tools. The queue is dispatch
+//                           data — which household is to be disconnected, and
+//                           where the technician should meet them.
+//   "create-sperr-order"  — POST a new order. Schedules a physical visit.
+//   "execute-sperr-order" — PUT .../execute or .../fail. Reports the outcome to
+//                           the Lieferant as IFTSTA 21039; the message cannot be
+//                           taken back, only corrected by another one.
+//   "cancel-sperr-order"  — PUT .../cancel. Withdraws a pending order. It only
+//                           ever prevents a disconnection, but an order cancelled
+//                           without telling the Lieferant still leaves their
+//                           process waiting, so it is held to the same role.
+//
+// The NB receives the Sperrauftrag, sends the field team, and reports the
+// Auftragsstatus; no other role has a basis for any of it.
+
+permit(
+    principal,
+    action in [
+        Action::"read-sperr-order",
+        Action::"create-sperr-order",
+        Action::"execute-sperr-order",
+        Action::"cancel-sperr-order"
+    ],
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.contains("NB")
 };

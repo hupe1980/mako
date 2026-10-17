@@ -77,6 +77,7 @@ pub enum GemeindeGroesse {
 /// consumption threshold: KAV §2 Abs. 3 applies to Sondervertragskunden whatever
 /// they consume, and Abs. 2 bands Tarifkunden by municipality size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum KaKundengruppe {
     /// Tarifkunde — KAV §2 Abs. 2. Rate depends on [`GemeindeGroesse`].
     ///
@@ -1205,6 +1206,7 @@ impl<'de> serde::Deserialize<'de> for Jahresanteil {
 
 /// A metered quantity priced at a rate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MengePreis {
     /// Metered energy in kWh.
     pub menge_kwh: Decimal,
@@ -1229,6 +1231,7 @@ pub struct MengePreis {
 /// Those were runtime warnings in a validator the engine never called. They are
 /// now unrepresentable.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum ArbeitspreisModell {
     /// A single rate for all metered energy.
     Einheitlich(MengePreis),
@@ -1345,6 +1348,7 @@ impl ArbeitspreisModell {
 /// Netzbetreiber's price sheet, and hard-coding one would bill some networks
 /// wrongly. [`Blindarbeit::COS_PHI_0_9`] is the documented default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Blindarbeit {
     /// Reactive energy drawn in the period, in kvarh.
     pub blindarbeit_kvarh: Decimal,
@@ -1378,6 +1382,7 @@ impl Blindarbeit {
 /// A pair, because billing one without the other is meaningless — which two
 /// independent `Option`s cannot express.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Leistungspreis {
     /// The Höchstleistung in kW the price is charged against.
     ///
@@ -1416,6 +1421,7 @@ pub struct Leistungspreis {
 /// and this enum is where it says which.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[serde(deny_unknown_fields)]
 pub enum LeistungspreisSystem {
     /// §17 Abs. 2 Satz 2 StromNEV — Jahresleistungspreis × Jahreshöchstleistung
     /// im Abrechnungsjahr.
@@ -1438,6 +1444,7 @@ pub enum LeistungspreisSystem {
 
 /// A Gas NNE Grundpreis — monthly rate and the months billed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Grundpreis {
     /// Rate in EUR per month.
     pub eur_per_month: Decimal,
@@ -2083,6 +2090,7 @@ pub struct NneInput {
 /// 15-minute interval. The rates arrive already derived — this crate never
 /// queries a spot market.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpotpreisInterval {
     /// UTC start of this controlled dispatch interval (ISO-8601).
     ///
@@ -2406,6 +2414,7 @@ pub struct GasAwhInput {
 /// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AwhPositionInput {
     /// Human-readable action description, e.g. `"Sperrung Gaszähler"`.
     pub beschreibung: String,

@@ -189,7 +189,7 @@ with `200 OK` without re-processing.
 | edmd API → ERP | `GET /api/v1/lastgang/{malo_id}` | BO4E `Lastgang` — interval time series grouped by OBIS register |
 | edmd API → ERP | `GET /api/v1/billing-period/{malo_id}` | `MeterBillingPeriod` — arbeitsmenge, spitzenleistung, brennwert |
 | ERP → marktd | `PUT /api/v1/nb-contracts/{id}` | Upsert NB contract with full BO4E `Vertrag` payload |
-| obsd API → ERP | `GET /obs/kpis` | BNetzA KPI report — § 7a Abs. 5 EnWG Gleichbehandlung parity, STP rates, decision times |
+| processd API → ERP | `GET /obs/kpis` | BNetzA KPI report — § 7a Abs. 5 EnWG Gleichbehandlung parity, STP rates, decision times |
 
 ### ERP-facing integration topology
 
@@ -203,8 +203,7 @@ graph TB
     marktd["marktd :8180 · PostgreSQL<br/>MaLo/MeLo/contracts · Vertrag<br/>typed rubo4e::current API<br/>durable fan-out"]
     invoicd["invoicd :8280 · PostgreSQL<br/>INVOIC plausibility · REMADV<br/>§ 147 AO / GoBD receipts"]
     edmd["edmd :8380 · PostgreSQL<br/>Vec<Energiemenge> deliveries<br/>Lastgang · MeterBillingPeriod"]
-    obsd["obsd :8480 · PostgreSQL<br/>process projections<br/>BNetzA §20 KPI reports"]
-    processd["processd :8580<br/>NB STP `mako-pruefung`<br/>LF answers 55007 / 55010"]
+    processd["processd :8580 · PostgreSQL<br/>NB STP `mako-pruefung`<br/>LF answers 55007 / 55010<br/>process projections · BNetzA KPI reports"]
     billingd["billingd :9280 · PostgreSQL<br/>energy billing · EN 16931<br/>XRechnung CII / PEPPOL UBL"]
     outputd["outputd :9880<br/>template store · ZUGFeRD PDF/A-3<br/>Textform proofs"]
     accountingd["accountingd :9380 · PostgreSQL<br/>double-entry ledger · Kontokorrent<br/>SEPA pain.008 / camt.05x"]
@@ -216,16 +215,15 @@ graph TB
     makod -->|"de.mako.process.*<br/>HMAC-signed CloudEvents"| marktd
     marktd -->|"fan-out<br/>de.mako.* + de.markt.*"| ERP
     marktd -->|"de.mako.process.initiated"| invoicd
-    marktd -->|"de.mako.process.initiated"| processd
+    marktd -->|"de.mako.*"| processd
     marktd -->|"de.mako.*"| edmd
-    marktd -->|"de.mako.*"| obsd
 
     invoicd -->|"de.invoic.receipt.settled/disputed<br/>de.invoic.payment.overdue"| ERP
     invoicd -->|"gpke.abrechnung.annehmen/.ablehnen"| makod
     processd -->|"gpke.lieferbeginn.bestaetigen/.ablehnen<br/>geli.lieferbeginn.anmelden"| makod
 
-    ERP -->|"GET /api/v1/deliveries/{malo_id}<br/>(Vec<Energiemenge>)<br/>GET /obs/kpis"| edmd
-    ERP -.->|"GET /obs/kpis<br/>GET /obs/overdue"| obsd
+    ERP -->|"GET /api/v1/deliveries/{malo_id}<br/>(Vec<Energiemenge>)"| edmd
+    ERP -.->|"GET /obs/kpis<br/>GET /obs/overdue"| processd
 
     billingd -->|"render · pin template hash"| outputd
     billingd -->|"de.billing.rechnung.erstellt"| accountingd
@@ -488,7 +486,7 @@ payload is `422 idempotency_key_reuse`.
 
 ```json
 // 422 — the key already belongs to a different request.
-{ "error": "idempotency_key_reuse", "detail": "…" }
+{ "error": "Unprocessable Entity", "code": "idempotency_key_reuse", "detail": "…" }
 ```
 
 A storage failure on the lookup is `503 idempotency_unavailable` — retry.
@@ -497,14 +495,14 @@ Beneath the key sits the business-level guard: a second `anmelden` while a
 process is active for the same business key is `409 duplicate_process` even
 under a fresh key, carrying the existing `process_id`. **Treat it as success**
 and adopt the `process_id`. The other 409, `invalid_state`, is a real error and
-carries none.
+carries none. Branch on `code`: `error` is the HTTP reason phrase.
 
 ```json
 // 409 — your retry already succeeded. Adopt the process_id.
-{ "error": "duplicate_process", "malo_id": "51238696799", "process_id": "018f3a2b-..." }
+{ "error": "Conflict", "code": "duplicate_process", "detail": "…", "malo_id": "51238696799", "process_id": "018f3a2b-..." }
 
 // 409 — genuine rejection. Do not retry.
-{ "error": "invalid_state", "detail": "cannot bestaetigen a process in state Abgeschlossen" }
+{ "error": "Conflict", "code": "invalid_state", "detail": "cannot bestaetigen a process in state Abgeschlossen" }
 ```
 
 The guard covers a **running** process of the same family only, decided from
@@ -842,7 +840,7 @@ CloudEvents types. The BO4E schema tag is `v202607.1.0`; a payload's
 | `marktd` operator reference | [marktd](@/docs/services/marktd.md) |
 | `invoicd` operator guide | [invoicd](@/docs/services/invoicd.md) |
 | `edmd` operator guide | [edmd](@/docs/services/edmd.md) |
-| `obsd` operator guide | [obsd](@/docs/services/obsd.md) |
+| process read model (KPIs, § 7a Abs. 5 EnWG) | [processd](@/docs/services/processd.md#process-read-model) |
 | Engine architecture | [Engine](@/docs/architecture/engine.md) |
 | API-Webdienste Strom (MaLo-ID) | [API-Webdienste](@/docs/architecture/api-webdienste.md) |
 | Annual release workflow | [Annual release workflow](@/docs/compliance/annual-release-workflow.md) |

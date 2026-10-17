@@ -124,7 +124,7 @@ fn monat_pos_traced(
 }
 
 fn decimal_to_euro_amount(d: Decimal) -> Result<EuroAmount, BillingError> {
-    EuroAmount::checked_from_decimal(d).map_err(|_| BillingError::MonetaryOverflow {
+    EuroAmount::from_decimal(d).map_err(|_| BillingError::MonetaryOverflow {
         input_value: Some(d),
     })
 }

@@ -22,7 +22,7 @@ use uuid::Uuid;
 /// Build the canonical `CloudEvents` `source` URI for a mako service.
 ///
 /// Shape: `urn:mako:{service}:tenant:{tenant}`. `CloudEvents` §3.1 requires
-/// `source` to be a URI-reference; a bare service name (`"obsd"`) is not one.
+/// `source` to be a URI-reference; a bare service name (`"processd"`) is not one.
 /// This is the single convention every emitter uses, so a subscriber can parse
 /// the emitting service and tenant out of `source` uniformly.
 #[must_use]
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn without_subject_omits_it() {
         let ce = CloudEvent::new(
-            source("obsd", "9900000000001"),
+            source("processd", "9900000000001"),
             mako_events::obs::DEADLINE_APPROACHING,
             "",
             serde_json::json!({}),
@@ -435,7 +435,7 @@ mod tests {
     #[test]
     fn new_subjectless_omits_subject() {
         let ce = CloudEvent::new_subjectless(
-            source("obsd", "t1"),
+            source("processd", "t1"),
             mako_events::obs::STP_PARITY_ALERT,
             serde_json::json!({}),
         );

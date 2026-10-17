@@ -93,7 +93,7 @@ impl InboundMakoEvent {
 /// Produced by the event enrichment pipeline and broadcast to the fan-out worker
 /// via an unbounded MPSC sender.
 ///
-/// L3 services (`invoicd`, `edmd`, `obsd`) receive this struct deserialized from
+/// L3 services (`invoicd`, `edmd`, `processd`) receive this struct deserialized from
 /// the JSON webhook body posted by `marktd`'s fan-out worker.
 ///
 /// # CloudEvents extensions (§3.3: lowercase alphanumeric)
@@ -157,7 +157,7 @@ pub struct MarktEvent {
     /// Prüfidentifikator of the originating EDIFACT process.
     ///
     /// Forwarded from the `makopid` CloudEvents extension set by `makod` and
-    /// preserved by `marktd` so that L3 subscribers (e.g. `edmd`, `obsd`) can
+    /// preserved by `marktd` so that L3 subscribers (e.g. `edmd`, `processd`) can
     /// filter events without parsing the `data` payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub makopid: Option<u32>,

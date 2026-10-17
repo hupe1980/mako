@@ -7,7 +7,6 @@
 
 allow_insecure_no_auth = true
 
-port           = 8680
 tenant         = "9900357000004"
 marktd_url     = "http://127.0.0.1:8180"
 marktd_api_key = "dev-marktd-key"
@@ -16,5 +15,16 @@ makod_api_key  = "dev-makod-key"
 edmd_url       = "http://127.0.0.1:8380"
 edmd_api_key   = "dev-edmd-key"
 
+[http]
+addr = "127.0.0.1:8680"
+
 [database]
 url = "postgres://dev:dev@localhost:5432/netzbilanzd"
+
+# MaBiS Summenzeitreihen: the Netzbetreiber filing, the ÜNB receiving, and the
+# Bilanzierungsgebiet the Summenzeitreihen are for — synthetic codes, EIC check
+# character included. Remove the section to run without MaBiS filing.
+[mabis]
+sender_mp_id           = "9900357000004"
+receiver_mp_id         = "9900077000006"
+bilanzierungsgebiet_id = "11YMAKO-TEST-01U"

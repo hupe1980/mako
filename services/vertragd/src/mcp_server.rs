@@ -24,6 +24,8 @@ pub struct VertragdMcpState {
     pub pool: PgPool,
     pub tenant: String,
     pub auth: mako_service::mcp_auth::McpAuth,
+    /// The operator policy and posture this deployment runs under.
+    pub policy: Arc<mako_service::policy::PolicyReport>,
 }
 
 /// A tool that takes no arguments.
@@ -124,6 +126,16 @@ impl VertragdMcpHandler {
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
         }
+    }
+
+    #[tool(
+        description = "The operator policy and posture this vertragd deployment runs under: each [policy.dsr] reading (which categories are portable under Art. 20 DSGVO, which processes are stated as automated decisions under Art. 15 Abs. 1 lit. h) with its value, whether it was set or defaulted, and its source. Read-only; a setting changes only by editing the config and restarting.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_policy(&self) -> Result<CallToolResult, McpError> {
+        ContentBlock::json(serde_json::to_value(&*self.state.policy).unwrap_or_default())
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None))
     }
 
     #[tool(

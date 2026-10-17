@@ -14,7 +14,7 @@
 //! valid JSON, and the field looks populated.
 //!
 //! The MCP surface is where it costs most: a deadline specialist's whole job is
-//! deciding whether a Frist has passed, and an `obsd` `deadline_at` served as an
+//! deciding whether a Frist has passed, and a `deadline_at` served as an
 //! undocumented integer array is something it can only do arithmetic on by
 //! guessing.
 //!
@@ -36,9 +36,9 @@
 //! serve whatever the derive produces, and the `time` crate's `serde` feature
 //! writes an `OffsetDateTime` as `1970-01-01 00:00:00.0 +00:00:00` — a space
 //! where ISO 8601 puts a `T`, and an offset carrying seconds. It parses in
-//! `time` and almost nowhere else. `obsd` served exactly that on
-//! `GET /obs/processes` while its own MCP tools served RFC 3339 for the same
-//! `deadline_at`, because only the hand-built path was checked.
+//! `time` and almost nowhere else. A REST route serving that beside MCP tools
+//! that serve RFC 3339 for the same `deadline_at` hands two consumers two
+//! spellings of one instant, and checking only the hand-built path lets it.
 //!
 //! So an `OffsetDateTime` (or `PrimitiveDateTime`) field of a struct deriving
 //! `Serialize` must carry `#[serde(with = "time::serde::rfc3339")]`, or
@@ -448,9 +448,9 @@ mod tests {
         assert!(offending_lines(ordinary).is_empty());
     }
 
-    /// The `obsd` projection as it shipped: RFC 3339 through the MCP tools,
-    /// `time`'s own format through the REST routes, because only the hand-built
-    /// path was checked.
+    /// A projection that serves RFC 3339 through its MCP tools serves `time`'s
+    /// own format through its REST routes unless the derived path is checked
+    /// too.
     #[test]
     fn a_derived_serialize_field_needs_an_rfc_3339_adapter() {
         let shipped = r#"

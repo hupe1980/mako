@@ -90,11 +90,7 @@ pub async fn grant_einwilligung(
         return ApiError::forbidden("write-einwilligung denied").into_response();
     }
     if body.location_ids.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "location_ids must not be empty" })),
-        )
-            .into_response();
+        return ApiError::bad_request("location_ids must not be empty").into_response();
     }
     let rec = EinwilligungRecord {
         id: Uuid::nil(),
@@ -394,13 +390,7 @@ pub async fn put_esa_preise(
         return ApiError::forbidden("write-einwilligung denied").into_response();
     }
     if body.preise.is_empty() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "preise must not be empty — SG31 PRI is Muss inside the SG27 LIN                           position block, and an offer that prices nothing is the Ablehnung",
-            })),
-        )
-            .into_response();
+        return ApiError::unprocessable("preise must not be empty — SG31 PRI is Muss inside the SG27 LIN                           position block, and an offer that prices nothing is the Ablehnung").into_response();
     }
     let waehrung = body.waehrung.unwrap_or_else(|| "EUR".to_owned());
     let rows: Vec<EsaMessproduktPreis> = body
@@ -510,16 +500,10 @@ pub async fn put_esa_messprodukt_katalog(
     for e in body {
         let code = mako_wim::esa::normalize_code(&e.messprodukt);
         if mako_wim::esa::messprodukt(&code).is_none() {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": format!(
+            return ApiError::unprocessable(format!(
                         "Messprodukt {:?} steht nicht in der Codeliste der Konfigurationen 1.4                          Kapitel 4.6 — nur diese Produkte darf die Marktrolle ESA bestellen",
                         e.messprodukt
-                    ),
-                })),
-            )
-                .into_response();
+                    )).into_response();
         }
         eintraege.push(EsaMessproduktAngebot {
             tenant: tenant.clone(),

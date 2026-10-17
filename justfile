@@ -101,7 +101,7 @@ suite crate name *test_args:
 # vars. Without Docker the `#[ignore]`d tests skip gracefully.
 
 # All database integration suites in one go.
-test-db: check-sql test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-productd-db test-marktd-db test-processd-db test-sperrd-db test-invoicd-db test-mabis-syncd-db test-netzbilanzd-db test-obsd-db test-outbox-db
+test-db: check-sql test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-productd-db test-marktd-db test-processd-db test-invoicd-db test-netzbilanzd-db test-outbox-db test-policy-db
 
 # Every service's SQL literals prepare against its own schema.
 #
@@ -121,7 +121,7 @@ check-sql:
 # filesystem Iceberg warehouse).
 test-edmd-db:
     {{ just_executable() }} suite edmd meterstore_integration --include-ignored --test-threads=1
-    cargo test -p edmd --bin edmd startup_test -- --include-ignored
+    {{ just_executable() }} suite edmd router_builds --include-ignored
 
 # Handler + SQL integration tests for einsd (EEG settlement).
 test-einsd-db:
@@ -132,13 +132,7 @@ test-einsd-db:
 # inclusion proof) against real PostgreSQL.
 test-accountingd-db:
     {{ just_executable() }} suite accountingd db_scenarios --include-ignored --test-threads=1
-    cargo test -p accountingd --bin accountingd startup_test -- --include-ignored
-
-# Execution-queue integration tests for sperrd (ORDERS 17115/17117 ingest,
-# the claim guard, and the IFTSTA 21039 retry queue) against real PostgreSQL —
-# the only suite covering the §41f disconnection execution path.
-test-sperrd-db:
-    {{ just_executable() }} suite sperrd db_scenarios --include-ignored --test-threads=1
+    {{ just_executable() }} suite accountingd router_builds --include-ignored
 
 # Records integration tests for billingd.
 test-billingd-db:
@@ -172,33 +166,37 @@ test-marktd-db:
 test-invoicd-db:
     {{ just_executable() }} suite invoicd receipts_pg --include-ignored --test-threads=1
 
-# mabis-syncd's submission schema — the per-run series ledger the BIKO acks
-# against, and the constraints that stop a retry re-filing an acked series.
-test-mabis-syncd-db:
-    {{ just_executable() }} suite mabis-syncd schema_pg --include-ignored --test-threads=1
-
 # netzbilanzd's invoice-draft store — numbering series, Abschlag deduction,
-# the Storno chain and the tenant scoping of every read and transition.
+# the Storno chain and the tenant scoping of every read and transition — and
+# its MaBiS submission schema: the per-run series ledger the BIKO acks against,
+# and the constraints that stop a retry re-filing an acked series.
 test-netzbilanzd-db:
-    {{ just_executable() }} suite netzbilanzd invoice_drafts_pg --include-ignored --test-threads=1
-
-# obsd's sweeps — the deadline alert and the § 7a parity report, both of which
-# run on a timer with no caller to notice a wrong predicate.
-test-obsd-db:
-    {{ just_executable() }} suite obsd worker_integration --include-ignored --test-threads=1
+    cargo test -p netzbilanzd --test it -- --include-ignored --test-threads=1 \
+        invoice_drafts_pg:: schema_pg::
 
 # The shared transactional outbox: atomicity with the caller's write, the retry
 # schedule and the dead-letter hand-off. Every service that emits depends on it.
 test-outbox-db:
     {{ just_executable() }} suite mako-service outbox_integration --include-ignored --test-threads=1
 
-# processd's SQL suite (approval queue claim/dispatch, decision audit log).
+# The runner's `service_policy_log`: a changed operator setting appends a row,
+# an unchanged boot appends none.
+test-policy-db:
+    {{ just_executable() }} suite mako-service policy_integration --include-ignored --test-threads=1
+
+# processd's SQL suites: the approval queue claim/dispatch and decision audit
+# log; the process read model's sweeps (the deadline alert and the § 7a parity
+# report, both on a timer with no caller to notice a wrong predicate), its
+# rebuild from marktd's replay log and the one webhook's fan-out; and the
+# Sperrauftrag queue (ORDERS 17115/17117 ingest, the claim guard, the IFTSTA
+# 21039 retry queue) — the only suite covering the §41f disconnection path.
 #
-# `--no-default-features --features integrated` because the default build is
-# role-split and these tests drive both the NB and the LF module.
+# `--no-default-features --features integrated` because these tests drive the
+# NB, the LF and the read-model module together.
 test-processd-db:
-    CARGO_ARGS="--no-default-features --features integrated" \
-        {{ just_executable() }} suite processd sql_integration --include-ignored --test-threads=1
+    cargo test -p processd --no-default-features --features integrated --test it -- \
+        --include-ignored --test-threads=1 \
+        sql_integration:: worker_integration:: rebuild:: webhook_fanout:: db_scenarios::
 
 # Every real-PostgreSQL suite is `#[ignore]`d and named by a `test-*-db` recipe.
 #
@@ -332,28 +330,22 @@ dep-age *args:
     cargo xtask dep-age {{ args }}
 
 # Full CI suite (minimum gate + tests + quality + release-lifecycle checks)
-# Lint every documented role-scoped deployment profile of makod.
+# Lint every documented role-scoped build profile.
 #
 # `clippy` above runs --all-features, which turns on *every* role at once. That
 # is exactly the configuration in which role gating cannot be wrong: each
 # `#[cfg(feature = "role-…")]` is satisfied, so nothing is excluded and no
 # unused import appears. A role-scoped build is the opposite case and the one
-# operators actually deploy, so it needs its own pass — the profiles below are
-# the ones documented in services/makod/Cargo.toml.
+# operators actually deploy, so it needs its own pass. makod has no role
+# features — it selects its modules from `[deployment] rollen` at runtime, and
+# `smoke-roles` boots each declaration.
 clippy-roles:
     #!/usr/bin/env bash
     set -euo pipefail
-    for f in "role-lf" "role-nb" "role-msb" \
-             "role-lf-strom" "role-lf-gas" \
-             "role-nb-strom" "role-nb-gas" \
-             "role-msb-strom" "role-msb-gas" "role-esa-strom" \
-             "role-lf,role-nb,role-msb"; do
-        echo "==> cargo clippy -p makod --no-default-features --features $f"
-        cargo clippy -p makod --no-default-features --features "$f" --all-targets -- -D warnings
-    done
-    # processd's role features enforce § 6a EnWG informatorische Entflechtung: an
-    # nb-only build
-    # must contain no LF or MSB answer path. Each profile is linted and its
+    # processd's role features decide which answer paths a build carries: an
+    # nb-only build cannot answer as an LF or an MSB, so a misconfiguration fails
+    # closed. That is not an unbundling control — no § 6a EnWG duty is
+    # discharged by a build flag. Each profile is linted and its
     # `role_separation` suite run, because a module gated on the wrong role
     # feature ships one role's obligations inside another role's binary.
     for f in "lf-only" "nb-only" "msb-only" "integrated"; do
@@ -372,24 +364,21 @@ clippy-roles:
     done
     # agentd carries the same role flags: it is the one service that reaches all
     # the others, so a role-scoped build must exclude the other arm's
-    # specialists rather than merely decline to run them (§ 6a EnWG).
+    # specialists rather than merely decline to run them: it cannot answer as a
+    # role it was not built for. The confidentiality duty is Cedar's, at runtime.
     for f in "role-lf" "role-nb" "role-msb"; do
         echo "==> cargo clippy -p agentd --features $f"
         cargo clippy -p agentd --features "$f" --all-targets -- -D warnings
         cargo test   -p agentd --features "$f" --lib role_scoped
     done
 
-# Boot each umbrella deployment profile and assert it passes --check.
+# Boot makod once per deployment role and assert each passes --check.
 #
-# `clippy-roles` proves a role-scoped build *compiles*; it cannot prove the
-# binary starts. Startup runs assertions that only fire at runtime — adapter
-# coverage and dispatch completeness both panic — so a role gate that excludes
-# a module while leaving its PIDs registered produces a binary that lints clean
-# and dies on boot. That is the failure an operator would meet in production,
-# so it needs a real run.
-#
-# Umbrella profiles only (lf/nb/msb): the per-Sparte features are components of
-# these, and a full build per feature is too slow for the default gate.
+# The role → module table is pinned by a unit test; this proves each
+# declaration *starts*. Startup runs assertions that only fire at runtime —
+# adapter coverage and dispatch completeness both panic — so a role whose
+# module set registers a PID without its workflow lints clean and dies on boot.
+# One build serves every role: the declaration is `[deployment] rollen`.
 smoke-roles:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -402,17 +391,20 @@ smoke-roles:
     # Authorization is default-deny, so a bare start refuses every request and
     # `--check` says so. `--cedar-policy-dir` loads *every* `.cedar` in the
     # directory it is given, and `src/cedar/` also holds the permissive
-    # `default.cedar` — so the least-privilege set is staged alone. That is the
-    # policy set § 6a EnWG role separation is written for, and the one a role
-    # build should be smoke-tested against.
+    # `default.cedar` — so the least-privilege set is staged alone, the one a
+    # role-limited deployment should be smoke-tested against.
     mkdir -p "$tmp/cedar"
     cp services/makod/src/cedar/conservative.cedar "$tmp/cedar/"
-    for pair in "role-lf:LF" "role-nb:NB" "role-msb:MSB"; do
-        feat="${pair%%:*}"; role="${pair##*:}"
-        echo "==> $feat (party role $role)"
-        cargo build -p makod --no-default-features --features "$feat"
-        printf '[[party]]\nmp_id = "9900001000001"\nroles = ["%s"]\nprimary = true\n' \
-            "$role" > "$tmp/makod.toml"
+    cargo build -p makod
+    # rollen token : [[party]] role : MP-ID (Strom 99…, Gas 98…)
+    for row in "nb-strom:NB:9900001000001" "lf-strom:LF:9900001000001" \
+               "msb-strom:MSB:9900001000001" "esa-strom:ESA:9900001000001" \
+               "nb-gas:GNB:9800001000001" "lf-gas:LFG:9800001000001" \
+               "msb-gas:GMSB:9800001000001"; do
+        IFS=: read -r rolle role mp_id <<< "$row"
+        echo "==> rollen = [\"$rolle\"] (party role $role)"
+        printf '[deployment]\nrollen = ["%s"]\n\n[[party]]\nmp_id = "%s"\nroles = ["%s"]\nprimary = true\n' \
+            "$rolle" "$mp_id" "$role" > "$tmp/makod.toml"
         "$out" --config "$tmp/makod.toml" --allow-volatile \
             --http-addr 127.0.0.1:18080 --auth-key smoke=0123456789abcdef \
             --cedar-policy-dir "$tmp/cedar" \
@@ -495,7 +487,7 @@ ci:
     RUSTFLAGS="${RUSTFLAGS:--D warnings}" {{ just_executable() }} _ci
 
 [private]
-_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-dep-versions check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-request-bodies check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-dep-versions check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-request-bodies check-thin-main check-error-tuples check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -590,7 +582,7 @@ build-makotest:
 
 # Only deps needed for the Lieferbeginn smoke test; no iceberg/LanceDB.
 # Expected cold build: ~8 min (debug) / ~12 min (release).
-# Optional services (invoicd, netzbilanzd, obsd): build with --target <name>-runtime.
+# Optional services (invoicd, netzbilanzd): build with --target <name>-runtime.
 
 # Build the nb-stp demo images (makod, marktd, processd)
 build-demo profile="dev":
@@ -848,6 +840,13 @@ check-cedar-roles:
 check-citations:
     cargo xtask check-citations
 
+# Every operator policy setting: each option sourced (and passing the citation
+# and known-wrong rules), its docs anchor resolving, the generated
+# operator-policy page in sync, each key read in production code — and no
+# service config defaulting an enum outside a policy.
+check-policy-settings:
+    cargo xtask check-policy-settings
+
 # Refuse a claim AGENTS.md lists as known-wrong, and a tracked file that points
 # into the untracked roadmap or specifications.
 check-known-wrong:
@@ -936,13 +935,26 @@ check-malo-ids:
 check-bo4e-attributes:
     cargo xtask check-bo4e-attributes
 
-# Three rules about the moment an untrusted JSON body becomes a Rust value:
-# every `Json<T>` body denies unknown fields (serde silently drops a key no
-# field declares, so a customer can be created with no name), a BO4E document in
-# a body is a `Bo4e<T>` rather than an ungated `serde_json::Value`, and no
-# comment carries a `\uXXXX` escape.
+# Rules about the moment an untrusted JSON body becomes a Rust value:
+# `mako_service::Json` refuses an undeclared key at runtime, so the guard names
+# what it cannot see — a flattened field, an untagged or internally tagged enum,
+# a `Lenient` or `axum::Json` extraction — unless listed with a reason; a BO4E
+# document in a body is a `Bo4e<T>` rather than an ungated `serde_json::Value`;
+# and no comment carries a `\uXXXX` escape.
 check-request-bodies:
     cargo xtask check-request-bodies
+
+# A service is a library: `main.rs` is `mako_service::run::<D>().await` and
+# nothing else, so a test can build the router the binary ships. The services
+# not there yet are listed in the guard, and the list only shrinks.
+check-thin-main:
+    cargo xtask check-thin-main
+
+# A handler fails with an `ApiError`, never a hand-built `(StatusCode, …)`
+# tuple — that is a body shape the caller cannot rely on and, for a database
+# error, the schema's own text handed to the caller. Absolute: any tuple fails.
+check-error-tuples:
+    cargo xtask check-error-tuples
 
 # Refuse a specialist procedure that tells a model to call a tool the manifest
 # does not grant. `check-tool-grants` validates the grant list; this validates

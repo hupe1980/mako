@@ -1010,8 +1010,8 @@ pub struct SettleOutput {
     /// - `Flexibilitaet`: base Vergütung + §50 Flex-Prämie
     /// - Multi-block plants (§24 Anlagenerweiterung): one position per active block
     ///
-    /// Use `.to_line_item()` on each position to convert to [`billing::LineItem`]
-    /// for invoice / `BillingDocument` generation.
+    /// Use `.to_line()` on each position to convert to [`billing::Line`]
+    /// for invoice / `billing::Document` generation.
     pub positions: Vec<SettlePosition>,
 
     /// Computation outcome.
@@ -1102,9 +1102,9 @@ pub struct SettleOutput {
 /// Each position represents one regulatory charge line:
 /// `net_eur = kwh × rate_ct_kwh / 100`.
 ///
-/// Convert to a [`billing::LineItem`] for invoice generation via [`.to_line_item()`].
+/// Convert to a [`billing::Line`] for invoice generation via [`.to_line()`].
 ///
-/// [`.to_line_item()`]: SettlePosition::to_line_item
+/// [`.to_line()`]: SettlePosition::to_line
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct SettlePosition {
@@ -1128,56 +1128,59 @@ pub struct SettlePosition {
 }
 
 impl SettlePosition {
-    /// Convert this position to a [`billing::LineItem`] for use in
-    /// [`billing::BillingDocument`] generation (invoice, settlement receipt).
+    /// Convert this position to a [`billing::Line`] for a
+    /// [`billing::Document`] (Gutschrift, settlement receipt).
     ///
-    /// Uses `billing::LineItem::for_usage()` with the signed rate — negative
-    /// EPEX prices produce a negative `net_amount` on a `Sign::Debit` item,
-    /// correctly modelling the post-EEG scenario where the plant owes the NB.
-    pub fn to_line_item(&self) -> billing::LineItem {
-        use billing::{LineItem, Quantity, RoundingStrategy, UnitPrice};
+    /// The line is `kwh` KWH (EN 16931 BT-130, UN/ECE Rec 20) at the exact
+    /// rate in EUR/kWh, `rate_ct_kwh / 100`: the document derives BT-131 from
+    /// that product and rounds it once at its own scale. `billing` refuses a
+    /// negative price (BR-27) and carries direction in the quantity's sign, so a
+    /// negative rate — post-EEG at negative EPEX, where the plant owes the NB —
+    /// is the negated quantity at the rate's magnitude; the net is the same
+    /// signed product.
+    ///
+    /// Labels (opaque to `billing`): `legal_basis` for the audit trail,
+    /// `regime` (`eeg` / `kwkg`) and `position` (`verguetung`, `marktpraemie`,
+    /// `mieterstrom`, `flexibilitaet`, `post-eeg-spot`, `kwk-zuschlag`) for ERP
+    /// filtering.
+    #[must_use]
+    pub fn to_line(&self) -> billing::Line {
+        use billing::{Line, Price, Quantity, UnitPrice};
 
-        let rate_eur = self.rate_ct_kwh / rust_decimal::Decimal::from(100);
-        // Typed `Quantity`/`UnitPrice` keep the two unit labels apart, so a
-        // quantity unit cannot be passed where a price unit belongs.
-        // `.with_code("KWH")` stamps EN 16931 BT-130 (UN/ECE Rec 20), so the
-        // `billing::BillingDocument` is a complete EN-16931 source rather than
-        // leaving a downstream mapper to guess the unit code from "kWh".
-        // `UnitPrice::rounded(6, …)` prevents silent precision drift when
-        // rate_ct_kwh is derived from integer arithmetic (ct/100); BO4E Preis.wert
-        // is 6 decimal places, keeping the stored unit_price consistent with the
-        // rendered output.
-        let mut builder = LineItem::for_usage(
+        let rate_eur = self.rate_ct_kwh / Decimal::ONE_HUNDRED;
+        let kwh = if rate_eur.is_sign_negative() {
+            -self.kwh
+        } else {
+            self.kwh
+        };
+        let mut line = Line::new(
             &self.description,
-            Quantity::new(self.kwh, "kWh").with_code("KWH"),
-            UnitPrice::new(rate_eur, "EUR/kWh").rounded(6, RoundingStrategy::MidpointAwayFromZero),
+            Quantity::new(kwh, "KWH"),
+            UnitPrice::new(Price::new(rate_eur.abs())),
         )
-        .meta("legal_basis", self.legal_basis.as_str());
+        .with_label("legal_basis", self.legal_basis.as_str());
 
-        // Category tags for ERP filtering
         if self.legal_basis.contains("EEG") || self.legal_basis.contains("post-F\u{00f6}rderung") {
-            builder = builder.tag("eeg");
+            line = line.with_label("regime", "eeg");
         }
         if self.legal_basis.contains("KWKG") {
-            builder = builder.tag("kwkg");
+            line = line.with_label("regime", "kwkg");
         }
-        builder = match self.legal_basis.as_str() {
+        let position = match self.legal_basis.as_str() {
             b if b.starts_with("\u{00a7}23a") || b.starts_with("\u{00a7}\u{00a7}22a") => {
-                builder.tag("marktpraemie")
+                Some("marktpraemie")
             }
-            "\u{00a7}21 Abs. 3 EEG 2023" => builder.tag("mieterstrom"),
-            b if b == "\u{00a7}50b EEG 2023" || b == "\u{00a7}50 EEG 2023" => {
-                builder.tag("flexibilitaet")
-            }
-            b if b.contains("post-F\u{00f6}rderung") => builder.tag("post-eeg-spot"),
-            "\u{00a7}7 KWKG 2023" => builder.tag("kwk-zuschlag"),
-            "\u{00a7}21 EEG 2023" => builder.tag("verguetung"),
-            _ => builder,
+            "\u{00a7}21 Abs. 3 EEG 2023" => Some("mieterstrom"),
+            b if b == "\u{00a7}50b EEG 2023" || b == "\u{00a7}50 EEG 2023" => Some("flexibilitaet"),
+            b if b.contains("post-F\u{00f6}rderung") => Some("post-eeg-spot"),
+            "\u{00a7}7 KWKG 2023" => Some("kwk-zuschlag"),
+            "\u{00a7}21 EEG 2023" => Some("verguetung"),
+            _ => None,
         };
-
-        builder
-            .build()
-            .expect("SettlePosition always has a non-empty static description")
+        match position {
+            Some(p) => line.with_label("position", p),
+            None => line,
+        }
     }
 }
 

@@ -39,7 +39,6 @@ Rahmenvertrag from the accepted variant.
 
 ```toml
 # productd.toml
-port     = 9080
 tenant   = "9900357000004"   # data-isolation key
 lf_mp_id = "9900357000004"   # market identity; defaults to tenant
 
@@ -50,6 +49,9 @@ erp_hmac_secret = "env:PRODUCTD_ERP_HMAC_SECRET"
 # (2027): "rvo_bezugspreis" (default) or "korridor" (55–65 EUR/t) — the same
 # setting billingd bills under, so a Gas quotation and its invoice agree.
 behg_regime = "rvo_bezugspreis"
+
+[http]
+addr = "0.0.0.0:9080"
 
 [database]
 url = "postgresql://productd:secret@db:5432/productd"

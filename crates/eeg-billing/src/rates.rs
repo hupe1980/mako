@@ -1,6 +1,6 @@
 //! Statutory EEG feed-in tariff rate tables.
 //!
-//! Provides [`billing::RateLookup`] tables for the most common EEG technology types
+//! Provides [`RateTable`]s for the most common EEG technology types
 //! and law years.  The rate is determined by the plant's **installed capacity (kWp)**
 //! at commissioning.
 //!
@@ -64,9 +64,59 @@
 //! KWK-Strom is fed into a Netz der allgemeinen Versorgung, so it does not fit a
 //! capacity-keyed rate table — see [`crate::kwkg`]. § 53 EEG does not apply to it.
 
-use billing::{Amount, BillingError, RateLookup};
+use billing::{Amount, Price, Tier, Tiers};
 use rust_decimal::Decimal;
 use rust_decimal::dec;
+
+// ── RateTable ─────────────────────────────────────────────────────────────────
+
+/// A statutory rate ladder keyed on capacity: [`billing::Tiers`] of EUR/kWh
+/// prices, each tier's bound inclusive.
+///
+/// Built in ascending order by this module; `billing` refuses an unsorted
+/// ladder rather than sorting it, so a table typed out of order is a build
+/// failure of the constructor (answered as `None`), never a reordered one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RateTable(Tiers);
+
+impl RateTable {
+    /// Ascending `(upper bound inclusive, EUR/kWh)` tiers, then an optional open
+    /// top tier. `None` when the bounds are not strictly increasing.
+    fn new(closed: &[(Decimal, Amount<5>)], open: Option<Amount<5>>) -> Option<Self> {
+        let tiers = closed
+            .iter()
+            .map(|&(limit, rate)| Tier::up_to(limit, Price::new(rate.to_decimal())))
+            .chain(open.map(|rate| Tier::above(Price::new(rate.to_decimal()))));
+        Tiers::new(tiers).ok().map(Self)
+    }
+
+    /// The rate in EUR/kWh for a plant of `kw`.
+    ///
+    /// # Errors
+    ///
+    /// [`RateError::Uncovered`] when `kw` is negative or above the top of a
+    /// ladder that ends closed — the statute names no value there, and none is
+    /// invented.
+    pub fn rate_for(&self, kw: Decimal) -> Result<Amount<5>, RateError> {
+        let tier = self.0.at(kw).map_err(|_| RateError::Uncovered { kw })?;
+        // Every tier is built from an `Amount<5>`, so the price is exact at 5 dp.
+        Amount::from_decimal(tier.unit_price().value()).map_err(|_| RateError::Uncovered { kw })
+    }
+}
+
+/// Why a statutory rate lookup has no answer.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RateError {
+    /// The capacity lies outside every tier of the ladder.
+    #[error("no statutory tier covers {kw} kW")]
+    Uncovered {
+        /// The capacity looked up.
+        kw: Decimal,
+    },
+    /// No static table exists for the technology or EEG year.
+    #[error("{0}")]
+    NoTable(String),
+}
 
 // ── Solar PV — §48 EEG 2023 ───────────────────────────────────────────────────
 
@@ -212,7 +262,7 @@ pub fn solar_pv_freiflaeche_aw_ct(inbetriebnahme: time::Date) -> Option<Decimal>
     })
 }
 
-/// The §48 Abs. 2 Überschusseinspeisung table as a [`RateLookup`], for the §49
+/// The §48 Abs. 2 Überschusseinspeisung table as a [`RateTable`], for the §49
 /// window `inbetriebnahme` falls into. Gross AW, in EUR/kWh.
 ///
 /// ```rust
@@ -224,35 +274,39 @@ pub fn solar_pv_freiflaeche_aw_ct(inbetriebnahme: time::Date) -> Option<Decimal>
 /// assert_eq!(table.rate_for(dec!(9)).unwrap(), billing::Amount::parse("0.08510").unwrap());
 /// ```
 #[must_use]
-pub fn solar_pv_ueberschuss_lookup(inbetriebnahme: time::Date) -> Option<RateLookup> {
+pub fn solar_pv_ueberschuss_lookup(inbetriebnahme: time::Date) -> Option<RateTable> {
     if inbetriebnahme < EEG2023_START {
         return None;
     }
     let at = |kwp| solar_pv_ueberschuss_aw_ct(kwp, inbetriebnahme).unwrap_or(Decimal::ZERO);
-    RateLookup::builder()
-        .at_most(dec!(10), amount_from_ct(at(dec!(10))))
-        .at_most(dec!(40), amount_from_ct(at(dec!(40))))
-        .at_most(dec!(1_000), amount_from_ct(at(dec!(1_000))))
-        .build()
-        .ok()
+    RateTable::new(
+        &[
+            (dec!(10), amount_from_ct(at(dec!(10)))),
+            (dec!(40), amount_from_ct(at(dec!(40)))),
+            (dec!(1_000), amount_from_ct(at(dec!(1_000)))),
+        ],
+        None,
+    )
 }
 
-/// The §48 Abs. 2 + Abs. 2a Volleinspeisung table as a [`RateLookup`], for the
+/// The §48 Abs. 2 + Abs. 2a Volleinspeisung table as a [`RateTable`], for the
 /// §49 window `inbetriebnahme` falls into. Gross AW, in EUR/kWh.
 #[must_use]
-pub fn solar_pv_volleinspeisung_lookup(inbetriebnahme: time::Date) -> Option<RateLookup> {
+pub fn solar_pv_volleinspeisung_lookup(inbetriebnahme: time::Date) -> Option<RateTable> {
     if inbetriebnahme < EEG2023_START {
         return None;
     }
     let at = |kwp| solar_pv_volleinspeisung_aw_ct(kwp, inbetriebnahme).unwrap_or(Decimal::ZERO);
-    RateLookup::builder()
-        .at_most(dec!(10), amount_from_ct(at(dec!(10))))
-        .at_most(dec!(40), amount_from_ct(at(dec!(40))))
-        .at_most(dec!(100), amount_from_ct(at(dec!(100))))
-        .at_most(dec!(400), amount_from_ct(at(dec!(400))))
-        .at_most(dec!(1_000), amount_from_ct(at(dec!(1_000))))
-        .build()
-        .ok()
+    RateTable::new(
+        &[
+            (dec!(10), amount_from_ct(at(dec!(10)))),
+            (dec!(40), amount_from_ct(at(dec!(40)))),
+            (dec!(100), amount_from_ct(at(dec!(100)))),
+            (dec!(400), amount_from_ct(at(dec!(400)))),
+            (dec!(1_000), amount_from_ct(at(dec!(1_000)))),
+        ],
+        None,
+    )
 }
 
 // ── Wind Onshore ──────────────────────────────────────────────────────────────
@@ -270,7 +324,7 @@ pub fn solar_pv_volleinspeisung_lookup(inbetriebnahme: time::Date) -> Option<Rat
 /// value as [`crate::TariffSource::Auction`] with
 /// [`crate::wind::korrekturfaktor_fuer_guetefaktor`] applied.
 #[must_use]
-pub fn wind_onshore_lookup(_eeg_year: i16) -> Option<RateLookup> {
+pub fn wind_onshore_lookup(_eeg_year: i16) -> Option<RateTable> {
     None
 }
 
@@ -299,12 +353,9 @@ pub fn wind_onshore_lookup(_eeg_year: i16) -> Option<RateLookup> {
 /// // Above 150 kW the value comes from a tender, not from the statute.
 /// assert!(table.rate_for(dec!(600)).is_err());
 /// ```
-pub fn biomasse_lookup(eeg_year: i16) -> Option<RateLookup> {
+pub fn biomasse_lookup(eeg_year: i16) -> Option<RateTable> {
     match eeg_year {
-        2023..=2026 => RateLookup::builder()
-            .at_most(dec!(150), amount_ct("12.67"))
-            .build()
-            .ok(),
+        2023..=2026 => RateTable::new(&[(dec!(150), amount_ct("12.67"))], None),
         _ => None,
     }
 }
@@ -315,13 +366,15 @@ pub fn biomasse_lookup(eeg_year: i16) -> Option<RateLookup> {
 /// Abs. 2 additionally requires the anaerobic digestion to be directly coupled
 /// to a Nachrotte stage whose residue is materially recovered — a plant
 /// condition the caller checks.
-pub fn bioabfall_lookup(eeg_year: i16) -> Option<RateLookup> {
+pub fn bioabfall_lookup(eeg_year: i16) -> Option<RateTable> {
     match eeg_year {
-        2023..=2026 => RateLookup::builder()
-            .at_most(dec!(500), amount_ct("14.16"))
-            .at_most(dec!(20_000), amount_ct("12.41"))
-            .build()
-            .ok(),
+        2023..=2026 => RateTable::new(
+            &[
+                (dec!(500), amount_ct("14.16")),
+                (dec!(20_000), amount_ct("12.41")),
+            ],
+            None,
+        ),
         _ => None,
     }
 }
@@ -332,13 +385,15 @@ pub fn bioabfall_lookup(eeg_year: i16) -> Option<RateLookup> {
 /// Abs. 2 conditions the claim on generation at the Biogaserzeugungsanlage's
 /// site, ≤ 150 kW installed there, and an average manure share the statute
 /// names — see [`crate::biomasse`].
-pub fn guelle_lookup(eeg_year: i16) -> Option<RateLookup> {
+pub fn guelle_lookup(eeg_year: i16) -> Option<RateTable> {
     match eeg_year {
-        2023..=2026 => RateLookup::builder()
-            .at_most(dec!(75), amount_ct("22.00"))
-            .at_most(dec!(150), amount_ct("19.00"))
-            .build()
-            .ok(),
+        2023..=2026 => RateTable::new(
+            &[
+                (dec!(75), amount_ct("22.00")),
+                (dec!(150), amount_ct("19.00")),
+            ],
+            None,
+        ),
         _ => None,
     }
 }
@@ -346,7 +401,7 @@ pub fn guelle_lookup(eeg_year: i16) -> Option<RateLookup> {
 // ── KWKG ──────────────────────────────────────────────────────────────────────
 //
 // The KWK-Zuschlag is priced per **Leistungsanteil** (§ 7 Abs. 1 and Abs. 2
-// KWKG), so it is not a `RateLookup`: a plant's rate is the capacity-weighted
+// KWKG), so it is not a `RateTable`: a plant's rate is the capacity-weighted
 // mean of the bands its capacity spans, and it further depends on whether the
 // KWK-Strom is fed into a Netz der allgemeinen Versorgung and on the plant's
 // Anlagenart. [`crate::kwkg`] holds the computation.
@@ -366,7 +421,7 @@ pub fn guelle_lookup(eeg_year: i16) -> Option<RateLookup> {
 fn amount_from_ct(ct: rust_decimal::Decimal) -> Amount<5> {
     Amount::from_decimal_rounded(
         ct / rust_decimal::Decimal::from(100u32),
-        billing::RoundingStrategy::MidpointAwayFromZero,
+        billing::Rounding::HalfAwayFromZero,
     )
     .expect("statutory rate is in range")
 }
@@ -423,30 +478,32 @@ fn amount_ct(ct_str: &str) -> Amount<5> {
 /// // 60 MW: the open top tier
 /// assert_eq!(table.rate_for(dec!(60000)).unwrap(), billing::Amount::parse("0.03370").unwrap());
 /// ```
-pub fn wasserkraft_lookup(eeg_year: i16) -> Option<RateLookup> {
+pub fn wasserkraft_lookup(eeg_year: i16) -> Option<RateTable> {
     match eeg_year {
         // § 40 Abs. 1 EEG 2023.
-        2023..=2026 => RateLookup::builder()
-            .at_most(dec!(500), amount_ct("12.03"))
-            .at_most(dec!(2_000), amount_ct("7.93"))
-            .at_most(dec!(5_000), amount_ct("6.07"))
-            .at_most(dec!(10_000), amount_ct("5.32"))
-            .at_most(dec!(20_000), amount_ct("5.13"))
-            .at_most(dec!(50_000), amount_ct("4.12"))
-            .fallback(amount_ct("3.37"))
-            .build()
-            .ok(),
+        2023..=2026 => RateTable::new(
+            &[
+                (dec!(500), amount_ct("12.03")),
+                (dec!(2_000), amount_ct("7.93")),
+                (dec!(5_000), amount_ct("6.07")),
+                (dec!(10_000), amount_ct("5.32")),
+                (dec!(20_000), amount_ct("5.13")),
+                (dec!(50_000), amount_ct("4.12")),
+            ],
+            Some(amount_ct("3.37")),
+        ),
         // § 40 Abs. 1 EEG 2021.
-        2017..=2022 => RateLookup::builder()
-            .at_most(dec!(500), amount_ct("12.15"))
-            .at_most(dec!(2_000), amount_ct("8.01"))
-            .at_most(dec!(5_000), amount_ct("6.13"))
-            .at_most(dec!(10_000), amount_ct("5.37"))
-            .at_most(dec!(20_000), amount_ct("5.18"))
-            .at_most(dec!(50_000), amount_ct("4.16"))
-            .fallback(amount_ct("3.40"))
-            .build()
-            .ok(),
+        2017..=2022 => RateTable::new(
+            &[
+                (dec!(500), amount_ct("12.15")),
+                (dec!(2_000), amount_ct("8.01")),
+                (dec!(5_000), amount_ct("6.13")),
+                (dec!(10_000), amount_ct("5.37")),
+                (dec!(20_000), amount_ct("5.18")),
+                (dec!(50_000), amount_ct("4.16")),
+            ],
+            Some(amount_ct("3.40")),
+        ),
         _ => None,
     }
 }
@@ -468,13 +525,15 @@ pub fn wasserkraft_lookup(eeg_year: i16) -> Option<RateLookup> {
 /// assert_eq!(t.rate_for(dec!(3000)).unwrap(), billing::Amount::parse("0.05170").unwrap());
 /// assert!(t.rate_for(dec!(6000)).is_err());
 /// ```
-pub fn deponiegas_lookup(eeg_year: i16) -> Option<RateLookup> {
+pub fn deponiegas_lookup(eeg_year: i16) -> Option<RateTable> {
     match eeg_year {
-        2023..=2026 => RateLookup::builder()
-            .at_most(dec!(500), amount_ct("7.46"))
-            .at_most(dec!(5_000), amount_ct("5.17"))
-            .build()
-            .ok(),
+        2023..=2026 => RateTable::new(
+            &[
+                (dec!(500), amount_ct("7.46")),
+                (dec!(5_000), amount_ct("5.17")),
+            ],
+            None,
+        ),
         _ => None,
     }
 }
@@ -482,13 +541,15 @@ pub fn deponiegas_lookup(eeg_year: i16) -> Option<RateLookup> {
 /// § 41 Abs. 2 EEG 2023 — **Klärgas**, by Bemessungsleistung.
 ///
 /// Same shape as Abs. 1, including the closed top at 5 MW.
-pub fn klaergas_lookup(eeg_year: i16) -> Option<RateLookup> {
+pub fn klaergas_lookup(eeg_year: i16) -> Option<RateTable> {
     match eeg_year {
-        2023..=2026 => RateLookup::builder()
-            .at_most(dec!(500), amount_ct("5.93"))
-            .at_most(dec!(5_000), amount_ct("5.17"))
-            .build()
-            .ok(),
+        2023..=2026 => RateTable::new(
+            &[
+                (dec!(500), amount_ct("5.93")),
+                (dec!(5_000), amount_ct("5.17")),
+            ],
+            None,
+        ),
         _ => None,
     }
 }
@@ -498,14 +559,15 @@ pub fn klaergas_lookup(eeg_year: i16) -> Option<RateLookup> {
 /// Satz 2: the claim exists only where the gas comes from active or
 /// decommissioned mining operations — a condition on the plant, checked by the
 /// caller, not expressible in a rate table.
-pub fn grubengas_lookup(eeg_year: i16) -> Option<RateLookup> {
+pub fn grubengas_lookup(eeg_year: i16) -> Option<RateTable> {
     match eeg_year {
-        2023..=2026 => RateLookup::builder()
-            .at_most(dec!(1_000), amount_ct("5.98"))
-            .at_most(dec!(5_000), amount_ct("3.81"))
-            .fallback(amount_ct("3.37"))
-            .build()
-            .ok(),
+        2023..=2026 => RateTable::new(
+            &[
+                (dec!(1_000), amount_ct("5.98")),
+                (dec!(5_000), amount_ct("3.81")),
+            ],
+            Some(amount_ct("3.37")),
+        ),
         _ => None,
     }
 }
@@ -516,12 +578,9 @@ pub fn grubengas_lookup(eeg_year: i16) -> Option<RateLookup> {
 /// Ausschreibung at any size**: § 22 Abs. 5 Satz 2 names Geothermie among the
 /// technologies whose anzulegender Wert „durch die §§ 40 bis 49 gesetzlich
 /// bestimmt" is. § 22 Abs. 4 is Biomasse.
-pub fn geothermie_lookup(eeg_year: i16) -> Option<RateLookup> {
+pub fn geothermie_lookup(eeg_year: i16) -> Option<RateTable> {
     match eeg_year {
-        2017..=2026 => RateLookup::builder()
-            .fallback(amount_ct("25.20"))
-            .build()
-            .ok(),
+        2017..=2026 => RateTable::new(&[], Some(amount_ct("25.20"))),
         _ => None,
     }
 }
@@ -558,12 +617,9 @@ pub fn lookup_rate(
     erzeugungsart: &str,
     leistung_kwp: rust_decimal::Decimal,
     eeg_year: i16,
-) -> Result<Amount<5>, BillingError> {
-    let art = crate::ErzeugungsArt::from_db_str(erzeugungsart).map_err(|_| {
-        BillingError::InvalidInput {
-            reason: format!("unknown erzeugungsart {erzeugungsart:?}"),
-        }
-    })?;
+) -> Result<Amount<5>, RateError> {
+    let art = crate::ErzeugungsArt::from_db_str(erzeugungsart)
+        .map_err(|_| RateError::NoTable(format!("unknown erzeugungsart {erzeugungsart:?}")))?;
     lookup_rate_for(art, leistung_kwp, eeg_year)
 }
 
@@ -573,17 +629,17 @@ pub fn lookup_rate(
 /// variant forces a routing decision at compile time — the string-keyed
 /// [`lookup_rate`] cannot silently misroute a plant whose DB spelling drifts
 /// from the rate table's. Variants without a static statutory table (offshore
-/// wind, tendered plants) return [`BillingError::InvalidInput`] — the caller
+/// wind, tendered plants) return [`RateError::NoTable`] — the caller
 /// resolves those from the `eeg_verguetungssaetze` DB table instead.
 ///
 /// # Errors
-/// [`BillingError::InvalidInput`] when no static table covers the technology or
+/// [`RateError::NoTable`] when no static table covers the technology or
 /// EEG year.
 pub fn lookup_rate_for(
     art: crate::ErzeugungsArt,
     leistung_kwp: rust_decimal::Decimal,
     eeg_year: i16,
-) -> Result<Amount<5>, BillingError> {
+) -> Result<Amount<5>, RateError> {
     use crate::ErzeugungsArt as E;
     let table = match art {
         // Solar has half-yearly §49 windows, which a calendar year cannot
@@ -615,10 +671,12 @@ pub fn lookup_rate_for(
         E::Klaergas => klaergas_lookup(eeg_year),
         E::Grubengas => grubengas_lookup(eeg_year),
     }
-    .ok_or(BillingError::InvalidInput {
-        reason: "no statutory rate table for this erzeugungsart/eeg_year combination — a KWK \
-                 plant is priced by `crate::kwkg`, a tendered one by its award"
-            .to_owned(),
+    .ok_or_else(|| {
+        RateError::NoTable(
+            "no statutory rate table for this erzeugungsart/eeg_year combination — a KWK \
+             plant is priced by `crate::kwkg`, a tendered one by its award"
+                .to_owned(),
+        )
     })?;
 
     table.rate_for(leistung_kwp)
@@ -724,7 +782,7 @@ pub fn aw_ct_bei_inbetriebnahme(
     };
     let startwert = lookup_rate_for(art, leistung_kw, eeg_year)
         .ok()?
-        .into_decimal()
+        .to_decimal()
         * Decimal::from(100u32);
     Some(match jaehrliche_absenkung(art) {
         Some(absenkung) => absenkung.anzulegender_wert(startwert, inbetriebnahme),
@@ -800,7 +858,7 @@ mod statutory_rate_tests {
     use super::*;
 
     /// Assert a whole ladder at once: `(Bemessungsleistung, ct/kWh)`.
-    fn assert_ladder(table: &RateLookup, tiers: &[(&str, &str)], what: &str) {
+    fn assert_ladder(table: &RateTable, tiers: &[(&str, &str)], what: &str) {
         for (kw, ct) in tiers {
             let kw: Decimal = kw.parse().expect("test literal");
             let expected = amount_ct(ct);
@@ -812,6 +870,45 @@ mod statutory_rate_tests {
                 "{what}: {kw} kW must pay {ct} ct/kWh",
             );
         }
+    }
+
+    /// `billing` refuses a ladder whose bounds do not rise and never sorts it:
+    /// a table typed out of order answers `None` instead of quietly paying the
+    /// reordered rates.
+    #[test]
+    fn an_unsorted_ladder_is_refused_not_sorted() {
+        assert!(
+            RateTable::new(
+                &[
+                    (dec!(500), amount_ct("5.17")),
+                    (dec!(100), amount_ct("7.46"))
+                ],
+                None
+            )
+            .is_none()
+        );
+        let t = RateTable::new(
+            &[
+                (dec!(100), amount_ct("7.46")),
+                (dec!(500), amount_ct("5.17")),
+            ],
+            None,
+        )
+        .expect("ascending");
+        assert_eq!(
+            t.rate_for(dec!(100)).unwrap(),
+            amount_ct("7.46"),
+            "bounds are inclusive"
+        );
+        assert_eq!(t.rate_for(dec!(100.001)).unwrap(), amount_ct("5.17"));
+        assert!(matches!(
+            t.rate_for(dec!(501)),
+            Err(RateError::Uncovered { .. })
+        ));
+        assert!(matches!(
+            t.rate_for(dec!(-1)),
+            Err(RateError::Uncovered { .. })
+        ));
     }
 
     /// **§ 40 Abs. 1 EEG 2023** — seven tiers, and the top one is open.

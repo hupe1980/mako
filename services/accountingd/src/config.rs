@@ -77,8 +77,9 @@ pub struct AccountingdConfig {
     /// connects a tuned pool (with `application_name = "accountingd"`) from this.
     pub database: mako_service::config::DatabaseConfig,
 
-    /// HTTP listen port.  Defaults to `9380`.
-    pub port: Option<u16>,
+    /// `[http]` — the listen address. Defaults to every interface on `9380`.
+    #[serde(default = "default_http")]
+    pub http: mako_service::config::HttpConfig,
 
     /// Operator tenant.
     pub tenant: String,
@@ -202,16 +203,14 @@ pub struct AccountingdConfig {
     /// both are the same party, the LF's own legal entity, so one block
     /// configures both sides.
     ///
-    /// ## Mandatory from 15 November 2026
+    /// ## Structured, or absent
     ///
-    /// Version 1.1 of the 2025 SEPA rulebooks, in force since 5 October 2025,
-    /// ends the unstructured address on that date (version 1.0 said the 22nd;
-    /// it moved to land with that year's Swift Standards MX release). `town`
-    /// and `country` are the two elements the schemes then require. Until the
-    /// cut-over the block may be omitted entirely — but not filled in halfway:
-    /// street or post code without town and country is a hard error, because
-    /// "we thought we sent the address" is exactly what the cut-over will
-    /// surface.
+    /// accountingd emits the structured ISO 20022 form, whose required
+    /// elements are `town` and `country` (see [`crate::sepa::AddressParts`]
+    /// for the EPC rule). The block may be omitted entirely — but not filled
+    /// in halfway: street or post code without town and country is a hard
+    /// error, because an address someone configured and the bank never
+    /// received is a failure nobody sees.
     ///
     /// ```toml
     /// [creditor_address]
@@ -381,6 +380,10 @@ impl mako_service::ServiceConfig for AccountingdConfig {
         Some(&self.database)
     }
     fn bind_addr(&self) -> String {
-        format!("0.0.0.0:{}", self.port.unwrap_or(9380))
+        self.http.addr.clone()
     }
+}
+
+fn default_http() -> mako_service::config::HttpConfig {
+    mako_service::config::HttpConfig::on_port(9380)
 }

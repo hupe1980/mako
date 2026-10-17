@@ -29,7 +29,7 @@
 //!
 //! ## Position in the pipeline
 //!
-//! This module provides the pure domain aggregation. The `mabis-syncd` daemon
+//! This module provides the pure domain aggregation. The `netzbilanzd` daemon's `mabis` module
 //! drives it: it queries `edmd` for per-MaLo Lastgang, aggregates with
 //! [`SummenzeitreiheBuilder`], serialises via `edi-energy`, and submits through
 //! `makod`.

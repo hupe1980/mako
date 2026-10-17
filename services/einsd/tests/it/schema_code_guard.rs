@@ -485,7 +485,7 @@ fn the_billing_month_window_is_german_local_time() {
 // ── One settle path ──────────────────────────────────────────────────────────
 
 const SETTLE: &str = include_str!("../../src/settle.rs");
-const MAIN: &str = include_str!("../../src/main.rs");
+const MAIN: &str = include_str!("../../src/daemon.rs");
 const SECT52: &str = include_str!("../../src/sect52.rs");
 
 /// Only `settle.rs` may run a settlement.
@@ -498,7 +498,7 @@ fn only_one_module_calls_run_settlement() {
     for (name, src) in [
         ("handlers.rs", HANDLERS),
         ("mcp_server.rs", MCP),
-        ("main.rs", MAIN),
+        ("daemon.rs", MAIN),
     ] {
         let code = code_only(src);
         assert!(

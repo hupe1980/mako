@@ -121,14 +121,11 @@ pub async fn put_nb_energiemix(
     // obligation, so it is rejected here rather than stored as a hollow record.
     match req.energiemix.anteil.as_ref().filter(|a| !a.is_empty()) {
         None => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": "§42 EnWG: Energiemix requires a non-empty `anteil[]` \
-                              energy-source breakdown"
-                })),
+            return ApiError::unprocessable(
+                "§42 EnWG: Energiemix requires a non-empty `anteil[]` \
+                              energy-source breakdown",
             )
-                .into_response();
+            .into_response();
         }
         Some(anteile) => {
             let sum: rust_decimal::Decimal = anteile
@@ -137,22 +134,17 @@ pub async fn put_nb_energiemix(
                 .copied()
                 .sum();
             if (sum - rust_decimal::Decimal::from(100)).abs() > rust_decimal::Decimal::new(5, 1) {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": format!(
-                            "§42 EnWG: Energiemix `anteil[]` shares sum to {sum} %, must be ~100 %"
-                        )
-                    })),
-                )
-                    .into_response();
+                return ApiError::unprocessable(format!(
+                    "§42 EnWG: Energiemix `anteil[]` shares sum to {sum} %, must be ~100 %"
+                ))
+                .into_response();
             }
         }
     }
 
     let canonical = match super::serialise_or_500(req.energiemix.get()) {
         Ok(v) => v,
-        Err((status, body)) => return (status, Json(body)).into_response(),
+        Err(e) => return e.into_response(),
     };
 
     // The § 42 EnWG disclosure year is a German calendar year; the column
@@ -190,7 +182,7 @@ pub async fn put_nb_energiemix(
             })),
         )
             .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -245,13 +237,7 @@ pub async fn get_nb_energiemix(
     };
 
     match row {
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": format!("no Energiemix found for NB {nb_mp_id}")
-            })),
-        )
-            .into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
         Ok(Some(r)) => {
             let energiemix_json: serde_json::Value = r.try_get("energiemix").unwrap_or_default();
             // A stored row can predate the current schema series, so a read is
@@ -281,7 +267,7 @@ pub async fn get_nb_energiemix(
             };
             Json(resp).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -333,6 +319,6 @@ pub async fn get_nb_energiemix_history(
                 .collect();
             Json(serde_json::json!({ "nb_mp_id": nb_mp_id, "history": items })).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }

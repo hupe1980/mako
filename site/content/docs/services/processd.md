@@ -1,6 +1,6 @@
 +++
 title = "processd Operator Guide"
-description = "Operator guide for processd, the process decision engine: NB Anmeldung straight-through processing, LF and MSB answers, role-gated binaries and Cedar ABAC."
+description = "Operator guide for processd, the process decision engine: NB Anmeldung straight-through processing, LF and MSB answers, the process read model with its KPIs and § 7a Abs. 5 EnWG evidence, the NB Sperrauftrag queue, role-gated binaries and Cedar ABAC."
 weight = 23
 +++
 `processd` is the **process decision engine**. It receives the market messages
@@ -10,7 +10,11 @@ its operator must answer, walks the published
 [PID](@/docs/architecture/domain-model.md#prufidentifikator-pid), dispatches the
 answer through [`makod`](@/docs/services/makod.md) before the
 [Frist](@/docs/architecture/domain-model.md#frist-and-werktag), and queues
-whatever the tree cannot decide for an operator. Terms are defined in the
+whatever the tree cannot decide for an operator. Beside the decisions it keeps
+the [process read model](#process-read-model) — one row per process, its
+Antwortfrist, the per-PID KPIs and the § 7a Abs. 5 EnWG Gleichbehandlung
+evidence — and, in an NB build, the
+[Sperr-/Entsperrauftrag queue](#sperr-entsperrauftrag-queue-nb-role). Terms are defined in the
 [glossary](@/docs/architecture/domain-model.md#glossary); which PID belongs to
 which process is the [process map](@/docs/reference/processes.md).
 
@@ -19,9 +23,16 @@ graph TB
     marktd["marktd :8180<br/>fan-out"]
     processd["processd :8580<br/>(this service)"]
     makod["makod :8080"]
-    pg["PostgreSQL<br/>anmeldung_decisions · abmeldeanfragen<br/>approval_queue · eog_activations<br/>neuanlage_faelle"]
+    pg["PostgreSQL<br/>anmeldung_decisions · abmeldeanfragen<br/>approval_queue · eog_activations<br/>neuanlage_faelle · process_projections<br/>sperr_orders"]
 
-    marktd -->|"de.mako.process.initiated<br/>de.markt.versorgung.gap-detected<br/>HMAC POST /webhook"| processd
+    marktd -->|"de.mako.* · de.markt.versorgung.*<br/>HMAC POST /webhook"| processd
+
+    subgraph OBS ["process read model (every build)"]
+        PROJ["obs::project<br/>process_projections · KPIs<br/>§ 7a Abs. 5 EnWG evidence"]
+        PROJ --> pg
+    end
+    processd --> OBS
+    OBS -->|"de.obs.deadline.approaching<br/>de.obs.stp.parity.alert"| marktd
 
     subgraph NB ["NB module (--features nb-only)"]
         NC["mako-pruefung<br/>NB: E_0622 · E_0623 · E_0607 · E_0608 · G_0011 · G_0007<br/>LF: E_0609 · E_0624 · E_0614 · E_0615<br/>STP target ≥ 95%"]
@@ -65,6 +76,10 @@ msb-only   = ["role-msb"]
 integrated = ["role-lf-strom", "role-lf-gas", "role-nb-strom", "role-nb-gas", "role-msb"]
 ```
 
+The NB queue routes stay mounted in a build without an NB role, so the Cedar
+decision is still the first answer; past it they answer `501 Not Implemented` —
+the build does not serve them, and a retry against it cannot succeed.
+
 The flags gate handlers, not linked code: `mako-gpke`, `mako-geli-gas` and
 `mako-wim` are unconditional dependencies, so a role-gated build still links
 their catalogues. The legal separation of §§ 6a/7/7a EnWG happens at the level
@@ -97,6 +112,15 @@ and policy to each other in both directions.
 | `POST /api/v1/queue/{id}/approve` · `/reject` | `decide-queue` | `NB`, `LF` or `MSB` |
 | `PUT /api/v1/neuanlage/{id}/identifikation` | `identify-neuanlage` | `NB` |
 | `POST /api/v1/start-supply[-gas]` · `end-supply[-gas]` | `initiate-supply` | `LF` |
+| `GET /obs/processes` · `/obs/processes/{id}` | `read-process` | any caller of the tenant |
+| `GET /obs/kpis` · `GET /api/v1/audit/gleichbehandlung` | `read-kpi` | any caller of the tenant |
+| `GET /obs/overdue` | `read-overdue` | any caller of the tenant |
+| `POST /api/v1/obs/rebuild` | `rebuild-projection` | `ADMIN` |
+| `GET /obs/metrics` | — (restrict at the ingress) | scraper |
+| `GET /api/v1/sperr-orders` · `/{id}` · `/stats` | `read-sperr-order` | `NB` |
+| `POST /api/v1/sperr-orders` | `create-sperr-order` | `NB` |
+| `PUT /api/v1/sperr-orders/{id}/execute` · `/fail` | `execute-sperr-order` | `NB` |
+| `PUT /api/v1/sperr-orders/{id}/cancel` | `cancel-sperr-order` | `NB` |
 | `POST`/`GET /mcp` | `use-mcp`, then a per-tool action | any caller of the tenant |
 
 Roles come from the `mako_roles` JWT claim, the tenant from `mako_tenant`, which
@@ -104,7 +128,8 @@ must equal the deployment's own. The runner adds `/health/live`,
 `/health/ready` and `/metrics`.
 
 `processd` refuses to start without `[oidc]` and without `[webhook]
-inbound_secret`; the refusal names each missing one. `allow_insecure_no_auth =
+inbound_secret`, and with a `[sperr] erp_webhook_url` but no `erp_hmac_secret`;
+the refusal names each missing one. `allow_insecure_no_auth =
 true` accepts both, for local development (`just dev processd` reads
 `dev/config/processd.toml`).
 
@@ -293,8 +318,8 @@ initiating LF MP-ID == [identity] own_mp_id  →  initiator_is_affiliate = true
 
 `[identity] own_mp_id` must match makod's primary party. Startup logs the coding
 authority derived from it (293 = BDEW, 332 = DVGW) and warns on a GS1 GLN. The
-flag lands on every `anmeldung_decisions` row and on obsd's `ProcessProjection`;
-see [the obsd Gleichbehandlung parity report](@/docs/services/obsd.md#ss-7a-abs-5-enwg-gleichbehandlung-parity).
+flag lands on every `anmeldung_decisions` row and on the read model's
+`ProcessProjection`; see [the Gleichbehandlung parity report](#ss-7a-abs-5-enwg-gleichbehandlung-parity).
 
 ### Selbstzahler — the Lieferantenwechsel carve-out
 
@@ -544,14 +569,22 @@ curl -X POST http://processd:8580/api/v1/start-supply \
 
 \* Optional only where `[[lf.bilanzkreise]]` declares exactly one `standard`
 entry. UTILMD AHB Strom 2.2 Kap. 5.3 makes the Produktpaket Muss on a 55001, so
-a request resolving to none is `422 MISSING_BILANZKREIS`.
+a request resolving to none is a `422` with `code` `MISSING_BILANZKREIS`.
+
+Every refusal is the shared problem body — `error`, `detail` (the sentence) and
+`code` (the machine-readable reason: `MISSING_MALO_ID`, `MISSING_LIEFERBEGINN`,
+`INVALID_DATE`, `RETROACTIVE_DATE`, `VORLAUFFRIST_VIOLATION`, and for Gas
+`MISSING_ZAEHLPUNKT`, `MISSING_PROCESS_DATE`). A command `makod` refuses in the
+process's current state is a `409`; `makod` failing or unreachable is a `502`
+whose body names `upstream` and an `error_id`, never `makod`'s own text.
 
 Vorlauffrist (BK6-24-174 GPKE Teil 2, SD Lieferbeginn Prozessschritt 1):
 „Spätester ÜT ist der Tag vor dem letzten WT vor dem Zuordnungsbeginn" —
 day-granular, no time-of-day cutoff. The earliest Lieferbeginn is the calendar
 day after the next Werktag after today (Berlin date); a date before today is
-`RETROACTIVE_DATE`. The response carries `earliest_lieferbeginn` and
-`berlin_date_at_submission`.
+`RETROACTIVE_DATE`, a date before the earliest `VORLAUFFRIST_VIOLATION`, which
+carries `earliest_lieferbeginn` and `berlin_date`. The `202` carries
+`vorlauffrist.earliest_allowed` and `vorlauffrist.berlin_date_at_submission`.
 
 ### Gas: `POST /api/v1/start-supply-gas`
 
@@ -601,9 +634,273 @@ The answer is MSCONS 13007 or ORDRSP 19103; a delivery updates `edmd`
 
 Every `anmeldung_decisions` row carries `initiator_is_affiliate` (TRUE when
 `lf_mp_id == own_mp_id`) — the evidence behind the § 7a Abs. 5 EnWG
-Gleichbehandlungsbericht that [`obsd`](@/docs/services/obsd.md#ss-7a-abs-5-enwg-gleichbehandlung-parity)
+Gleichbehandlungsbericht that the [process read model](#ss-7a-abs-5-enwg-gleichbehandlung-parity)
 assembles. The duty it evidences is § 20 Abs. 1 Satz 1 EnWG: a systematically
 faster decision for affiliates is a violation.
+
+---
+
+## Process read model
+
+Every `de.mako.*` lifecycle event the one `POST /webhook` receives is projected
+into one `process_projections` row per business process **before** any
+decision module sees it, in every role build. From that row processd answers
+three questions the engine's own metrics cannot:
+
+- **Which processes are at risk** of missing their business answer window?
+- **How did this Prüfidentifikator perform** last month?
+- **Did we treat our own Lieferant better** than a third party's?
+
+A projection write that fails is not acknowledged, so the fan-out redelivers;
+every module behind it is idempotent against a redelivery. The **STP rate** of
+the read model is completions over the processes that *ended* in the window.
+
+### Two deadline clocks
+
+Every MaKo process carries **two independent deadlines**. The read model
+measures the second; the first never reaches it.
+
+| Clock | Window | A breach means | Where it shows |
+|---|---|---|---|
+| **APERAK Frist** | Strom UTILMD/ORDERS 45 min (Samstag: Sonntag 12:00), other Strom next Werktag 12:00; Gas Folgeprozess next Werktag 12:00, Initialprozess end of the 3. Werktag (APERAK AHB 1.1 §§ 2.3.1 / 2.4.1) | the counterparty's acknowledgement did not arrive — a transport or validation fault | not in the read model: makod raises the delivery-window alert and keeps the message in its outbox |
+| **Antwortfrist** | per PID — see below | the *business answer* is owed and has not been sent | `deadline_at`, computed on `process.initiated` |
+
+`state = aperak_timeout` is set by `de.mako.aperak.timeout`, which
+`gpke-supplier-change` and `geli-gas-supplier-change` emit when **their
+Antwortfrist** lapses unanswered — an Antwortfrist signal raised by the
+workflow. `total_aperak_timeout` and `total_frist_breached` are separate fields
+on every report; `aperak_timeout` is not terminal, so those processes stay in the
+Antwortfrist sweep.
+
+### ProcessProjection
+
+| Field | Description |
+|-------|-------------|
+| `process_id` | UUID — the CloudEvent `subject` |
+| `pid` | BDEW Prüfidentifikator (e.g. 55001) |
+| `family` | `gpke`, `wim`, `geli-gas`, `wim-gas`, `gabi-gas`, `mabis`, `emob`, `redispatch`, `invoic-storno`, `unknown`. A PID with a published Antwortfrist takes the family of its Festlegung. The WiM PIDs of both Sparten (INSRPT, INVOIC 31003) take `wim` or `wim-gas` from the event's `data.sparte`, else from the counterparty's coding authority (BDEW-Codenummer `293` Strom, DVGW-Codenummer `332` Gas), else `wim`. Then the workflow-name prefix, then the PID table |
+| `workflow_name` | From the `makoworkflow` CE extension |
+| `state` | `initiated` \| `running` \| `aperak_timeout` \| `completed` \| `rejected` \| `failed` |
+| `malo_id` | 11-digit Marktlokations-ID |
+| `partner_mp_id` | MP-ID of the counterparty |
+| `mdm_role` | Canonical Marktrolle (`LF`, `NB`, …) |
+| `started_at` / `last_event_at` | First and most recent event seen for this process |
+| `deadline_at` | The **business Antwortfrist**. `null` = no published window for this PID |
+| `deadline_source` | The Festlegung `deadline_at` came from |
+| `deadline_risk` | `unknown` \| `green` \| `amber` (< 24 h) \| `red` (past) |
+| `erc_code` | BDEW ERC code when `state = rejected` |
+| `initiator_is_affiliate` | The Lieferant belongs to this operator's own undertaking |
+
+`completed_at` (not on the wire) is the time the first terminal event carries.
+It feeds cycle time and caps the breach test
+(`deadline_at < COALESCE(completed_at, now())`), so a process that closed late
+counts as breached.
+
+### The Antwortfrist
+
+The read model computes no deadline of its own: `mako-fristen` does, from the
+same per-PID table `makod` registers deadlines from and the approval queue is
+sized by.
+
+| Family | Window | Source |
+|---|---|---|
+| GPKE Strom | **a clock time on the 1. Werktag after the ÜT**: 11:00 Anmeldung (55001/55077), 06:00 Abmeldung (55004), 05:00 Lieferende NB→LF (55007), 09:00 Beendigung der Zuordnung (55010); Kündigung 55016 to the end of the 1. WT | BK6-24-174 GPKE Teil 2 |
+| GeLi Gas | Ablauf des **4. WT** Anmeldung (44001), **3. WT** Abmeldung (44004), **2. WT** Ersatz-/Grundversorgung (44013), **3. WT** Kündigung (44016) | BK7-24-01-009 Kap. 3.1–3.3 |
+| WiM (Strom + Gas) | **3 / 5 / 7 / 1 Werktage** (55039/55042/55051/55168 resp. 44039/44042/44051/44168), to the end of that Werktag in Berlin; REQOTE Preisanfrage 4/5/10 WT je PID; Rechnungsabwicklung 8 WT | BK6-24-174 Anlage 2a Kap. 2.2.2–2.5.2, 3.2.2, 3.3.1.2, 3.6.3 · AWH WiM Gas 2.0 |
+| Everything else | `null` — **unknown, never unbounded** | — |
+
+A PID with no published window carries no deadline, is absent from every breach
+sweep, and has `deadline_risk = unknown` — never `green`.
+
+### § 7a Abs. 5 EnWG Gleichbehandlung parity
+
+A vertically integrated undertaking's Gleichbehandlungsbeauftragte files a report
+with the Bundesnetzagentur **by 31 March** for the preceding calendar year
+(§ 7a Abs. 5 EnWG); the read model produces its Lieferantenwechsel evidence. The
+underlying duties are **§ 6a EnWG** and **§ 20 Abs. 1 Satz 1 EnWG**.
+
+A process belongs to the calendar year in which it **started, in
+Europe/Berlin**: one initiated on 1 January at 00:30 belongs to the new year,
+although the stored instant is 31 December 23:30 UTC. The `GET /obs/kpis` month
+is bounded by Berlin dates the same way, and grouping by start makes a re-run of
+a closed year reproduce it.
+
+The comparison covers the processes the network arm answers for a Lieferant,
+derived from the Antwortfrist table (`answered_by == "NB"` in GPKE and GeLi Gas):
+55001, 55077, 55004, 44001 and 44004. `initiator_is_affiliate` is set when the
+Lieferant's MP-ID (`new_supplier`, else the counterparty) is in
+`[identity] own_mp_ids`; list every MP-ID the operator uses, or its affiliate
+processes count as third-party.
+
+**`gap_pp = affiliate − third_party`, in percentage points; positive means the
+affiliate fared better.** `gap_pp` covers the completion rate, `frist_gap_pp`
+the share answered inside the Antwortfrist; both are `null` when either group
+has fewer than 10 processes. The Bundesnetzagentur publishes no numeric parity
+limit; `[obs] parity_threshold_pp` is the operator's own escalation policy.
+
+```bash
+# JSON, for the current year
+curl -s "http://processd:8580/api/v1/audit/gleichbehandlung?year=2026" \
+  -H "Authorization: Bearer $TOKEN" \
+  | jq '.by_pid[] | {pid, process, gap_pp, frist_gap_pp, favours}'
+
+# CSV, for the filing: 15 columns; an unstatable rate is an empty cell
+curl -s "http://processd:8580/api/v1/audit/gleichbehandlung?year=2025&format=csv" \
+  -H "Authorization: Bearer $TOKEN" > gleichbehandlung-2025.csv
+```
+
+### Queries
+
+```bash
+curl -s "http://processd:8580/obs/processes?family=gpke&state=initiated&pid=55001" \
+  -H "Authorization: Bearer $TOKEN" | jq '.[] | {process_id, started_at, deadline_at}'
+curl -s "http://processd:8580/obs/kpis?pid=55001&period=2026-07" -H "Authorization: Bearer $TOKEN"
+curl -s "http://processd:8580/obs/overdue" -H "Authorization: Bearer $TOKEN"
+```
+
+`state` accepts exactly the six stored spellings; anything else is a `400` naming
+them. In a KPI report, check `total_with_frist` before quoting
+`frist_compliance_rate`: a small denominator means the bucket is mostly
+*unmeasured*. A `null` rate means nothing measurable in the bucket — not `0`, and
+not perfect performance.
+
+### Rebuilding from marktd's replay log
+
+The projection is a function of the events `marktd` fanned out, and `marktd`
+keeps every envelope in `event_log`. `POST /api/v1/obs/rebuild` (Cedar
+`rebuild-projection`, `ADMIN`) pages `marktd` `GET /admin/events` oldest first,
+from the beginning of the log to the instant the rebuild started, and hands each
+envelope to the projection function the webhook calls — a truncated table
+rebuilt this way equals the original row for row. The projection upserts on
+`process_id`, so a rebuild over a populated table repairs it, and an interrupted
+rebuild is finished by sending it again.
+
+`marktd` serves the log only to a principal holding its `manage-fanout`
+action, so the `[marktd] api_key` processd uses must belong to one. A replay
+log holding at least a page (5000) of events received at one instant cannot be
+paged by arrival time, and the rebuild refuses rather than loops.
+
+### Events produced
+
+Two sweeps produce `de.obs.*` CloudEvents when `[obs] outbound_url` is set (in
+production `marktd`'s event ingest), HMAC-signed with `[obs] outbound_secret`:
+
+| Event | When | Consumed by |
+|-------|------|-------------|
+| `de.obs.deadline.approaching` | an open process has `deadline_at` within `deadline_warn_hours`, or already past it, and has not been alerted (`deadline_alerted_at`) | agentd `deadline-alert-agent` |
+| `de.obs.stp.parity.alert` | **either** gap — completion rate or Frist compliance — passes `parity_threshold_pp`, with both groups ≥ 10 processes | agentd `compliance-agent` |
+
+Only a **delivered** alert is stamped, so a downed target cannot consume a
+warning; a sweep returning a full batch reports `saturated`.
+
+---
+
+## Sperr-/Entsperrauftrag queue (NB role)
+
+An NB build (`role-nb-strom` / `role-nb-gas`) carries the Netzbetreiber's work
+queue for the physical acts GPKE orders it to perform. An **ORDERS 17115
+Sperrauftrag** or **17117 Entsperrauftrag** from a Lieferant becomes a job for
+the field team; the outcome goes back as **IFTSTA 21039** (Auftragsstatus
+Sperren/Entsperren). Without the IFTSTA the Lieferant's `gpke-sperrung-lf`
+process never reaches a terminal state, so its dispatch is the one state the
+queue will not let fall silently.
+
+```mermaid
+flowchart LR
+    LF["Lieferant"] -->|"ORDERS 17115 / 17117"| MAKOD["makod<br/>gpke-sperrung"]
+    MAKOD -->|"de.mako.process.initiated"| WH["processd<br/>POST /webhook"]
+    WH --> Q[("sperr_orders<br/>pending")]
+    OP["Operator"] -->|"POST /api/v1/sperr-orders"| Q
+    Q --> FIELD["Field team"]
+    FIELD -->|"PUT /execute or /fail"| Q
+    Q -->|"gpke.sperrung.bestaetigen<br/>/ .fehlgeschlagen"| MAKOD
+    MAKOD -->|"IFTSTA 21039"| LF
+```
+
+The market inbox queues PIDs 17115 and 17117, keyed on the `makod` process so an
+AS4 redelivery does not queue a second disconnection; an operator order has no
+`process_id` and owes no IFTSTA. PID **17116** (Anfrage Sperrung, NB → MSB) is
+not queued: it is not an order to execute.
+
+| Column | EDIFACT | Meaning |
+|---|---|---|
+| `order_type` | `BGM+Z51` / `Z52` | Sperrung / Entsperrung |
+| `ausfuehrung_am` | `DTM+203` | A **fixed** date the LF requires (hint [533]: a Gerichtsvollzieher may have set it) |
+| `fruehestens_am` | `DTM+469` | Execute at the next opportunity, but **not before** this date |
+| `arbeitszeit` | `IMD+7081` `Z53`/`Z54` | Entsperrauftrag: within working hours, or also outside |
+| `treffpunkt_*` | `SG2 NAD+Z24` | Where the technician goes |
+| `hinweis` | `SG29 FTX+ACB` | The LF's free-text hints |
+
+`ausfuehrung_am` and `fruehestens_am` are alternatives (AHB conditions
+[55]/[56]), enforced in the API and by a `CHECK`.
+
+### Timing — three clocks, all published
+
+BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2 state three deadlines, counted in
+Werktagen on the BDEW-MaKo calendar:
+
+| Clock | Frist | Tracked by |
+|---|---|---|
+| **ORDRSP** 19116 / 19117 answering the order | „spätester ÜT ist der 1. WT nach dem ÜT" (Prozessschritt 2) | `makod`, from `mako_fristen::antwort` |
+| **The physical act** | „…spätestens innerhalb von 6 WT nach dem frühestmöglichen Sperrtermin" (Prozessschritt 1) | `ausfuehrung_faellig_am` |
+| **IFTSTA 21039** | „spätester ÜT ist der 1. WT nach dem Abschluss des Sperrauftrags" (Prozessschritt 5) | `iftsta_faellig_am` |
+
+`/stats` reports `overdue_pending` for the Lieferant's own `DTM+203` / `DTM+469`
+and `frist_ueberschritten` for the regulatory window; a pending order past its
+6 WT is announced once as `de.sperr.ausfuehrung.ueberfaellig`. The
+Vorlauffristen the *Lieferant* owes — 6 WT before the frühestmöglicher
+Sperrtermin, **12 WT** before a termingebundener one (Prozessschritt 1) — are
+recorded as `vorlauffrist_eingehalten` and counted as `vorlauffrist_verletzt`,
+never refused: Prozessschritt 2's checks do not include them.
+
+„Der NB führt bis zu zwei Sperrversuche innerhalb eines Sperrauftrags durch"
+(Prozessschritt 5): `PUT .../fail` records the first unsuccessful visit and
+leaves the order `pending`; the second closes it, as does `endgueltig: true` for a
+legal or factual impossibility.
+
+### Reporting the outcome
+
+`PUT /api/v1/sperr-orders/{id}/execute` and `.../fail` **claim the order first**
+(`UPDATE … WHERE status = 'pending'`) and only then dispatch, so a concurrent
+execute and fail cannot both reach the wire. The IFTSTA carries `SG15 STS` `Z37`
+(Sperren) / `Z38` (Entsperren) with `Z14 erfolgreich` or `Z13 gescheitert`, the
+EBD Prüfschritt code (`pruefschritt_code`, a **Muss**), and `DTM+293`
+Fertigstellungsdatum — Muss on `Z14` and ≤ the document date (condition [495]),
+so a future `executed_at` is refused at the API (IFTSTA AHB 2.1 § 7.2).
+
+`204`: recorded, IFTSTA with `makod`. `202`: recorded, dispatch failed, order in
+the retry queue — the Lieferant has **not** been told.
+
+A terminal order with `iftsta_dispatched_at IS NULL` has an uninformed
+Lieferant. A worker re-sends under the same idempotency key;
+`iftsta_next_attempt_at` is both claim lease and backoff, so replicas cannot
+double-send. It announces `de.sperr.iftsta.ausstehend` once when the 8 attempts
+are spent or `iftsta_faellig_am` has passed. `/stats` reports
+`iftsta_outstanding` (in flight), `iftsta_ueberfaellig` (past the 1-WT window)
+and `iftsta_stuck` (past the retry budget — **the number that needs a human**).
+A stuck dispatch almost always means `makod` has no `gpke-sperrung` process for
+that MaLo in `ValidationPassed`; after fixing the cause, reset `iftsta_attempts`.
+
+### Emitted events
+
+All go through the transactional outbox in the transaction of the state change,
+delivered to `[sperr] erp_webhook_url`; without it the notices accumulate in
+`event_outbox` and startup warns.
+
+| CloudEvent | Emitted when |
+|---|---|
+| `de.sperr.auftrag.eingegangen` | An order entered the queue, from ORDERS or an operator |
+| `de.sperr.ausgefuehrt` | Carried out — IFTSTA `Z14` |
+| `de.sperr.versuch.gescheitert` | The **first** Sperrversuch failed and the order stayed `pending` |
+| `de.sperr.fehlgeschlagen` | Not carried out — IFTSTA `Z13`, with the Prüfschritt code |
+| `de.sperr.storniert` | A pending order was withdrawn; no IFTSTA |
+| `de.sperr.ausfuehrung.ueberfaellig` | The 6-WT execution window closed with the order still open |
+| `de.sperr.iftsta.ausstehend` | The retry budget is spent **or** the § 3.5.1.2 Nr. 5 Frist has passed, and the LF is still uninformed |
+
+`agentd`'s `sperrd-agent` subscribes to the `de.sperr.*` glob. All four
+Sperrauftrag Cedar actions require the `NB` role and a tenant match;
+`tests/it/sperr/authorization_guard.rs` fails the build if a handler loses its
+`Claims` extractor or Cedar check.
 
 ---
 
@@ -628,6 +925,10 @@ pool_size = 10                  # default
 [identity]
 own_mp_id = "9900357000004"     # required — must match makod.toml [[party]] primary
 tenant    = ""                  # optional; defaults to own_mp_id
+# Every MP-ID the operator acts under, for the read model's § 7a Abs. 5 EnWG
+# affiliate detection: Strom NB (BDEW 99…) + Gas GNB (DVGW 98…). Defaults to
+# [own_mp_id].
+own_mp_ids = ["9900357000004", "9800357000004"]
 
 [makod]
 url     = "http://makod:8080"   # required
@@ -651,10 +952,19 @@ inbound_secret = "env:INBOUND_WEBHOOK_SECRET"   # required unless allow_insecure
 # retried with backoff up to 30 s).
 webhook_url   = "http://processd:8580/webhook"  # optional; omit to skip registration
 subscriber_id = "processd"                       # default
-# Comma-separated. The default is de.mako.process.initiated +
-# de.markt.versorgung.{gap-detected,eog-begonnen,changed}; leaving one out
-# silently disables the module that consumes it.
-# event_types = "de.mako.process.initiated,de.markt.versorgung.gap-detected,de.markt.versorgung.eog-begonnen,de.markt.versorgung.changed"
+# One subscription for every module. The default is the union they read;
+# leaving one out silently disables the module that consumes it.
+event_types = [
+  "de.mako.process.initiated",
+  "de.mako.process.completed",
+  "de.mako.process.failed",
+  "de.mako.aperak.accepted",
+  "de.mako.aperak.rejected",
+  "de.mako.aperak.timeout",
+  "de.markt.versorgung.gap-detected",
+  "de.markt.versorgung.eog-begonnen",
+  "de.markt.versorgung.changed",
+]
 
 [nb]
 auto_accept              = false  # true → dispatch bestaetigen automatically on Accept
@@ -696,6 +1006,21 @@ default_transaktionsgrund = "ZT6"         # SG4 STS DE9013 for automatic Anmeldu
 warn_days_before_expiry   = 14            # §38 Abs. 4 3-month warning lead
 # notify_webhook_url      = "https://erp.example/hooks/eog"   # ersatz-auslaufend CloudEvents
 # notify_webhook_secret   = "env:EOG_WEBHOOK_SECRET"
+
+[obs]                               # the process read model's de.obs.* producers
+# Target for de.obs.deadline.approaching and de.obs.stp.parity.alert, in
+# production marktd's event ingest; omit to disable both sweeps.
+outbound_url        = "http://marktd:8180/api/v1/mako/events"
+outbound_secret     = "env:PROCESSD_OBS_OUTBOUND_SECRET"  # HMAC; the target's inbound secret
+deadline_sweep_secs = 900     # default
+deadline_warn_hours = 24      # alert when an Antwortfrist is within this many hours
+parity_sweep_secs   = 86400   # default
+parity_threshold_pp = 5.0     # the operator's own escalation threshold, not a regulatory one
+parity_window_days  = 90      # parity look-back window
+
+[sperr]                             # NB Sperrauftrag queue — de.sperr.* to the ERP
+# erp_webhook_url = "https://erp.internal/hooks/sperr"
+# erp_hmac_secret = "env:PROCESSD_SPERR_ERP_HMAC_SECRET"   # required with erp_webhook_url
 
 # Required unless allow_insecure_no_auth = true.
 [oidc]
@@ -740,9 +1065,23 @@ handler's `decide-queue` check runs as well.
 | `get_queue_entry` | `read-queue` | Single queue entry by UUID |
 | `approve_queue_entry` | `decide-queue` | Dispatch the entry's answer; takes `antwort_code` / `antwort_tree` / `antwort_codeliste` / `bemerkung` for an escalation |
 | `reject_queue_entry` | `decide-queue` | Dispatch the refusal with the operator's `antwort_code`, or `bemerkung` as the Begründung |
+| `get_process` | `read-process` | Full process projection — state, deadline, `deadline_source`, ERC code |
+| `list_processes_by_family` | `read-process` | One family, optionally one state; both are enumerated in the schema and an unknown value is refused |
+| `list_overdue_processes` | `read-overdue` | Past the business Antwortfrist, most urgent first; reports `saturated` |
+| `get_kpi_report` | `read-kpi` | Per-PID KPIs for a `YYYY-MM` month, both clocks separately |
+| `get_parity_report` | `read-kpi` | § 7a Abs. 5 parity; `gap_pp` = affiliate − third_party |
+| `get_process_stp_rate` | `read-kpi` | Completions over the processes that **ended** in the window, `null` when none did |
+| `list_sperr_orders` | `read-sperr-order` | The Sperrauftrag queue (NB build) |
+| `get_sperr_order` | `read-sperr-order` | One order, with ORDERS provenance and IFTSTA state |
+| `get_sperr_stats` | `read-sperr-order` | Counters, incl. `iftsta_outstanding` / `iftsta_stuck` |
+| `list_due_orders` | `read-sperr-order` | The field-dispatch list, with the Treffpunkt |
 
-Four guided prompts ship alongside them — `triage-nb-rejection`,
-`investigate-stp-drop`, `triage-msb-wechsel` and `trigger-lieferbeginn`.
+Guided prompts ship alongside them — `triage-nb-rejection`,
+`investigate-stp-drop`, `triage-msb-wechsel`, `trigger-lieferbeginn`, the read
+model's `audit-kpi` and `investigate-aperak-violation`, and in an NB build the
+queue's `execute-sperrung` and `iftsta-sweep`. An agent key reading the
+Sperrauftrag tools carries the `NB` role (`[mcp] api_key_roles` or a named
+key's `roles`).
 
 ---
 
@@ -754,6 +1093,12 @@ Four guided prompts ship alongside them — `triage-nb-rejection`,
 | `processd_approval_queue_pending` | gauge | Processes waiting for an operator decision |
 | `processd_approval_queue_overdue` | gauge | Pending entries past `expires_at` — the answer deadline has been missed |
 | `processd_eog_open` | gauge | Ersatz-/Grundversorgung cases not yet closed (§ 36/§ 38 EnWG) |
+
+`GET /obs/metrics` serves the read model's gauges, computed from the store on
+each scrape: `processd_obs_process_projections_total`,
+`processd_obs_open_processes_total`, `processd_obs_overdue_processes_total`
+(open and past their Antwortfrist), and `processd_obs_db_pool_size` /
+`processd_obs_db_pool_idle`. It is unauthenticated — restrict it at the ingress.
 
 | Alert | Condition | Usual cause |
 |---|---|---|

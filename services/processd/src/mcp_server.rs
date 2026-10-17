@@ -17,12 +17,17 @@
 //! | `get_queue_entry`           | Get a single LF approval-queue entry by its UUID |
 //! | `approve_queue_entry`       | Approve a pending queue entry (dispatch its answer) |
 //! | `reject_queue_entry`        | Reject a pending queue entry (dispatch its refusal) |
+//!
+//! The process read model adds six tools and two prompts
+//! (`obs::mcp`); an NB build adds the four Sperrauftrag tools and
+//! two prompts (`sperr::mcp`). They are further routers on the one
+//! handler, so every tool sits behind the same `/mcp` door and the same
+//! per-tool Cedar action.
 
 use std::sync::Arc;
 
 use axum::{
     Router,
-    http::StatusCode,
     middleware::{self, Next},
     response::IntoResponse as _,
 };
@@ -170,7 +175,7 @@ pub struct GetQueueEntryParams {
 
 #[derive(Clone)]
 pub struct ProcessdMcpHandler {
-    state: Arc<ProcessdMcpState>,
+    pub(crate) state: Arc<ProcessdMcpState>,
     #[allow(
         dead_code,
         reason = "reached only in some feature or target combinations"
@@ -186,10 +191,17 @@ pub struct ProcessdMcpHandler {
 #[tool_router]
 impl ProcessdMcpHandler {
     fn new(state: Arc<ProcessdMcpState>) -> Self {
+        let tool_router = Self::tool_router() + Self::obs_tool_router();
+        let prompt_router = Self::prompt_router() + Self::obs_prompt_router();
+        #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+        let (tool_router, prompt_router) = (
+            tool_router + Self::sperr_tool_router(),
+            prompt_router + Self::sperr_prompt_router(),
+        );
         Self {
             state,
-            tool_router: Self::tool_router(),
-            prompt_router: Self::prompt_router(),
+            tool_router,
+            prompt_router,
         }
     }
 
@@ -298,7 +310,7 @@ Escalate = data gap (grid record missing) or affiliate initiator \
         description = "List NB Anmeldung decisions where `initiator_is_affiliate = true` — §20 EnWG \
 Diskriminierungsfreiheitspflicht audit. Returns decisions where the LF MP-ID matches the operator's \
 own MP-ID. These MUST NOT be auto-accepted (§ 20 Abs. 1 EnWG; § 7a Abs. 5 EnWG Gleichbehandlung). \
-Use `obsd.get_kpi_report` for the aggregated §20 parity report.",
+Use `get_parity_report` for the aggregated § 7a Abs. 5 EnWG parity report.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_affiliate_decisions(
@@ -467,7 +479,7 @@ hour — check it with `list_pending_approvals` first.",
         description = "Reject a pending approval-queue entry: dispatch the entry's refusal \
 command to makod and mark it Rejected. The refusal's `antwort_code` is the operator's; a \
 refusal that carries no code (the ESA Werteanfrage) takes its Begründung from `bemerkung`. \
-For § 20 EnWG parity data use `obsd` `get_kpi_report`.",
+For the aggregated parity figures use `get_parity_report`.",
         annotations(
             read_only_hint = false,
             idempotent_hint = false,
@@ -666,13 +678,26 @@ impl ServerHandler for ProcessdMcpHandler {
                 .build(),
         )
         .with_server_info(Implementation::new("processd", env!("CARGO_PKG_VERSION")))
-        .with_instructions(
-            "processd MCP — NB Anmeldung STP decisions, §20 EnWG compliance, LF E_0624 queue.\n\
-                 NB: `list_decisions`, `get_decision`, `get_stp_rate`, `get_stp_breakdown_by_erc`, `list_affiliate_decisions`.\n\
-                 LF: `list_pending_approvals`, `get_queue_entry`, `approve_queue_entry`, `reject_queue_entry`.\n\
-                 Prompts: `triage-nb-rejection`, `investigate-stp-drop`, `triage-msb-wechsel`, `trigger-lieferbeginn`.",
-        )
+        .with_instructions(instructions())
     }
+}
+
+/// The server instructions: processd's decision tools, then the read model's,
+/// then — in an NB build — the Sperrauftrag queue's.
+fn instructions() -> String {
+    let mut text = String::from(
+        "processd MCP — NB Anmeldung STP decisions, §20 EnWG compliance, LF E_0624 queue.\n\
+         NB: `list_decisions`, `get_decision`, `get_stp_rate`, `get_stp_breakdown_by_erc`, `list_affiliate_decisions`.\n\
+         LF: `list_pending_approvals`, `get_queue_entry`, `approve_queue_entry`, `reject_queue_entry`.\n\
+         Prompts: `triage-nb-rejection`, `investigate-stp-drop`, `triage-msb-wechsel`, `trigger-lieferbeginn`.\n\n",
+    );
+    text.push_str(&crate::obs::mcp::instructions());
+    #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+    {
+        text.push_str("\n\n");
+        text.push_str(crate::sperr::mcp::instructions());
+    }
+    text
 }
 
 /// The Cedar action each MCP tool needs, by tool name.
@@ -698,6 +723,16 @@ fn tool_action(name: &str) -> Option<&'static str> {
         // or `geli.stornierung.initiieren`. The market message cannot be
         // withdrawn once sent.
         "approve_queue_entry" | "reject_queue_entry" => "decide-queue",
+        // The process read model — the same actions as its REST routes.
+        "get_process" | "list_processes_by_family" => "read-process",
+        "get_kpi_report" | "get_parity_report" | "get_process_stp_rate" => "read-kpi",
+        "list_overdue_processes" => "read-overdue",
+        // The Sperrauftrag queue — dispatch data naming the household to be
+        // disconnected, held to the role its REST reads require.
+        #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+        "list_sperr_orders" | "get_sperr_order" | "get_sperr_stats" | "list_due_orders" => {
+            "read-sperr-order"
+        }
         _ => return None,
     })
 }
@@ -764,7 +799,10 @@ async fn mcp_auth_middleware(
     let bytes = match axum::body::to_bytes(body, MAX_MCP_BODY).await {
         Ok(b) => b,
         Err(_) => {
-            return (StatusCode::PAYLOAD_TOO_LARGE, "MCP request body too large").into_response();
+            return mako_service::ApiError::payload_too_large(format!(
+                "MCP request body exceeds {MAX_MCP_BODY} bytes"
+            ))
+            .into_response();
         }
     };
     let mut bytes = bytes;
@@ -782,21 +820,17 @@ async fn mcp_auth_middleware(
             // caller cannot name somebody else as the decider.
             if action == "decide-queue" {
                 let Some(identity) = state.auth.identify(&parts.headers) else {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        "403 Forbidden: this decision cannot be attributed to a verified \
-                         caller, and an unattributable § 20 Abs. 1 EnWG record is refused \
-                         rather than written against a placeholder",
+                    return mako_service::ApiError::forbidden(
+                        "this decision cannot be attributed to a verified caller, and an \
+                         unattributable § 20 Abs. 1 EnWG record is refused rather than \
+                         written against a placeholder",
                     )
-                        .into_response();
+                    .into_response();
                 };
                 match stamp_decider(&bytes, &identity.name) {
                     Some(rewritten) => bytes = rewritten.into(),
                     None => {
-                        return (
-                            StatusCode::BAD_REQUEST,
-                            "400 Bad Request: malformed tools/call frame",
-                        )
+                        return mako_service::ApiError::bad_request("malformed tools/call frame")
                             .into_response();
                     }
                 }
@@ -804,14 +838,11 @@ async fn mcp_auth_middleware(
         }
         McpCall::UnknownTool(name) => {
             tracing::warn!(tool = %name, "processd: MCP tool carries no Cedar action");
-            return (
-                StatusCode::FORBIDDEN,
-                format!(
-                    "403 Forbidden: MCP tool {name:?} carries no Cedar action, so it cannot be \
-                     authorized — add it to `tool_action`"
-                ),
-            )
-                .into_response();
+            return mako_service::ApiError::forbidden(format!(
+                "MCP tool {name:?} carries no Cedar action, so it cannot be authorized — add \
+                 it to `tool_action`"
+            ))
+            .into_response();
         }
     }
     let request = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));

@@ -54,7 +54,8 @@ and `build_for_test::<D>(cfg)` (feature `testing`) builds the router exactly as
 | Module | Key exports | Purpose |
 |---|---|---|
 | `service` | `run`, `Daemon`, `ServiceConfig`, `ServiceContext` | **The daemon lifecycle owner** — `main` = `run::<D>().await` |
-| `error` | `ApiError`, `ApiResult` | Shared HTTP error → JSON problem body (`?`-friendly); `ApiError::forbidden(reason)` is the one 403 |
+| `error` | `ApiError`, `ApiResult`, `UpstreamFailure` | Shared HTTP error → JSON problem body (`?`-friendly); `ApiError::forbidden(reason)` is the one 403; a 500 (`ApiError::internal`) and a 502/503/504 (`ApiError::upstream_*`) carry an `error_id` the log line carries, never the error's text |
+| `json` | `Json`, `Lenient`, `DETAIL_SENTINEL` | The request-body extractor — every rejection in the problem shape, and a key the type does not declare refused as a 422 with its JSON path; `Lenient` reads an externally specified schema without that refusal |
 | `headers` | `single_str` | Identity/idempotency headers — a repeated header is refused, never first-wins |
 | `dates` | `parse_iso_date`, `DateError` | The one request-date parser — a malformed date is a 400 naming the field, never `None` |
 | `config` | `load_config`, `DatabaseConfig`, `HttpConfig` | Layered TOML + env-var config loading |

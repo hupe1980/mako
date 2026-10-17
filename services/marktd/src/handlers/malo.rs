@@ -6,6 +6,7 @@
 //!   GET    /api/v1/malos           (list / query)
 
 use crate::state::AppState;
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{
@@ -45,10 +46,8 @@ use super::{Claims, IfMatch, IntoMdmResponse as _, etag, malformed_if_match, par
 ///
 /// Non-standard keys (e.g. `fallgruppenzuordnung`) are preserved through the
 /// `_additional` extension map (serde `flatten`) — round-trip is lossless.
-fn normalize_marktlokation(
-    data: serde_json::Value,
-) -> Result<Marktlokation, (StatusCode, serde_json::Value)> {
-    mako_markt::bo4e::decode(data).map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))
+fn normalize_marktlokation(data: serde_json::Value) -> mako_service::ApiResult<Marktlokation> {
+    mako_markt::bo4e::decode(data).map_err(|e| super::bo4e_refusal(&e))
 }
 
 /// Deserialise stored JSONB as `Marktlokation`. Returns `None` and logs an
@@ -232,35 +231,9 @@ pub async fn put_malo(
     // Re-serialises to canonical camelCase form before storage.
     let malo = match normalize_marktlokation(req.data) {
         Ok(v) => v,
-        Err((status, body)) => return (status, Json(body)).into_response(),
+        Err(e) => return e.into_response(),
     };
 
-    // Extract fields for the makod MaLo cache push from the canonical payload.
-    //
-    // makod resolves outbound EDIFACT recipients from this cache, so the role
-    // codes must be the ones valid *today* — an ERP PUT carrying the full role
-    // history would otherwise push an expired NB/MSB GLN. Same half-open
-    // `[valid_from, valid_to)` window as the SQL read path; latest start wins.
-    let today = today_berlin();
-    let current_role = |typ: &str, generic: &str| {
-        req.rollenzuordnung
-            .iter()
-            .filter(|z| {
-                (z.zuordnungstyp == typ || z.zuordnungstyp == generic)
-                    && z.valid_from <= today
-                    && z.valid_to.is_none_or(|to| to > today)
-            })
-            .max_by_key(|z| z.valid_from)
-            .map(|z| z.rollencodenummer.clone())
-    };
-    let nb_mp_id = current_role("NB", "GNB").unwrap_or_else(|| state.tenant.clone());
-    let msb_mp_id = current_role("MSB", "GMSB");
-    // Read off the typed BO, not its JSON: the previous string lookups asked
-    // for `netzgebietsnummer` / `netzgebiet`, neither of which is a BO4E field
-    // name (the schema calls it `netzgebietsnr`), so the cache push carried a
-    // permanent `None`.
-    let bilanzierungsgebiet = malo.bilanzierungsgebiet.clone();
-    let netzgebiet = malo.netzgebietsnr.clone();
     let sparte_str = req.sparte.to_string();
     let malo_id_str = malo_id.to_string();
 
@@ -290,7 +263,11 @@ pub async fn put_malo(
         Err(e) => return e.into_response(),
     };
 
-    // Emit de.markt.malo.updated so ERP subscribers and obsd get notified.
+    // Emit de.markt.malo.updated. Every consumer of the record — makod's
+    // MaLo-Ident cache among them — subscribes to the durable fan-out and
+    // reads the record back, so a consumer that is down when the record
+    // changes still receives it: the fan-out retries and dead-letters
+    // (`/admin/fanout/dlq`), and this handler calls nobody.
     let evt = MarktEvent::new(
         &state.tenant,
         mako_events::markt::MALO_UPDATED,
@@ -304,40 +281,11 @@ pub async fn put_malo(
     });
     if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt).await {
         tracing::error!(error = %e, "malo: durable enqueue failed");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "event enqueue failed"})),
-        )
-            .into_response();
+        return ApiError::internal(e).into_response();
     }
     if let Err(e) = tx.commit().await {
         tracing::error!(error = %e, "put_malo: commit failed");
         return MdmError::Internal(e.to_string()).into_response();
-    }
-
-    // Push to makod's MaLo cache so the engine can resolve NB/MSB GLNs for
-    // outbound EDIFACT without the ERP having to call makod directly.
-    // Best-effort: a failure here is logged but does NOT fail the API call —
-    // the master record is already durably stored in marktd's PostgreSQL.
-    let cache_record = mako_markt::makod_client::MaloIdentResultPositive {
-        malo_id: malo_id_str.clone(),
-        nb_mp_id,
-        msb_mp_id,
-        sender_market_partner_id: state.tenant.clone(),
-        bilanzierungsgebiet,
-        netzgebiet,
-        sparte: sparte_str,
-    };
-    if let Err(e) = state
-        .makod_client
-        .put_malo(&cache_record.malo_id, &cache_record)
-        .await
-    {
-        tracing::warn!(
-            malo_id = %malo_id,
-            error   = %e,
-            "put_malo: makod cache push failed (non-fatal — marktd record saved)",
-        );
     }
 
     // 201 vs 200 comes from the write, not from a probe before it. The row is
@@ -603,16 +551,10 @@ pub async fn get_malo_lastprofil(
         .unwrap_or("")
         .to_uppercase();
     if bilanzierungsmethode == "RLM" || bilanzierungsmethode == "IMS" {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": format!(
-                    "MaLo {malo_id} uses bilanzierungsmethode={bilanzierungsmethode}; \
-                     no SLP Lastprofil applies (use edmd Lastgang for metered values)"
-                )
-            })),
-        )
-            .into_response();
+        // A metered MaLo has no SLP Lastprofil: the resource the route names
+        // does not exist for it, and its values are edmd's Lastgang.
+        tracing::debug!(%malo_id, %bilanzierungsmethode, "no SLP Lastprofil for a metered MaLo");
+        return ApiError::NotFound.into_response();
     }
 
     // 1. Try to extract stored lastprofile from the JSONB data.

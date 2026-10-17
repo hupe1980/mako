@@ -7,7 +7,6 @@
 
 allow_insecure_no_auth = true
 
-port     = 9780
 tenant   = "9900357000004"
 lf_mp_id = "9900357000004"
 
@@ -15,6 +14,9 @@ processd_url    = "http://127.0.0.1:8580"
 accountingd_url = "http://127.0.0.1:9380"
 edmd_url        = "http://127.0.0.1:8380"
 outputd_url     = "http://127.0.0.1:9880"
+
+[http]
+addr = "127.0.0.1:9780"
 
 [database]
 url = "postgres://dev:dev@localhost:5432/vertragd"

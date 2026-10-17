@@ -4,6 +4,7 @@
 //! | Tool | Description |
 //! |---|---|
 //! | `get_balance` | Current open-items balance for a customer MaLo |
+//! | `get_vorauszahlung` | The BO4E `Vorauszahlung` (Abschlag) of a customer MaLo — what `GET /api/v1/accounts/{malo_id}/vorauszahlung` serves |
 //! | `list_ledger` | Ledger movements (debit/credit) for a MaLo, with the opening balance the window starts from |
 //! | `list_dunning` | Active dunning cases |
 //! | `list_overdue` | All accounts with overdue invoices |
@@ -12,7 +13,6 @@
 
 use axum::{
     Router,
-    http::StatusCode,
     middleware::{self, Next},
     response::IntoResponse as _,
 };
@@ -45,7 +45,7 @@ pub struct AccountingdMcpState {
     pub creditor_iban: Option<String>,
     pub creditor_name: Option<String>,
     pub creditor_id: Option<String>,
-    /// The operator's own `Cdtr/PstlAdr` — mandatory from 2026-11-15.
+    /// The operator's own `Cdtr/PstlAdr`.
     pub creditor_address: crate::sepa::AddressParts,
     /// Keys the IBAN lookup hash, so a payment can be resolved by the
     /// counterparty account the bank reported.
@@ -68,6 +68,15 @@ pub struct NoParams {}
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MaloParams {
     pub malo_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct VorauszahlungParams {
+    /// 11-digit MaLo-ID.
+    pub malo_id: String,
+    /// The LF MP-ID the account is held under. Defaults to the tenant, as on
+    /// the REST route.
+    pub lf_mp_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -217,6 +226,38 @@ impl AccountingdMcpHandler {
             }))
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None)),
+            Ok(None) => Err(McpError::invalid_params(
+                format!("account for {} not found", p.malo_id),
+                None,
+            )),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Get the BO4E `Vorauszahlung` (monthly Abschlag) of a customer MaLo — the same body `GET /api/v1/accounts/{malo_id}/vorauszahlung` serves: the stored typed record (`source: stored`), or one derived from `abschlag_ct` when none is stored (`source: derived_from_abschlag_ct`).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_vorauszahlung(
+        &self,
+        Parameters(p): Parameters<VorauszahlungParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let lf_mp_id = p.lf_mp_id.as_deref().unwrap_or(&self.state.tenant);
+        match crate::pg::fetch_vorauszahlung(
+            &self.state.pool,
+            &p.malo_id,
+            lf_mp_id,
+            &self.state.tenant,
+        )
+        .await
+        {
+            Ok(Some((vzahlung, abschlag_ct))) => {
+                let body = crate::handlers::vorauszahlung_view(&p.malo_id, vzahlung, abschlag_ct)
+                    .map_err(|e| McpError::internal_error(e, None))?;
+                ContentBlock::json(body)
+                    .map(|b| CallToolResult::success(vec![b]))
+                    .map_err(|e| McpError::internal_error(e.message, None))
+            }
             Ok(None) => Err(McpError::invalid_params(
                 format!("account for {} not found", p.malo_id),
                 None,
@@ -1027,7 +1068,7 @@ impl AccountingdMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "1. Use `get_balance` to check current open-items balance.\n                 2. Use `list_ledger` to see recent RECHNUNG/ZAHLUNG/GUTSCHRIFT/ABSCHLAG history.\n                 3. If balance > 0 (overdue): check `list_dunning` for active dunning cases.\n                 4. For missing payments: `import_payments` with CAMT.054 bank entries to match.\n                 5. Monthly Abschlagslauf: `run_abschlag_cycle` raises the Abschlagsforderungen (day=billing_day).\n                 6. Monthly SEPA: `run_sepa_collection` → pain.008 XML (send N-5 bank days before due).\n                 7. After Jahresabschluss: `trigger_jahresabschluss` → review → `update_abschlag`.\n                 8. Period-end HGB accruals: `compute_bilanzielle_abgrenzung` → ERP pRAP/aRAP booking.\n                 9. Mahnstufe 3: de.accounting.sperrauftrag → sperrd → IFTSTA 21039 to NB.",
+                "1. Use `get_balance` to check current open-items balance.\n                 2. Use `list_ledger` to see recent RECHNUNG/ZAHLUNG/GUTSCHRIFT/ABSCHLAG history.\n                 3. If balance > 0 (overdue): check `list_dunning` for active dunning cases.\n                 4. For missing payments: `import_payments` with CAMT.054 bank entries to match.\n                 5. Monthly Abschlagslauf: `run_abschlag_cycle` raises the Abschlagsforderungen (day=billing_day).\n                 6. Monthly SEPA: `run_sepa_collection` → pain.008 XML (send N-5 bank days before due).\n                 7. After Jahresabschluss: `trigger_jahresabschluss` → review → `update_abschlag`.\n                 8. Period-end HGB accruals: `compute_bilanzielle_abgrenzung` → ERP pRAP/aRAP booking.\n                 9. Mahnstufe 3: de.accounting.sperrauftrag → ORDERS 17115 to the NB, whose Sperrauftrag queue (processd) reports IFTSTA 21039.",
             ),
         ]
     }
@@ -1046,7 +1087,7 @@ impl ServerHandler for AccountingdMcpHandler {
                  - Inbound: de.billing.rechnung.erstellt → RECHNUNG debit entry\n\
                  - Inbound: CAMT.054 bank statement → use `import_payments` for ZAHLUNG credit\n\
                  - Outbound: pain.008 XML → use `run_sepa_collection` for monthly Abschlag collection\n\
-                 - Dunning: `list_dunning` → escalate → de.accounting.sperrauftrag → sperrd\n\n\
+                 - Dunning: `list_dunning` → escalate → de.accounting.sperrauftrag → ORDERS 17115 to the NB\n\n\
                  **⚠ EEG double-booking prevention (§20-21 EEG 2023):**\n\
                  If billingd includes an EEG Gutschrift as a negative Rechnungsposition,\n\
                  the resulting debit from de.billing.rechnung.erstellt is already net of EEG.\n\
@@ -1069,7 +1110,7 @@ impl ServerHandler for AccountingdMcpHandler {
 /// Abschlagsforderung against every account due that day, `import_payments`
 /// books a ZAHLUNG per CAMT.054 entry, `update_abschlag` rewrites the monthly
 /// advance and the SEPA billing day, and `run_sepa_collection` emits a
-/// bank-submittable pain.008 carrying every mandate's IBAN. Five of the thirteen
+/// bank-submittable pain.008 carrying every mandate's IBAN. Five of the fourteen
 /// tools write, so the surface is not "read-only by construction".
 ///
 /// Every tool is mapped, not only the five that write, because accountingd's
@@ -1085,6 +1126,7 @@ pub fn tool_action(tool: &str) -> Option<&'static str> {
     Some(match tool {
         // Reads about one customer.
         "get_balance"
+        | "get_vorauszahlung"
         | "list_ledger"
         | "suggest_payment_match"
         // A preview: it fetches the account and nets the year, and commits
@@ -1147,7 +1189,10 @@ async fn mcp_auth_middleware(
     let bytes = match axum::body::to_bytes(body, MAX_MCP_BODY).await {
         Ok(b) => b,
         Err(_) => {
-            return (StatusCode::PAYLOAD_TOO_LARGE, "MCP request body too large").into_response();
+            return mako_service::ApiError::payload_too_large(format!(
+                "MCP request body exceeds {MAX_MCP_BODY} bytes"
+            ))
+            .into_response();
         }
     };
     match classify(&bytes) {
@@ -1159,13 +1204,9 @@ async fn mcp_auth_middleware(
         }
         McpCall::UnknownTool(name) => {
             tracing::warn!(tool = %name, "accountingd: MCP tool carries no Cedar action");
-            return (
-                StatusCode::FORBIDDEN,
-                format!(
+            return mako_service::error::ApiError::forbidden(format!(
                     "403 Forbidden: MCP tool {name:?} carries no Cedar action, so it cannot be                      authorized — add it to `tool_action`"
-                ),
-            )
-                .into_response();
+                )).into_response();
         }
     }
     let request = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
@@ -1182,4 +1223,29 @@ pub fn router(state: Arc<AccountingdMcpState>, _shutdown: CancellationToken) -> 
     Router::new()
         .route_service("/mcp", service)
         .layer(middleware::from_fn_with_state(state, mcp_auth_middleware))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `get_vorauszahlung` is on the router `tools/list` answers from, declared
+    /// read-only, and held to the action its REST twin
+    /// `GET /api/v1/accounts/{malo_id}/vorauszahlung` checks.
+    ///
+    /// The router is the list the client sees: a tool missing from it is absent
+    /// from `tools/list` and refused by `tools/call`, whatever a manifest grants.
+    #[test]
+    fn get_vorauszahlung_is_listed_read_only_and_held_to_read_account() {
+        let router = AccountingdMcpHandler::tool_router();
+        let tool = router
+            .get("get_vorauszahlung")
+            .expect("tools/list carries get_vorauszahlung");
+        assert_eq!(
+            tool.annotations.as_ref().and_then(|a| a.read_only_hint),
+            Some(true),
+            "get_vorauszahlung reads a stored Vorauszahlung and must be declared read-only"
+        );
+        assert_eq!(tool_action("get_vorauszahlung"), Some("read-account"));
+    }
 }

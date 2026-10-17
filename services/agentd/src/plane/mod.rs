@@ -32,8 +32,8 @@ pub mod sweep;
 pub mod tools;
 pub mod witness;
 pub use runtime::{
-    Accepted, Activation, Admitted, AgentDecision, Envelope, Plane, PlaneConfig, Reception, Route,
-    Router, Stores,
+    Accepted, Activation, Admitted, AgentDecision, Envelope, EraseError, Plane, PlaneConfig,
+    Reception, Route, Router, Stores,
 };
 
 use std::collections::BTreeMap;
@@ -100,7 +100,7 @@ pub fn manifests() -> &'static BTreeMap<String, Manifest> {
             "../../agents/grid-anomaly-agent.yaml",
             "../../agents/invoice-reconciliation-agent.yaml",
             "../../agents/jahresabrechnung-agent.yaml",
-            "../../agents/mabis-syncd-agent.yaml",
+            "../../agents/mabis-agent.yaml",
             "../../agents/mako-agent.yaml",
             "../../agents/meter-data-agent.yaml",
             "../../agents/msb-history-agent.yaml",
@@ -313,10 +313,9 @@ mod tests {
 
     /// A coded specialist grants exactly the tools its code calls.
     ///
-    /// The cutover handed every specialist its servers' whole read surface —
-    /// this one carried 34 grants across obsd, makod and marktd for a procedure
-    /// that calls one tool. A coded skill's reach is legible, so there is no
-    /// excuse for granting more than it takes.
+    /// Its procedure calls one tool; a grant of its servers' whole read surface
+    /// would hand a coded skill reach its code never uses. A coded skill's
+    /// reach is legible, so there is no excuse for granting more than it takes.
     #[test]
     fn the_deadline_specialist_grants_only_the_tool_it_calls() {
         let m = find_manifest(crate::skills::DeadlineTriage::NAME).expect("compiled in");
@@ -324,7 +323,7 @@ mod tests {
         let refs: Vec<&str> = m.spec.tools.iter().map(|t| t.reference.as_str()).collect();
         assert_eq!(
             refs,
-            vec!["tool://obsd/list_overdue_processes"],
+            vec!["tool://processd/list_overdue_processes"],
             "least privilege is checkable when the caller is code"
         );
         assert!(
@@ -394,6 +393,39 @@ mod tests {
         );
     }
 
+    /// Every answer a model writes fits strict constrained decoding.
+    ///
+    /// Strict mode lists every property in `required` and spells an optional
+    /// one nullable (`type: [string, "null"]`, with `null` in its `enum`). A
+    /// schema outside that subset is not refused by the Anthropic driver — it
+    /// sends the respond tool with `strict: false` and generation runs
+    /// unconstrained, so the shape a reviewer approved stops binding what the
+    /// model writes and only the validation after the fact remains. The coded
+    /// specialists ask no model and are out of scope.
+    #[test]
+    fn every_model_answer_schema_fits_strict_constrained_decoding() {
+        let mut loose = Vec::new();
+        for (name, m) in manifests() {
+            let asks_a_model = m
+                .spec
+                .models
+                .as_ref()
+                .is_some_and(|models| models.privileged.is_some());
+            let Some(schema) = m.output_schema().filter(|_| asks_a_model) else {
+                continue;
+            };
+            if let Some(problem) = agentplane::model::strict_schema_problem(schema) {
+                loose.push(format!("{name}: {problem}"));
+            }
+        }
+        assert!(
+            loose.is_empty(),
+            "these answer schemas fall outside strict constrained decoding, so the model \
+             writes them unconstrained:\n  {}",
+            loose.join("\n  ")
+        );
+    }
+
     /// **Closed all the way down**, not only at the top.
     ///
     /// The root is where the argument for closing a schema is usually made, and
@@ -449,7 +481,7 @@ mod tests {
 
     /// Knowledge is granted, not copied.
     ///
-    /// mako's MCP servers publish 57 step-by-step prompts for their own
+    /// mako's MCP servers publish step-by-step prompts for their own
     /// procedures. A manifest names the prompt it needs; a hand-typed paraphrase
     /// in `constraints` drifts from the server's prompt the first time either
     /// changes.
@@ -730,7 +762,7 @@ mod tests {
     /// worklist, exactly like a row that was answered.
     #[test]
     fn the_coded_specialists_triage_audience_is_admitted_by_the_policy_set() {
-        use agentplane::core::{PolicyDecision, PolicyRequest};
+        use agentplane::core::{PolicyDecision, PolicyRequest, PrincipalKind};
 
         let engine = crate::plane::policy::engine(crate::plane::policy::DEFAULT_POLICY)
             .expect("the embedded policy set compiles");
@@ -743,6 +775,7 @@ mod tests {
             let context = serde_json::json!({ "roles": [role], "tenant": "9900357000004" });
             let decision = engine.authorize(&PolicyRequest {
                 principal: "user:reviewer",
+                principal_kind: PrincipalKind::Subject,
                 action: "api:task.decide",
                 resource: "*",
                 context: &context,
@@ -876,7 +909,10 @@ mod tests {
         );
     }
 
-    /// **A role build's worklist rows stay inside its own arm (§§ 6a, 7a EnWG).**
+    /// **A role build's worklist rows stay inside its own arm.**
+    ///
+    /// The build fails a misconfiguration closed; the confidentiality duty of
+    /// §§ 6a, 7a EnWG is the deployment's Cedar policy, enforced at runtime.
     ///
     /// The structural half is asserted elsewhere: a `role-lf` binary does not
     /// *contain* the NB specialists and does not require their MCP endpoints.

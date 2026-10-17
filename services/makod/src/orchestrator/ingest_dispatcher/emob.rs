@@ -14,9 +14,9 @@
 //!
 //! A `Deadline` whose label no `on_deadline` arm matches fires into `None` and
 //! is lost, so the labels come from `mako_emob::modellwechsel` and the windows
-//! from `mako_fristen::antwort` — the same table `processd` and `obsd` read.
+//! from `mako_fristen::antwort` — the same table `processd` reads.
 //! Only the **inbound** leg gets one: it is our own answer that is owed. When
-//! we sent the request, the counterparty owes the answer and `obsd` watches it.
+//! we sent the request, the counterparty owes the answer and `processd` watches it.
 
 use super::*;
 

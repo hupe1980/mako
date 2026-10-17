@@ -18,6 +18,7 @@
 //   "issue-billing"      — POST /api/v1/billing/{id}/versenden — records the
 //                          rendered document for 8 years and sends it to the
 //                          customer on their channels
+//   "read-policy"        — GET  /api/v1/policy — the operator policy report
 //
 // The MCP surface is authenticated separately by `[mcp]` (McpAuth) and is
 // read-only by construction, so it carries no Cedar action. The VPP dispatch
@@ -34,7 +35,8 @@ permit(
     principal,
     action in [
         Action::"read-billing",
-        Action::"preview-billing"
+        Action::"preview-billing",
+        Action::"read-policy"
     ],
     resource
 ) when {

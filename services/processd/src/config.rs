@@ -95,6 +95,12 @@ pub struct Config {
     pub esa: EsaConfig,
     #[serde(default)]
     pub eog: EogConfig,
+    /// `[obs]` — the process read model's `de.obs.*` producers.
+    #[serde(default)]
+    pub obs: ObsConfig,
+    /// `[sperr]` — the Sperr-/Entsperrauftrag queue's ERP notices (NB role).
+    #[serde(default)]
+    pub sperr: SperrConfig,
     /// OIDC token verification for the HTTP API. Without it every request is
     /// admitted with synthetic dev-admin claims, which is a posture
     /// [`Self::check_auth_posture`] refuses to start in.
@@ -108,7 +114,8 @@ pub struct Config {
     /// Start without HTTP token verification and without inbound webhook
     /// signing (dev/test only).
     ///
-    /// Both doors decide what this operator answers a market partner, so the
+    /// Both doors decide what this operator answers a market partner, lead to
+    /// the process read model, and queue physical disconnections, so the
     /// posture is asked for by name.
     #[serde(default)]
     pub allow_insecure_no_auth: bool,
@@ -128,9 +135,9 @@ impl Config {
     pub fn check_auth_posture(&self) -> anyhow::Result<()> {
         if self.allow_insecure_no_auth {
             tracing::warn!(
-                "processd: allow_insecure_no_auth is set — the decision queues and the \
-                 approval routes are served to any caller, and POST /webhook answers market \
-                 partners from unsigned events"
+                "processd: allow_insecure_no_auth is set — the decision queues, the approval \
+                 routes, the process read model and the Sperrauftrag queue are served to any \
+                 caller, and POST /webhook answers market partners from unsigned events"
             );
             return Ok(());
         }
@@ -140,7 +147,10 @@ impl Config {
                 "[oidc] — without it every REST and MCP route is admitted with dev claims: \
                  the pending decision queues, and the approval routes that confirm or reject \
                  an Anmeldung, a Kündigung or a Messstellenbetreiber-Wechsel in this \
-                 operator's name"
+                 operator's name; the process read model with its counterparties and \
+                 Marktlokationen, the list of breached Antwortfristen, and the § 7a Abs. 5 \
+                 EnWG Gleichbehandlung report; and the Sperrauftrag routes that schedule a \
+                 physical disconnection and dispatch IFTSTA 21039"
                     .to_owned(),
             );
         }
@@ -148,7 +158,19 @@ impl Config {
             fehlt.push(
                 "webhook.inbound_secret — without it POST /webhook accepts any unsigned body, \
                  and a forged de.mako.process.initiated makes this operator answer a market \
-                 partner over a process nobody started"
+                 partner over a process nobody started, queues a physical disconnection, or \
+                 closes an open process in the read model"
+                    .to_owned(),
+            );
+        }
+        // `OutboxWorker` signs only when it has a secret, so a configured ERP
+        // webhook without one ships every de.sperr.* notice unsigned — a
+        // disconnection announcement the receiver cannot tell from a forged one.
+        if self.sperr.erp_webhook_url.is_some() && self.sperr.erp_hmac_secret.is_none() {
+            fehlt.push(
+                "sperr.erp_hmac_secret — sperr.erp_webhook_url is configured, and without the \
+                 secret every de.sperr.* notice, including the ones announcing a physical \
+                 disconnection, reaches the ERP unsigned"
                     .to_owned(),
             );
         }
@@ -210,6 +232,18 @@ pub struct IdentityConfig {
     /// Tenant identifier written to every DB row.  Defaults to `own_mp_id`.
     #[serde(default)]
     pub tenant: String,
+    /// Every MP-ID this operator acts under, for the § 7a Abs. 5 EnWG
+    /// Gleichbehandlung evidence of the process read model.
+    ///
+    /// Include each one: the NB Strom BDEW-Codenummer (`99…`), the GNB Gas
+    /// DVGW-Codenummer (`98…`), MSB codes where applicable. When the Lieferant
+    /// on an NB-answered process matches **any** of them it belongs to the
+    /// operator's own vertically integrated undertaking, and the projection
+    /// sets `initiator_is_affiliate`.
+    ///
+    /// Defaults to `[own_mp_id]` when absent (single-MP-ID deployments).
+    #[serde(default)]
+    pub own_mp_ids: Vec<String>,
 }
 
 // ── makod connection ──────────────────────────────────────────────────────────
@@ -261,7 +295,7 @@ pub struct WebhookConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubscriptionConfig {
-    /// URL that `marktd` will POST `de.mako.process.initiated` events to.
+    /// URL that `marktd` will POST the subscribed CloudEvents to.
     ///
     /// When set, `processd` calls `PUT {marktd.url}/api/v1/subscriptions/{subscriber_id}`
     /// on startup and self-registers as a subscriber.  Retries for up to 30 s to
@@ -273,25 +307,39 @@ pub struct SubscriptionConfig {
     /// `PUT /api/v1/subscriptions/:id` — idempotent upsert.
     #[serde(default = "default_subscriber_id")]
     pub subscriber_id: String,
-    /// Comma-separated CloudEvent types to subscribe to.
+    /// CloudEvent types to subscribe to — one subscription for every module.
+    ///
+    /// The default is the union every compiled module reads: narrowing it
+    /// disables a module with no other signal.
     #[serde(default = "default_event_types")]
-    pub event_types: String,
+    pub event_types: Vec<String>,
 }
 
 fn default_subscriber_id() -> String {
     "processd".to_owned()
 }
-fn default_event_types() -> String {
-    // PROCESS_INITIATED drives the NB/LF/MSB STP modules; the versorgung
-    // events drive the EoG gap-closure automation (§38 EnWG) — CHANGED closes
-    // a case once regular supply resumes.
-    format!(
-        "{},{},{},{}",
+/// The union of the CloudEvent types processd's modules read.
+///
+/// - `PROCESS_INITIATED` drives the NB/LF/MSB STP modules, opens a Sperrauftrag
+///   for ORDERS 17115/17117 and opens a row in the process read model;
+/// - the four other `de.mako.*` lifecycle types advance that row;
+/// - the versorgung events drive the EoG gap-closure automation (§38 EnWG) —
+///   CHANGED closes a case once regular supply resumes.
+#[must_use]
+pub fn default_event_types() -> Vec<String> {
+    [
         mako_events::mako::PROCESS_INITIATED,
+        mako_events::mako::PROCESS_COMPLETED,
+        mako_events::mako::PROCESS_FAILED,
+        mako_events::mako::APERAK_ACCEPTED,
+        mako_events::mako::APERAK_REJECTED,
+        mako_events::mako::APERAK_TIMEOUT,
         mako_events::markt::VERSORGUNG_GAP_DETECTED,
         mako_events::markt::VERSORGUNG_EOG_BEGONNEN,
         mako_events::markt::VERSORGUNG_CHANGED,
-    )
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }
 
 impl Default for SubscriptionConfig {
@@ -402,6 +450,104 @@ impl Default for EogConfig {
             notify_webhook_secret: None,
         }
     }
+}
+
+// ── obs module (process read model) ───────────────────────────────────────────
+
+/// `[obs]` — where the process read model's `de.obs.*` events go, and how its
+/// sweeps are tuned.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObsConfig {
+    /// Outbound CloudEvent target for `de.obs.deadline.approaching` and
+    /// `de.obs.stp.parity.alert`. In production this is the `marktd`
+    /// event-ingest endpoint (`…/api/v1/mako/events`), whose fan-out delivers
+    /// to the `agentd` subscribers. When `None` the sweep workers do not run.
+    /// Use `"env:PROCESSD_OBS_OUTBOUND_URL"`.
+    #[serde(default)]
+    pub outbound_url: Option<String>,
+    /// HMAC-SHA256 secret for signing the outbound `de.obs.*` CloudEvents
+    /// (Standard Webhooks). Must match the target's inbound secret.
+    #[serde(default)]
+    pub outbound_secret: Option<String>,
+    /// Interval between deadline sweeps, seconds. Default 900 (15 min).
+    #[serde(default = "default_deadline_sweep_secs")]
+    pub deadline_sweep_secs: u64,
+    /// A process is "approaching" its deadline when `deadline_at` is within this
+    /// many hours of now. Default 24 (the Amber window).
+    #[serde(default = "default_deadline_warn_hours")]
+    pub deadline_warn_hours: i64,
+    /// Interval between § 7a Abs. 5 EnWG parity sweeps, seconds. Default 86400 (daily).
+    #[serde(default = "default_parity_sweep_secs")]
+    pub parity_sweep_secs: u64,
+    /// Completion-rate gap, in percentage points, at which
+    /// `de.obs.stp.parity.alert` fires. Default 5.0.
+    ///
+    /// **This is the operator's own escalation policy, not a regulatory limit.**
+    /// The Bundesnetzagentur publishes no numeric parity threshold for this
+    /// figure; the § 7a Abs. 5 EnWG Gleichbehandlungsbericht asks the
+    /// Gleichbehandlungsbeauftragte to describe the measures taken.
+    ///
+    /// A gap over a group smaller than `obs::domain::PARITY_MIN_SAMPLE` is
+    /// never alerted on, whatever this is set to.
+    #[serde(default = "default_parity_threshold_pp")]
+    pub parity_threshold_pp: f64,
+    /// Look-back window for the parity computation, days. Default 90.
+    #[serde(default = "default_parity_window_days")]
+    pub parity_window_days: i32,
+}
+
+fn default_deadline_sweep_secs() -> u64 {
+    900
+}
+fn default_deadline_warn_hours() -> i64 {
+    24
+}
+fn default_parity_sweep_secs() -> u64 {
+    86_400
+}
+fn default_parity_threshold_pp() -> f64 {
+    5.0
+}
+fn default_parity_window_days() -> i32 {
+    90
+}
+
+impl Default for ObsConfig {
+    fn default() -> Self {
+        Self {
+            outbound_url: None,
+            outbound_secret: None,
+            deadline_sweep_secs: default_deadline_sweep_secs(),
+            deadline_warn_hours: default_deadline_warn_hours(),
+            parity_sweep_secs: default_parity_sweep_secs(),
+            parity_threshold_pp: default_parity_threshold_pp(),
+            parity_window_days: default_parity_window_days(),
+        }
+    }
+}
+
+// ── sperr module (Sperr-/Entsperrauftrag queue, NB role) ──────────────────────
+
+/// `[sperr]` — where the Sperrauftrag queue's `de.sperr.*` notices go.
+///
+/// The ORDERS ingest rides `[webhook]`, the IFTSTA 21039 dispatch rides
+/// `[makod]`; only the ERP notification is the queue's own.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SperrConfig {
+    /// ERP webhook the `de.sperr.*` CloudEvents are delivered to.
+    ///
+    /// `sperr::events` enqueues all seven types into `event_outbox`
+    /// transactionally. Without a URL nothing drains that table: the Sperrung,
+    /// Entsperrung and Ankündigung notices accumulate undelivered, which is why
+    /// startup says so.
+    #[serde(default)]
+    pub erp_webhook_url: Option<String>,
+    /// HMAC secret the outbound `de.sperr.*` deliveries are signed with.
+    /// Required when `erp_webhook_url` is set. Use `"env:VAR_NAME"`.
+    #[serde(default)]
+    pub erp_hmac_secret: Option<String>,
 }
 
 // ── LF module ─────────────────────────────────────────────────────────────────

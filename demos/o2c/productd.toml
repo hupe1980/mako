@@ -6,7 +6,6 @@
 # every market role, which is enough to rewrite any supplier's live prices.
 allow_insecure_no_auth = true
 
-port   = 9080
 tenant = "9912345000005"
 
 # What the catalogue's products are sold under. The same string as `tenant` in
@@ -15,6 +14,9 @@ tenant = "9912345000005"
 lf_mp_id = "9912345000005"
 
 erp_webhook_url = "http://webhook:8000/events"
+
+[http]
+addr = "0.0.0.0:9080"
 
 [database]
 url = "postgres://demo:demo-secret@postgres/productd"

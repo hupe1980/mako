@@ -1,8 +1,8 @@
 # AGENTS.md — mako
 
 German energy-market communication and settlement (BDEW MaKo / EDI@Energy) in
-Rust. A Cargo workspace: **25 library crates** under `crates/`, **17 service
-daemons** under `services/`, plus `xtask`, `makotest` and the Zola site.
+Rust. A Cargo workspace: library crates under `crates/`, service
+daemons under `services/`, plus `xtask`, `makotest` and the Zola site.
 
 `README.md` is the service index and `site/content/docs/**` the operator guides;
 neither is restated here. This file is what an agent needs before touching code.
@@ -92,7 +92,7 @@ Four traps, each of which has produced a false "green" or a stalled run:
 | Business dates are **Europe/Berlin** — `mako_fristen::heute`, SQL `heute()` | a Frist, a Lieferbeginn and a Rechnungsdatum are German calendar dates; `now_utc().date()` is yesterday between 23:00 and midnight |
 | **No `f64` touches money** — `billing::Amount<5>`, `Decimal` only at the JSON/storage boundary | a settlement must be reproducible to the cent |
 | Rounding is **kaufmännisch** (DIN 1333) | pinned by `check-rounding` |
-| Every `Json<T>` request body **denies unknown fields** | serde drops an unknown key silently, so a typo becomes a setting that does nothing |
+| Every request body is read by **`mako_service::Json`**, which refuses an unknown field | serde drops an unknown key silently, so a typo becomes a setting that does nothing; `check-request-bodies` names what the runtime check cannot see (a flatten, an untagged or internally tagged enum, a `Lenient`/`axum::Json` extraction) |
 | A multi-statement write is **one transaction** | a half-applied write leaves a state no reader can interpret |
 | A missing input is a **refusal, not a zero** | a substituted price misprices every unit of the period |
 | Identifier literals carry a **valid check digit** | `check-malo-ids` computes the right one for you when you get it wrong |
@@ -246,7 +246,13 @@ a cutover.
 - `tracing` — optional instrumentation; off by default.
 
 ### Service architecture (daemons)
-Every daemon builds on the `mako-service` SDK. Do **not** hand-roll the lifecycle.
+Every daemon except `makod` builds on the `mako-service` SDK. Do **not** hand-roll the lifecycle.
+
+`makod` is the one exemption, named in `check-runner-routes`' `EXEMPT` list: it drives its own
+`main` because it opens a SlateDB engine store rather than a PostgreSQL pool, runs `migrate` as a
+subcommand, builds its Tokio runtime with a configured worker count before anything else, and
+reads clap flags with its TOML file as an overlay — none of which `run()` hosts. It mounts
+`/metrics` and `/health/*` itself, on each of its ports.
 
 - **Bootstrap.** `fn main()` is one line: `mako_service::run::<MyDaemon>().await`. Implement the
   `Daemon` trait — supply `type Config`, `const NAME`, `migrate(&PgPool)` (usually
@@ -254,6 +260,17 @@ Every daemon builds on the `mako-service` SDK. Do **not** hand-roll the lifecycl
   (assemble the domain router and spawn workers on `ctx.shutdown`). `run()` owns tracing, the pool,
   migrations, `/health/*`, infra routes, graceful shutdown, and `--check`. **Never** add health routes,
   bind a listener, or call `serve` inside `build`.
+- **Further ports.** A daemon that serves more than `bind_addr()` returns them from
+  `Daemon::listeners` (`Listener { name, addr, router }`); the runner binds each, merges
+  `/health/*` into it outside the daemon's own layers, serves it on the shared shutdown token and
+  joins it with the main port.
+- **Validation and policy.** Put every check a loaded config must pass in `Daemon::validate` —
+  the runner calls it from `--print-config` and before `build`, so the two cannot disagree. An
+  operator reading is a `mako_service::policy_choice!` enum under the service's `[policy]`
+  section, reported by `Daemon::policy`: the runner logs it, exports `mako_policy_info`, records
+  each change in `service_policy_log`, and the daemon merges `mako_service::policy::router` (Cedar
+  `read-policy`) and a read-only `get_policy` MCP tool. `cargo xtask policy-inventory` generates
+  `site/content/docs/reference/operator-policy.md`; `check-policy-settings` holds it together.
 - **Config shape.** Embed a `[database]` block (`pub database: DatabaseConfig`) and implement
   `ServiceConfig` (`database() -> Option<&DatabaseConfig>`, `bind_addr()`), never a
   flat `database_url: String`. A stateless daemon returns `database() -> None`.
@@ -261,7 +278,14 @@ Every daemon builds on the `mako-service` SDK. Do **not** hand-roll the lifecycl
   `DatabaseConfig::connect(url, NAME)` (tuned sizing + `application_name`). Never call bare
   `PgPool::connect` / `PgPoolOptions` in a service.
 - **HTTP errors.** Handlers return `ApiResult<T>` and use `?`; construct failures with `ApiError`
-  (`NotFound`, `unprocessable(..)`, `conflict(..)`, …). Never build ad-hoc `(StatusCode, Json)` error tuples.
+  (`not_found(..)`, `unprocessable(..)`, `conflict(..)`, `precondition_failed(..)`,
+  `too_many_requests(..)`, `not_implemented(..)`, …), a stable machine `code` and extra keys
+  through `with_code` / `with_fields`. A 500 or upstream failure renders an `error_id` the log
+  line carries, never the error's text. `check-error-tuples` refuses any ad-hoc
+  `(StatusCode, …)` tuple outside `#[cfg(test)]`.
+- **Service shape.** The `Daemon` lives in `lib.rs`; `main.rs` is the one `run` call
+  (`check-thin-main`); a config listens on `[http] addr`, and `dev/ports.toml` is the dev port
+  table the `dev_configs` tests hold every dev config to.
 - **CloudEvent emission.** Build with `CloudEvent::new(source(svc, tenant), TYPE, subject, data)`
   (type constants from `mako-events`) and send via `post_ce_with_retry`. Never hand-roll a
   `json!({"specversion": ...})` envelope or compute a signature inline.
@@ -556,6 +580,7 @@ engine it silently becomes money.
 | "§6b EnWG = an integrated NB+LF deployment" | § 6b EnWG is **Rechnungslegung und Buchführung** — the accounts a vertikal integriertes Unternehmen keeps. It does not make a deployment integrated, and an integrated utility still identifies each role by its own MP-ID: „Für jede Sparte (Gas bzw. Strom) und jede Rolle hat ein Marktteilnehmer genau eine MP-ID" (Identifikatoren AWH V1.2 §2.1) |
 | "APERAK AHB 1.0 states the current APERAK rule" | `profiles/sources.json`: **APERAK AHB 1.1** binds from FV2026-10-01; AHB 1.0 is the FV2025-10-01 edition. Chapters 2.1–2.5 carry the same numbers in both. Cite 1.0 only for what that edition itself states about a message processed under it |
 | "API-Webdienste 2.0.0 applies from 01.10.2027 and retires UTILTS" (or „Nr. 57 proposes …" as the plan for FV 2027-04) | **BNetzA Mitteilung Nr. 58** (01.10.2026) is what was published: no EDIFACT and no API-Webdienste document for 01.04.2027 — only ActivationDocument AWT 1.1g and the Regelungen zum Übertragungsweg 1.11 bind then — and UTILTS stays. Nr. 57 was a proposal |
+| "Compile-time role features enforce § 6a EnWG" (or „a role build contains no other role's code, in support of § 6a") | A role feature buys one thing: a `processd` or `mako-pruefung` build **cannot answer as a role it was not built for**, so a misconfiguration fails closed. No unbundling duty is discharged by a build flag, and makod has no role features — it registers the modules of its `[deployment] rollen` and every build links every domain crate. The § 6a Abs. 1 EnWG duty — „die Vertraulichkeit wirtschaftlich sensibler Informationen … gewahrt wird" — is an access-control duty, met by Cedar (`ReadProcess` carries the workflow name) |
 
 ## Licenses
 

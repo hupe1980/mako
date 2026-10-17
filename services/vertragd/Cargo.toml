@@ -16,6 +16,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "vertragd"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 mako-fristen = { workspace = true }

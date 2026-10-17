@@ -8,8 +8,9 @@ pub struct ProductdConfig {
     /// PostgreSQL connection + pool tuning (`[database]` block).
     pub database: mako_service::config::DatabaseConfig,
 
-    /// HTTP listen port.  Defaults to `9080`.
-    pub port: Option<u16>,
+    /// `[http]` — the listen address. Defaults to every interface on `9080`.
+    #[serde(default = "default_http")]
+    pub http: mako_service::config::HttpConfig,
 
     /// Tenant identifier — the data-isolation key written to every row and
     /// enforced on every token.
@@ -80,7 +81,7 @@ impl ProductdConfig {
     /// anyone who can reach the port rewrites a supplier's catalogue, prices
     /// included. The § 41c comparison feed then publishes those prices.
     ///
-    /// The same shape `netzbilanzd`, `outputd`, `sperrd` and `vertragd` refuse:
+    /// The same shape `netzbilanzd`, `outputd`, `processd` and `vertragd` refuse:
     /// an unauthenticated deployment is a choice, not a default.
     ///
     /// # Errors
@@ -112,8 +113,12 @@ impl mako_service::ServiceConfig for ProductdConfig {
         Some(&self.database)
     }
     fn bind_addr(&self) -> String {
-        format!("0.0.0.0:{}", self.port.unwrap_or(9080))
+        self.http.addr.clone()
     }
+}
+
+fn default_http() -> mako_service::config::HttpConfig {
+    mako_service::config::HttpConfig::on_port(9080)
 }
 
 #[cfg(test)]

@@ -18,15 +18,14 @@
 //! compares its `malo_id` to the authorised one before rendering: otherwise any
 //! authenticated customer could stream any other customer's XRechnung by id.
 
-#![expect(clippy::result_large_err, reason = "the error *is* the HTTP response")]
-
 use axum::{
     Extension,
     extract::{Path, Query},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use mako_service::Json;
+use mako_service::http::UpstreamError;
+use mako_service::{ApiError, ApiResult, Json};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -42,59 +41,75 @@ use crate::{
 type Cfg = Extension<Arc<PortaldConfig>>;
 type Clients = Extension<Arc<PortalClients>>;
 
-/// Proxy a GET to an upstream, mapping absence to 404 and outage to 502.
-async fn proxy(client: &UpstreamClient, path: &str) -> Response {
+/// An upstream failure as the caller sees it: the service named, its status
+/// and body logged beside the `error_id` and never echoed — an upstream's
+/// error text is that service's internals.
+fn upstream_err(e: UpstreamError) -> ApiError {
+    match e {
+        UpstreamError::Transport { service, source } => ApiError::upstream_request(service, source),
+        UpstreamError::Status {
+            service,
+            status,
+            body,
+        } => ApiError::upstream_status(service, status, body),
+        UpstreamError::Body { service, source } => ApiError::upstream(service, source),
+    }
+}
+
+/// Proxy a GET to an upstream, mapping absence to 404 and a failure to the
+/// upstream's gateway status.
+async fn proxy(client: &UpstreamClient, path: &str) -> ApiResult<Response> {
     match client.get_json(path).await {
-        Ok(Some(body)) => (StatusCode::OK, Json(body)).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
-            tracing::warn!(path, error = %e, "portald: upstream GET failed");
-            (StatusCode::BAD_GATEWAY, e.to_string()).into_response()
-        }
+        Ok(Some(body)) => Ok(Json(body).into_response()),
+        Ok(None) => Err(ApiError::NotFound),
+        Err(e) => Err(upstream_err(e)),
     }
 }
 
 /// [`proxy`], for an upstream that may not be configured at all.
-async fn proxy_opt(client: Option<&Arc<UpstreamClient>>, path: &str, service: &str) -> Response {
-    match client {
-        Some(c) => proxy(c, path).await,
-        None => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            format!("{service} not configured"),
-        )
-            .into_response(),
-    }
+async fn proxy_opt(
+    client: Option<&Arc<UpstreamClient>>,
+    path: &str,
+    service: &str,
+) -> ApiResult<Response> {
+    proxy(require(client, service)?, path).await
 }
 
-/// Require an upstream, or produce the 503 to return.
+/// Require an upstream, or the 503 for one this deployment does not configure.
 fn require<'a>(
     client: Option<&'a Arc<UpstreamClient>>,
     service: &str,
-) -> Result<&'a UpstreamClient, Response> {
+) -> ApiResult<&'a UpstreamClient> {
     client.map(AsRef::as_ref).ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            format!("{service} not configured"),
-        )
-            .into_response()
+        ApiError::upstream_unreachable(service, anyhow::anyhow!("{service} not configured"))
     })
 }
 
-/// Relay an upstream write verdict unchanged.
+/// Relay an upstream write verdict.
 ///
-/// A 422 from `vertragd` carries the rule it applied (a notice period, a
-/// contract state); rewriting it into a generic error would strip exactly the
-/// part the customer needs. Only the success code is this service's own — it
-/// reports `202` because the market message the write triggers is asynchronous.
-fn relay_write(status: u16, body: serde_json::Value, on_success: serde_json::Value) -> Response {
-    if (200..300).contains(&status) {
-        return (StatusCode::ACCEPTED, Json(on_success)).into_response();
+/// A 4xx from `vertragd` or `accountingd` carries the rule it applied (a
+/// notice period, a contract state, an IBAN check); rewriting it into a
+/// generic error would strip exactly the part the customer needs, so a 4xx is
+/// relayed with its status and body. Anything else is the upstream's own
+/// failure: a 502 naming the service, its body only in the log.
+fn relay_refusal(service: &str, status: u16, body: serde_json::Value) -> ApiResult<Response> {
+    match StatusCode::from_u16(status) {
+        Ok(code) if code.is_client_error() => Ok((code, Json(body)).into_response()),
+        _ => Err(ApiError::upstream_status(service, status, body)),
     }
-    (
-        StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
-        Json(body),
-    )
-        .into_response()
+}
+
+/// [`relay_refusal`] for a `vertragd` write whose success this service reports
+/// as `202` — the market message the write triggers is asynchronous.
+fn relay_write(
+    status: u16,
+    body: serde_json::Value,
+    on_success: serde_json::Value,
+) -> ApiResult<Response> {
+    if (200..300).contains(&status) {
+        return Ok((StatusCode::ACCEPTED, Json(on_success)).into_response());
+    }
+    relay_refusal("vertragd", status, body)
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -111,11 +126,8 @@ pub async fn get_dashboard(
     Extension(clients): Clients,
     headers: HeaderMap,
     Path(malo_id): Path<String>,
-) -> Response {
-    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
+) -> ApiResult<Response> {
+    let ctx = authorize(&cfg, &clients, &headers, &malo_id).await?;
 
     async fn opt(client: Option<&Arc<UpstreamClient>>, path: String) -> Option<serde_json::Value> {
         client?.get_json(&path).await.ok().flatten()
@@ -144,7 +156,7 @@ pub async fn get_dashboard(
         ),
     );
 
-    Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "malo_id":       malo_id,
         "tenant":        cfg.tenant,
         "kundentyp":     ctx.kundentyp,
@@ -154,7 +166,7 @@ pub async fn get_dashboard(
         "meter_summary": meter_summary,
         "vorauszahlung": vorauszahlung,
     }))
-    .into_response()
+    .into_response())
 }
 
 // ── Shared query shapes ───────────────────────────────────────────────────────
@@ -184,10 +196,8 @@ pub async fn get_lastgang(
     headers: HeaderMap,
     Path(malo_id): Path<String>,
     Query(q): Query<PeriodQuery>,
-) -> Response {
-    if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
-        return resp;
-    }
+) -> ApiResult<Response> {
+    authorize(&cfg, &clients, &headers, &malo_id).await?;
     let path = match (q.from.as_deref(), q.to.as_deref()) {
         (Some(from), Some(to)) => format!("/api/v1/lastgang/{malo_id}?from={from}&to={to}"),
         _ => format!("/api/v1/lastgang/{malo_id}"),
@@ -214,10 +224,8 @@ pub async fn get_invoices(
     headers: HeaderMap,
     Path(malo_id): Path<String>,
     Query(q): Query<InvoicesQuery>,
-) -> Response {
-    if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
-        return resp;
-    }
+) -> ApiResult<Response> {
+    authorize(&cfg, &clients, &headers, &malo_id).await?;
     let limit = q.limit.unwrap_or(24).clamp(1, MAX_INVOICE_PAGE);
     let mut path = format!("/api/v1/billing?malo_id={malo_id}&limit={limit}");
     if let Some(outcome) = q.outcome.as_deref() {
@@ -242,15 +250,9 @@ pub async fn get_portal_invoice_download(
     Extension(clients): Clients,
     headers: HeaderMap,
     Path((malo_id, record_id)): Path<(String, String)>,
-) -> Response {
-    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
-    let billingd = match require(clients.billingd.as_ref(), "billingd") {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
+) -> ApiResult<Response> {
+    let ctx = authorize(&cfg, &clients, &headers, &malo_id).await?;
+    let billingd = require(clients.billingd.as_ref(), "billingd")?;
 
     match billingd
         .get_json(&format!("/api/v1/billing/{record_id}"))
@@ -266,13 +268,13 @@ pub async fn get_portal_invoice_download(
                 );
                 // 404, not 403: confirming the record exists would turn the id
                 // space into an oracle for which invoices the tenant holds.
-                return StatusCode::NOT_FOUND.into_response();
+                return Err(ApiError::NotFound);
             }
         }
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => return Err(ApiError::NotFound),
         Err(e) => {
             tracing::warn!(record_id, error = %e, "portald: billingd record lookup failed");
-            return (StatusCode::BAD_GATEWAY, e.to_string()).into_response();
+            return Err(upstream_err(e));
         }
     }
 
@@ -280,7 +282,7 @@ pub async fn get_portal_invoice_download(
         .get_text(&format!("/api/v1/billing/{record_id}/xrechnung"))
         .await
     {
-        Ok(Some(xml)) => (
+        Ok(Some(xml)) => Ok((
             StatusCode::OK,
             [
                 (
@@ -294,9 +296,9 @@ pub async fn get_portal_invoice_download(
             ],
             xml,
         )
-            .into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+            .into_response()),
+        Ok(None) => Err(ApiError::NotFound),
+        Err(e) => Err(upstream_err(e)),
     }
 }
 
@@ -308,10 +310,8 @@ pub async fn get_balance(
     Extension(clients): Clients,
     headers: HeaderMap,
     Path(malo_id): Path<String>,
-) -> Response {
-    if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
-        return resp;
-    }
+) -> ApiResult<Response> {
+    authorize(&cfg, &clients, &headers, &malo_id).await?;
     proxy_opt(
         clients.accountingd.as_ref(),
         &format!("/api/v1/accounts/{malo_id}/balance"),
@@ -332,10 +332,8 @@ pub async fn get_kontoauszug(
     headers: HeaderMap,
     Path(malo_id): Path<String>,
     Query(q): Query<PeriodQuery>,
-) -> Response {
-    if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
-        return resp;
-    }
+) -> ApiResult<Response> {
+    authorize(&cfg, &clients, &headers, &malo_id).await?;
     let path = match (q.from.as_deref(), q.to.as_deref()) {
         (Some(from), Some(to)) => {
             format!("/api/v1/accounts/{malo_id}/kontoauszug?from={from}&to={to}")
@@ -351,10 +349,8 @@ pub async fn get_portal_vorauszahlung(
     Extension(clients): Clients,
     headers: HeaderMap,
     Path(malo_id): Path<String>,
-) -> Response {
-    if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
-        return resp;
-    }
+) -> ApiResult<Response> {
+    authorize(&cfg, &clients, &headers, &malo_id).await?;
     proxy_opt(
         clients.accountingd.as_ref(),
         &format!("/api/v1/accounts/{malo_id}/vorauszahlung"),
@@ -371,10 +367,8 @@ pub async fn get_eeg_status(
     Extension(clients): Clients,
     headers: HeaderMap,
     Path(malo_id): Path<String>,
-) -> Response {
-    if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
-        return resp;
-    }
+) -> ApiResult<Response> {
+    authorize(&cfg, &clients, &headers, &malo_id).await?;
     proxy_opt(
         clients.einsd.as_ref(),
         &format!("/api/v1/anlagen?malo_id={malo_id}"),
@@ -389,10 +383,8 @@ pub async fn get_versorgung(
     Extension(clients): Clients,
     headers: HeaderMap,
     Path(malo_id): Path<String>,
-) -> Response {
-    if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
-        return resp;
-    }
+) -> ApiResult<Response> {
+    authorize(&cfg, &clients, &headers, &malo_id).await?;
     proxy_opt(
         clients.marktd.as_ref(),
         &format!("/api/v1/versorgung/{malo_id}"),
@@ -459,15 +451,12 @@ async fn resolve_vertrag_for_malo(
 async fn require_vertrag<'a>(
     clients: &'a PortalClients,
     ctx: &PortalAuthCtx,
-) -> Result<(&'a UpstreamClient, uuid::Uuid, uuid::Uuid), Response> {
+) -> ApiResult<(&'a UpstreamClient, uuid::Uuid, uuid::Uuid)> {
     let vertragd = require(clients.vertragd.as_ref(), "vertragd")?;
     match resolve_vertrag_for_malo(vertragd, ctx).await {
         Some((vtid, komp_id)) => Ok((vertragd, vtid, komp_id)),
-        None => Err((
-            StatusCode::NOT_FOUND,
-            "no active supply contract for this delivery point",
-        )
-            .into_response()),
+        // No contract for this MaLo is the resource the route names not existing.
+        None => Err(ApiError::NotFound),
     }
 }
 
@@ -481,15 +470,9 @@ pub async fn get_portal_vertrag(
     Extension(clients): Clients,
     headers: HeaderMap,
     Path(malo_id): Path<String>,
-) -> Response {
-    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
-    let (vertragd, vtid, _) = match require_vertrag(&clients, &ctx).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
+) -> ApiResult<Response> {
+    let ctx = authorize(&cfg, &clients, &headers, &malo_id).await?;
+    let (vertragd, vtid, _) = require_vertrag(&clients, &ctx).await?;
     proxy(vertragd, &format!("/api/v1/vertraege/{vtid}")).await
 }
 
@@ -526,18 +509,12 @@ pub async fn post_portal_tarifwechsel(
     headers: HeaderMap,
     Path(malo_id): Path<String>,
     Json(req): Json<PortalTarifwechselRequest>,
-) -> Response {
-    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
+) -> ApiResult<Response> {
+    let ctx = authorize(&cfg, &clients, &headers, &malo_id).await?;
     if !is_iso_date(&req.wirksamkeit) {
-        return (StatusCode::BAD_REQUEST, "wirksamkeit must be YYYY-MM-DD").into_response();
+        return Err(ApiError::bad_request("wirksamkeit must be YYYY-MM-DD"));
     }
-    let (vertragd, vtid, komp_id) = match require_vertrag(&clients, &ctx).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
+    let (vertragd, vtid, komp_id) = require_vertrag(&clients, &ctx).await?;
 
     // A switch the customer made in the portal is not a supplier exercising a
     // reserved right to change the contract, so § 41 Abs. 5 EnWG does not
@@ -567,7 +544,7 @@ pub async fn post_portal_tarifwechsel(
                 "detail":           resp_body,
             }),
         ),
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(e) => Err(upstream_err(e)),
     }
 }
 
@@ -600,15 +577,9 @@ pub async fn get_portal_kuendigungsfrist(
     Extension(clients): Clients,
     headers: HeaderMap,
     Path(malo_id): Path<String>,
-) -> Response {
-    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
-    let (vertragd, vtid, _) = match require_vertrag(&clients, &ctx).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
+) -> ApiResult<Response> {
+    let ctx = authorize(&cfg, &clients, &headers, &malo_id).await?;
+    let (vertragd, vtid, _) = require_vertrag(&clients, &ctx).await?;
     proxy(
         vertragd,
         &format!("/api/v1/vertraege/{vtid}/kuendigungsfrist"),
@@ -626,18 +597,12 @@ pub async fn post_portal_kuendigen(
     headers: HeaderMap,
     Path(malo_id): Path<String>,
     Json(req): Json<PortalKuendigungRequest>,
-) -> Response {
-    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
+) -> ApiResult<Response> {
+    let ctx = authorize(&cfg, &clients, &headers, &malo_id).await?;
     if !is_iso_date(&req.lieferende) {
-        return (StatusCode::BAD_REQUEST, "lieferende must be YYYY-MM-DD").into_response();
+        return Err(ApiError::bad_request("lieferende must be YYYY-MM-DD"));
     }
-    let (vertragd, vtid, _) = match require_vertrag(&clients, &ctx).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
+    let (vertragd, vtid, _) = require_vertrag(&clients, &ctx).await?;
 
     let body = serde_json::json!({
         "lieferende": req.lieferende,
@@ -657,7 +622,7 @@ pub async fn post_portal_kuendigen(
                 "detail":     resp_body,
             }),
         ),
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(e) => Err(upstream_err(e)),
     }
 }
 
@@ -678,15 +643,9 @@ pub async fn get_portal_kontakt(
     Extension(clients): Clients,
     headers: HeaderMap,
     Path(malo_id): Path<String>,
-) -> Response {
-    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
-    let vertragd = match require(clients.vertragd.as_ref(), "vertragd") {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
+) -> ApiResult<Response> {
+    let ctx = authorize(&cfg, &clients, &headers, &malo_id).await?;
+    let vertragd = require(clients.vertragd.as_ref(), "vertragd")?;
     match vertragd
         .get_json(&format!("/api/v1/kunden/{}", ctx.kunden_id))
         .await
@@ -694,15 +653,15 @@ pub async fn get_portal_kontakt(
         Ok(Some(body)) => {
             let kunde = body.get("kunde").unwrap_or(&serde_json::Value::Null);
             let pick = |k: &str| kunde.get(k).cloned().unwrap_or(serde_json::Value::Null);
-            Json(serde_json::json!({
+            Ok(Json(serde_json::json!({
                 "geschaeftspartner": pick("geschaeftspartner"),
                 "sepa_erlaubt":      pick("sepa_erlaubt"),
                 "kundentyp":         pick("kundentyp"),
             }))
-            .into_response()
+            .into_response())
         }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Ok(None) => Err(ApiError::NotFound),
+        Err(e) => Err(upstream_err(e)),
     }
 }
 
@@ -736,18 +695,12 @@ pub async fn put_portal_kontakt(
     headers: HeaderMap,
     Path(malo_id): Path<String>,
     Json(req): Json<PortalKontaktRequest>,
-) -> Response {
-    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
+) -> ApiResult<Response> {
+    let ctx = authorize(&cfg, &clients, &headers, &malo_id).await?;
     if req.geschaeftspartner.is_none() && req.sepa_erlaubt.is_none() {
-        return (StatusCode::BAD_REQUEST, "nothing to update").into_response();
+        return Err(ApiError::bad_request("nothing to update"));
     }
-    let vertragd = match require(clients.vertragd.as_ref(), "vertragd") {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
+    let vertragd = require(clients.vertragd.as_ref(), "vertragd")?;
 
     let geschaeftspartner = match req
         .geschaeftspartner
@@ -756,7 +709,7 @@ pub async fn put_portal_kontakt(
         .transpose()
     {
         Ok(v) => v,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return Err(ApiError::internal(e)),
     };
     let body = serde_json::json!({
         "geschaeftspartner": geschaeftspartner,
@@ -766,13 +719,9 @@ pub async fn put_portal_kontakt(
         .put_json(&format!("/api/v1/kunden/{}", ctx.kunden_id), &body)
         .await
     {
-        Ok((200..=299, _)) => StatusCode::NO_CONTENT.into_response(),
-        Ok((status, body)) => (
-            StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
-            Json(body),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Ok((200..=299, _)) => Ok(StatusCode::NO_CONTENT.into_response()),
+        Ok((status, body)) => relay_refusal("vertragd", status, body),
+        Err(e) => Err(upstream_err(e)),
     }
 }
 
@@ -791,9 +740,8 @@ pub struct PortalSepaRequest {
     /// The debtor's own postal address (`Dbtr/PstlAdr`), forwarded verbatim to
     /// `accountingd`, which validates it.
     ///
-    /// Optional until **15 November 2026**, when version 1.1 of the 2025 SEPA
-    /// rulebooks ends the unstructured address and the schemes begin requiring
-    /// `town` + `country` on every collection. Shape: `{ "town", "country",
+    /// Optional: EPC153-22 v2.2 (30 September 2026) permits a collection
+    /// without a structured address and sets no end date for that. Shape: `{ "town", "country",
     /// "street", "building_number", "post_code", "country_subdivision" }`.
     pub debtor_address: Option<serde_json::Value>,
 }
@@ -816,22 +764,18 @@ pub async fn put_portal_sepa(
     headers: HeaderMap,
     Path(malo_id): Path<String>,
     Json(req): Json<PortalSepaRequest>,
-) -> Response {
-    if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
-        return resp;
-    }
-    let accountingd = match require(clients.accountingd.as_ref(), "accountingd") {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
+) -> ApiResult<Response> {
+    authorize(&cfg, &clients, &headers, &malo_id).await?;
+    let accountingd = require(clients.accountingd.as_ref(), "accountingd")?;
 
     // `debtor_address` is **omitted** when absent, never sent as `null`.
     // `accountingd`'s `CreateMandateRequest` denies unknown fields and takes the
     // address as `#[serde(default)] AddressParts` — a plain struct, not an
     // `Option` — so `default` fills a *missing* key while an explicit `null` is
     // `invalid type: null, expected struct` and refuses the whole body. The
-    // address stays optional until 15.11.2026, so that is today's normal case:
-    // every customer without one would get a 422 on mandate registration.
+    // address is optional (EPC153-22 v2.2 sets no end date for the
+    // unstructured form), so that is the normal case: every customer without
+    // one would get a 422 on mandate registration.
     let mut body = serde_json::json!({
         "malo_id":      &malo_id,
         "lf_mp_id":     cfg.lf_mp_id(),
@@ -846,13 +790,9 @@ pub async fn put_portal_sepa(
     }
 
     match accountingd.post_json("/api/v1/sepa/mandates", &body).await {
-        Ok((200..=299, body)) => (StatusCode::CREATED, Json(body)).into_response(),
-        Ok((status, body)) => (
-            StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
-            Json(body),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Ok((200..=299, body)) => Ok((StatusCode::CREATED, Json(body)).into_response()),
+        Ok((status, body)) => relay_refusal("accountingd", status, body),
+        Err(e) => Err(upstream_err(e)),
     }
 }
 
@@ -933,11 +873,8 @@ pub async fn get_dokumente(
     headers: HeaderMap,
     Path(malo_id): Path<String>,
     Query(q): Query<DokumenteQuery>,
-) -> Response {
-    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
+) -> ApiResult<Response> {
+    let ctx = authorize(&cfg, &clients, &headers, &malo_id).await?;
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let mut path = format!("/api/v1/documents?malo_id={}&limit={limit}", ctx.malo_id);
     if let Some(kind) = q.kind.as_deref().filter(|k| {
@@ -972,25 +909,19 @@ pub async fn get_dokument(
     Extension(clients): Clients,
     headers: HeaderMap,
     Path((malo_id, document_id)): Path<(String, String)>,
-) -> Response {
-    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
-    let outputd = match require(clients.outputd.as_ref(), "outputd") {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
+) -> ApiResult<Response> {
+    let ctx = authorize(&cfg, &clients, &headers, &malo_id).await?;
+    let outputd = require(clients.outputd.as_ref(), "outputd")?;
 
     let document = match outputd
         .get_json(&format!("/api/v1/documents/{document_id}"))
         .await
     {
         Ok(Some(d)) => d,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => return Err(ApiError::NotFound),
         Err(e) => {
             tracing::warn!(document_id, error = %e, "portald: outputd document lookup failed");
-            return (StatusCode::BAD_GATEWAY, e.to_string()).into_response();
+            return Err(upstream_err(e));
         }
     };
     if document["malo_id"].as_str().unwrap_or_default() != ctx.malo_id {
@@ -1001,7 +932,7 @@ pub async fn get_dokument(
         );
         // 404, not 403: confirming the document exists would turn the id space
         // into an oracle for what the tenant has issued.
-        return StatusCode::NOT_FOUND.into_response();
+        return Err(ApiError::NotFound);
     }
 
     // Best-effort, before the bytes: a failed receipt must not withhold the
@@ -1038,7 +969,7 @@ pub async fn get_dokument(
                     }
                 })
                 .collect();
-            (
+            Ok((
                 StatusCode::OK,
                 [
                     (axum::http::header::CONTENT_TYPE, media_type),
@@ -1052,9 +983,9 @@ pub async fn get_dokument(
                 ],
                 bytes,
             )
-                .into_response()
+                .into_response())
         }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Ok(None) => Err(ApiError::NotFound),
+        Err(e) => Err(upstream_err(e)),
     }
 }

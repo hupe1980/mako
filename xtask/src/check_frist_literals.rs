@@ -68,18 +68,18 @@ const EXEMPT: &[Exempt] = &[
         reason: MABIS_TABELLE_2,
     },
     Exempt {
-        path: "services/mabis-syncd/src/mcp_server.rs",
+        path: "services/netzbilanzd/src/mcp_server.rs",
         fragment: "MaBiS submission health snapshot",
         reason: MABIS_TABELLE_2,
     },
     Exempt {
-        path: "services/mabis-syncd/src/mcp_server.rs",
+        path: "services/netzbilanzd/src/mcp_server.rs",
         fragment: "MaBiS Summenzeitreihe triage",
         reason: MABIS_TABELLE_2,
     },
     Exempt {
-        path: "services/mabis-syncd/src/mcp_server.rs",
-        fragment: "mabis-syncd MCP — MaBiS Summenzeitreihe submission state",
+        path: "services/netzbilanzd/src/mcp_server.rs",
+        fragment: "## MaBiS timing (BK6-24-174 Anlage 3 §3.10)",
         reason: MABIS_TABELLE_2,
     },
     Exempt {
@@ -94,12 +94,12 @@ const EXEMPT: &[Exempt] = &[
         reason: "06:00 is where the Gastag begins, a day boundary and not a Frist",
     },
     Exempt {
-        path: "services/sperrd/src/events.rs",
+        path: "services/processd/src/sperr/events.rs",
         fragment: "6 WT nach dem frühestmöglichen Sperrtermin",
         reason: SPERR_AUSFUEHRUNG,
     },
     Exempt {
-        path: "services/sperrd/src/mcp_server.rs",
+        path: "services/processd/src/sperr/mcp.rs",
         fragment: "6 Werktagen nach dem frühestmöglichen Sperrtermin",
         reason: SPERR_AUSFUEHRUNG,
     },

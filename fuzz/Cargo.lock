@@ -197,13 +197,12 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "billing"
-version = "0.15.0"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccf778746b9b4f8bc9db0e34c9350448ed732536a27e69a0651a3269cb214ee3"
+checksum = "3ee9ac2600bf0d36671a4cae9473b34a2b492a59c0c557abadf88b4b1cca4ea6"
 dependencies = [
  "rust_decimal",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]

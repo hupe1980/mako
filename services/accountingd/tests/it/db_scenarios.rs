@@ -1424,7 +1424,7 @@ async fn sperr_sequence_progresses_through_all_phases() {
         contains(&sa, case),
         "the announced disconnection date has arrived → Sperrauftrag candidate"
     );
-    pg::mark_sperrauftrag_dispatched(&pool, case, TENANT, "sperrd:test")
+    pg::mark_sperrauftrag_dispatched(&pool, case, TENANT, "sperrauftrag:test")
         .await
         .unwrap();
     let sa = pg::list_sperrauftrag_candidates(&pool, TENANT, 10_000)

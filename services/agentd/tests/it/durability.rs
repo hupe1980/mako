@@ -96,6 +96,17 @@ fn faulty_plane(
         quotas: Arc::clone(&store) as _,
         memory: store as _,
     };
+    let plane = plane_over(stores, &tenant, provider, tools);
+    (plane, faulty)
+}
+
+/// The production wiring over the stores a test chose.
+fn plane_over(
+    stores: Stores,
+    tenant: &agentplane::core::TenantId,
+    provider: &Arc<FakeProvider>,
+    tools: &Arc<CountingTools>,
+) -> Plane {
     let policy = agentd::plane::policy::engine(agentd::plane::policy::DEFAULT_POLICY)
         .expect("the embedded policy set compiles");
     let servers = ["makod", "marktd", "netzbilanzd"]
@@ -103,7 +114,7 @@ fn faulty_plane(
         .map(|name| (name.to_owned(), Arc::clone(tools) as Arc<dyn ToolClient>))
         .collect();
 
-    let plane = Plane::new(
+    Plane::new(
         stores,
         PlaneConfig {
             outbox: None,
@@ -114,7 +125,7 @@ fn faulty_plane(
             signer: None,
             quota: agentplane::quota::TenantQuota::default(),
             owner: "agentd-durability-test",
-            tenant: &tenant,
+            tenant,
             activated: &Activation::named(vec![AGENT.to_owned()]),
             providers: vec![(
                 "anthropic".to_owned(),
@@ -125,8 +136,7 @@ fn faulty_plane(
             keyring: None,
         },
     )
-    .expect("the plane assembles");
-    (plane, faulty)
+    .expect("the plane assembles")
 }
 
 /// A read-only plan: one granted read, one parse. No approval suspension, so
@@ -174,6 +184,7 @@ fn parsed_answer() -> Completion {
 fn completion(structured: Value) -> Completion {
     Completion {
         text: String::new(),
+        model: None,
         structured: Some(structured),
         tool_calls: Vec::new(),
         usage: Usage::default(),
@@ -286,5 +297,60 @@ async fn a_committed_then_lost_append_duplicates_no_effect() {
     assert!(
         ["completed", "failed", "quarantined"].contains(&decision.outcome.as_str()),
         "unexpected terminal state: {decision:?}"
+    );
+}
+
+/// **A journal this build cannot verify is refused before anything appends.**
+///
+/// agentplane recreates its store across a durable-format cut rather than
+/// migrating it. The redb backend refuses an older file at open by itself; the
+/// Postgres backend opens an older schema in place, so startup probes the newest
+/// run instead: it must verify end to end under this build. A damaged newest
+/// record stands in for one an earlier build wrote — both fail the same check,
+/// and the refusal names both causes.
+#[tokio::test]
+async fn a_journal_whose_newest_run_does_not_verify_is_refused_at_startup() {
+    let tenant = agentplane::core::TenantId::new("9900357000004").expect("a usable key scope");
+    let store = RedbStore::open_in_memory().expect("store");
+    let stores = || Stores::redb(store.clone(), &tenant);
+
+    stores()
+        .refuse_an_unreadable_journal()
+        .await
+        .expect("an empty journal has nothing an earlier build wrote");
+
+    let provider = FakeProvider::new();
+    let tools = Arc::new(CountingTools::default());
+    let plane = plane_over(stores(), &tenant, &provider, &tools);
+    let decision = plane
+        .dispatch_one(AGENT, ce("ce-generation", EVENT_TYPE), event())
+        .await
+        .expect("activated");
+    assert_eq!(decision.outcome, "completed", "{decision:?}");
+
+    stores()
+        .refuse_an_unreadable_journal()
+        .await
+        .expect("a journal this build wrote verifies under it");
+
+    let tenanted = store.clone().for_tenant(tenant.clone());
+    let (newest, _) = agentplane::journal::JournalStore::recent_runs(&tenanted, None, 1)
+        .await
+        .expect("listing")
+        .into_iter()
+        .next()
+        .expect("the run just dispatched");
+    tenanted
+        .tamper_for_test(newest, 1, b"{\"v\":1}".to_vec())
+        .await
+        .expect("tamper");
+
+    let refusal = stores()
+        .refuse_an_unreadable_journal()
+        .await
+        .expect_err("a run that does not verify must stop startup");
+    assert!(
+        refusal.contains("earlier agentplane build") && refusal.contains("upgrade runbook"),
+        "the refusal must name the cause and the remedy: {refusal}"
     );
 }

@@ -53,7 +53,7 @@
 /// Core MaKo process lifecycle + EDIFACT transport events (`de.mako.*`).
 ///
 /// Emitted by `makod` toward the ERP adapter / event bus; consumed by
-/// `obsd`, `processd`, `edmd`, `invoicd`, `marktd`, `vertragd` and `agentd`.
+/// `processd`, `edmd`, `invoicd`, `marktd`, `vertragd` and `agentd`.
 pub mod mako {
     /// A MaKo market process was started (first outbound message built).
     pub const PROCESS_INITIATED: &str = "de.mako.process.initiated";
@@ -572,20 +572,22 @@ pub mod gabi {
 
 /// Process-observability events (`de.obs.*`).
 ///
-/// Produced by `obsd`'s background sweep workers (`services/obsd/src/worker.rs`)
-/// and consumed by `agentd` (`compliance-agent`, `deadline-alert-agent`).
+/// Produced by the sweep workers of `processd`'s process read model
+/// (`services/processd/src/obs/worker.rs`) and consumed by `agentd`
+/// (`compliance-agent`, `deadline-alert-agent`).
 pub mod obs {
     /// §20 EnWG STP parity-gap alert: the completion-rate gap between affiliate-
     /// and non-affiliate-initiated Anmeldungen exceeds the configured threshold.
-    /// Emitted by obsd's parity sweep; consumed by agentd (`compliance-agent`).
+    /// Emitted by processd's parity sweep; consumed by agentd (`compliance-agent`).
     pub const STP_PARITY_ALERT: &str = "de.obs.stp.parity.alert";
     /// A tracked process is approaching its regulatory response deadline (within
-    /// the warn window). Emitted per process by obsd's deadline sweep; consumed
+    /// the warn window). Emitted per process by processd's deadline sweep; consumed
     /// by agentd (`deadline-alert-agent`).
     pub const DEADLINE_APPROACHING: &str = "de.obs.deadline.approaching";
 }
 
-/// Sperr/Entsperr execution events (`de.sperr.*`), emitted by `sperrd`.
+/// Sperr/Entsperr execution events (`de.sperr.*`), emitted by `processd`'s
+/// Sperrauftrag queue (NB role).
 ///
 /// These are the **NB side**: the grid operator's record of a Sperr- or
 /// Entsperrauftrag it received (ORDERS 17115/17117) and physically carried out.
@@ -615,7 +617,7 @@ pub mod sperr {
     /// NB for the physical act — 6 Werktage after the frühestmöglicher
     /// Sperrtermin. Announced once per order.
     pub const AUSFUEHRUNG_UEBERFAELLIG: &str = "de.sperr.ausfuehrung.ueberfaellig";
-    /// An order is terminal in `sperrd` but its IFTSTA 21039 has still not
+    /// An order is terminal in `processd`'s Sperrauftrag queue but its IFTSTA 21039 has still not
     /// reached `makod` after the retry budget. Until it does, the LF's
     /// `gpke-sperrung-lf` process cannot close — this is the one state in the
     /// service that needs a human.
@@ -623,7 +625,7 @@ pub mod sperr {
 }
 
 /// MaBiS Summenzeitreihe submission events (`de.mabis.*`), emitted by
-/// `mabis-syncd`.
+/// `netzbilanzd`.
 ///
 /// Both are failure signals: a healthy submission cycle is silent, because the
 /// scheduled Erstaufschlag run filing on time is the normal case and an event

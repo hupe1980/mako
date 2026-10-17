@@ -7,6 +7,7 @@
 //!
 //! | Module | Purpose |
 //! |---|---|
+//! | `daemon` | the [`Productd`] daemon `mako_service::run` starts |
 //! | `config` | see module docs |
 //! | `handlers` | see module docs |
 //! | `pg` | see module docs |
@@ -14,6 +15,9 @@
 pub mod behg;
 pub mod bo4e_angebot;
 pub mod config;
+pub mod daemon;
 pub mod handlers;
 pub mod mcp_server;
 pub mod pg;
+
+pub use daemon::Productd;

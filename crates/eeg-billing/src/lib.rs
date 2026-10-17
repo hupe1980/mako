@@ -49,8 +49,8 @@
 //! - **Regelbesteuerung**: all others → **19 % USt** (category `S`)
 //!
 //! The status is a declared property of the operator (masterdata), not something
-//! the plant size decides. Use [`ust::ust_tax_layers`] to get the right
-//! `billing::TaxLayer` for a document.
+//! the plant size decides. [`ust::ust_vat`] gives the `billing::Vat` treatment
+//! for a document, and [`bridge::settlement_document`] builds it.
 //!
 //! # Multi-EEG-version support
 //!
@@ -107,7 +107,6 @@ pub mod reductions;
 pub mod scheme;
 pub mod seed;
 pub mod settlement_state;
-pub mod tariff;
 pub mod technology;
 pub mod ust;
 pub mod version;
@@ -116,8 +115,7 @@ pub mod zusammenfassung;
 
 /// A monetary amount in euro at 10⁻⁵-EUR resolution.
 ///
-/// `billing` 0.12 dropped its own `EuroAmount` alias — the engine is
-/// currency-agnostic and the name asserted a currency the type does not carry.
+/// `billing` is currency-agnostic and names no currency in its own types.
 /// EEG/KWKG Vergütung is euro-denominated by statute, so the alias is correct
 /// here; it just belongs to the domain crate rather than the engine.
 pub type EuroAmount = billing::Amount<5>;

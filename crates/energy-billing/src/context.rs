@@ -3,7 +3,6 @@
 //! Separates *what we're billing* (quantities, products) from *how we're billing it*
 //! (period, identifiers, invoice type, regulatory rates).
 
-use crate::EuroAmount;
 use crate::rates::RoundMoney;
 use rust_decimal::Decimal;
 
@@ -195,6 +194,7 @@ impl Rechnungsempfaenger {
 /// Cancellations reverse the original to EUR 0.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+#[serde(deny_unknown_fields)]
 pub enum InvoiceType {
     /// Standard billing run (Abschlagsrechnung, periodic invoice).
     Initial,
@@ -502,11 +502,13 @@ impl AbschlagDeduction {
         self.betrag_eur - self.netto_eur()
     }
 
-    /// Project into a [`billing::AdvancePayment`] carrying this advance's own tax.
+    /// Project into a [`billing::Advance`] carrying this advance's own tax.
     ///
     /// This is the structure EN 16931's flat BT-113 cannot hold and that
     /// §14 Abs. 5 Satz 2 UStG requires on a settling invoice. It mirrors the
     /// ZUGFeRD / Factur-X EXTENDED group `SpecifiedAdvancePayment` (BG-X-45).
+    /// The advance's date and reference are header data `billing` does not
+    /// carry; they stay on this deduction.
     ///
     /// The category is derived from the rate: a positive rate is a standard-rated
     /// advance, a zero rate a zero-rated one. An advance under reverse charge
@@ -515,25 +517,20 @@ impl AbschlagDeduction {
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::Arithmetic`](crate::EngineError::Arithmetic) if
-    /// the amounts overflow [`EuroAmount`].
-    pub fn to_advance_payment(&self) -> Result<billing::AdvancePayment, crate::EngineError> {
-        let category = if self.ust_satz.is_zero() {
-            billing::TaxCategory::ZeroRated
+    /// Returns [`EngineError::Arithmetic`](crate::EngineError::Arithmetic) for a
+    /// negative rate, which no VAT treatment has.
+    pub fn to_advance(&self) -> Result<billing::Advance, crate::EngineError> {
+        let vat = if self.ust_satz.is_zero() {
+            billing::Vat::zero_rated()
         } else {
-            billing::TaxCategory::Standard
+            billing::Vat::standard(billing::Percent::new(
+                (self.ust_satz * Decimal::ONE_HUNDRED).normalize(),
+            ))?
         };
-        let entry = billing::TaxBreakdownEntry::new(
-            category,
-            self.ust_satz,
-            EuroAmount::checked_from_decimal(self.netto_eur())?,
-            EuroAmount::checked_from_decimal(self.ust_eur())?,
-        );
-        let advance =
-            billing::AdvancePayment::new(vec![entry])?.with_received_on(self.datum.to_string());
-        Ok(match &self.beschreibung {
-            Some(r) => advance.with_reference(r.clone()),
-            None => advance,
+        Ok(billing::Advance {
+            vat,
+            net: self.netto_eur(),
+            tax: self.ust_eur(),
         })
     }
 }
@@ -1046,8 +1043,8 @@ impl BillingContext {
         self.abschlage.iter().map(|a| a.betrag_eur).sum()
     }
 
-    /// Return `(active_days, total_days)` for use with `billing::prorate` /
-    /// `billing::prorate_amount`.
+    /// Return `(active_days, total_days)`: the weights a per-period figure is
+    /// pro-rated by.
     ///
     /// - `total_days` = calendar days in the billing period (`days()`)
     /// - `active_days` = billable days after clipping to `vertragsbeginn` /

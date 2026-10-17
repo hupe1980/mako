@@ -256,7 +256,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     //     gpke.sperrung.bestaetigen    → executed      → IFTSTA 21039
     //     gpke.sperrung.fehlgeschlagen → not executed  → IFTSTA 21039 + reason
     //
-    // `sperrd` calls the NB-side pair after field-service confirmation
+    // `processd` calls the NB-side pair after field-service confirmation
     // (GPKE Teil 2 § 3.5, BK6-24-174 Anlage 1b).
     CommandDescriptor {
         name: "gpke.sperrung.beauftragen",

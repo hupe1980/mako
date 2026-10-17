@@ -113,10 +113,10 @@ fn identifiers_after(text: &str, needle: &str) -> Vec<String> {
 }
 
 /// Every handler the domain router mounts, read out of the routing calls in
-/// `main.rs` rather than out of every `handlers::…` mention — so the background
+/// `daemon.rs` rather than out of every `handlers::…` mention — so the background
 /// Angebot-expiry worker `main` also names is not mistaken for a route.
 fn routed_handlers() -> Vec<String> {
-    let main = src("main.rs");
+    let main = src("daemon.rs");
     let mut routed = Vec::new();
     for verb in ["get(", "post(", "put(", "patch(", "delete("] {
         routed.extend(identifiers_after(
@@ -165,7 +165,7 @@ fn every_rest_handler_authenticates_and_authorizes() {
     let routed = routed_handlers();
     assert!(
         routed.len() >= 25,
-        "only {} routed handlers found — the extractor has drifted from main.rs",
+        "only {} routed handlers found — the extractor has drifted from daemon.rs",
         routed.len()
     );
 
@@ -255,12 +255,12 @@ fn no_handler_extracts_claims_as_a_request_extension() {
 /// policy rather than by the API-key path alone.
 #[test]
 fn the_router_injects_the_enforcer_and_gates_mcp_with_it() {
-    let main = compact(&src("main.rs"));
+    let main = compact(&src("daemon.rs"));
     assert!(
         main.contains(
             "CedarEnforcer::from_policy_str(include_str!(\"../policies/productd.cedar\"))"
         ),
-        "main.rs does not load policies/productd.cedar — every `authorize` call would then \
+        "daemon.rs does not load policies/productd.cedar — every `authorize` call would then \
          fail to find its `Extension<Arc<CedarEnforcer>>` and answer 500"
     );
     assert!(

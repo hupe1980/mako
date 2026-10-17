@@ -122,6 +122,11 @@ spec:
         - dispatch_tx_id
         - sr_id
         - settlement_found
+        - billing_record_id
+        - arithmetic_ok
+        - audit_fields_present
+        - action
+        - detail
       properties:
         dispatch_tx_id:
           type: string
@@ -134,23 +139,25 @@ spec:
             - NO
             - PENDING
         billing_record_id:
-          type: string
+          type: [string, "null"]
         arithmetic_ok:
-          type: string
+          type: [string, "null"]
         audit_fields_present:
-          type: string
+          type: [string, "null"]
           enum:
             - YES
             - NO
+            - null
         action:
-          type: string
+          type: [string, "null"]
           enum:
             - NONE
             - ESCALATE_MISSING_SETTLEMENT
             - ESCALATE_MISSING_CONTRACT
             - REVIEW_ARITHMETIC
+            - null
         detail:
-          type: string
+          type: [string, "null"]
 
   # Knowledge, granted rather than copied.
   #

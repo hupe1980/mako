@@ -41,7 +41,7 @@ use rubo4e::convenience::{BetragExt as _, MengeExt as _, PreisExt as _};
 use rubo4e::current::{Rechnung, Rechnungsposition};
 use rust_decimal::Decimal;
 
-use crate::amount::EuroAmount;
+use crate::amount::{EuroAmount, WithinTolerance as _};
 use crate::check::CheckConfig;
 
 /// What the ESA's own records contribute — the Prüfschritte an INVOIC cannot

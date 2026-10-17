@@ -10,6 +10,8 @@
 //! - [`error`] — shared [`ApiError`] / [`ApiResult`] with `IntoResponse`
 //! - [`cloudevent`] — canonical `CloudEvent` envelope + signed publisher
 //! - [`outbox`] — transactional outbox (persist-before-dispatch) + drain worker
+//! - [`policy`] — operator policy settings ([`policy::PolicyChoice`]), the
+//!   report the runner logs, exports and records, and `GET /api/v1/policy`
 //! - [`webhook`] — the one HMAC-SHA256 signer/verifier
 //! - [`ServiceBuilder`] — composable Axum router builder (infra routes)
 //! - [`health`] — `/health/live` and `/health/ready` route helpers
@@ -44,6 +46,7 @@ pub mod health;
 pub mod http;
 pub mod json;
 pub mod outbox;
+pub mod policy;
 pub mod schema_check;
 pub mod service;
 pub mod shutdown;
@@ -81,9 +84,9 @@ pub use config::{
     ConfigError, ConfigFile, ConfigProblem, DatabaseConfig, HttpConfig, load_config,
     load_config_file,
 };
-pub use error::{ApiError, ApiResult};
-pub use json::{DETAIL_SENTINEL, Json};
-pub use service::{Daemon, ServiceConfig, ServiceContext, run};
+pub use error::{ApiError, ApiResult, UpstreamFailure};
+pub use json::{DETAIL_SENTINEL, Json, Lenient};
+pub use service::{Daemon, Listener, ServiceConfig, ServiceContext, run, serve, validate_config};
 #[cfg(feature = "testing")]
 pub use service::{build_for_test, build_for_test_on};
 pub use telemetry::{

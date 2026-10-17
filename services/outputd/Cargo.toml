@@ -16,6 +16,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "outputd"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel", "metrics"] }

@@ -13,6 +13,7 @@
 //! A `de.markt.nb-contract.updated` CloudEvent is emitted on every successful
 //! upsert so subscribers can rebuild Vertrag caches without polling.
 
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{
@@ -51,9 +52,8 @@ pub type NbContractRepoExt = Arc<PgNbContractRepository>;
 /// serde alone decodes any unrecognised value to `Unknown` and stores it.
 fn normalize_vertrag(
     data: serde_json::Value,
-) -> Result<(Vertrag, serde_json::Value), (StatusCode, serde_json::Value)> {
-    let vertrag: Vertrag = mako_markt::bo4e::decode(data)
-        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))?;
+) -> mako_service::ApiResult<(Vertrag, serde_json::Value)> {
+    let vertrag: Vertrag = mako_markt::bo4e::decode(data).map_err(|e| super::bo4e_refusal(&e))?;
     let canonical = super::serialise_or_500(&vertrag)?;
     Ok((vertrag, canonical))
 }
@@ -149,36 +149,25 @@ fn parse_req(
     id: String,
     req: NbContractUpsertRequest,
     tenant: &str,
-) -> Result<NbContractRecord, (StatusCode, serde_json::Value)> {
+) -> mako_service::ApiResult<NbContractRecord> {
     let date_fmt = format_description!("[year]-[month]-[day]");
 
-    let valid_from = time::Date::parse(&req.valid_from, date_fmt).map_err(|_| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": "valid_from must be YYYY-MM-DD" }),
-        )
-    })?;
+    let valid_from = time::Date::parse(&req.valid_from, date_fmt)
+        .map_err(|_| ApiError::unprocessable("valid_from must be YYYY-MM-DD"))?;
 
     let valid_to = req
         .valid_to
         .as_deref()
         .map(|s| time::Date::parse(s, date_fmt))
         .transpose()
-        .map_err(|_| {
-            (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                serde_json::json!({ "error": "valid_to must be YYYY-MM-DD" }),
-            )
-        })?;
+        .map_err(|_| ApiError::unprocessable("valid_to must be YYYY-MM-DD"))?;
 
     let billing_schedule = BillingSchedule::from_str_or_default(&req.billing_schedule);
 
-    let malo_id = req.malo_id.parse::<MaloId>().map_err(|e| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": format!("invalid malo_id: {e}") }),
-        )
-    })?;
+    let malo_id = req
+        .malo_id
+        .parse::<MaloId>()
+        .map_err(|e| ApiError::unprocessable(format!("invalid malo_id: {e}")))?;
 
     // Validate and normalise the BO4E Vertrag payload.
     //
@@ -241,7 +230,7 @@ pub async fn put_nb_contract(
 
     let rec = match parse_req(id.clone(), req, &tenant.0) {
         Ok(r) => r,
-        Err((status, body)) => return (status, Json(body)).into_response(),
+        Err(e) => return e.into_response(),
     };
 
     let vertragsart = rec
@@ -272,11 +261,7 @@ pub async fn put_nb_contract(
             });
             if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
                 tracing::error!(error = %e, "nb_contract: durable enqueue failed");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "event enqueue failed"})),
-                )
-                    .into_response();
+                return ApiError::internal(e).into_response();
             }
             Json(serde_json::json!({ "version": version })).into_response()
         }
@@ -324,11 +309,7 @@ pub async fn list_nb_contracts(
     let nb_mp_id = match q.nb_mp_id {
         Some(g) => g,
         None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "nb_mp_id query parameter required" })),
-            )
-                .into_response();
+            return ApiError::bad_request("nb_mp_id query parameter required").into_response();
         }
     };
 
@@ -376,11 +357,7 @@ pub async fn get_nb_contract_by_malo(
         Some(raw) => match time::Date::parse(raw, date_fmt) {
             Ok(d) => d,
             Err(_) => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({ "error": "on must be YYYY-MM-DD" })),
-                )
-                    .into_response();
+                return ApiError::unprocessable("on must be YYYY-MM-DD").into_response();
             }
         },
         None => super::malo::today_berlin(),

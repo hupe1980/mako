@@ -59,6 +59,18 @@ pub(crate) fn authorize(
         })
 }
 
+/// A write refused for what it was asked to store answers `422` with the
+/// refusal; a database failure underneath is a `500` with an `error_id`, never
+/// its text.
+fn refusal(e: impl Into<anyhow::Error>) -> ApiError {
+    let e = e.into();
+    if e.chain().any(|c| c.is::<sqlx::Error>()) {
+        ApiError::internal(e)
+    } else {
+        ApiError::unprocessable(format!("{e:#}"))
+    }
+}
+
 // ── BO4E Tarifpreisblatt validation ──────────────────────────────────────────
 
 /// The BO4E schema release Tarifpreisblatt payloads are stamped with.
@@ -193,7 +205,7 @@ pub const VALID_PREISTYPEN: &[&str] = &[
 pub fn normalize_tarifpreisblatt(
     category: &str,
     mut data: serde_json::Value,
-) -> Result<serde_json::Value, (StatusCode, serde_json::Value)> {
+) -> Result<serde_json::Value, ApiError> {
     let is_bo4e_category = TARIFPREISBLATT_CATEGORIES.contains(&category);
 
     // ── 0. _version: reject payloads from another schema **series** ──────────
@@ -210,15 +222,10 @@ pub fn normalize_tarifpreisblatt(
             .and_then(|v| v.as_str())
             .filter(|&v| !mako_markt::bo4e::version_is_readable(v))
     {
-        return Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({
-                "error": format!(
-                    "_version {v:?} is not accepted; this build reads BO4E series {:?}",
-                    mako_markt::bo4e::SCHEMA_SERIES
-                )
-            }),
-        ));
+        return Err(ApiError::unprocessable(format!(
+            "_version {v:?} is not accepted; this build reads BO4E series {:?}",
+            mako_markt::bo4e::SCHEMA_SERIES
+        )));
     }
 
     // ── 1. Normalise tarifpreise ─────────────────────────────────────
@@ -229,16 +236,11 @@ pub fn normalize_tarifpreisblatt(
             if let Some(pt) = pos.get("preistyp").and_then(|v| v.as_str()) {
                 let upper = pt.to_uppercase();
                 if !VALID_PREISTYPEN.contains(&upper.as_str()) {
-                    return Err((
-                        StatusCode::UNPROCESSABLE_ENTITY,
-                        serde_json::json!({
-                            "error": format!(
-                                "tarifpreise[{i}].preistyp {pt:?} is not valid; \
+                    return Err(ApiError::unprocessable(format!(
+                        "tarifpreise[{i}].preistyp {pt:?} is not valid; \
                                  accepted values: {}",
-                                VALID_PREISTYPEN.join(", ")
-                            )
-                        }),
-                    ));
+                        VALID_PREISTYPEN.join(", ")
+                    )));
                 }
                 // A value BO4E defines stays in the BO4E field. A mako
                 // extension moves to the `mako:preistyp` ZusatzAttribut and
@@ -275,16 +277,11 @@ pub fn normalize_tarifpreisblatt(
                             _ => false,
                         };
                         if !is_scalar_decimal {
-                            return Err((
-                                StatusCode::UNPROCESSABLE_ENTITY,
-                                serde_json::json!({
-                                    "error": format!(
-                                        "tarifpreise[{i}].preisstaffeln[{j}].preis \
+                            return Err(ApiError::unprocessable(format!(
+                                "tarifpreise[{i}].preisstaffeln[{j}].preis \
                                          must be a scalar decimal (string or number), \
                                          not a nested object"
-                                    )
-                                }),
-                            ));
+                            )));
                         }
                     }
                 }
@@ -306,8 +303,9 @@ pub fn normalize_tarifpreisblatt(
     //    `mako:preistyp` ZusatzAttribut, so nothing in the tree is expected to
     //    reach the catch-all and the round-trip is lossless.
     if is_bo4e_category {
-        let typed: Tarifpreisblatt = mako_markt::bo4e::decode(data.clone())
-            .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))?;
+        let typed: Tarifpreisblatt = mako_markt::bo4e::decode(data.clone()).map_err(|e| {
+            ApiError::unprocessable_with(e.to_string(), serde_json::Value::Object(e.detail()))
+        })?;
 
         // ── Cross-validation: the BO4E `sparte` must match the product
         //    category. A GAS product carrying `sparte: Strom` (or vice versa)
@@ -329,15 +327,10 @@ pub fn normalize_tarifpreisblatt(
             if let Some(exp) = expected
                 && sparte != exp
             {
-                return Err((
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    serde_json::json!({
-                        "error": format!(
-                            "sparte {sparte:?} does not match category {category} \
+                return Err(ApiError::unprocessable(format!(
+                    "sparte {sparte:?} does not match category {category} \
                              (expected {exp:?})"
-                        )
-                    }),
-                ));
+                )));
             }
         }
 
@@ -345,12 +338,7 @@ pub fn normalize_tarifpreisblatt(
         // in `preistyp`, the typed round-trip is lossless, so the canonical
         // form is what gets stored.
         let canonical = serde_json::to_value(&typed).map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                serde_json::json!({
-                    "error": format!("could not serialise Tarifpreisblatt: {e}")
-                }),
-            )
+            ApiError::internal(anyhow::Error::new(e).context("serialise Tarifpreisblatt"))
         })?;
         return Ok(canonical);
     }
@@ -370,13 +358,8 @@ pub fn normalize_tarifpreisblatt(
 ///
 /// The `anteil[]` shares (Prozent) must be present and sum to ~100 % (±0.5 for
 /// rounding).
-fn check_energiemix_completeness(mix: &Energiemix) -> Result<(), (StatusCode, serde_json::Value)> {
-    let berr = |msg: String| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": msg }),
-        )
-    };
+fn check_energiemix_completeness(mix: &Energiemix) -> Result<(), ApiError> {
+    let berr = ApiError::unprocessable;
     let anteile = mix
         .anteil
         .as_ref()
@@ -418,16 +401,11 @@ pub async fn put_product(
     }
     // Tenant isolation: each LF operator can only manage their own products.
     if lf_mp_id != claims.tenant() {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": format!(
-                    "cannot manage products for {lf_mp_id:?}: token tenant is {:?}",
-                    claims.tenant()
-                )
-            })),
-        )
-            .into_response();
+        return ApiError::forbidden(format!(
+            "cannot manage products for {lf_mp_id:?}: token tenant is {:?}",
+            claims.tenant()
+        ))
+        .into_response();
     }
     // dyn_source is validated by the DB CHECK constraint, but we surface a
     // clear 422 here before hitting the DB.
@@ -436,34 +414,24 @@ pub async fn put_product(
         .as_deref()
         .filter(|&ds| ds != "epex-spot-day-ahead")
     {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!(
-                    "dyn_source {ds:?} is not valid; the only accepted value is \
+        return ApiError::unprocessable(format!(
+            "dyn_source {ds:?} is not valid; the only accepted value is \
                      'epex-spot-day-ahead'"
-                )
-            })),
-        )
-            .into_response();
+        ))
+        .into_response();
     }
     // product_status validation.
     if !matches!(req.product_status.as_str(), "DRAFT" | "PUBLISHED") {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!(
-                    "product_status {:?} is not valid; accepted values: DRAFT, PUBLISHED",
-                    req.product_status
-                )
-            })),
-        )
-            .into_response();
+        return ApiError::unprocessable(format!(
+            "product_status {:?} is not valid; accepted values: DRAFT, PUBLISHED",
+            req.product_status
+        ))
+        .into_response();
     }
     // Validate + canonicalise product data against BO4E Tarifpreisblatt schema.
     req.data = match normalize_tarifpreisblatt(&req.category, req.data) {
         Ok(v) => v,
-        Err((status, json)) => return (status, Json(json)).into_response(),
+        Err(e) => return e.into_response(),
     };
     let category = req.category.clone();
     let status = req.product_status.clone();
@@ -486,7 +454,7 @@ pub async fn put_product(
             .await;
             (StatusCode::OK, Json(serde_json::json!({ "id": id }))).into_response()
         }
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -593,16 +561,11 @@ pub async fn delete_product(
         return e.into_response();
     }
     if lf_mp_id != claims.tenant() {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": format!(
-                    "cannot delete products for {lf_mp_id:?}: token tenant is {:?}",
-                    claims.tenant()
-                )
-            })),
-        )
-            .into_response();
+        return ApiError::forbidden(format!(
+            "cannot delete products for {lf_mp_id:?}: token tenant is {:?}",
+            claims.tenant()
+        ))
+        .into_response();
     }
     match soft_delete_product(&pool, &lf_mp_id, claims.tenant(), &product_code).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
@@ -692,12 +655,12 @@ pub async fn put_epex_prices(
     let date = match time::Date::parse(&date_str, &Iso8601::DEFAULT) {
         Ok(d) => d,
         Err(_) => {
-            return (StatusCode::BAD_REQUEST, "invalid date, expected YYYY-MM-DD").into_response();
+            return ApiError::bad_request("invalid date, expected YYYY-MM-DD").into_response();
         }
     };
     match upsert_epex_day(&pool, date, req).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -720,7 +683,7 @@ pub async fn get_epex_prices_quarter_hourly(
     let date = match time::Date::parse(&date_str, &Iso8601::DEFAULT) {
         Ok(d) => d,
         Err(_) => {
-            return (StatusCode::BAD_REQUEST, "invalid date, expected YYYY-MM-DD").into_response();
+            return ApiError::bad_request("invalid date, expected YYYY-MM-DD").into_response();
         }
     };
     match fetch_epex_day(&pool, date).await {
@@ -795,12 +758,12 @@ pub async fn put_nehs_price(
     let date = match time::Date::parse(&date_str, &Iso8601::DEFAULT) {
         Ok(d) => d,
         Err(_) => {
-            return (StatusCode::BAD_REQUEST, "invalid date, expected YYYY-MM-DD").into_response();
+            return ApiError::bad_request("invalid date, expected YYYY-MM-DD").into_response();
         }
     };
     match crate::pg::upsert_nehs_price(&pool, date, req).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -823,8 +786,7 @@ pub async fn get_nehs_price_latest(
         Some(s) => match time::Date::parse(s, &Iso8601::DEFAULT) {
             Ok(d) => d,
             Err(_) => {
-                return (StatusCode::BAD_REQUEST, "invalid date, expected YYYY-MM-DD")
-                    .into_response();
+                return ApiError::bad_request("invalid date, expected YYYY-MM-DD").into_response();
             }
         },
         None => mako_fristen::heute(),
@@ -866,28 +828,19 @@ pub async fn put_energiemix(
         return e.into_response();
     }
     if lf_mp_id != claims.tenant() {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": format!(
-                    "cannot update energiemix for {lf_mp_id:?}: token tenant is {:?}",
-                    claims.tenant()
-                )
-            })),
-        )
-            .into_response();
+        return ApiError::forbidden(format!(
+            "cannot update energiemix for {lf_mp_id:?}: token tenant is {:?}",
+            claims.tenant()
+        ))
+        .into_response();
     }
-    if let Err((status, json)) = check_energiemix_completeness(&req.energiemix) {
-        return (status, Json(json)).into_response();
+    if let Err(e) = check_energiemix_completeness(&req.energiemix) {
+        return e.into_response();
     }
 
     match upsert_energiemix(&pool, &lf_mp_id, claims.tenant(), &product_code, req).await {
         Ok(()) => StatusCode::OK.into_response(),
-        Err(e) if e.to_string().contains("not found") => {
-            (StatusCode::NOT_FOUND,
-             Json(serde_json::json!({ "error": format!("product {lf_mp_id}/{product_code} not found") })))
-                .into_response()
-        }
+        Err(e) if e.to_string().contains("not found") => ApiError::NotFound.into_response(),
         Err(e) => ApiError::Internal(e).into_response(),
     }
 }
@@ -920,11 +873,7 @@ pub async fn get_energiemix(
     }
     match fetch_energiemix(&pool, &lf_mp_id, claims.tenant(), &product_code).await {
         Ok(Some(row)) if !row.energiemix.is_null() => Json(row).into_response(),
-        Ok(_) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "no Energiemix set for this product" })),
-        )
-            .into_response(),
+        Ok(_) => ApiError::NotFound.into_response(),
         Err(e) => ApiError::Internal(e).into_response(),
     }
 }
@@ -944,16 +893,11 @@ pub async fn delete_energiemix_handler(
         return e.into_response();
     }
     if lf_mp_id != claims.tenant() {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": format!(
-                    "cannot delete energiemix for {lf_mp_id:?}: token tenant is {:?}",
-                    claims.tenant()
-                )
-            })),
-        )
-            .into_response();
+        return ApiError::forbidden(format!(
+            "cannot delete energiemix for {lf_mp_id:?}: token tenant is {:?}",
+            claims.tenant()
+        ))
+        .into_response();
     }
     match delete_energiemix(&pool, &lf_mp_id, claims.tenant(), &product_code).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
@@ -1598,16 +1542,9 @@ fn variant_positionen(
 
 /// Refuse a quotation that cannot be priced in full.
 fn unpreisbar_response(errors: &[PositionPricingError]) -> axum::response::Response {
-    (
-        StatusCode::UNPROCESSABLE_ENTITY,
-        Json(serde_json::json!({
-            "error": "das Angebot kann nicht vollständig bepreist werden",
-            "hinweis": "Ein Angebot ist ein bindendes Vertragsangebot. Eine Position, deren \
+    ApiError::unprocessable_with("das Angebot kann nicht vollständig bepreist werden", serde_json::json!({"hinweis": "Ein Angebot ist ein bindendes Vertragsangebot. Eine Position, deren \
                         Preis nicht ermittelt werden kann, wird nicht übergangen — sonst \
-                        stünde die Jahressumme für weniger Lieferstellen als das Angebot.",
-            "unpreisbare_positionen": errors,
-        })),
-    )
+                        stünde die Jahressumme für weniger Lieferstellen als das Angebot.", "unpreisbare_positionen": errors}))
         .into_response()
 }
 
@@ -1694,14 +1631,11 @@ pub async fn post_angebot(
             .map(|s| s.is_empty())
             .unwrap_or(true)
     {
-        return (
-            StatusCode::BAD_REQUEST,
-            "either kunden_id or interessent_name must be supplied",
-        )
+        return ApiError::bad_request("either kunden_id or interessent_name must be supplied")
             .into_response();
     }
     if req.positionen.is_empty() {
-        return (StatusCode::BAD_REQUEST, "positionen must not be empty").into_response();
+        return ApiError::bad_request("positionen must not be empty").into_response();
     }
 
     // Parse optional dates.
@@ -1709,7 +1643,7 @@ pub async fn post_angebot(
         match time::Date::parse(s, &time::format_description::well_known::Iso8601::DATE) {
             Ok(d) => d,
             Err(_) => {
-                return (StatusCode::BAD_REQUEST, "gueltig_bis must be YYYY-MM-DD").into_response();
+                return ApiError::bad_request("gueltig_bis must be YYYY-MM-DD").into_response();
             }
         }
     } else {
@@ -1719,8 +1653,7 @@ pub async fn post_angebot(
         match time::Date::parse(s, &time::format_description::well_known::Iso8601::DATE) {
             Ok(d) => Some(d),
             Err(_) => {
-                return (StatusCode::BAD_REQUEST, "lieferbeginn must be YYYY-MM-DD")
-                    .into_response();
+                return ApiError::bad_request("lieferbeginn must be YYYY-MM-DD").into_response();
             }
         }
     } else {
@@ -2002,10 +1935,7 @@ pub async fn get_angebot_comparison(
         match serde_json::from_value(angebot.positionen.clone()) {
             Ok(p) => p,
             Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("cannot deserialise positionen: {e}"),
-                )
+                return ApiError::internal(anyhow::anyhow!("cannot deserialise positionen: {e}"))
                     .into_response();
             }
         };
@@ -2169,7 +2099,7 @@ pub async fn post_angebot_versenden(
     }
     match mark_angebot_versandt(&pool, id, &cfg.tenant).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::CONFLICT, e.to_string()).into_response(),
+        Err(e) => transition_error_response(e).into_response(),
     }
 }
 
@@ -2348,7 +2278,18 @@ pub async fn post_angebot_ablehnen(
     }
     match decline_angebot(&pool, id, &cfg.tenant).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::CONFLICT, e.to_string()).into_response(),
+        Err(e) => transition_error_response(e).into_response(),
+    }
+}
+
+/// The answer to an Angebot that could not be declined or sent: `404` for an
+/// unknown id, `409` for one in the wrong status, `500` for a storage failure.
+pub(crate) fn transition_error_response(e: crate::pg::TransitionError) -> ApiError {
+    use crate::pg::TransitionError as E;
+    match e {
+        E::NotFound => ApiError::NotFound,
+        E::Status { .. } => ApiError::conflict(e.to_string()),
+        E::Storage(inner) => ApiError::Internal(inner),
     }
 }
 
@@ -2412,14 +2353,11 @@ pub async fn put_angebot(
         Err(e) => return ApiError::Internal(e).into_response(),
     };
     if existing.status != "ANGELEGT" {
-        return (
-            StatusCode::CONFLICT,
-            format!(
-                "Angebot {} is in status '{}' — only ANGELEGT can be updated",
-                id, existing.status
-            ),
-        )
-            .into_response();
+        return ApiError::conflict(format!(
+            "Angebot {} is in status '{}' — only ANGELEGT can be updated",
+            id, existing.status
+        ))
+        .into_response();
     }
 
     let lf_mp_id = existing.lf_mp_id.clone();
@@ -2494,7 +2432,7 @@ pub async fn put_angebot(
         match time::Date::parse(s, &time::format_description::well_known::Iso8601::DATE) {
             Ok(d) => Some(d),
             Err(_) => {
-                return (StatusCode::BAD_REQUEST, "gueltig_bis must be YYYY-MM-DD").into_response();
+                return ApiError::bad_request("gueltig_bis must be YYYY-MM-DD").into_response();
             }
         }
     } else {
@@ -2508,7 +2446,7 @@ pub async fn put_angebot(
             match time::Date::parse(s, &time::format_description::well_known::Iso8601::DATE) {
                 Ok(d) => Some(Some(d)),
                 Err(_) => {
-                    return (StatusCode::BAD_REQUEST, "lieferbeginn must be YYYY-MM-DD")
+                    return ApiError::bad_request("lieferbeginn must be YYYY-MM-DD")
                         .into_response();
                 }
             }
@@ -2547,11 +2485,9 @@ pub async fn put_angebot(
 
     match result {
         Ok(r) if r.rows_affected() > 0 => StatusCode::NO_CONTENT.into_response(),
-        Ok(_) => (
-            StatusCode::CONFLICT,
-            "Angebot not found or no longer in ANGELEGT state",
-        )
-            .into_response(),
+        Ok(_) => {
+            ApiError::conflict("Angebot not found or no longer in ANGELEGT state").into_response()
+        }
         Err(e) => ApiError::from(e).into_response(),
     }
 }
@@ -3055,11 +2991,7 @@ pub async fn get_comparison_feed_bo4e(
         Ok(v) => v,
         Err(e) => {
             tracing::error!(error = %e, "comparison feed: a TarifInfo is not serialisable");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
+            return ApiError::internal(e).into_response();
         }
     };
 
@@ -3242,11 +3174,7 @@ pub async fn get_comparison_feed(
         Ok(v) => v,
         Err(e) => {
             tracing::error!(error = %e, "comparison feed: a TarifInfo is not serialisable");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
+            return ApiError::internal(e).into_response();
         }
     };
 
@@ -3338,7 +3266,7 @@ mod category_tests {
 
 #[cfg(test)]
 mod accept_error_tests {
-    use super::accept_error_response;
+    use super::{accept_error_response, transition_error_response};
     use crate::pg::AcceptError;
     use axum::http::StatusCode;
 
@@ -3371,6 +3299,29 @@ mod accept_error_tests {
         assert_eq!(
             accept_error_response(AcceptError::NichtBepreist).status(),
             StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    /// Declining or sending answers per reason: a storage failure is a 500,
+    /// never the 409 that says the Angebot is in the wrong state.
+    #[test]
+    fn a_transition_answers_per_reason() {
+        use crate::pg::TransitionError as E;
+        assert_eq!(
+            transition_error_response(E::Storage(anyhow::anyhow!("connection reset"))).status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            transition_error_response(E::NotFound).status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            transition_error_response(E::Status {
+                status: "ABGELEHNT".to_owned(),
+                from: "ANGELEGT or VERSANDT",
+            })
+            .status(),
+            StatusCode::CONFLICT
         );
     }
 }

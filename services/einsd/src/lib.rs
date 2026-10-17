@@ -7,6 +7,7 @@
 //!
 //! | Module | Purpose |
 //! |---|---|
+//! | `daemon` | the [`Einsd`] daemon `mako_service::run` starts |
 //! | `config` | see module docs |
 //! | `handlers` | see module docs |
 //! | `models` | the settlement-model vocabulary |
@@ -17,6 +18,7 @@
 //! | `pg_einspeiser` | the Anlagenbetreiber — payee, bank details, § 19 UStG election |
 
 pub mod config;
+pub mod daemon;
 pub mod handlers;
 pub mod mcp_server;
 pub mod models;
@@ -26,3 +28,5 @@ pub mod routes;
 pub mod sect52;
 pub mod settle;
 pub mod validate;
+
+pub use daemon::Einsd;

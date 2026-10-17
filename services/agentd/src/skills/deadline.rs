@@ -1,6 +1,6 @@
 //! APERAK / response-window deadline triage — arithmetic, not inference.
 //!
-//! `obsd` already knows which processes are past their Frist: it computes the
+//! `processd` already knows which processes are past their Frist: it computes the
 //! deadline with the same BDEW Werktage calendar this service uses, and
 //! `list_overdue_processes` returns them ordered most-urgent-first with
 //! `deadline_at` and `partner_mp_id` on every row.
@@ -20,7 +20,7 @@
 //!
 //! ## What the skill classifies
 //!
-//! The union of the **triggering event** and `obsd`'s overdue list, deduplicated
+//! The union of the **triggering event** and `processd`'s overdue list, deduplicated
 //! by `process_id`; the alert's own row wins, because its `due_at` came from the
 //! event that caused this run.
 //!
@@ -170,7 +170,7 @@ fn trigger_as_row(payload: &Value) -> Option<Value> {
 ///
 /// A row whose `deadline_at` mako cannot read is **not** silently treated as
 /// compliant: the caller counts it as unclassifiable and says so. Guessing the
-/// safe direction here would hide an obsd projection bug behind a green alert.
+/// safe direction here would hide a processd projection bug behind a green alert.
 fn remaining_secs(now: Timestamp, deadline: &str) -> Option<i64> {
     use time::format_description::well_known::Rfc3339;
     let parsed = Timestamp::parse(deadline, &Rfc3339).ok()?;
@@ -197,11 +197,11 @@ impl Skill for DeadlineTriage {
         // manifest's reach, and cannot drift from it.
         let overdue = cx
             .call_tool(
-                ToolId::new("obsd", "list_overdue_processes"),
+                ToolId::new("processd", "list_overdue_processes"),
                 Tainted::trusted(json!({})),
             )
             .await
-            .map_err(|e| SkillError::Other(format!("obsd/list_overdue_processes: {e}")))?;
+            .map_err(|e| SkillError::Other(format!("processd/list_overdue_processes: {e}")))?;
 
         // The clock is an effect too, so a replay classifies against the instant
         // the original run saw. A wall-clock read here would make a replayed run
@@ -267,7 +267,7 @@ impl Skill for DeadlineTriage {
                 "state":           row.get("state"),
                 "partner_mp_id":   partner,
                 "deadline_at":     deadline_at,
-                // The Festlegung the instant came from, where obsd supplied one.
+                // The Festlegung the instant came from, where processd supplied one.
                 // A recommendation that cites the rule beats one that asserts a
                 // number.
                 "deadline_source": row.get("deadline_source"),
@@ -278,7 +278,7 @@ impl Skill for DeadlineTriage {
 
         // Adjacent to the effects it explains, so reasoning-versus-action
         // mismatch stays detectable after the fact.
-        // `obsd` caps its overdue list and says when the cap bit. A run that
+        // `processd` caps its overdue list and says when the cap bit. A run that
         // reported 500 of ten thousand as though it were the whole picture would
         // be wrong in the calmest possible way.
         let saturated = overdue
@@ -298,7 +298,7 @@ impl Skill for DeadlineTriage {
                 String::new()
             },
             if saturated {
-                "; obsd's overdue list was saturated — at least the cap was waiting"
+                "; processd's overdue list was saturated — at least the cap was waiting"
             } else {
                 ""
             }
@@ -315,7 +315,7 @@ impl Skill for DeadlineTriage {
             "deadline_status":  worst.as_str(),
             "at_risk_count":    classified.len(),
             "unclassifiable":   unclassifiable,
-            // `true` means obsd returned a full batch: at least the cap was
+            // `true` means processd returned a full batch: at least the cap was
             // waiting, never that the cap was all there was.
             "truncated":        saturated,
             "by_partner_mp_id": by_partner,
@@ -389,13 +389,17 @@ impl DeadlineTriage {
 
         let spec = TaskSpec::new(
             "deadline.breach",
-            Justification::new(summary, json!({ "breached": breached })),
+            Justification::new(
+                // agentd's own sentence — counts it computed, no tool or model
+                // text — so the reviewer is shown it as the runtime's note.
+                Tainted::trusted(summary),
+                json!({ "breached": breached }),
+            ),
             TRIAGE_OBLIGATION,
         )
         .role(TRIAGE_AUDIENCE)
         .priority(Priority::Urgent)
-        .on_expiry(agentplane::core::OnExpiry::Escalate)
-        .escalate_to(TRIAGE_ESCALATION);
+        .on_expiry(agentplane::core::Expiry::escalate_to([TRIAGE_ESCALATION]));
 
         cx.open_task(&spec)
             .await
@@ -455,7 +459,7 @@ mod tests {
 
     /// The triggering alert is classified, not just echoed back.
     ///
-    /// `obsd`'s overdue list is past its Frist by construction, so classifying
+    /// `processd`'s overdue list is past its Frist by construction, so classifying
     /// it alone answers `BREACH` every time and makes the other three bands
     /// unreachable — while saying nothing about the process the run was woken
     /// for.

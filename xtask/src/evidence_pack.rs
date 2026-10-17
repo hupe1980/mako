@@ -22,6 +22,7 @@
 //! | `lead-time.json`          | `release_lead_time` |
 //! | `sbom/*.cdx.json`         | `sbom` — SHA-256 per CycloneDX document |
 //! | `attestations/*.json`     | `attestations` — one record per attested subject |
+//! | `policy-inventory.json`   | `policy_defaults` — every operator setting, its default or `required`, and the source of each option (`cargo xtask policy-inventory --json`) |
 //!
 //! **A missing input is `not measured`, never a zero.** A section whose
 //! producer did not run, or whose output this task cannot read, says so in
@@ -45,6 +46,7 @@ pub const SECTIONS: &[&str] = &[
     "release_lead_time",
     "sbom",
     "attestations",
+    "policy_defaults",
 ];
 
 const MEASURED: &str = "measured";
@@ -213,6 +215,10 @@ pub fn assemble(
     pack.insert(
         "attestations".into(),
         attestations(&inputs.join("attestations")),
+    );
+    pack.insert(
+        "policy_defaults".into(),
+        policy_defaults(&inputs.join("policy-inventory.json")),
     );
     Ok(Value::Object(pack))
 }
@@ -441,6 +447,23 @@ fn attestations(dir: &Path) -> Value {
     json!({ "status": MEASURED, "records": records })
 }
 
+/// The operator policy defaults the release ships, from
+/// `cargo xtask policy-inventory --json`. An empty list is not a measurement:
+/// the producer found no declaration, which is a broken producer.
+fn policy_defaults(file: &Path) -> Value {
+    let Ok(text) = std::fs::read_to_string(file) else {
+        return not_measured(
+            "policy-inventory.json absent: `cargo xtask policy-inventory --json` did not run",
+        );
+    };
+    match serde_json::from_str::<Value>(&text) {
+        Ok(Value::Array(settings)) if !settings.is_empty() => {
+            json!({ "status": MEASURED, "settings": settings })
+        }
+        _ => not_measured("policy-inventory.json is not a non-empty JSON array of settings"),
+    }
+}
+
 /// Every reason a pack is refused.
 pub fn check(pack: &Value) -> Vec<String> {
     let mut findings = Vec::new();
@@ -470,6 +493,9 @@ pub fn check(pack: &Value) -> Vec<String> {
                         .as_array()
                         .is_some_and(|a| !a.is_empty()),
                     "attestations" => section["records"].as_array().is_some_and(|a| !a.is_empty()),
+                    "policy_defaults" => section["settings"]
+                        .as_array()
+                        .is_some_and(|a| !a.is_empty()),
                     _ => !section["values"].is_null(),
                 };
                 if !carries {
@@ -557,6 +583,11 @@ binding places gated by an unreadable Voraussetzung: 2100 of 24000, in 300 of th
             r#"{"subject":"ghcr.io/o/mako-makod","digest":"sha256:00"}"#,
         )
         .unwrap();
+        std::fs::write(
+            inputs.join("policy-inventory.json"),
+            r#"[{"service":"einsd","key":"beihilfe_politik","default":"verweigern","options":[{"name":"verweigern","quelle":"BT-Drs. 21/7867 S. 248"}]}]"#,
+        )
+        .unwrap();
         (root, inputs)
     }
 
@@ -595,6 +626,7 @@ binding places gated by an unreadable Voraussetzung: 2100 of 24000, in 300 of th
             ("guards", "guards"),
             ("sbom", "sbom"),
             ("attestations", "attestations"),
+            ("policy-inventory.json", "policy_defaults"),
         ];
         for (input, section) in deletions {
             let (root, inputs) = fixture(section);
@@ -609,7 +641,14 @@ binding places gated by an unreadable Voraussetzung: 2100 of 24000, in 300 of th
             let s = &p[*section];
             assert_eq!(s["status"], NOT_MEASURED, "{section}: {s}");
             assert!(s["reason"].as_str().is_some_and(|r| !r.is_empty()));
-            for figure in ["measured", "values", "documents", "records", "score"] {
+            for figure in [
+                "measured",
+                "values",
+                "documents",
+                "records",
+                "score",
+                "settings",
+            ] {
                 assert!(
                     s[figure].is_null(),
                     "{section} carries `{figure}` while not measured"
@@ -646,6 +685,32 @@ binding places gated by an unreadable Voraussetzung: 2100 of 24000, in 300 of th
         assert_eq!(f.len(), 4, "{f:?}");
         assert!(f.iter().any(|x| x.contains("`sbom` is absent")));
         assert!(f.iter().any(|x| x.contains("check-vex")));
+    }
+
+    /// A pack without the `policy_defaults` section is refused; one built
+    /// without the inventory input says `not measured`, never an empty list.
+    #[test]
+    fn the_policy_defaults_section_is_required_and_never_an_empty_list() {
+        let (root, inputs) = fixture("policy");
+        let mut p = pack(&root, &inputs);
+        assert_eq!(p["policy_defaults"]["status"], MEASURED);
+        assert_eq!(
+            p["policy_defaults"]["settings"][0]["key"],
+            "beihilfe_politik"
+        );
+        p.as_object_mut().unwrap().remove("policy_defaults");
+        assert!(
+            check(&p)
+                .iter()
+                .any(|x| x.contains("`policy_defaults` is absent")),
+            "{:?}",
+            check(&p)
+        );
+        std::fs::write(inputs.join("policy-inventory.json"), "[]").unwrap();
+        let p = pack(&root, &inputs);
+        std::fs::remove_dir_all(&root).ok();
+        assert_eq!(p["policy_defaults"]["status"], NOT_MEASURED);
+        assert!(p["policy_defaults"]["settings"].is_null());
     }
 
     #[test]

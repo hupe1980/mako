@@ -44,6 +44,9 @@ fn check_exits_zero_on_valid_config() {
     let cfg = write_config(
         dir.path(),
         r#"
+[deployment]
+rollen = ["nb-strom"]
+
 [[party]]
 mp_id = "9900001000001"
 roles = ["NB"]
@@ -73,6 +76,9 @@ fn check_exits_nonzero_on_mixed_sparte_party() {
     let cfg = write_config(
         dir.path(),
         r#"
+[deployment]
+rollen = ["nb-strom", "nb-gas"]
+
 [[party]]
 mp_id = "9900001000001"
 roles = ["NB", "GNB"]
@@ -102,6 +108,9 @@ fn refuses_volatile_storage_without_explicit_flag() {
     let cfg = write_config(
         dir.path(),
         r#"
+[deployment]
+rollen = ["nb-strom"]
+
 [[party]]
 mp_id = "9900001000001"
 roles = ["NB"]
@@ -143,6 +152,9 @@ fn check_rejects_an_authenticated_port_without_credentials() {
     let cfg = write_config(
         dir.path(),
         r#"
+[deployment]
+rollen = ["nb-strom"]
+
 [[party]]
 mp_id = "9900001000001"
 roles = ["NB"]
@@ -185,6 +197,9 @@ fn check_accepts_an_authenticated_port_with_credentials() {
     let cfg = write_config(
         dir.path(),
         r#"
+[deployment]
+rollen = ["nb-strom"]
+
 [[party]]
 mp_id = "9900001000001"
 roles = ["NB"]
@@ -228,6 +243,9 @@ fn check_rejects_an_as4_partner_without_an_encryption_certificate() {
     let cfg = write_config(
         dir.path(),
         r#"
+[deployment]
+rollen = ["nb-strom"]
+
 [[party]]
 mp_id = "9900001000001"
 roles = ["NB"]
@@ -264,6 +282,9 @@ fn check_rejects_a_plaintext_as4_partner_endpoint() {
     let cfg = write_config(
         dir.path(),
         r#"
+[deployment]
+rollen = ["nb-strom"]
+
 [[party]]
 mp_id = "9900001000001"
 roles = ["NB"]
@@ -297,6 +318,9 @@ fn check_rejects_an_invalid_cedar_policy() {
     let cfg = write_config(
         dir.path(),
         r#"
+[deployment]
+rollen = ["nb-strom"]
+
 [[party]]
 mp_id = "9900001000001"
 roles = ["NB"]
@@ -333,6 +357,9 @@ fn check_rejects_a_config_with_no_ingest_transport() {
     let cfg = write_config(
         dir.path(),
         r#"
+[deployment]
+rollen = ["nb-strom"]
+
 [[party]]
 mp_id = "9900001000001"
 roles = ["NB"]
@@ -361,6 +388,9 @@ fn check_rejects_a_config_with_no_outbound_delivery_path() {
     let cfg = write_config(
         dir.path(),
         r#"
+[deployment]
+rollen = ["nb-strom"]
+
 [[party]]
 mp_id = "9900001000001"
 roles = ["NB"]
@@ -406,6 +436,9 @@ fn as4_key_material_can_be_supplied_from_files() {
         dir.path(),
         &format!(
             r#"
+[deployment]
+rollen = ["nb-strom"]
+
 [[party]]
 mp_id = "9900001000001"
 roles = ["NB"]
@@ -454,6 +487,9 @@ fn an_unknown_config_key_is_rejected() {
     let cfg = write_config(
         dir.path(),
         r#"
+[deployment]
+rollen = ["nb-strom"]
+
 [[party]]
 mp_id = "9900001000001"
 roles = ["NB"]
@@ -492,6 +528,9 @@ fn check_does_not_run_the_process_registry_reconciliation() {
     let cfg = write_config(
         dir.path(),
         r#"
+[deployment]
+rollen = ["nb-strom"]
+
 [[party]]
 mp_id = "9900001000001"
 roles = ["NB"]
@@ -552,6 +591,9 @@ fn check_rejects_an_as4_listener_without_a_trust_anchor() {
     let cfg = write_config(
         dir.path(),
         r#"
+[deployment]
+rollen = ["nb-strom"]
+
 [[party]]
 mp_id = "9900001000001"
 roles = ["NB"]
@@ -584,4 +626,129 @@ primary = true
         stderr.contains("trust anchor") && stderr.contains("--allow-no-as4-trust-anchor"),
         "the error must name the missing material and the opt-out: {stderr}"
     );
+}
+
+/// The `--check` stderr and status for `body`.
+fn check(body: &str, extra: &[&str]) -> (bool, String) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cfg = write_config(dir.path(), body);
+    let out = makod()
+        .args(["--config"])
+        .arg(&cfg)
+        .args(STARTABLE)
+        .args(extra)
+        .arg("--check")
+        .output()
+        .expect("spawn makod");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// A configuration that declares no deployment role refuses to start: it would
+/// register no engine module and dead-letter every inbound message.
+#[test]
+fn check_refuses_a_config_without_rollen() {
+    let (ok, stderr) = check(
+        r#"
+[[party]]
+mp_id = "9900001000001"
+roles = ["NB"]
+primary = true
+"#,
+        &[],
+    );
+    assert!(!ok, "a config without [deployment] rollen must be refused");
+    assert!(stderr.contains("no deployment role"), "{stderr}");
+}
+
+/// An MP-ID for a role the deployment does not declare is refused, naming it.
+#[test]
+fn check_refuses_an_mp_id_for_an_undeclared_role() {
+    let (ok, stderr) = check(
+        r#"
+[deployment]
+rollen = ["lf-strom"]
+
+[[party]]
+mp_id = "9900001000001"
+roles = ["LF"]
+primary = true
+
+[[party]]
+mp_id = "9900001000002"
+roles = ["NB"]
+"#,
+        &[],
+    );
+    assert!(
+        !ok,
+        "an NB MP-ID under rollen = [\"lf-strom\"] must be refused"
+    );
+    assert!(stderr.contains("nb-strom"), "{stderr}");
+}
+
+/// A declared role without an MP-ID is refused, naming it.
+#[test]
+fn check_refuses_a_declared_role_without_an_mp_id() {
+    let (ok, stderr) = check(
+        r#"
+[deployment]
+rollen = ["nb-strom", "msb-strom"]
+
+[[party]]
+mp_id = "9900001000001"
+roles = ["NB"]
+primary = true
+"#,
+        &[],
+    );
+    assert!(!ok);
+    assert!(stderr.contains("msb-strom"), "{stderr}");
+}
+
+/// An unknown role token is a parse error, not an ignored entry.
+#[test]
+fn check_refuses_an_unknown_role_token() {
+    let (ok, stderr) = check(
+        r#"
+[deployment]
+rollen = ["lf"]
+
+[[party]]
+mp_id = "9900001000001"
+roles = ["LF"]
+primary = true
+"#,
+        &[],
+    );
+    assert!(!ok);
+    assert!(stderr.contains("unknown variant"), "{stderr}");
+}
+
+/// makod has no multi-instance mode: the flag is an unknown argument and the
+/// TOML key an unknown field. The data-directory lock refuses a second writer,
+/// so a switch acknowledging one would describe a topology that cannot run.
+#[test]
+fn allow_multi_instance_is_refused_in_both_forms() {
+    let body = r#"
+[deployment]
+rollen = ["nb-strom"]
+
+[[party]]
+mp_id = "9900001000001"
+roles = ["NB"]
+primary = true
+"#;
+    let (ok, stderr) = check(body, &["--allow-multi-instance"]);
+    assert!(!ok, "--allow-multi-instance must be an unknown argument");
+    assert!(stderr.contains("--allow-multi-instance"), "{stderr}");
+
+    let (ok, stderr) = check(
+        &format!("{body}\n[storage]\nallow_multi_instance = true\n"),
+        &[],
+    );
+    assert!(!ok, "storage.allow_multi_instance must be an unknown field");
+    assert!(stderr.contains("allow_multi_instance"), "{stderr}");
 }

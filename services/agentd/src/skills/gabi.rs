@@ -77,15 +77,17 @@ impl Skill for GabiAllocationTriage {
         let task = TaskSpec::new(
             "gabi.final-allocation.missing",
             Justification::new(
-                "A binding final ALOCAT is missing. Open and track the clearing case.",
+                Tainted::trusted(
+                    "A binding final ALOCAT is missing. Open and track the clearing case."
+                        .to_owned(),
+                ),
                 justification,
             ),
             TRIAGE_OBLIGATION,
         )
         .role(TRIAGE_AUDIENCE)
         .priority(Priority::Urgent)
-        .on_expiry(agentplane::core::OnExpiry::Escalate)
-        .escalate_to(TRIAGE_ESCALATION);
+        .on_expiry(agentplane::core::Expiry::escalate_to([TRIAGE_ESCALATION]));
 
         cx.open_task(&task)
             .await

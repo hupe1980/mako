@@ -74,6 +74,8 @@ pub struct BillingdMcpState {
     pub tenant: String,
     pub auth: mako_service::mcp_auth::McpAuth,
     pub deps: Arc<crate::clients::BillingDeps>,
+    /// The operator policy and posture this deployment runs under.
+    pub policy: Arc<mako_service::policy::PolicyReport>,
 }
 
 /// A tool that takes no arguments.
@@ -183,6 +185,16 @@ impl BillingdMcpHandler {
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
         }
+    }
+
+    #[tool(
+        description = "The operator policy and posture this billingd deployment runs under: each [policy] setting (behg_regime, settlement_form) with its value, whether it was set or defaulted, and the primary source of the value. Read-only; a setting changes only by editing the config and restarting.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_policy(&self) -> Result<CallToolResult, McpError> {
+        ContentBlock::json(serde_json::to_value(&*self.state.policy).unwrap_or_default())
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None))
     }
 
     #[tool(
@@ -304,7 +316,12 @@ B2B mandate in §14 UStG. Returns the raw XML string, not BASE64.",
                         None,
                     ));
                 };
-                let xml = crate::einvoice::render_cii(&model);
+                let xml = crate::einvoice::render_cii(&model).map_err(|e| {
+                    McpError::invalid_params(
+                        format!("record {id}: {e} — re-run the calculation"),
+                        None,
+                    )
+                })?;
                 ContentBlock::json(serde_json::json!({
                     "billing_record_id": id,
                     "xrechnung_xml": xml,
@@ -778,7 +795,7 @@ impl BillingdMcpHandler {
                  **3. Meter Data (edmd)**\n                 MSCONS readings arrive via makod EDIFACT pipeline automatically.\n                 Verify: edmd GET /api/v1/billing-period/{malo_id}\n
                  **4. Invoice Generation (billingd)**\n                 POST /api/v1/billing/{malo_id}/calculate { lf_mp_id, nb_mp_id, period_from, period_to }\n                 → productd → edmd → grid (NNE, from the request) → §14a discount → EEG credit\n                 → Rechnung BO4E persisted; CloudEvent de.billing.rechnung.erstellt\n                 Use `list_billing_records` to verify; `get_xrechnung` for B2G XML.\n
                  **5. Account Posting (accountingd)**\n                 de.billing.rechnung.erstellt → accountingd debit entry (Rechnungsbetrag)\n                 Check balance: accountingd `get_balance`\n                 Monthly SEPA: accountingd `run_sepa_collection` → pain.008 XML\n                 Payment receipt: accountingd `import_payments` (CAMT.054)\n
-                 **6. Dunning & Collections (if overdue)**\n                 `list_overdue` → Mahnstufe 1 (reminder) → 2 (fee) → 3 (Sperrauftrag)\n                 Mahnstufe 3 → de.accounting.sperrauftrag → sperrd → IFTSTA 21039 to NB\n
+                 **6. Dunning & Collections (if overdue)**\n                 `list_overdue` → Mahnstufe 1 (reminder) → 2 (fee) → 3 (Sperrauftrag)\n                 Mahnstufe 3 → de.accounting.sperrauftrag → ORDERS 17115 to the NB → IFTSTA 21039 back\n
                  **Annual Jahresabschluss:**\n                 billingd annual settlement → accountingd `trigger_jahresabschluss` → `update_abschlag` with new rate.\n                 ⚠ EEG note: EEG Gutschrift in Rechnung is already netted in the debit amount. \n                 Do NOT separately book de.eeg.verguetung.berechnet credits for the same period.\n\n                 **Monthly Abschlagslauf (automated advance payment cycle):**\n                 accountingd `run_abschlag_cycle` on each billing_day → raises the Abschlagsforderungen (debits).\n                 Then `run_sepa_collection` N-5 bank days before due date → generates pain.008 XML.\n                 Import bank statement: `import_payments` (CAMT.054) to match SEPA returns.\n\n                 **Bilanzielle Abgrenzung (HGB §250 — period-end accruals):**\n                 At Monats-/Jahresabschluss: use accountingd `compute_bilanzielle_abgrenzung`.\n                 pRAP (passive): advance payments collected > energy billed → book as liability.\n                 aRAP (active): unbilled energy → edmd GET /billing-period/{malo_id} × tariff.\n                 ERP journals: Dr. Umsatzerlöse / Cr. pRAP 0990; Dr. FLL 1400 / Cr. Erlöse."
             ),
         ]
@@ -973,7 +990,7 @@ unpriced intervals would silently under-bill.",
                  (§ 4 Abs. 1 Nr. 2 CO2KostAufG Mittelwert); productd's `nehs_prices` series prices \
                  a period from a point set in its own year. 2027 has no statutory price: it is \
                  refused until a series point or a `[rates] behg_eur_per_t` row supplies one, \
-                 checked against `[rates] behg_regime` (`rvo_bezugspreis` or `korridor` 55–65 EUR/t) |\n\
+                 checked against `[policy] behg_regime` (`rvo_bezugspreis` or `korridor` 55–65 EUR/t) |\n\
                 | MwSt | 19% | Gas and Fernwärme are standard-rated. The 7% window was \
                 §28 Abs. 5/6 UStG (01.10.2022–31.03.2024) and has expired; billingd resolves \
                 it automatically for periods inside it and refuses periods that straddle the \

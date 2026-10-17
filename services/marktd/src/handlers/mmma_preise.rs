@@ -14,6 +14,7 @@
 //! | `PUT` | `/api/v1/mmm-preise/strom/{year}/{month}` | `write-preisblatt` | Upsert Strom MMM price pair (VNB publication) |
 //! | `GET` | `/api/v1/mmm-preise/strom/{year}/{month}` | `read-preisblatt` | Fetch Strom MMM prices |
 
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{
@@ -107,11 +108,11 @@ pub async fn put_mmma_gas(
         .check(&claims.principal(), "write-mmma-preis", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
     let price_month = match path.to_date() {
         Ok(d) => d,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiError::bad_request(e).into_response(),
     };
     match repo
         .upsert_gas(
@@ -124,7 +125,7 @@ pub async fn put_mmma_gas(
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -140,11 +141,11 @@ pub async fn get_mmma_gas(
         .check(&claims.principal(), "read-mmma-preis", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
     let price_month = match path.to_date() {
         Ok(d) => d,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiError::bad_request(e).into_response(),
     };
     match repo.find_gas(price_month, "THE").await {
         Ok(Some(r)) => Json(MmmaGasResponse {
@@ -156,14 +157,10 @@ pub async fn get_mmma_gas(
             updated_at: r.updated_at,
         })
         .into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            format!("No MMMA Gas prices for {}/{}", path.year, path.month),
-        )
-            .into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
         Err(e) => {
             warn!("mmma_gas GET error: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+            ApiError::internal(e).into_response()
         }
     }
 }
@@ -191,7 +188,7 @@ pub async fn list_mmma_gas(
         .check(&claims.principal(), "read-mmma-preis", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
     match repo.list_gas(q.limit.min(120)).await {
         Ok(records) => {
@@ -208,7 +205,7 @@ pub async fn list_mmma_gas(
                 .collect();
             Json(resp).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -254,18 +251,18 @@ pub async fn put_mmm_strom(
         .check(&claims.principal(), "write-mmma-preis", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
     let price_month = match path.to_date() {
         Ok(d) => d,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiError::bad_request(e).into_response(),
     };
     match repo
         .upsert_strom(price_month, req.mehr_ct_kwh, req.minder_ct_kwh, &req.source)
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -281,11 +278,11 @@ pub async fn get_mmm_strom(
         .check(&claims.principal(), "read-mmma-preis", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
     let price_month = match path.to_date() {
         Ok(d) => d,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiError::bad_request(e).into_response(),
     };
     match repo.find_strom(price_month).await {
         Ok(Some(r)) => Json(MmmStromResponse {
@@ -296,16 +293,8 @@ pub async fn get_mmm_strom(
             updated_at: r.updated_at,
         })
         .into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            format!(
-                "No Strom Mehr-/Mindermengenpreise for {}/{} — import them from the \
-                 BDEW publication via PUT /api/v1/mmm-preise/strom/{}/{}",
-                path.year, path.month, path.year, path.month
-            ),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -368,13 +357,13 @@ pub async fn post_import_trigger(
         .check(&claims.principal(), "write-mmma-preis", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "access denied").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     // The Anwendungsmonat of the published series is a German calendar month.
     let price_month = match import_month(&q, mako_fristen::heute()) {
         Ok(d) => d,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiError::bad_request(e).into_response(),
     };
     let (year, month) = (price_month.year(), price_month.month() as u8);
 

@@ -51,17 +51,22 @@ pub use sepa::validate_iban;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// The 403 body every Cedar denial returns.
-///
-/// The 500 body. The detail is returned because every caller of this service is
-/// an operator or an internal system, never an end customer.
-fn internal(e: &anyhow::Error) -> axum::response::Response {
-    tracing::error!(error = %e, "accountingd: request failed");
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(serde_json::json!({ "error": e.to_string() })),
-    )
-        .into_response()
+/// The 500 for a failure of this service: logged under an `error_id`, which
+/// is all the body carries.
+fn internal(e: anyhow::Error) -> axum::response::Response {
+    ApiError::internal(e).into_response()
+}
+
+/// A write refused for what it was asked to store answers `422` with the
+/// refusal; a database failure underneath is a `500` with an `error_id`, never
+/// its text.
+fn refusal(e: impl Into<anyhow::Error>) -> ApiError {
+    let e = e.into();
+    if e.chain().any(|c| c.is::<sqlx::Error>()) {
+        ApiError::internal(e)
+    } else {
+        ApiError::unprocessable(format!("{e:#}"))
+    }
 }
 
 /// Convert an amount in ct (i64, × 10⁻² EUR) to a `"1234.56"` EUR string.
@@ -90,7 +95,7 @@ pub async fn get_account(
     match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(row)) => Json(row).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -114,7 +119,7 @@ pub async fn put_account(
     // database fault, which sends the operator looking for the wrong problem.
     if let Err(e) = upsert_account(&pool, &malo_id, &lf_mp_id, &cfg.tenant).await {
         tracing::error!(error = %e, %malo_id, "accountingd: account upsert failed");
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return ApiError::internal(e).into_response();
     }
     match update_account_tenanted(
         &pool,
@@ -127,7 +132,7 @@ pub async fn put_account(
     .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -153,7 +158,7 @@ pub async fn get_balance(
         }))
         .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -184,7 +189,7 @@ pub async fn get_ledger(
     .await
     {
         Ok(window) => Json(window).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -206,13 +211,7 @@ pub async fn get_kontoauszug(
     // period: a bare `to` is the cumulative position through that date, which is
     // a balance rather than a Kontoauszug, and a bare `from` has no closing
     // date to open the *next* one at.
-    let unprocessable = |msg: String| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({ "error": msg })),
-        )
-            .into_response()
-    };
+    let unprocessable = |msg: String| ApiError::unprocessable(msg).into_response();
     let (from, to) = match (
         optional_date("from", q.from.as_deref()),
         optional_date("to", q.to.as_deref()),
@@ -231,14 +230,14 @@ pub async fn get_kontoauszug(
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     let query = period.map_or_else(doubleentry::BalanceQuery::all, |(from, to)| {
         doubleentry::BalanceQuery::between(from, to)
     });
     let window = match list_ledger(&ledger, lf_mp_id, &malo_id, query, 500).await {
         Ok(e) => e,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     // Eröffnungs- und Schlusssaldo: the two figures that make the page add up.
     // The closing figure is the opening plus everything on it, not the account's
@@ -333,14 +332,14 @@ pub async fn get_abschlaege(
         .unwrap_or(time::OffsetDateTime::UNIX_EPOCH.date());
     let from = match parse("from", q.from.as_deref(), epoch) {
         Ok(d) => d,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiError::bad_request(e).into_response(),
     };
     let to = match parse("to", q.to.as_deref(), mako_fristen::heute()) {
         Ok(d) => d,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return ApiError::bad_request(e).into_response(),
     };
     if from > to {
-        return (StatusCode::BAD_REQUEST, "from must not be after to").into_response();
+        return ApiError::bad_request("from must not be after to").into_response();
     }
     if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         return StatusCode::NOT_FOUND.into_response();
@@ -357,7 +356,7 @@ pub async fn get_abschlaege(
     .await
     {
         Ok(v) => v,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     let include_open = q.include_open.unwrap_or(false);
     let out: Vec<serde_json::Value> = all
@@ -416,10 +415,10 @@ pub async fn put_abschlag(
         .await
         {
             Ok(()) => StatusCode::NO_CONTENT.into_response(),
-            Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+            Err(e) => refusal(e).into_response(),
         }
     } else {
-        (StatusCode::BAD_REQUEST, "abschlag_ct required").into_response()
+        ApiError::bad_request("abschlag_ct required").into_response()
     }
 }
 
@@ -561,10 +560,7 @@ pub async fn ingest_webhook(
                     "accountingd: invoice event carries no readable gesamtbrutto — refusing \
                      rather than booking nothing"
                 );
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "invoice event carries no readable gesamtbrutto",
-                )
+                return ApiError::unprocessable("invoice event carries no readable gesamtbrutto")
                     .into_response();
             };
             let verrechnete_abschlaege_ct: i64 = betrag_ct("zuZahlen")
@@ -1457,17 +1453,21 @@ async fn import_cash_entries(
             // entry), signed by CdtDbtInd, and is `None` when the statement
             // doesn't determine it — precisely when the obvious "reuse the entry
             // total per detail" fallback would multiply a batch by its
-            // transaction count.
-            let signed_ct = match detail {
-                Some(d) => d.signed_ct(),
-                None => Some(entry.signed_ct()), // single unbatched booking
-            };
-            let Some(signed_ct) = signed_ct else {
-                tracing::warn!(
-                    "accountingd: camt batch detail has no determinable amount — skipping"
-                );
-                out.skipped += 1;
-                continue;
+            // transaction count. An entry with no details is the transaction.
+            let signed_ct = match crate::sepa::camt_posting_ct(entry, detail) {
+                Ok(ct) => ct,
+                Err(e) => {
+                    tracing::warn!(
+                        account_servicer_ref = ?entry.account_servicer_ref,
+                        amount_raw = ?entry.amount.amount_raw,
+                        currency = ?entry.amount.currency,
+                        direction_raw = ?entry.amount.direction_raw,
+                        reason = %e,
+                        "accountingd: camt booking not posted"
+                    );
+                    out.skipped += 1;
+                    continue;
+                }
             };
             // A bank does not always report the counterparty IBAN — a cash
             // deposit, a foreign transfer, a booking whose `RltdPties` block the
@@ -1769,11 +1769,7 @@ pub async fn import_payments_camt054(
     let doc = match crate::sepa::parse_camt054(&body) {
         Ok(d) => d,
         Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": format!("camt.054 parse failed: {e}") })),
-            )
-                .into_response();
+            return ApiError::unprocessable(format!("camt.054 parse failed: {e}")).into_response();
         }
     };
 
@@ -1850,11 +1846,7 @@ pub async fn import_payments_camt052(
     let doc = match crate::sepa::parse_camt052(&body) {
         Ok(d) => d,
         Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": format!("camt.052 parse failed: {e}") })),
-            )
-                .into_response();
+            return ApiError::unprocessable(format!("camt.052 parse failed: {e}")).into_response();
         }
     };
 
@@ -1929,11 +1921,7 @@ pub async fn import_payments_camt053(
     let doc = match crate::sepa::parse_camt053(&body) {
         Ok(d) => d,
         Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": format!("camt.053 parse failed: {e}") })),
-            )
-                .into_response();
+            return ApiError::unprocessable(format!("camt.053 parse failed: {e}")).into_response();
         }
     };
 
@@ -1977,6 +1965,40 @@ pub async fn import_payments_camt053(
     .into_response()
 }
 
+/// Render a pain.002's `NbOfTxsPerSts` rows — group and payment-info level —
+/// for the import response.
+///
+/// Every observation is kept as it arrived: a row whose count or control sum
+/// the bank wrote unreadably still reports the bucket, with `null` for the
+/// typed value and the bank's text in the `*_raw` field. An absent count is not
+/// zero, and a status outside ISO 20022 is reported verbatim and is not a
+/// verification.
+#[must_use]
+pub fn pain002_status_counts_json(doc: &crate::sepa::Pain002Document) -> Vec<serde_json::Value> {
+    doc.group_status_counts
+        .iter()
+        .chain(
+            doc.payment_info_statuses
+                .iter()
+                .flat_map(|p| &p.status_counts),
+        )
+        .map(|c| {
+            serde_json::json!({
+                "status":     c.status.as_ref().map(crate::sepa::PaymentStatus::as_code),
+                "status_raw": c.status_raw,
+                "count":      c.count,
+                "count_raw":  c.count_raw,
+                "total_ct":   c.total_ct,
+                "total_raw":  c.total_raw,
+                "is_verification": c
+                    .status
+                    .as_ref()
+                    .is_some_and(crate::sepa::PaymentStatus::is_verification),
+            })
+        })
+        .collect()
+}
+
 /// Render a camt balance set for the response body.
 fn balances_json(balances: &[sepa::camt::StatementBalance]) -> Vec<serde_json::Value> {
     balances
@@ -1985,7 +2007,7 @@ fn balances_json(balances: &[sepa::camt::StatementBalance]) -> Vec<serde_json::V
             serde_json::json!({
                 "type":      b.balance_type.as_code(),
                 "signed_ct": b.signed_ct(),
-                "currency":  b.currency,
+                "currency":  b.amount.currency,
                 "date":      b.date().map(|d| d.to_string()),
             })
         })
@@ -2020,11 +2042,7 @@ pub async fn metrics(
     let m = match crate::pg::financial_metrics(&pool, &cfg.tenant).await {
         Ok(m) => m,
         Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("# metrics query failed: {e}\n"),
-            )
-                .into_response();
+            return ApiError::internal(e).into_response();
         }
     };
     let t = &cfg.tenant;
@@ -2046,7 +2064,7 @@ pub async fn metrics(
          # HELP accountingd_sepa_runs_pending SEPA collection runs not yet dispatched.\n\
          # TYPE accountingd_sepa_runs_pending gauge\n\
          accountingd_sepa_runs_pending{{tenant=\"{t}\"}} {}\n\
-         # HELP accountingd_sperrung_pending Mahnstufe-3 cases handed to sperrd.\n\
+         # HELP accountingd_sperrung_pending Mahnstufe-3 cases handed on as a Sperrauftrag.\n\
          # TYPE accountingd_sperrung_pending gauge\n\
          accountingd_sperrung_pending{{tenant=\"{t}\"}} {}\n\
          # HELP accountingd_sepa_collections Direct-debit collections by lifecycle state.\n\
@@ -2097,17 +2115,13 @@ pub async fn put_account_business_partner(
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let Some(kunden_nr) = body.get("kunden_nr").and_then(|v| v.as_str()) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "kunden_nr required" })),
-        )
-            .into_response();
+        return ApiError::bad_request("kunden_nr required").into_response();
     };
     match crate::pg::set_account_kunden_nr(&pool, &malo_id, lf_mp_id, &cfg.tenant, kunden_nr).await
     {
         Ok(0) => StatusCode::NOT_FOUND.into_response(),
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -2129,7 +2143,7 @@ pub async fn get_bp_accounts(
             "accounts": rows,
         }))
         .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -2151,7 +2165,7 @@ pub async fn get_bp_balance(
             "balance_eur": format_ct_as_eur(total_ct),
         }))
         .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -2188,7 +2202,7 @@ pub async fn get_offene_posten(
     match list_overdue_accounts(&pool, &cfg.tenant, min_ct, q.limit.unwrap_or(200).min(2000)).await
     {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -2218,7 +2232,7 @@ pub async fn get_dunning(
     }
     match list_open_dunning(&pool, &cfg.tenant, q.limit.unwrap_or(200).min(1000)).await {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -2237,7 +2251,7 @@ pub async fn escalate_dunning(
     let account = match fetch_account_by_id(&pool, account_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     let stufe: i16 = body.get("stufe").and_then(|v| v.as_i64()).unwrap_or(1) as i16;
     let amount_due_ct = account.balance_ct.max(0);
@@ -2260,7 +2274,7 @@ pub async fn escalate_dunning(
     .await
     {
         Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -2278,7 +2292,7 @@ pub async fn resolve_dunning(
     match resolve_dunning_case(&pool, id, &cfg.tenant).await {
         Ok(0) => StatusCode::NOT_FOUND.into_response(),
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 /// `POST /api/v1/dunning/{id}/abwendung/angebot` — § 41g Abs. 1 S. 2 EnWG.
@@ -2310,14 +2324,14 @@ pub async fn abwendung_angebot(
     {
         Ok(Some(row)) => row,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return internal(&e),
+        Err(e) => return internal(e),
     };
     // Re-derived, not read: the instalment band depends on the arrears, and an
     // offer quoting the wrong band is a §41g Abs. 1 S. 7-9 defect.
     let verzug_ct =
         match crate::pg::refresh_verzug(&ledger, &pool, &cfg.tenant, &malo_id, &lf_mp_id).await {
             Ok(v) => v,
-            Err(e) => return internal(&e),
+            Err(e) => return internal(e),
         };
     // § 41g Abs. 1 S. 7–9: 6–18 Monate in der Regel, 12–24 Monate über 300 EUR.
     let (min_monate, max_monate) = if verzug_ct > 30_000 {
@@ -2359,7 +2373,7 @@ pub async fn abwendung_angebot(
         // Already offered, or the case is closed — either way there is nothing
         // to do and nothing went wrong.
         Ok(false) => StatusCode::CONFLICT.into_response(),
-        Err(e) => internal(&e),
+        Err(e) => internal(e),
     }
 }
 
@@ -2395,7 +2409,7 @@ pub async fn get_dormant_mandates(
                      symptom of ignoring it is a rejected batch",
         }))
         .into_response(),
-        Err(e) => internal(&e),
+        Err(e) => internal(e),
     }
 }
 
@@ -2437,14 +2451,11 @@ pub async fn place_lock(
         return ApiError::forbidden(e.to_string()).into_response();
     }
     if matches!(req.grund, crate::pg::LockGrund::Operator) && req.note.is_none() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "grund = \"operator\" requires a note — a halt with no \
+        return ApiError::unprocessable(
+            "grund = \"operator\" requires a note — a halt with no \
                           statutory ground and no reason is not auditable",
-            })),
         )
-            .into_response();
+        .into_response();
     }
     let placed = crate::pg::place_dunning_lock(
         &pool,
@@ -2469,15 +2480,12 @@ pub async fn place_lock(
         // ground for part of the term. Two would make lifting one a release the
         // operator can read and the dunning run cannot see, so the second is
         // refused rather than stacked.
-        Err(e) if is_exclusion_violation(&e) => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "the account already carries a live lock on this ground \
+        Err(e) if is_exclusion_violation(&e) => ApiError::conflict(
+            "the account already carries a live lock on this ground \
                           for part of that term — lift it or change the dates",
-            })),
         )
-            .into_response(),
-        Err(e) => internal(&e),
+        .into_response(),
+        Err(e) => internal(e),
     }
 }
 
@@ -2502,7 +2510,7 @@ pub async fn get_locks(
     }
     match crate::pg::list_dunning_locks(&pool, id, &cfg.tenant).await {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => internal(&e),
+        Err(e) => internal(e),
     }
 }
 
@@ -2528,7 +2536,7 @@ pub async fn get_locks_due_review(
             "locks": rows,
         }))
         .into_response(),
-        Err(e) => internal(&e),
+        Err(e) => internal(e),
     }
 }
 
@@ -2564,11 +2572,7 @@ pub async fn lift_lock(
         return ApiError::forbidden(e.to_string()).into_response();
     }
     if req.grund.trim().is_empty() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({ "error": "grund must not be empty" })),
-        )
-            .into_response();
+        return ApiError::unprocessable("grund must not be empty").into_response();
     }
     let broken = req.grund.trim() == "vereinbarung_gebrochen";
     let done = async {
@@ -2624,7 +2628,7 @@ pub async fn lift_lock(
             .into_response(),
         Ok(Some(_)) => StatusCode::NO_CONTENT.into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => internal(&e),
+        Err(e) => internal(e),
     }
 }
 
@@ -2663,17 +2667,13 @@ pub async fn place_einwand(
         return ApiError::forbidden(e.to_string()).into_response();
     }
     if req.betrag_ct <= 0 {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({ "error": "betrag_ct must be positive" })),
-        )
-            .into_response();
+        return ApiError::unprocessable("betrag_ct must be positive").into_response();
     }
     let (account_id, malo_id, lf_mp_id) =
         match crate::pg::dunning_case_account(&pool, id, &cfg.tenant).await {
             Ok(Some(row)) => row,
             Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-            Err(e) => return internal(&e),
+            Err(e) => return internal(e),
         };
 
     let done = async {
@@ -2710,7 +2710,7 @@ pub async fn place_einwand(
             })),
         )
             .into_response(),
-        Err(e) => internal(&e),
+        Err(e) => internal(e),
     }
 }
 
@@ -2728,11 +2728,11 @@ pub async fn get_einwaende(
     let (account_id, _, _) = match crate::pg::dunning_case_account(&pool, id, &cfg.tenant).await {
         Ok(Some(row)) => row,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return internal(&e),
+        Err(e) => return internal(e),
     };
     match crate::pg::list_einwaende(&pool, account_id, &cfg.tenant).await {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => internal(&e),
+        Err(e) => internal(e),
     }
 }
 
@@ -2766,13 +2766,10 @@ pub async fn close_einwand(
         req.erledigung.as_str(),
         "stattgegeben" | "zurueckgenommen" | "zurueckgewiesen"
     ) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "erledigung must be stattgegeben, zurueckgenommen or zurueckgewiesen",
-            })),
+        return ApiError::unprocessable(
+            "erledigung must be stattgegeben, zurueckgenommen or zurueckgewiesen",
         )
-            .into_response();
+        .into_response();
     }
     let done = async {
         let mut tx = pool.begin().await?;
@@ -2799,7 +2796,7 @@ pub async fn close_einwand(
     match done {
         Ok(Some(_)) => StatusCode::NO_CONTENT.into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => internal(&e),
+        Err(e) => internal(e),
     }
 }
 
@@ -2826,26 +2823,17 @@ pub async fn post_mandate(
     // Validate IBAN checksum before writing to DB (B16).
     // Malformed IBANs cause SEPA return charges (€3–15/return) + Mahnstufe escalation.
     if let Err(msg) = validate_iban(&req.iban) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({ "error": format!("invalid IBAN: {msg}") })),
-        )
-            .into_response();
+        return ApiError::unprocessable(format!("invalid IBAN: {msg}")).into_response();
     }
     // Mandatsreferenz is Max35Text (SEPA AT-01) and doubles as the pain.008
     // EndToEndId — an over-long value would make every future collection file
     // schema-invalid, so reject it at the boundary.
     let ref_len = req.mandatsref.chars().count();
     if ref_len == 0 || ref_len > 35 {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!(
-                    "mandatsref must be 1–35 characters (SEPA Max35Text), got {ref_len}"
-                )
-            })),
-        )
-            .into_response();
+        return ApiError::unprocessable(format!(
+            "mandatsref must be 1–35 characters (SEPA Max35Text), got {ref_len}"
+        ))
+        .into_response();
     }
     match create_mandate(&pool, &cfg.tenant, iban_key.as_ref(), req).await {
         Ok(id) => (
@@ -2853,7 +2841,7 @@ pub async fn post_mandate(
             Json(serde_json::json!({ "mandate_id": id })),
         )
             .into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -2871,7 +2859,7 @@ pub async fn get_mandate(
     match fetch_mandate(&pool, mandate_id, &cfg.tenant).await {
         Ok(Some(row)) => Json(row).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -2905,7 +2893,7 @@ pub async fn delete_mandate(
     .await;
 
     match rows {
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
         Ok(r) if r.rows_affected() == 0 => StatusCode::NOT_FOUND.into_response(),
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
     }
@@ -2923,7 +2911,7 @@ pub async fn run_sepa(
     }
     let mandates = match list_active_mandates(&pool, &cfg.tenant, 10_000).await {
         Ok(m) => m,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     // Filter: only mandates with a scheduled Abschlag (§40 Abs. 1 EnWG monthly collection).
@@ -2945,26 +2933,20 @@ pub async fn run_sepa(
     let creditor_iban = match cfg.creditor_iban.as_deref().filter(|s| !s.is_empty()) {
         Some(iban) => iban,
         None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({
-                    "error": "creditor_iban not configured — set a valid SEPA IBAN in accountingd.toml"
-                })),
-            )
-                .into_response();
+            return ApiError::internal(anyhow::anyhow!(
+                "creditor_iban not configured — set a valid SEPA IBAN in accountingd.toml"
+            ))
+            .into_response();
         }
     };
 
     let creditor_name = cfg.creditor_name.as_deref().unwrap_or(&cfg.tenant);
     let Some(creditor_id) = cfg.creditor_id.as_deref().filter(|s| !s.is_empty()) else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": "creditor_id not configured — the EPC rulebook mandates CdtrSchmeId; \
-                          set the Gläubiger-ID (Bundesbank registry) in accountingd.toml"
-            })),
-        )
-            .into_response();
+        return ApiError::internal(anyhow::anyhow!(
+            "creditor_id not configured — the EPC rulebook mandates CdtrSchmeId; set the \
+             Gläubiger-ID (Bundesbank registry) in accountingd.toml"
+        ))
+        .into_response();
     };
 
     // Ad-hoc runs collect at the SDD CORE minimum lead time (D-1, submit today).
@@ -2973,11 +2955,7 @@ pub async fn run_sepa(
     let dd_schema = match crate::sepa::resolve_pain008_schema(cfg.pain008_schema.as_deref()) {
         Ok(s) => s,
         Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
+            return ApiError::internal(e).into_response();
         }
     };
 
@@ -2998,39 +2976,29 @@ pub async fn run_sepa(
             // which is precisely the collection the comment above warns
             // against: the operator submits it, the bank replies, and no entry
             // row carries the `EndToEndId` the reply names.
-            let run_id = match crate::pg::persist_sepa_collection(
-                &pool,
-                &cfg.tenant,
-                collection_date,
-                &run,
-            )
-            .await
-            {
-                Ok(id) => id,
-                Err(e) => {
-                    // A run already dispatched for this date is an operator
-                    // mistake, not a fault: building a second pain.008 for the
-                    // same collection date is how a household gets debited
-                    // twice. `409` says so; anything else is a real failure.
-                    let already = e
-                        .downcast_ref::<crate::pg::SepaRunAlreadyDispatched>()
-                        .is_some();
-                    let status = if already {
-                        StatusCode::CONFLICT
-                    } else {
-                        tracing::error!(error = %e, "accountingd: /sepa/run — failed to persist sepa_collection_run");
-                        StatusCode::INTERNAL_SERVER_ERROR
-                    };
-                    return (
-                        status,
-                        Json(serde_json::json!({
-                            "error": e.to_string(),
-                            "collection_date": collection_date.to_string(),
-                        })),
-                    )
-                        .into_response();
-                }
-            };
+            let run_id =
+                match crate::pg::persist_sepa_collection(&pool, &cfg.tenant, collection_date, &run)
+                    .await
+                {
+                    Ok(id) => id,
+                    Err(e) => {
+                        // A run already dispatched for this date is an operator
+                        // mistake, not a fault: building a second pain.008 for the
+                        // same collection date is how a household gets debited
+                        // twice. `409` says so; anything else is a real failure.
+                        let already = e
+                            .downcast_ref::<crate::pg::SepaRunAlreadyDispatched>()
+                            .is_some();
+                        if already {
+                            return ApiError::conflict(format!(
+                                "{e} (collection_date {collection_date})"
+                            ))
+                            .into_response();
+                        }
+                        return ApiError::internal(e.context("persist sepa_collection_run"))
+                            .into_response();
+                    }
+                };
             (
                 StatusCode::OK,
                 Json(serde_json::json!({
@@ -3046,11 +3014,9 @@ pub async fn run_sepa(
             )
                 .into_response()
         }
-        Err(e) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        // The run cannot be built from the configured creditor and the mandates'
+        // data; the sentence names which.
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -3091,16 +3057,19 @@ pub async fn put_vorauszahlung(
     // The BO4E gate — the same four stages every BO4E endpoint in mako runs.
     let typed: Vorauszahlung = match mako_markt::bo4e::decode(body) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(e.to_json())).into_response(),
+        Err(e) => {
+            return ApiError::unprocessable_with(
+                e.to_string(),
+                serde_json::Value::Object(e.detail()),
+            )
+            .into_response();
+        }
     };
     let canonical = match serde_json::to_value(&typed) {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(error = %e, "validated Vorauszahlung is not serialisable");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "could not serialise Vorauszahlung" })),
-            )
+            return ApiError::internal(anyhow::anyhow!("could not serialise Vorauszahlung"))
                 .into_response();
         }
     };
@@ -3132,7 +3101,7 @@ pub async fn put_vorauszahlung(
     .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -3141,7 +3110,7 @@ pub async fn put_vorauszahlung(
 /// Retrieve the stored BO4E `Vorauszahlung` for an account.
 ///
 /// Falls back to synthesising a `Vorauszahlung` from `abschlag_ct` when no
-/// typed record has been stored yet (backward-compatible bootstrapping).
+/// typed record has been stored ([`vorauszahlung_view`]).
 pub async fn get_vorauszahlung(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -3153,59 +3122,66 @@ pub async fn get_vorauszahlung(
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-    use rust_decimal::Decimal;
-
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
 
     match fetch_vorauszahlung(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "account not found" })),
-        )
-            .into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
         Ok(Some((vzahlung, abschlag_ct))) => {
-            let body = if !vzahlung.is_null() {
-                // Stored typed Vorauszahlung.
-                serde_json::json!({
-                    "malo_id": malo_id,
-                    "vorauszahlung": vzahlung,
-                    "abschlag_ct": abschlag_ct,
-                    "source": "stored",
-                })
-            } else {
-                // Synthesise from abschlag_ct — bootstrapping fallback.
-                //
-                // Built typed rather than as a JSON literal: this is a BO4E COM
-                // served to a caller, so `_typ` is stamped by rubo4e on the
-                // `Vorauszahlung` and the nested `Betrag`, and `waehrung` goes
-                // through `Waehrungscode` rather than a bare string.
-                use rubo4e::current::{Betrag, Vorauszahlung, Waehrungscode};
-                let eur = Decimal::from(abschlag_ct) / Decimal::from(100);
-                let vorauszahlung = Vorauszahlung {
-                    betrag: Some(Betrag {
-                        wert: Some(eur),
-                        waehrung: Some(Waehrungscode::Eur),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                };
-                let vorauszahlung = match mako_markt::bo4e::to_canonical_json(&vorauszahlung) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-                    }
-                };
-                serde_json::json!({
-                    "malo_id": malo_id,
-                    "vorauszahlung": vorauszahlung,
-                    "abschlag_ct": abschlag_ct,
-                    "source": "derived_from_abschlag_ct",
-                })
-            };
-            Json(body).into_response()
+            match vorauszahlung_view(&malo_id, vzahlung, abschlag_ct) {
+                Ok(body) => Json(body).into_response(),
+                Err(e) => ApiError::internal(anyhow::anyhow!(e)).into_response(),
+            }
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
+}
+
+/// The body `GET /api/v1/accounts/{malo_id}/vorauszahlung` and the MCP tool
+/// `get_vorauszahlung` both serve, from what [`fetch_vorauszahlung`] read.
+///
+/// A stored typed `Vorauszahlung` is served as stored (`source: "stored"`);
+/// with none stored, one is synthesised from `abschlag_ct`
+/// (`source: "derived_from_abschlag_ct"`).
+///
+/// # Errors
+///
+/// The synthesised COM fails the BO4E canonical-JSON gate.
+pub fn vorauszahlung_view(
+    malo_id: &str,
+    vzahlung: serde_json::Value,
+    abschlag_ct: i64,
+) -> Result<serde_json::Value, String> {
+    if !vzahlung.is_null() {
+        return Ok(serde_json::json!({
+            "malo_id": malo_id,
+            "vorauszahlung": vzahlung,
+            "abschlag_ct": abschlag_ct,
+            "source": "stored",
+        }));
+    }
+    // Built typed rather than as a JSON literal: this is a BO4E COM served to
+    // a caller, so `_typ` is stamped by rubo4e on the `Vorauszahlung` and the
+    // nested `Betrag`, and `waehrung` goes through `Waehrungscode` rather than
+    // a bare string.
+    use rubo4e::current::{Betrag, Vorauszahlung, Waehrungscode};
+    use rust_decimal::Decimal;
+    let eur = Decimal::from(abschlag_ct) / Decimal::from(100);
+    let vorauszahlung = Vorauszahlung {
+        betrag: Some(Betrag {
+            wert: Some(eur),
+            waehrung: Some(Waehrungscode::Eur),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let vorauszahlung =
+        mako_markt::bo4e::to_canonical_json(&vorauszahlung).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "malo_id": malo_id,
+        "vorauszahlung": vorauszahlung,
+        "abschlag_ct": abschlag_ct,
+        "source": "derived_from_abschlag_ct",
+    }))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -3271,27 +3247,20 @@ pub async fn post_buchen(
     // Validate entry_type against the allowed set.
     const ALLOWED: &[&str] = crate::ledger::ENTRY_TYPES;
     if !ALLOWED.contains(&req.entry_type.as_str()) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!(
-                "unknown entry_type '{}'; allowed: {}",
-                req.entry_type,
-                ALLOWED.join(", ")
-            ),
-        )
-            .into_response();
+        return ApiError::unprocessable(format!(
+            "unknown entry_type '{}'; allowed: {}",
+            req.entry_type,
+            ALLOWED.join(", ")
+        ))
+        .into_response();
     }
     if req.amount_ct == 0 {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "amount_ct must be non-zero",
-        )
-            .into_response();
+        return ApiError::unprocessable("amount_ct must be non-zero").into_response();
     }
 
     let lf_mp_id = req.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
     if let Err(e) = upsert_account(&pool, &malo_id, &lf_mp_id, &cfg.tenant).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return ApiError::internal(e).into_response();
     }
 
     let today = mako_fristen::heute();
@@ -3347,7 +3316,7 @@ pub async fn post_buchen(
             })),
         )
             .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -3479,25 +3448,13 @@ impl JahresabschlussSums {
 /// The settlement is driven by two callers — an operator's POST and the annual
 /// worker — so it cannot answer in `axum` terms. This is the thin thing that
 /// lets it keep saying *what* went wrong: a missing account is a `404`, an
-/// unbuildable refund a `422`, an unconfigured creditor IBAN a `503`, and the
+/// unbuildable refund a `422`, an unconfigured creditor IBAN a `500`, and the
 /// worker logs each with the same distinction rather than collapsing them into
 /// "settlement failed".
 #[derive(Debug)]
-pub struct SettleError {
-    pub status: StatusCode,
-    pub body: serde_json::Value,
-}
+pub struct SettleError(pub ApiError);
 
 impl SettleError {
-    fn new(status: StatusCode, message: impl Into<String>) -> Self {
-        Self {
-            status,
-            body: serde_json::json!({ "error": message.into() }),
-        }
-    }
-    fn json(status: StatusCode, body: serde_json::Value) -> Self {
-        Self { status, body }
-    }
     /// Whether retrying later could succeed.
     ///
     /// A `5xx` is a database or a bank adapter having a bad moment; a `4xx` is
@@ -3505,21 +3462,19 @@ impl SettleError {
     /// uses the distinction to decide between a warning and an error.
     #[must_use]
     pub fn is_transient(&self) -> bool {
-        self.status.is_server_error()
+        self.0.status().is_server_error()
+    }
+}
+
+impl From<ApiError> for SettleError {
+    fn from(e: ApiError) -> Self {
+        Self(e)
     }
 }
 
 impl std::fmt::Display for SettleError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}: {}",
-            self.status,
-            self.body
-                .get("error")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("settlement refused")
-        )
+        write!(f, "{}: {:#}", self.0.status(), self.0)
     }
 }
 
@@ -3544,7 +3499,7 @@ pub async fn post_jahresabschluss(
     }
     match settle_jahresabschluss(&pool, &ledger, &cfg, &malo_id, &q).await {
         Ok(body) => Json(body).into_response(),
-        Err(e) => (e.status, Json(e.body)).into_response(),
+        Err(e) => e.0.into_response(),
     }
 }
 
@@ -3564,10 +3519,9 @@ pub async fn settle_jahresabschluss(
     // back the first one's amount as „already settled". Refused here, before the
     // dry run, so both paths answer for the same year.
     let billing_year_i16 = i16::try_from(year).map_err(|_| {
-        SettleError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("year {year} is outside the range an Abrechnungsjahr can take"),
-        )
+        SettleError(ApiError::unprocessable(format!(
+            "year {year} is outside the range an Abrechnungsjahr can take"
+        )))
     })?;
     let dry_run = q.dry_run.unwrap_or(false);
 
@@ -3575,16 +3529,10 @@ pub async fn settle_jahresabschluss(
     let acct = match fetch_account(pool, malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => {
-            return Err(SettleError::new(
-                StatusCode::NOT_FOUND,
-                format!("account for {malo_id} not found"),
-            ));
+            return Err(SettleError(ApiError::NotFound));
         }
         Err(e) => {
-            return Err(SettleError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                e.to_string(),
-            ));
+            return Err(SettleError(ApiError::internal(e)));
         }
     };
 
@@ -3593,10 +3541,7 @@ pub async fn settle_jahresabschluss(
     let sums = match ledger.year_kind_sums(lf_mp_id, malo_id, year).await {
         Ok(s) => s,
         Err(e) => {
-            return Err(SettleError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                e.to_string(),
-            ));
+            return Err(SettleError(ApiError::internal(e)));
         }
     };
     let JahresabschlussSums {
@@ -3661,10 +3606,7 @@ pub async fn settle_jahresabschluss(
         }
         Ok(None) => {}
         Err(e) => {
-            return Err(SettleError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                e.to_string(),
-            ));
+            return Err(SettleError(ApiError::internal(e)));
         }
     }
 
@@ -3694,12 +3636,9 @@ pub async fn settle_jahresabschluss(
                 let creditor_iban = match cfg.creditor_iban.as_deref().filter(|s| !s.is_empty()) {
                     Some(i) => i,
                     None => {
-                        return Err(SettleError::json(
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            serde_json::json!({
-                                "error": "Erstattung due but creditor_iban (payer account) not configured"
-                            }),
-                        ));
+                        return Err(SettleError(ApiError::internal(anyhow::anyhow!(
+                            "Erstattung due but creditor_iban (payer account) not configured"
+                        ))));
                     }
                 };
                 let e2e = format!("REFUND-{malo_id}-{year}");
@@ -3710,10 +3649,7 @@ pub async fn settle_jahresabschluss(
                     match crate::sepa::resolve_pain001_schema(cfg.pain001_schema.as_deref()) {
                         Ok(s) => s,
                         Err(e) => {
-                            return Err(SettleError::json(
-                                StatusCode::SERVICE_UNAVAILABLE,
-                                serde_json::json!({ "error": e.to_string() }),
-                            ));
+                            return Err(SettleError(ApiError::internal(e)));
                         }
                     };
                 // A refund leaves today: §40 EnWG gives no grace period for
@@ -3737,10 +3673,9 @@ pub async fn settle_jahresabschluss(
                 ) {
                     Ok(xml) => refund_pain001 = Some(xml),
                     Err(e) => {
-                        return Err(SettleError::json(
-                            StatusCode::UNPROCESSABLE_ENTITY,
-                            serde_json::json!({ "error": format!("refund pain.001 build failed: {e}") }),
-                        ));
+                        return Err(SettleError(ApiError::unprocessable(format!(
+                            "refund pain.001 build failed: {e}"
+                        ))));
                     }
                 }
                 // Clearing debit: zeroes the credit balance the refund pays out.
@@ -3767,10 +3702,7 @@ pub async fn settle_jahresabschluss(
                 {
                     Ok(id) => settlement_entry_id = Some(id),
                     Err(e) => {
-                        return Err(SettleError::new(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            e.to_string(),
-                        ));
+                        return Err(SettleError(ApiError::internal(e)));
                     }
                 }
             }
@@ -3791,10 +3723,7 @@ pub async fn settle_jahresabschluss(
     let mut tx = match pool.begin().await {
         Ok(t) => t,
         Err(e) => {
-            return Err(SettleError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                e.to_string(),
-            ));
+            return Err(SettleError(ApiError::internal(e)));
         }
     };
 
@@ -3817,10 +3746,7 @@ pub async fn settle_jahresabschluss(
     .await
     {
         tracing::error!(malo_id, error = %e, "accountingd: record_jahresabschluss failed");
-        return Err(SettleError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            e.to_string(),
-        ));
+        return Err(SettleError(ApiError::internal(e)));
     }
 
     // 4. Update monthly Abschlag (§40 Abs. 1 EnWG: Abschlag must match actual consumption).
@@ -3847,10 +3773,7 @@ pub async fn settle_jahresabschluss(
             error = %e,
             "accountingd: Jahresabschluss Abschlag update failed"
         );
-        return Err(SettleError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            e.to_string(),
-        ));
+        return Err(SettleError(ApiError::internal(e)));
     }
 
     // 5. Enqueue the refund CloudEvent for the ERP/bank (persist-before-dispatch);
@@ -3874,10 +3797,7 @@ pub async fn settle_jahresabschluss(
         .without_subject();
         if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
             tracing::error!(malo_id, error = %e, "accountingd: outbox enqueue (erstattung) failed");
-            return Err(SettleError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                e.to_string(),
-            ));
+            return Err(SettleError(ApiError::internal(e)));
         }
     }
 
@@ -3913,17 +3833,11 @@ pub async fn settle_jahresabschluss(
     .with_id(ce_id.clone());
     if let Err(e) = mako_service::outbox::enqueue(&mut tx, &done).await {
         tracing::error!(malo_id, error = %e, "accountingd: outbox enqueue (jahresabschluss) failed");
-        return Err(SettleError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            e.to_string(),
-        ));
+        return Err(SettleError(ApiError::internal(e)));
     }
 
     if let Err(e) = tx.commit().await {
-        return Err(SettleError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            e.to_string(),
-        ));
+        return Err(SettleError(ApiError::internal(e)));
     }
 
     Ok(serde_json::json!({
@@ -3984,28 +3898,27 @@ pub async fn put_zahlungsinformation(
     // stored as a mandate instruction nobody can act on.
     let typed: Zahlungsinformation = match mako_markt::bo4e::decode(body) {
         Ok(z) => z,
-        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(e.to_json())).into_response(),
+        Err(e) => {
+            return ApiError::unprocessable_with(
+                e.to_string(),
+                serde_json::Value::Object(e.detail()),
+            )
+            .into_response();
+        }
     };
 
     // Validate IBAN when present.
     if let Some(ref iban) = typed.iban
         && let Err(msg) = validate_iban(iban)
     {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({ "error": format!("invalid IBAN: {msg}") })),
-        )
-            .into_response();
+        return ApiError::unprocessable(format!("invalid IBAN: {msg}")).into_response();
     }
 
     let canonical = match serde_json::to_value(&typed) {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(error = %e, "validated Zahlungsinformation is not serialisable");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "could not serialise Zahlungsinformation" })),
-            )
+            return ApiError::internal(anyhow::anyhow!("could not serialise Zahlungsinformation"))
                 .into_response();
         }
     };
@@ -4013,7 +3926,7 @@ pub async fn put_zahlungsinformation(
     // Ensure account row exists.
     let account_id = match upsert_account(&pool, &malo_id, &lf_mp_id, &cfg.tenant).await {
         Ok(id) => id,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     // Store typed Zahlungsinformation JSON + sync iban column for payment matching.
@@ -4043,7 +3956,7 @@ pub async fn put_zahlungsinformation(
             })),
         )
             .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -4077,7 +3990,7 @@ pub async fn get_zahlungsinformation(
 
     match row {
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
         Ok(Some(row)) => {
             let typed_json: Option<serde_json::Value> =
                 row.try_get("zahlungsinformation").ok().flatten();
@@ -4174,7 +4087,7 @@ pub async fn get_open_items(
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     match crate::pg::list_open_items(&ledger, lf_mp_id, &malo_id).await {
         Ok(items) => Json(serde_json::json!({
@@ -4185,7 +4098,7 @@ pub async fn get_open_items(
             "open_items": items,
         }))
         .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -4244,20 +4157,17 @@ pub async fn post_anonymize(
         return ApiError::forbidden(e.to_string()).into_response();
     }
     if req.requested_by.is_empty() || req.legal_basis.is_empty() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "requested_by and legal_basis are required for GDPR audit trail"
-            })),
+        return ApiError::unprocessable(
+            "requested_by and legal_basis are required for GDPR audit trail",
         )
-            .into_response();
+        .into_response();
     }
 
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     match crate::pg::anonymize_account(
@@ -4270,12 +4180,10 @@ pub async fn post_anonymize(
     .await
     {
         Ok(result) => (StatusCode::OK, Json(result)).into_response(),
-        Err(e) if e.to_string().contains("already anonymized") => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": "account already anonymized" })),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) if e.to_string().contains("already anonymized") => {
+            ApiError::conflict("account already anonymized").into_response()
+        }
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -4331,7 +4239,7 @@ pub async fn post_reconcile(
         .await
     {
         Ok(result) => Json(result).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -4393,15 +4301,11 @@ pub async fn post_seal_period(
         time::Date::parse(&req.start, &Iso8601::DEFAULT),
         time::Date::parse(&req.end, &Iso8601::DEFAULT),
     ) else {
-        return (StatusCode::BAD_REQUEST, "invalid start/end date (ISO 8601)").into_response();
+        return ApiError::bad_request("invalid start/end date (ISO 8601)").into_response();
     };
     match ledger.seal_period(&period_id, start, end).await {
         Ok(seal) => (StatusCode::CREATED, Json(seal_json(&seal))).into_response(),
-        Err(e) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -4417,7 +4321,7 @@ pub async fn get_seals(
     }
     let seals = match ledger.seals().await {
         Ok(s) => s,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     let verified = ledger.verify_seals().await;
     Json(serde_json::json!({
@@ -4446,7 +4350,7 @@ pub async fn get_entry_proof(
         return ApiError::forbidden(e.to_string()).into_response();
     }
     let Ok(uuid) = Uuid::parse_str(&entry_id) else {
-        return (StatusCode::BAD_REQUEST, "invalid entry_id").into_response();
+        return ApiError::bad_request("invalid entry_id").into_response();
     };
     match ledger
         .prove_entry(doubleentry::EntryId::from_uuid(uuid))
@@ -4468,7 +4372,12 @@ pub async fn get_entry_proof(
             }))
             .into_response()
         }
-        Err(e) => (StatusCode::NOT_FOUND, e.to_string()).into_response(),
+        // The ledger reports a missing entry and a failed proof through the
+        // same error, so both answer as the entry this caller cannot see.
+        Err(e) => {
+            tracing::warn!(error = %e, %entry_id, "accountingd: inclusion proof failed");
+            ApiError::NotFound.into_response()
+        }
     }
 }
 
@@ -4504,12 +4413,11 @@ pub async fn get_period_balance_proof(
         .await
     {
         Ok(o) => o,
+        // The ledger reports an unknown period and a failed proof through the
+        // same error, so both answer as the period this caller cannot see.
         Err(e) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
+            tracing::warn!(error = %e, %period_id, "accountingd: sealed-balance proof failed");
+            return ApiError::NotFound.into_response();
         }
     };
 
@@ -4555,13 +4463,10 @@ pub async fn get_period_balance_proof(
     // Verified here before it is published: handing out a proof that does not
     // check is worse than returning nothing, because it looks like evidence.
     if !proof.verify() {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": "constructed balance proof does not verify against its seal"
-            })),
-        )
-            .into_response();
+        return ApiError::internal(anyhow::anyhow!(
+            "constructed balance proof does not verify against its seal"
+        ))
+        .into_response();
     }
 
     let balance = &proof.balance.balance;
@@ -4626,11 +4531,7 @@ pub async fn get_consistency_proof(
         // examined nothing is indistinguishable from a real verification. The
         // ledger refuses to build one; an auditor gets the refusal, not
         // reassurance.
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => ApiError::bad_request(e.to_string()).into_response(),
     }
 }
 
@@ -4659,7 +4560,7 @@ pub async fn get_trial_balance(
             }))
             .into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -4694,7 +4595,7 @@ pub async fn post_clear(
             "message": "nothing left to match",
         }))
         .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -4711,7 +4612,7 @@ pub async fn post_reset_clearing(
         return ApiError::forbidden(e.to_string()).into_response();
     }
     let Ok(uuid) = Uuid::parse_str(&clearing_id) else {
-        return (StatusCode::BAD_REQUEST, "invalid clearing_id").into_response();
+        return ApiError::bad_request("invalid clearing_id").into_response();
     };
     let today = mako_fristen::heute();
     match ledger
@@ -4719,7 +4620,7 @@ pub async fn post_reset_clearing(
         .await
     {
         Ok(()) => Json(serde_json::json!({ "reset": true })).into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -4810,7 +4711,7 @@ pub async fn get_eeg_payouts(
                 .collect();
             Json(serde_json::json!({ "payouts": result, "count": result.len() })).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -4834,8 +4735,8 @@ pub async fn get_eeg_payout(
             .await
         {
             Ok(Some(r)) => r,
-            Ok(None) => return (StatusCode::NOT_FOUND, "payout not found").into_response(),
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Ok(None) => return ApiError::NotFound.into_response(),
+            Err(e) => return ApiError::internal(e).into_response(),
         };
 
     let submitted_at: Option<time::OffsetDateTime> = row.try_get("submitted_at").unwrap_or(None);
@@ -4904,12 +4805,7 @@ pub async fn post_run_eeg_payouts(
     let debtor_iban = match cfg.eeg.debtor_iban.as_deref() {
         Some(iban) => iban.to_owned(),
         None => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": "EEG payout requires [eeg].debtor_iban in config"
-                })),
-            )
+            return ApiError::unprocessable("EEG payout requires [eeg].debtor_iban in config")
                 .into_response();
         }
     };
@@ -4927,7 +4823,7 @@ pub async fn post_run_eeg_payouts(
         .await
     {
         Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let mut generated = 0usize;
@@ -4951,7 +4847,7 @@ pub async fn post_run_eeg_payouts(
                 errors += 1;
                 continue;
             }
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Err(e) => return ApiError::internal(e).into_response(),
         };
         let account_id = account.account_id;
         let zahlungsinformation: Option<serde_json::Value> =
@@ -5140,11 +5036,7 @@ pub async fn put_eeg_payout_status(
         return ApiError::forbidden(e.to_string()).into_response();
     }
     if !["ACCP", "RJCT", "CANC"].contains(&req.status.as_str()) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({ "error": "status must be ACCP, RJCT, or CANC" })),
-        )
-            .into_response();
+        return ApiError::unprocessable("status must be ACCP, RJCT, or CANC").into_response();
     }
 
     let settled_at: Option<time::OffsetDateTime> = if req.status == "ACCP" {
@@ -5158,7 +5050,7 @@ pub async fn put_eeg_payout_status(
     // (persist-before-dispatch), then delivered by the outbox worker.
     let mut tx = match pool.begin().await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let updated = match sqlx::query(
@@ -5178,8 +5070,8 @@ pub async fn put_eeg_payout_status(
     .await
     {
         Ok(Some(r)) => r,
-        Ok(None) => return (StatusCode::NOT_FOUND, "payout not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => return ApiError::NotFound.into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     use sqlx::Row;
@@ -5206,12 +5098,12 @@ pub async fn put_eeg_payout_status(
         );
         if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
             tracing::error!(malo_id, error = %e, "accountingd: outbox enqueue (eeg_payout_rejected) failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            return ApiError::internal(e).into_response();
         }
     }
 
     if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return ApiError::internal(e).into_response();
     }
 
     StatusCode::NO_CONTENT.into_response()
@@ -5248,8 +5140,10 @@ pub async fn put_eeg_payout_status(
 /// acceptance: `RCVC` says a payee name matched, which is not a statement about
 /// whether the payment was taken. The outcome is stored in `vop_outcome` and
 /// leaves `pain002_status` alone; anything other than a match emits
-/// `de.accounting.payee.verification-mismatch`, because executing after a
-/// no-match shifts liability to the payer and that is an operator's decision.
+/// `de.accounting.payee.verification-mismatch`, because whether to execute
+/// after anything but a match is an operator's decision. The codes are the
+/// Deutsche Kreditwirtschaft's pain.002 conventions (DFÜ-Abkommen Anlage 3
+/// V3.9 Kap. 2.2.6); they report the check, not who is liable for executing.
 pub async fn import_pain002(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -5263,17 +5157,14 @@ pub async fn import_pain002(
     let doc = match crate::sepa::parse_pain002(&body) {
         Ok(d) => d,
         Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": format!("pain.002 parse failed: {e}") })),
-            )
-                .into_response();
+            return ApiError::unprocessable(format!("pain.002 parse failed: {e}")).into_response();
         }
     };
 
     let mut payouts_updated = 0usize;
     let mut collections_updated = 0usize;
     let mut unmatched = 0usize;
+    let mut unrecognised = 0usize;
     let mut verifications = 0usize;
     let mut total = 0usize;
 
@@ -5297,6 +5188,20 @@ pub async fn import_pain002(
                 unmatched += 1;
                 continue;
             };
+            // Status codes are matched by their exact ISO spelling, so `rjct`
+            // or a bank-proprietary code is neither an acceptance nor a
+            // rejection. Nothing is applied for it: `pain002_status` holds only
+            // the ISO codes, and guessing which outcome was meant would either
+            // settle a payout or reopen a collection on a code nobody defined.
+            if let crate::sepa::PaymentStatus::Other(code) = status {
+                tracing::warn!(
+                    reference,
+                    status = %code,
+                    "accountingd: pain.002 carries a status code outside ISO 20022 — not applied"
+                );
+                unrecognised += 1;
+                continue;
+            }
             let reason = tx.reason_codes.first().map(|r| r.as_code().to_owned());
             // `StsRsnInf/AddtlInf` is unbounded and banks use it: a legal notice
             // spans lines, and a VoP close-match name over 105 characters
@@ -5398,23 +5303,7 @@ pub async fn import_pain002(
     // `NbOfTxsPerSts` states counts per outcome for a whole file and itemises
     // only the transactions needing attention — a VoP report on hundreds of
     // payments may carry nothing else. Surface it rather than discard it.
-    let status_counts: Vec<serde_json::Value> = doc
-        .group_status_counts
-        .iter()
-        .chain(
-            doc.payment_info_statuses
-                .iter()
-                .flat_map(|p| &p.status_counts),
-        )
-        .map(|c| {
-            serde_json::json!({
-                "status":    c.status.as_code(),
-                "count":     c.count,
-                "total_ct":  c.total_ct,
-                "is_verification": c.status.is_verification(),
-            })
-        })
-        .collect();
+    let status_counts = pain002_status_counts_json(&doc);
 
     Json(serde_json::json!({
         "msg_id":              doc.msg_id,
@@ -5429,6 +5318,7 @@ pub async fn import_pain002(
         "bulk_rejected":       bulk_rejected,
         "verifications":       verifications,
         "unmatched":           unmatched,
+        "unrecognised":        unrecognised,
         "total":               total,
     }))
     .into_response()
@@ -5519,8 +5409,8 @@ async fn apply_pain002_status(
             );
             mako_service::outbox::enqueue(&mut tx, &ce).await?;
         }
-        // Anything but a clean match is an operator decision: after `RVNM`,
-        // executing the transfer moves liability to the payer.
+        // Anything but a clean match is an operator decision: whether to
+        // execute the transfer after `RVMC`, `RVNM` or `RVNA` is not ours.
         if verification.is_some_and(|v| v != VerificationOutcome::Match) {
             let ce = mako_service::CloudEvent::new(
                 mako_service::source("accountingd", &cfg.tenant),
@@ -5667,31 +5557,21 @@ pub async fn post_sepa_reversal(
     {
         Ok(Some(e)) => e,
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "collection entry not found" })),
-            )
-                .into_response();
+            return ApiError::NotFound.into_response();
         }
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     // Only a *settled* collection can be reversed. A rejected one never moved
     // money, and an already-returned or already-reversed one would refund twice.
     if entry.status != "SETTLED" {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": format!(
-                    "collection is {} — only a SETTLED collection can be reversed \
+        return ApiError::conflict(format!(
+            "collection is {} — only a SETTLED collection can be reversed \
                      (a REJECTED one never moved money; a RETURNED or REVERSED one \
                      has already been given back)",
-                    entry.status
-                ),
-                "status": entry.status,
-            })),
-        )
-            .into_response();
+            entry.status
+        ))
+        .into_response();
     }
 
     // The debtor identity lives on the mandate, so an erased mandate correctly
@@ -5699,30 +5579,24 @@ pub async fn post_sepa_reversal(
     let (Some(debtor_iban), Some(signed_at)) =
         (entry.debtor_iban.as_deref(), entry.mandate_signed_at)
     else {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "the mandate behind this collection is gone (revoked and deleted, \
+        return ApiError::conflict(
+            "the mandate behind this collection is gone (revoked and deleted, \
                           or anonymised under GDPR Art. 17) — pain.007 needs its IBAN and \
-                          signature date in OrgnlTxRef"
-            })),
+                          signature date in OrgnlTxRef",
         )
-            .into_response();
+        .into_response();
     };
 
     let (Some(creditor_iban), Some(creditor_id)) = (
         cfg.creditor_iban.as_deref().filter(|s| !s.is_empty()),
         cfg.creditor_id.as_deref().filter(|s| !s.is_empty()),
     ) else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": "creditor_iban and creditor_id (Gläubiger-ID) must both be \
+        return ApiError::internal(anyhow::anyhow!(
+            "creditor_iban and creditor_id (Gläubiger-ID) must both be \
                           configured — a reversal restates the creditor identity the \
                           collection carried"
-            })),
-        )
-            .into_response();
+        ))
+        .into_response();
     };
     let creditor_name = cfg.creditor_name.as_deref().unwrap_or(&cfg.tenant);
     let creditor = crate::sepa::CreditorIdentity {
@@ -5740,26 +5614,17 @@ pub async fn post_sepa_reversal(
         .unwrap_or(crate::sepa::ReversalReason::Ms02);
     let reversed_amount_ct = req.reversed_amount_ct.unwrap_or(entry.amount_ct);
     if reversed_amount_ct <= 0 || reversed_amount_ct > entry.amount_ct {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!(
-                    "reversed_amount_ct must be between 1 and the collected {} ct",
-                    entry.amount_ct
-                )
-            })),
-        )
-            .into_response();
+        return ApiError::unprocessable(format!(
+            "reversed_amount_ct must be between 1 and the collected {} ct",
+            entry.amount_ct
+        ))
+        .into_response();
     }
 
     let dd_schema = match crate::sepa::resolve_pain008_schema(cfg.pain008_schema.as_deref()) {
         Ok(s) => s,
         Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
+            return ApiError::internal(e).into_response();
         }
     };
 
@@ -5783,11 +5648,7 @@ pub async fn post_sepa_reversal(
     let reversal = match crate::sepa::build_pain_007(&creditor, &[reversal_request], dd_schema) {
         Ok(r) => r,
         Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
+            return ApiError::unprocessable(e.to_string()).into_response();
         }
     };
 
@@ -5820,12 +5681,7 @@ pub async fn post_sepa_reversal(
                 Ok(id) => Some(id),
                 Err(e) => {
                     tracing::error!(error = %e, "accountingd: SEPA_STORNO ledger post failed");
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({
-                            "error": format!("reversal ledger post failed: {e}")
-                        })),
-                    )
+                    return ApiError::internal(anyhow::anyhow!("reversal ledger post failed: {e}"))
                         .into_response();
                 }
             }
@@ -5838,7 +5694,7 @@ pub async fn post_sepa_reversal(
     // second request refunding the same collection twice.
     let mut tx = match pool.begin().await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     let reversal_id = match crate::pg::record_sepa_reversal(
         &mut *tx,
@@ -5854,13 +5710,10 @@ pub async fn post_sepa_reversal(
     {
         Ok(id) => id,
         Err(e) => {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": format!("reversal already recorded for this collection: {e}")
-                })),
-            )
-                .into_response();
+            return ApiError::conflict(format!(
+                "reversal already recorded for this collection: {e}"
+            ))
+            .into_response();
         }
     };
     match crate::pg::set_collection_entry_status(
@@ -5872,21 +5725,18 @@ pub async fn post_sepa_reversal(
     .await
     {
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            return ApiError::internal(e).into_response();
         }
         // The collection is already REJECTED, RETURNED or REVERSED — there is
         // nothing left to send back. Dropping `tx` rolls back the reversal row
         // written just above, so we neither record nor announce a pain.007 for
         // a collection that cannot carry one.
         Ok(false) => {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": "collection is not in a reversible state",
-                    "entry_id": entry.entry_id.to_string(),
-                })),
-            )
-                .into_response();
+            return ApiError::conflict(format!(
+                "collection {} is not in a reversible state",
+                entry.entry_id
+            ))
+            .into_response();
         }
         Ok(true) => {}
     }
@@ -5909,11 +5759,11 @@ pub async fn post_sepa_reversal(
             }),
         );
         if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            return ApiError::internal(e).into_response();
         }
     }
     if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return ApiError::internal(e).into_response();
     }
 
     (
@@ -5972,24 +5822,17 @@ pub async fn post_sepa_recall(
 
     let Some(run) = (match crate::pg::fetch_sepa_run(&pool, req.run_id, &cfg.tenant).await {
         Ok(r) => r,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "collection run not found" })),
-        )
-            .into_response();
+        return ApiError::NotFound.into_response();
     };
 
     let Some(bic) = cfg.debtor_agent_bic.as_deref().filter(|s| !s.is_empty()) else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": "debtor_agent_bic must be configured — a camt.055 is addressed to \
+        return ApiError::internal(anyhow::anyhow!(
+            "debtor_agent_bic must be configured — a camt.055 is addressed to \
                           the bank that holds the submission (Assgnmt/Assgne)"
-            })),
-        )
-            .into_response();
+        ))
+        .into_response();
     };
     let creditor_name = cfg.creditor_name.as_deref().unwrap_or(&cfg.tenant);
 
@@ -6008,17 +5851,13 @@ pub async fn post_sepa_recall(
     let dd_schema = match crate::sepa::resolve_pain008_schema(cfg.pain008_schema.as_deref()) {
         Ok(s) => s,
         Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
+            return ApiError::internal(e).into_response();
         }
     };
 
     let targets = match crate::pg::recallable_entries(&pool, &cfg.tenant, req.run_id).await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     let named = req.end_to_end_ids.as_deref().unwrap_or(&[]);
     let (scope_entries, recalled_ids): (Vec<crate::sepa::RecallEntry<'_>>, Option<Vec<String>>) =
@@ -6028,28 +5867,19 @@ pub async fn post_sepa_recall(
             let mut picked = Vec::with_capacity(named.len());
             for id in named {
                 let Some(t) = targets.iter().find(|t| &t.end_to_end_id == id) else {
-                    return (
-                        StatusCode::UNPROCESSABLE_ENTITY,
-                        Json(serde_json::json!({
-                            "error": format!("`{id}` is not a collection of this run"),
-                        })),
-                    )
-                        .into_response();
+                    return ApiError::unprocessable(format!(
+                        "`{id}` is not a collection of this run"
+                    ))
+                    .into_response();
                 };
                 if t.status != "SUBMITTED" {
-                    return (
-                        StatusCode::CONFLICT,
-                        Json(serde_json::json!({
-                            "error": format!(
-                                "`{id}` is {} — only a SUBMITTED collection is still in \
+                    return ApiError::conflict(format!(
+                        "`{id}` is {} — only a SUBMITTED collection is still in \
                                  flight; a SETTLED one is reversed with pain.007 and a \
                                  REJECTED one never moved money",
-                                t.status
-                            ),
-                            "status": t.status,
-                        })),
-                    )
-                        .into_response();
+                        t.status
+                    ))
+                    .into_response();
                 }
                 picked.push(crate::sepa::RecallEntry {
                     end_to_end_id: t.end_to_end_id.as_str(),
@@ -6075,17 +5905,13 @@ pub async fn post_sepa_recall(
     ) {
         Ok(r) => r,
         Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
+            return ApiError::unprocessable(e.to_string()).into_response();
         }
     };
 
     let mut tx = match pool.begin().await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     let recall_id = match crate::pg::record_sepa_recall(
         &mut *tx,
@@ -6098,7 +5924,7 @@ pub async fn post_sepa_recall(
     .await
     {
         Ok(id) => id,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     let ce = mako_service::CloudEvent::new(
         mako_service::source("accountingd", &cfg.tenant),
@@ -6117,10 +5943,10 @@ pub async fn post_sepa_recall(
         }),
     );
     if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return ApiError::internal(e).into_response();
     }
     if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return ApiError::internal(e).into_response();
     }
 
     (
@@ -6163,21 +5989,15 @@ pub async fn import_camt029(
     let doc = match crate::sepa::parse_camt029(&body) {
         Ok(d) => d,
         Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": format!("not a readable camt.029: {e}") })),
-            )
+            return ApiError::unprocessable(format!("not a readable camt.029: {e}"))
                 .into_response();
         }
     };
     let Some(case_id) = doc.resolved_case_id.clone() else {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "the camt.029 carries no RslvdCase/Id, so it names no recall"
-            })),
+        return ApiError::unprocessable(
+            "the camt.029 carries no RslvdCase/Id, so it names no recall",
         )
-            .into_response();
+        .into_response();
     };
 
     let status = crate::sepa::recall_status_of(&doc);
@@ -6189,7 +6009,7 @@ pub async fn import_camt029(
 
     let mut tx = match pool.begin().await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     let recall = match crate::pg::resolve_sepa_recall(
         &mut *tx,
@@ -6203,15 +6023,9 @@ pub async fn import_camt029(
     {
         Ok(Some(r)) => r,
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({
-                    "error": format!("no recall of this tenant carries Assgnmt/Id `{case_id}`"),
-                })),
-            )
-                .into_response();
+            return ApiError::NotFound.into_response();
         }
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let mut closed = 0u64;
@@ -6233,7 +6047,7 @@ pub async fn import_camt029(
         .await
         {
             Ok(n) => closed = n,
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Err(e) => return ApiError::internal(e).into_response(),
         }
     }
 
@@ -6251,10 +6065,10 @@ pub async fn import_camt029(
         }),
     );
     if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return ApiError::internal(e).into_response();
     }
     if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return ApiError::internal(e).into_response();
     }
 
     (
@@ -6319,7 +6133,7 @@ pub async fn get_collection_entries(
             })).collect::<Vec<_>>(),
         }))
         .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -6581,7 +6395,7 @@ pub async fn get_aging(
             }))
             .into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -6603,11 +6417,11 @@ pub async fn get_interest_charges(
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     match crate::pg::list_interest_charges(&pool, account.account_id, &cfg.tenant, 200).await {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -6647,19 +6461,19 @@ pub async fn post_interest_charge(
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let period_from = match time::Date::parse(&req.period_from, &Iso8601::DEFAULT) {
         Ok(d) => d,
-        Err(_) => return (StatusCode::BAD_REQUEST, "invalid period_from").into_response(),
+        Err(_) => return ApiError::bad_request("invalid period_from").into_response(),
     };
     let period_to = match time::Date::parse(&req.period_to, &Iso8601::DEFAULT) {
         Ok(d) => d,
-        Err(_) => return (StatusCode::BAD_REQUEST, "invalid period_to").into_response(),
+        Err(_) => return ApiError::bad_request("invalid period_to").into_response(),
     };
     if req.principal_ct <= 0 {
-        return (StatusCode::BAD_REQUEST, "principal_ct must be > 0").into_response();
+        return ApiError::bad_request("principal_ct must be > 0").into_response();
     }
 
     match crate::pg::create_interest_charge(
@@ -6678,7 +6492,7 @@ pub async fn post_interest_charge(
     .await
     {
         Ok(charge) => (StatusCode::CREATED, Json(charge)).into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -6700,11 +6514,11 @@ pub async fn get_payment_plans(
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     match crate::pg::list_payment_plans(&pool, account.account_id, &cfg.tenant).await {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -6730,7 +6544,7 @@ pub async fn post_payment_plan(
             Json(serde_json::json!({ "plan_id": id })),
         )
             .into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => refusal(e).into_response(),
     }
 }
 
@@ -6752,7 +6566,7 @@ pub async fn get_payment_plan(
         }))
         .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -6769,6 +6583,46 @@ pub async fn delete_payment_plan(
     }
     match crate::pg::cancel_payment_plan(&pool, plan_id, &cfg.tenant, Some(claims.sub())).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => refusal(e).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod error_mapping_tests {
+    use super::{SettleError, refusal};
+    use axum::{http::StatusCode, response::IntoResponse as _};
+    use mako_service::ApiError;
+
+    /// A database failure under a write is a `500` with an `error_id`, never a
+    /// `422` carrying the driver's text.
+    #[tokio::test]
+    async fn a_database_failure_under_a_write_is_a_500_without_its_text() {
+        let e = anyhow::Error::new(sqlx::Error::PoolTimedOut).context("update account");
+        let res = refusal(e).into_response();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(res.into_body(), 1 << 16)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(body["error_id"].is_string(), "{body}");
+        assert!(!body.to_string().contains("pool"), "{body}");
+    }
+
+    /// A refusal of the input keeps its sentence.
+    #[test]
+    fn a_refused_input_is_a_422_with_its_sentence() {
+        let e = refusal(anyhow::anyhow!("abschlag_ct must not be negative"));
+        assert_eq!(e.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(e.to_string().contains("abschlag_ct"));
+    }
+
+    /// The annual worker retries a server-side failure and only that.
+    #[test]
+    fn only_a_server_side_settlement_failure_is_transient() {
+        assert!(SettleError(ApiError::internal(anyhow::anyhow!("db"))).is_transient());
+        assert!(!SettleError(ApiError::NotFound).is_transient());
+        assert!(!SettleError(ApiError::unprocessable("no IBAN")).is_transient());
     }
 }

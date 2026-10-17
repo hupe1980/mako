@@ -14,6 +14,9 @@ format = "json"
 [storage]
 allow_volatile = true   # in-memory only — data is lost on restart
 
+[deployment]
+rollen = ["nb-strom"]
+
 [[party]]
 mp_id   = "9900357000004"
 roles   = ["NB"]
@@ -29,3 +32,13 @@ addr = "0.0.0.0:8080"
 # `webhook_secret` is deliberately absent: an empty value here would win over
 # MAKOD_ERP_WEBHOOK_SECRET and sign every delivery with an empty key.
 webhook_url = "http://marktd:8180/api/v1/events"
+
+[marktd]
+# The MaLo-Ident cache follows marktd's durable fan-out: makod subscribes to
+# de.markt.malo.updated at webhook_url, reads each changed record back, and
+# backfills marktd's MaLo list before /health/ready answers 200. marktd runs
+# without OIDC in this demo, so any api_key is accepted. No webhook_secret:
+# deliveries arrive unsigned, as processd's do here.
+url         = "http://marktd:8180"
+api_key     = "demo-makod-key"
+webhook_url = "http://makod:8080/webhooks/marktd"

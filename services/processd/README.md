@@ -6,6 +6,15 @@ the Marktrolle that owes the answer — automatically where a published
 Entscheidungsbaum decides, through an operator approval queue (bounded by the
 business Frist) where it does not. Answers go to `makod` as commands.
 
+Two modules ride the same delivery. The **process read model** (`src/obs/`)
+projects every `de.mako.*` lifecycle event into `process_projections` — per-PID
+KPIs, the overdue list against each process's Antwortfrist, the § 7a Abs. 5 EnWG
+Gleichbehandlung evidence — in every role build, and is rebuildable from
+`marktd`'s replay log. In an NB build the **Sperrauftrag queue** (`src/sperr/`)
+turns an inbound ORDERS 17115 / 17117 into a field work order and reports its
+outcome as IFTSTA 21039. `POST /webhook` verifies once and hands each event to
+the read model first, then to the queue, then to the decision modules.
+
 ## Run it
 
 ```bash
@@ -16,7 +25,8 @@ cargo run -p processd --no-default-features --features nb-only # one role only
 Role features select which decision paths are registered, so a binary cannot
 answer as a role it was not built for (`tests/it/role_separation.rs`):
 `role-{lf,nb}-{strom,gas}`, `role-msb`, and the composites `lf-only`,
-`nb-only`, `msb-only`, `integrated`. The default build registers none.
+`nb-only`, `msb-only`, `integrated`. The default build is `integrated`,
+which registers every role's paths.
 
 ## What answers what
 
@@ -67,6 +77,16 @@ a genuine absence of that data escalates to an operator.
 | `GET` | `/api/v1/eog` | `read-eog` | EoG case log (`?status=`) |
 | `GET` | `/api/v1/neuanlage` | `read-neuanlage` | `E_0608` case log (`?status=`), with each case's `letzter_pruefungstag` |
 | `PUT` | `/api/v1/neuanlage/{id}/identifikation` | `identify-neuanlage` | Record the MaLo-ID the NB matched from address/device data |
+| `GET` | `/obs/processes` · `/obs/processes/{id}` | `read-process` | Process projections |
+| `GET` | `/obs/kpis` | `read-kpi` | Per-PID KPIs for a `YYYY-MM` month |
+| `GET` | `/obs/overdue` | `read-overdue` | Past their business Antwortfrist |
+| `GET` | `/api/v1/audit/gleichbehandlung` | `read-kpi` | § 7a Abs. 5 EnWG evidence (`?year=&format=csv`) |
+| `POST` | `/api/v1/obs/rebuild` | `rebuild-projection` | Replay `marktd`'s `GET /admin/events` into the projection (`ADMIN`) |
+| `GET` | `/obs/metrics` | — | Read-model gauges; restrict at the ingress |
+| `GET` · `POST` | `/api/v1/sperr-orders` | `read-sperr-order` · `create-sperr-order` | The Sperrauftrag queue (NB build) |
+| `GET` | `/api/v1/sperr-orders/{id}` · `/stats` | `read-sperr-order` | One order; counters incl. outstanding IFTSTA |
+| `PUT` | `/api/v1/sperr-orders/{id}/execute` · `/fail` | `execute-sperr-order` | Field outcome → IFTSTA 21039 `Z14` / `Z13` |
+| `PUT` | `/api/v1/sperr-orders/{id}/cancel` | `cancel-sperr-order` | Withdraw a pending order |
 | `GET` | `/health/live` · `/health/ready` · `/metrics` | — | Mounted by `mako_service::run` |
 | `GET\|POST` | `/mcp` | `use-mcp` | MCP Streamable HTTP |
 
@@ -83,8 +103,14 @@ command.
   `[subscription]` (self-registers with `marktd` at startup), `[oidc]`.
 - **Automation per role:** `[nb]` (`auto_accept`, `einsd_url`), `[lf]`
   (`auto_respond`, `[[lf.bilanzkreise]]`), `[msb]`, `[esa]`, `[eog]`.
+- **Read model:** `[identity] own_mp_ids` (§ 7a Abs. 5 affiliate detection),
+  `[obs]` (`outbound_url` / `outbound_secret` for the `de.obs.*` producers, the
+  sweep intervals, the operator's `parity_threshold_pp`).
+- **Sperrauftrag queue:** `[sperr]` (`erp_webhook_url` / `erp_hmac_secret` for
+  the `de.sperr.*` notices).
 
-DB suite: `just test-processd-db`.
+DB suites: `just test-processd-db` — the approval queue, the read model's
+sweeps, its rebuild and the webhook fan-out, and the Sperrauftrag queue.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/processd/)
 covers the NB and LF decision pipelines, the Entscheidungsbäume, metrics and the

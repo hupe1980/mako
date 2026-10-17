@@ -90,7 +90,7 @@ pub struct NutzungsplanInput {
 /// Request body for `POST /api/v1/billing/{malo_id}/tarifwechsel`.
 ///
 /// Calculates a combined invoice when a price change occurs within the billing
-/// period. Uses `billing::merge_period_documents` semantics via `Invoice::merge()`.
+/// period, merged with `Invoice::merge()`.
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TarifwechselRequest {
@@ -132,9 +132,8 @@ pub struct TarifwechselRequest {
 /// - **Sub-period A**: `period_from` → `switch_date - 1` at `old_tariff`
 /// - **Sub-period B**: `switch_date` → `period_to` at `new_tariff`
 ///
-/// The two invoices are merged via [`Invoice::merge()`] using the same logic
-/// as `billing::merge_period_documents`: positions are concatenated, totals
-/// re-summed. Tax is applied **independently** per sub-period (correct for
+/// The two invoices are merged via [`Invoice::merge()`]: positions are
+/// concatenated, totals re-summed. Tax is applied **independently** per sub-period (correct for
 /// mid-month rate changes per §41 EnWG).
 ///
 /// ## Legal basis

@@ -105,6 +105,17 @@ All paths are prefixed `/api/v1/portal/{malo_id}`.
 
 `/health/live`, `/health/ready` and `/metrics` come from the service runner.
 
+### Failures
+
+Every failure is the service runtime's problem body. An upstream that fails —
+unreachable (`503`), too slow (`504`), a `5xx` or an unreadable body (`502`), or
+not configured in this deployment (`503`) — is answered with that upstream's
+name and an `error_id` the log line carries; its own error text stays in the
+log. A `4xx` refusal from `vertragd` or `accountingd` on a write is relayed
+with its status and body, because it names the rule the customer ran into (a
+notice period, a contract state, an IBAN check). A record, document or
+contract that does not exist, or belongs to another Marktlokation, is `404`.
+
 ### Invoices and documents are two different lists
 
 `/invoices` is what `billingd` **calculated**, drafts held by the risk gate
@@ -157,9 +168,9 @@ The caller supplies neither `sequence_type` (`FRST` before `RCUR` is
 35 characters, the SEPA `MndtId` limit, so a same-day IBAN correction gets a new
 mandate).
 
-`debtor_address` is optional until **15 November 2026**, when version 1.1 of the
-2025 SEPA rulebooks ends the unstructured address and the schemes begin
-requiring `town` + `country` on every collection.
+`debtor_address` is optional: EPC153-22 v2.2 (30 September 2026) permits a
+collection without a structured address and sets no end date for that, and
+`accountingd` refuses only a half-filled one.
 
 ---
 
@@ -167,7 +178,6 @@ requiring `town` + `country` on every collection.
 
 ```toml
 # portald.toml
-port   = 9480
 tenant = "9900357000004"
 
 # Required — the authorization authority for every route.
@@ -196,11 +206,8 @@ outputd_url     = "http://outputd:9880"
 # Local development only: serve portal routes without resolving ownership.
 # allow_insecure_no_auth = true
 
-# Required, like `vertragd_url`: the MCP tools take a `malo_id` and carry no
-# customer token, so `/mcp` is a second door the ownership check never reaches.
-# portald refuses to start without a key unless `allow_insecure_no_auth` is set.
-[mcp]
-api_key = "env:PORTALD_MCP_API_KEY"
+[http]
+addr = "0.0.0.0:9480"
 ```
 
 There is no `oidc_issuer` / `oidc_audience`: `portald` verifies no tokens.
@@ -225,28 +232,22 @@ portald:
 
 ---
 
-## MCP server
+## No MCP server
 
-`/mcp` (Streamable HTTP), 8 read-only tools:
+`portald` serves no `/mcp`. An MCP tool takes a `malo_id` and carries no
+customer token, so it cannot pass the `vertragd` ownership check every portal
+route makes, and would read every customer in the tenant. Agents read the same
+data from the service that owns it, each behind that service's Cedar policy:
 
-| Tool | Description |
+| Datum | MCP tool |
 |---|---|
-| `get_dashboard` | Aggregated snapshot: supply status, latest invoice, balance |
-| `get_lastgang` | Consumption time-series, optional ISO-8601 range |
-| `get_invoices` | Billing history, newest first |
-| `get_balance` | Open-items net balance (positive = owed) |
-| `get_kontoauszug` | Full account statement, for dispute investigation |
-| `get_vorauszahlung` | Abschlag amount, cycle, next due date |
-| `get_eeg_status` | EEG/KWKG plants + settlements |
-| `get_versorgung` | Supply status and effective date |
+| Invoices | [`billingd`](@/docs/services/billingd.md) `list_billing_records`, `get_billing_record` |
+| Balance, account statement, Abschlag | [`accountingd`](@/docs/services/accountingd.md) `get_balance`, `list_ledger`, `get_vorauszahlung` |
+| Lastgang | [`edmd`](@/docs/services/edmd.md) `get_timeseries` |
+| EEG/KWKG plants | [`einsd`](@/docs/services/einsd.md) `list_plants`, `get_plant` |
+| Supply status | [`marktd`](@/docs/services/marktd.md) `get_versorgungsstatus` |
 
-Prompts: `customer-overview`, `billing-dispute`, `eeg-foerderung-check`.
-
-**This surface is operator-facing.** Its tools take a `malo_id` and carry no
-customer token, so they bypass the ownership gate: whoever can call `/mcp` reads
-every customer in the tenant. `portald` therefore refuses to start without
-`[mcp] api_key` (unless `allow_insecure_no_auth`). Keep the credential off the
-public ingress.
+`agentd`'s `portald-agent` is granted these reads, all non-mutating.
 
 ---
 
@@ -254,7 +255,7 @@ public ingress.
 
 An **LF-role** service. It reads `marktd` only for VersorgungsStatus — the LF's
 own supply records — never NB grid topology or NB billing data. The unbundled NB
-services (`netzbilanzd`, `sperrd`) are not reachable through it.
+services (`netzbilanzd`, `processd`'s Sperrauftrag queue) are not reachable through it.
 
 ---
 

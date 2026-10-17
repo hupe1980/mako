@@ -5,8 +5,8 @@
 //!
 //! | Mode | Configuration | Used by |
 //! |---|---|---|
-//! | **OIDC + Cedar** | [`from_auth_config_oidc`][crate::mcp_auth::McpAuth::from_auth_config_oidc] with `Some(cedar)` | every MCP service but `portald` — 13 of them |
-//! | **API key only** | [`from_auth_config`][crate::mcp_auth::McpAuth::from_auth_config] | `portald`, which verifies no tokens |
+//! | **OIDC + Cedar** | [`from_auth_config_oidc`][crate::mcp_auth::McpAuth::from_auth_config_oidc] with `Some(cedar)` | every service that serves MCP |
+//! | **API key only** | [`from_auth_config`][crate::mcp_auth::McpAuth::from_auth_config] | no service; tests that need an authenticated caller without an issuer |
 //! | **OIDC only** | `from_auth_config_oidc` with `None` | nothing today; the type still supports it |
 //! | **Dev mode** | `McpAuth::dev()`, no keys | local development only |
 //!
@@ -391,8 +391,9 @@ impl McpAuth {
     /// - `cfg.named_keys` → additional named keys
     /// - both absent → dev mode (allow all; **never use in production**)
     ///
-    /// This is the standard construction for `productd`, `einsd`, `vertragd`,
-    /// `sperrd`, `billingd`, `accountingd`, `portald`.
+    /// No service builds its MCP auth this way — each one serving MCP verifies
+    /// tokens through [`Self::from_auth_config_oidc`]. Tests use it for a caller
+    /// that needs no issuer.
     ///
     /// # Example
     ///
@@ -424,8 +425,7 @@ impl McpAuth {
     /// - `cfg.api_key` → named key `"agentd"` accepted alongside OIDC
     /// - `cfg.named_keys` → additional named keys
     ///
-    /// This is the standard construction for `marktd`, `invoicd`, `processd`,
-    /// `edmd`, `obsd`, `accountingd`, `billingd`, `sperrd` when OIDC is active.
+    /// This is the construction every service serving MCP uses.
     ///
     /// # Example
     ///
@@ -664,8 +664,8 @@ impl McpAuth {
     /// has a valid signature, the right issuer and the right audience. What
     /// makes it foreign is the claim, and something has to read it.
     ///
-    /// Until this check existed, nothing in `McpAuth` did. The MCP surface was
-    /// closed only because all fourteen service policies happen to repeat
+    /// Without this check nothing in `McpAuth` reads it, and the MCP surface
+    /// would be closed only by every service policy repeating
     /// `context.principal_tenant == context.resource_tenant` in every `permit`
     /// — a condition spread across hundreds of rules standing in for one layer,
     /// which is the arrangement `xtask check-expected-tenant` exists to refuse

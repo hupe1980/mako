@@ -7,8 +7,10 @@
 
 allow_insecure_no_auth = true
 
-port   = 9880
 tenant = "9900357000004"
+
+[http]
+addr = "127.0.0.1:9880"
 
 [database]
 url = "postgres://dev:dev@localhost:5432/outputd"

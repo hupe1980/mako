@@ -13,4 +13,11 @@ fn the_dev_config_loads() {
         cfg.party.as_ref().is_some_and(|p| !p.is_empty()),
         "makod refuses to start without a [[party]]"
     );
+    let rollen = cfg
+        .deployment
+        .as_ref()
+        .map(|d| d.rollen.clone())
+        .unwrap_or_default();
+    makod::deployment::validate_rollen(&rollen, cfg.party.as_deref().unwrap_or_default())
+        .unwrap_or_else(|e| panic!("dev/config/makod.toml [deployment] rollen: {e:#}"));
 }

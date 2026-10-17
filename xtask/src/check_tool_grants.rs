@@ -7,10 +7,9 @@
 //! `annotations(read_only_hint = …)`. Two statements of one fact drift, and both
 //! directions of drift are silent:
 //!
-//! * **A read declared mutating** stops for a human on every call. 91 grants
-//!   were in this state — every `einsd` read, every `processd` read and
-//!   `obsd/list_overdue_processes` — so those specialists could not look
-//!   anything up without an approval that no worklist would ever show.
+//! * **A read declared mutating** stops for a human on every call, so the
+//!   specialist cannot look anything up without an approval that no worklist
+//!   would ever show.
 //! * **A mutation declared read-only** is dispatched unattended, which is the
 //!   same mistake with the consequences reversed.
 //! * **A grant naming no tool at all** fails at the first call, inside a run,
@@ -103,8 +102,8 @@ pub fn run(workspace_root: &Path) -> bool {
             let key = format!("{}/{}", grant.server, grant.tool);
             // agentplane's ToolId refuses `-` in a server component (hyphens
             // are reserved so the model-facing wire rendering stays injective),
-            // so a hyphenated service directory like `mabis-syncd` is granted
-            // as `mabis_syncd`. The inventory is keyed by directory name;
+            // so a hyphenated service directory would be granted with an
+            // underscore. The inventory is keyed by directory name;
             // fall back to the hyphen spelling before calling a grant missing.
             let dir_key = format!("{}/{}", grant.server.replace('_', "-"), grant.tool);
             let Some(read_only) = tools.get(&key).or_else(|| tools.get(&dir_key)) else {
@@ -251,13 +250,7 @@ fn mcp_tools(workspace_root: &Path) -> BTreeMap<String, bool> {
     };
     for entry in entries.flatten() {
         let service = entry.file_name().to_string_lossy().into_owned();
-        // Most daemons keep the server at `src/mcp_server.rs`; makod nests it
-        // under `src/api/`.
-        for tail in ["src/mcp_server.rs", "src/api/mcp_server.rs"] {
-            let path = entry.path().join(tail);
-            let Ok(src) = std::fs::read_to_string(&path) else {
-                continue;
-            };
+        for (path, src) in server_sources(&entry.path()) {
             // A `#[tool(…)]` outside the `#[tool_router]` impl is unreachable:
             // `rmcp` builds the router from that block alone, so the tool is
             // absent from `list_tools` and refused by `call_tool` while a
@@ -281,6 +274,64 @@ fn mcp_tools(workspace_root: &Path) -> BTreeMap<String, bool> {
     out
 }
 
+/// The sources that make up one service's MCP server, with their paths.
+///
+/// Most daemons keep the server at `src/mcp_server.rs`; makod nests it under
+/// `src/api/`. A server may also be composed of further routers declared in a
+/// module's `mcp.rs` — `#[tool_router(router = obs_tool_router)]` — and added
+/// to the handler's own (`Self::tool_router() + Self::obs_tool_router()`). Such
+/// a file counts only when the server source calls the router it declares: a
+/// router nobody adds is not served, and certifying its tools would certify a
+/// surface no client can reach.
+fn server_sources(service_dir: &Path) -> Vec<(std::path::PathBuf, String)> {
+    let mut out = Vec::new();
+    for tail in ["src/mcp_server.rs", "src/api/mcp_server.rs"] {
+        let path = service_dir.join(tail);
+        if let Ok(src) = std::fs::read_to_string(&path) {
+            out.push((path, src));
+        }
+    }
+    if out.is_empty() {
+        return out;
+    }
+    let server: String = out.iter().map(|(_, s)| s.as_str()).collect();
+    let Ok(modules) = std::fs::read_dir(service_dir.join("src")) else {
+        return out;
+    };
+    let mut extra: Vec<_> = modules
+        .flatten()
+        .map(|m| m.path().join("mcp.rs"))
+        .filter_map(|p| std::fs::read_to_string(&p).ok().map(|src| (p, src)))
+        .filter(|(_, src)| {
+            declared_routers(src)
+                .iter()
+                .any(|name| server.contains(&format!("Self::{name}()")))
+        })
+        .collect();
+    extra.sort();
+    out.extend(extra);
+    out
+}
+
+/// The router names a module declares with `#[tool_router(router = …)]` or
+/// `#[prompt_router(router = "…")]`.
+fn declared_routers(src: &str) -> Vec<String> {
+    src.lines()
+        .map(str::trim_start)
+        .filter(|l| l.starts_with("#[tool_router(") || l.starts_with("#[prompt_router("))
+        .filter_map(|l| {
+            let rest = &l[l.find("router =")? + "router =".len()..];
+            let name: String = rest
+                .trim_start()
+                .trim_start_matches('"')
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            (!name.is_empty()).then_some(name)
+        })
+        .collect()
+}
+
 /// How many MCP **prompts** each service publishes.
 ///
 /// A context grant is not a tool grant, so `check-tool-grants` would not
@@ -294,12 +345,10 @@ fn prompts_per_service(workspace_root: &Path) -> BTreeMap<String, usize> {
         return out;
     };
     for entry in entries.flatten() {
-        let mut here = 0usize;
-        for tail in ["src/mcp_server.rs", "src/api/mcp_server.rs"] {
-            if let Ok(src) = std::fs::read_to_string(entry.path().join(tail)) {
-                here += src.matches("#[prompt(").count();
-            }
-        }
+        let here: usize = server_sources(&entry.path())
+            .iter()
+            .map(|(_, src)| src.matches("#[prompt(").count())
+            .sum();
         if here > 0 {
             out.insert(entry.file_name().to_string_lossy().into_owned(), here);
         }
@@ -353,15 +402,13 @@ fn per_service_claims(
 
     let (accountingd, billingd, edmd, einsd) =
         (t("accountingd"), t("billingd"), t("edmd"), t("einsd"));
-    let (invoicd, mabis_syncd, makod, marktd) =
-        (t("invoicd"), t("mabis-syncd"), t("makod"), t("marktd"));
-    let (netzbilanzd, obsd, portald, processd) =
-        (t("netzbilanzd"), t("obsd"), t("portald"), t("processd"));
-    let (productd, sperrd, vertragd) = (t("productd"), t("sperrd"), t("vertragd"));
+    let (invoicd, makod, marktd) = (t("invoicd"), t("makod"), t("marktd"));
+    let (netzbilanzd, processd) = (t("netzbilanzd"), t("processd"));
+    let (productd, vertragd) = (t("productd"), t("vertragd"));
     let _ = (marktd, processd); // no doc states these two as a number
 
     let (p_edmd, p_einsd) = (p("edmd"), p("einsd"));
-    let (p_netzbilanzd, p_obsd) = (p("netzbilanzd"), p("obsd"));
+    let p_netzbilanzd = p("netzbilanzd");
     let (p_productd, p_vertragd) = (p("productd"), p("vertragd"));
 
     vec![
@@ -380,19 +427,11 @@ fn per_service_claims(
         ),
         (
             "README.md",
-            format!("Entsperrauftrag execution queue · {sperrd} MCP tools"),
-        ),
-        (
-            "README.md",
             format!("Ablesesteuerung, tiered store · {edmd} MCP tools"),
         ),
         (
             "README.md",
             format!("EPEX and BEHG price series · {productd} MCP tools"),
-        ),
-        (
-            "README.md",
-            format!("§ 41 EnWG self-service writes · {portald} MCP tools"),
         ),
         (
             "README.md",
@@ -422,27 +461,11 @@ fn per_service_claims(
         ),
         (
             "site/content/docs/services/_index.md",
-            format!("{sperrd}-tool MCP serve"),
-        ),
-        (
-            "site/content/docs/services/_index.md",
             format!("{edmd}-tool MCP serve"),
         ),
         (
             "site/content/docs/services/_index.md",
-            format!("{mabis_syncd}-tool read-only"),
-        ),
-        (
-            "site/content/docs/services/_index.md",
             format!("{einsd}-tool MCP serve"),
-        ),
-        (
-            "site/content/docs/services/_index.md",
-            format!("{obsd}-tool MCP serve"),
-        ),
-        (
-            "site/content/docs/services/_index.md",
-            format!("{portald}-tool operator"),
         ),
         // ── Service pages ──
         (
@@ -464,10 +487,6 @@ fn per_service_claims(
         (
             "site/content/docs/services/accountingd.md",
             format!("`accountingd` exposes **{accountingd} tools** at `/mcp`"),
-        ),
-        (
-            "site/content/docs/services/portald.md",
-            format!("`/mcp` (Streamable HTTP), {portald} read-only tools:"),
         ),
         (
             "site/content/docs/services/productd.md",
@@ -497,14 +516,6 @@ fn per_service_claims(
             ),
         ),
         (
-            "services/obsd/README.md",
-            format!("| MCP | {obsd} tools + {p_obsd} prompts at `/mcp`"),
-        ),
-        (
-            "services/portald/README.md",
-            format!("{portald} read-only tools"),
-        ),
-        (
             "services/productd/README.md",
             format!("| **MCP** | {productd} tools + {p_productd} prompts at `/mcp` |"),
         ),
@@ -518,10 +529,6 @@ fn per_service_claims(
         (
             "concepts/EDMD.md",
             format!("exposes **{edmd} tools** and {p_edmd} prompts"),
-        ),
-        (
-            "concepts/OBSD.md",
-            format!("MCP surface ({obsd} tools, {p_obsd} prompts)"),
         ),
     ]
 }
@@ -842,11 +849,11 @@ fn attr_at_line_start(src: &str, attr: &str) -> Option<usize> {
 /// Bounded by the next `#[prompt_router]` / `#[tool_handler]` attribute, which
 /// is how every mako MCP server is laid out.
 fn tool_router_block(src: &str) -> &str {
-    let Some(start) = attr_at_line_start(src, "#[tool_router]") else {
+    let Some(start) = attr_at_line_start(src, "#[tool_router") else {
         return src;
     };
     let rest = &src[start..];
-    let end = ["#[prompt_router]", "#[tool_handler]"]
+    let end = ["#[prompt_router", "#[tool_handler"]
         .iter()
         .filter_map(|m| attr_at_line_start(rest, m))
         .min()
@@ -860,11 +867,11 @@ fn tool_router_block(src: &str) -> &str {
 /// adds it to the router. Returning them lets the caller fail rather than
 /// quietly narrowing what it certifies.
 fn misplaced_tools_in(src: &str) -> Vec<String> {
-    let Some(start) = attr_at_line_start(src, "#[tool_router]") else {
+    let Some(start) = attr_at_line_start(src, "#[tool_router") else {
         return Vec::new();
     };
     let rest = &src[start..];
-    let router_end = ["#[prompt_router]", "#[tool_handler]"]
+    let router_end = ["#[prompt_router", "#[tool_handler"]
         .iter()
         .filter_map(|m| attr_at_line_start(rest, m))
         .min()
@@ -879,6 +886,39 @@ fn misplaced_tools_in(src: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::is_untracked;
+
+    /// A module router is read by the name it declares, in both attribute
+    /// spellings rmcp accepts, so a composed server's tools are counted.
+    #[test]
+    fn a_module_router_is_found_by_its_declared_name() {
+        let src = "#[tool_router(router = obs_tool_router, vis = \"pub(crate)\")]\n\
+                   impl H {}\n\
+                   #[prompt_router(router = \"obs_prompt_router\", vis = \"pub(crate)\")]\n\
+                   impl H {}\n";
+        assert_eq!(
+            super::declared_routers(src),
+            vec!["obs_tool_router".to_owned(), "obs_prompt_router".to_owned()]
+        );
+        assert!(super::declared_routers("#[tool_router]\nimpl H {}\n").is_empty());
+    }
+
+    /// Tools in a module router count, and one outside it is still refused.
+    #[test]
+    fn a_module_routers_tools_are_scoped_to_its_impl() {
+        let src = "#[tool_router(router = obs_tool_router)]\n\
+                   impl H {\n\
+                   #[tool(description = \"x\", annotations(read_only_hint = true))]\n\
+                   async fn get_x(&self) {}\n\
+                   }\n\
+                   #[prompt_router(router = \"p\")]\n\
+                   impl H {\n\
+                   #[tool(description = \"y\", annotations(read_only_hint = true))]\n\
+                   async fn get_y(&self) {}\n\
+                   }\n";
+        let names: Vec<String> = super::tools_in(src).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, vec!["get_x".to_owned()]);
+        assert_eq!(super::misplaced_tools_in(src), vec!["get_y".to_owned()]);
+    }
 
     /// The split that decides whether a missing file fails the build.
     ///

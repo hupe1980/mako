@@ -39,7 +39,7 @@ use tracing::info;
 
 use mako_service::cedar::CedarEnforcer;
 
-use crate::handlers::{Claims, MdmErrorResponse, Tenant};
+use crate::handlers::{Claims, Tenant, mdm_error};
 use crate::pg::PgBilanzierungRepository;
 
 /// Extension alias — concrete type so AFIT dispatches statically.
@@ -106,37 +106,26 @@ pub async fn get_bilanzierung_at(
     Query(q): Query<AtQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-bilanzierung", &tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let at = match q.at.as_deref() {
         Some(s) => match parse_at(s) {
             Ok(dt) => dt,
             Err(reason) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": reason })),
-                )
-                    .into_response();
+                return ApiError::bad_request(reason).into_response();
             }
         },
         None => OffsetDateTime::now_utc(),
     };
     match repo.find_at(&tenant, &malo_id, at).await {
         Ok(Some(rec)) => Json(rec).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "no Bilanzierung effective at this instant",
+        Ok(None) => ApiError::not_found("no Bilanzierung effective at this instant")
+            .with_fields(serde_json::json!({
                 "malo_id": malo_id,
                 "at": at.format(&Rfc3339).unwrap_or_default(),
-            })),
-        )
+            }))
             .into_response(),
-        Err(e) => MdmErrorResponse(e).into_response(),
+        Err(e) => mdm_error(e).into_response(),
     }
 }
 
@@ -149,16 +138,12 @@ pub async fn get_bilanzierung_history(
     Path(malo_id): Path<String>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-bilanzierung", &tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     match repo.history(&tenant, &malo_id).await {
         Ok(rows) => {
             Json(serde_json::json!({ "malo_id": malo_id, "history": rows })).into_response()
         }
-        Err(e) => MdmErrorResponse(e).into_response(),
+        Err(e) => mdm_error(e).into_response(),
     }
 }

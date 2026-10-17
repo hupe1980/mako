@@ -37,16 +37,23 @@ spec:
       ## PROCEDURE
 
       1. Determine notification type from event.
-      2. Call portald `get_dashboard` — a notification for a customer with no portal view
-         reaches nobody, and that is worth saying rather than composing.
+      2. Call marktd `get_versorgungsstatus` — a notification for a MaLo this LF does
+         not supply reaches no customer of its own, and that is worth saying rather
+         than composing. `customer_portal_active` is YES only when marktd reports the
+         MaLo supplied.
       3. Retrieve what the notification will quote, from the service that owns it:
-         - invoice → portald `get_invoices` for the list the customer sees, and billingd
-           `get_billing_record` for the total it must agree with;
-         - Mahnung → portald `get_balance` and accountingd `list_dunning` for the stage;
-         - EEG expiry → portald `get_eeg_status` and einsd `get_plant` for the
-           Förderende.
-         Where the portal view and the owning service disagree, the notification is
-         wrong whichever number it quotes: report the discrepancy instead.
+         - invoice → billingd `list_billing_records` with the `malo_id` for the list
+           the customer sees, and billingd `get_billing_record` for the total the
+           notification quotes;
+         - Mahnung → accountingd `get_balance` for the open amount and accountingd
+           `list_dunning` for the stage;
+         - EEG expiry → einsd `list_plants` with the `malo_id` for the customer's
+           plants and einsd `get_plant` for the Förderende;
+         - contract lifecycle → accountingd `get_vorauszahlung` for the Abschlag the
+           portal shows after the change.
+         Where two of these disagree — a record missing from the list, a balance the
+         dunning stage does not explain — the notification is wrong whichever number
+         it quotes: report the discrepancy instead.
       4. Compose notification summary for customer-facing display.
       5. Flag if notification requires operator approval before sending.
 
@@ -100,6 +107,7 @@ spec:
         - notification_type
         - customer_portal_active
         - notification_safe
+        - summary
       properties:
         notification_type:
           type: string
@@ -119,55 +127,41 @@ spec:
             - YES
             - NEEDS_REVIEW
         summary:
-          type: string
+          type: [string, "null"]
 
   # Knowledge, granted rather than copied.
   #
-  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
-  # their own procedures. A specialist names the one it needs; a hand-typed
+  # mako's MCP servers publish step-by-step prompts for their own
+  # procedures. A specialist names the one it needs; a hand-typed
   # paraphrase in `constraints` would be a second copy with nothing keeping the
   # two in agreement — the server's prompt changes with the code, a paraphrase
-  # changes when somebody remembers.
+  # changes when somebody remembers. einsd's `check-foerderung-expiry` is what
+  # the EEG expiry notification needs: when the event fires, and what moves the
+  # effective end date away from the stored Förderende.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
   # but it does cross a trust and data-egress boundary, which is why it is
   # declared here where a reviewer sees it rather than fetched silently.
   context:
     prompts:
-      - server: portald
-        name: customer-overview
-        max_input_sensitivity: internal
-        output_sensitivity: internal
-      - server: portald
-        name: billing-dispute
+      - server: einsd
+        name: check-foerderung-expiry
         max_input_sensitivity: internal
         output_sensitivity: internal
 
   tools:
-    - ref: tool://portald/get_dashboard
+    - ref: tool://marktd/get_versorgungsstatus
       mutates: false
-      max_sensitivity: confidential
+      max_sensitivity: internal
       description: >-
-        Whether the customer has a portal view at all, and what it currently
-        shows.
+        Whether this LF supplies the MaLo, and so whether there is a customer
+        to notify.
 
-    - ref: tool://portald/get_invoices
+    - ref: tool://billingd/list_billing_records
       mutates: false
-      max_sensitivity: confidential
+      max_sensitivity: internal
       description: >-
         The invoice list the notification would point at.
-
-    - ref: tool://portald/get_balance
-      mutates: false
-      max_sensitivity: confidential
-      description: >-
-        The balance a Mahnung notification must agree with.
-
-    - ref: tool://portald/get_eeg_status
-      mutates: false
-      max_sensitivity: confidential
-      description: >-
-        The plant view behind an EEG Förderung expiry notification.
 
     - ref: tool://billingd/get_billing_record
       mutates: false
@@ -175,14 +169,32 @@ spec:
       description: >-
         The invoice total the notification quotes.
 
-    - ref: tool://einsd/get_plant
+    - ref: tool://accountingd/get_balance
       mutates: false
       max_sensitivity: internal
       description: >-
-        The Förderende the EEG notification quotes.
+        The balance a Mahnung notification must agree with.
 
     - ref: tool://accountingd/list_dunning
       mutates: false
       max_sensitivity: internal
       description: >-
         The Mahnstufe the reminder is about.
+
+    - ref: tool://accountingd/get_vorauszahlung
+      mutates: false
+      max_sensitivity: internal
+      description: >-
+        The Abschlag a contract-change confirmation quotes.
+
+    - ref: tool://einsd/list_plants
+      mutates: false
+      max_sensitivity: internal
+      description: >-
+        The customer's plants behind an EEG Förderung expiry notification.
+
+    - ref: tool://einsd/get_plant
+      mutates: false
+      max_sensitivity: internal
+      description: >-
+        The Förderende the EEG notification quotes.

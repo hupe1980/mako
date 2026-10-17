@@ -5,6 +5,7 @@
 //!   GET  /api/v1/melos/:id
 
 use crate::state::AppState;
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{
@@ -34,11 +35,8 @@ use super::{Claims, IfMatch, IntoMdmResponse as _, etag, malformed_if_match, par
 ///
 /// The BO4E-stated rule this adds for a `Messlokation` is that at most one of
 /// `messadresse`, `geoadresse` and `katasterinformation` may be present.
-fn normalize_messlokation(
-    data: serde_json::Value,
-) -> Result<Messlokation, (axum::http::StatusCode, serde_json::Value)> {
-    mako_markt::bo4e::decode(data)
-        .map_err(|e| (axum::http::StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))
+fn normalize_messlokation(data: serde_json::Value) -> mako_service::ApiResult<Messlokation> {
+    mako_markt::bo4e::decode(data).map_err(|e| super::bo4e_refusal(&e))
 }
 
 /// Deserialise stored JSONB as `Messlokation`. Returns `None` on schema drift.
@@ -187,18 +185,14 @@ pub async fn put_melo(
         Ok(found) => found.is_some(),
         Err(e) => {
             tracing::error!(melo_id = %melo_id, error = %e, "put_melo: existence probe failed");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "could not determine whether the MeLo exists"})),
-            )
-                .into_response();
+            return ApiError::internal(e).into_response();
         }
     };
 
     // L4 hard cut: validate and normalise the incoming BO4E Messlokation payload.
     let melo = match normalize_messlokation(req.data) {
         Ok(v) => v,
-        Err((status, body)) => return (status, Json(body)).into_response(),
+        Err(e) => return e.into_response(),
     };
 
     match state
@@ -230,11 +224,7 @@ pub async fn put_melo(
             });
             if let Err(e) = crate::outbox::enqueue(&pool, &evt).await {
                 tracing::error!(error = %e, "melo: durable enqueue failed");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "event enqueue failed"})),
-                )
-                    .into_response();
+                return ApiError::internal(e).into_response();
             }
 
             let status = if exists {

@@ -35,7 +35,13 @@
 
 use std::sync::{Arc, RwLock};
 
-use axum::{Router, extract::State, http::StatusCode, routing::get};
+use axum::{
+    Router,
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::get,
+};
 use mako_engine::store_slatedb::{KvNamespace, SlateDbStore};
 use mako_service::Json;
 use serde::Serialize;
@@ -54,6 +60,28 @@ pub struct HealthState {
     store: SlateDbStore,
     instance_id: Arc<str>,
     worker_watches: Arc<RwLock<Vec<WorkerWatch>>>,
+    gates: Arc<RwLock<Vec<ReadinessGate>>>,
+}
+
+/// A startup step `/health/ready` waits for.
+///
+/// Registered closed with [`HealthState::readiness_gate`]; readiness answers
+/// `503 not_ready:<name>` until the step calls [`ReadinessGate::open`].
+#[derive(Clone)]
+pub struct ReadinessGate {
+    name: &'static str,
+    open: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ReadinessGate {
+    /// Mark the step done.
+    pub fn open(&self) {
+        self.open.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    fn is_open(&self) -> bool {
+        self.open.load(std::sync::atomic::Ordering::Acquire)
+    }
 }
 
 impl HealthState {
@@ -71,7 +99,22 @@ impl HealthState {
             store,
             instance_id: Arc::from(instance_id.as_str()),
             worker_watches: Arc::new(RwLock::new(Vec::new())),
+            gates: Arc::new(RwLock::new(Vec::new())),
         }
+    }
+
+    /// Register a closed [`ReadinessGate`] named `name`.
+    #[must_use]
+    pub fn readiness_gate(&self, name: &'static str) -> ReadinessGate {
+        let gate = ReadinessGate {
+            name,
+            open: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        self.gates
+            .write()
+            .expect("gates RwLock is never poisoned")
+            .push(gate.clone());
+        gate
     }
 
     /// Register a [`WorkerWatch`] for readiness monitoring.
@@ -107,28 +150,36 @@ pub(crate) struct HealthResponse {
 }
 
 impl HealthResponse {
-    fn ok(state: &HealthState) -> (StatusCode, Json<Self>) {
-        (
-            StatusCode::OK,
-            Json(Self {
-                status: "ok",
-                instance_id: String::from(&*state.instance_id),
-                version: env!("CARGO_PKG_VERSION"),
-                reason: None,
-            }),
-        )
+    fn ok(state: &HealthState) -> Self {
+        Self {
+            status: "ok",
+            instance_id: String::from(&*state.instance_id),
+            version: env!("CARGO_PKG_VERSION"),
+            reason: None,
+        }
     }
 
-    fn degraded(state: &HealthState, reason: String) -> (StatusCode, Json<Self>) {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(Self {
-                status: "degraded",
-                instance_id: String::from(&*state.instance_id),
-                version: env!("CARGO_PKG_VERSION"),
-                reason: Some(reason),
-            }),
-        )
+    fn degraded(state: &HealthState, reason: String) -> Self {
+        Self {
+            status: "degraded",
+            instance_id: String::from(&*state.instance_id),
+            version: env!("CARGO_PKG_VERSION"),
+            reason: Some(reason),
+        }
+    }
+}
+
+/// A probe report answers with the status its own verdict decides — `200` for
+/// `ok`, `503` for `degraded` — so a probe that reads only the code and a
+/// person reading the body see the same answer.
+impl IntoResponse for HealthResponse {
+    fn into_response(self) -> Response {
+        let status = if self.reason.is_none() {
+            StatusCode::OK
+        } else {
+            StatusCode::SERVICE_UNAVAILABLE
+        };
+        (status, Json(self)).into_response()
     }
 }
 
@@ -146,15 +197,16 @@ impl HealthResponse {
     tag = "health",
     responses((status = 200, description = "Process is alive", body = HealthResponse))
 )]
-pub(crate) async fn live(State(state): State<HealthState>) -> (StatusCode, Json<HealthResponse>) {
+pub(crate) async fn live(State(state): State<HealthState>) -> HealthResponse {
     HealthResponse::ok(&state)
 }
 
 /// Readiness probe — reports whether this instance can serve traffic.
 ///
-/// Fails when the event store is unreachable or a background worker has stopped
-/// heartbeating, because in either case an accepted message would not be
-/// processed to the point of durability.
+/// Fails while a startup step registered as a [`ReadinessGate`] has not
+/// finished, when the event store is unreachable, or when a background worker
+/// has stopped heartbeating, because in each case an accepted message would not
+/// be processed to the point of durability or answered from current data.
 #[utoipa::path(
     get,
     path = "/health/ready",
@@ -164,8 +216,14 @@ pub(crate) async fn live(State(state): State<HealthState>) -> (StatusCode, Json<
         (status = 503, description = "Store is unavailable or a worker has stalled", body = HealthResponse),
     )
 )]
-pub(crate) async fn ready(State(state): State<HealthState>) -> (StatusCode, Json<HealthResponse>) {
-    // 1. Worker heartbeats first (cheap atomic reads).
+pub(crate) async fn ready(State(state): State<HealthState>) -> HealthResponse {
+    // 1. Startup steps and worker heartbeats first (cheap atomic reads).
+    {
+        let gates = state.gates.read().expect("gates RwLock is never poisoned");
+        if let Some(gate) = gates.iter().find(|g| !g.is_open()) {
+            return HealthResponse::degraded(&state, format!("not_ready:{}", gate.name));
+        }
+    }
     {
         let watches = state
             .worker_watches

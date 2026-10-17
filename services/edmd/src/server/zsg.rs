@@ -162,19 +162,11 @@ pub async fn post_zaehlerstandsgang(
 
     let tenant = state.tenant.clone();
     if let Err(e) = enforcer.check(&claims.principal(), "write-meter-reads", tenant.as_str()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     if req.readings.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "readings must not be empty" })),
-        )
-            .into_response();
+        return ApiError::bad_request("readings must not be empty").into_response();
     }
     // The same ceiling the interval doors carry, for the same reason: one
     // request must not be able to saturate the write path for every other
@@ -182,13 +174,11 @@ pub async fn post_zaehlerstandsgang(
     // readings rather than intervals.
     const MAX_READINGS: usize = 50_000;
     if req.readings.len() > MAX_READINGS {
-        return (
-            StatusCode::PAYLOAD_TOO_LARGE,
-            Json(serde_json::json!({
-                "error": format!("batch too large: {} > {MAX_READINGS}", req.readings.len()),
-            })),
-        )
-            .into_response();
+        return ApiError::payload_too_large(format!(
+            "batch too large: {} > {MAX_READINGS}",
+            req.readings.len()
+        ))
+        .into_response();
     }
 
     let sparte = match req.sparte.as_deref() {
@@ -196,14 +186,11 @@ pub async fn post_zaehlerstandsgang(
         Some(raw) => match crate::domain::parse_sparte(raw) {
             Some(s) => s,
             None => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": format!("unknown sparte `{raw}`"),
-                        "expected": crate::domain::Sparte::CODES,
-                    })),
+                return ApiError::unprocessable_with(
+                    format!("unknown sparte `{raw}`"),
+                    serde_json::json!({ "expected": crate::domain::Sparte::CODES }),
                 )
-                    .into_response();
+                .into_response();
             }
         },
     };
@@ -218,15 +205,12 @@ pub async fn post_zaehlerstandsgang(
         Some(raw) => match IngestionSource::parse_db_str(raw) {
             Some(s) => s,
             None => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": format!("unknown source `{raw}`"),
-                        "expected": IngestionSource::ALL
-                            .iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-                    })),
+                return ApiError::unprocessable_with(
+                    format!("unknown source `{raw}`"),
+                    serde_json::json!({ "expected": IngestionSource::ALL
+                            .iter().map(|s| s.as_str()).collect::<Vec<_>>() }),
                 )
-                    .into_response();
+                .into_response();
             }
         },
     };
@@ -236,15 +220,12 @@ pub async fn post_zaehlerstandsgang(
     // calorific value varies by supply area and month, and a national average
     // would systematically mis-bill an L-Gas network.
     if sparte.requires_conversion() && req.brennwert_kwh_per_m3.is_none() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "brennwert_kwh_per_m3 is required for a gas Zählerstandsgang \
+        return ApiError::unprocessable(
+            "brennwert_kwh_per_m3 is required for a gas Zählerstandsgang \
                           (§ 25 Nr. 4 MessEV) — the register counts m³ and the difference \
                           is stored in kWh_Hs",
-            })),
         )
-            .into_response();
+        .into_response();
     }
 
     let session_id = req.session_id.clone().unwrap_or_else(|| {
@@ -312,17 +293,13 @@ pub async fn post_zaehlerstandsgang(
         });
     }
     if zsg.len() < 2 {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "a Zählerstandsgang needs at least two usable readings — \
+        return ApiError::unprocessable_with(
+            "a Zählerstandsgang needs at least two usable readings — \
                           one reading is a Zählerstand, and the interval energy is \
                           the difference between two of them",
-                "usable": zsg.len(),
-                "rejected": rejected,
-            })),
+            serde_json::json!({ "usable": zsg.len(), "rejected": rejected }),
         )
-            .into_response();
+        .into_response();
     }
 
     // ── Difference ───────────────────────────────────────────────────────────
@@ -401,11 +378,7 @@ pub async fn post_zaehlerstandsgang(
         .collect();
     if let Err(e) = state.repo.store_readings(&readings).await {
         tracing::error!(malo_id, error = %e, "edmd: Zählerstandsgang store failed");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::internal(e).into_response();
     }
 
     // ── The conversion audit (§ 146 Abs. 4 AO) ───────────────────────────────
@@ -465,16 +438,11 @@ pub async fn post_zaehlerstandsgang(
             _ => Some(iv.value()),
         };
         let Some(quantity_kwh) = quantity else {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": format!(
-                        "the difference at {} leaves the decimal range once converted",
-                        iv.from()
-                    ),
-                })),
-            )
-                .into_response();
+            return ApiError::unprocessable(format!(
+                "the difference at {} leaves the decimal range once converted",
+                iv.from()
+            ))
+            .into_response();
         };
         batch.push(MeterRead {
             malo_id: malo_id.clone(),
@@ -513,11 +481,7 @@ pub async fn post_zaehlerstandsgang(
     let stored = validated.len();
     if let Err(e) = state.repo.store_reads(validated).await {
         tracing::error!(malo_id, error = %e, "edmd: derived Lastgang store failed");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::internal(e).into_response();
     }
     if let Some(q) = &hampel {
         q.record(state.repo.pool(), &tenant, &malo_id).await;
@@ -635,11 +599,7 @@ pub(crate) async fn get_zaehlerstandsgang(
         "read-timeseries",
         state.tenant.as_str(),
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
         Ok(w) => w,

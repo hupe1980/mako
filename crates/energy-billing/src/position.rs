@@ -551,8 +551,8 @@ impl BillingPosition {
 /// failure a billing engine must not have; an out-of-range line instead fails
 /// loudly downstream in the EN 16931 total reconciliation.
 pub(crate) fn validated_eur(amount: Decimal) -> Decimal {
-    EuroAmount::checked_from_decimal(amount)
-        .map(EuroAmount::into_decimal)
+    EuroAmount::from_decimal(amount)
+        .map(EuroAmount::to_decimal)
         .unwrap_or_else(|_| amount.round_kfm(5))
 }
 

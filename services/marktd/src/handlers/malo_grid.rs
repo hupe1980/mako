@@ -10,9 +10,10 @@
 //!
 //! ## Access control
 //!
-//! - `GET` — any authenticated caller in the same tenant (ERP, processd, obsd)
+//! - `GET` — any authenticated caller in the same tenant (ERP, processd)
 //! - `PUT` — NB role only (`mako_roles` contains `"NB"`)
 
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{Extension, extract::Path, http::StatusCode, response::IntoResponse};
@@ -27,7 +28,7 @@ use tracing::info;
 
 use mako_service::cedar::CedarEnforcer;
 
-use crate::handlers::{Claims, MdmErrorResponse, Tenant};
+use crate::handlers::{Claims, Tenant, mdm_error};
 use crate::pg::PgMaloGridRepository;
 
 /// Extension alias — concrete type so AFIT dispatches statically.
@@ -88,32 +89,20 @@ pub async fn get_malo_grid(
     Path(malo_id_str): Path<String>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-malo-grid", &tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let malo_id: MaloId = match malo_id_str.parse() {
         Ok(id) => id,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("invalid malo_id: {e}") })),
-            )
-                .into_response();
+            return ApiError::bad_request(format!("invalid malo_id: {e}")).into_response();
         }
     };
 
     match repo.find(&malo_id, &tenant).await {
         Ok(Some(rec)) => Json(MaloGridResponse::from(rec)).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "grid record not found for this MaLo" })),
-        )
-            .into_response(),
-        Err(e) => MdmErrorResponse(e).into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
+        Err(e) => mdm_error(e).into_response(),
     }
 }
 
@@ -130,32 +119,20 @@ pub async fn put_malo_grid(
     Json(body): Json<PutMaloGridBody>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "write-malo-grid", &tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let malo_id: MaloId = match malo_id_str.parse() {
         Ok(id) => id,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("invalid malo_id: {e}") })),
-            )
-                .into_response();
+            return ApiError::bad_request(format!("invalid malo_id: {e}")).into_response();
         }
     };
 
     let sparte: Sparte = match body.sparte.parse() {
         Ok(s) => s,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("invalid sparte: {e}") })),
-            )
-                .into_response();
+            return ApiError::bad_request(format!("invalid sparte: {e}")).into_response();
         }
     };
 
@@ -174,6 +151,6 @@ pub async fn put_malo_grid(
 
     match repo.upsert(rec).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => MdmErrorResponse(e).into_response(),
+        Err(e) => mdm_error(e).into_response(),
     }
 }

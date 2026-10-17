@@ -86,6 +86,7 @@ pub const ATYPISCH_MINDESTENTGELT: Decimal = dec!(0.20);
 
 /// An agreed §19 Abs. 2 individual charge, as a fraction of the published one.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Sect19Vereinbarung {
     /// Which form the agreement takes.
     pub art: Sect19Art,

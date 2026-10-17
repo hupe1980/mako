@@ -19,6 +19,7 @@
 //   "read-marktdaten"    — GET  EPEX / Jahresmarktwert / Vergütungssatz lookup
 //   "write-marktdaten"   — PUT  EPEX / Jahresmarktwert
 //   "use-mcp"            — /mcp (Streamable HTTP MCP server)
+//   "read-policy"        — GET  /api/v1/policy (the operator policy report)
 
 // ── Reads ─────────────────────────────────────────────────────────────────────
 // Any authenticated caller may read their own tenant's plants and settlements.
@@ -29,7 +30,8 @@ permit(
         Action::"read-einspeiser",
         Action::"read-settlement",
         Action::"read-marktdaten",
-        Action::"use-mcp"
+        Action::"use-mcp",
+        Action::"read-policy"
     ],
     resource
 ) when {

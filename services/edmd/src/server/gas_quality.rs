@@ -26,11 +26,7 @@ pub(crate) async fn get_gas_quality(
         "read-timeseries",
         state.tenant.as_str(),
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
     let from = params
         .from
@@ -85,13 +81,7 @@ pub(crate) async fn get_gas_quality(
                 "legal_basis": "§25 Nr. 4 MessEV / DVGW G 685",
             })}).collect();
             if records.is_empty() {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({
-                        "error": "no gas quality data for this MaLo in requested period"
-                    })),
-                )
-                    .into_response()
+                ApiError::NotFound.into_response()
             } else {
                 Json(serde_json::json!({
                     "malo_id": malo_id,

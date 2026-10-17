@@ -6,4 +6,6 @@ mod authorization_guard;
 mod dev_config;
 mod documented_examples;
 mod invoice_drafts_pg;
+mod mabis;
+mod router_builds;
 mod schema_enum_guard;

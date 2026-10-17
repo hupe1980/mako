@@ -33,7 +33,7 @@
 //! # Fristen
 //!
 //! The answer windows are [`mako_fristen::antwort`]'s, keyed by trigger PID, so
-//! `makod`, `processd` and `obsd` cannot disagree with them. Each leg registers
+//! `makod` and `processd` cannot disagree with them. Each leg registers
 //! its own window at spawn under the label its `*_WINDOW_LABEL` constant names
 //! — a `Deadline` whose label no `on_deadline` arm matches fires into `None`
 //! and is lost silently.

@@ -105,6 +105,7 @@ pub enum RedispatchRichtung {
 /// determined (Kap. 3.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case", tag = "fall")]
+#[serde(deny_unknown_fields)]
 pub enum Leistungslimitierung {
     /// Aufforderungsfall: the anweisende NB requests the EIV to adapt;
     /// `vorgabe` is `P_min` (positiver Redispatch) or `P_max` (negativer).

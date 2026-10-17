@@ -41,7 +41,7 @@ use crate::{
         partner_api,
     },
     cedar_authz::CedarAuthorizer,
-    commands_api, contrl_ack, health, ingest_dispatcher, malo_cache,
+    commands_api, contrl_ack, health, ingest_dispatcher, malo_cache, malo_sync,
     party_registry::MpIdRegistry,
     transport::{as4_ingest, webdienste},
 };
@@ -141,6 +141,9 @@ pub(crate) struct HttpServerConfig<'a> {
     pub marktrollen: Vec<String>,
     pub malo_cache: Arc<malo_cache::SlateDbMaloCache>,
     pub marktd_client: Option<Arc<mako_markt::marktd_client::MarktdClient>>,
+    /// The marktd fan-out receiver that keeps the MaLo cache current, mounted
+    /// at [`malo_sync::WEBHOOK_PATH`] when `[marktd]` is configured.
+    pub malo_sync: Option<Arc<malo_sync::MaloSync>>,
     /// `--as4-partner MP-ID=URL` pairs, bootstrapped into the durable partner
     /// store on first start.
     pub as4_partner: &'a [String],
@@ -232,7 +235,13 @@ pub(crate) async fn serve_http(
         tenant: primary_mp_id,
     });
 
-    let app = edifact_api::router(api_state)
+    let mut app = edifact_api::router(api_state);
+    // Authenticated by the fan-out's Standard Webhooks signature, not a bearer
+    // token: marktd holds a signing secret per subscriber and no makod key.
+    if let Some(sync) = cfg.malo_sync {
+        app = app.merge(malo_sync::router(sync));
+    }
+    let app = app
         .merge(malo_admin_api::router(admin_state))
         .merge(partner_api::router(partner_admin_state))
         .merge(commands_api::router(commands_state))

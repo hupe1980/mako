@@ -23,6 +23,7 @@ transport, and the `makotest` Python toolkit.
 | [DVGW EDI](@/docs/reference/dvgw.md) | Gas transport messages (ALOCAT, NOMINT, NOMRES, SSQNOT) |
 | [BDEW AS4](@/docs/reference/as4-bdew.md) | The transport that carries every EDIFACT interchange between market partners |
 | [makotest](@/docs/reference/makotest.md) | Writing tests in Python against the real Fristen and the real validator |
+| [Operator policy](@/docs/reference/operator-policy.md) | Every operator setting: its key, its options with their primary sources, its default or that it is required |
 
 The process catalogue and the [PID reference](@/docs/regulatory/pid-reference.md)
 are lookup tables, ordered by regulatory framework and by message type.
@@ -62,8 +63,10 @@ Every process is a conversation between two of these
 | **MSB** | Messstellenbetreiber | The meter — installing it, reading it, and delivering the values |
 | **BKV** | Bilanzkreisverantwortlicher | A Bilanzkreis's balance against the ÜNB |
 
-A deployment is scoped to the roles it plays, and a role build contains no other
-arm's code — informatorische Entflechtung, § 6a EnWG.
+A deployment is scoped to the roles it plays: makod registers the modules of
+the roles its `[deployment] rollen` declares. Which principal may read which
+role's processes — the confidentiality § 6a Abs. 1 EnWG asks for — is the
+deployment's Cedar policy, not the role scope.
 
 ### The 17 EDIFACT message types
 

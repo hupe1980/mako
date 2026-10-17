@@ -295,9 +295,11 @@ pub async fn post_ggv_nne(
     // The shares are of the sum actually supplied, so they describe the whole of
     // it and have to add to exactly 100 %. Rounding each one on its own does not
     // give that: three equal tenants take 33.3333 % each and the statement
-    // accounts for 99.9999 % of the supply. `proportional_split` allocates the
-    // hundred by largest remainder instead.
-    let share_pct = ggv_shares(&req.tenant_consumption, total_kwh);
+    // accounts for 99.9999 % of the supply. `billing::split` allocates the
+    // hundred by largest remainder instead, weighted by the kWh themselves.
+    let share_pct = ggv_shares(&req.tenant_consumption, total_kwh).map_err(|e| {
+        ApiError::unprocessable(format!("tenant consumption cannot be apportioned: {e}"))
+    })?;
 
     let mut positions: Vec<BillingPositionRequest> = Vec::new();
     let mut attribution = Vec::new();
@@ -507,16 +509,24 @@ pub async fn kostenblatt_deadline_alert(pool: &PgPool, cfg: &NetzbilanzConfig) {
 ///
 /// Ordered the way the map iterates, so the caller can zip it back onto the
 /// tenants. An empty supply has no shares to state and answers zero for each.
+///
+/// The kWh are the weights, so every quota `100 · kwhᵢ / Σ kwh` is an exact
+/// fraction; no 28-digit quotient `kwhᵢ / Σ kwh` is formed first.
+///
+/// # Errors
+///
+/// `billing`'s refusal when the weights cannot be apportioned exactly — a
+/// negative reading (refused by the caller before this point) or a product
+/// outside `i128`.
 fn ggv_shares(
     consumption: &std::collections::BTreeMap<String, Decimal>,
     total_kwh: Decimal,
-) -> Vec<Decimal> {
+) -> Result<Vec<Decimal>, billing::Error> {
     if total_kwh.is_zero() {
-        return vec![Decimal::ZERO; consumption.len()];
+        return Ok(vec![Decimal::ZERO; consumption.len()]);
     }
-    let fractions: Vec<Decimal> = consumption.values().map(|kwh| kwh / total_kwh).collect();
-    billing::proportional_split(Decimal::from(100), &fractions, 4)
-        .unwrap_or_else(|_| vec![Decimal::ZERO; consumption.len()])
+    let weights: Vec<Decimal> = consumption.values().copied().collect();
+    billing::split(Decimal::from(100), &weights, 4)
 }
 
 #[cfg(test)]
@@ -556,7 +566,7 @@ mod tests {
         let c = consumption(&[dec!(1200), dec!(800), dec!(2000)]);
         let total: Decimal = c.values().copied().sum();
         assert_eq!(
-            super::ggv_shares(&c, total),
+            super::ggv_shares(&c, total).expect("apportioned"),
             vec![dec!(30.0), dec!(20.0), dec!(50.0)]
         );
     }
@@ -569,7 +579,7 @@ mod tests {
         for n in 3..=7u32 {
             let c = consumption(&vec![dec!(1000); n as usize]);
             let total: Decimal = c.values().copied().sum();
-            let shares = super::ggv_shares(&c, total);
+            let shares = super::ggv_shares(&c, total).expect("apportioned");
             assert_eq!(shares.len(), n as usize);
             assert_eq!(
                 shares.iter().sum::<Decimal>(),
@@ -579,12 +589,29 @@ mod tests {
         }
     }
 
+    /// The remainder goes by largest remainder of the exact quota, ties to the
+    /// first tenant: 1 : 1 : 1 is 33.3334 / 33.3333 / 33.3333, and 1 : 2 is
+    /// 33.3333 / 66.6667 — the quota 200/3 has the larger remainder.
+    #[test]
+    fn ggv_shares_are_exact_largest_remainder() {
+        let c = consumption(&[dec!(1), dec!(1), dec!(1)]);
+        assert_eq!(
+            super::ggv_shares(&c, dec!(3)).expect("apportioned"),
+            vec![dec!(33.3334), dec!(33.3333), dec!(33.3333)]
+        );
+        let c = consumption(&[dec!(1), dec!(2)]);
+        assert_eq!(
+            super::ggv_shares(&c, dec!(3)).expect("apportioned"),
+            vec![dec!(33.3333), dec!(66.6667)]
+        );
+    }
+
     /// Nothing supplied is no shares to state, not a division by zero.
     #[test]
     fn no_supply_states_no_shares() {
         let c = consumption(&[Decimal::ZERO, Decimal::ZERO]);
         assert_eq!(
-            super::ggv_shares(&c, Decimal::ZERO),
+            super::ggv_shares(&c, Decimal::ZERO).expect("no supply"),
             vec![Decimal::ZERO, Decimal::ZERO]
         );
     }

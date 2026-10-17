@@ -8,12 +8,14 @@
 //! **`deny_unknown_fields` breaks a field removal.** An event written today
 //! carries a key that tomorrow's struct no longer declares; `serde` is asked to
 //! refuse exactly that, and the fold of every historical stream carrying the
-//! event fails. The attribute is a **non-negotiable on a `Json<T>` request
-//! body** — where a typo must not become a setting that silently does nothing,
-//! and `check-request-bodies` requires it — and the situation inverts for an
-//! event, which is read back by code written years later. The two rules do not
-//! collide: `check-request-bodies` finds its types from the `): Json<T>` in a
-//! handler signature, and no event payload is an axum body.
+//! event fails. On a request body the opposite holds — a typo must not become
+//! a setting that silently does nothing — and `mako_service::Json` refuses an
+//! unknown key at runtime; where it cannot see (a flattened field, an untagged
+//! or internally tagged enum) `check-request-bodies` requires the attribute.
+//! The situation inverts for an event, which is read back by code written
+//! years later. The two rules collide only on a type that is both, which is
+//! why [`REQUEST_BODY_TYPES`] lists each body type a workflow crate holds and
+//! refuses one that rides in an event.
 //!
 //! **A required field with no default breaks a field addition**, which is the
 //! far more common change. An old event simply lacks the new key, and `serde`
@@ -67,7 +69,6 @@ const NOT_WORKFLOW_CRATES: &[&str] = &[
     "mako-service",
     "mako-events",
     "mako-as4",
-    "mako-obs",
     "mako-markt",
     "mako-fristen",
     "mako-pruefung",
@@ -83,11 +84,17 @@ const NOT_WORKFLOW_CRATES: &[&str] = &[
 const PAYLOAD_FILES: &[&str] = &["crates/mako-engine/src/payload.rs"];
 
 /// Request-body types that live in a workflow crate because the calculation
-/// that reads them lives there: `(file, type, reason)`. Each must be strict
-/// for `check-request-bodies`, and this guard refuses an entry whose type is
+/// that reads them lives there: `(file, type, reason)`. Each may be strict for
+/// `check-request-bodies`, and this guard refuses an entry whose type is
 /// named inside any `…Event` or `…State` enum of its crate — the one shape
 /// that would make it an event payload after all.
 const REQUEST_BODY_TYPES: &[(&str, &str, &str)] = &[
+    (
+        "crates/mako-redispatch/src/ausfallarbeit.rs",
+        "Leistungslimitierung",
+        "netzbilanzd Ausfallarbeit request input, internally tagged, so the runtime \
+         unknown-key refusal cannot see into it; never recorded as an event",
+    ),
     (
         "crates/mako-redispatch/src/ausfallarbeit.rs",
         "VergleichsViertelstunde",
@@ -354,8 +361,8 @@ pub fn run(workspace_root: &Path) -> bool {
         "\nAn event is read back by code written years later. `deny_unknown_fields` turns a \
          removed or renamed field into a hard `serde` error on every historical stream that \
          carries the event — a § 147 Abs. 1 AO record that no longer folds.\n\
-         The attribute belongs on a `Json<T>` request body, where a typo must not become a \
-         setting that does nothing, and `check-request-bodies` requires it there.\n\
+         The attribute belongs on a request body where serde buffers (a flattened field, an \
+         untagged or internally tagged enum), and `check-request-bodies` requires it there.\n\
          Remove it here."
     );
     false

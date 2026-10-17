@@ -40,6 +40,12 @@
 //                            curtailed Anlagenbetreiber
 //   "compute-ausfallarbeit"— POST /api/v1/redispatch/ausfallarbeit/* — the
 //                            stateless BilAReM Kap.-3 calculators
+//   "read-mabis-run"       — GET  /api/v1/mabis/runs[/{id}], /korrekturbedarf
+//   "record-biko-response" — POST /api/v1/mabis/datenstatus, /pruefmitteilung —
+//                            records an inbound IFTSTA; files nothing
+//   "trigger-mabis-run"    — POST /api/v1/mabis/sync, PUT /runs/{id}/retry —
+//                            files a binding Summenzeitreihe (MSCONS 13003)
+//                            with the BIKO
 //   "use-mcp"              — the blanket gate the shared MCP middleware applies
 //                            (`mako_service::mcp_auth::McpAuth::authenticate`)
 //
@@ -106,6 +112,46 @@ permit(
         Action::"submit-kostenblatt",
         Action::"compute-verguetung"
     ],
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    (context.principal_roles.contains("NB") ||
+     context.principal_roles.contains("UENB"))
+};
+
+// ── MaBiS ─────────────────────────────────────────────────────────────────────
+// A MaBiS submission is a binding filing to the BIKO under BK6-24-174 Anlage 3:
+// it settles the balance group and cannot be withdrawn once acked. The three
+// grants below are three different powers, and the middle one is not the
+// first.
+//
+// Reading run state is authorised within the tenant. Run history discloses
+// which Bilanzierungsgebiete a tenant settles, so it is not public.
+permit(
+    principal,
+    action == Action::"read-mabis-run",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant
+};
+
+// Recording what the BIKO said states what arrived and files nothing, so the
+// ingest identity that relays BIKO responses holds no power to send a
+// Summenzeitreihe in this tenant's name.
+permit(
+    principal,
+    action == Action::"record-biko-response",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant
+};
+
+// Filing a Summenzeitreihe: only NB and ÜNB. These are the roles that
+// aggregate a Bilanzierungsgebiet and file it with the BIKO; no other market
+// role has standing to send a Summenzeitreihe in this tenant's name.
+permit(
+    principal,
+    action == Action::"trigger-mabis-run",
     resource
 ) when {
     context.principal_tenant == context.resource_tenant &&

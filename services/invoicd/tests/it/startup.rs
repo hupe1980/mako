@@ -15,10 +15,9 @@ async fn peer() -> String {
     format!("http://{addr}")
 }
 
-#[tokio::test]
-async fn the_router_builds_as_the_runner_mounts_it() {
+async fn config() -> invoicd::config::Config {
     let peer = peer().await;
-    let cfg: invoicd::config::Config = serde_json::from_value(serde_json::json!({
+    serde_json::from_value(serde_json::json!({
         "http": {}, "database": {"url": "postgres://startup-test/invoicd"},
         "identity": {"tenant": "9900357000004"},
         "makod": {"url": peer},
@@ -26,8 +25,41 @@ async fn the_router_builds_as_the_runner_mounts_it() {
         "webhook": {"inbound_secret": "s3cret"},
         "allow_insecure_no_auth": true,
     }))
-    .expect("the configuration parses");
-    let _app = mako_service::build_for_test::<invoicd::server::Invoicd>(cfg)
+    .expect("the configuration parses")
+}
+
+#[tokio::test]
+async fn the_router_builds_as_the_runner_mounts_it() {
+    let _app = mako_service::build_for_test::<invoicd::server::Invoicd>(config().await)
         .await
         .expect("the router builds");
+}
+
+/// A database failure answers the problem shape with an `error_id` the log
+/// line carries, and nothing of the driver's text. The lazy pool points at a
+/// closed port, so the receipt lookup is the fault.
+#[tokio::test]
+async fn a_database_failure_answers_with_an_error_id_and_no_driver_text() {
+    let app = mako_service::build_for_test::<invoicd::server::Invoicd>(config().await)
+        .await
+        .expect("the router builds");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let resp = reqwest::get(format!(
+        "http://{addr}/api/v1/receipts/0195f6c2-0000-4000-8000-000000000001"
+    ))
+    .await
+    .expect("the request is answered");
+    assert_eq!(resp.status(), 500);
+    let body: serde_json::Value = resp.json().await.expect("a JSON problem body");
+    let error_id = body["error_id"].as_str().expect("an error_id");
+    assert!(uuid::Uuid::parse_str(error_id).is_ok(), "{body}");
+    let text = body.to_string();
+    for leak in ["pool", "timed out", "connect", "startup-test"] {
+        assert!(!text.contains(leak), "the body leaks {leak:?}: {text}");
+    }
 }

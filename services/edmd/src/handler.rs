@@ -60,6 +60,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use mako_service::ApiError;
 use secrecy::{ExposeSecret, SecretString};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -113,6 +114,8 @@ pub struct HandlerState {
     /// `GET /api/v1/archive/status` reports this rather than a constant, so it
     /// cannot read as "archival is working" on the deployment where it is not.
     pub cold_tier_enabled: bool,
+    /// `[policy] physische_loeschung` — the reading every erasure result names.
+    pub physische_loeschung: mako_service::policy::PolicyTriple,
 }
 
 impl HandlerState {
@@ -151,11 +154,7 @@ pub async fn handle_webhook(
                 "edmd: /webhook rejected — no [webhook].inbound_secret configured; refusing \
                  unauthenticated reading ingestion"
             );
-            return (
-                StatusCode::UNAUTHORIZED,
-                "webhook authentication not configured",
-            )
-                .into_response();
+            return ApiError::Unauthorized.into_response();
         }
     }
 
@@ -164,7 +163,7 @@ pub async fn handle_webhook(
         Ok(e) => e,
         Err(err) => {
             warn!(%err, "edmd: failed to parse MarktEvent");
-            return (StatusCode::BAD_REQUEST, "invalid JSON").into_response();
+            return ApiError::bad_request("invalid JSON").into_response();
         }
     };
 

@@ -598,13 +598,12 @@ fn lookup_rate_unknown_tech_returns_err() {
     assert!(rates::lookup_rate("NOT_A_REAL_TECHNOLOGY", dec!(100), 2023).is_err());
 }
 
-// ── billing::PricingModel integration ───────────────────────────────────────────────
+// ── billing::Document integration ───────────────────────────────────────────────
 
 #[test]
-fn eeg_settle_tariff_produces_billing_document() {
-    use billing::DocumentMeta;
-    use billing::PricingModel;
-    use eeg_billing::tariff::EegSettleTariff;
+fn eeg_settlement_produces_billing_document() {
+    use eeg_billing::bridge::settlement_document;
+    use eeg_billing::ust::VatStatus;
 
     let output = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
@@ -613,17 +612,17 @@ fn eeg_settle_tariff_produces_billing_document() {
         einspeisemenge_kwh: Some(dec!(500)),
         ..SettleInput::default()
     });
-    let tariff = EegSettleTariff::new(&output);
-    let doc = tariff.settle(DocumentMeta::default()).expect("settle");
-    assert_eq!(doc.net_total(), billing::Amount::parse("40.55000").unwrap());
-    doc.assert_valid();
+    let doc = settlement_document(&output, VatStatus::Kleinunternehmer).expect("document");
+    assert_eq!(
+        doc.tax_exclusive_total(),
+        billing::Amount::parse("40.55").unwrap()
+    );
 }
 
 #[test]
-fn eeg_settle_tariff_mit_mwst_19_percent() {
-    use billing::DocumentMeta;
-    use billing::PricingModel;
-    use eeg_billing::tariff::EegSettleTariffRegelbesteuerung;
+fn eeg_settlement_mit_ust_19_percent() {
+    use eeg_billing::bridge::settlement_document;
+    use eeg_billing::ust::VatStatus;
 
     let output = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
@@ -632,12 +631,13 @@ fn eeg_settle_tariff_mit_mwst_19_percent() {
         einspeisemenge_kwh: Some(dec!(1000)),
         ..SettleInput::default()
     });
-    let tariff = EegSettleTariffRegelbesteuerung::new(&output);
-    let doc = tariff
-        .settle(DocumentMeta::default())
-        .expect("settle mit MwSt");
-    assert_eq!(doc.net_total(), billing::Amount::parse("81.10000").unwrap());
-    doc.assert_valid();
+    let doc = settlement_document(&output, VatStatus::Regelbesteuerung).expect("document");
+    assert_eq!(
+        doc.tax_exclusive_total(),
+        billing::Amount::parse("81.10").unwrap()
+    );
+    // 81.10 × 19 % = 15.409, rounded once to the cent.
+    assert_eq!(doc.vat_total(), billing::Amount::parse("15.41").unwrap());
 }
 
 // ── Decimal precision ─────────────────────────────────────────────────────────
@@ -1022,25 +1022,26 @@ fn ust_regelbesteuerung_19_pct() {
 }
 
 #[test]
-fn ust_tax_layers_one_layer_per_status() {
-    use eeg_billing::ust::{VatStatus, ust_tax_layers};
-    // An exempt supply is still a taxable supply: EN 16931 BG-23 requires it in the
-    // VAT breakdown under its own category, so the layer is present and charges
+fn ust_vat_one_treatment_per_status() {
+    use billing::TaxCategory;
+    use eeg_billing::ust::{VatStatus, ust_vat};
+    // An exempt supply still lands in the VAT breakdown: EN 16931 BG-23 requires
+    // it under its own category, so the treatment is present and charges
     // nothing rather than being omitted.
-    for status in [VatStatus::Kleinunternehmer, VatStatus::Regelbesteuerung] {
-        assert_eq!(
-            ust_tax_layers(status).len(),
-            1,
-            "{status:?} must contribute exactly one breakdown entry"
-        );
-    }
+    assert_eq!(
+        ust_vat(VatStatus::Kleinunternehmer).category(),
+        TaxCategory::Exempt
+    );
+    assert_eq!(
+        ust_vat(VatStatus::Regelbesteuerung).category(),
+        TaxCategory::Standard
+    );
 }
 
 #[test]
 fn ust_kleinunternehmer_billing_document_is_exempt() {
-    use billing::{BillingDocument, DocumentMeta, PricingModel as _};
-    use eeg_billing::tariff::EegSettleTariffKleinunternehmer;
-    use eeg_billing::ust::{VatStatus, ust_tax_layers};
+    use eeg_billing::bridge::settlement_document;
+    use eeg_billing::ust::VatStatus;
 
     let output = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
@@ -1052,41 +1053,36 @@ fn ust_kleinunternehmer_billing_document_is_exempt() {
         ..SettleInput::default()
     });
 
-    let vat = VatStatus::Kleinunternehmer;
-    let tariff = EegSettleTariffKleinunternehmer::new(&output);
-    let doc = BillingDocument::from_positions(
-        DocumentMeta::default(),
-        tariff.positions(&()).unwrap().into_inner(),
-        ust_tax_layers(vat),
-        vec![],
-    )
-    .unwrap();
+    let doc = settlement_document(&output, VatStatus::Kleinunternehmer).unwrap();
 
     // 500 kWh × 8.51 ct = 42.55 EUR; §19 → no USt → gross = net
-    assert_eq!(doc.net_total(), billing::Amount::parse("42.55000").unwrap());
     assert_eq!(
-        doc.gross_total(),
-        doc.net_total(),
+        doc.tax_exclusive_total(),
+        billing::Amount::parse("42.55").unwrap()
+    );
+    assert_eq!(
+        doc.tax_inclusive_total(),
+        doc.tax_exclusive_total(),
         "§19 Kleinunternehmer: no USt"
     );
 
     // The turnover still appears in the EN 16931 BG-23 breakdown as an exempt
     // supply (category E): charging no tax is not the same as no taxable base.
-    let breakdown = doc.tax_breakdown();
+    let breakdown = doc.vat_groups();
     assert_eq!(breakdown.len(), 1);
-    assert_eq!(breakdown[0].category, billing::TaxCategory::Exempt);
-    assert!(breakdown[0].rate.is_zero());
-    assert_eq!(breakdown[0].taxable_base, doc.net_total());
-    assert!(breakdown[0].tax_amount.is_zero());
-
-    doc.assert_valid();
+    assert_eq!(breakdown[0].category(), billing::TaxCategory::Exempt);
+    assert!(breakdown[0].rate_percent().value().is_zero());
+    assert_eq!(breakdown[0].taxable_base(), doc.tax_exclusive_total());
+    assert!(breakdown[0].tax().is_zero());
 }
 
+/// BT-110 is derived once, at the EN 16931 scale: 55.60 × 19 % = 10.564 is
+/// stated as 10.56 and the gross as 66.16 — the amounts the Gutschrift carries,
+/// never the unrounded 10.564 / 66.164.
 #[test]
 fn ust_regelbesteuerung_19pct_billing_document() {
-    use billing::{BillingDocument, DocumentMeta, PricingModel as _};
-    use eeg_billing::tariff::EegSettleTariffRegelbesteuerung;
-    use eeg_billing::ust::{VatStatus, ust_tax_layers};
+    use eeg_billing::bridge::settlement_document;
+    use eeg_billing::ust::VatStatus;
 
     let output = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
@@ -1097,25 +1093,18 @@ fn ust_regelbesteuerung_19pct_billing_document() {
         ..SettleInput::default()
     });
 
-    let vat = VatStatus::Regelbesteuerung;
-    let tariff = EegSettleTariffRegelbesteuerung::new(&output);
-    let doc = BillingDocument::from_positions(
-        DocumentMeta::default(),
-        tariff.positions(&()).unwrap().into_inner(),
-        ust_tax_layers(vat), // 19%
-        vec![],
-    )
-    .unwrap();
+    let doc = settlement_document(&output, VatStatus::Regelbesteuerung).unwrap();
 
-    // Net = 1000 × 5.56 ct = 55.60 EUR; USt 19% = 10.564 EUR; Gross = 66.164 EUR
-    assert_eq!(doc.net_total(), billing::Amount::parse("55.60000").unwrap());
-    // USt = 55.60 × 0.19 = 10.564 EUR
-    assert_eq!(doc.tax_total(), billing::Amount::parse("10.56400").unwrap());
+    // Net = 1000 × 5.56 ct = 55.60 EUR
     assert_eq!(
-        doc.gross_total(),
-        billing::Amount::parse("66.16400").unwrap()
+        doc.tax_exclusive_total(),
+        billing::Amount::parse("55.60").unwrap()
     );
-    doc.assert_valid();
+    assert_eq!(doc.vat_total(), billing::Amount::parse("10.56").unwrap());
+    assert_eq!(
+        doc.tax_inclusive_total(),
+        billing::Amount::parse("66.16").unwrap()
+    );
 }
 
 /// §100 EEG Übergangsregelung: plants commissioned before 01.01.2023 apply old EEG rules.

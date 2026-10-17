@@ -16,6 +16,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "billingd"
 path = "src/main.rs"
+# The binary is the one-line `run` call; the daemon is tested through the library.
+test = false
 
 [dependencies]
 mako-fristen = { workspace = true }

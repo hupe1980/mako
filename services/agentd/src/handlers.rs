@@ -33,7 +33,7 @@
 //!
 //! [`plane::oversight`]: crate::plane::oversight
 
-use crate::plane::{AgentDecision, Envelope, Plane, Reception};
+use crate::plane::{AgentDecision, Envelope, EraseError, Plane, Reception};
 use std::sync::Arc;
 
 use axum::{
@@ -42,8 +42,8 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use mako_service::Json;
 use mako_service::oidc::Claims;
+use mako_service::{ApiError, ApiResult, Json};
 use secrecy::ExposeSecret;
 use serde_json::Value;
 
@@ -81,17 +81,12 @@ pub struct AppState {
 /// The refusal a caller the policy set does not admit gets, or `None` when they
 /// are admitted.
 ///
-/// `Option` rather than `Result`: an `axum::Response` is a large `Err` variant,
-/// and "no refusal" reads more honestly than "Ok(())" for a check whose only
-/// product is the refusal itself. The `403` body names the verb, so an operator
-/// reading it can ask for the role rather than guessing which door refused them.
-/// The roles come from the verified token; nothing in the request body reaches
-/// this.
-fn refusal(
-    state: &AppState,
-    claims: &Claims,
-    action: &'static str,
-) -> Option<axum::response::Response> {
+/// `Option` rather than `Result`: "no refusal" reads more honestly than
+/// "Ok(())" for a check whose only product is the refusal itself. The `403`
+/// body names the verb, so an operator reading it can ask for the role rather
+/// than guessing which door refused them. The roles come from the verified
+/// token; nothing in the request body reaches this.
+fn refusal(state: &AppState, claims: &Claims, action: &'static str) -> Option<ApiError> {
     if crate::plane::policy::caller_may(
         state.policy.as_ref(),
         claims.sub(),
@@ -106,18 +101,10 @@ fn refusal(
         action,
         "agentd: caller is authenticated but not authorized for this action"
     );
-    Some(
-        (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": format!(
-                    "your roles do not admit `{action}` on this plane — authorization comes \
-                     from the Cedar set in agentd's policy, not from holding a token"
-                )
-            })),
-        )
-            .into_response(),
-    )
+    Some(ApiError::forbidden(format!(
+        "your roles do not admit `{action}` on this plane — authorization comes from the \
+         Cedar set in agentd's policy, not from holding a token"
+    )))
 }
 
 /// The three CloudEvents attributes this door cannot work without.
@@ -286,7 +273,12 @@ pub async fn webhook(
                 specialists = accepted.len(),
                 "agentd: no specialist could be admitted — asking the emitter to resend"
             );
-            (StatusCode::TOO_MANY_REQUESTS, Json(accepted)).into_response()
+            ApiError::too_many_requests(
+                "no specialist could be admitted now; resend the event — the runs already \
+                 admitted under its keys are answered again, not duplicated",
+            )
+            .with_fields(serde_json::json!({ "admissions": accepted }))
+            .into_response()
         }
         Reception::Unprocessable => {
             // Loud, because this one does not come back. The message is going
@@ -301,7 +293,12 @@ pub async fn webhook(
                 "agentd: no specialist can act on this event and resending cannot help — \
                  it will be dead-lettered by the emitter"
             );
-            (StatusCode::UNPROCESSABLE_ENTITY, Json(accepted)).into_response()
+            ApiError::unprocessable_with(
+                "no specialist subscribing to this event can act on it, and resending cannot \
+                 help",
+                serde_json::json!({ "admissions": accepted }),
+            )
+            .into_response()
         }
     }
 }
@@ -316,7 +313,7 @@ pub async fn manual_run(
     // the realm issues a token to could start any specialist on any
     // Marktlokation and spend the tenant's model budget doing it.
     if let Some(refused) = refusal(&state, &claims, crate::plane::policy::action::RUN_START) {
-        return refused;
+        return refused.into_response();
     }
 
     // No concurrency cap here. It was an in-process semaphore, and the ceiling
@@ -333,16 +330,12 @@ pub async fn manual_run(
     if let Some(name) = agent_name.as_deref()
         && !state.plane.router().routes().iter().any(|r| r.name == name)
     {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": format!(
-                    "no specialist named '{name}' is activated in this deployment — \
-                     GET /api/v1/agents lists the ones that are"
-                )
-            })),
-        )
-            .into_response();
+        tracing::debug!(
+            agent = name,
+            "agentd: no specialist of that name is activated — GET /api/v1/agents lists the ones \
+             that are"
+        );
+        return ApiError::NotFound.into_response();
     }
 
     // The webhook's at-most-once admission, offered rather than imposed: with an
@@ -404,13 +397,13 @@ pub async fn erase(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     Json(request): Json<ErasureRequest>,
-) -> impl IntoResponse {
+) -> ApiResult<Json<Value>> {
     if let Some(refused) = refusal(
         &state,
         &claims,
         crate::plane::policy::action::ERASURE_EXECUTE,
     ) {
-        return refused;
+        return Err(refused);
     }
     let reason = request.reason.trim();
     let subject = request
@@ -419,42 +412,34 @@ pub async fn erase(
         .map(str::trim)
         .filter(|subject| !subject.is_empty());
     if reason.is_empty() || (request.case_id.is_none() && subject.is_none()) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "a non-empty reason and at least one of case_id or memory_subject are required"
-            })),
-        )
-            .into_response();
+        return Err(ApiError::unprocessable(
+            "a non-empty reason and at least one of case_id or memory_subject are required",
+        ));
     }
-    let case = match request.case_id.as_deref() {
-        Some(raw) => match agentplane::core::CaseId::parse(raw) {
-            Ok(case) => Some(case),
-            Err(_) => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({ "error": "case_id is invalid" })),
-                )
-                    .into_response();
-            }
-        },
-        None => None,
-    };
-    match state.plane.erase(case, subject, reason).await {
-        Ok(forgotten_memories) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "case_erased": request.case_id.is_some(),
-                "memory_subject": subject,
-                "forgotten_memories": forgotten_memories,
-            })),
-        )
-            .into_response(),
-        Err(error) => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": error })),
-        )
-            .into_response(),
+    let case = request
+        .case_id
+        .as_deref()
+        .map(agentplane::core::CaseId::parse)
+        .transpose()
+        .map_err(|_| ApiError::unprocessable("case_id is invalid"))?;
+    let forgotten_memories = state
+        .plane
+        .erase(case, subject, reason)
+        .await
+        .map_err(erase_failure)?;
+    Ok(Json(serde_json::json!({
+        "case_erased": request.case_id.is_some(),
+        "memory_subject": subject,
+        "forgotten_memories": forgotten_memories,
+    })))
+}
+
+/// The answer an [`EraseError`] gets: a deployment without a key ring is a
+/// `409` naming that, and a store failure a `500` whose text stays in the log.
+fn erase_failure(error: EraseError) -> ApiError {
+    match error {
+        EraseError::NoKeyRing => ApiError::conflict(EraseError::NoKeyRing.to_string()),
+        EraseError::Store(cause) => ApiError::internal(cause),
     }
 }
 
@@ -473,7 +458,7 @@ pub async fn erase(
 /// and carries no endpoint credential.
 pub async fn list_agents(claims: Claims, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if let Some(refused) = refusal(&state, &claims, crate::plane::policy::action::AGENT_LIST) {
-        return refused;
+        return refused.into_response();
     }
     let routes = state.plane.router().routes();
     Json(serde_json::json!({
@@ -508,21 +493,14 @@ pub async fn list_agents(claims: Claims, State(state): State<Arc<AppState>>) -> 
 pub async fn agent_card(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(name): axum::extract::Path<String>,
-) -> impl IntoResponse {
-    let not_found = || {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": format!("agent '{name}' not found") })),
-        )
-    };
-
+) -> ApiResult<Json<agentplane::peers::AgentCard>> {
     // Only an activated specialist gets a card. Advertising one this deployment
     // does not run would publish a capability no request could reach.
     if !state.plane.router().routes().iter().any(|r| r.name == name) {
-        return not_found().into_response();
+        return Err(ApiError::NotFound);
     }
     let Some(embedded) = crate::plane::find_manifest(&name) else {
-        return not_found().into_response();
+        return Err(ApiError::NotFound);
     };
     let manifest = embedded;
 
@@ -530,17 +508,9 @@ pub async fn agent_card(
         "{}/api/v1/run",
         state.cfg.public_base_url.trim_end_matches('/')
     );
-    match agentplane::peers::AgentCard::derive(manifest, url) {
-        Ok(card) => Json(card).into_response(),
-        Err(e) => {
-            tracing::warn!(agent = %name, error = %e, "agent card could not be derived");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "the agent card could not be derived" })),
-            )
-                .into_response()
-        }
-    }
+    agentplane::peers::AgentCard::derive(manifest, url)
+        .map(Json)
+        .map_err(|e| ApiError::internal(anyhow::anyhow!("derive the agent card of {name}: {e}")))
 }
 
 // ── GET /api/v1/agents/catalog ────────────────────────────────────────────────
@@ -558,7 +528,7 @@ pub async fn agents_catalog(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     if let Some(refused) = refusal(&state, &claims, crate::plane::policy::action::AGENT_LIST) {
-        return refused;
+        return refused.into_response();
     }
     let catalog: Vec<serde_json::Value> = crate::builtin::all()
         .map(|def| {
@@ -612,4 +582,44 @@ pub async fn agents_catalog(
         "agents": catalog
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn body(error: ApiError) -> (StatusCode, Value) {
+        let response = error.into_response();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        (status, serde_json::from_slice(&bytes).expect("json"))
+    }
+
+    /// A key-service failure is this service's fault: a `500` with an
+    /// `error_id`, and the store's own text — which names its internals — only
+    /// in the log.
+    #[tokio::test]
+    async fn a_store_failure_on_erasure_is_an_internal_error_that_echoes_nothing() {
+        let (status, body) = body(erase_failure(EraseError::Store(anyhow::anyhow!(
+            "destroy case wrapping key: vault token s.SECRET rejected"
+        ))))
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(body["error_id"].is_string(), "{body}");
+        assert!(!body.to_string().contains("SECRET"), "{body}");
+    }
+
+    /// A deployment without a key ring cannot erase a case however often it is
+    /// asked, and the caller is told why.
+    #[tokio::test]
+    async fn erasure_without_a_key_ring_is_a_conflict_that_names_it() {
+        let (status, body) = body(erase_failure(EraseError::NoKeyRing)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(
+            body["detail"],
+            "case erasure requires a configured key ring"
+        );
+    }
 }

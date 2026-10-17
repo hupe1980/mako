@@ -64,11 +64,7 @@ pub(crate) async fn jahresablesung_campaign(
     Json(req): Json<JahresablesungCampaignRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "write-reading-order", &state.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     match run_jahresablesung_campaign(
@@ -146,23 +142,16 @@ pub enum CampaignError {
 impl CampaignError {
     fn into_response(self) -> axum::response::Response {
         match self {
-            Self::InvalidNbMpId => (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": "nb_mp_id must be a 13-digit BDEW/DVGW Codenummer",
-                })),
-            )
-                .into_response(),
-            Self::Marktd(detail) => (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": detail })),
-            )
-                .into_response(),
-            Self::Store(detail) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": detail })),
-            )
-                .into_response(),
+            Self::InvalidNbMpId => {
+                ApiError::unprocessable("nb_mp_id must be a 13-digit BDEW/DVGW Codenummer")
+                    .into_response()
+            }
+            // Both texts name another system's internals: they go to the log
+            // under the `error_id` the body carries.
+            Self::Marktd(detail) => {
+                ApiError::upstream("marktd", anyhow::anyhow!(detail)).into_response()
+            }
+            Self::Store(detail) => ApiError::internal(anyhow::anyhow!(detail)).into_response(),
         }
     }
 
@@ -408,11 +397,7 @@ pub(crate) async fn jahresablesung_compliance(
     Path(year): Path<i32>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-reading-order", &state.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+        return ApiError::forbidden(e.to_string()).into_response();
     }
 
     let rows = sqlx::query(
@@ -434,11 +419,7 @@ pub(crate) async fn jahresablesung_compliance(
     let rows = match rows {
         Ok(r) => r,
         Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
+            return ApiError::internal(e).into_response();
         }
     };
 

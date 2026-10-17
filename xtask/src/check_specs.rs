@@ -7,9 +7,11 @@
 //!
 //! - a spec whose `**Status**:` disagrees with what its `tasks.md` derives
 //!   ([`derived_status`]);
-//! - a `Parked` spec with an open task, or one the roadmap's parked list does
-//!   not name — parking is a decision the roadmap records, and an open task
-//!   under it is work nobody is scheduled to do;
+//! - a `Parked` spec the roadmap's parked list does not name — parking is a
+//!   decision the roadmap records, and that list is where the scheduling wait
+//!   lives. A parked spec's tasks keep their own markers: `[ ]` for work that
+//!   is buildable once scheduled, `[~]` only for a wait on somebody who is not
+//!   us, so its Status is not derived from them;
 //! - a spec without `plan.md` or `tasks.md` — the workflow is specify → plan →
 //!   tasks;
 //! - a spec `NNN` that does not cite its own milestone `M<NNN>`, or that cites
@@ -95,13 +97,6 @@ fn problems(root: &Path) -> std::io::Result<Vec<String>> {
             .map_or("(none)", str::trim);
 
         if stated.starts_with("Parked") {
-            let open = task_count(&tasks, "- [ ]");
-            if open > 0 {
-                problems.push(format!(
-                    "specs/{name} states Status `Parked` and has {open} open task(s) — a parked \
-                     spec marks what it waits for `- [~]`"
-                ));
-            }
             if !parked.contains(&name) {
                 problems.push(format!(
                     "specs/{name} states Status `Parked` and the roadmap's parked list does not \
@@ -188,16 +183,55 @@ fn row_state(roadmap: &str, name: &str) -> Option<String> {
 }
 
 /// The task lines carrying `marker` — `- [x] **T001** …` — so a checkbox
-/// quoted in prose is never counted as a task.
+/// quoted in prose is never counted as a task. A retired task — its block notes
+/// `(dropped: …)` or `(superseded by …)` — is not counted at all: it keeps its
+/// id so citations resolve, but it was never built, so it cannot make a
+/// feature „In progress".
 fn task_count(tasks: &str, marker: &str) -> usize {
-    tasks
-        .lines()
-        .filter(|l| {
-            l.trim_start()
+    task_blocks(tasks)
+        .into_iter()
+        .filter(|block| !is_retired(block))
+        .filter(|block| {
+            block
+                .trim_start()
                 .strip_prefix(marker)
                 .is_some_and(|rest| rest.trim_start().starts_with("**T"))
         })
         .count()
+}
+
+/// Each task with its continuation lines: a block runs from one `- [?] **T…`
+/// line to the next task line, heading or blank line.
+fn task_blocks(tasks: &str) -> Vec<String> {
+    let is_task = |l: &str| {
+        let t = l.trim_start();
+        ["- [ ]", "- [x]", "- [~]"].iter().any(|m| {
+            t.strip_prefix(m)
+                .is_some_and(|r| r.trim_start().starts_with("**T"))
+        })
+    };
+    let mut blocks: Vec<String> = Vec::new();
+    let mut open = false;
+    for line in tasks.lines() {
+        if is_task(line) {
+            blocks.push(line.to_owned());
+            open = true;
+        } else if open && !line.trim().is_empty() && !line.starts_with('#') {
+            if let Some(last) = blocks.last_mut() {
+                last.push('\n');
+                last.push_str(line);
+            }
+        } else {
+            open = false;
+        }
+    }
+    blocks
+}
+
+/// A task kept only for its id: dropped as not worth building, or superseded by
+/// another task that does the work.
+fn is_retired(block: &str) -> bool {
+    block.contains("(dropped:") || block.contains("(superseded by")
 }
 
 /// What a tasks file says about its feature: `[x]` done, `[~]` waiting on
@@ -206,7 +240,10 @@ fn derived_status(tasks: &str) -> Option<&'static str> {
     // Only task lines count — `- [x] **T001** …` — so a checkbox quoted in
     // prose cannot change a feature's state.
     let count = |marker: &str| task_count(tasks, marker);
+    let retired = task_blocks(tasks).iter().filter(|b| is_retired(b)).count();
     match (count("- [x]"), count("- [~]"), count("- [ ]")) {
+        // Every task retired: nothing is left to build.
+        (0, 0, 0) if retired > 0 => Some("Built"),
         (0, 0, 0) => None,
         (0, _, open) if open > 0 => Some("Not started"),
         (_, _, open) if open > 0 => Some("In progress"),
@@ -366,6 +403,21 @@ mod tests {
         );
     }
 
+    /// A dropped or superseded task keeps its id but is not work done, so a
+    /// spec whose only `[x]` tasks are retired has not started.
+    #[test]
+    fn a_retired_task_is_not_progress() {
+        let tasks = "- [x] **T001** gone\n      (dropped: overengineered)\n\
+                     - [x] **T002** old path\n      (superseded by T003: one jump)\n\
+                     - [ ] **T003** the work\n";
+        assert_eq!(derived_status(tasks), Some("Not started"));
+        let built =
+            "- [x] **T001** real\n      (done: path)\n- [x] **T002** x\n      (dropped: y)\n";
+        assert_eq!(derived_status(built), Some("Built"));
+        let only_retired = "- [x] **T001** x\n      (dropped: y)\n";
+        assert_eq!(derived_status(only_retired), Some("Built"));
+    }
+
     #[test]
     fn a_milestone_inside_a_word_is_not_cited() {
         let cited = milestones_cited("M1, (M23) and MaBiS, FM12x, Modell 2, M4a");
@@ -403,14 +455,19 @@ mod tests {
     }
 
     #[test]
-    fn a_parked_spec_with_open_work_is_refused() {
+    fn a_parked_spec_may_carry_open_tasks() {
+        // The roadmap's parked list records the scheduling wait; `[~]` stays
+        // reserved for a wait on somebody who is not us, so a parked spec
+        // carries buildable work as `[ ]` beside its external waits.
         let root = tree(
             "parked-open",
             ROADMAP_OK,
-            &[open_spec(), parked_spec("- [ ] **T001** w\n")],
+            &[
+                open_spec(),
+                parked_spec("- [ ] **T001** buildable\n- [~] **T002** waits on a Festlegung\n"),
+            ],
         );
-        let found = problems(&root).unwrap();
-        assert!(found.iter().any(|p| p.contains("open task")), "{found:?}");
+        assert_eq!(problems(&root).unwrap(), Vec::<String>::new());
     }
 
     #[test]

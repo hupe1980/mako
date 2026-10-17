@@ -1,5 +1,3 @@
-#![expect(clippy::result_large_err, reason = "the error *is* the HTTP response")]
-
 //! Axum router and daemon wiring for `invoicd`.
 //!
 //! | Method | Path | Cedar action |
@@ -30,9 +28,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;
+use mako_service::{ApiError, ApiResult, Json};
 use mako_service::{Daemon, ServiceContext};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
@@ -75,21 +73,10 @@ impl Daemon for Invoicd {
 /// Cedar is deny-by-default, so an action named here and missing from
 /// `policies/invoicd.cedar` is a permanent 403 no configuration can lift.
 /// `tests/it/cedar_actions.rs` pins the two together.
-fn authorize(
-    cedar: &CedarEnforcer,
-    claims: &Claims,
-    action: &str,
-    tenant: &str,
-) -> Result<(), Response> {
+fn authorize(cedar: &CedarEnforcer, claims: &Claims, action: &str, tenant: &str) -> ApiResult<()> {
     cedar
         .check(&claims.principal(), action, tenant)
-        .map_err(|e| {
-            (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response()
-        })
+        .map_err(|e| ApiError::forbidden(e.to_string()))
 }
 
 /// Every Cedar action this router checks — the list `tests/it/cedar_actions.rs`
@@ -279,28 +266,17 @@ fn fmt_ts(t: Option<time::OffsetDateTime>) -> Option<String> {
     t.and_then(|t| t.format(&Rfc3339).ok())
 }
 
-fn db_error(e: sqlx::Error) -> Response {
-    tracing::warn!(error = %e, "invoicd: query failed");
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(serde_json::json!({ "error": "query failed" })),
-    )
-        .into_response()
-}
-
 /// `GET /api/v1/receipts` — list receipts for this tenant.
 async fn list_receipts(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Query(params): Query<ReceiptListQuery>,
-) -> Response {
-    if let Err(r) = authorize(&cedar, &claims, "read-receipt", &state.tenant) {
-        return r;
-    }
+) -> ApiResult<Response> {
+    authorize(&cedar, &claims, "read-receipt", &state.tenant)?;
     match fetch_receipts(&state.pool, &state.tenant, &params).await {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => db_error(e),
+        Ok(rows) => Ok(Json(rows).into_response()),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -309,10 +285,8 @@ async fn list_disputes(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
-) -> Response {
-    if let Err(r) = authorize(&cedar, &claims, "read-disputes", &state.tenant) {
-        return r;
-    }
+) -> ApiResult<Response> {
+    authorize(&cedar, &claims, "read-disputes", &state.tenant)?;
     let params = ReceiptListQuery {
         sender_mp_id: None,
         outcome: Some("Dispute".to_owned()),
@@ -322,8 +296,8 @@ async fn list_disputes(
         size: 200,
     };
     match fetch_receipts(&state.pool, &state.tenant, &params).await {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => db_error(e),
+        Ok(rows) => Ok(Json(rows).into_response()),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -333,10 +307,8 @@ async fn get_receipt(
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Path(id): Path<uuid::Uuid>,
-) -> Response {
-    if let Err(r) = authorize(&cedar, &claims, "read-receipt", &state.tenant) {
-        return r;
-    }
+) -> ApiResult<Response> {
+    authorize(&cedar, &claims, "read-receipt", &state.tenant)?;
     let row = sqlx::query_as::<_, ReceiptSummary>(
         r"SELECT id, process_id, pid, sender_mp_id, outcome, invoice_ref, rechnungsnummer,
                  received_at, bo4e_version
@@ -347,9 +319,9 @@ async fn get_receipt(
     .fetch_optional(&state.pool)
     .await;
     match row {
-        Ok(Some(r)) => Json(r).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => db_error(e),
+        Ok(Some(r)) => Ok(Json(r).into_response()),
+        Ok(None) => Err(ApiError::NotFound),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -359,10 +331,8 @@ async fn get_rechnung(
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Path(id): Path<uuid::Uuid>,
-) -> Response {
-    if let Err(r) = authorize(&cedar, &claims, "read-receipt", &state.tenant) {
-        return r;
-    }
+) -> ApiResult<Response> {
+    authorize(&cedar, &claims, "read-receipt", &state.tenant)?;
     let row: Result<Option<(serde_json::Value, String, i16)>, _> = sqlx::query_as(
         "SELECT rechnung, bo4e_version, pid FROM invoic_receipts WHERE id = $1 AND tenant = $2",
     )
@@ -371,12 +341,12 @@ async fn get_rechnung(
     .fetch_optional(&state.pool)
     .await;
     match row {
-        Ok(Some((rechnung, bo4e_version, pid))) => Json(
+        Ok(Some((rechnung, bo4e_version, pid))) => Ok(Json(
             serde_json::json!({ "rechnung": rechnung, "bo4e_version": bo4e_version, "pid": pid }),
         )
-        .into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => db_error(e),
+        .into_response()),
+        Ok(None) => Err(ApiError::NotFound),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -390,10 +360,8 @@ async fn list_overdue_remadv(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
-) -> Response {
-    if let Err(r) = authorize(&cedar, &claims, "read-overdue-remadv", &state.tenant) {
-        return r;
-    }
+) -> ApiResult<Response> {
+    authorize(&cedar, &claims, "read-overdue-remadv", &state.tenant)?;
     let rows: Result<Vec<ReceiptSummary>, _> = sqlx::query_as(
         r"SELECT id, process_id, pid, sender_mp_id, outcome, invoice_ref, rechnungsnummer,
                  received_at, bo4e_version
@@ -410,9 +378,9 @@ async fn list_overdue_remadv(
     .await;
     match rows {
         Ok(items) => {
-            Json(serde_json::json!({ "count": items.len(), "items": items })).into_response()
+            Ok(Json(serde_json::json!({ "count": items.len(), "items": items })).into_response())
         }
-        Err(e) => db_error(e),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -422,10 +390,8 @@ async fn get_zahlungsstatus(
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Path(malo_id): Path<String>,
-) -> Response {
-    if let Err(r) = authorize(&cedar, &claims, "read-receipt", &state.tenant) {
-        return r;
-    }
+) -> ApiResult<Response> {
+    authorize(&cedar, &claims, "read-receipt", &state.tenant)?;
     type Row = (
         uuid::Uuid,
         uuid::Uuid,
@@ -450,10 +416,7 @@ async fn get_zahlungsstatus(
     .fetch_all(&state.pool)
     .await;
 
-    let rows = match rows {
-        Ok(r) => r,
-        Err(e) => return db_error(e),
-    };
+    let rows = rows?;
     let now = time::OffsetDateTime::now_utc();
     let items: Vec<serde_json::Value> = rows
         .into_iter()
@@ -495,7 +458,7 @@ async fn get_zahlungsstatus(
         .collect();
 
     let count = |s: &str| items.iter().filter(|i| i["zahlungsstatus"] == s).count();
-    Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "malo_id":            malo_id,
         "settled_count":      count("settled"),
         "pending_count":      count("pending"),
@@ -503,7 +466,7 @@ async fn get_zahlungsstatus(
         "undispatched_count": count("undispatched"),
         "items":              items,
     }))
-    .into_response()
+    .into_response())
 }
 
 // ── Writes ────────────────────────────────────────────────────────────────────
@@ -517,18 +480,13 @@ async fn confirm_payment(
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Path(id): Path<uuid::Uuid>,
-) -> Response {
-    if let Err(r) = authorize(&cedar, &claims, "write-receipt", &state.tenant) {
-        return r;
-    }
+) -> ApiResult<Response> {
+    authorize(&cedar, &claims, "write-receipt", &state.tenant)?;
     match pg::receipts::confirm_payment(&state.pool, id, &state.tenant).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "receipt not found or already confirmed" })),
-        )
-            .into_response(),
-        Err(e) => db_error(e),
+        Ok(true) => Ok(StatusCode::NO_CONTENT.into_response()),
+        // The message says which of the two it can be; both are 404.
+        Ok(false) => Err(ApiError::NotFound),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -548,19 +506,13 @@ async fn resolve_dispute(
     State(state): State<HandlerState>,
     Path(id): Path<uuid::Uuid>,
     body: Option<Json<ResolveDisputeBody>>,
-) -> Response {
-    if let Err(r) = authorize(&cedar, &claims, "write-receipt", &state.tenant) {
-        return r;
-    }
+) -> ApiResult<Response> {
+    authorize(&cedar, &claims, "write-receipt", &state.tenant)?;
     let note = body.as_ref().and_then(|Json(b)| b.note.as_deref());
     match pg::receipts::resolve_dispute(&state.pool, id, &state.tenant, note).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "receipt not found or not in Dispute state" })),
-        )
-            .into_response(),
-        Err(e) => db_error(e),
+        Ok(true) => Ok(StatusCode::NO_CONTENT.into_response()),
+        Ok(false) => Err(ApiError::NotFound),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -581,40 +533,27 @@ async fn dispatch_answer(
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Path(id): Path<uuid::Uuid>,
-) -> Response {
-    if let Err(r) = authorize(&cedar, &claims, "write-receipt", &state.tenant) {
-        return r;
-    }
+) -> ApiResult<Response> {
+    authorize(&cedar, &claims, "write-receipt", &state.tenant)?;
     let target = match pg::receipts::dispatch_target(&state.pool, id, &state.tenant).await {
         Ok(Some(t)) => t,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return db_error(e),
+        Ok(None) => return Err(ApiError::NotFound),
+        Err(e) => return Err(e.into()),
     };
 
     if target.already_dispatched {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": "receipt already dispatched" })),
-        )
-            .into_response();
+        return Err(ApiError::conflict("receipt already dispatched"));
     }
     let Some(invoice_ref) = target.invoice_ref else {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "receipt has no INVOIC message reference — the answer cannot be routed"
-            })),
-        )
-            .into_response();
+        return Err(ApiError::unprocessable(
+            "receipt has no INVOIC message reference — the answer cannot be routed",
+        ));
     };
     let Some(route) = route_for(target.pid as u32) else {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!("PID {} is not answered by this service", target.pid)
-            })),
-        )
-            .into_response();
+        return Err(ApiError::unprocessable(format!(
+            "PID {} is not answered by this service",
+            target.pid
+        )));
     };
 
     let dispute = target.outcome == "Dispute";
@@ -656,20 +595,16 @@ async fn dispatch_answer(
             {
                 tracing::warn!(%e, process_id = %target.process_id, "invoicd: manual dispatch not recorded");
             }
-            Json(serde_json::json!({
+            Ok(Json(serde_json::json!({
                 "dispatched":  true,
                 "process_id":  target.process_id,
                 "pid":         target.pid,
                 "command":     command,
                 "invoice_ref": invoice_ref,
             }))
-            .into_response()
+            .into_response())
         }
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": format!("makod dispatch failed: {e}") })),
-        )
-            .into_response(),
+        Err(e) => Err(ApiError::upstream("makod", e)),
     }
 }
 

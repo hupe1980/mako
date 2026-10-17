@@ -826,10 +826,7 @@ pub async fn content_signature_middleware(
     use axum::response::IntoResponse as _;
     let refuse = |why: String| {
         tracing::warn!(reason = %why, "API-Webdienste: content signature refused");
-        (
-            axum::http::StatusCode::UNAUTHORIZED,
-            format!("content signature refused: {why}"),
-        )
+        mako_service::ApiError::unauthorized(format!("content signature refused: {why}"))
             .into_response()
     };
     let headers = request.headers();
@@ -1084,11 +1081,10 @@ pub async fn client_identity_middleware(
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(header = %e.name, count = e.count, "API-Webdienste: repeated caller-identity header — refusing");
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                format!("{} must appear at most once", CLIENT_MP_ID_HEADER),
-            )
-                .into_response();
+            return mako_service::ApiError::bad_request(format!(
+                "{CLIENT_MP_ID_HEADER} must appear at most once"
+            ))
+            .into_response();
         }
     };
     let mp_id = raw
@@ -1114,11 +1110,10 @@ pub async fn webdienste_auth_middleware(
 ) -> axum::response::Response {
     use axum::response::IntoResponse as _;
     let Some(identity) = state.cedar.authenticate(request.headers()) else {
-        return (
-            axum::http::StatusCode::UNAUTHORIZED,
+        return mako_service::ApiError::unauthorized(
             "Authorization: Bearer <token> required for API-Webdienste",
         )
-            .into_response();
+        .into_response();
     };
     if !state.cedar.authorize_webdienste(
         &identity,
@@ -1126,10 +1121,7 @@ pub async fn webdienste_auth_middleware(
             tenant: &state.tenant,
         },
     ) {
-        return (
-            axum::http::StatusCode::FORBIDDEN,
-            "403 Forbidden: UseWebdienste permission denied",
-        )
+        return mako_service::ApiError::forbidden("UseWebdienste permission denied")
             .into_response();
     }
     next.run(request).await

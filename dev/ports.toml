@@ -1,0 +1,25 @@
+# The one dev port table. Every `dev/config/<service>.toml` listens on
+# `[http] addr = "127.0.0.1:<port>"` with the port named here, and every
+# `http://127.0.0.1:<port>` URL in those files reaches the service its key
+# names. The xtask `dev_configs` tests hold the files to this table, so a port
+# changed here and not there — or there and not here — fails `just test`.
+
+[services]
+makod       = 8080
+marktd      = 8180
+invoicd     = 8280
+edmd        = 8380
+processd    = 8580
+netzbilanzd = 8680
+productd    = 9080
+einsd       = 9180
+billingd    = 9280
+accountingd = 9380
+portald     = 9480
+agentd      = 9580
+vertragd    = 9780
+outputd     = 9880
+
+# Local processes outside mako that a dev config calls.
+[external]
+ollama = 11434

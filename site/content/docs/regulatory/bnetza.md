@@ -365,8 +365,8 @@ keine Antwortfrist; die Abmeldung hat dafür **7 WT** (Kap. 3.2.2).
 | GeLi Gas | **Ablauf des 4. / 3. / 2. Werktags** je Prozess | `FristShape::EndOfWerktag` |
 
 Alle vier Familien stehen in **einer** Tabelle, `mako_fristen::antwort` — `makod`
-registriert daraus die Prozessfrist, `processd` bemisst die Operator-Queue,
-`obsd` meldet die Verletzung. Eine PID ohne veröffentlichte Frist liefert `None`:
+registriert daraus die Prozessfrist, `processd` bemisst die Operator-Queue
+und meldet die Verletzung. Eine PID ohne veröffentlichte Frist liefert `None`:
 **unbekannt**, nie *unbefristet*.
 
 > GPKE Teil 2 nennt jede Antwortfrist als Uhrzeit auf einem Werktag, nie als

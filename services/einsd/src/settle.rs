@@ -18,13 +18,15 @@ pub const BEIHILFEVORBEHALT_GRUNDLAGE: &str = "Beihilfevorbehalt: EEG-2023-Geneh
      31.12.2026; § 104 EEG 2027 (Entwurf, BT-Drs. 21/7867)";
 
 /// A Teil-3 payment for a supply period no recorded state-aid approval covers,
-/// refused under the `verweigern` policy.
+/// refused under `[policy] beihilfe_politik = "verweigern"`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BeihilfevorbehaltOffen {
     /// The plant.
     pub tr_id: String,
     /// The first day of the supply period.
     pub periodenbeginn: Option<time::Date>,
+    /// The reading the refusal was decided under.
+    pub policy: mako_service::policy::PolicyTriple,
 }
 
 impl std::fmt::Display for BeihilfevorbehaltOffen {
@@ -32,56 +34,110 @@ impl std::fmt::Display for BeihilfevorbehaltOffen {
         write!(
             f,
             "Anlage {}: keine beihilferechtliche Genehmigung deckt den Zeitraum ab {} — \
-             Zahlung nicht angewandt ({BEIHILFEVORBEHALT_GRUNDLAGE}). Eine Genehmigung wird \
-             unter [beihilfevorbehalt] genehmigungen erfasst.",
+             Zahlung nicht angewandt ({BEIHILFEVORBEHALT_GRUNDLAGE}; {}). Eine Genehmigung \
+             wird unter [beihilfevorbehalt] genehmigungen erfasst.",
             self.tr_id,
             self.periodenbeginn
-                .map_or_else(|| "unbekannt".to_owned(), |d| d.to_string())
+                .map_or_else(|| "unbekannt".to_owned(), |d| d.to_string()),
+            self.policy
         )
     }
 }
 
 impl std::error::Error for BeihilfevorbehaltOffen {}
 
+/// What the Beihilfevorbehalt makes of one plant's month.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Beihilfeentscheidung {
+    /// An approval covers the period, or the plant is outside the
+    /// reservation: settle and pay as usual. No policy was consulted.
+    #[default]
+    Gedeckt,
+    /// Uncovered, `unter_vorbehalt`: settle and pay, stating `hinweis` on the
+    /// receipt and the Gutschrift.
+    UnterVorbehalt {
+        /// The receipt position's text.
+        hinweis: String,
+        /// The reading the payment was made under.
+        policy: mako_service::policy::PolicyTriple,
+    },
+    /// Uncovered, `halten`: settle without paying — receipt `gehalten`, no
+    /// Gutschrift number, no payout event.
+    Halten {
+        /// The reading the payment was held under.
+        policy: mako_service::policy::PolicyTriple,
+    },
+}
+
+impl Beihilfeentscheidung {
+    /// The reading the result was decided under, if a policy was consulted.
+    #[must_use]
+    pub fn policy(&self) -> Option<&mako_service::policy::PolicyTriple> {
+        match self {
+            Self::Gedeckt => None,
+            Self::UnterVorbehalt { policy, .. } | Self::Halten { policy } => Some(policy),
+        }
+    }
+}
+
+/// The first day of the supply month, or `None` for a month that is no month.
+#[must_use]
+pub fn periodenbeginn(year: i16, month: i16) -> Option<time::Date> {
+    u8::try_from(month)
+        .ok()
+        .and_then(|m| time::Month::try_from(m).ok())
+        .and_then(|m| time::Date::from_calendar_date(i32::from(year), m, 1).ok())
+}
+
+/// Whether a recorded approval covers the supply month.
+#[must_use]
+pub fn genehmigung_deckt(cfg: &EinsdConfig, year: i16, month: i16) -> bool {
+    eeg_billing::beihilfevorbehalt(
+        periodenbeginn(year, month),
+        &cfg.beihilfevorbehalt.genehmigungen,
+    )
+    .anwendbar()
+}
+
 /// Consult the Beihilfevorbehalt for one plant and month.
-///
-/// `Ok(None)` — covered, settle as usual. `Ok(Some(text))` — uncovered under
-/// the `unter_vorbehalt` policy: settle, stating `text` on the receipt.
 ///
 /// A KWKG plant is outside it: the Zuschlag is paid under the KWKG, not under
 /// Teil 3 of the EEG.
 ///
 /// # Errors
 ///
-/// [`BeihilfevorbehaltOffen`] under the `verweigern` policy.
+/// [`BeihilfevorbehaltOffen`] under `[policy] beihilfe_politik = "verweigern"`.
 pub fn beihilfevorbehalt_pruefen(
     cfg: &EinsdConfig,
     anlage: &AnlageRow,
     year: i16,
     month: i16,
-) -> Result<Option<String>, BeihilfevorbehaltOffen> {
-    if anlage.settlement_model == crate::models::KWKG_ZUSCHLAG {
-        return Ok(None);
-    }
-    let periodenbeginn = u8::try_from(month)
-        .ok()
-        .and_then(|m| time::Month::try_from(m).ok())
-        .and_then(|m| time::Date::from_calendar_date(i32::from(year), m, 1).ok());
-    if eeg_billing::beihilfevorbehalt(periodenbeginn, &cfg.beihilfevorbehalt.genehmigungen)
-        .anwendbar()
+) -> Result<Beihilfeentscheidung, BeihilfevorbehaltOffen> {
+    if anlage.settlement_model == crate::models::KWKG_ZUSCHLAG
+        || genehmigung_deckt(cfg, year, month)
     {
-        return Ok(None);
+        return Ok(Beihilfeentscheidung::Gedeckt);
     }
-    match cfg.beihilfevorbehalt.politik {
+    let periodenbeginn = periodenbeginn(year, month);
+    let politik = &cfg.policy.beihilfe_politik;
+    let policy = politik.triple();
+    match politik.get() {
         crate::config::BeihilfePolitik::Verweigern => Err(BeihilfevorbehaltOffen {
             tr_id: anlage.tr_id.clone(),
             periodenbeginn,
+            policy,
         }),
-        crate::config::BeihilfePolitik::UnterVorbehalt => Ok(Some(format!(
-            "Zahlung unter Beihilfevorbehalt — keine beihilferechtliche Genehmigung \
-             für den Zeitraum ab {} erfasst",
-            periodenbeginn.map_or_else(|| "unbekannt".to_owned(), |d| d.to_string())
-        ))),
+        crate::config::BeihilfePolitik::UnterVorbehalt => {
+            Ok(Beihilfeentscheidung::UnterVorbehalt {
+                hinweis: format!(
+                    "Zahlung unter Beihilfevorbehalt — keine beihilferechtliche Genehmigung \
+                     für den Zeitraum ab {} erfasst ({policy})",
+                    periodenbeginn.map_or_else(|| "unbekannt".to_owned(), |d| d.to_string())
+                ),
+                policy,
+            })
+        }
+        crate::config::BeihilfePolitik::Halten => Ok(Beihilfeentscheidung::Halten { policy }),
     }
 }
 
@@ -129,17 +185,23 @@ pub fn pauschaloption_pruefen(anlage: &AnlageRow) -> Result<(), PauschaloptionNi
     Ok(())
 }
 
-/// The HTTP status a settlement failure is reported with: `422` for a
-/// Beihilfevorbehalt or Pauschaloption refusal — the plant's or the period's
-/// state, not a server fault — `500` for everything else.
+/// Whether a settlement failure is a refusal — a Beihilfevorbehalt or
+/// Pauschaloption refusal, the plant's or the period's state rather than a
+/// server fault.
 #[must_use]
-pub fn settle_error_status(e: &anyhow::Error) -> axum::http::StatusCode {
-    if e.downcast_ref::<BeihilfevorbehaltOffen>().is_some()
+pub fn is_refusal(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<BeihilfevorbehaltOffen>().is_some()
         || e.downcast_ref::<PauschaloptionNichtAnwendbar>().is_some()
-    {
-        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+}
+
+/// A settlement failure as the HTTP answer: `422` naming the refusal for
+/// [`is_refusal`], a `500` with an `error_id` for everything else.
+#[must_use]
+pub fn settle_error(e: anyhow::Error) -> mako_service::error::ApiError {
+    if is_refusal(&e) {
+        mako_service::error::ApiError::unprocessable(format!("{e:#}"))
     } else {
-        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        mako_service::error::ApiError::internal(e)
     }
 }
 
@@ -186,7 +248,7 @@ pub async fn settle_plant(
 ) -> anyhow::Result<SettleResult> {
     // ── State-aid gates — before anything is fetched or written ──────────────
     pauschaloption_pruefen(anlage)?;
-    let beihilfevorbehalt_hinweis = beihilfevorbehalt_pruefen(cfg, anlage, year, month)?;
+    let beihilfe = beihilfevorbehalt_pruefen(cfg, anlage, year, month)?;
 
     // ── Einspeisemenge ───────────────────────────────────────────────────────
     let einspeisemenge_kwh = match req.einspeisemenge_kwh {
@@ -278,7 +340,7 @@ pub async fn settle_plant(
             jahresmarktwert_ct_kwh: None,
             sect51_abs3_unreported_days,
             ausfallverguetung,
-            beihilfevorbehalt_hinweis,
+            beihilfe,
         },
     )?;
 

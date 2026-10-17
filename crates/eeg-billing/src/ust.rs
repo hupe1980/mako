@@ -45,41 +45,28 @@
 //! ## Usage in billing documents
 //!
 //! ```rust
-//! use eeg_billing::ust::{VatStatus, ust_tax_layers};
-//! use billing::{DocumentMeta, PricingModel};
-//! use eeg_billing::{SettleInput, SettlementScheme, calculate_settlement};
-//! use eeg_billing::tariff::EegSettleTariff;
+//! use eeg_billing::ust::{VatStatus, ust_vat};
+//! use billing::TaxCategory;
 //! use rust_decimal::dec;
 //! use time::macros::date;
-//!
-//! let output = calculate_settlement(&SettleInput {
-//!     scheme: eeg_billing::SettlementScheme::FeedInTariff { verguetungssatz_ct: dec!(8.51) },
-//!     einspeisemenge_kwh: Some(dec!(500)),
-//!     leistung_kwp: Some(dec!(9.5)),
-//!     inbetriebnahme: Some(date!(2024-06-01)),
-//!     ..SettleInput::default()
-//! });
 //!
 //! // A small post-2023 solar operator is, by default, a Kleinunternehmer (§19).
 //! let vat = VatStatus::default_for_plant(true, dec!(9.5), Some(date!(2024-06-01)));
 //! assert_eq!(vat, VatStatus::Kleinunternehmer);
 //! assert!(vat.is_exempt());
 //!
-//! // EegSettleTariff itself adds no tax layer — VAT is the caller's to apply.
-//! let tariff = EegSettleTariff::new(&output);
-//! assert!(tariff.tax_layers().is_empty());
-//!
-//! // §19 charges nothing, but still contributes an exempt entry to the
-//! // EN 16931 BG-23 breakdown, so the layer is present rather than omitted.
-//! let layers = ust_tax_layers(vat);
-//! assert_eq!(layers.len(), 1);
+//! // §19 charges nothing, but the supply still lands in the EN 16931 BG-23
+//! // breakdown, as category `E` with its BT-120 exemption reason.
+//! assert_eq!(ust_vat(vat).category(), TaxCategory::Exempt);
+//! assert!(ust_vat(vat).exemption().is_some());
+//! assert_eq!(ust_vat(VatStatus::Regelbesteuerung).category(), TaxCategory::Standard);
 //! ```
 //!
 //! VAT follows the *current* UStG and the operator's current tax status, not
 //! the EEG version that fixes a pre-2023 plant's Vergütungssatz (§100 Abs. 1
 //! EEG 2023).
 
-use billing::{TaxCategory, TaxLayer, tax::FixedRateTax};
+use billing::{Exemption, Percent, TaxCategory, Vat};
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 use time::Date;
@@ -235,15 +222,19 @@ impl VatStatus {
     }
 }
 
-// ── Tax layers ────────────────────────────────────────────────────────────────
+// ── VAT treatment ─────────────────────────────────────────────────────────────
 
-/// Return the `billing::TaxLayer` list for a given VAT status.
+/// The BT-120 text a §19 Gutschrift carries.
+pub const KLEINUNTERNEHMER_BT120: &str =
+    "Kein Ausweis von Umsatzsteuer, da Kleinunternehmer gemäß §19 UStG";
+
+/// The `billing` VAT treatment of a feed-in under `status`.
 ///
-/// Every status yields exactly one layer, including the exempt one. A supply
-/// taxed at 0 % is still a taxable supply: EN 16931 BG-23 requires it to appear
-/// in the VAT breakdown under its UNTDID 5305 category. Omitting the layer would
-/// drop the turnover from the breakdown altogether, which understates the taxable
-/// base on the invoice.
+/// Every status yields a treatment, the exempt one included. A supply taxed at
+/// 0 % is still a supply: EN 16931 BG-23 requires it to appear in the VAT
+/// breakdown under its UNTDID 5305 category. Leaving the lines without a
+/// treatment would drop the turnover from the breakdown altogether, which
+/// understates the taxable base on the invoice.
 ///
 /// | Status | Rate | Category | Basis |
 /// |---|---|---|---|
@@ -253,40 +244,48 @@ impl VatStatus {
 /// §19 UStG does not levy the tax at all and maps to `E`, which EN 16931 requires
 /// to carry an exemption reason (BT-120).
 ///
-/// Add the returned layers to a `BillingDocument` via `from_positions(…, tax_layers, …)`.
-///
 /// # Mixed-rate documents
 ///
-/// A document combining supplies with different treatment — a PV feed-in credit at
-/// 0 % beside NNE grid charges at 19 % — cannot use a single status. Build the
-/// layers directly and restrict each to its own positions with
-/// [`FixedRateTax::with_tag`], so each contributes its own breakdown entry.
-///
-/// # Example
-///
-/// ```rust
-/// use eeg_billing::ust::{VatStatus, ust_tax_layers};
-///
-/// // Every status yields one layer — the exempt one included.
-/// assert_eq!(ust_tax_layers(VatStatus::Kleinunternehmer).len(), 1);
-/// assert_eq!(ust_tax_layers(VatStatus::Regelbesteuerung).len(), 1);
-/// ```
+/// VAT is an attribute of each `billing::Line`, so a document combining
+/// supplies with different treatment — a PV feed-in credit at 0 % beside NNE
+/// grid charges at 19 % — sets each line's own treatment with
+/// `Line::with_vat`, and each contributes its own BG-23 group.
 #[must_use]
-pub fn ust_tax_layers(status: VatStatus) -> Vec<Box<dyn TaxLayer>> {
-    // `exempt` validates the category/reason pairing up front (EN 16931 zero-tax
-    // families) instead of at breakdown time; `.boxed()` is the trait-object
-    // shorthand for `Box::new(_) as Box<dyn TaxLayer>`.
-    let layer = match status {
-        VatStatus::Regelbesteuerung => FixedRateTax::new("Umsatzsteuer 19\u{202f}%", dec!(0.19))
-            .expect("19 % is a valid rate")
-            .with_category(TaxCategory::Standard),
+pub fn ust_vat(status: VatStatus) -> Vat {
+    match status {
+        VatStatus::Regelbesteuerung => {
+            Vat::standard(Percent::new(dec!(19))).expect("19 % is a valid standard rate")
+        }
         // §19 UStG is a genuine exemption (category E) requiring a reason (BT-120).
-        VatStatus::Kleinunternehmer => FixedRateTax::exempt(
-            "Umsatzsteuer (§19 UStG)",
+        VatStatus::Kleinunternehmer => Vat::exempt(
             TaxCategory::Exempt,
-            "Kein Ausweis von Umsatzsteuer, da Kleinunternehmer gemäß §19 UStG",
+            Exemption::Text(KLEINUNTERNEHMER_BT120.to_owned()),
         )
         .expect("§19 exemption is a valid (category, reason) pairing"),
-    };
-    vec![layer.boxed()]
+    }
+}
+
+#[cfg(test)]
+mod vat_tests {
+    use super::*;
+
+    /// `billing` takes a typed percentage: `Percent::new(19)` is 19 %, never
+    /// the fraction 0.19.
+    #[test]
+    fn regelbesteuerung_is_nineteen_percent_standard() {
+        let vat = ust_vat(VatStatus::Regelbesteuerung);
+        assert_eq!(vat.category(), TaxCategory::Standard);
+        assert_eq!(vat.rate_percent(), Percent::new(dec!(19)));
+        assert!(vat.exemption().is_none());
+    }
+
+    #[test]
+    fn kleinunternehmer_is_exempt_with_its_reason() {
+        let vat = ust_vat(VatStatus::Kleinunternehmer);
+        assert_eq!(vat.category(), TaxCategory::Exempt);
+        assert_eq!(
+            vat.exemption().and_then(Exemption::text),
+            Some(KLEINUNTERNEHMER_BT120)
+        );
+    }
 }

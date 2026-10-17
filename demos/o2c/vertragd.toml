@@ -6,7 +6,6 @@
 # no operator token, so a forged event would move supply and create contracts.
 allow_insecure_no_auth = true
 
-port     = 9780
 tenant   = "9912345000005"
 
 # The Lieferant this deployment registers supply under. The same string as
@@ -31,6 +30,9 @@ edmd_url = "http://edmd.not-run.invalid:8380"
 outputd_url = "http://outputd:9880"
 
 erp_webhook_url = "http://webhook:8000/events"
+
+[http]
+addr = "0.0.0.0:9780"
 
 [database]
 url = "postgres://demo:demo-secret@postgres/vertragd"

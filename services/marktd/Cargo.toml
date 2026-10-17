@@ -12,6 +12,8 @@ publish          = false
 [[bin]]
 name = "marktd"
 path = "src/main.rs"
+# The binary is the one-line `run` call; the daemon is tested through the library.
+test = false
 
 [lib]
 name = "marktd"

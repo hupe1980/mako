@@ -24,6 +24,7 @@
 //! Only `nb_mp_id` rides in the envelope, and only because `Netzlokation`
 //! declares no Netzbetreiber field for it to duplicate.
 
+use mako_service::ApiError;
 use std::sync::Arc;
 
 use axum::{
@@ -58,9 +59,8 @@ pub type NeLoRepoExt = Arc<PgNeLoRepository>;
 /// returning it alongside its canonical serialization.
 fn normalize_netzlokation(
     data: serde_json::Value,
-) -> Result<(Netzlokation, serde_json::Value), (StatusCode, serde_json::Value)> {
-    let nelo: Netzlokation = mako_markt::bo4e::decode(data)
-        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))?;
+) -> mako_service::ApiResult<(Netzlokation, serde_json::Value)> {
+    let nelo: Netzlokation = mako_markt::bo4e::decode(data).map_err(|e| super::bo4e_refusal(&e))?;
     let canonical = super::serialise_or_500(&nelo)?;
     Ok((nelo, canonical))
 }
@@ -227,7 +227,7 @@ pub async fn put_nelo(
     // Validate and canonicalise the BO4E Netzlokation payload.
     let (typed_nelo, canonical_data) = match normalize_netzlokation(body.data) {
         Ok(v) => v,
-        Err((status, json)) => return (status, Json(json)).into_response(),
+        Err(e) => return e.into_response(),
     };
 
     // The mako profile for this endpoint: BO4E makes `sparte` optional, marktd
@@ -237,32 +237,23 @@ pub async fn put_nelo(
         Some(rubo4e::current::Sparte::Strom) => Sparte::Strom,
         Some(rubo4e::current::Sparte::Gas) => Sparte::Gas,
         Some(other) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": format!(
-                        "sparte {} is a BO4E value, but market communication covers \
-                         only STROM and GAS",
-                        other.as_wire()
-                    ),
-                    "code": "mako.profile",
-                    "field": "sparte",
-                })),
+            return ApiError::unprocessable_with(
+                format!(
+                    "sparte {} is a BO4E value, but market communication covers \
+                     only STROM and GAS",
+                    other.as_wire()
+                ),
+                serde_json::json!({ "code": "mako.profile", "field": "sparte" }),
             )
-                .into_response();
+            .into_response();
         }
         None => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": "sparte is required on a Netzlokation stored by marktd, \
-                              though BO4E makes it optional — it is the indexed column \
-                              every query filters on",
-                    "code": "mako.profile",
-                    "field": "sparte",
-                })),
+            return ApiError::unprocessable_with(
+                "sparte is required on a Netzlokation stored by marktd, though BO4E \
+                 makes it optional — it is the indexed column every query filters on",
+                serde_json::json!({ "code": "mako.profile", "field": "sparte" }),
             )
-                .into_response();
+            .into_response();
         }
     };
 

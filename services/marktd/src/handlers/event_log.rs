@@ -12,7 +12,8 @@
 //! - `type`: CloudEvents `type` exact-match filter.
 //! - `limit`: max rows (default 500, max 5000).
 
-use axum::{Extension, extract::Query, http::StatusCode, response::IntoResponse};
+use axum::{Extension, extract::Query, response::IntoResponse};
+use mako_service::ApiError;
 use mako_service::Json;
 use mako_service::cedar::CedarEnforcer;
 use serde::Deserialize;
@@ -50,7 +51,7 @@ pub async fn list_event_log(
         .check(&claims.principal(), "manage-fanout", &tenant)
         .is_err()
     {
-        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+        return ApiError::forbidden("access denied").into_response();
     }
 
     let limit = q.limit.unwrap_or(500).clamp(1, 5000);
@@ -83,7 +84,7 @@ pub async fn list_event_log(
         Ok(rows) => Json(rows).into_response(),
         Err(e) => {
             warn!(error = %e, "event_log: query failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+            ApiError::internal(e).into_response()
         }
     }
 }

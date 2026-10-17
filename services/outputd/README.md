@@ -38,8 +38,10 @@ just dev outputd       # dev/config/outputd.toml against the dev PostgreSQL
 
 ```toml
 # outputd.toml
-port   = 9880
 tenant = "9900357000004"   # the operator's MP-ID; every template row is scoped to it
+
+[http]
+addr = "0.0.0.0:9880"
 
 [database]
 url = "postgresql://outputd:secret@db:5432/outputd"

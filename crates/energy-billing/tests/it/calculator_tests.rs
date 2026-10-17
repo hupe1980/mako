@@ -4909,7 +4909,7 @@ fn electricity_consumption_is_standard_rated_regardless_of_own_pv() {
 
 #[test]
 fn tou_pricing_ht_nt_matches_manual_calculation() {
-    // HT/NT via billing::TimeOfUsePricing must produce same result as direct arithmetic.
+    // HT/NT, one position per register, must produce the same result as direct arithmetic.
     // HT: 300 kWh × 32 ct/kWh = 96.00 EUR (net)
     // NT: 200 kWh × 18 ct/kWh = 36.00 EUR (net)
     // Total net commodity: 132.00 EUR
@@ -7269,6 +7269,29 @@ fn a_period_total_is_apportioned_across_legs_by_days() {
     assert!(
         (parts[0] - parts[2]).abs() <= dec!(0.001),
         "equal-length legs take equal shares but for the last one's residue: {parts:?}"
+    );
+}
+
+/// Each leg's share is the exact quota `total · daysᵢ / Σ days` by largest
+/// remainder, ties to the earlier leg: 1000 kWh over 31 / 28 / 31 days is
+/// 344.445 / 311.111 / 344.444 — the two equal remainders of the 31-day legs
+/// tie and the first takes the thousandth. A correction run's negative total
+/// splits as the mirror image.
+#[test]
+fn a_period_total_is_apportioned_by_the_exact_quota() {
+    let days = [31_u32, 28, 31];
+    let legs = |total| {
+        (0..days.len())
+            .map(|i| energy_billing::DayApportionment::new(&days, i).quantity(total))
+            .collect::<Vec<rust_decimal::Decimal>>()
+    };
+    assert_eq!(
+        legs(dec!(1000)),
+        vec![dec!(344.445), dec!(311.111), dec!(344.444)]
+    );
+    assert_eq!(
+        legs(dec!(-1000)),
+        vec![dec!(-344.445), dec!(-311.111), dec!(-344.444)]
     );
 }
 

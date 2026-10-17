@@ -7,7 +7,7 @@ Summenzeitreihen with their versions, Prüfmitteilungen and Datenstatus, the
 Clearing- and Korrekturlisten, the MaBiS-Zählpunkt lifecycle and the list
 requests. Governed by **BK6-24-174 Anlage 3**; Strom only. `MabisModule`
 registers six workflows; `summenzeitreihe` is the aggregation builder
-`mabis-syncd` files with.
+`netzbilanzd` files with.
 
 ## Example
 
@@ -39,7 +39,7 @@ assert!(ctx.registered_workflows().contains(&mako_mabis::bilanzkreisabrechnung::
 | `anforderung` | `mabis-anforderung` | ORDERS list requests + the one Ablehnung |
 | `fristen` | — | Kap. 3.10 Tabelle 2, executable |
 | `zeitreihen` | — | Kap. 2 Tabelle 1 + the `CAV` codelist |
-| `summenzeitreihe` | — | the aggregation builder (`mabis-syncd` uses it) |
+| `summenzeitreihe` | — | the aggregation builder (`netzbilanzd` uses it) |
 
 | Workflow | PIDs |
 |---|---|

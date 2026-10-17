@@ -54,7 +54,6 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    http::StatusCode,
     middleware::{self, Next},
     response::IntoResponse,
 };
@@ -1390,8 +1389,8 @@ impl MakodMcpHandler {
                  - payload: {\"malo_id\": \"<11-digit MaLo>\", \"reason\": \"<why>\"}\n\n\
                  `reason` is **mandatory** on the failure path — without it the LF waits out\n\
                  its answer window with no explanation.\n\n\
-                 Note: `sperrd` issues both commands automatically from its execute/fail\n\
-                 endpoints. Call them by hand only when driving `makod` without `sperrd`.\n\n\
+                 Note: `processd` issues both commands automatically from its Sperrauftrag\n\
+                 execute/fail endpoints. Call them by hand only when driving `makod` without it.\n\n\
                  The **LF side** is a different command set: `gpke.sperrung.beauftragen`\n\
                  (17115), `gpke.entsperrung.beauftragen` (17117), `gpke.sperrung.stornieren`\n\
                  (ORDCHG 39000).\n\n\
@@ -1649,11 +1648,7 @@ async fn mcp_auth_middleware(
     let identity = match state.cedar.authenticate(request.headers()) {
         Some(id) => id,
         None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                "Authorization: Bearer <token> required for /mcp",
-            )
-                .into_response();
+            return mako_service::ApiError::Unauthorized.into_response();
         }
     };
 
@@ -1663,11 +1658,7 @@ async fn mcp_auth_middleware(
             tenant: &state.tenant,
         },
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            "403 Forbidden: UseMcp permission denied",
-        )
-            .into_response();
+        return mako_service::ApiError::forbidden("UseMcp permission denied").into_response();
     }
 
     // Forward the authenticated identity to the tool handlers: rmcp injects

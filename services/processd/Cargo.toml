@@ -52,7 +52,7 @@ publish          = false
 #   msb-only   = ["role-msb"]
 #   integrated = every role (one operator holding several Marktrollen)
 [features]
-default = []
+default = ["integrated"]
 
 ## LF answers to the NB- and LFN-initiated GPKE processes (`E_0609`, `E_0624`,
 ## `E_0614`, `E_0615`, `E_0603`–`E_0606`) + LFN Strom bootstrap.
@@ -82,6 +82,7 @@ integrated = ["role-lf-strom", "role-lf-gas", "role-nb-strom", "role-nb-gas", "r
 [[bin]]
 name = "processd"
 path = "src/main.rs"
+test = false
 
 [lib]
 name = "processd"
@@ -111,6 +112,7 @@ axum               = { version = "0.8", features = [] }
 rust_decimal       = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
+thiserror          = { workspace = true }
 toml               = { version = "0.8", default-features = false, features = ["parse"] }
 time               = { workspace = true }
 uuid               = { workspace = true }

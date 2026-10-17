@@ -21,8 +21,6 @@ use std::sync::Arc;
 use axum::{
     Router,
     extract::{Path, State},
-    http::StatusCode,
-    response::IntoResponse,
     routing::get,
 };
 use mako_engine::{
@@ -30,6 +28,7 @@ use mako_engine::{
     ids::{ProcessId, StreamId, TenantId},
     store_slatedb::SlateDbStore,
 };
+use mako_service::{ApiError, ApiResult};
 use uuid::Uuid;
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -63,106 +62,54 @@ pub fn router(state: Arc<InvoicApiState>) -> Router {
 /// - **200 OK** — JSON `Rechnung` (BO4E v202607 schema)
 /// - **404 Not Found** — process does not exist or has no `InvoicReceived` event
 /// - **422 Unprocessable Entity** — `process_id` is not a valid UUID
+/// - **500** — the stream could not be read, or its `WimInvoicReceived` event
+///   carries no `rechnung` (the adapter embeds one on every such event, so its
+///   absence is a malformed stream, not an invoice that has yet to arrive)
 async fn get_rechnung(
     State(state): State<Arc<InvoicApiState>>,
     headers: axum::http::HeaderMap,
     Path(process_id_str): Path<String>,
-) -> impl IntoResponse {
-    let Some(identity) = state.cedar.authenticate(&headers) else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            axum::Json(serde_json::json!({
-                "error": "Authorization: Bearer <token> required"
-            })),
-        )
-            .into_response();
-    };
+) -> ApiResult<axum::Json<serde_json::Value>> {
+    let identity = state
+        .cedar
+        .authenticate(&headers)
+        .ok_or(ApiError::Unauthorized)?;
     if !state.cedar.authorize_rechnung(
         &identity,
         &crate::cedar_authz::RechnungResource {
             tenant: &state.tenant,
         },
     ) {
-        return (
-            StatusCode::FORBIDDEN,
-            axum::Json(serde_json::json!({
-                "error": "ReadRechnung permission denied"
-            })),
-        )
-            .into_response();
+        return Err(ApiError::forbidden("ReadRechnung permission denied"));
     }
-    let process_uuid: Uuid = match process_id_str.parse() {
-        Ok(id) => id,
-        Err(_) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                axum::Json(serde_json::json!({
-                    "error": "INVALID_PROCESS_ID",
-                    "message": "process_id must be a valid UUID v4"
-                })),
-            )
-                .into_response();
-        }
-    };
+    let process_uuid: Uuid = process_id_str
+        .parse()
+        .map_err(|_| ApiError::unprocessable("process_id must be a valid UUID v4"))?;
     let process_id = ProcessId::from(process_uuid);
     let stream_id = StreamId::for_process(state.tenant_id, &process_id);
 
-    let events = match state.store.load(&stream_id).await {
-        Ok(evs) => evs,
-        Err(e) => {
-            tracing::warn!(
-                process_id = %process_uuid,
-                error = %e,
-                "invoic_api: failed to load event stream"
-            );
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(serde_json::json!({
-                    "error": "STORE_ERROR",
-                    "message": "failed to load event stream"
-                })),
-            )
-                .into_response();
-        }
-    };
-
-    if events.is_empty() {
-        return (
-            StatusCode::NOT_FOUND,
-            axum::Json(serde_json::json!({
-                "error": "PROCESS_NOT_FOUND",
-                "message": format!("no events found for process {process_uuid}")
-            })),
+    let events = state.store.load(&stream_id).await.map_err(|e| {
+        ApiError::internal(
+            anyhow::Error::new(e).context(format!("invoic_api: load the stream of {process_uuid}")),
         )
-            .into_response();
-    }
+    })?;
 
-    // Find the first WimInvoicReceived event and extract the rechnung.
-    for env in &events {
-        if env.event_type.as_ref() == "WimInvoicReceived" {
-            if let Some(rechnung) = env.payload.get("data").and_then(|d| d.get("rechnung")) {
-                return (StatusCode::OK, axum::Json(rechnung.clone())).into_response();
-            }
-            // The adapter embeds the decoded Rechnung on every
-            // `WimInvoicReceived`, so an event without one is a malformed
-            // stream rather than an invoice that has not arrived.
-            return (
-                StatusCode::NOT_FOUND,
-                axum::Json(serde_json::json!({
-                    "error": "RECHNUNG_NOT_EMBEDDED",
-                    "message": "the WimInvoicReceived event of this process carries no rechnung payload"
-                })),
-            )
-                .into_response();
-        }
-    }
-
-    (
-        StatusCode::NOT_FOUND,
-        axum::Json(serde_json::json!({
-            "error": "INVOIC_NOT_RECEIVED",
-            "message": format!("no WimInvoicReceived event in stream for process {process_uuid}")
-        })),
-    )
-        .into_response()
+    // Find the first WimInvoicReceived event and extract the rechnung. No
+    // events at all, or none of that type: the invoice has not arrived.
+    let Some(env) = events
+        .iter()
+        .find(|env| env.event_type.as_ref() == "WimInvoicReceived")
+    else {
+        return Err(ApiError::NotFound);
+    };
+    env.payload
+        .get("data")
+        .and_then(|d| d.get("rechnung"))
+        .cloned()
+        .map(axum::Json)
+        .ok_or_else(|| {
+            ApiError::internal(anyhow::anyhow!(
+                "invoic_api: the WimInvoicReceived event of {process_uuid} carries no rechnung"
+            ))
+        })
 }

@@ -415,7 +415,7 @@ mod tests {
 
         let at = invoic_checker::EuroAmount::from_decimal_rounded(
             rust_decimal::dec!(250.00),
-            invoic_checker::amount::RoundingStrategy::MidpointAwayFromZero,
+            invoic_checker::amount::Rounding::HalfAwayFromZero,
         )
         .unwrap();
         assert_eq!(at.to_raw(), threshold_raw);
@@ -426,7 +426,7 @@ mod tests {
 
         let above = invoic_checker::EuroAmount::from_decimal_rounded(
             rust_decimal::dec!(250.00001),
-            invoic_checker::amount::RoundingStrategy::MidpointAwayFromZero,
+            invoic_checker::amount::Rounding::HalfAwayFromZero,
         )
         .unwrap();
         assert!(
