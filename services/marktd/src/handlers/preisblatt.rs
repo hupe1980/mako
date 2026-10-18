@@ -87,34 +87,24 @@ pub struct PreisblattResponse {
     /// Wall-clock time (UTC) when this sheet was last written.
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
-    /// §14a Modul 2 time-variable NNE price positions (BNetzA BK8-22/010-A).
+    /// The § 14a Modul 3 zeitvariables Netzentgelt (BK8-22/010-A Tenor 3.).
     ///
-    /// Extracted from `data.zeitvariablePreispositionen` for explicit typed access.
-    /// Contains ToU (time-of-use) discount bands for controllable loads
-    /// (heat pumps, EV charging, §14a-eligible assets).
+    /// Extracted from `data.zeitvariablePreispositionen` for explicit typed
+    /// access: one `ZeitvariablePreisposition` per Tarifstufe, named by its
+    /// `zaehlzeitregister` — `HT`, `ST` and `NT`, all three present (refused on
+    /// PUT otherwise). `invoicd` check 4 and `netzbilanzd` read the band prices
+    /// from here before falling back to static `Leistungstyp` positions.
     ///
-    /// Mandatory for all NB deployments since 01.01.2024.  Consumers
-    /// (`invoicd` check 4, `netzbilanzd` Modul-2 billing) MUST check this
-    /// list before falling back to static `Leistungstyp` positions.
-    ///
-    /// `null` / empty = no ToU bands configured (pure static NNE tariff).
+    /// Empty = no zeitvariables Netzentgelt on this sheet.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub zeitvariable_preispositionen: Vec<serde_json::Value>,
-    /// §14a Modul 3 load-variable NNE pricing formula (BNetzA BK8-22/010-A Tenor 3.).
+    /// Quantity-tiered price positions (`LastvariablePreisposition`).
     ///
-    /// Extracted from `data.lastvariablePreispositionen` for typed ERP consumption.
-    /// Each element is a `LastvariablePreisposition` BO4E COM describing the
-    /// spot-price-linked NNE formula for one pricing band:
-    /// - `tarifkalkulationsmethode = SPOTPREIS`
-    /// - `preisreferenz = ENERGIEMENGE`
-    /// - `preisBezugseinheit = KWH`
-    /// - `preisstaffeln` — formula parameters (multiplier, floor/ceiling rates)
+    /// Extracted from `data.lastvariablePreispositionen`. Each element is
+    /// priced by its `tarifkalkulationsmethode` (`STAFFELN`, `ZONEN`, …) over
+    /// its `preisstaffeln`. Not a § 14a module.
     ///
-    /// Used by `netzbilanzd` Modul-3 billing to build per-interval `NneArbeitModul3`
-    /// positions in `GridSettlement`. `billingd` embeds these in `Rechnungsposition.
-    /// zusatzAttribute` for portal display.
-    ///
-    /// `null` / empty = Modul 3 not offered by this NB (most deployments pre-2025).
+    /// Empty = no quantity-tiered positions on this sheet.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub lastvariable_preispositionen: Vec<serde_json::Value>,
 }
@@ -157,9 +147,8 @@ pub async fn get_preisblatt(
 
     match repo.find_for_date(&nb_mp_id, &billing_date).await {
         Ok(Some(record)) => {
-            // Extract §14a Modul 2 time-variable positions from the stored JSONB.
-            // The NB PUTs them under `zeitvariablePreispositionen` (BO4E camelCase).
-            // Expose at top-level for explicit typed consumption by invoicd / netzbilanzd.
+            // The § 14a Modul 3 Tarifstufen, exposed at top level for invoicd and
+            // netzbilanzd. Validated on PUT.
             let zeitvariable = record
                 .data
                 .get("zeitvariablePreispositionen")
@@ -167,8 +156,7 @@ pub async fn get_preisblatt(
                 .cloned()
                 .unwrap_or_default();
 
-            // Extract §14a Modul 3 load-variable NNE pricing formula positions.
-            // Validated as `rubo4e::current::LastvariablePreisposition` on PUT.
+            // Quantity-tiered positions, validated on PUT.
             let lastvariable = record
                 .data
                 .get("lastvariablePreispositionen")
@@ -234,61 +222,8 @@ pub async fn put_preisblatt(
         return super::bo4e_refusal(&e).into_response();
     }
 
-    // ── Validate lastvariablePreispositionen (§14a Modul 3, BK8-22/010-A Tenor 3.) ──
-    //
-    // Validates each element against `rubo4e::current::LastvariablePreisposition`.
-    // Rules enforced beyond the BO4E schema:
-    //   1. Each element must deserialize as `LastvariablePreisposition`.
-    //   2. `tarifkalkulationsmethode` must be `SPOTPREIS` for §14a Modul 3.
-    //      Other methods (STAFFELN, INDEXIERT, …) are not Modul-3-compliant.
-    //   3. `preisBezugseinheit` must be `KWH` (NNE is always per kWh for controllable loads).
-    //
-    // Unlike `zeitvariablePreispositionen`, `lastvariablePreispositionen` is an extension
-    // field not in the standard BO4E schema — stored in `_additional` extension map.
-    if let Some(lvp_arr) = req
-        .data
-        .get("lastvariablePreispositionen")
-        .and_then(|v| v.as_array())
-    {
-        for (i, item) in lvp_arr.iter().enumerate() {
-            // The enclosing PreisblattNetznutzung has already established what
-            // this is, and BO4E producers do not reliably stamp `_typ` on a
-            // nested COM — so the gate injects it. Every stage still runs.
-            if let Err(e) = mako_markt::bo4e::decode::<LastvariablePreisposition>(item.clone()) {
-                let mut detail = e.detail();
-                detail.insert(
-                    "at".into(),
-                    format!("lastvariablePreispositionen[{i}]").into(),
-                );
-                return ApiError::unprocessable_with(
-                    e.to_string(),
-                    serde_json::Value::Object(detail),
-                )
-                .into_response();
-            }
-            // tarifkalkulationsmethode must be SPOTPREIS for §14a Modul 3 NNE
-            if let Some(method) = item
-                .get("tarifkalkulationsmethode")
-                .and_then(|v| v.as_str())
-                && method != "SPOTPREIS"
-            {
-                return ApiError::unprocessable(format!(
-                    "lastvariablePreispositionen[{i}].tarifkalkulationsmethode must be \
-                             \"SPOTPREIS\" for §14a Modul 3 NNE (got \"{method}\")"
-                ))
-                .into_response();
-            }
-            // preisBezugseinheit must be KWH
-            if let Some(unit) = item.get("preisBezugseinheit").and_then(|v| v.as_str())
-                && unit != "KWH"
-            {
-                return ApiError::unprocessable(format!(
-                    "lastvariablePreispositionen[{i}].preisBezugseinheit must be \
-                             \"KWH\" for §14a Modul 3 (got \"{unit}\")"
-                ))
-                .into_response();
-            }
-        }
+    if let Err(e) = validate_netznutzung_positionen(&req.data) {
+        return e.into_response();
     }
 
     let data = req.data;
@@ -371,6 +306,82 @@ pub async fn put_preisblatt(
 /// outage is `500`. Formatting every error into a `500` tuple throws that
 /// mapping away and tells the operator the server broke when what they need to
 /// change is a date.
+/// The three Tarifstufen of the § 14a Modul 3 zeitvariables Netzentgelt:
+/// BK8-22/010-A Tenor 3. b) obliges one „mit drei Tarifstufen gemäß der
+/// Anlage", and a `ZeitvariablePreisposition` names its Stufe in
+/// `zaehlzeitregister`.
+const MODUL3_TARIFSTUFEN: [&str; 3] = ["HT", "ST", "NT"];
+
+/// Checks the price positions a `PreisblattNetznutzung` carries in its BO4E
+/// extension map, which the envelope's own decode does not reach.
+///
+/// - `zeitvariablePreispositionen` is the § 14a Modul 3 zeitvariables
+///   Netzentgelt. Every element names one of [`MODUL3_TARIFSTUFEN`] and the
+///   sheet carries all three, so `invoic-checker` and `netzbilanzd` can price
+///   each band: a sheet missing a Stufe would leave its energy unpriced.
+/// - `lastvariablePreispositionen` is quantity-tiered pricing (`STAFFELN`,
+///   `ZONEN`, …). It is not a § 14a module — BK8-22/010-A defines three and none
+///   is spot-linked — so it passes the BO4E gate and nothing more.
+#[must_use = "a refusal that is not returned stores the sheet anyway"]
+fn validate_netznutzung_positionen(data: &serde_json::Value) -> Result<(), ApiError> {
+    let at = |list: &str, i: usize, e: &mako_markt::bo4e::Bo4eRejection| {
+        let mut detail = e.detail();
+        detail.insert("at".into(), format!("{list}[{i}]").into());
+        ApiError::unprocessable_with(e.to_string(), serde_json::Value::Object(detail))
+    };
+
+    if let Some(zvp) = data
+        .get("zeitvariablePreispositionen")
+        .and_then(|v| v.as_array())
+    {
+        let mut stufen = Vec::with_capacity(MODUL3_TARIFSTUFEN.len());
+        for (i, item) in zvp.iter().enumerate() {
+            if item.get("bandNummer").is_some() {
+                return Err(ApiError::unprocessable(format!(
+                    "zeitvariablePreispositionen[{i}]: 'bandNummer' is not a BO4E v202607 \
+                     field — name the Tarifstufe in 'zaehlzeitregister' (\"HT\", \"ST\" or \"NT\")"
+                )));
+            }
+            // A nested COM need not stamp `_typ`; the gate injects the one the
+            // enclosing PreisblattNetznutzung already settled.
+            let position = mako_markt::bo4e::decode::<ZeitvariablePreisposition>(item.clone())
+                .map_err(|e| at("zeitvariablePreispositionen", i, &e))?;
+            match position.zaehlzeitregister.as_deref() {
+                Some(stufe) if MODUL3_TARIFSTUFEN.contains(&stufe) => stufen.push(stufe.to_owned()),
+                other => {
+                    return Err(ApiError::unprocessable(format!(
+                        "zeitvariablePreispositionen[{i}].zaehlzeitregister must name a \
+                         § 14a Modul 3 Tarifstufe — \"HT\", \"ST\" or \"NT\" \
+                         (BK8-22/010-A Tenor 3. b)); got {other:?}"
+                    )));
+                }
+            }
+        }
+        let fehlend: Vec<&str> = MODUL3_TARIFSTUFEN
+            .into_iter()
+            .filter(|s| !stufen.iter().any(|have| have == s))
+            .collect();
+        if !zvp.is_empty() && !fehlend.is_empty() {
+            return Err(ApiError::unprocessable(format!(
+                "zeitvariablePreispositionen must price all three § 14a Modul 3 \
+                 Tarifstufen HT, ST and NT (BK8-22/010-A Tenor 3. b)); missing {}",
+                fehlend.join(", ")
+            )));
+        }
+    }
+
+    if let Some(lvp) = data
+        .get("lastvariablePreispositionen")
+        .and_then(|v| v.as_array())
+    {
+        for (i, item) in lvp.iter().enumerate() {
+            mako_markt::bo4e::decode::<LastvariablePreisposition>(item.clone())
+                .map_err(|e| at("lastvariablePreispositionen", i, &e))?;
+        }
+    }
+    Ok(())
+}
+
 fn failure(e: impl Into<Failure>) -> axum::response::Response {
     super::mdm_error(e.into().0).into_response()
 }
@@ -447,25 +458,27 @@ pub struct PreisblattMessungResponse {
     /// Extracted from `data.aufAbschlaege` for explicit typed access.
     /// Contains conditional supplements and discounts on the MSB base price:
     /// - remote-read surcharge (`AufAbschlagstyp::AUFSCHLAG`)
-    /// - §14a Modul 3 ToU discount bands (`AufAbschlagstyp::ABSCHLAG`)
+    /// - discounts (`AufAbschlagstyp::ABSCHLAG`)
     /// - hardware rental add-ons
     ///
     /// An empty list means no supplements/discounts are configured.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub auf_abschlaege: Vec<serde_json::Value>,
-    /// §14a Modul 2 time-variable MSB price positions.
+    /// Time-of-use MSB price positions.
     ///
     /// Typed `Vec<ZeitvariablePreisposition>` deserialized from stored JSONB.
-    /// Each element carries `zaehlzeitregister` (e.g. `"HT"`, `"NT"`, `"ST"`) which
-    /// identifies the TOU band.  Used by `invoicd` check 4 for INVOIC 31009 MSB
-    /// tariff validation and by `billingd` §14a Modul 2/3 billing.
+    /// Each element carries `zaehlzeitregister` (e.g. `"HT"`, `"NT"`), which
+    /// identifies the band. Used by `invoicd` check 4 for INVOIC 31009 MSB
+    /// tariff validation. A Messstellenbetrieb price is not a Netzentgelt, so
+    /// § 14a does not number these bands.
     ///
     /// Empty = no TOU bands configured (pure flat MSB tariff).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[schema(value_type = Vec<Object>)]
     pub zeitvariable_preispositionen: Vec<ZeitvariablePreisposition>,
     /// Number of `zeitvariablePreispositionen` elements that failed schema validation.
-    /// Non-zero indicates data stored before the band-code validation — re-PUT the sheet to normalize.
+    /// Non-zero means a stored element no longer decodes under the current
+    /// schema — re-PUT the sheet to normalize it.
     #[serde(skip_serializing_if = "is_zero")]
     pub schema_drift_count: u32,
 }
@@ -624,9 +637,9 @@ pub async fn put_preisblatt_messung(
     // BDEW business rules that are NOT enforced by the BO4E schema:
     //
     // 1. Each element must deserialize as `ZeitvariablePreisposition`.
-    // 2. `zaehlzeitregister` MUST be non-empty (§14a Modul 2, BK8-22/010-A):
-    //    An MSB with ToU pricing MUST identify each band code (e.g. "HT", "NT", "ST").
-    //    Without it, `invoic-checker` cannot match INVOIC 31009 positions against bands.
+    // 2. `zaehlzeitregister` MUST be non-empty: an MSB with time-of-use pricing
+    //    names each band code (e.g. "HT", "NT"). Without it, `invoic-checker`
+    //    cannot match INVOIC 31009 positions against bands.
     // 3. Reject `bandNummer` (does NOT exist in BO4E v202607 — pre-standardization field).
     //    Operators who accidentally set `bandNummer` instead of `zaehlzeitregister` would
     //    get silent failures in invoic-checker check 4.
@@ -669,14 +682,13 @@ pub async fn put_preisblatt_messung(
                 }
             };
 
-            // Business rule (§14a Modul 2, BK8-22/010-A): `zaehlzeitregister` is mandatory.
-            // Without it, `invoicd` / `invoic-checker` cannot route INVOIC positions to bands.
+            // `zaehlzeitregister` is mandatory: without it, `invoicd` /
+            // `invoic-checker` cannot route INVOIC positions to bands.
             match zvp.zaehlzeitregister.as_deref() {
                 None | Some("") => {
                     return ApiError::unprocessable(format!(
                         "zeitvariablePreispositionen[{}]: 'zaehlzeitregister' is \
-                                 mandatory per §14a Modul 2 (BK8-22/010-A) — set it to the \
-                                 TOU band code (e.g. \"HT\", \"NT\", \"ST\")",
+                                 mandatory — set it to the band code (e.g. \"HT\", \"NT\")",
                         i
                     ))
                     .into_response();
@@ -1008,5 +1020,90 @@ pub async fn put_preisblatt_hardware(
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => failure(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_netznutzung_positionen;
+    use serde_json::json;
+
+    fn stufe(register: &str) -> serde_json::Value {
+        json!({
+            "zaehlzeitregister": register,
+            "preisreferenz": "ENERGIEMENGE",
+            "preis": { "wert": "8.35", "einheit": "CT", "bezugswert": "KWH" }
+        })
+    }
+
+    fn sheet(zeitvariabel: Vec<serde_json::Value>) -> serde_json::Value {
+        json!({ "_typ": "PREISBLATTNETZNUTZUNG", "zeitvariablePreispositionen": zeitvariabel })
+    }
+
+    fn refusal(data: &serde_json::Value) -> String {
+        format!(
+            "{:?}",
+            validate_netznutzung_positionen(data).expect_err("must be refused")
+        )
+    }
+
+    /// A § 14a Modul 3 sheet prices the three Tarifstufen HT, ST and NT
+    /// (BK8-22/010-A Tenor 3. b)) and is stored.
+    #[test]
+    fn a_modul_3_sheet_with_ht_st_nt_is_accepted() {
+        let data = sheet(vec![stufe("HT"), stufe("ST"), stufe("NT")]);
+        assert!(validate_netznutzung_positionen(&data).is_ok());
+    }
+
+    /// Two Stufen leave the third band's energy with no price to bill at.
+    #[test]
+    fn a_modul_3_sheet_missing_a_tarifstufe_is_refused() {
+        let msg = refusal(&sheet(vec![stufe("HT"), stufe("NT")]));
+        assert!(msg.contains("missing ST"), "{msg}");
+    }
+
+    /// A register outside HT/ST/NT, or none, names no Modul 3 Tarifstufe.
+    #[test]
+    fn a_register_that_is_no_tarifstufe_is_refused() {
+        for bad in [stufe("SuperHT"), json!({ "preisreferenz": "ENERGIEMENGE" })] {
+            let msg = refusal(&sheet(vec![stufe("HT"), stufe("ST"), stufe("NT"), bad]));
+            assert!(msg.contains("Tarifstufe"), "{msg}");
+        }
+    }
+
+    /// `bandNummer` is no BO4E v202607 field.
+    #[test]
+    fn a_band_nummer_is_refused() {
+        let mut ht = stufe("HT");
+        ht["bandNummer"] = json!(1);
+        let msg = refusal(&sheet(vec![ht, stufe("ST"), stufe("NT")]));
+        assert!(msg.contains("bandNummer"), "{msg}");
+    }
+
+    /// A quantity-tiered position is priced by its Staffeln and is not a
+    /// § 14a module, so `STAFFELN` is stored.
+    #[test]
+    fn a_staffel_priced_lastvariable_position_is_accepted() {
+        let data = json!({
+            "_typ": "PREISBLATTNETZNUTZUNG",
+            "lastvariablePreispositionen": [{
+                "tarifkalkulationsmethode": "STAFFELN",
+                "preisreferenz": "ENERGIEMENGE",
+                "preisBezugseinheit": "KWH"
+            }]
+        });
+        assert!(validate_netznutzung_positionen(&data).is_ok());
+    }
+
+    /// `SPOTPREIS` is no `Tarifkalkulationsmethode`, so the BO4E gate
+    /// refuses it, naming the element.
+    #[test]
+    fn a_spotpreis_method_is_refused_by_the_gate() {
+        let data = json!({
+            "_typ": "PREISBLATTNETZNUTZUNG",
+            "lastvariablePreispositionen": [{ "tarifkalkulationsmethode": "SPOTPREIS" }]
+        });
+        let msg = refusal(&data);
+        assert!(msg.contains("lastvariablePreispositionen[0]"), "{msg}");
     }
 }

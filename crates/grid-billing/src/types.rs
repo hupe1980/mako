@@ -748,10 +748,10 @@ pub enum BillingPositionKind {
     /// §14a Modul 2 Arbeit — prozentuale Reduzierung of the device's Arbeitspreis.
     /// → `BdewArtikelnummer::Wirkarbeit` (same article, different rate)
     NneArbeitModul2,
-    /// §14a Modul 3 Spotpreis-NNE — per-dispatch-interval variable rate position.
+    /// Spot-linked Netzentgelt — one position per dispatch interval.
     ///
-    /// One `InvoicePosition` is generated per dispatch interval from
-    /// `NneInput::sect14a_modul3_intervals`. Each carries a
+    /// One `InvoicePosition` is generated per interval of
+    /// [`ArbeitspreisModell::SpotpreisNetzentgelt`]. Each carries a
     /// `lastvariable_preisposition_json` with the BO4E `LastvariablePreisposition`
     /// COM data (pricing formula parameters) for ERP-side validation and portal
     /// display of the per-interval tariff breakdown.
@@ -759,7 +759,7 @@ pub enum BillingPositionKind {
     /// Priced from the NB's own `PreisblattNetznutzung` formula, not from a
     /// Festlegung: no § 14a module is spot-linked.
     /// → `BdewArtikelnummer::Wirkarbeit`
-    NneArbeitModul3,
+    NneArbeitSpotpreis,
     /// Netznutzungsentgelt Leistung — RLM peak demand charge (kW).
     /// → `BdewArtikelnummer::Leistung`
     NneLeistung,
@@ -837,7 +837,7 @@ impl BillingPositionKind {
         Self::NneArbeitNt,
         Self::NneArbeitModul1,
         Self::NneArbeitModul2,
-        Self::NneArbeitModul3,
+        Self::NneArbeitSpotpreis,
         Self::NneLeistung,
         Self::NneGasGrundpreis,
         Self::Konzessionsabgabe,
@@ -871,7 +871,7 @@ impl BillingPositionKind {
             | Self::NneArbeitNt
             | Self::NneArbeitModul1
             | Self::NneArbeitModul2
-            | Self::NneArbeitModul3
+            | Self::NneArbeitSpotpreis
             | Self::NneLeistung
             | Self::NneGasGrundpreis
             | Self::Konzessionsabgabe
@@ -900,7 +900,7 @@ impl BillingPositionKind {
 /// (BO4E `Rechnungsposition`, EN16931 UBL, etc.).
 ///
 /// Invariant: `net_eur == (quantity × unit_price_eur).round_kfm(5)`.
-/// The pricing formula behind a §14a Modul 3 spot-priced position.
+/// The pricing formula behind a spot-linked Netzentgelt position.
 ///
 /// Modelled as a value object rather than a serialised BO4E document. The engine
 /// states *what the formula was*; translating that into
@@ -910,7 +910,7 @@ impl BillingPositionKind {
 /// to avoid.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SpotPriceFormula {
-    /// What the price refers to — for Modul 3 always the metered energy.
+    /// What the price refers to — always the metered energy.
     pub reference: PriceReference,
     /// The unit the price is expressed per.
     pub unit: QuantityUnit,
@@ -1010,7 +1010,7 @@ impl BillingPositionKind {
                 | K::NneArbeitNt
                 | K::NneArbeitModul1
                 | K::NneArbeitModul2
-                | K::NneArbeitModul3,
+                | K::NneArbeitSpotpreis,
                 ST::NneGas,
             ) => Some("WIRKARBEIT"),
             (K::NneLeistung, ST::NneGas) => Some("LEISTUNG"),
@@ -1023,7 +1023,7 @@ impl BillingPositionKind {
                 | K::NneArbeitNt
                 | K::NneArbeitModul1
                 | K::NneArbeitModul2
-                | K::NneArbeitModul3
+                | K::NneArbeitSpotpreis
                 | K::NneLeistung,
                 _,
             ) => None,
@@ -1917,9 +1917,8 @@ impl SettlementResult {
 /// - Leave both fields as `None` (Arbeitspreisanteil only).
 ///
 /// For **§14a Modul 3 zeitvariable NNE** (BNetzA BK8-22/010-A Tenor 3.):
-/// - Set `arbeitsmenge_ht_kwh` + `arbeitspreis_ht_ct_per_kwh` for Hochlast periods.
-/// - Set `arbeitsmenge_nt_kwh` + `arbeitspreis_nt_ct_per_kwh` for Niedertarif periods.
-/// - Leave `arbeitsmenge_kwh` / `arbeitspreis_ct_per_kwh` as the base fallback.
+/// - Select [`ArbeitspreisModell::Modul3ZeitVariabel`] with the HT, ST and NT
+///   bands, each its energy and its published rate.
 ///
 /// For Gas:
 /// - The `arbeitsmenge_kwh` should already be converted from m³ using
@@ -1983,7 +1982,7 @@ pub struct NneInput {
     /// - `Sparte::Gas` → `GasNEV §15`, `SettlementType::NneGas`
     pub sparte: Sparte,
 
-    // ── §14a Modul 3 Spotpreis-NNE per-interval dispatch data ────────────────
+    // ── Spot-linked Netzentgelt per-interval dispatch data ───────────────────
     /// Per-dispatch-interval positions for a spot-linked Netzentgelt.
     ///
     /// Each entry represents one 15-min interval during which a spot-price-linked
@@ -1998,7 +1997,7 @@ pub struct NneInput {
     /// construction — the enum holds one at a time.
     ///
     /// Each interval generates one `InvoicePosition` with
-    /// `kind = NneArbeitModul3` and `lastvariable_preisposition_json` populated.
+    /// `kind = NneArbeitSpotpreis` and `lastvariable_preisposition_json` populated.
     #[doc = "Spot-linked Netzentgelt per-interval input data."]
     ///
     /// One value rather than twelve loose fields: the four shapes are mutually
@@ -2777,15 +2776,15 @@ mod input_model_tests {
         }
     }
 
-    /// BK8-22/010-A numbers the three modules in a specific way, and this project
-    /// had them shuffled: the time-variable model was labelled Modul 2 and a
-    /// spot-linked Netzentgelt was labelled Modul 3.
+    /// BK8-22/010-A numbers the three modules: Modul 2 is the prozentuale
+    /// Reduzierung, Modul 3 the zeitvariable Netzentgelt, and a spot-linked
+    /// Netzentgelt is none of them.
     ///
     /// Getting this wrong prints the wrong statutory module on a real invoice
     /// and makes the LF-side and NB-side engines disagree about the same
     /// connection, so it is pinned here rather than left to a doc comment.
     #[test]
-    fn the_modules_are_numbered_as_bk6_22_300_defines_them() {
+    fn the_modules_are_numbered_as_bk8_22_010_a_defines_them() {
         use Sect14aModule as M;
         assert!(M::Modul1.label().contains("pauschale Reduzierung"));
         assert!(

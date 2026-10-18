@@ -1164,12 +1164,12 @@ impl InvoicCheckEngine {
                 continue;
             };
 
-            // Collect published prices split into flat and ToU (§14a Modul 2) sets.
+            // Collect published prices split into flat and ToU sets.
             //
             // - `flat_prices`: prices from `Preisposition.preisstaffeln`
             //   (flat Arbeitspreis, Leistungspreis, Grundpreis)
             // - `tou_prices`: prices from `zeitvariablePreispositionen` extension
-            //   (HT/NT band prices per §14a Modul 3, BK8-22/010-A Tenor 3.)
+            //   (HT/ST/NT band prices per §14a Modul 3, BK8-22/010-A Tenor 3.)
             //
             // ToU-aware matching (L3):
             //   • Position text contains "HT" (Hochlast/Hochtarif) → only `tou_prices`

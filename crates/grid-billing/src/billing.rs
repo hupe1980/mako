@@ -461,7 +461,7 @@ fn push_netzumlagen(
 /// | next | Netznutzung Arbeit (§14a Modul 1 reduced) | Modul 1 flat reduction mode |
 /// | next | Netznutzung Arbeit HT + ST + NT (§14a Modul 3) | zeitvariables Netzentgelt (BK8-22/010-A) |
 /// | next | Netznutzung Arbeit (§14a Modul 2, reduzierter Arbeitspreis) | prozentuale Reduzierung |
-/// | next | Netznutzung Arbeit je Dispatch-Intervall (§14a Modul 3 Spot) | spot-priced mode |
+/// | next | Netznutzung Arbeit je Dispatch-Intervall (Spotpreis-Netzentgelt) | spot-priced mode |
 /// | next | Netznutzung Arbeit | flat mode (no §14a) |
 /// | next | Netznutzung Leistung (StromNEV §17, Jahresleistungspreis pro-rated by days) | RLM only |
 /// | last | Konzessionsabgabe (KAV §2) | when `ka_satz_ct_per_kwh` set |
@@ -472,7 +472,9 @@ fn push_netzumlagen(
 /// - Arbeit positions → `StromNEV §21` (or `GasNEV §15` for Gas)
 /// - §14a Modul 1 positions → `Sect14aEnwg { module: Modul1 }` + `BNetzA BK8-22/010-A`
 /// - §14a Modul 2 position → `Sect14aEnwg { module: Modul2 }` + `BNetzA BK8-22/010-A`
-/// - §14a Modul 3 positions (HT/ST/NT and Spot) → `Sect14aEnwg { module: Modul3 }` + `BNetzA BK8-22/010-A`
+/// - §14a Modul 3 positions (HT/ST/NT) → `Sect14aEnwg { module: Modul3 }` + `BNetzA BK8-22/010-A`
+/// - Spot-linked Netzentgelt positions → the Arbeit reference alone: no § 14a
+///   module is spot-linked
 /// - Leistung position → `StromNEV §17` (Abs. 2 — a Jahresleistungspreis)
 /// - Konzessionsabgabe → `KAV §2 Abs. 2`
 ///
@@ -514,18 +516,19 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     if let ArbeitspreisModell::SpotpreisNetzentgelt { intervalle } = &input.arbeitspreis {
         if intervalle.is_empty() {
             return Err(BillingError::InvalidInput {
-                reason: "§14a Modul 3 requires at least one dispatch interval".to_owned(),
+                reason: "a spot-linked Netzentgelt requires at least one dispatch interval"
+                    .to_owned(),
             });
         }
         for (i, iv) in intervalle.iter().enumerate() {
             if iv.period_from >= iv.period_to {
                 return Err(BillingError::InvalidInput {
-                    reason: format!("Modul 3 interval {i}: start is not before end"),
+                    reason: format!("spot interval {i}: start is not before end"),
                 });
             }
             if iv.menge_kwh < Decimal::ZERO {
                 return Err(BillingError::InvalidInput {
-                    reason: format!("Modul 3 interval {i}: metered energy is negative"),
+                    reason: format!("spot interval {i}: metered energy is negative"),
                 });
             }
         }
@@ -951,7 +954,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             positions.push(p);
         }
 
-        // Modul 3 positions are emitted below, per dispatch interval.
+        // Spot-linked positions are emitted below, per dispatch interval.
         ArbeitspreisModell::SpotpreisNetzentgelt { .. } => {}
     }
 
@@ -1275,16 +1278,16 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         positions.push(p);
     }
 
-    // ── §14a Modul 3: per-dispatch-interval Spotpreis-NNE ─────────────────────
+    // ── Spot-linked Netzentgelt: one position per dispatch interval ───────────
     // One position per 15-min dispatch interval, priced from the NB's Preisblatt.
     // The rate is pre-calculated by the caller from the spot-price formula in
     // `PreisblattNetznutzung.lastvariablePreispositionen`.
     // Each position carries a `LastvariablePreisposition` JSON for ERP validation.
-    let modul3_intervalle: &[SpotpreisInterval] = match &input.arbeitspreis {
+    let spot_intervalle: &[SpotpreisInterval] = match &input.arbeitspreis {
         ArbeitspreisModell::SpotpreisNetzentgelt { intervalle } => intervalle,
         _ => &[],
     };
-    for interval in modul3_intervalle.iter() {
+    for interval in spot_intervalle.iter() {
         if interval.menge_kwh <= Decimal::ZERO {
             continue; // skip zero-energy intervals (e.g. overnight no-load)
         }
@@ -1301,7 +1304,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             .format(&Rfc3339)
             .unwrap_or_else(|_| interval.period_to.to_string());
 
-        let label = format!("§14a Modul 3 Spotpreis-NNE {from_str}–{to_str}");
+        let label = format!("Spotpreis-Netzentgelt {from_str}–{to_str}");
 
         // Build typed LastvariablePreisposition JSON for ERP-side validation.
         // The formula as a value, not as somebody's document schema. An adapter
@@ -1318,7 +1321,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         };
 
         let mut explanation = format!(
-            "{:.3} kWh × {:.6} EUR/kWh (§14a Modul 3 Spotpreis, interval {}/{}) = {:.5} EUR",
+            "{:.3} kWh × {:.6} EUR/kWh (Spotpreis-Netzentgelt, interval {}/{}) = {:.5} EUR",
             interval.menge_kwh, rate_eur, from_str, to_str, net
         );
         if let Some(epex) = interval.epex_spot_ct_per_kwh {
@@ -1327,7 +1330,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
 
         let p = SettlementPosition {
             text: label,
-            kind: BillingPositionKind::NneArbeitModul3,
+            kind: BillingPositionKind::NneArbeitSpotpreis,
             quantity: interval.menge_kwh.round_kfm(3),
             unit: QuantityUnit::Kwh,
             unit_price_eur: rate_eur.round_kfm(6),
@@ -1338,15 +1341,9 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                 input_quantity: interval.menge_kwh,
                 input_unit_price_eur: rate_eur,
                 gross_eur: interval.menge_kwh * rate_eur,
-                legal_refs: vec![
-                    LegalReference::Sect14aEnwg {
-                        module: Sect14aModule::Modul3,
-                    },
-                    LegalReference::BnetzaDecision {
-                        reference: "BK8-22/010-A",
-                    },
-                    arbeit_ref.clone(),
-                ],
+                // The NB's own price model: no § 14a module and no Festlegung
+                // stands behind the rate, so the trace cites neither.
+                legal_refs: vec![arbeit_ref.clone()],
                 tariff_source: tariff_src.clone(),
                 regulatory_reduction_factor: None,
                 rounding_note: Some("rate ct→EUR 6 dp; net 5 dp"),
@@ -1363,9 +1360,9 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     // revenue is recovered through the §19-Umlage billed above.
     //
     // Sequenced last on purpose. It reduces a *basis*, so every NNE position it
-    // covers has to exist before it runs — the §14a Modul 3 Spotpreis positions
+    // covers has to exist before it runs — the spot-linked Netzentgelt positions
     // are emitted per dispatch interval further down and would otherwise be
-    // outside the basis entirely, leaving a Modul-3 customer with a 10 %
+    // outside the basis entirely, leaving a spot-priced customer with a 10 %
     // agreement billed as though they had none.
     if let Some(v) = &input.sect19 {
         v.pruefe_prozentsatz()?;
@@ -1427,7 +1424,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                         | BillingPositionKind::NneArbeitNt
                         | BillingPositionKind::NneArbeitModul1
                         | BillingPositionKind::NneArbeitModul2
-                        | BillingPositionKind::NneArbeitModul3
+                        | BillingPositionKind::NneArbeitSpotpreis
                         | BillingPositionKind::NneLeistung
                 )
             })
@@ -5587,7 +5584,7 @@ mod proptests {
     }
 }
 
-// ── §14a Modul 3 unit tests ───────────────────────────────────────────────────
+// ── Spot-linked Netzentgelt unit tests ────────────────────────────────────────
 
 #[cfg(test)]
 mod modul3_tests {
@@ -5632,7 +5629,7 @@ mod modul3_tests {
     }
 
     #[test]
-    fn nne_sect14a_modul3_single_interval() {
+    fn nne_spot_single_interval() {
         use time::OffsetDateTime;
         let start = OffsetDateTime::parse(
             "2026-01-15T10:00:00Z",
@@ -5653,12 +5650,12 @@ mod modul3_tests {
         };
         let r = settle_nne(&i).unwrap();
 
-        // Flat Arbeit + one Modul 3 interval, plus the three network levies a
+        // Flat Arbeit + one spot interval, plus the three network levies a
         // Strom NNE invoice for a covered year always carries.
         assert_eq!(
             r.positions.len(),
             4,
-            "1 Modul 3 position + 3 Umlagen — and no flat Arbeit position: \
+            "1 spot position + 3 Umlagen — and no flat Arbeit position: \
              the interval rates replace it rather than adding to it"
         );
         assert_eq!(
@@ -5674,24 +5671,24 @@ mod modul3_tests {
             3
         );
 
-        let modul3_pos = r
+        let spot_pos = r
             .positions
             .iter()
-            .find(|p| p.kind == BillingPositionKind::NneArbeitModul3)
-            .expect("Modul 3 position must be present");
+            .find(|p| p.kind == BillingPositionKind::NneArbeitSpotpreis)
+            .expect("spot position must be present");
 
         // 2.5 kWh × 0.018 EUR/kWh = 0.045 EUR
-        assert_eq!(modul3_pos.net_eur, d("0.04500"), "Modul 3 net_eur");
-        assert_eq!(modul3_pos.quantity, d("2.500"));
-        assert_eq!(modul3_pos.unit, QuantityUnit::Kwh);
+        assert_eq!(spot_pos.net_eur, d("0.04500"), "spot net_eur");
+        assert_eq!(spot_pos.quantity, d("2.500"));
+        assert_eq!(spot_pos.unit, QuantityUnit::Kwh);
 
         // The pricing formula is a value, not a serialised document. What an
         // auditor needs is the method and the rate that applied; how a BO4E
         // `LastvariablePreisposition` renders that is the adapter's problem.
-        let formula = modul3_pos
+        let formula = spot_pos
             .spot_price_formula
             .as_ref()
-            .expect("a Modul 3 position states the formula behind its rate");
+            .expect("a spot position states the formula behind its rate");
         assert_eq!(formula.method, TariffCalculationMethod::Spotpreis);
         assert_eq!(formula.reference, PriceReference::Energiemenge);
         assert_eq!(formula.unit, QuantityUnit::Kwh);
@@ -5703,35 +5700,35 @@ mod modul3_tests {
         // The EPEX price that produced the rate stays in the trace, which is
         // where an auditor looks for inputs.
         assert!(
-            modul3_pos.trace.explanation.contains("12.5"),
+            spot_pos.trace.explanation.contains("12.5"),
             "the spot price behind the rate must be recoverable: {}",
-            modul3_pos.trace.explanation
+            spot_pos.trace.explanation
         );
 
-        // Legal references
-        let refs = &modul3_pos.trace.legal_refs;
+        // No § 14a module is spot-linked, so the trace cites none — and no
+        // Festlegung either: the rate is the NB's own price model.
+        let refs = &spot_pos.trace.legal_refs;
         assert!(
-            refs.iter().any(|r| matches!(
-                r,
-                LegalReference::Sect14aEnwg {
-                    module: Sect14aModule::Modul3
-                }
-            )),
-            "must reference §14a Modul 3"
+            !refs
+                .iter()
+                .any(|r| matches!(r, LegalReference::Sect14aEnwg { .. })),
+            "a spot-linked Netzentgelt cites no § 14a module: {refs:?}"
         );
         assert!(
-            refs.iter().any(|r| matches!(
-                r,
-                LegalReference::BnetzaDecision {
-                    reference: "BK8-22/010-A"
-                }
-            )),
-            "must reference BK8-22/010-A"
+            !refs
+                .iter()
+                .any(|r| matches!(r, LegalReference::BnetzaDecision { .. })),
+            "a spot-linked Netzentgelt cites no Festlegung: {refs:?}"
+        );
+        assert!(
+            !spot_pos.text.contains("14a"),
+            "the invoice text names no § 14a module: {}",
+            spot_pos.text
         );
     }
 
     #[test]
-    fn nne_sect14a_modul3_multiple_intervals_sum_correctly() {
+    fn nne_spot_multiple_intervals_sum_correctly() {
         let base = time::OffsetDateTime::parse(
             "2026-01-15T10:00:00Z",
             &time::format_description::well_known::Rfc3339,
@@ -5758,14 +5755,14 @@ mod modul3_tests {
         };
         let r = settle_nne(&i).unwrap();
 
-        // 2 Modul 3 intervals + the three network levies. The flat Arbeit
+        // 2 spot intervals + the three network levies. The flat Arbeit
         // position is absent by design: billing it alongside the interval rates
         // charged the same energy twice.
         assert_eq!(r.positions.len(), 5);
         let modul3: Vec<_> = r
             .positions
             .iter()
-            .filter(|p| p.kind == BillingPositionKind::NneArbeitModul3)
+            .filter(|p| p.kind == BillingPositionKind::NneArbeitSpotpreis)
             .collect();
         assert_eq!(modul3.len(), 2);
         // Interval 1: 1.25 kWh × 0.02 EUR/kWh = 0.025 EUR
@@ -5780,7 +5777,7 @@ mod modul3_tests {
     }
 
     #[test]
-    fn nne_modul3_zero_kwh_interval_is_skipped() {
+    fn nne_spot_zero_kwh_interval_is_skipped() {
         let base = time::OffsetDateTime::parse(
             "2026-01-15T10:00:00Z",
             &time::format_description::well_known::Rfc3339,
@@ -5809,18 +5806,17 @@ mod modul3_tests {
         let modul3: Vec<_> = r
             .positions
             .iter()
-            .filter(|p| p.kind == BillingPositionKind::NneArbeitModul3)
+            .filter(|p| p.kind == BillingPositionKind::NneArbeitSpotpreis)
             .collect();
         assert_eq!(modul3.len(), 1, "zero-kWh interval must be skipped");
     }
 
     /// The §14a modules are mutually exclusive by construction.
     ///
-    /// Modul 1 applies a flat reduction to the whole Arbeitsmenge; Modul 3 prices
-    /// each dispatch interval. Both together billed the same energy twice, and
-    /// the engine did it silently because the conflict check lived in a validator
-    /// nothing called. `ArbeitspreisModell` now holds one model at a time, so the
-    /// combination cannot be expressed.
+    /// Modul 1 applies a flat reduction to the whole Arbeitsmenge; a spot-linked
+    /// Netzentgelt prices each dispatch interval. Both together would bill the
+    /// same energy twice, so `ArbeitspreisModell` holds one model at a time and
+    /// the combination cannot be expressed.
     #[test]
     fn the_sect14a_modules_are_mutually_exclusive() {
         let base = time::OffsetDateTime::parse(
@@ -5859,20 +5855,20 @@ mod modul3_tests {
             .count();
         assert_eq!(
             modul1_positions, 0,
-            "no flat Modul 1 position alongside Modul 3"
+            "no flat Modul 1 position alongside the spot model"
         );
     }
 
     // ── §19 Abs. 2 StromNEV — the reduction basis ────────────────────────────
 
-    /// The §19 Abs. 2 reduction must cover the §14a Modul 3 Spotpreis positions.
+    /// The §19 Abs. 2 reduction must cover the spot-linked Netzentgelt positions.
     ///
     /// They are emitted per dispatch interval and must be in the basis before
-    /// the §19 block runs. Pushed after it, a Modul-3 customer with a 10 %
+    /// the §19 block runs. Pushed after it, a spot-priced customer with a 10 %
     /// agreement has a basis of zero and is billed the published Netzentgelt in
     /// full.
     #[test]
-    fn sect19_reduction_covers_the_modul3_spot_positions() {
+    fn sect19_reduction_covers_the_spot_positions() {
         use time::macros::datetime;
         let interval = |kwh: &str, ct: &str, hour: u8| SpotpreisInterval {
             period_from: datetime!(2025-01-01 00:00 UTC) + time::Duration::hours(hour as i64),
@@ -5896,20 +5892,20 @@ mod modul3_tests {
         })
         .expect("a settleable NNE");
 
-        let modul3: Decimal = out
+        let spot: Decimal = out
             .positions
             .iter()
-            .filter(|p| p.kind == BillingPositionKind::NneArbeitModul3)
+            .filter(|p| p.kind == BillingPositionKind::NneArbeitSpotpreis)
             .map(|p| p.net_eur)
             .sum();
-        assert_eq!(modul3, d("50.00000"), "1 000 kWh × 5 ct");
+        assert_eq!(spot, d("50.00000"), "1 000 kWh × 5 ct");
 
         let reduktion = out
             .positions
             .iter()
             .find(|p| p.kind == BillingPositionKind::Sect19IndividuellesEntgelt)
             .expect("a §19 reduction position");
-        // 10 % agreed → 90 % of the Modul-3 NNE is credited back.
+        // 10 % agreed → 90 % of the spot-linked NNE is credited back.
         assert_eq!(reduktion.net_eur, d("-45.00000"));
     }
 

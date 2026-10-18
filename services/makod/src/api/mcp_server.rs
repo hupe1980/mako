@@ -1314,9 +1314,7 @@ impl MakodMcpHandler {
                  Call `get_process` with the `melo_id` to check if the Preisanfrage process\n\
                  is active and what deadlines are pending.\n\n\
                  **Step 4 — Initiate WiM-Wechsel after price agreement:**\n\
-                 `submit_command` with command: \"wim.geraetewechsel.beauftragen\"\n\n\
-                 **§14a note:** For controllable loads (iMSys), the PRICAT must include\n\
-                 `ZeitvariablePreisposition` for time-of-use MSB fees (§14a Modul 3).",
+                 `submit_command` with command: \"wim.geraetewechsel.beauftragen\"",
                     frist = render_fristen(&[35_001])
                 ),
             ),

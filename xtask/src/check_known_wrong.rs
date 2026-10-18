@@ -216,10 +216,11 @@ const RULES: &[Rule] = &[
     Rule {
         id: "modul-2-3",
         row: "§14a EnWG Modul 2 = zeitvariable/HT-NT Netzentgelte",
-        pattern: r"(?i)modul ?2\b[^,;.]{0,25}(zeitvariabl|ht/nt|ht-nt|\btou\b)|modul ?3\b.{0,20}steuerungsentschädigung|BK6-22-300.{0,10}§ ?14a Modul",
+        pattern: r"(?i)modul ?2\b[^,;.]{0,25}(zeitvariabl|time[- ]variable|ht/nt|ht-nt|\btou\b)|\btou\b.{0,5}§ ?14a modul ?2\b|modul ?3\b.{0,20}steuerungsentschädigung|modul ?3\b[^,;.]{0,25}spot|spot\w*[^,;.]{0,25}§ ?14a modul ?3\b|BK6-22-300.{0,10}§ ?14a Modul",
         reason: "BK8-22/010-A numbers the modules: Modul 2 is the prozentuale \
-                 Arbeitspreis-Reduzierung (40 %), Modul 3 the zeitvariable Netzentgelt. The \
-                 row's „Modul 3 = Spotpreis\" half is not matched",
+                 Arbeitspreis-Reduzierung (40 %), Modul 3 the zeitvariable Netzentgelt in \
+                 three Tarifstufen, and none is spot-linked. A „Modul 3\" and a „spot\" are \
+                 caught only within one clause of each other",
     },
     Rule {
         id: "invoic-31009-direction",
@@ -847,6 +848,18 @@ mod tests {
             ),
             ("modul-2-3", "/// Modul 2 (HT/NT), Modul 3 (spot)"),
             (
+                "modul-2-3",
+                "\"tarifkalkulationsmethode must be \\\"SPOTPREIS\\\" for §14a Modul 3 NNE\"",
+            ),
+            (
+                "modul-2-3",
+                "let label = format!(\"§14a Modul 3 Spotpreis-NNE {from}\");",
+            ),
+            (
+                "modul-2-3",
+                "/// §14a Modul 2 time-variable NNE price positions",
+            ),
+            (
                 "invoic-31009-direction",
                 "| 31009 | MSB-Rechnung | NB → MSB |",
             ),
@@ -925,6 +938,9 @@ mod tests {
             "//! §18 StromNEV pays the operator of a decentral generating plant",
             "| 13025 | Lastgang Marktlokation, Tranche | MSB → LF |",
             "Modul 1 pauschal, Modul 2 prozentual, Modul 3 zeitvariabel",
+            "/// **Not a §14a module.** BK8-22/010-A defines exactly three, none of which is",
+            "/// (zeitvariable Netzentgelte in three Tarifstufen) — and none of them is spot-linked",
+            "\"a spot-linked Netzentgelt is the NB's own price model, not §14a Modul 3\"",
             "//! All other operators (large plants exceeding the §19 turnover limit, commercial",
             "/// - Operators whose turnover exceeds the §19 Kleinunternehmer limit",
             "{grenze} Masseprozent — kein Anspruch nach §19 Abs. 1\"",

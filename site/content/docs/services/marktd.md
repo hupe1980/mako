@@ -429,7 +429,9 @@ per-unit in `bezugswert` and the kind in `preisreferenz` (`ENERGIEMENGE` /
 
 Time bands live in the `zaehlzeitdefinition` the position's `zaehlzeitregister`
 points into. The array is omitted when empty; `netzbilanzd` reads it for §14a
-Modul 3 (BK8-22/010-A).
+Modul 3 (BK8-22/010-A). A `PUT` names each position's Tarifstufe `HT`, `ST` or
+`NT` and prices all three (Tenor 3. b)), or is `422`. `lastvariablePreispositionen`
+are quantity-tiered (`STAFFELN`, `ZONEN`, …) and pass the BO4E gate only.
 
 **`source` and the operator override.** `api` rows come from the REST `PUT`,
 `mako` rows from the PRICAT ingest. An `api` row is never overwritten by a
@@ -504,8 +506,7 @@ curl -s -X PUT "http://marktd:8180/api/v1/preisblaetter-messung/9900012345678" \
 ```
 
 Every `ZeitvariablePreisposition` must carry a non-empty `zaehlzeitregister`
-(`422` otherwise, §14a Modul 3, BK8-22/010-A); a `bandNummer` field is `422`
-because BO4E v202607 has none. `invoic-checker` check 4 routes INVOIC 31009
+(`422` otherwise); a `bandNummer` field is `422` because BO4E v202607 has none. `invoic-checker` check 4 routes INVOIC 31009
 positions by that code.
 
 ---
