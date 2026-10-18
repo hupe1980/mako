@@ -23,7 +23,6 @@ MaBiS-Hub Anwendungsfälle in EDIFACT.
 
 ## Prerequisites
 
-- `cargo xtask` runs every step (`cargo build -p xtask` once).
 - The BDEW PDFs live in a local mirror that `cargo xtask sync-regulatories
   --download` populates (Step 0); they are third-party publications and not in
   the repository.
@@ -247,7 +246,8 @@ Expected response (success):
 ```
 
 **Assert `errors == []`** (the endpoint answers `207` otherwise); investigate
-each failed stream. A pair outside `KNOWN_FV_TRANSITIONS` is `422`.
+each failed stream. A pair outside `KNOWN_FV_TRANSITIONS` (`migration_api.rs`,
+one entry per release cycle) is `422`.
 `workflows` names every workflow the run covered — each registered
 `WorkflowDriver`.
 
@@ -341,14 +341,6 @@ both carry wire release `1.3c`, so only the date distinguishes them.
 `ProcessContext::for_date` does the same for a context. The date is always
 supplied by the caller — `makod` states `mako_fristen::heute()`, the German
 calendar date, because a Formatversion takes effect at German midnight.
-
-Running processes continue under the FV on their `WorkflowId`, while the
-inbound message's own FV picks the adapter.
-
-### xtask coverage check
-
-After adding a profile, `cargo xtask check-release-coverage --date <valid_from>`
-must exit 0.
 
 
 ## Appendix D — Release naming conventions

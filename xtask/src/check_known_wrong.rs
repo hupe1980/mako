@@ -39,12 +39,14 @@
 //!
 //! The roadmap and the feature specifications live in `concepts/` and `specs/`,
 //! both gitignored. A tracked file that names `ROADMAP.md`, `concepts/` or
-//! `specs/` points a reader at text the checkout does not have. Refused in
+//! `specs/`, or a milestone or task id (`M66 T016`, `T001`), points a reader at
+//! text the checkout does not have. Refused in
 //! every tracked or not-ignored file, except [`POINTER_SITES`]: `.gitignore`
 //! and the code that opens those paths, each with its reason.
 
 use std::path::Path;
 use std::process::Command;
+use std::sync::LazyLock;
 
 use regex::Regex;
 
@@ -97,8 +99,9 @@ const RULES: &[Rule] = &[
         id: "asx-sign-only",
         row: "`asx-rs` accepts a sign-only override",
         pattern: r"(?i)asx-rs.{0,30}refuses (a|the) (policy )?layer only when|sign-only (override|overlay).{0,30}(passes|is valid|validates)",
-        reason: "asx-rs refuses a sign-only overlay itself: the declared security_floor is \
-                 SIGN_AND_ENCRYPT, so dropping encryption fails as SecurityFloorViolation",
+        reason: "asx-rs 0.16 has no setting that relaxes signing or encryption: \
+                 Profile::bdew() signs and encrypts, build() refuses a client without a \
+                 decrypter, and an unencrypted inbound message is answered EBMS:0103",
     },
     Rule {
         id: "messzv",
@@ -379,7 +382,7 @@ const ALLOWED: &[Allow] = &[
     },
 ];
 
-/// Files that may name `ROADMAP.md`, `concepts/` or `specs/`, and why.
+/// Files that may name `ROADMAP.md`, `concepts/`, `specs/` or a task id, and why.
 const POINTER_SITES: &[(&str, &str)] = &[
     (".gitignore", "it is what makes the trees untracked"),
     (
@@ -436,6 +439,10 @@ const TEXT_EXTENSIONS: &[&str] = &[
 
 /// The strings rule 2 refuses.
 const POINTERS: &[&str] = &["ROADMAP.md", "concepts/", "specs/"];
+
+/// A milestone or task id — `M66 T016`, `T001` — which names a row of the
+/// untracked roadmap or a task of an untracked `tasks.md` as surely as a path does.
+const TASK_ID: &str = r"\b(M\d{1,3} )?T\d{3}\b";
 
 /// One offending line: path, 1-based line, message.
 type Finding = (String, usize, String);
@@ -637,15 +644,22 @@ fn pointer_findings(rel: &str, src: &str) -> Vec<Finding> {
     if POINTER_SITES.iter().any(|(p, _)| *p == rel) {
         return Vec::new();
     }
+    static TASK: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(TASK_ID).expect("TASK_ID is a valid pattern"));
     let mut out = Vec::new();
     for (i, line) in src.lines().enumerate() {
-        if let Some(p) = POINTERS.iter().find(|p| line.contains(*p)) {
+        let hit = POINTERS
+            .iter()
+            .find(|p| line.contains(*p))
+            .map(|p| (*p).to_owned())
+            .or_else(|| TASK.find(line).map(|m| m.as_str().to_owned()));
+        if let Some(p) = hit {
             out.push((
                 rel.to_owned(),
                 i + 1,
                 format!(
                     "names `{p}` — the roadmap and the specifications are untracked, so a \
-                     tracked file must not point into them"
+                     tracked file must not point into them; state the invariant instead"
                 ),
             ));
         }
@@ -986,6 +1000,21 @@ mod tests {
         );
         assert!(pointer_findings(".gitignore", "concepts/\nspecs/").is_empty());
         assert!(pointer_findings("crates/x/src/lib.rs", "/// a roadmap of the rollout").is_empty());
+    }
+
+    #[test]
+    fn a_milestone_or_task_id_is_refused() {
+        assert_eq!(
+            pointer_findings("crates/x/src/service.rs", "/// M66 T016: a second listener").len(),
+            1
+        );
+        assert_eq!(
+            pointer_findings("crates/x/src/policy.rs", "/// T001: a setting left out").len(),
+            1
+        );
+        assert!(pointer_findings("xtask/src/check_specs.rs", "- [ ] **T001** do it").is_empty());
+        assert!(pointer_findings("crates/x/src/lib.rs", "DTM+163:202601010000T001").is_empty());
+        assert!(pointer_findings("crates/x/src/lib.rs", "/// unit = M3").is_empty());
     }
 
     /// The live table: every rule names a row, every row is decided.

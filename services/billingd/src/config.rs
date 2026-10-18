@@ -1139,10 +1139,10 @@ mod straddle_tests {
     /// The defect this refusal exists to prevent.
     ///
     /// Gas carried 7 % USt until 31.03.2024 and 19 % after (§28 Abs. 5/6 UStG).
-    /// A March–April period has no correct single rate, and the old resolver
-    /// answered the `None` with the 19 % default — billing the March portion,
-    /// legally 7 %, at 19 %. That reads exactly like a correct invoice
-    /// downstream, so nothing else would have caught it.
+    /// A March–April period has no correct single rate; answering the `None`
+    /// with the 19 % default bills the March portion, legally 7 %, at 19 %.
+    /// That reads exactly like a correct invoice downstream, so nothing else
+    /// catches it.
     #[test]
     fn a_gas_period_crossing_the_vat_window_is_refused_with_its_stichtag() {
         let c = cfg(None);

@@ -12,12 +12,10 @@
 //! | 19110 | — | ✅ | NB → LF   | Ablehnung Allokationsliste (Gas-only; formally belongs to `mako-gabi-gas` `gabi-gas-mmma`) |
 //! | 19115 | ✅ | — | NB → LF   | Ablehnung Anforderung bilanzierte Menge (Strom-only) |
 //!
-//! > **Note on 17110 / 19110**: These PIDs are Gas-only (⚡=— in ORDERS/ORDRSP AHB 1.0)
-//! > and are owned by `mako-gabi-gas` `gabi-gas-mmma` per the authoritative PID table.
-//! > They are currently also handled in this workflow to avoid breaking the shared
-//! > `gpke-allokationsliste` state machine while the Gas-specific workflow is built out.
-//! > Once `gabi-gas-mmma` implements its full ORDERS/ORDRSP state machine, 17110/19110
-//! > will be removed from this array and routed exclusively via that workflow.
+//! > **Note on 17110 / 19110**: These PIDs are Gas-only (⚡=— in ORDERS/ORDRSP AHB 1.0),
+//! > the Gas twins of 17114/19115. The AHB puts their formal home in the Gas MMMA
+//! > process, but `mako-gabi-gas` `gabi-gas-mmma` registers MSCONS 13013 only, so
+//! > this workflow is the one that routes them.
 //!
 //! Positive responses (actual data) arrive via **MSCONS** (13014 for Strom bilanzierte
 //! Menge, further MSCONS PIDs for Strom). PID 13013 (Gas-only Allokationsliste) is

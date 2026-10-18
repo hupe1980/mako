@@ -25,7 +25,7 @@ use time::macros::date;
 let product: Product = serde_json::from_str(r#"{
     "category": "STROM",
     "arbeitspreis_ct_per_kwh": "32.0",
-    "grundpreis_ct_per_day": 12.0
+    "grundpreis_ct_per_day": "12.0"
 }"#)?;
 
 let ctx = BillingContext {

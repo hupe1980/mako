@@ -235,82 +235,6 @@ primary = true
 // `core::preflight` cover the rules, these cover the contract the pipeline
 // actually reads.
 
-/// A registered AS4 partner with no encryption certificate cannot deliver a
-/// single message (BDEW AS4-Profil v1.2 §2.2.6.2.2).
-#[test]
-fn check_rejects_an_as4_partner_without_an_encryption_certificate() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let cfg = write_config(
-        dir.path(),
-        r#"
-[deployment]
-rollen = ["nb-strom"]
-
-[[party]]
-mp_id = "9900001000001"
-roles = ["NB"]
-primary = true
-"#,
-    );
-    let out = makod()
-        .args(["--config"])
-        .arg(&cfg)
-        .args(STARTABLE)
-        .args([
-            "--as4-partner",
-            "9900001000002=https://partner.example/as4/inbox",
-            "--check",
-        ])
-        .output()
-        .expect("spawn makod");
-    assert!(
-        !out.status.success(),
-        "missing partner cert must be refused"
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("encryption certificate"),
-        "the error must name the missing material: {stderr}"
-    );
-}
-
-/// A partner endpoint on plain HTTP would carry regulated market
-/// communication in the clear.
-#[test]
-fn check_rejects_a_plaintext_as4_partner_endpoint() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let cfg = write_config(
-        dir.path(),
-        r#"
-[deployment]
-rollen = ["nb-strom"]
-
-[[party]]
-mp_id = "9900001000001"
-roles = ["NB"]
-primary = true
-"#,
-    );
-    let out = makod()
-        .args(["--config"])
-        .arg(&cfg)
-        .args(STARTABLE)
-        .args([
-            "--as4-partner",
-            "9900001000002=http://partner.example/as4/inbox",
-            "--allow-unencrypted-as4",
-            "--check",
-        ])
-        .output()
-        .expect("spawn makod");
-    assert!(!out.status.success(), "plaintext endpoint must be refused");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("HTTPS"),
-        "the error must name HTTPS: {stderr}"
-    );
-}
-
 /// An unparseable Cedar policy leaves every endpoint's authorization undefined.
 #[test]
 fn check_rejects_an_invalid_cedar_policy() {
@@ -421,64 +345,6 @@ primary = true
 
 // ── Config-file surface ──────────────────────────────────────────────────────
 
-/// Key material must be expressible as file references, not only as flags and
-/// environment variables — a secret passed by flag is visible in `ps` output.
-#[test]
-fn as4_key_material_can_be_supplied_from_files() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let cert = dir.path().join("partner.pem");
-    std::fs::write(
-        &cert,
-        "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
-    )
-    .expect("write cert");
-    let cfg = write_config(
-        dir.path(),
-        &format!(
-            r#"
-[deployment]
-rollen = ["nb-strom"]
-
-[[party]]
-mp_id = "9900001000001"
-roles = ["NB"]
-primary = true
-
-[http]
-addr      = "127.0.0.1:18080"
-auth_keys = ["erp-prod=0123456789abcdef0123456789abcdef"]
-
-[storage]
-allow_volatile = true
-
-[as4]
-allow_no_signing   = true
-partners           = ["9900001000002=https://partner.example/as4/inbox"]
-partner_cert_files = ["9900001000002={}"]
-
-# Authorization is default-deny; this test is about the AS4 key material, so it
-# takes the development posture through the config file rather than the flag.
-[authz]
-permit_all = true
-"#,
-            cert.display()
-        ),
-    );
-    let out = makod()
-        .args(["--config"])
-        .arg(&cfg)
-        .arg("--check")
-        .output()
-        .expect("spawn makod");
-    assert!(
-        out.status.success(),
-        "a config whose partner certificate comes from a file must pass.\n\
-         stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
-}
-
 /// An unknown TOML key is a typo, and a typo in a security-relevant field is a
 /// silently weakened deployment. `deny_unknown_fields` must stay on.
 #[test]
@@ -496,7 +362,7 @@ roles = ["NB"]
 primary = true
 
 [as4]
-allow_unencrypted_as4 = true   # not a field — the real name is allow_unencrypted
+allow_no_signng = true   # not a field — the real name is allow_no_signing
 "#,
     );
     let out = makod()
@@ -566,65 +432,6 @@ primary = true
     assert!(
         logs.contains("check mode: all startup validations passed"),
         "--check must still run every validation.\nlogs: {logs}",
-    );
-}
-
-// ── AS4 trust anchor ─────────────────────────────────────────────────────────
-
-/// An AS4 listener with no counterparty trust anchor must be refused.
-///
-/// # Why this is a test
-///
-/// Counterparty signing certificates are issued by the BDEW/BNetzA PKI. With no
-/// CA certificate configured, the session falls back to the operator's own
-/// signing certificate as its only trust anchor — it then trusts exactly one
-/// signer, itself, and rejects every message from every partner. The daemon
-/// starts, binds :4080, reports healthy, and receives nothing.
-///
-/// An `error!` line above a successful boot is the shape an operator discovers
-/// when a counterparty escalates a missed Frist, so this is a startup refusal —
-/// with `--allow-no-as4-trust-anchor` as the explicit loopback-test opt-out,
-/// the same shape as `--allow-unencrypted-as4`.
-#[test]
-fn check_rejects_an_as4_listener_without_a_trust_anchor() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let cfg = write_config(
-        dir.path(),
-        r#"
-[deployment]
-rollen = ["nb-strom"]
-
-[[party]]
-mp_id = "9900001000001"
-roles = ["NB"]
-primary = true
-"#,
-    );
-    let out = makod()
-        .args(["--config"])
-        .arg(&cfg)
-        .args([
-            "--allow-volatile",
-            "--as4-addr",
-            "127.0.0.1:14080",
-            // `=` form: a PEM starts with hyphens, which clap would otherwise
-            // read as a flag.
-            "--as4-signing-key-pem=-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\n",
-            "--as4-signing-cert-pem=-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
-            "--allow-unencrypted-as4",
-            "--cedar-permit-all",
-            "--check",
-        ])
-        .output()
-        .expect("spawn makod");
-    assert!(
-        !out.status.success(),
-        "--check must reject an AS4 listener that can verify no counterparty"
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("trust anchor") && stderr.contains("--allow-no-as4-trust-anchor"),
-        "the error must name the missing material and the opt-out: {stderr}"
     );
 }
 
@@ -751,4 +558,200 @@ primary = true
     );
     assert!(!ok, "storage.allow_multi_instance must be an unknown field");
     assert!(stderr.contains("allow_multi_instance"), "{stderr}");
+}
+
+// ── AS4 ──────────────────────────────────────────────────────────────────────
+
+/// AS4 key material from a test SM-PKI, written to `dir`: makod's party
+/// `9900001000001`, a partner `9900001000002`, the root and the CCRL-S.
+fn write_as4_material(dir: &std::path::Path) {
+    let ca = asx::testkit::pki::TestCa::sm_pki();
+    let crl = ca.crl_signer("CCRL-S(Root)", asx::testkit::pki::KeyAlg::EcBrainpoolP256r1);
+    let own = ca.bdew_party("9900001000001");
+    let partner = ca.bdew_party("9900001000002");
+    let w = |name: &str, bytes: &[u8]| std::fs::write(dir.join(name), bytes).expect("write");
+    w("root.pem", ca.cert_pem());
+    w("ccrl-s.pem", crl.cert_pem());
+    for (name, pair) in [
+        ("sig", &own.signing),
+        ("enc", &own.encryption),
+        ("tls", &own.tls),
+    ] {
+        w(&format!("{name}.cert.pem"), &pair.cert_pem);
+        w(&format!("{name}.key.pem"), &pair.key_pem);
+    }
+    w("partner.enc.pem", &partner.encryption.cert_pem);
+    w("partner.sig.pem", &partner.signing.cert_pem);
+}
+
+/// A makod.toml with AS4 configured from the files of [`write_as4_material`].
+/// `partner` is the `[[as4.partner]]` body, `as4_extra` extra `[as4]` lines.
+fn as4_config(dir: &std::path::Path, as4_extra: &str, partner: &str) -> String {
+    let d = dir.display();
+    format!(
+        r#"
+[deployment]
+rollen = ["nb-strom"]
+
+[[party]]
+mp_id = "9900001000001"
+roles = ["NB"]
+primary = true
+
+[party.as4]
+signing_cert_pem_file    = "{d}/sig.cert.pem"
+signing_key_pem_file     = "{d}/sig.key.pem"
+encryption_cert_pem_file = "{d}/enc.cert.pem"
+encryption_key_pem_file  = "{d}/enc.key.pem"
+tls_cert_pem_file        = "{d}/tls.cert.pem"
+tls_key_pem_file         = "{d}/tls.key.pem"
+
+[http]
+addr      = "127.0.0.1:18080"
+auth_keys = ["erp-prod=0123456789abcdef0123456789abcdef"]
+
+[storage]
+allow_volatile = true
+
+[authz]
+permit_all = true
+
+[as4]
+addr = "127.0.0.1:14080"
+{as4_extra}
+
+[[as4.partner]]
+mp_id = "9900001000002"
+{partner}
+"#
+    )
+}
+
+const AS4_TRUST: &str = r#"message_id_domain = "as4.check.test"
+trust_anchor_pem_file = "DIR/root.pem"
+crl_signer_pem_file = "DIR/ccrl-s.pem""#;
+
+fn as4_check(dir: &std::path::Path, body: &str, env: Option<(&str, &str)>) -> (bool, String) {
+    let cfg = write_config(dir, &body.replace("DIR", &dir.display().to_string()));
+    let mut cmd = makod();
+    cmd.args(["--config"]).arg(&cfg).arg("--check");
+    if let Some((k, v)) = env {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().expect("spawn makod");
+    (
+        out.status.success(),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// The production shape — every MP-ID's key pairs, the SM-PKI root, the
+/// CRL signer and a partner, all from files — passes `--check`, which ran
+/// `As4::builder(..).build()` for the party.
+#[test]
+fn a_complete_as4_configuration_passes_the_check() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_as4_material(dir.path());
+    let partner = r#"endpoint = "https://partner.example/as4/inbox/9900001000002"
+encryption_cert_pem_file = "DIR/partner.enc.pem"
+signing_cert_pem_files = ["DIR/partner.sig.pem"]
+quirks = ["receipt-without-non-repudiation"]"#;
+    let (ok, out) = as4_check(
+        dir.path(),
+        &as4_config(dir.path(), AS4_TRUST, partner),
+        None,
+    );
+    assert!(ok, "a complete AS4 configuration must pass --check:\n{out}");
+}
+
+/// A partner with an endpoint and no encryption certificate cannot be
+/// delivered to (BDEW AS4-Profil 1.2 §2.2.6.2.2).
+#[test]
+fn check_rejects_an_as4_partner_without_an_encryption_certificate() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_as4_material(dir.path());
+    let partner = r#"endpoint = "https://partner.example/as4/inbox/9900001000002""#;
+    let (ok, out) = as4_check(
+        dir.path(),
+        &as4_config(dir.path(), AS4_TRUST, partner),
+        None,
+    );
+    assert!(
+        !ok,
+        "a partner without an encryption certificate must be refused"
+    );
+    assert!(out.contains("encryption certificate"), "{out}");
+}
+
+/// A partner endpoint on plain HTTP would carry market communication in the
+/// clear.
+#[test]
+fn check_rejects_a_plaintext_as4_partner_endpoint() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_as4_material(dir.path());
+    let partner = r#"endpoint = "http://partner.example/as4/inbox"
+encryption_cert_pem_file = "DIR/partner.enc.pem""#;
+    let (ok, out) = as4_check(
+        dir.path(),
+        &as4_config(dir.path(), AS4_TRUST, partner),
+        None,
+    );
+    assert!(!ok, "a plaintext endpoint must be refused");
+    assert!(out.contains("HTTPS"), "{out}");
+}
+
+/// The SM-PKI root is the one trust anchor; without it nothing verifies, so
+/// the AS4 listener is refused and the key is named.
+#[test]
+fn check_rejects_an_as4_listener_without_a_trust_anchor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_as4_material(dir.path());
+    let trust = r#"message_id_domain = "as4.check.test"
+crl_signer_pem_file = "DIR/ccrl-s.pem""#;
+    let (ok, out) = as4_check(dir.path(), &as4_config(dir.path(), trust, ""), None);
+    assert!(
+        !ok,
+        "an AS4 listener without the SM-PKI root must be refused"
+    );
+    assert!(out.contains("as4.trust_anchor_pem_file"), "{out}");
+}
+
+/// The CCRL-S(Root) is required: without it no certificate below the root
+/// passes the revocation check.
+#[test]
+fn check_rejects_an_as4_listener_without_a_crl_signer() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_as4_material(dir.path());
+    let trust = r#"message_id_domain = "as4.check.test"
+trust_anchor_pem_file = "DIR/root.pem""#;
+    let (ok, out) = as4_check(dir.path(), &as4_config(dir.path(), trust, ""), None);
+    assert!(!ok);
+    assert!(out.contains("as4.crl_signer_pem_file"), "{out}");
+}
+
+/// The removed lenient-receipts switch is refused — from the config file and
+/// from the environment — naming the per-partner setting that replaces it.
+#[test]
+fn the_removed_lenient_receipts_switch_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_as4_material(dir.path());
+    let trust = format!("{AS4_TRUST}\nlenient_receipts = true");
+    let (ok, out) = as4_check(dir.path(), &as4_config(dir.path(), &trust, ""), None);
+    assert!(!ok);
+    assert!(
+        out.contains("quirks = [\"receipt-without-non-repudiation\"]"),
+        "{out}"
+    );
+
+    let (ok, out) = as4_check(
+        dir.path(),
+        &as4_config(dir.path(), AS4_TRUST, ""),
+        Some(("MAKOD_AS4_LENIENT_RECEIPTS", "true")),
+    );
+    assert!(!ok);
+    assert!(out.contains("receipt-without-non-repudiation"), "{out}");
 }

@@ -180,6 +180,7 @@ mod tests {
             roles: roles.iter().map(|r| (*r).to_owned()).collect(),
             primary: false,
             agency: None,
+            as4: None,
         }
     }
 

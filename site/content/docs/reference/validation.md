@@ -3,10 +3,6 @@ title = "Validation"
 description = "EDIFACT validation against the MIG and the AHB column: the checks, the ValidationReport, rule ids, Prüfidentifikatoren and release dates."
 weight = 11
 +++
-Every EDI@Energy message can be validated against the officially registered
-BDEW profiles. This guide explains the validation model, how to read the report,
-and common patterns.
-
 Two BDEW documents define what "valid" means, and mako ships both as generated
 profiles ([vocabulary](@/docs/reference/_index.md#vocabulary)):
 
@@ -164,7 +160,7 @@ a PID mismatch from other conformance failures:
 let report = validate_and_check_pid(&msg, pid)?;
 if !report.is_valid() {
     for issue in report.errors() {
-        if issue.rule_id().as_deref() == Some("EE-PID-001") {
+        if issue.rule_id() == Some("EE-PID-001") {
             eprintln!("PID mismatch: {}", issue.message);
         }
     }
@@ -238,9 +234,9 @@ Each issue carries:
 | Field | Type | Description |
 |---|---|---|
 | `severity` | `ValidationSeverity` | Critical / Error / Warning / Info |
-| `message` | `&str` | Human-readable description |
-| `rule_id` | `Option<&str>` | Stable rule identifier, e.g. `"AHB-55001-DTM-M0"` |
-| `error_code` | `Option<&'static str>` | Machine-readable error code |
+| `message` | `String` | Human-readable description |
+| `rule_id` | `Option<String>` (`rule_id()` → `Option<&str>`) | Stable rule identifier, e.g. `"AHB-55001-00011-NAD-3055-CODE"` |
+| `error_code` | `Option<Cow<'static, str>>` | Machine-readable error code |
 | `segment_tag` | `Option<String>` | EDIFACT segment tag, e.g. `"DTM"` |
 | `segment_occurrence` | `Option<u16>` | 0-based occurrence index |
 | `element_index` | `Option<u8>` | 0-based data-element index |
@@ -277,13 +273,18 @@ let json   = serde_json::to_string_pretty(&report)?;
 println!("{json}");
 ```
 
-Output shape:
+Output shape (`pruefidentifikator`, `release`, `ahbRevision` and
+`interchangeHeader` appear when known):
 
 ```json
 {
   "valid": true,
-  "issueCount": 0,
-  "issues": []
+  "errors": [],
+  "warnings": [],
+  "infos": [],
+  "totalIssues": 0,
+  "pruefidentifikator": 55001,
+  "release": "S2.2"
 }
 ```
 
@@ -378,9 +379,8 @@ refusal. Which numbers those are is fixed at import rather than left to run
 time — `cargo xtask validate-profiles` refuses a profile citing an
 unregistered `[9xx]` at a binding place, against a list that only shrinks.
 
-`FMT-` findings are **warnings**. The verdicts are new, and one that refuses a
-counterparty message accepted today is a change to make after a release has been
-read, not before.
+`FMT-` findings are **warnings**: a Formatbedingung verdict alone never makes a
+message invalid.
 
 **A rule id is only meaningful together with the Formatversion.** The `Nr` is the
 MIG's running number, and BDEW renumbers when a place is inserted: the `SG5 LOC`
@@ -425,7 +425,7 @@ let ahb = report.filter_by_rule_prefix("AHB-");
 
 ## Validate Against a Specific Release Date
 
-To reproduce past validation behaviour or run tests against historical data:
+To validate against the profiles in force on a given date:
 
 ```rust
 use edi_energy::{Parser, ParseConfig, EdiEnergyMessage};

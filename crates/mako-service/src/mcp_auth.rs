@@ -993,7 +993,7 @@ mod tests {
     }
 
     /// A key with no roles is refused by a role-testing permit — it does not
-    /// fall through to an allow the way the old trust-boundary path did.
+    /// fall through to an allow.
     #[test]
     fn role_less_key_is_denied_not_waved_through() {
         let auth = lf_only_auth();

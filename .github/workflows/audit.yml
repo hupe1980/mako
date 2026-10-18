@@ -1,27 +1,20 @@
-name: Security Audit
+name: Fuzz
 
-# Weekly sweep over the *unchanged* main branch: advisories filed since the last
-# push, and a time-boxed run of the fuzz targets that guard the untrusted-input
-# boundary. The push/PR CI lane already runs cargo-deny on every change and
-# compiles every fuzz target; this schedule is what actually *executes* them.
+# A time-boxed run of the fuzz targets that guard the untrusted-input boundary,
+# started by hand (Actions → Fuzz → Run workflow). ci.yml compiles every target
+# and checks advisories on every push and pull request; only a *run* can find a
+# panic, and a run worth anything costs minutes per target, so it is not a gate.
 #
-# Advisories: this catches entries published after the last push — a dependency
-# that was clean on merge day and had a RUSTSEC entry filed on Wednesday.
+# The targets under `fuzz/` cover the boundaries where bytes from outside the
+# trust perimeter first meet mako's parsers: EDIFACT interchanges from trading
+# partners, AS4 messages arriving pre-authentication, OBIS codes and metering
+# series out of MSCONS, and retail-catalogue JSONB. The property is the same
+# everywhere — arbitrary input returns `Err`, never a panic.
 #
-# cargo-deny (not rustsec/audit-check), for two load-bearing reasons:
-#  - audit-check builds cargo-audit from source under the repo's pinned
-#    toolchain (rust-toolchain.toml, MSRV 1.94), and cargo-audit's dependency
-#    tree already requires a newer rustc — the install fails before any
-#    auditing happens. cargo-deny-action ships a prebuilt binary and needs no
-#    toolchain at all.
-#  - deny.toml is the single advisory policy, including the deliberately
-#    accepted ignores; a second auditor without that policy re-alarms weekly
-#    on advisories the project has already triaged in writing.
+# `fuzz/corpus/` is gitignored, so each run starts from an empty corpus and
+# keeps nothing. Two minutes per target keeps the job inside its timeout.
 
 on:
-  schedule:
-    # Every Monday at 07:00 UTC.
-    - cron: "0 7 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -31,35 +24,10 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  audit:
-    name: Advisories (cargo-deny)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          command: check advisories
-          arguments: --all-features
-
-  # ── Fuzzing ─────────────────────────────────────────────────────────────────
-  #
-  # The targets under `fuzz/` cover the boundaries where bytes from outside the
-  # trust perimeter first meet mako's parsers: EDIFACT interchanges from trading
-  # partners, AS4 SOAP envelopes arriving pre-authentication, OBIS codes and
-  # metering series out of MSCONS, and retail-catalogue JSONB. The property is
-  # the same everywhere — arbitrary input returns `Err`, never a panic.
-  #
-  # This is a cron job rather than a CI gate because only a *run* can find a
-  # panic, and a run long enough to be worth anything costs minutes per target.
-  # The push/PR lane compiles the targets so they cannot rot between sweeps.
-  #
-  # `fuzz/corpus/` is gitignored, so each sweep starts from an empty corpus and
-  # keeps nothing: the value here is the unstructured-input targets, where random
-  # mutation reaches interesting states within the time box. Two minutes apiece
-  # keeps the whole job inside a quarter of an hour.
   fuzz:
     name: Fuzz the untrusted-input boundary
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # libFuzzer needs `-Z sanitizer`, which is nightly-only. The `+nightly`
@@ -71,7 +39,7 @@ jobs:
           workspaces: "fuzz"
       - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
         with:
-          tool: cargo-fuzz
+          tool: cargo-fuzz@0.13.2
 
       - name: Run each target for two minutes
         working-directory: fuzz

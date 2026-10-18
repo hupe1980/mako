@@ -821,7 +821,7 @@ pub(super) async fn dispatch_steuerungsauftrag_endantwort(
             .map(str::to_owned)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-        // ── M1: Konfigurationsprodukt eligibility guard ───────────────────────
+        // ── Konfigurationsprodukt eligibility guard ───────────────────────────
         // Before dispatching the positive ORDRSP, verify that the SR has the
         // requested `produkt_code` in its contracted `konfigurationsprodukte`
         // list in `marktd`.  If the product is not contracted, auto-dispatch

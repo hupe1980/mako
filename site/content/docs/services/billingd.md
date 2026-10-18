@@ -120,9 +120,7 @@ edmd; RLM or iMSys). The passed-through NNE demand charge is **annual**
 (`nne_leistungspreis_eur_per_kw_year` × the billed fraction of a year, § 17 Abs.
 2 StromNEV Jahresleistungspreis).
 
-Mixing the two under-bills twelvefold. Which Leistungspreissystem a price sheet
-states (`JAHR` or `MONAT`) is the NB-side engine's business — see
-[netzbilanzd](@/docs/services/netzbilanzd.md).
+Mixing the two under-bills twelvefold.
 
 ### § 14a EnWG modules
 
@@ -505,7 +503,7 @@ overlap or gap to the previous invoice, rolling deviation. The score is 0–100.
 `MWST_STICHTAG_IM_ZEITRAUM` and `BEHG_JAHRESGRENZE_IM_ZEITRAUM` are **blocking**
 findings: they hold the invoice regardless of score, because no single rate is
 correct for such a period. Thresholds are validated at start (`sample_at <
-review_at < hold_at ≤ 100`);
+review_at < hold_at ≤ 100`).
 
 `hold_dispatch = false` runs the gate in shadow mode. `GET
 /api/v1/billing/review-queue` lists REVIEW and HELD; a release stamps `outcome =
@@ -801,6 +799,7 @@ Art. 17 audit fields.
 | `GET` | `/api/v1/billing/review-queue` | REVIEW and HELD, highest risk first |
 | `POST` | `/api/v1/billing/{id}/release` | Release a held record |
 | `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G (§ 4a EGovG i.V.m. ERechV) |
+| `GET` | `/api/v1/policy` | Operator policy (Cedar `read-policy`) |
 | `GET` | `/health/live` · `/health/ready` | Liveness; readiness |
 | `POST/GET` | `/mcp` | MCP |
 
@@ -962,8 +961,8 @@ Further keys: `*_api_key` for each upstream, `erp_hmac_secret`,
 (`enabled`, `hold_dispatch`, `sample_at`, `review_at`, `hold_at`), `[mcp]`,
 `[oidc]`, `allow_insecure_no_auth`.
 
-The removed keys `[rates] behg_regime` and `[billing]` are refused at startup,
-naming `[policy] behg_regime` and `[policy] settlement_form`. Every setting
+`[rates] behg_regime`, `[billing]`, `seller_address` and `seller_contact` are
+refused at startup, each naming the key that replaces it. Every setting
 under `[policy]` is listed in
 [Operator policy](@/docs/reference/operator-policy.md), logged at startup with
 its origin and source, exported as `mako_policy_info` and served at
@@ -972,6 +971,4 @@ its origin and source, exported as `mako_policy_info` and served at
 `[rates]`, `[seller]`, `[e_rechnung]`, `[billing_runs]`, `[risk]` and
 `[policy]` deny unknown fields — a year-less
 `stromsteuer_ct_per_kwh = "2.05"` is refused at startup. The top level does not:
-a `mwst_rate` written above the first table header binds to nothing. The removed
-free-text `seller_address` / `seller_contact` keys are refused at startup, naming
-their replacements.
+a `mwst_rate` written above the first table header binds to nothing.

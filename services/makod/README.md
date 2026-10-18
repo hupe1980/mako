@@ -22,8 +22,8 @@ makod --check --config /etc/makod/makod.toml   # every startup validation, then 
 
 | Port | Purpose |
 |---|---|
-| `:8080` | REST API — `POST /edifact`, `POST /api/v1/commands`, admin, `/mcp`, `/metrics`, OpenAPI at `/api/v1/openapi.json`, Swagger UI at `/api/v1/docs/` |
-| `:4080` | AS4/ebMS3 inbound — EDIFACT and Redispatch XML, signed and encrypted (BDEW AS4-Profil) |
+| `:8080` | REST API — `POST /edifact`, `POST /api/v1/commands`, admin, `/mcp`, `/metrics`, OpenAPI at `/api/v1/openapi.json` |
+| `:4080` | AS4/ebMS3 inbound at `POST /as4/inbox/<MP-ID>` per `[[party]]` — EDIFACT and Redispatch XML, signed and encrypted (BDEW AS4-Profil) |
 | `:8090` | API-Webdienste Strom (iMS REST/JSON, `energy-api`) |
 
 Each port is enabled on its own. Every enabled port serves `/health/live`,
@@ -75,8 +75,10 @@ deployment runs.
 ## Configuration
 
 `makod.toml` (`--config`, `MAKOD_CONFIG`) requires `[deployment] rollen` and at
-least one `[[party]]` (`mp_id`, `roles`, `primary`). Other blocks: `[storage]` (+ `.s3`/`.gcs`/
-`.azure`), `[http]`, `[authz]`, `[oidc]`, `[engine]`, `[as4]`, `[erp]`,
+least one `[[party]]` (`mp_id`, `roles`, `primary`, and `[party.as4]` — each
+MP-ID's own signing, encryption and TLS key pairs). Other blocks: `[storage]`
+(+ `.s3`/`.gcs`/`.azure`), `[http]`, `[authz]`, `[oidc]`, `[engine]`, `[as4]`
+(`[[as4.partner]]`), `[policy.as4] unbekannte_absender`, `[erp]`,
 `[webdienste]`, `[marktd]`, `[maloid]`, `[logging]`. Precedence is CLI flag →
 `MAKOD_*` environment variable → file → default; `makod --help` lists every
 flag.

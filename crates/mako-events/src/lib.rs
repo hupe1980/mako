@@ -861,7 +861,7 @@ mod matcher_tests {
         assert!(matches("de.mako.*", "de.mako.process.initiated"));
         assert!(matches("de.markt.*", "de.markt.malo.updated"));
         assert!(!matches("de.mako.*", "de.markt.malo.updated"));
-        // Prefix boundary is character-wise, exactly like the old
+        // Prefix boundary is character-wise:
         // `starts_with(trim_end_matches('*'))`.
         assert!(matches("de.mako.process.*", "de.mako.process.failed"));
     }

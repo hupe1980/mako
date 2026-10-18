@@ -186,9 +186,11 @@ a cutover.
 ## Code Conventions
 
 ### Error handling
-- All public APIs return `Result<_, EngineError>` or `Result<_, WorkflowError>`.
-- Use `thiserror` for error type definitions. Do not use `anyhow` inside library crates.
-- `anyhow` is acceptable in `xtask` and `makod` (binary crates).
+- A library crate's public API returns its own `thiserror` error type — in the
+  engine and the workflow crates, `EngineError` / `WorkflowError`.
+- `anyhow` belongs to `xtask`, the services and the one surface of
+  `mako-service` that hosts them (`Daemon::build` returns `anyhow::Result`) —
+  not to a library crate's API.
 - Every `Result`-returning function must be annotated `#[must_use]`.
 
 ### Async
@@ -566,7 +568,7 @@ engine it silently becomes money.
 | "Blindmehrarbeit rests on StromNEV §18" | §18 StromNEV is the **Entgelt für dezentrale Erzeugung** (the crate's own `sect18.rs` says so). Reactive-energy excess is charged from the Netzbetreiber's **Preisblatt**, formed under StromNEV §17. §19 is Sonderformen der Netznutzung. The free share (cos φ 0,9 → tan φ ≈ 0,4843, often rounded to 50 %) is a price-sheet term and must be an input, not a constant |
 | "Parse-don't-validate applies uniformly to inbound and outbound" | It does not. A value the system **produces** should be a validating newtype (`MabisZaehlpunktId`) so a malformed one is unconstructible. A value it **receives** must stay representable — requiring the type on an inbound command leaves the workflow unable to record what arrived and therefore unable to reject it properly. Type the outbound side; keep the inbound side raw and refuse explicitly |
 | "A DB `CHECK` is enough to protect an identifier that reaches the wire" | A `CHECK` only guards rows written to *that* table. A payload assembled from a fixture, a replay, or a caller passing a value straight through never meets it. MSCONS SG6's `LOC+172`/`107`/`237` are free text at the MIG level, so a swapped pair parses, validates and is **accepted by the BIKO** — the guard has to live in the pure crate as well (`Summenzeitreihe::validate_identifiers`) |
-| "`asx-rs` accepts a sign-only override, so only our own floor rejects it" | **It rejects it.** The declared `security_floor` is `SecurityPolicy::SIGN_AND_ENCRYPT`, so an overlay keeping signing and dropping encryption fails as `SecurityFloorViolation`. `NoCriticalSecurityInvariant` — the „neither" code — is the *fallback* for a floor somebody deliberately lowered, not the only check. `mako-as4`'s `a_partner_overlay_cannot_turn_off_encryption` asserts the rejection: run the repository's own tests before reporting an upstream defect. `validate()` is only a control where something calls it, which is why `check-as4-controls` pins the preflight call site |
+| "`asx-rs` accepts a sign-only override, so only our own floor rejects it" | **No such override exists.** asx-rs 0.16's `Profile::bdew()` fixes signing and encryption and exposes no setting that relaxes either; `As4::builder(..).build()` refuses a client without a decrypter, and an unencrypted inbound message is answered `EBMS:0103`. Run the repository's own tests before reporting an upstream defect. `build()` is only a control where something calls it, which is why `check-as4-controls` pins the preflight's `As4Clients::build` call site |
 | "§13a Abs. 2 EnWG compensation uses one Ausfallarbeit basis" | The counterfactual differs by redispatch case: **Duldungsfall** derives it from the measured Lastgang (the NB steered, so nothing was transmitted), **Aufforderungsfall** from the schedule transmitted to the EIV (that schedule *is* the counterfactual). Resolving both from the Lastgang settles an Aufforderungsfall against what happened rather than what was instructed — a money error nothing downstream detects. `AusfallarbeitBasis` is a required input, carried into the result and trace |
 | "Gas NNE Grundpreis / Arbeitspreis rests on §14 GasNEV" | **§14 GasNEV is *Teilnetze*** — cost allocation when a Betreiber has formed Teilnetze under §6 Abs. 5 GasNZV. Netzentgelte are **§15 GasNEV** (*Ermittlung der Netzentgelte*), and the Verrechnungspreis specifically **§15 Abs. 7**: „Für leistungsgemessene Ausspeisepunkte sind … ein Entgelt für den Messstellenbetrieb, ein Entgelt … für die Messung und ein Entgelt für die Abrechnung festzulegen." A wrong § here lands in the audit trace of every gas NNE invoice |
 | "Gemeinschaftliche Gebäudeversorgung is §42b **EEG 2023**" | There is no §42b EEG 2023. GGV is **§42b EnWG**. §42a EnWG is Mieterstrom, §42c Energy Sharing; the Mieterstromzuschlag is §21 Abs. 3 EEG 2023 |

@@ -35,7 +35,7 @@ metering  = { workspace = true, features = ["serde"] }
 # engines (DuckDB/Spark/Trino/PyIceberg) can read the cold tier directly — it
 # pulls only `axum` (already a dep), not `reqwest`. `object-store-all` enables
 # meterstore's S3/GCS/Azure cold-tier backends: meterstore owns the whole Iceberg
-# catalog stack now, so edmd links none of it directly (see below). `file://` and
+# catalog stack, so edmd links none of it directly (see below). `file://` and
 # `memory://` warehouses need none of them and reach `iceberg`'s own factories.
 meterstore = { version = "0.15", default-features = false, features = ["catalog-facade", "object-store-all", "sql-catalog"] }
 rubo4e     = { workspace = true }
@@ -54,10 +54,8 @@ mako-service       = { workspace = true, features = ["otel", "cedar", "oidc", "r
 krafka             = { workspace = true }
 rmcp               = { workspace = true }
 # `rust_decimal1` gives `JsonSchema` for `Decimal`, which the MCP tool schemas
-# need for their money and energy fields. It used to arrive by accident —
-# `rubo4e`'s `schemars` feature selected it, and feature unification handed it
-# to edmd, so removing that feature elsewhere broke this build. Declared here
-# now, where it is actually used.
+# need for their money and energy fields. Declared here, where it is used,
+# rather than left to arrive through another crate's feature unification.
 schemars           = { workspace = true, features = ["rust_decimal1"] }
 secrecy            = "0.10"
 sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json", "rust_decimal"] }

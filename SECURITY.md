@@ -69,8 +69,6 @@ releases are made for earlier tags.
 
 ## What a release carries
 
-Stated plainly, because a security page that overstates is worse than none:
-
 - `cargo-deny` runs over the full feature graph against the RustSec advisory
   database and the licence policy, and is part of the gate.
 - The release pipeline publishes multi-platform images carrying **SLSA build
@@ -96,12 +94,9 @@ Stated plainly, because a security page that overstates is worse than none:
   digest, and `cargo xtask check-action-pins` refuses a tag pin.
 - Each release carries an **evidence pack** (`evidence-vX.Y.Z.json`): the
   extraction-fidelity budgets and measured values, the exit status of each
-  `just ci` recipe the release runs (every recipe that is one `cargo xtask`
-  call, and the `fmt-check`, `clippy` and `check` runs of the pre-flight job),
-  the SBOM digests and the attestations; a figure that was not measured — a
-  `just ci` recipe the release does not run among them — reads
-  `not measured`. Every guard verdict is taken before anything is published,
-  and a failing guard stops the release.
+  `just ci` recipe the release runs, the SBOM digests and the attestations; a
+  figure that was not measured reads `not measured`. Every guard verdict is
+  taken before anything is published, and a failing guard stops the release.
 
 The release process and how to check each artefact are on the
 [Release Lifecycle](https://hupe1980.github.io/mako/docs/compliance/release-lifecycle/#what-a-release-carries)

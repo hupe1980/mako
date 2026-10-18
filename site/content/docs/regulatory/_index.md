@@ -13,7 +13,7 @@ EDI@Energy message types, and the legal basis each implementation rests on.
 |---|---|
 | [Domain Model](@/docs/architecture/domain-model.md) | Party roles (LF, NB, MSB, BKV, …), market objects (MaLo, MeLo, NeLo, NeBe), identifier formats, EDIFACT encoding |
 | [BNetzA Regulatory Reference](@/docs/regulatory/bnetza.md) | BK6 / BK7 rulings, APERAK Fristen, process scopes |
-| [Process Catalog](@/docs/reference/processes.md) | Business-level catalog of all MaKo processes — GPKE, WiM, GeLi Gas, MaBiS, Redispatch 2.0 — with message flows and implementation status |
+| [Process Catalog](@/docs/reference/processes.md) | Every MaKo process — GPKE, WiM, GeLi Gas, MaBiS, Redispatch 2.0 — with its message flow |
 | [PID Reference](@/docs/regulatory/pid-reference.md) | Complete Prüfidentifikator table for all process families, including the DVGW gas transport PIDs |
 
 ---
@@ -68,8 +68,7 @@ graph LR
 | Regulation | Domain | Implementation |
 |---|---|---|
 | **BK6-24-174** (GPKE Teil 1–3 = Anlagen 1a–1c, WiM Teil 1/2 = Anlagen 2a/2b, MaBiS = Anlage 3, in force 06.06.2025) | Strom | `mako-gpke`, `mako-wim`, `mako-mabis` |
-| **BK6-22-024** (GPKE Teil 4 = Anlage 1d) | Strom | `mako-gpke` |
-| **BK6-22-024** (LFW24 — 24h-Lieferantenwechsel, §20a EnWG; re-issued GPKE Teil 2 + Teil 4, MPES absorbed into GPKE, in force 06.06.2025) | Strom | `mako-gpke` |
+| **BK6-22-024** (LFW24 — 24h-Lieferantenwechsel, §20a EnWG; GPKE Teil 4 = Anlage 1d) | Strom | `mako-gpke` |
 | **BK7-24-01-009** (GeLi Gas 3.0, BK7 Beschluss 12.09.2025) | Gas | `mako-geli-gas`, `mako-wim` |
 | **BK7-24-01-008** (GaBi Gas 2.1 — Kapazitätsabrechnung, DVGW) | Gas | `mako-gabi-gas`, `dvgw-edi` |
 | **PARTIN AHB 1.0f** (Kommunikationsdaten Strom + Gas) | Both | `mako-gpke` (37000–37006), `mako-geli-gas` (37008–37014) |
@@ -86,14 +85,14 @@ graph LR
 | **§41a EnWG** (Dynamic tariffs — EPEX Spot day-ahead) | Strom | `productd` (EPEX prices), `billingd` (§41a iMSys guard) |
 | **GDPR Art. 15/17/20** (data export, pseudonymization, portability) | — | `vertragd` (`/export`, `/anonymize`), `accountingd` (`/anonymize`) |
 | **XRechnung 3.0 CII / PEPPOL UBL** (EN 16931 e-invoice) | — | `billingd` |
-| **BK6-20-160 Anlage 6** (NZR-EMob / Modell 2 — ladevorgangscharfe bilanzielle Energiemengenzuordnung) · **BK6-24-267** (Modell 2 für Kundenanlagen, § 20 Abs. 1, 1a EnWG) | Strom | `mako-emob` (allocation engine + the three Modellwechsel-Workflows), `mako-mabis` (Zuordnung ZP der NGZ zur NZR, 55235–55237), `makod` (routing, adapters, UTILMD render), `marktd` (`malo.abwicklungsmodell`), `mako-pruefung` (`E_0510`–`E_0513`), `mako-fristen`, `edi-energy` (UTILMD 55235–55243, MSCONS 13018), `mako-engine` (`Marktrolle::Lpb`) |
+| **BK6-20-160 Anlage 6** (NZR-EMob / Modell 2 — ladevorgangscharfe bilanzielle Energiemengenzuordnung) · **BK6-24-267** (Modell 2 für Kundenanlagen, § 20 Abs. 1, 1a EnWG) | Strom | `mako-emob` (allocation + Modellwechsel workflows), `mako-mabis` (55235–55237), `mako-pruefung` (`E_0510`–`E_0513`), `marktd` (`malo.abwicklungsmodell`), `makod` |
 | **BK6-20-059** TZ 2 (Redispatch 2.0 Datenformate; TZ 1, BK6-20-060 and BK6-20-061 repealed by BK6-23-241) | Strom | `mako-redispatch` (8 workflows), `redispatch-xml` (9 document types), `makod` (AS4 EDIFACT+XML ingest), `grid-billing` (§13a Vergütung) |
 | **BK6-23-241** (BilAReM, Beschluss 07.05.2026 — Planwert-/Prognosemodell, Kap.-3 Ausfallarbeit) | Strom | `mako-redispatch` (`bilarem` model/migration + `ausfallarbeit` engine), `grid-billing` (`bilarem_finanzielle_korrektur`), `netzbilanzd` (compute endpoints) |
 | **§19 Abs. 2/3 StromNEV + BK8-25-003-A / GBK-25-01 (AgNeS, draft)** | Strom | `grid-billing::regulatory` (regime turnovers as dates; **AgNeS-era Entgelt settlements are refused** — no Rahmenfestlegung supplies their parameters) |
-| **§20b EnWG** (Netzzugangsplattform, G. v. 18.12.2025 — no Festlegung or API exists) | Both | `makod` (`netzzugang.*` commands, outbox-reliable sender + signed ERP-webhook fallback), `marktd` (`netzzugang_antraege` registry) |
+| **§20b EnWG** (Netzzugangsplattform, G. v. 18.12.2025 — no Festlegung or API exists) | Both | `makod` (`netzzugang.*` commands), `marktd` (`netzzugang_antraege` registry) |
 | **BDEW AS4-Profil v1.2** (BrainpoolP256r1, sign+encrypt, ECDH-ES AES128-GCM) | — | `mako-as4` |
 | **§ 20 Abs. 1 S. 1 EnWG** (diskriminierungsfreier Netzzugang) + **§ 6a / § 7a Abs. 5 EnWG** (informatorische Entflechtung, Gleichbehandlungsbericht by 31 March) | Both | `processd` (`GET /api/v1/audit/gleichbehandlung`), Cedar ABAC |
-| **MsbG §29 Abs. 3 / BSI TR-03109-4 §6.3** (SMGW certificate expiry monitoring) | Strom | `edmd` daily cert-expiry worker — tiered 90/30/7-day `de.messwert.smgw.cert.expiry-warning` (dedup per tier); `agentd` `smgw-diagnostics-agent` escalates renewal |
+| **MsbG §29 Abs. 3 / BSI TR-03109-4 §6.3** (SMGW certificate expiry monitoring) | Strom | `edmd` cert-expiry worker (90/30/7-day `de.messwert.smgw.cert.expiry-warning`), `agentd` `smgw-diagnostics-agent` |
 
 > **Format version coexistence.** Profiles are per message and fv-dated —
 > `fv20260401` binds from 01.04.2026, `fv20261001` from 01.10.2026. The

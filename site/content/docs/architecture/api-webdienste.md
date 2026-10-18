@@ -115,7 +115,7 @@ sequenceDiagram
     participant dir as Verzeichnisdienst<br/>(BDEW)
 
     Note over MSB,dir: Channel 1 — EDIFACT/AS4 (Gerätewechsel)
-    MSB->>NB_AS4: POST /as4/inbox<br/>UTILMD PID 55042
+    MSB->>NB_AS4: POST /as4/inbox/NB-MP-ID<br/>UTILMD PID 55042
     NB_AS4->>engine: WimDeviceChangeWorkflow::Initiate
     engine-->>NB_AS4: events + APERAK outbox
     NB_AS4-->>MSB: AS4 Receipt + APERAK
@@ -131,7 +131,6 @@ sequenceDiagram
 returns the record with its certificate and signature headers, so the caller
 verifies the JWS before trusting the endpoint URL. The `/[Post]/` prefix on the
 Steuerbefehl routes is the BDEW OpenAPI path template, mirrored verbatim.
-
 
 ```rust
 use edi_energy::{parse_interchange, EdiEnergyMessage};

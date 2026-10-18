@@ -176,7 +176,7 @@ use edi_energy::builders::AperakBuilder;
 use edi_energy::{Pruefidentifikator, releases};
 
 let bytes = AperakBuilder::new(releases::aperak_fv20261001().clone())
-    .pruefidentifikator(Pruefidentifikator::new(29002)?)  // 29002 = Ablehnung
+    .pruefidentifikator(Pruefidentifikator::new(29001)?)  // 29001 = Fehlermeldung
     .sender("4012345000023")
     .receiver("9900357000004")
     .acw_ref("MSG-ORIG-001")      // SG2 RFF+ACE / SG5 RFF+ACW — the message answered
@@ -235,12 +235,11 @@ println!("{}", pid.as_u32());  // 55001
 println!("{}", pid);           // "55001"
 
 // Common Pruefidentifikatoren
-// 13001 — MSCONS: Netzbetreiber an Lieferant (SLP)
-// 29001 — APERAK: Annahme
-// 29002 — APERAK: Ablehnung
-// 55001 — UTILMD Strom: Anmeldung Lieferbeginn (LF → NB)
-// 55004 — UTILMD Strom: Abmeldung / Lieferende (LF → NB)
-// 55042 — UTILMD Strom: WiM Anmeldung MSB (MSBN → NB)
+// 29001 — APERAK: Fehlermeldung
+// 29002 — APERAK: Anerkennungsmeldung
+// 55001 — UTILMD Strom: Anmeldung verb. MaLo (LF → NB)
+// 55004 — UTILMD Strom: Abmeldung (LF → NB)
+// 55042 — UTILMD Strom: Anmeldung MSB (MSB → NB)
 ```
 
 ---
@@ -268,7 +267,7 @@ which is why every example here re-parses what it built.
 
 ## Serialization
 
-The built message implements `EdifactSerialize`:
+The built message implements `EdiEnergyMessage`, whose `serialize` writes it:
 
 ```rust
 let msg = builder.build()?;

@@ -68,7 +68,6 @@ deny = [
 # ── Skip entries for unavoidable transitive duplicates ───────────────────────
 #
 # Each entry documents WHY the duplicate exists and what would resolve it.
-# Review and tighten on every annual dependency update pass.
 
 # ── Typst document renderer ──────────────────────────────────────────────────
 # `outputd` compiles operator document templates with Typst. Its syntax
@@ -288,8 +287,7 @@ version = "0.2"
 reason  = "p256/sha2 0.10 chain still pulls cpufeatures 0.2; asx-rs + lopdf pull cpufeatures 0.3 via sha2 0.11. Resolve when p256 ecosystem updates."
 
 # ── asx-rs vs p256/ecdsa/energy-api crypto split ────────────────────────────────
-# asx-rs and lopdf are both on sha2 0.11 / hmac 0.13 (RustCrypto 2024 update),
-# so xtask contributes no crypto version split.
+# asx-rs and lopdf are both on sha2 0.11 / hmac 0.13 (RustCrypto 2024 generation).
 # p256/ecdsa/rfc6979 (energy-api ECDSA, makod HMAC) are still on sha2 0.10 / hmac 0.12.
 # No shared key material or verification state across the version boundary.
 # Resolve when p256/ecdsa ecosystem aligns on sha2 0.11 / hmac 0.13.
@@ -360,9 +358,9 @@ name    = "windows-strings"
 version = "0.4"
 reason  = "windows-strings 0.4 travels with windows-core 0.61; 0.5 with windows-core 0.62."
 
-# ── marktd new-dependency version skew ─────────────────────────────────────────
-# sqlx 0.8 / reqwest 0.13 bring in newer minor versions of crates already
-# present through the existing dependency tree.
+# ── sqlx / reqwest minor-version skew ──────────────────────────────────────────
+# sqlx 0.8 / reqwest 0.13 bring in newer minor versions of crates other
+# dependencies pin older.
 
 [[bans.skip]]
 name    = "foldhash"
@@ -487,18 +485,17 @@ ignore = [
 
 # ── Bans: duplicate-version skip entries ──────────────────────────────────────
 # Each entry allows a specific older version to coexist with a newer version.
-# New portald (reqwest 0.13) + existing workspace (reqwest 0.12) require both.
-# iceberg and existing ecosystem crates pull older versions of crypto/utility crates.
+# iceberg and other ecosystem crates pull older versions of crypto/utility crates.
 
 [[bans.skip]]
 name    = "reqwest"
 version = "=0.12"
-reason  = "portald introduces reqwest 0.13 (no ring dep); workspace services still use 0.12. Resolve by bumping all services to 0.13."
+reason  = "iceberg 0.10 (meterstore → edmd cold tier) pins reqwest 0.12; the workspace uses 0.13. Resolve when iceberg bumps to 0.13."
 
 [[bans.skip]]
 name    = "reqwest"
 version = "=0.13"
-reason  = "portald introduces reqwest 0.13; coexists with workspace 0.12 services."
+reason  = "the workspace version; coexists with iceberg's reqwest 0.12."
 
 # ── darling two-way split ───────────────────────────────────────────────────
 # 0.20: iceberg-datafusion (edmd cold tier) → derive_builder.
@@ -665,7 +662,7 @@ version = "0.11"
 reason  = "krafka pins lz4_flex 0.11 (visible in the all-features graph); 0.13 is current."
 
 # ── object_store 0.13 (three-way: 0.12 / 0.13 / 0.14) ───────────────────────────
-# 0.12 was already skipped above. Adding 0.13 for the cargo update bump.
+# 0.12 is skipped above.
 [[bans.skip]]
 name    = "object_store"
 version = "=0.13"
@@ -730,18 +727,18 @@ version = "0.37"
 reason  = "backtrace 0.3.76 (miette/cedar chain) pins object 0.37; the newer cedar → ar_archive_writer chain uses object 0.39 (canonical). Resolve when backtrace bumps object."
 
 # ── ordered-float 4.x (three-way: 2 / 4 / 5) ────────────────────────────────────
-# 2 was already skipped above (petgraph 0.7). Adding 4.x for the cargo update bump.
+# 2 is skipped above (petgraph 0.7).
 [[bans.skip]]
 name    = "ordered-float"
 version = "=4"
 reason  = "ordered-float three-way split: 2 (petgraph 0.7/iceberg), 4 (mid-generation crates), 5 (current). Resolve when all consumers align on 5."
 
 # ── phf 0.12 (three-way: 0.11 / 0.12 / 0.13) ────────────────────────────────────
-# 0.11 was already skipped above. Adding 0.12 for the cargo update bump.
+# 0.11 is skipped above.
 [[bans.skip]]
 name    = "phf"
 version = "=0.12"
-reason  = "phf three-way split after cargo update: 0.11 (older crates), 0.12 (mid), 0.13 (current). Resolve when all consumers align on 0.13."
+reason  = "phf three-way split: 0.11 (older crates), 0.12 (mid), 0.13 (current). Resolve when all consumers align on 0.13."
 
 [[bans.skip]]
 name    = "phf_shared"

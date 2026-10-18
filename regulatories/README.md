@@ -86,7 +86,7 @@ BDEW catalogue and are maintained by hand; `sync-regulatories` reports them as
 > The same applies to Mitteilungen Nr. 71 (Netzbetreiberwechsel Strom, 01.07.2024)
 > and Nr. 72 (MMM-Preis Strom, 05.02.2026).
 
-## Subfolders (pre-existing library)
+## Subfolders
 
 | Folder | Content |
 |---|---|

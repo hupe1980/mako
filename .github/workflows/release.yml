@@ -15,57 +15,49 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   # A hosted runner has ~14 GB free and a debug build of this workspace with
-  # every feature does not fit — `preflight` alone runs clippy, test and check
-  # over `--all-features`, three full builds into one target directory. It died
-  # on `No space left on device` linking `typenum`. Same settings and same
+  # every feature does not fit beside a second one. Same settings and same
   # reasoning as `ci.yml`, which carries the measurements.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
   CARGO_INCREMENTAL: 0
 
+# Nothing is published until `preflight`, `test`, `guards` and `semver` have
+# passed: `publish` needs all four, `makotest-publish` needs `test` and
+# `guards`, and the images are baked only after `publish`.
 jobs:
   # ── Pre-flight checks ────────────────────────────────────────────────────────
   preflight:
-    name: Pre-flight (fmt / clippy / test)
+    name: Pre-flight (fmt / clippy / check)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
+      # `makotest` binds PyO3 with `abi3-py311`, so a workspace-wide build needs
+      # an interpreter >= 3.11; the runner image's `python3` is above it.
       PYO3_PYTHON: python3
-      # One value for the whole job. cargo fingerprints on RUSTFLAGS, so setting
-      # it on the warning gate alone made that step rebuild the entire workspace
-      # into the same target directory — a second complete set of artefacts, and
-      # the reason this job ran the runner out of disk. Job-scoped rather than
-      # workflow-scoped: `publish` must not deny warnings it does not own.
+      # Job-scoped rather than workflow-scoped: `publish` must not deny
+      # warnings it does not own. cargo fingerprints on RUSTFLAGS, so one value
+      # for the whole job keeps every step on one set of artefacts.
       RUSTFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Toolchain is rust-toolchain.toml's
-        shell: bash
         run: |
           want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
           have=$(rustc --version | cut -d' ' -f2)
           case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
             *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
 
-      - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
-
-      # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
-      # command needs an interpreter >= 3.11. `.cargo/config.toml` points
-      # PYO3_PYTHON at the developer's `.venv`, which does not exist here — and
-      # cargo leaves an already-set variable alone, so naming the runner's
-      # interpreter here is what makes the workspace build.
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
         with:
-          python-version: "3.11"
+          tool: just@1.58.0
 
       - name: Install protoc
         run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
 
       - name: Reclaim runner disk
         run: |
-          df -h /
           sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
                       /usr/share/dotnet /opt/ghc /usr/local/share/powershell
           df -h /
@@ -86,28 +78,13 @@ jobs:
           fi
           echo "tag v$tag matches workspace version $workspace"
 
-      # The publish job runs one `cargo publish` per crate, so their order is the
-      # contract: cargo resolves each dependency against crates.io, not the tree.
-      - name: Publish order resolves on crates.io
-        run: cargo xtask check-publish-order
-
-      # The steps that build the workspace run the `just ci` recipes of the same
-      # name, so the evidence pack can carry their verdicts beside the guards'.
-      # A failing step fails the job and nothing is released, so each verdict
-      # is written only once its recipe has passed.
-      - name: Format check
-        run: just fmt-check
-
-      - name: Clippy
-        run: just clippy
-
-      - name: Tests
-        # Mirror the CI test-workspace job: makod's suite has a job of its own.
-        # Not `just test` (which covers makod too), so it records no verdict.
-        run: cargo test --workspace --all-features --exclude makod
-
-      - name: Warning gate
-        run: just check
+      # These steps run the `just ci` recipes of the same name, so the evidence
+      # pack can carry their verdicts beside the guards'. A failing step fails
+      # the job and nothing is released, so each verdict is written only once
+      # its recipe has passed.
+      - run: just fmt-check
+      - run: just clippy
+      - run: just check
 
       - name: Record the verdicts of the recipes run above
         run: |
@@ -120,27 +97,48 @@ jobs:
           path: preflight-verdicts
           if-no-files-found: error
 
+  # ── Tests ────────────────────────────────────────────────────────────────────
+  # The workspace suite, as ci.yml's `test` job runs it: makod's own suite is
+  # ci.yml's `test-makod` job and does not run here. A job of its own, beside
+  # `preflight`, so neither build has to share one job's time and disk.
+  test:
+    name: Test workspace crates
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PYO3_PYTHON: python3
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install protoc
+        run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
+      - run: cargo test --workspace --all-features --exclude makod
+
   # ── Guard verdicts ───────────────────────────────────────────────────────────
   #
-  # Every `just ci` recipe whose body is one xtask call, run before anything is
-  # published: `publish`, `makotest-publish` and `docker-bake` need this job,
-  # so a failing guard stops the release before a crate reaches crates.io, a
-  # wheel reaches PyPI or an image is tagged. Every recipe runs and leaves its
-  # exit status for the evidence pack; the job fails if any is non-zero.
+  # Every `just ci` recipe whose body is one xtask call (`check-publish-order`
+  # among them), run before anything is published. Every recipe runs and
+  # leaves its exit status for the evidence pack; the job fails if any is
+  # non-zero. It also reads the released image list out of `docker-bake.hcl`
+  # for the manifest matrix.
   guards:
     name: Guard verdicts (every xtask recipe of `_ci`)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      services: ${{ steps.services.outputs.services }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@1.58.0
       - name: Run every guard and record its exit status
         run: |
           set -uo pipefail
@@ -167,6 +165,32 @@ jobs:
           name: guard-verdicts
           path: guards
           if-no-files-found: error
+      - name: Released images, from docker-bake.hcl
+        id: services
+        run: |
+          set -euo pipefail
+          services=$(docker buildx bake --print 2>/dev/null | jq -c '.target | keys')
+          test "$services" != "[]" || { echo "::error::docker-bake.hcl names no target"; exit 1; }
+          echo "services=$services" >> "$GITHUB_OUTPUT"
+          echo "$services"
+
+  # ── Semver ───────────────────────────────────────────────────────────────────
+  # A public-API break the new version number does not admit stops the release
+  # before any crate is published. Its own job: it builds rustdoc for every
+  # published crate twice, at this tag and at the previous one.
+  semver:
+    name: Published API admitted by the version (cargo-semver-checks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0   # the baseline is the previous release tag
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@1.58.0,cargo-semver-checks@0.50.0
+      - run: just semver
 
   # ── Publish to crates.io ─────────────────────────────────────────────────────
   #
@@ -177,46 +201,29 @@ jobs:
   # action's post step revokes it when the job ends. crates.io issues such a
   # token for 30 minutes (`ACCESS_TOKEN_LIFETIME`,
   # `src/controllers/trustpub/tokens/exchange/mod.rs` in the crates.io source),
-  # and 24 verified publishes take longer than that, so every crate mints its
-  # own immediately before it publishes.
+  # and the verified publishes below take longer than that, so every crate
+  # mints its own immediately before it publishes.
+  #
+  # One step per crate, in dependency order: `check-publish-order` reads that
+  # order out of this file, and `just check-publishable` / `just semver` read
+  # the crate list from the same `cargo publish -p` lines.
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    needs: [preflight, guards]   # guards include validate-profiles
+    timeout-minutes: 60
+    needs: [preflight, test, guards, semver]
     environment: crates-io
     permissions:
       contents: read
       id-token: write   # the OIDC token crates.io exchanges for a publish token
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          fetch-depth: 0   # semver needs the previous release tag
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-
-      - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
-        with:
-          tool: cargo-semver-checks,just
-
-      # A public-API break the new version number does not admit stops the
-      # release before any crate is published.
-      - name: Published API admitted by the version (cargo-semver-checks)
-        run: just semver
-
-      # 24 `cargo publish` runs share one target directory, and each verifies by
-      # building the packaged crate.
+      # Every `cargo publish` verifies by building the packaged crate, all into
+      # one target directory.
       - name: Reclaim runner disk
         run: |
-          df -h /
           sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
                       /usr/share/dotnet /opt/ghc /usr/local/share/powershell
           df -h /
@@ -327,7 +334,7 @@ jobs:
           out=$(cargo publish -p energy-billing 2>&1) && rc=0 || rc=$?
           echo "$out"
           if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
-      
+
       - name: crates.io token for mako-as4
         id: auth-mako-as4
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
@@ -339,7 +346,7 @@ jobs:
           out=$(cargo publish -p mako-as4 2>&1) && rc=0 || rc=$?
           echo "$out"
           if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
-      
+
       # Leaf crate (no internal deps) — depended on by mako-engine, mako-markt,
       # mako-gabi-gas. Must be published before any of them.
       - name: crates.io token for mako-events
@@ -431,7 +438,6 @@ jobs:
           echo "$out"
           if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
 
-
       # The shared INVOIC settle/dispute state machine. mako-gpke, mako-wim,
       # mako-gabi-gas and mako-geli-gas each register a family against it, so it
       # must be published before all four.
@@ -519,7 +525,6 @@ jobs:
           echo "$out"
           if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
 
-      
       - name: crates.io token for mako-gabi-gas
         id: auth-mako-gabi-gas
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
@@ -531,26 +536,6 @@ jobs:
           out=$(cargo publish -p mako-gabi-gas 2>&1) && rc=0 || rc=$?
           echo "$out"
           if [ "$rc" -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit "$rc"; fi
-
-  # ── Docker build + push ──────────────────────────────────────────────────────
-  #
-  # Three stages:
-  #
-  # 1. `docker-builder` runs in parallel with `publish` (it needs `preflight`
-  #    only), so the Rust compile does not wait for crates.io.
-  #
-  # 2. `docker-builder` pushes the builder images to ghcr.io, and the bake jobs
-  #    read them back as `cache-from=type=registry` — a cache hit even when the
-  #    GHA cache has evicted them, so the runtime stages recompile no Rust.
-  #
-  # 3. `docker-bake` is one job per platform: `docker buildx bake` shares the
-  #    builder stage across every service target, so the builder compiles once
-  #    per platform rather than once per service. It needs `publish` (the semver
-  #    tag) and `guards`, so no image is built for a release a guard refused.
-  #
-  # The service list appears twice below — the digest-export loop and the
-  # `docker-manifest` matrix — and both must hold every target in
-  # `docker-bake.hcl`'s `default` group.
 
   # ── makotest (Python wheels -> PyPI) ────────────────────────────────────────
   #
@@ -564,6 +549,7 @@ jobs:
   makotest-wheels:
     name: makotest wheel (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     needs: preflight
     strategy:
       fail-fast: false
@@ -575,25 +561,17 @@ jobs:
             target: aarch64-unknown-linux-gnu
           - runner: macos-latest
             target: aarch64-apple-darwin
-          # Intel macOS is cross-compiled from the Apple Silicon runner. The
-          # `macos-13` Intel image was retired by GitHub, and a job requesting
-          # it queues forever instead of failing — which blocks `makotest-publish`
-          # and with it the whole PyPI release. Cross-compiling needs no Intel
-          # runner at all: the wheel is abi3 and `pyo3/extension-module` leaves
-          # Python symbols undefined, so nothing here links against libpython.
+          # Intel macOS is cross-compiled from the Apple Silicon runner: GitHub
+          # retired the `macos-13` Intel image, and a job requesting it queues
+          # forever instead of failing. The wheel is abi3 and
+          # `pyo3/extension-module` leaves Python symbols undefined, so nothing
+          # here links against libpython.
           - runner: macos-latest
             target: x86_64-apple-darwin
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"   # the abi3 floor
@@ -602,14 +580,13 @@ jobs:
       # the resulting wheel is installable on distros older than the runner.
       #
       # `target` must be passed explicitly: without it maturin builds for the
-      # runner's host architecture and the matrix entry only renames the
-      # artifact. Two entries now share `macos-latest`, so an implicit host
-      # build would produce the same arm64 wheel twice — and because both would
-      # carry an identical filename, the `merge-multiple` download in
-      # `makotest-publish` would silently collapse them into one.
+      # runner's host architecture, and the two `macos-latest` entries would
+      # produce the same arm64 wheel under one filename — which the
+      # `merge-multiple` download in `makotest-publish` collapses into one.
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          maturin-version: v1.15.0
           command: build
           target: ${{ matrix.target }}
           args: --release --manifest-path makotest/Cargo.toml --out dist
@@ -623,12 +600,14 @@ jobs:
   makotest-sdist:
     name: makotest sdist
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: preflight
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Build sdist
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          maturin-version: v1.15.0
           command: sdist
           args: --manifest-path makotest/Cargo.toml --out dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -639,7 +618,8 @@ jobs:
   makotest-publish:
     name: Publish makotest to PyPI
     runs-on: ubuntu-latest
-    needs: [makotest-wheels, makotest-sdist, guards]
+    timeout-minutes: 10
+    needs: [makotest-wheels, makotest-sdist, test, guards]
     environment: pypi
     permissions:
       # Required for PyPI Trusted Publishing — mints the OIDC token in place
@@ -663,9 +643,25 @@ jobs:
           # already exist makes the job idempotent instead of hard-failing.
           skip-existing: true
 
+  # ── Docker build + push ──────────────────────────────────────────────────────
+  #
+  # 1. `docker-builder` compiles each Rust builder stage (`builder`,
+  #    `demo-builder`) on native hardware, one job per stage and platform, in
+  #    parallel with `publish` (it needs `preflight` only), and pushes it to
+  #    ghcr.io.
+  #
+  # 2. `docker-bake` is one job per platform: it reads the builder images back
+  #    as cache, so the runtime stages recompile no Rust, and builds every
+  #    image `docker-bake.hcl` names. It needs `publish` (the semver tag) and
+  #    `guards`, so no image is built for a release a guard refused.
+  #
+  # 3. `docker-manifest` merges the two platform digests per service, tags the
+  #    result and attests it. Its matrix is `docker-bake.hcl`'s target list,
+  #    read by `guards`, so no service list is kept in this file.
   docker-builder:
-    name: Docker — builder (${{ matrix.platform }})
+    name: Docker — ${{ matrix.stage }} (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     needs: preflight          # parallel with `publish`
     permissions:
       contents: read
@@ -673,6 +669,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        platform: [linux/amd64, linux/arm64]
+        # `makod`, `marktd` and `processd` copy their binaries from
+        # `demo-builder`, every other service from `builder`. The two are
+        # siblings on `chef`, so neither build populates the other's layers.
+        stage: [builder, demo-builder]
         include:
           - platform: linux/amd64
             runner: ubuntu-latest
@@ -686,14 +687,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      # A hosted runner has ~14 GB free and this workspace does not compile into
-      # it alongside Docker's layer store. The failure arrives as
-      # `No space left on device` mid-compile, or as a linker SIGBUS — `rust-lld`
-      # mmaps its output, so a write to a full disk is not reported as ENOSPC.
-      # Neither reads as "out of disk".
+      # The workspace does not compile into ~14 GB alongside Docker's layer
+      # store. The failure arrives as `No space left on device` mid-compile, or
+      # as a linker SIGBUS — `rust-lld` mmaps its output, so a write to a full
+      # disk is not reported as ENOSPC. Neither reads as "out of disk".
       - name: Reclaim runner disk
         run: |
-          df -h /
           sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
                       /usr/share/dotnet /opt/ghc /usr/local/share/powershell
           df -h /
@@ -705,48 +704,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Build the shared `builder` stage on native hardware and PUSH it to GHCR.
-      # Pushing (instead of push: false) lets the docker-bake jobs restore the
-      # fully-compiled builder image via cache-from=type=registry — no Rust
-      # recompilation in the runtime stage, even when the GHA cache is evicted.
-      - name: Build and push Rust builder stage (${{ matrix.platform }})
+      # Pushed (not `push: false`) so the bake jobs restore the compiled stage
+      # with cache-from=type=registry even when the GHA cache is evicted.
+      - name: Build and push the ${{ matrix.stage }} stage
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
-          target: builder
-          platforms: ${{ matrix.platform }}
-          push: true                            # the bake jobs read it back as cache
-          tags: ghcr.io/${{ github.repository_owner }}/mako-builder:${{ matrix.tag }}
-          build-args: |
-            OCI_REVISION=${{ github.sha }}
-            OCI_CREATED=${{ github.event.head_commit.timestamp }}
-          cache-from: type=gha,scope=mako-builder-${{ matrix.platform }}
-          cache-to:   type=gha,scope=mako-builder-${{ matrix.platform }},mode=max
-
-      # `demo-builder` is the second builder stage, and `makod`, `marktd` and
-      # `processd` copy their binaries from it — so a cache covering only
-      # `builder` leaves those three to compile from scratch in every bake.
-      # The two stages are siblings on `chef`, not a chain, so building
-      # `--target builder` never populates the other's cargo layers.
-      - name: Build and push demo builder stage (${{ matrix.platform }})
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          target: demo-builder
+          target: ${{ matrix.stage }}
           platforms: ${{ matrix.platform }}
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/mako-demo-builder:${{ matrix.tag }}
+          tags: ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.stage }}:${{ matrix.tag }}
           build-args: |
             OCI_REVISION=${{ github.sha }}
             OCI_CREATED=${{ github.event.head_commit.timestamp }}
-          cache-from: type=gha,scope=mako-demo-builder-${{ matrix.platform }}
-          cache-to:   type=gha,scope=mako-demo-builder-${{ matrix.platform }},mode=max
+          cache-from: type=gha,scope=mako-${{ matrix.stage }}-${{ matrix.platform }}
+          cache-to:   type=gha,scope=mako-${{ matrix.stage }}-${{ matrix.platform }},mode=max
 
   # One bake invocation per platform builds every service image from one build
-  # graph, sharing the builder stage. Digests are exported for manifest merging.
+  # graph, sharing the builder stages. Digests are exported for manifest merging.
   docker-bake:
     name: Docker — bake ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     needs: [docker-builder, publish, guards]    # publish provides the semver version tag
     permissions:
       contents: read
@@ -767,14 +746,8 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      # A hosted runner has ~14 GB free and this workspace does not compile into
-      # it alongside Docker's layer store. The failure arrives as
-      # `No space left on device` mid-compile, or as a linker SIGBUS — `rust-lld`
-      # mmaps its output, so a write to a full disk is not reported as ENOSPC.
-      # Neither reads as "out of disk".
       - name: Reclaim runner disk
         run: |
-          df -h /
           sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
                       /usr/share/dotnet /opt/ghc /usr/local/share/powershell
           df -h /
@@ -790,9 +763,7 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      # Build all 16 runtime images in one bake invocation.
-      # cache-from=type=registry restores from the pushed builder image — guaranteed hit.
-      # --metadata-file captures per-service OCI digests for the manifest job.
+      # cache-from=type=registry restores from the pushed builder images.
       - name: Bake all service images (${{ matrix.platform }})
         uses: docker/bake-action@5be5f02ff8819ecd3092ea6b2e6261c31774f2b4 # v6.10.0
         id: bake
@@ -811,14 +782,12 @@ jobs:
           # 11.12.2027. `mode=max` records the build arguments and the base
           # images, not only the invocation.
           #
-          # This changes the shape of what is pushed: with attestations each
-          # per-platform build produces an **OCI index** (the image manifest plus
-          # the attestation manifests) rather than a bare manifest, so
-          # `containerimage.digest` below is that index's digest.
-          # `docker buildx imagetools create` takes index sources and carries
-          # their manifests into the merged index, so the digest export and the
-          # manifest-merge job need no change — but they now depend on that
-          # behaviour, which is why the merge job asserts it.
+          # With attestations each per-platform build produces an **OCI index**
+          # (the image manifest plus the attestation manifests) rather than a
+          # bare manifest, so `containerimage.digest` below is that index's
+          # digest. `docker buildx imagetools create` carries an index source's
+          # manifests into the merged index — behaviour the manifest job
+          # depends on, which is why it asserts it.
           provenance: mode=max
           sbom: true
         env:
@@ -827,38 +796,28 @@ jobs:
           OCI_REVISION: ${{ github.sha }}
           OCI_CREATED:  ${{ github.event.head_commit.timestamp }}
 
-      # Extract one digest artifact per service for the manifest merge step.
-      # `BAKE_METADATA` is passed through the environment, never interpolated
-      # into the script. `${{ steps.bake.outputs.metadata }}` inside `run:` is
-      # substituted as *text* before bash parses the line, so one `'` anywhere in
-      # the blob ends the quoted string and the remainder is executed — which
-      # with `provenance: mode=max` is a megabyte of SLSA material, base64 source
-      # maps and build arguments for 16 targets. That is a shell-injection shape
-      # as much as a syntax one, and an environment variable cannot have it: the
-      # value never reaches the parser.
+      # One digest artifact per service for the manifest merge. `BAKE_METADATA`
+      # comes through the environment, never interpolated into the script:
+      # `${{ … }}` inside `run:` is substituted as text before bash parses it,
+      # and with `provenance: mode=max` this blob is a megabyte of SLSA
+      # material in which one `'` ends a quoted string.
       - name: Export per-service digests
         env:
           BAKE_METADATA: ${{ steps.bake.outputs.metadata }}
         run: |
+          set -euo pipefail
           platform_safe="${{ matrix.platform }}"
           platform_safe="${platform_safe//\//-}"
           mkdir -p /tmp/digests
           printf '%s' "$BAKE_METADATA" > /tmp/bake-metadata.json
           jq -e 'type == "object" and length > 0' /tmp/bake-metadata.json >/dev/null \
             || { echo "::error::bake produced no metadata — nothing to tag"; exit 1; }
-          # Every target in `docker-bake.hcl`'s `default` group. A service the
-          # bake builds but this loop omits is pushed by digest and then never
-          # tagged: no manifest job runs for it, so the image exists in the
-          # registry under no name anyone can pull.
-          for service in makod marktd processd invoicd edmd \
-                        netzbilanzd einsd \
-                        productd billingd outputd accountingd vertragd \
-                        portald agentd; do
+          # Every target docker-bake.hcl names must have produced a digest: a
+          # missing one would leave the manifest job tagging nothing while
+          # reporting success.
+          for service in $(docker buildx bake --print 2>/dev/null | jq -r '.target | keys[]'); do
             digest=$(jq -r --arg svc "$service" '.[$svc]["containerimage.digest"] // empty' \
                         /tmp/bake-metadata.json)
-            # An empty digest means the bake did not produce that image. Writing
-            # it anyway uploads a blank artifact, and the manifest job then tags
-            # nothing while reporting success.
             if [ -z "$digest" ]; then
               echo "::error::no containerimage.digest for ${service} in the bake metadata"
               exit 1
@@ -879,7 +838,8 @@ jobs:
   docker-manifest:
     name: Docker — manifest ${{ matrix.service }}
     runs-on: ubuntu-latest
-    needs: [docker-bake, sbom]
+    timeout-minutes: 20
+    needs: [docker-bake, sbom, guards]
     permissions:
       contents: read
       packages: write       # the merged index and its attestations go to ghcr.io
@@ -888,35 +848,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - service: makod
-            description: "Mako process engine daemon — German energy market communication (MaKo/BDEW EDI@Energy)"
-          - service: marktd
-            description: "Market Data Hub daemon — MaLo/MeLo/VersorgungsStatus/preisblaetter/EventBus fan-out"
-          - service: processd
-            description: "Process Decision Engine — NB STP (mako-pruefung) + LF E_0624 auto-response, process read model and KPIs, Sperrauftrag queue (IFTSTA 21039)"
-          - service: invoicd
-            description: "INVOIC plausibility-check daemon — LF role, § 147 AO / GoBD receipt retention"
-          - service: edmd
-            description: "Energy Data Management daemon — MSCONS meter readings, MeterBillingPeriod"
-          - service: netzbilanzd
-            description: "NNE/KA/MMM/MSB/AWH billing and MaBiS Summenzeitreihen (MSCONS 13003) — NB role, GridSettlement, CalculationTrace"
-          - service: einsd
-            description: "Einspeiser Registry + EEG/KWKG Settlement daemon — 10 settlement schemes, EEG/KWKG Gutschrift"
-          - service: productd
-            description: "Product & Tariff Catalog daemon — LF role, EPEX §41a, B2B Angebote"
-          - service: billingd
-            description: "Energy Billing Engine daemon — LF role, 12 categories, XRechnung 3.0, §14a, §41a"
-          - service: outputd
-            description: "Customer-communications daemon — Typst templates, ZUGFeRD PDF/A-3, issued-document store, per-channel delivery evidence"
-          - service: accountingd
-            description: "Customer Account Ledger daemon — LF role, SEPA pain.008/001, auto-dunning, GDPR Art.17"
-          - service: vertragd
-            description: "Contract & Customer Management daemon — LF role, B2C+B2B, OIDC→MaLo auth gateway"
-          - service: portald
-            description: "Customer Portal gateway — LF role, REST+SSE, §41 EnWG self-service"
-          - service: agentd
-            description: "Multi-agent LLM orchestration daemon — 28 declarative specialist manifests on the agentplane durable runtime, MCP tools"
+        service: ${{ fromJSON(needs.guards.outputs.services) }}
     steps:
       - name: Download amd64 digests
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -940,6 +872,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Tags only: the OCI labels (title, description, version) are the
+      # Dockerfile's and travel inside the image.
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
@@ -949,16 +883,10 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
-          labels: |
-            org.opencontainers.image.title=${{ matrix.service }}
-            org.opencontainers.image.description=${{ matrix.description }}
-            org.opencontainers.image.licenses=MIT OR Apache-2.0
 
       # `META_JSON` through the environment for the same reason the bake's
       # metadata is: interpolated into `run:` it is substituted as text before
-      # bash parses, and this blob carries the OCI descriptions — free prose,
-      # already holding parentheses, one apostrophe away from ending the quoted
-      # string and handing the rest to the shell.
+      # bash parses it.
       - name: Create and push multi-arch manifest for ${{ matrix.service }}
         env:
           META_JSON: ${{ steps.meta.outputs.json }}
@@ -1149,17 +1077,10 @@ jobs:
   sbom:
     name: CycloneDX SBOMs
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: preflight
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-
       - name: Install cargo-cyclonedx
         run: cargo install --locked cargo-cyclonedx@0.5.9
 
@@ -1191,6 +1112,7 @@ jobs:
   release:
     name: GitHub Release with the evidence pack
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [guards, publish, makotest-publish, docker-manifest, sbom]
     permissions:
       contents: write       # creates the GitHub Release
@@ -1198,20 +1120,10 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
 
       - name: Reclaim runner disk
         run: |
-          df -h /
           sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
                       /usr/share/dotnet /opt/ghc /usr/local/share/powershell
           df -h /

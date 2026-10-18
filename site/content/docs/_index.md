@@ -5,9 +5,6 @@ sort_by = "weight"
 template = "section.html"
 +++
 
-Everything needed to build, run and extend mako — grouped by what you are trying
-to do.
-
 ## Start here
 
 | If you want to… | Go to |
@@ -21,13 +18,11 @@ to do.
 
 ## Find it by market role
 
-A deployment is scoped to the roles it plays: `makod` registers the engine
-modules of the roles its `[deployment] rollen` declares, and a role-built
-`processd` cannot answer as a role it was not built for. Neither is an
-unbundling control — which principal may read which role's processes (§ 6a
-Abs. 1 EnWG) is the deployment's Cedar policy. `makod`, `marktd`, `edmd`,
-`processd` (whose process read model serves every role) and `agentd` run
-everywhere; the rest are role-specific.
+`makod` registers the engine modules of the roles its `[deployment] rollen`
+declares, and a role-built `processd` cannot answer as a role it was not built
+for. Which principal may read which role's processes (§ 6a Abs. 1 EnWG) is the
+deployment's Cedar policy. `makod`, `marktd`, `edmd`, `processd` and `agentd`
+run in every role; the rest are role-specific.
 
 | Role | Also runs | Starts at |
 |---|---|---|
@@ -66,20 +61,6 @@ graph TB
 The domain layer never sees EDIFACT and the format layer never knows what a
 Lieferantenwechsel is, so a BDEW format release is an import of new profiles
 rather than a change to process logic.
-
-## Sections
-
-- **[Guide](@/docs/guide/_index.md)** — install, run the demo stack, submit your first message.
-- **[Architecture](@/docs/architecture/_index.md)** — the domain model, the workflow engine, ERP
-  integration and the API-Webdienste beside EDIFACT.
-- **[Services](@/docs/services/_index.md)** — one operator manual per service: endpoints,
-  configuration, emitted events, deployment.
-- **[Reference](@/docs/reference/_index.md)** — EDIFACT parsing, validation, builders, the AS4
-  profile, process catalogue, and the `makotest` Python toolkit.
-- **[Regulatory](@/docs/regulatory/_index.md)** — BNetzA Festlegungen and the full
-  Prüfidentifikator table with the crate and workflow that owns each one.
-- **[Release & compliance](@/docs/compliance/_index.md)** — the format-release workflow, schema
-  versioning, and licence inventory.
 
 ## Common tasks
 

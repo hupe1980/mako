@@ -927,9 +927,9 @@ name is a BO4E type's own — `vertrag`, `kosten_json`, `standort_adresse`,
 
 ### A request body refuses what it cannot store
 
-`mako_service::Json` refuses a key no field declares with a `422` naming it,
-rather than a value that goes nowhere. The same guard names what that runtime
-check cannot see, each with a documented reason: `SmgwTyp2Push` is read
+`mako_service::Json` refuses a key no field declares with a `422` naming it.
+`check-request-bodies` lists what that runtime check cannot see, each with a
+reason: `SmgwTyp2Push` is read
 `Lenient` (a BSI TR-03109 payload); the BDEW **Energy API** schemas —
 `IdentificationParameter`, `MaloIdentResultPositive`, `MaloIdentResultNegative`
 and `ApiRecord` — are read by `axum::Json`, because their forward compatibility

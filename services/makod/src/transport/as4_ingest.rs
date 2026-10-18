@@ -1,230 +1,141 @@
 //! AS4 inbound transport for BDEW MaKo market communication.
 //!
-//! This module wires the [`asx_rs`] AS4 receive pipeline to the same
-//! EDIFACT dispatch layer used by the REST ingest API.  Every EDIFACT
-//! UserMessage delivered over AS4 passes through:
+//! One `asx::Inbound` per local MP-ID, mounted at `/as4/inbox/<MP-ID>`: each
+//! certificate names one web-service address (Regelungen zum Übertragungsweg
+//! für AS4 2.6 Kap. 5.2), and an inbox answers only for its own `eb:To`. A
+//! request passes, in order:
 //!
-//! 1. **HTTP pre-validation** — performed by the `asx_rs` Axum router before
-//!    our handler is invoked (method, `Content-Type: application/soap+xml`,
-//!    body size / read timeout).
-//! 2. **AS4 receive pipeline** — WS-Security signature verification, replay
-//!    deduplication via [`SlateDbDedupBridge`], MIME multipart parsing, payload
-//!    extraction (`receive_push_with_dedup_async`).
-//! 3. **EDIFACT dispatch** — identical to the REST `POST /edifact` path:
-//!    `Platform::parse_interchange` → `PidRouter` → structured log.
-//! 4. **Synchronous receipt** — an `eb:Receipt` SignalMessage is returned on
-//!    the same HTTP connection, satisfying the BDEW AS4 MEP requirement.
-//!    When receipt-signing credentials are configured
-//!    ([`BdewAs4IngestHandler::with_receipt_credentials`]), the receipt is
-//!    **signed** and echoes the inbound message's `ds:Reference` digests as
-//!    NonRepudiationInformation, satisfying Non-Repudiation of Receipt per
-//!    BDEW AS4-Profil §2.2.4.  Without credentials the receipt is **unsigned**
-//!    (dev/test only) and a warning is logged.
-//!
-//! # Security notes
-//!
-//! - Signing is **mandatory** for BDEW production deployments
-//!   (`As4PushPolicy::regulated()`), including receipt signing — configure
-//!   `with_receipt_credentials` with the operator's signing key pair.
-//! - The dedup bridge is backed by SlateDB (single-node durable storage).
-//!   Multi-replica deployments should replace it with a distributed backend.
-//! - Receipt `message_id` values are UUID v4, scoped with a `makod@` prefix
-//!   to distinguish them from sender-generated IDs.
+//! 1. **Rate limits** — per peer address and per claimed sender, before any
+//!    cryptography ([`as4_rate_limit_middleware`]).
+//! 2. **`asx-rs`** — signature (`X509PKIPathv1`, the signer chained to the
+//!    SM-PKI root, its OU carrying the claimed MP-ID, pinned certificates for a
+//!    configured partner), revocation (CRL, three-day rule), decryption — then
+//!    the dedup **claim** in [`SlateDbDedup`]. A duplicate is answered with a
+//!    fresh signed receipt, a message in flight with `503`; neither reaches
+//!    the handler. The ebMS3 test service is receipted and never delivered.
+//! 3. **[`BdewAs4IngestHandler::handle`]** — the sender policy
+//!    (`[policy.as4] unbekannte_absender`), the evidence record, then the
+//!    EDIFACT and Redispatch-XML legs: the same dispatch as `POST /edifact`.
+//! 4. **Settlement** — `asx-rs` writes its audit record and **accepts** the
+//!    claim on `Ok`, then answers with the signed receipt (NRR). On `Err` it
+//!    **releases** the claim: [`Reject::permanent`] (after the message is
+//!    dead-lettered) answers `EBMS:0004`, which the sender does not retry;
+//!    [`Reject::new`] (nothing recorded — a store outage, a dead letter that
+//!    could not be written) answers the retryable `EBMS:0202`.
 //!
 //! # Layering
 //!
-//! `mako-as4` remains a pure BDEW protocol/profile crate (no engine dep).
-//! This module is the glue layer in `makod` that knows about both the engine
-//! (`InboxStore`) and the transport (`asx_rs`).
+//! `mako-as4` is the BDEW profile crate (no engine dependency). This module is
+//! the glue that knows both the engine (`InboxStore`, the dead-letter sink)
+//! and the transport (`asx-rs`).
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use asx_rs::as4::{
-    As4ReceiptCredentials, As4ReceiveOutcome, As4ReceivePush, As4ReceivePushRequest,
-    As4SignerPinMap, generate_receipt_for_output, generate_signed_receipt_for_output, receive_push,
-};
-use asx_rs::core::{AsxError, ErrorCode, ErrorContext, SessionContext};
-use asx_rs::crypto::wssec::WsSecOutboundKeyInfoProfile;
-use asx_rs::observability::EventBus;
-use asx_rs::storage::{BoxFuture, DedupStorage, DedupVerdict};
-use asx_rs::transport::ingress::As4HttpIngress;
-use asx_rs::transport::server::{As4AxumHandler, HandlerOutcome, as4_router};
+use asx::as4::UserMessage;
+use asx::{BoxFuture, Claim, ClaimToken, DedupStore, Reject, Verified};
 use axum::Router;
 use edi_energy::{AnyMessage, EdiEnergyMessage};
-use mako_as4::server::RouterConfig;
+use mako_engine::ids::InboxClaimId;
 use mako_engine::inbox::{InboxClaim, InboxStore};
 use mako_engine::metrics::EngineMetrics;
 use mako_engine::store_slatedb::SlateDbInboxStore;
-use uuid::Uuid;
 
+use crate::as4_clients::As4Clients;
+use crate::as4_evidence::As4Evidence;
 use crate::edifact_api::{EdifactApiState, MessageStatus};
 
-// ── Dedup bridge ──────────────────────────────────────────────────────────────
+/// How long the inbox waits for a request body before giving up.
+pub const REQUEST_BODY_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Adapts [`SlateDbInboxStore`] to the async [`asx_rs::storage::DedupStorage`]
-/// interface required by the AS4 receive pipeline.
+/// How long an accepted dedup key is remembered: 8 days.
 ///
-/// `DedupStorage::first_seen` returns a `BoxFuture`, so `InboxStore::accept` is
-/// called directly, without `block_in_place` / `block_on` boilerplate.
+/// `asx-rs` 0.16.2 accepts an inbound `eb:Timestamp` up to 7 days old and
+/// requires a `DedupStore` to remember accepted keys for at least that long,
+/// so a sender's retry — BDEW retries for 72 hours — is answered as a duplicate
+/// rather than processed twice. One day above the floor for the daily purge.
+pub const DEDUP_RETENTION: time::Duration = time::Duration::days(8);
+
+// ── Dedup store ───────────────────────────────────────────────────────────────
+
+/// [`SlateDbInboxStore`] as the `asx-rs` [`DedupStore`] of the AS4 inbox.
 ///
-/// # Cluster safety
-///
-/// `cluster_safe()` returns `false` because SlateDB is a single-process store.
-/// For multi-replica deployments, replace this with a distributed dedup backend
-/// (Redis, PostgreSQL) that implements `DedupStorage` with `cluster_safe = true`.
-pub struct SlateDbDedupBridge {
-    store: Arc<SlateDbInboxStore>,
-    /// `true` when the underlying SlateDB is backed by a persistent store
-    /// (`--data-dir` or cloud object store). `false` when running in volatile
-    /// (in-memory) mode — inbox dedup state is lost on restart and every AS4
-    /// retry within the 72-hour window will re-process as a new message.
-    ///
-    /// Set from the `makod` configuration at startup so that the `asx-rs`
-    /// receive pipeline can surface appropriate diagnostics via `is_durable()`.
-    durable: bool,
+/// A claim's [`ClaimToken`] is the inbox claim id, so `accept` and `abandon`
+/// are fenced by it: a holder whose lease was taken over gets `Err` and
+/// changes nothing. A backend failure is `Err` too, which `asx-rs` answers
+/// without a receipt — a storage outage is never "first seen".
+#[derive(Clone)]
+pub struct SlateDbDedup {
+    store: SlateDbInboxStore,
 }
 
-impl SlateDbDedupBridge {
-    pub fn new(store: Arc<SlateDbInboxStore>, durable: bool) -> Self {
-        Self { store, durable }
+impl SlateDbDedup {
+    /// The AS4 dedup store over `store`.
+    #[must_use]
+    pub fn new(store: SlateDbInboxStore) -> Self {
+        Self { store }
     }
 }
 
-/// Hand-written, because the SlateDB handle behind the store is not printable
-/// and a dedup backend's interesting property is its durability rather than its
-/// file descriptors. `asx-rs` requires `Debug` on the trait so that the request
-/// and policy types holding a backend can be printed.
-impl std::fmt::Debug for SlateDbDedupBridge {
+/// Hand-written: the SlateDB handle behind the store is not printable.
+impl std::fmt::Debug for SlateDbDedup {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SlateDbDedupBridge")
-            .field("durable", &self.durable)
-            .field("cluster_safe", &false)
-            .finish()
+        f.debug_struct("SlateDbDedup").finish_non_exhaustive()
     }
 }
 
-impl DedupStorage for SlateDbDedupBridge {
-    fn is_durable(&self) -> bool {
-        // Report true only when the underlying SlateDB is backed by a
-        // persistent store. In volatile (in-memory) mode, inbox dedup state is
-        // lost on restart; `asx-rs` uses this flag to surface a diagnostic so
-        // operators know that message idempotency is not guaranteed across
-        // restarts. The `makod`-level VOLATILE MODE warning is still emitted at
-        // startup regardless of this flag.
-        self.durable
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+/// The inbox claim id a token names; a token this store did not issue names
+/// none, and settles nothing.
+fn claim_id(token: &ClaimToken) -> Result<InboxClaimId, BoxError> {
+    uuid::Uuid::parse_str(token.as_str())
+        .map(InboxClaimId::from_uuid)
+        .map_err(|_| "the claim token was not issued by this store".into())
+}
+
+impl DedupStore for SlateDbDedup {
+    fn claim<'a>(&'a self, key: &'a str) -> BoxFuture<'a, Result<Claim, BoxError>> {
+        Box::pin(async move {
+            Ok(match self.store.claim(key).await? {
+                InboxClaim::Claimed(id) => Claim::Claimed(ClaimToken::new(id.to_string())),
+                InboxClaim::InFlight => Claim::InFlight,
+                InboxClaim::Duplicate => Claim::Duplicate,
+            })
+        })
     }
 
-    fn cluster_safe(&self) -> bool {
-        false
-    }
-
-    fn claim<'a>(
+    fn accept<'a>(
         &'a self,
-        idempotency_key: &'a str,
-    ) -> BoxFuture<'a, asx_rs::core::Result<DedupVerdict>> {
-        let store = Arc::clone(&self.store);
-        let key = idempotency_key.to_owned();
-        Box::pin(async move {
-            store
-                .claim(&key)
-                .await
-                .map(|verdict| match verdict {
-                    InboxClaim::Claimed => DedupVerdict::Claimed,
-                    InboxClaim::InFlight => DedupVerdict::InFlight,
-                    InboxClaim::Duplicate => DedupVerdict::Duplicate,
-                })
-                .map_err(|e| dedup_err("claim", &e))
-        })
+        key: &'a str,
+        token: &'a ClaimToken,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { Ok(self.store.accept(key, claim_id(token)?).await?) })
     }
 
-    fn accept<'a>(&'a self, idempotency_key: &'a str) -> BoxFuture<'a, asx_rs::core::Result<()>> {
-        let store = Arc::clone(&self.store);
-        let key = idempotency_key.to_owned();
-        Box::pin(async move {
-            store
-                .accept(&key)
-                .await
-                .map_err(|e| dedup_err("accept", &e))
-        })
+    fn abandon<'a>(
+        &'a self,
+        key: &'a str,
+        token: &'a ClaimToken,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { Ok(self.store.abandon(key, claim_id(token)?).await?) })
     }
-
-    fn abandon<'a>(&'a self, idempotency_key: &'a str) -> BoxFuture<'a, asx_rs::core::Result<()>> {
-        let store = Arc::clone(&self.store);
-        let key = idempotency_key.to_owned();
-        Box::pin(async move {
-            store
-                .abandon(&key)
-                .await
-                .map_err(|e| dedup_err("abandon", &e))
-        })
-    }
-}
-
-/// Wrap an inbox failure as an `asx-rs` storage error.
-///
-/// Fail-closed by construction: `asx-rs` treats an error from any phase as a
-/// refusal rather than as "first seen", so a storage outage cannot be mistaken
-/// for a new message.
-fn dedup_err(phase: &str, e: &mako_engine::error::EngineError) -> AsxError {
-    AsxError::new(
-        ErrorCode::StorageBackendFailure,
-        format!("inbox dedup store error during {phase}: {e}"),
-        ErrorContext::new("as4_dedup"),
-    )
 }
 
 // ── AS4 receive handler ───────────────────────────────────────────────────────
 
-/// AS4 inbound message handler for BDEW MaKo.
+/// The handler of one local MP-ID's inbox.
 ///
 /// Shared across concurrent requests via `Arc<BdewAs4IngestHandler>`.
-/// All fields are `Send + Sync`.
 pub struct BdewAs4IngestHandler {
     /// Shared EDIFACT dispatch state (Platform + PidRouter).
     ingest: Arc<EdifactApiState>,
-    /// Per-session WS-Security context (signing key + partner trust anchors).
-    ///
-    /// The **base** session. It carries no pinned signer fingerprint, which is
-    /// why it is never handed to the receive pipeline directly: `asx-rs`
-    /// compares the WS-Security signer against `cert_handle.fingerprint_sha256`
-    /// and refuses a signed message outright when none is set. Every inbound
-    /// message is verified against it with the claimed sender's permitted
-    /// signing certificates supplied separately — see
-    /// [`BdewAs4IngestHandler::with_sender_pins`].
-    session: Arc<SessionContext>,
-    /// Which signing certificates each counterparty may use, by MP-ID.
-    ///
-    /// The trust anchor answers „is the signer a BDEW/DVGW market
-    /// participant?" — roughly 1500 parties hold a certificate chaining to it,
-    /// so on its own it authenticates the PKI rather than the counterparty.
-    /// These pins answer „is the signer *the party this message claims to come
-    /// from*?", which is the question a Lieferantenwechsel depends on.
-    ///
-    /// `asx-rs` resolves them against the parsed `eb:From` and compares the
-    /// verified signer itself, so a message claiming to be someone else is
-    /// refused by the party whose pin it selected. A party with no pin has no
-    /// permitted signer and is refused.
-    ///
-    /// `None` falls back to the session's single fingerprint, which serves one
-    /// counterparty only.
-    signer_pins: Option<Arc<dyn asx_rs::as4::As4SignerPins>>,
-    /// Telemetry event bus.
-    event_bus: Arc<EventBus>,
-    /// Deduplication backend.
-    dedup: Arc<dyn DedupStorage>,
-    /// Operator's own AS4 inbound decryption private key (EC, BrainpoolP256r1).
-    ///
-    /// Per BDEW AS4-Profil v1.2 §2.2.6.2.2 inbound messages are encrypted with
-    /// the operator's EC public key. asx-rs v0.7 decrypts them via ECDH-ES +
-    /// ConcatKDF when an EC private key is supplied.
-    decryption_key_pem: Option<std::sync::Arc<[u8]>>,
-    /// Operator signing credentials for outbound `eb:Receipt` signals.
-    ///
-    /// Per BDEW AS4-Profil §2.2.4 receipts must be signed (Non-Repudiation of
-    /// Receipt) and echo the inbound message's signed digests as
-    /// NonRepudiationInformation.  When `None`, receipts are emitted
-    /// **unsigned** — strict counterparties will reject them; dev/test only.
-    receipt_credentials: Option<As4ReceiptCredentials>,
+    /// The local MP-ID this inbox serves (`eb:To`).
+    local_mp_id: String,
+    /// The clients and the partner directory the sender policy reads.
+    clients: As4Clients,
+    /// Where the verified evidence of every delivered message is kept.
+    evidence: Option<As4Evidence>,
     /// CONTRL emitter — Empfangsbestätigung and Syntaxfehlermeldung.
     ///
     /// Per CONTRL AHB 1.0 §2.3.1 and APERAK AHB 1.1 §2.3 (Gas rules), a CONTRL
@@ -239,99 +150,26 @@ pub struct BdewAs4IngestHandler {
 }
 
 impl BdewAs4IngestHandler {
+    /// The handler of `local_mp_id`'s inbox.
+    #[must_use]
     pub fn new(
         ingest: Arc<EdifactApiState>,
-        session: Arc<SessionContext>,
-        event_bus: Arc<EventBus>,
-        dedup: Arc<dyn DedupStorage>,
+        local_mp_id: impl Into<String>,
+        clients: As4Clients,
     ) -> Self {
         Self {
             ingest,
-            session,
-            signer_pins: None,
-            event_bus,
-            dedup,
-            decryption_key_pem: None,
-            receipt_credentials: None,
+            local_mp_id: local_mp_id.into(),
+            clients,
+            evidence: None,
             contrl_ack: None,
         }
     }
 
-    /// Pin each counterparty's signing certificate, by MP-ID.
-    ///
-    /// `certs` maps an MP-ID to that partner's signing certificate in PEM. A
-    /// message is accepted only when the signer of its WS-Security signature is
-    /// one of the certificates pinned for the party it claims to come from.
-    ///
-    /// Several certificates may be pinned for one party, which is what a
-    /// certificate rollover needs: pin both for the overlap, then drop the old
-    /// one.
-    ///
-    /// Without a pin for the party a message claims, the message is refused —
-    /// there is no "unknown sender" mode, because the two failure directions
-    /// are not symmetric. Accepting an unpinned sender lets any holder of any
-    /// certificate the BDEW/DVGW PKI issued present themselves as any market
-    /// participant, and a forged 55004 Abmeldung or ORDERS 17115 Sperrung
-    /// cannot be withdrawn once acted on.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error naming the MP-ID whose certificate could not be read.
-    pub fn with_sender_pins<I, K, V>(mut self, certs: I) -> anyhow::Result<Self>
-    where
-        I: IntoIterator<Item = (K, V)>,
-        K: Into<String>,
-        V: AsRef<str>,
-    {
-        let mut map = As4SignerPinMap::new();
-        let mut pinned = 0usize;
-        for (mp_id, pem) in certs {
-            let mp_id = mp_id.into();
-            map = map
-                .pin_cert_pem(&mp_id, pem.as_ref().as_bytes())
-                .map_err(|e| {
-                    anyhow::anyhow!("AS4 partner signing certificate for MP-ID {mp_id}: {e}")
-                })?;
-            pinned += 1;
-        }
-        if pinned > 0 {
-            self.signer_pins = Some(Arc::new(map));
-        }
-        Ok(self)
-    }
-
-    /// Set the operator's own AS4 inbound decryption private key.
-    ///
-    /// When set, `As4PushPolicy.inbound_decryption_key_pem` is populated so
-    /// inbound encrypted AS4 messages can be decrypted. The key must be EC
-    /// (BrainpoolP256r1) corresponding to the encryption certificate published
-    /// to BDEW trading partners.
+    /// Keep the verified evidence of every delivered message.
     #[must_use]
-    pub fn with_decryption_key_pem(mut self, key_pem: Option<Vec<u8>>) -> Self {
-        self.decryption_key_pem = key_pem.map(|k| std::sync::Arc::from(k.as_slice()));
-        self
-    }
-
-    /// Set the operator signing credentials for outbound `eb:Receipt` signals.
-    ///
-    /// When set, synchronous receipts are signed (WS-Security XML Signature,
-    /// `X509PKIPathv1` key-info per BDEW AS4-Profil §2.2.6.2.1) and carry the
-    /// inbound message's `ds:Reference` digests as NonRepudiationInformation
-    /// — satisfying Non-Repudiation of Receipt per BDEW AS4-Profil §2.2.4.
-    ///
-    /// **Required for BDEW production deployments.** Without it, receipts are
-    /// emitted unsigned and strict counterparties will reject them.
-    #[must_use]
-    pub fn with_receipt_credentials(
-        mut self,
-        signing_key_pem: Vec<u8>,
-        signing_cert_pem: Vec<u8>,
-    ) -> Self {
-        self.receipt_credentials = Some(As4ReceiptCredentials {
-            signing_key_pem,
-            signing_cert_pem,
-            key_info_profile: WsSecOutboundKeyInfoProfile::X509PKIPathv1,
-        });
+    pub fn with_evidence(mut self, evidence: As4Evidence) -> Self {
+        self.evidence = Some(evidence);
         self
     }
 
@@ -342,259 +180,140 @@ impl BdewAs4IngestHandler {
         self.contrl_ack = Some(svc);
         self
     }
-}
 
-impl As4AxumHandler for BdewAs4IngestHandler {
-    async fn handle(&self, ingress: As4HttpIngress) -> HandlerOutcome {
-        let request = As4ReceivePushRequest {
-            http_content_type: ingress.content_type.clone(),
-            payload: Arc::clone(&ingress.body),
-            receipt_payload: None,
-            policy: mako_as4::bdew_push_policy(
-                self.decryption_key_pem
-                    .as_ref()
-                    .map(|k| k.as_ref().to_vec()),
-            ),
-            authenticated_sender_scope: None,
+    /// Handle one verified, first-seen message.
+    ///
+    /// `Ok` lets `asx-rs` accept the claim and send the signed receipt.
+    /// `Err` releases the claim: a permanent refusal after its dead letter, a
+    /// transient one when nothing durable recorded the message.
+    pub async fn handle(&self, msg: Verified<UserMessage>) -> Result<(), Reject> {
+        let msg_id = msg.message_id().to_owned();
+        let from = msg.from().to_owned();
+
+        // ── Sender policy (`[policy.as4] unbekannte_absender`) ──────────
+        // `asx-rs` has already verified that the signer chains to the SM-PKI
+        // root and that its OU carries `from`. Under `nur_konfigurierte`
+        // that is not enough: the sender must also be a configured partner
+        // (BDEW AS4-Profil 1.2 §2.3.7 lets a receiver whitelist by the OU
+        // MP-ID). Retryable on purpose — once the operator configures the
+        // partner, the sender's next retry is served.
+        if !self.clients.admits_sender(&from) {
+            tracing::warn!(
+                as4_message_id = %msg_id,
+                from_party     = %from,
+                to_party       = %self.local_mp_id,
+                "AS4 inbound: the sender is not an [[as4.partner]] and [policy.as4] \
+                 unbekannte_absender = nur_konfigurierte — refused (EBMS:0202)",
+            );
+            return Err(Reject::new(format!(
+                "the sender {from} is not a configured partner of {}",
+                self.local_mp_id
+            )));
+        }
+
+        // ── Transmission-path switch (BDEW AS4-Profil 1.2 §2.3.7) ───────
+        // Payload-less by definition; the receipt confirms reception. The
+        // confirmSwitch answer is the operator's.
+        if let Some(kind) = msg.path_switch() {
+            tracing::info!(
+                as4_message_id = %msg_id,
+                from_party     = %from,
+                kind           = ?kind,
+                "AS4 inbound: transmission-path switch received",
+            );
+            return Ok(());
+        }
+
+        // ── Evidence ────────────────────────────────────────────────────
+        // Kept before anything is dispatched: a failure here leaves no side
+        // effect, so the retryable refusal reprocesses cleanly.
+        if let Some(evidence) = &self.evidence {
+            evidence
+                .record_inbound(&self.local_mp_id, msg.evidence())
+                .await?;
+        }
+
+        // One Übertragungsdatei per message — the profile defines no
+        // multi-payload UserMessage.
+        let payload = match msg.payloads() {
+            [one] => one.bytes().clone(),
+            parts => {
+                use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                let count = parts.len();
+                self.ingest
+                    .dl_sink
+                    .reject(&DeadLetterReason::ProcessingError {
+                        message: format!("as4_payload_count: {count} payload parts, expected one"),
+                        context: AuditContext::now().with_message_ref(msg_id.clone()),
+                    })
+                    .await?;
+                return Err(Reject::permanent(format!(
+                    "{count} payload parts; one Übertragungsdatei per AS4 message"
+                )));
+            }
         };
 
-        match receive_push(
-            &self.session,
-            &self.event_bus,
-            As4ReceivePush {
-                request,
-                dedup: Arc::clone(&self.dedup),
-                // Fragment reassembly is not enabled, so no ordering context.
-                ordering: None,
-                // The pins are what bind a claimed `eb:From` to a verified
-                // signer. `None` would fall back to the session's single
-                // fingerprint, which cannot serve more than one counterparty.
-                signer_pins: self.signer_pins.clone(),
-            },
-        )
-        .await
-        .map(asx_rs::as4::As4Ordered::into_inner)
-        {
-            Err(e) => {
-                tracing::warn!(
-                    error      = %e,
-                    error_code = ?e.code,
-                    "AS4 inbound: receive pipeline failed",
-                );
-                HandlerOutcome::bad_request(format!("AS4 receive failed: {e}"))
-            }
-
-            Ok(As4ReceiveOutcome::Duplicate { message_id }) => {
-                // Idempotent replay: the dedup store has already seen this
-                // message_id.  Per BDEW AS4 §4.3 retransmissions must receive
-                // a valid acknowledgement — return 200 without re-dispatching.
-                //
-                // **A `400` from below is not a second chance.** The receive
-                // pipeline consumes the dedup key before the outcome reaches
-                // this handler, so it is spent by the time anything dispatches.
-                // The BDEW-mandated `ReceptionAwareness` retry carries the same
-                // `eb:MessageId`, so a retransmission lands here — 200, no
-                // dispatch — and the counterparty is told the message was
-                // delivered. Anything that fails after the key is spent must
-                // therefore leave a dead letter: it will not come round again.
-                tracing::debug!(
-                    as4_message_id = %message_id,
-                    "AS4 inbound: duplicate detected — returning idempotent 200",
-                );
-                HandlerOutcome::ok()
-            }
-
-            Ok(As4ReceiveOutcome::FirstSeen { output, claim }) => {
-                let handled = self.handle_first_seen(output, &ingress).await;
-                settle_first_seen(claim, handled).await
-            }
-
-            Ok(As4ReceiveOutcome::InFlight { message_id }) => {
-                // A concurrent delivery of this same message holds an unsettled
-                // claim. Not a duplicate — nothing has been handled yet, so an
-                // acknowledgement would tell the counterparty a message was
-                // processed that may still fail — and not first-seen either.
-                // Refusing without a receipt leaves the retransmission as the
-                // recovery path, which is what it is for.
-                tracing::warn!(
-                    as4_message_id = %message_id,
-                    "AS4 inbound: a concurrent delivery holds this message; refusing without \
-                     a receipt so the retransmission is the recovery path",
-                );
-                HandlerOutcome::bad_request(
-                    "a concurrent delivery of this eb:MessageId is still in flight",
-                )
-            }
-
-            // `As4ReceiveOutcome` is `#[non_exhaustive]` — keep a catch-all for
-            // future variants so new protocol outcomes don't silently fall through.
-            Ok(_) => {
-                tracing::warn!("AS4 inbound: unhandled receive outcome variant");
-                HandlerOutcome::ok()
-            }
-        }
-    }
-}
-
-// ── Claim settlement ──────────────────────────────────────────────────────────
-
-/// The two ways a first-seen dedup claim is settled.
-///
-/// A seam over [`asx_rs::storage::DedupClaim`], whose constructor is private to
-/// the receive pipeline, so the settlement rule is testable on its own.
-trait FirstSeenClaim {
-    fn accept(self) -> impl std::future::Future<Output = asx_rs::core::Result<()>> + Send;
-    fn abandon(self) -> impl std::future::Future<Output = asx_rs::core::Result<()>> + Send;
-}
-
-impl FirstSeenClaim for asx_rs::storage::DedupClaim {
-    fn accept(self) -> impl std::future::Future<Output = asx_rs::core::Result<()>> + Send {
-        asx_rs::storage::DedupClaim::accept(self)
-    }
-    fn abandon(self) -> impl std::future::Future<Output = asx_rs::core::Result<()>> + Send {
-        asx_rs::storage::DedupClaim::abandon(self)
-    }
-}
-
-/// Settle the claim of a first-seen message on what handling it recorded.
-///
-/// `Ok` means the message is durably recorded — dispatched, or dead-lettered
-/// with the write awaited — and the claim is accepted: a retransmission is
-/// then answered as a duplicate, 200 with no dispatch. `check-as4-controls`
-/// keeps every refusal path writing its dead letter first.
-///
-/// `Err` means a dead letter could not be written, so the message has no
-/// record. Accepting would lose it; the claim is abandoned instead and the
-/// answer carries no receipt, so the counterparty's `ReceptionAwareness`
-/// retry is processed as first-seen.
-async fn settle_first_seen<C: FirstSeenClaim>(
-    claim: C,
-    handled: Result<HandlerOutcome, mako_engine::error::EngineError>,
-) -> HandlerOutcome {
-    match handled {
-        Ok(outcome) => {
-            if let Err(e) = claim.accept().await {
-                // The work is done and recorded; only the dedup settlement
-                // failed. The claim's lease expires and a retransmission is
-                // reprocessed, which is the safe direction.
-                tracing::error!(
-                    error = %e,
-                    "AS4 inbound: could not settle the dedup claim; a retransmission will be \
-                     reprocessed once the claim lease expires",
-                );
-            }
-            outcome
-        }
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                "AS4 inbound: a dead letter could not be written; abandoning the claim so \
-                 the retransmission is reprocessed",
-            );
-            if let Err(e) = claim.abandon().await {
-                tracing::error!(
-                    error = %e,
-                    "AS4 inbound: could not abandon the dedup claim; the retransmission is \
-                     reprocessed once the claim lease expires",
-                );
-            }
-            HandlerOutcome::server_error("the message could not be recorded")
-        }
-    }
-}
-
-#[cfg(test)]
-mod settlement_tests {
-    use std::sync::{Arc, Mutex};
-
-    use super::{FirstSeenClaim, settle_first_seen};
-    use asx_rs::transport::server::HandlerOutcome;
-
-    /// Records which settlement the claim received.
-    #[derive(Clone, Default)]
-    struct FakeClaim(Arc<Mutex<Vec<&'static str>>>);
-
-    impl FirstSeenClaim for FakeClaim {
-        fn accept(self) -> impl std::future::Future<Output = asx_rs::core::Result<()>> + Send {
-            self.0.lock().expect("not poisoned").push("accept");
-            std::future::ready(Ok(()))
-        }
-        fn abandon(self) -> impl std::future::Future<Output = asx_rs::core::Result<()>> + Send {
-            self.0.lock().expect("not poisoned").push("abandon");
-            std::future::ready(Ok(()))
-        }
-    }
-
-    /// A refusal whose dead letter could not be written must not be accepted:
-    /// the accepted claim would answer the retransmission as a duplicate and
-    /// the refused message would leave no record anywhere.
-    #[tokio::test]
-    async fn an_unrecorded_refusal_abandons_the_claim() {
-        let claim = FakeClaim::default();
-        let outcome = settle_first_seen(
-            claim.clone(),
-            Err(mako_engine::error::EngineError::dead_letter("store closed")),
-        )
-        .await;
-        assert_eq!(*claim.0.lock().unwrap(), ["abandon"]);
-        assert!(
-            matches!(outcome, HandlerOutcome::Rejected { status: 500, .. }),
-            "no receipt, so the sender retransmits: {outcome:?}"
+        tracing::info!(
+            as4_message_id = %msg_id,
+            service        = %msg.service(),
+            from_party     = %from,
+            to_party       = %self.local_mp_id,
+            payload_bytes  = payload.len(),
+            "AS4 inbound: message received",
         );
-    }
-
-    /// A recorded outcome is accepted and answered as handling decided.
-    #[tokio::test]
-    async fn a_recorded_outcome_accepts_the_claim() {
-        let claim = FakeClaim::default();
-        let outcome = settle_first_seen(claim.clone(), Ok(HandlerOutcome::bad_request("x"))).await;
-        assert_eq!(*claim.0.lock().unwrap(), ["accept"]);
-        assert!(matches!(
-            outcome,
-            HandlerOutcome::Rejected { status: 400, .. }
-        ));
+        self.handle_first_seen(&msg_id, &payload).await
     }
 }
 
-// ── Router builder ────────────────────────────────────────────────────────────
+/// The `asx-rs` inbox of every local MP-ID, at `/as4/inbox/<MP-ID>`.
+///
+/// Each route reads at most [`mako_as4::constants::MAX_MESSAGE_BYTES`] (the
+/// profile limit of its client) and waits at most [`REQUEST_BODY_TIMEOUT`] for
+/// the body. The dedup store is shared: the key carries the sender and the
+/// message id.
+pub fn router(
+    clients: &As4Clients,
+    dedup: SlateDbDedup,
+    handler_for: impl Fn(&str) -> Arc<BdewAs4IngestHandler>,
+) -> Router {
+    let mut router = Router::new();
+    for (mp_id, client) in clients.iter() {
+        let service = tower_http::timeout::RequestBodyTimeout::new(
+            inbound(client, dedup.clone(), handler_for(mp_id)),
+            REQUEST_BODY_TIMEOUT,
+        );
+        router = router.route_service(&inbox_path(mp_id), service);
+    }
+    router
+}
 
-/// Build the Axum sub-router that mounts the BDEW AS4 inbound endpoint.
-///
-/// The router accepts `POST /as4/inbox` with `Content-Type: application/soap+xml`.
-/// Merge it into the top-level application router:
-///
-/// ```ignore
-/// app = app.merge(as4_ingest::router(handler, config));
-/// ```
-pub fn router(handler: Arc<BdewAs4IngestHandler>, config: RouterConfig) -> Router {
-    as4_router(handler, "/as4/inbox", config)
+/// The `asx-rs` inbox of `client` (one local MP-ID), dispatching through
+/// `handler`.
+pub fn inbound(
+    client: &asx::as4::As4,
+    dedup: impl DedupStore,
+    handler: Arc<BdewAs4IngestHandler>,
+) -> asx::Inbound {
+    client.inbound(dedup, move |msg: Verified<UserMessage>| {
+        let handler = Arc::clone(&handler);
+        async move { handler.handle(msg).await }
+    })
+}
+
+/// The inbox path of local MP-ID `mp_id`.
+#[must_use]
+pub fn inbox_path(mp_id: &str) -> String {
+    format!("/as4/inbox/{mp_id}")
 }
 
 // ── AS4 inbound rate-limit middleware ─────────────────────────────────────────
 
-/// Per-peer-IP GCRA rate limiter for the AS4 inbound endpoint.
-///
-/// **Keyed by client IP**: each peer gets its own token bucket (sustained
-/// **100 requests/second**, burst **50**), so one noisy or malicious
-/// counterparty cannot exhaust the budget for everyone else — the failure
-/// mode of a single global bucket. Returns `HTTP 429 Too Many Requests` when
-/// a peer's bucket is empty, protecting the event store from capacity
-/// exhaustion (OWASP A05).
-///
-/// The key is the socket peer address (`ConnectInfo`); deployments behind a
-/// load balancer terminate client connections there, so the LB must enforce
-/// its own per-client limits (`X-Forwarded-For` is spoofable and deliberately
-/// not trusted here).
 /// How many checks pass between sweeps of a keyed limiter's state.
 ///
 /// `governor`'s keyed store grows one entry per distinct key and is pruned only
 /// by an explicit `retain_recent()`; nothing calls it on a timer. Sweeping on a
 /// request count rather than a clock keeps the cost proportional to traffic and
 /// needs no background task to own — and so no shutdown path to get wrong.
-///
-/// Stated here rather than taken from `mako_service::rate_limit`, which lives
-/// behind the `rate-limit` feature: makod drives `governor` directly and has no
-/// other reason to pull in that middleware.
 const PRUNE_EVERY: u64 = 1024;
 
 /// Whether this call is the one that should sweep the keyed state.
@@ -615,6 +334,15 @@ static AS4_RATE_LIMITER_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic:
 static OPERATOR_RATE_LIMITER_CALLS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+/// Per-peer-IP GCRA rate limiter for the AS4 inbound endpoint.
+///
+/// Each peer address gets its own bucket (sustained **100 requests/second**,
+/// burst **50**), so one counterparty cannot exhaust the budget for everyone
+/// else; an empty bucket answers `429 Too Many Requests`.
+///
+/// The key is the socket peer address (`ConnectInfo`). Behind a load balancer
+/// that is the balancer, which must enforce its own per-client limits:
+/// `X-Forwarded-For` is spoofable and not trusted here.
 static AS4_RATE_LIMITER: std::sync::LazyLock<
     governor::RateLimiter<
         std::net::IpAddr,
@@ -641,14 +369,10 @@ static AS4_RATE_LIMITER: std::sync::LazyLock<
 /// sustained, burst 25 — half the per-IP quota, still far above any real MSH's
 /// peak.
 ///
-/// **It is established immediately after.** The same claimed `eb:From` selects
-/// the session the message is verified against, and that session pins the
-/// SHA-256 of the claimed party's signing certificate — so a sender claiming to
-/// be someone else selects that party's pin and then fails to produce a
-/// matching signature. Chaining to the BDEW/DVGW trust anchor is not that
-/// binding on its own: every market participant holds such a certificate, so
-/// the anchor proves membership and the pin proves membership *of which party*.
-/// A claimed MP-ID with no registered signing certificate is refused outright.
+/// **It is established immediately after**: `asx-rs` refuses a signer whose
+/// SM-PKI certificate does not carry the claimed MP-ID in its OU, or, for a
+/// configured partner, is not one of its pinned certificates — so a sender
+/// claiming to be someone else fails verification.
 static AS4_SENDER_RATE_LIMITER: std::sync::LazyLock<
     governor::RateLimiter<
         String,
@@ -926,115 +650,21 @@ mod dispatch_failure_tests {
 }
 
 impl BdewAs4IngestHandler {
-    /// Handle a verified, first-seen inbound message.
+    /// Dispatch the Übertragungsdatei of a verified, first-seen message.
     ///
-    /// Extracted from the receive match so the dedup claim is settled in exactly
-    /// one place. Inline, every one of this body's return points would have to
-    /// remember to settle, and the one that forgot would strand the key until
-    /// its lease expired.
-    ///
-    /// **Every `Ok` path here records the message durably before returning** —
-    /// dispatched, or dead-lettered ahead of the refusal with the write
-    /// awaited — which is what lets the caller accept the claim on `Ok`. An
-    /// `Err` is a dead letter that could not be written; the caller abandons
-    /// the claim. `check-as4-controls` keeps every refusal writing its dead
-    /// letter.
-    async fn handle_first_seen(
-        &self,
-        output: Box<asx_rs::as4::As4ReceivePushOutput>,
-        ingress: &As4HttpIngress,
-    ) -> Result<HandlerOutcome, mako_engine::error::EngineError> {
+    /// **Every refusal here dead-letters the message before it returns**, with
+    /// the write awaited, and then refuses for good ([`Reject::permanent`],
+    /// `EBMS:0004`): the sender does not retransmit a message that is already
+    /// recorded and could never pass. A dead letter that cannot be written is
+    /// the `?` on its `await` — a retryable [`Reject::new`], so the message
+    /// comes round again rather than vanishing. `check-as4-controls` keeps
+    /// every permanent refusal behind an awaited dead letter.
+    async fn handle_first_seen(&self, msg_id: &str, edifact: &[u8]) -> Result<(), Reject> {
+        let msg_id = msg_id.to_owned();
         // The ÜZ: the instant this door took the message, which the receipt
         // returned on this same request confirms. Every arrival-anchored Frist
         // of the messages inside runs from it, however long dispatch takes.
         let received_at = time::OffsetDateTime::now_utc();
-        let msg_id = output.user_message.message_id.clone();
-        let action = &output.user_message.action;
-        let from = output
-            .user_message
-            .from_party_ids
-            .first()
-            .map(String::as_str)
-            .unwrap_or("<unknown>");
-        let edifact = output.payload.clone().into_inner();
-
-        tracing::info!(
-            as4_message_id = %msg_id,
-            action         = %action,
-            from_party     = %from,
-            payload_bytes  = edifact.len(),
-            "AS4 inbound: message received",
-        );
-
-        // ── Synchronous receipt builder ───────────────────────────────
-        // BDEW AS4-Profil §2.2.4: the receipt must be signed and echo
-        // the inbound message's ds:Reference digests (NRR).  Unsigned
-        // receipts are a dev/test fallback only — strict counterparties
-        // reject them.  Shared by the EDIFACT and Redispatch-XML legs.
-        let send_receipt = || {
-            let receipt_id = format!("makod@{}", Uuid::new_v4());
-            let receipt = match &self.receipt_credentials {
-                Some(credentials) => generate_signed_receipt_for_output(
-                    &self.session,
-                    &receipt_id,
-                    &output,
-                    &ingress.body,
-                    &ingress.content_type,
-                    credentials,
-                ),
-                None => {
-                    tracing::warn!(
-                        as4_message_id = %msg_id,
-                        "AS4 inbound: no receipt-signing credentials configured — \
-                         emitting UNSIGNED receipt without NRI. This violates BDEW \
-                         AS4-Profil §2.2.4; configure with_receipt_credentials for \
-                         production.",
-                    );
-                    generate_receipt_for_output(&self.session, &receipt_id, &output)
-                }
-            };
-            match receipt {
-                Ok(receipt_xml) => {
-                    tracing::debug!(
-                        as4_message_id = %msg_id,
-                        receipt_id     = %receipt_id,
-                        signed         = self.receipt_credentials.is_some(),
-                        "AS4 inbound: sending synchronous receipt",
-                    );
-                    HandlerOutcome::ok_with_body(receipt_xml, "application/soap+xml")
-                }
-                Err(e) => {
-                    // Receipt generation failure is non-fatal for the
-                    // business payload — message was already dispatched.
-                    // Return 200 without a receipt body; the sender will
-                    // retry and hit the dedup path.
-                    tracing::error!(
-                        as4_message_id = %msg_id,
-                        error          = %e,
-                        "AS4 inbound: receipt generation failed — returning 200 without body",
-                    );
-                    HandlerOutcome::ok()
-                }
-            }
-        };
-
-        // ── ebMS3 Test Service (Core §5.2.2) ──────────────────────────
-        // A connectivity ping is acknowledged and **not delivered**: its
-        // payload is empty or a loopback of what the sender sent, so
-        // every branch below would read it as a malformed business
-        // document — a dead letter, or a 400 that tells the counterparty
-        // its connectivity check failed. `is_test_service_ping` is
-        // derived from the verified `eb:Service` and `eb:Action`, so a
-        // sender cannot label a real document as a ping to skip the
-        // pipeline: the payload never reaches it either way.
-        if output.is_test_service_ping() {
-            tracing::info!(
-                as4_message_id = %msg_id,
-                from_party     = %from,
-                "AS4 inbound: ebMS3 Test Service ping — acknowledged, not delivered",
-            );
-            return Ok(send_receipt());
-        }
 
         // ── Redispatch 2.0 XML leg ────────────────────────────────────
         // The BDEW AS4 channel carries two payload formats: EDIFACT
@@ -1042,7 +672,7 @@ impl BdewAs4IngestHandler {
         // (BK6-20-059/-061).  XML payloads never enter the EDIFACT
         // pipeline — no UNB envelope, no test indicator, no CONTRL
         // obligation.
-        if crate::redispatch_xml_ingest::looks_like_xml(&edifact) {
+        if crate::redispatch_xml_ingest::looks_like_xml(edifact) {
             let Some(dispatcher) = self.ingest.dispatcher.as_deref() else {
                 // A deployment fault, not a sender fault: retransmitting
                 // reaches the same unconfigured daemon, and the dedup key
@@ -1063,81 +693,81 @@ impl BdewAs4IngestHandler {
                     "AS4 ingest: XML payload received but no Phase 2 dispatcher \
                      is wired — dead-lettered",
                 );
-                return Ok(HandlerOutcome::bad_request(
+                return Err(Reject::permanent(
                     "XML payload received but workflow dispatch is not configured",
                 ));
             };
-            return Ok(
-                match crate::redispatch_xml_ingest::dispatch_redispatch_xml(dispatcher, &edifact)
-                    .await
-                {
-                    Ok(crate::ingest_dispatcher::IngestOutcome::Skipped {
-                        workflow_name,
-                        reason,
-                    }) => {
-                        // Parse/validation failure or unroutable document —
-                        // reject *without* a receipt: an AS4 receipt asserts
-                        // successful reception, and the sender must correct
-                        // and retransmit.
-                        // The sender has to correct and resend under a new
-                        // `eb:MessageId`; this one's dedup key is spent, so a
-                        // plain retransmission is answered 200 and vanishes.
-                        // A regulated document arrived and was refused — that
-                        // is a record we owe regardless of whose fault it is.
-                        use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
-                        self.ingest
-                            .dl_sink
-                            .reject(&DeadLetterReason::ProcessingError {
-                                message: format!(
-                                    "redispatch_xml_rejected: {workflow_name}: {reason}"
-                                ),
-                                context: AuditContext::now()
-                                    .with_message_type("REDISPATCH-XML")
-                                    .with_message_ref(msg_id.clone()),
-                            })
-                            .await?;
-                        tracing::warn!(
-                            as4_message_id = %msg_id,
-                            workflow       = %workflow_name,
-                            reason         = %reason,
-                            "AS4 ingest: Redispatch XML payload rejected — dead-lettered",
-                        );
-                        HandlerOutcome::bad_request(format!("Redispatch XML rejected: {reason}"))
-                    }
-                    Ok(outcome) => {
-                        tracing::info!(
-                            as4_message_id = %msg_id,
-                            outcome        = ?outcome,
-                            "AS4 ingest: Redispatch XML document dispatched",
-                        );
-                        send_receipt()
-                    }
-                    Err(e) => {
-                        // No durable business record was written, and the
-                        // dedup key is already spent: the `ReceptionAwareness`
-                        // retry carries the same `eb:MessageId` and is
-                        // answered 200 without dispatching. Without this dead
-                        // letter the document is lost while the counterparty
-                        // holds an acknowledgement saying it arrived.
-                        use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
-                        self.ingest
-                            .dl_sink
-                            .reject(&DeadLetterReason::ProcessingError {
-                                message: format!("redispatch_xml_dispatch_failed: {e}"),
-                                context: AuditContext::now()
-                                    .with_message_type("REDISPATCH-XML")
-                                    .with_message_ref(msg_id.clone()),
-                            })
-                            .await?;
-                        tracing::error!(
-                            as4_message_id = %msg_id,
-                            error          = %e,
-                            "AS4 ingest: Redispatch XML dispatch failed — dead-lettered",
-                        );
-                        HandlerOutcome::bad_request(format!("Redispatch XML dispatch failed: {e}"))
-                    }
-                },
-            );
+            return match crate::redispatch_xml_ingest::dispatch_redispatch_xml(dispatcher, edifact)
+                .await
+            {
+                Ok(crate::ingest_dispatcher::IngestOutcome::Skipped {
+                    workflow_name,
+                    reason,
+                }) => {
+                    // Parse/validation failure or unroutable document —
+                    // reject *without* a receipt: an AS4 receipt asserts
+                    // successful reception, and the sender must correct
+                    // and retransmit.
+                    // The sender has to correct and resend under a new
+                    // `eb:MessageId`; this one's dedup key is spent, so a
+                    // plain retransmission is answered 200 and vanishes.
+                    // A regulated document arrived and was refused — that
+                    // is a record we owe regardless of whose fault it is.
+                    use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                    self.ingest
+                        .dl_sink
+                        .reject(&DeadLetterReason::ProcessingError {
+                            message: format!("redispatch_xml_rejected: {workflow_name}: {reason}"),
+                            context: AuditContext::now()
+                                .with_message_type("REDISPATCH-XML")
+                                .with_message_ref(msg_id.clone()),
+                        })
+                        .await?;
+                    tracing::warn!(
+                        as4_message_id = %msg_id,
+                        workflow       = %workflow_name,
+                        reason         = %reason,
+                        "AS4 ingest: Redispatch XML payload rejected — dead-lettered",
+                    );
+                    Err(Reject::permanent(format!(
+                        "Redispatch XML rejected: {reason}"
+                    )))
+                }
+                Ok(outcome) => {
+                    tracing::info!(
+                        as4_message_id = %msg_id,
+                        outcome        = ?outcome,
+                        "AS4 ingest: Redispatch XML document dispatched",
+                    );
+                    Ok(())
+                }
+                Err(e) => {
+                    // No durable business record was written, and the
+                    // dedup key is already spent: the `ReceptionAwareness`
+                    // retry carries the same `eb:MessageId` and is
+                    // answered 200 without dispatching. Without this dead
+                    // letter the document is lost while the counterparty
+                    // holds an acknowledgement saying it arrived.
+                    use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                    self.ingest
+                        .dl_sink
+                        .reject(&DeadLetterReason::ProcessingError {
+                            message: format!("redispatch_xml_dispatch_failed: {e}"),
+                            context: AuditContext::now()
+                                .with_message_type("REDISPATCH-XML")
+                                .with_message_ref(msg_id.clone()),
+                        })
+                        .await?;
+                    tracing::error!(
+                        as4_message_id = %msg_id,
+                        error          = %e,
+                        "AS4 ingest: Redispatch XML dispatch failed — dead-lettered",
+                    );
+                    Err(Reject::permanent(format!(
+                        "Redispatch XML dispatch failed: {e}"
+                    )))
+                }
+            };
         }
 
         // The `UNB` alone, not a full parse. A full parse errs on a
@@ -1147,11 +777,7 @@ impl BdewAs4IngestHandler {
         // trusting, letting a test-flagged or misaddressed one reach
         // production workflows because one message inside it was
         // malformed.
-        let unb = self
-            .ingest
-            .platform
-            .parse_interchange_header(&edifact[..])
-            .ok();
+        let unb = self.ingest.platform.parse_interchange_header(edifact).ok();
 
         // ── Recipient guard (Allgemeine Festlegungen V6.1d § 2.13) ────
         //
@@ -1192,7 +818,7 @@ impl BdewAs4IngestHandler {
                 "AS4 ingest: interchange is addressed to an MP-ID this deployment \
                  does not hold — refused",
             );
-            return Ok(HandlerOutcome::bad_request(
+            return Err(Reject::permanent(
                 "UNB DE0010 names an MP-ID this deployment does not hold",
             ));
         }
@@ -1227,7 +853,7 @@ impl BdewAs4IngestHandler {
             if let Some(contrl_svc) = self.contrl_ack.as_deref()
                 && let Err(e) = contrl_svc
                     .emit_syntax_error(
-                        &edifact,
+                        edifact,
                         &header.control_ref,
                         &header.receiver_id,
                         &header.sender_id,
@@ -1248,7 +874,7 @@ impl BdewAs4IngestHandler {
                     })
                     .await?;
             }
-            return Ok(HandlerOutcome::bad_request(
+            return Err(Reject::permanent(
                 "test interchange rejected: DE0035=1 on production endpoint",
             ));
         }
@@ -1260,12 +886,12 @@ impl BdewAs4IngestHandler {
         // costs that path only the sniff.
         {
             if let Some(report) =
-                crate::dvgw_ingest::try_ingest(self.ingest.as_ref(), &edifact).await
+                crate::dvgw_ingest::try_ingest(self.ingest.as_ref(), edifact).await
             {
                 // A refused DVGW message without its dead letter must not be
                 // settled: the claim is abandoned and the sender retransmits.
                 if let Some(e) = report.unrecorded {
-                    return Err(mako_engine::error::EngineError::dead_letter(e));
+                    return Err(Reject::new(mako_engine::error::EngineError::dead_letter(e)));
                 }
                 tracing::info!(
                     as4_message_id = %msg_id,
@@ -1307,7 +933,7 @@ impl BdewAs4IngestHandler {
                 // payload belongs to, so the DVGW path returns through the
                 // same closure the BDEW path ends with rather than
                 // short-circuiting it.
-                return Ok(send_receipt());
+                return Ok(());
             }
         }
 
@@ -1317,7 +943,7 @@ impl BdewAs4IngestHandler {
         // The recipient MP-ID (UNB DE0010) drives Sparte detection and the
         // CONTRL sender MP-ID.
         let (interchange_ref, recipient_mp_id): (String, String) =
-            if let Ok(pi) = self.ingest.platform.parse_interchange_full(&edifact[..]) {
+            if let Ok(pi) = self.ingest.platform.parse_interchange_full(edifact) {
                 (
                     pi.header.control_ref.to_string(),
                     pi.header.receiver_id.to_string(),
@@ -1337,21 +963,21 @@ impl BdewAs4IngestHandler {
         let results: Vec<Result<AnyMessage, edi_energy::Error>> = self
             .ingest
             .platform
-            .parse_interchange(std::io::Cursor::new(&edifact[..]))
+            .parse_interchange(std::io::Cursor::new(edifact))
             .collect();
         let broken = results.iter().filter(|r| r.is_err()).count();
         if broken > 0 && broken < results.len() {
             crate::edifact_api::reject_broken_interchange(
                 self.ingest.as_ref(),
                 self.contrl_ack.as_deref(),
-                &edifact,
+                edifact,
                 &results,
                 &msg_id,
             )
             .await?;
             // The file arrived; the CONTRL, not the transport, says it is
             // rejected.
-            return Ok(send_receipt());
+            return Ok(());
         }
         let mut accepted = 0usize;
         let mut rejected = 0usize;
@@ -1533,10 +1159,10 @@ impl BdewAs4IngestHandler {
             // makes a CONTRL impossible in that case and the dead letter
             // above is the record instead.
             if let Some(contrl_svc) = self.contrl_ack.as_deref()
-                && let Ok(pi) = self.ingest.platform.parse_interchange_full(&edifact[..])
+                && let Ok(pi) = self.ingest.platform.parse_interchange_full(edifact)
                 && let Err(e) = contrl_svc
                     .emit_syntax_error(
-                        &edifact,
+                        edifact,
                         &pi.header.control_ref,
                         &pi.header.receiver_id,
                         &pi.header.sender_id,
@@ -1556,7 +1182,7 @@ impl BdewAs4IngestHandler {
                     })
                     .await?;
             }
-            return Ok(HandlerOutcome::bad_request(
+            return Err(Reject::permanent(
                 "AS4 payload contained no valid EDIFACT messages",
             ));
         }
@@ -1588,6 +1214,6 @@ impl BdewAs4IngestHandler {
         }
 
         // ── Synchronous receipt (BDEW AS4-Profil §2.2.4) ──────────────
-        Ok(send_receipt())
+        Ok(())
     }
 }

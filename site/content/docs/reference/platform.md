@@ -39,45 +39,19 @@ let report = msg.validate()?;
 
 ## Custom Profile Subset
 
-`Platform::with_all_profiles()` is the supported way to obtain a platform backed
-by the crate's built-in profiles. Each call builds a fresh, independent
-`ReleaseRegistry`:
+`Platform::with_all_profiles()` builds a fresh, independent `ReleaseRegistry`
+from every profile compiled in. There is no public API to build a registry
+from an arbitrary subset of the built-in profiles: the generated per-profile
+statics are crate-private, and `edi_energy::releases` exposes `&'static Release`
+*identifiers* (e.g. `releases::mscons_fv20261001()`), not `Profile` objects. To
+trim which profiles are compiled in, use the per-message-type **Cargo features**
+(`utilmd`, `mscons`, `aperak`, `invoic`, …).
 
-```rust
-use edi_energy::Platform;
-
-let platform = Platform::with_all_profiles();
-let msg = platform.parse(bytes)?;
-```
-
-There is **no public API to build a registry containing an arbitrary subset of
-the built-in profiles at runtime**. The generated per-profile statics and the
-profile-registration entry point are crate-private and are not re-exported. The
-`edi_energy::releases` module exposes `&'static Release` *identifiers* (e.g.
-`edi_energy::releases::mscons_fv20261001()` returns a `&'static Release`), not
-`Profile` objects, so they cannot be handed to a registry constructor.
-
-To trim which built-in profiles are compiled in, use the crate's per-message-type
-**Cargo features** (`utilmd`, `mscons`, `aperak`, `invoic`, …). A profile that is
-not enabled at build time is simply absent from `with_all_profiles()`.
-
-The one runtime constructor for a custom registry is
-`ReleaseRegistry::new(Vec<&'static Profile>)` combined with
-`Platform::new(registry)`:
-
-```rust
-use edi_energy::{Platform, registry::ReleaseRegistry};
-
-let platform = Platform::new(ReleaseRegistry::new(profiles));
-let msg = platform.parse(bytes)?;
-```
-
-`Profile` is a **struct**, not a trait — a profile is the MIG and AHB read as
-data (`crates/edi-energy/src/profile/mod.rs`), so there is nothing to
-implement. The `&'static Profile` values that go into that `Vec` are the
-crate-private generated statics, which is why this constructor is in practice
-for tests and benchmarks that want an isolated registry rather than a way to
-supply profiles of your own.
+`Platform::new(ReleaseRegistry::new(Vec<&'static Profile>))` is the one runtime
+constructor for a custom registry; since the statics are crate-private, it
+serves the crate's own tests and benchmarks. `Profile` is a struct — the MIG and
+AHB read as data (`crates/edi-energy/src/profile/mod.rs`) — not a trait to
+implement.
 
 You can also widen the receive tolerance on any platform:
 
@@ -195,8 +169,8 @@ std::thread::spawn(move || {
 
 Resolution is by the UNH association code (`DE 0057`) **and** the reference date:
 several profiles may share one wire release code where BDEW revised a format
-without changing the EDIFACT version — COMDIS `1.0g` appears in both
-`fv20251001` and `fv20261001` — so the index keeps the candidates sorted by
+without changing the EDIFACT version — INVOIC `2.8e` appears in both
+`fv20260401` and `fv20261001` — so the index keeps the candidates sorted by
 `valid_from` and picks the latest one at or before the date.
 
 ### Format boundaries

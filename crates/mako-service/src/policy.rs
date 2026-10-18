@@ -967,7 +967,7 @@ mod tests {
         );
     }
 
-    /// T001: a `Required` setting left out is reported with its options and
+    /// A `Required` setting left out is reported with its options and
     /// their sources, beside an unrelated unknown key, in one error.
     #[test]
     fn the_loader_names_a_missing_required_setting_beside_every_other_problem() {
@@ -1016,7 +1016,7 @@ mod tests {
         assert!(text.contains("`base` (Quelle C, S. 3)"), "{text}");
     }
 
-    /// T004: `GET /api/v1/policy` is behind the daemon's authentication and
+    /// `GET /api/v1/policy` is behind the daemon's authentication and
     /// the Cedar action `read-policy`.
     #[cfg(all(feature = "cedar", feature = "oidc"))]
     #[tokio::test]

@@ -607,10 +607,10 @@ impl Generator<'_> {
                 } else if self.fix.elements.contains(&key)
                     // The fixpoint is keyed by place and data element, and a
                     // composite may repeat one: `NAD` C059 carries DE 3042
-                    // four times. Forcing the key filled all four, three of
-                    // which the column does not list — so the next round
-                    // reported them not permitted, the round after dropped the
-                    // element again, and the one the column *does* ask for was
+                    // four times. Forcing the key would fill all four, three
+                    // of which the column does not list — the next round
+                    // reports them not permitted, the round after drops the
+                    // element again, and the one the column *does* ask for is
                     // never emitted. Only an occurrence the column lists is
                     // forced; where it lists none, the MIG is what asked and
                     // every occurrence stands.

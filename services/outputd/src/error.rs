@@ -1,16 +1,9 @@
 //! The one error type every `outputd` endpoint returns.
 //!
-//! Handlers hand-rolled `(StatusCode, String)` tuples, so the wire format
-//! depended on which branch fired — and the branch that matters most, a
-//! template that does not compile, answered a **newline-joined blob of
-//! diagnostics**. Those diagnostics are already structured
-//! (`path:line:col: message`, with hints and a call trace); flattening them into
-//! one string is the one thing that makes them unusable to the tool that would
-//! most like to have them, which is the editor the operator is writing the
-//! template in.
-//!
-//! Every failure now renders the same envelope with a stable code, and a
-//! compile failure carries its diagnostics as a list:
+//! Every failure renders the same envelope with a stable code, and a template
+//! that does not compile carries its diagnostics as a list: they are structured
+//! (`path:line:col: message`, with hints and a call trace), and joined into one
+//! string they are unusable to the editor the operator writes the template in.
 //!
 //! ```json
 //! { "error": { "code": "TEMPLATE_DID_NOT_COMPILE",

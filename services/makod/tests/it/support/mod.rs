@@ -12,6 +12,7 @@ pub fn registry(mp_id: &str) -> MpIdRegistry {
         roles: vec!["NB".to_owned()],
         primary: true,
         agency: None,
+        as4: None,
     };
     MpIdRegistry::from_config(&[party]).expect("test registry")
 }

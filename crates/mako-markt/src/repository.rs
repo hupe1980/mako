@@ -2629,7 +2629,7 @@ pub trait SteuerbareRessourceRepository: Send + Sync {
         tenant: &str,
     ) -> Result<Vec<SteuerbareRessourceRecord>, MdmError>;
 
-    /// Replace the `konfigurationsprodukte` array for an existing SR (M1).
+    /// Replace the `konfigurationsprodukte` array for an existing SR.
     ///
     /// Returns `Ok(true)` when the SR was found and updated,
     /// `Ok(false)` when the SR does not exist (caller should return 404).

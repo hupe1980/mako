@@ -7,7 +7,7 @@
 //! | `de.mako.process.completed`  | MSCONS set | Store `MeterDataReceipt` |
 //! | `de.mako.process.initiated`  | 23001 (INSRPT Störungsmeldung) | Auto-create `INSRPT_STOERUNG` reading order (WiM Störungsmeldung) |
 //! | `de.mako.process.initiated`  | 23003/23008 (INSRPT Technische Änderung/Gerätebefund) | Auto-create `SONDERABLESUNG` reading order |
-//! | `de.mako.process.initiated`  | 23005/23009 (WiM Gas INSRPT) | Auto-create `SONDERABLESUNG` reading order |
+//! | `de.mako.process.initiated`  | 23005/23009 (INSRPT, Strom and Gas) | Auto-create `SONDERABLESUNG` reading order |
 //! | `de.mako.process.completed`  | 55001 (GPKE Lieferbeginn) | Auto-create `LIEFERBEGINN` reading order |
 //! | `de.mako.process.completed`  | 55004/55007 (GPKE Abmeldung / Beendigung der Zuordnung) | Auto-create `LIEFERENDE` reading order |
 //! | *(anything else)*            | *(any)*   | 204 No Content (ignored) |
@@ -176,13 +176,13 @@ pub async fn handle_webhook(
 
     debug!(ce_type, pid, "edmd: received event");
 
-    // ── M2+: INSRPT → auto-create reading orders ──────────────────────────────
+    // ── INSRPT → auto-create reading orders ───────────────────────────────────
     //
     // PID 23001: Störungsmeldung (LF→MSB) → INSRPT_STOERUNG (WiM Störungsmeldung)
     // PID 23003: Technische Änderung / Geräteübernahme → SONDERABLESUNG
-    // PID 23005: WiM Gas INSRPT → SONDERABLESUNG
+    // PID 23005: INSRPT (Strom and Gas) → SONDERABLESUNG
     // PID 23008: Gerätebefund (device inspection) → SONDERABLESUNG
-    // PID 23009: WiM Gas INSRPT → SONDERABLESUNG
+    // PID 23009: INSRPT (Strom and Gas) → SONDERABLESUNG
     if ce_type == mako_events::mako::PROCESS_INITIATED
         && matches!(pid, 23001 | 23003 | 23004 | 23005 | 23008 | 23009)
     {
@@ -193,9 +193,9 @@ pub async fn handle_webhook(
                 "SONDERABLESUNG",
                 "INSRPT Bestätigung Gerätebefund (PID 23004)",
             ),
-            23005 => ("SONDERABLESUNG", "WiM Gas INSRPT (PID 23005)"),
+            23005 => ("SONDERABLESUNG", "INSRPT (PID 23005)"),
             23008 => ("SONDERABLESUNG", "INSRPT Gerätebefund (PID 23008)"),
-            23009 => ("SONDERABLESUNG", "WiM Gas INSRPT (PID 23009)"),
+            23009 => ("SONDERABLESUNG", "INSRPT (PID 23009)"),
             _ => unreachable!(),
         };
 

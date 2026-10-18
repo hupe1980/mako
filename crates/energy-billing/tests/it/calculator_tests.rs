@@ -3056,7 +3056,7 @@ fn solar_provider_simple_path_unchanged_without_ggv() {
     );
     invoice.assert_valid();
 
-    // Legal basis must now be §42b (not the old §42a)
+    // Legal basis is §42b EnWG, not §42a
     let solar_pos = invoice
         .positions
         .iter()
@@ -4514,9 +4514,8 @@ fn eeg_regelbesteuerung_normal_mwst() {
 
 /// § 9b StromStG is a **Steuerentlastung**: the supplier invoices the full
 /// 2,05 ct/kWh and the customer reclaims 2,00 ct/kWh from the Hauptzollamt.
-/// Zero-rating the levy at supply — what the old
-/// `industrie_stromsteuer_befreiung` flag did — under-declared the supplier's
-/// own Stromsteueranmeldung and let the customer reclaim tax nobody had paid.
+/// Zero-rating the levy at supply under-declares the supplier's own
+/// Stromsteueranmeldung and lets the customer reclaim tax nobody has paid.
 #[test]
 fn a_produzierendes_gewerbe_is_billed_the_full_stromsteuer() {
     let tariff: Product = serde_json::from_str(
@@ -6727,7 +6726,7 @@ fn half_a_zweitarif_is_refused_as_a_product_defect() {
 /// a monetary field the negation misses yields a document whose totals disagree
 /// with each other — a correction no receiver can book.
 ///
-/// `billingd` now runs the outbound gate on the result before persisting it and
+/// `billingd` runs the outbound gate on the result before persisting it and
 /// publishing `de.billing.rechnung.erstellt`. This pins the invariant that gate
 /// asserts: negating a conformant invoice yields a conformant invoice.
 #[cfg(feature = "bo4e")]

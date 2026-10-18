@@ -852,7 +852,7 @@ fn msb_wechsel_process_name(pid: u32) -> &'static str {
     }
 }
 
-// ── M3: Preisanfrage REQOTE auto-response ──────────────────────────────────────
+// ── Preisanfrage REQOTE auto-response ──────────────────────────────────────────
 
 /// PIDs for which the MSB must auto-respond with a QUOTES message.
 ///

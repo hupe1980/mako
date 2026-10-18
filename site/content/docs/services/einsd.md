@@ -38,11 +38,6 @@ graph TB
     einsd -->|"de.eeg.*"| agentd
 ```
 
-The NB must register every plant with its commissioning date, capacity and
-governing EEG version, verify the MaStR registration (§ 52 EEG 2023), settle
-monthly, apply the § 51 version that governs each plant, and alert the owner
-≥ 180 days before the Förderende.
-
 ---
 
 ## EEG versions
@@ -57,8 +52,7 @@ the `EegGesetz` enum (`Kwkg`, `Eeg2000` … `Eeg2023`).
 by `NegativpreisRegime::fuer_inbetriebnahme` — see [§ 51](#negativpreisregel).
 
 Bestandsschutz follows § 100 EEG (§ 100 Abs. 1 Satz 4 EEG 2017, § 100 Abs. 2
-Nr. 13 EEG 2021, § 100 Abs. 1 EEG 2023); some rules apply regardless of the
-commissioning date, so confirm specific plant scenarios against § 100.
+Nr. 13 EEG 2021, § 100 Abs. 1 EEG 2023).
 
 For a plant under a specific § 100 provision, supply
 `tariff_source = Transitional(rule)`; `SettleInput::effective_eeg_gesetz()` and
@@ -258,14 +252,14 @@ source (BT-Drs. 21/7867 S. 248, Zu § 104).
 
 | `beihilfe_politik` | Effect |
 |---|---|
-| `verweigern` (default) | The settlement is refused with `422` naming the reservation and the setting; no receipt is written and the sweep retries the month. The default because paying cannot be taken back |
+| `verweigern` (default) | Refused with `422` naming the reservation and the setting; no receipt is written and the sweep retries the month |
 | `unter_vorbehalt` | Settled and paid; the receipt and the Gutschrift carry a zero-euro position stating the reservation |
-| `halten` | Settled and held: the receipt is stored with status `gehalten`, no Gutschrift number is allocated and no payout CloudEvent is enqueued. The auto-settle worker re-settles every held month once a recorded approval covers it, however far back it lies, and pays it then |
+| `halten` | Stored with status `gehalten`, no Gutschrift number, no payout CloudEvent; the auto-settle worker re-settles and pays every held month once a recorded approval covers it |
 
 A receipt paid under reservation or held carries `policy_json` — the
 `{key, value, quelle}` of the reading — and the settlement result returns it
 as `policy`. The batch endpoint counts held plants under `gehalten`. The
-setting changes only by editing `einsd.toml` and restarting; the old key
+setting changes only by editing `einsd.toml` and restarting;
 `[beihilfevorbehalt] politik` is refused at startup, naming this one.
 
 A recorded approval opens the supply periods it covers under every policy:
@@ -853,7 +847,7 @@ row (`ORDER BY is_correction DESC, settled_at DESC`).
 **full-repowering** case: the Förderdauer restarts (31 December of year + 20,
 § 25 Abs. 1 Satz 2), `eeg_gesetz` and `verguetungssatz_ct` move to current law,
 and `ursprungs_inbetriebnahme` keeps the original date. Partial repowering is not
-modelled; confirm each case against the EEG and BNetzA guidance.
+modelled.
 
 `POST /api/v1/anlagen/{tr_id}/zusammenlegen` evaluates **§ 24 Abs. 1** and
 refuses with `422` naming the rule when the pair does not fuse. Satz 1 needs all
@@ -930,6 +924,7 @@ without a document. Non-billable statuses issue none.
 | `PUT/GET` | `/api/v1/marktwert/{year}/{art}/{erzeugungsart}` | Anlage 1 Marktwert, `art` = `monat` \| `jahr` |
 | `GET` | `/api/v1/marktwert/{year}/nachbewertung` | Months on a provisional Jahresmarktwert |
 | `POST` | `/api/v1/verguetungssatz-lookup` | Rate lookup |
+| `GET` | `/api/v1/policy` | Operator policy report (`read-policy`) |
 | `GET/POST` | `/mcp` | MCP (Streamable HTTP 2025-11-25) |
 | `GET` | `/health/live` · `/health/ready` | Liveness; readiness |
 
@@ -938,14 +933,14 @@ without a document. Non-billable statuses issue none.
 ## Authentication and authorization
 
 einsd refuses to boot without `[oidc]` unless `allow_insecure_no_auth = true`.
-`policies/einsd.cedar` states **11 actions** in three grants; every handler checks
+`policies/einsd.cedar` states **12 actions** in three grants; every handler checks
 one before touching the database, and a refusal is `403` with the Cedar decision
 in `error`. Context: `principal_tenant` / `principal_roles` from `mako_tenant` /
 `mako_roles`, `resource_tenant` from the row's owner.
 
 | Grant | Actions | Requires |
 |---|---|---|
-| Reads | `read-anlage`, `read-einspeiser`, `read-settlement`, `read-marktdaten`, `use-mcp` | matching tenant |
+| Reads | `read-anlage`, `read-einspeiser`, `read-settlement`, `read-marktdaten`, `use-mcp`, `read-policy` | matching tenant |
 | Writes | `write-anlage`, `write-einspeiser`, `run-settlement`, `manage-lifecycle`, `write-marktdaten` | `NB`, `LF` or `UENB` |
 | Corrections | `correct-settlement` | `NB` or `UENB` |
 
@@ -961,6 +956,7 @@ in `error`. Context: `principal_tenant` / `principal_roles` from `mako_tenant` /
 | `read-marktdaten` | EPEX and Marktwert reads, `nachbewertung`, `verguetungssatz-lookup` |
 | `write-marktdaten` | EPEX and Marktwert writes |
 | `use-mcp` | `/mcp` |
+| `read-policy` | `GET /api/v1/policy` |
 
 ---
 

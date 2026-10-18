@@ -95,7 +95,7 @@ credential.
 
 ## Authorization
 
-`policies/vertragd.cedar` states 24 actions over two kinds of principal:
+`policies/vertragd.cedar` states 25 actions over two kinds of principal:
 **operators** (staff and peer services) carry a market role — `LF`, `MSB`, `ESA`
 or `ADMIN`; **portal customers** carry none. Two actions are customer-scoped and
 need no role: `authenticate-portal-identity` and `read-own-portal-identity`
@@ -162,8 +162,7 @@ Kunde (B2C: Haushalt/SLP, B2B: Unternehmen/RLM/HV)
 `vertrags_nr` and `rahmenvertrag_nr` come from a sequence (§ 41 Abs. 1 Nr. 1
 EnWG). `vertragsart`, `kuendigung_grund` and the outbound task `kind` are
 `CHECK`-constrained and held to their Rust enums in both directions by
-`tests/it/schema_enum_guard.rs` — necessary because `Vertragsart::from_db` reads
-an unknown value as `SONDERVERTRAG`.
+`tests/it/schema_enum_guard.rs`.
 
 ### Contract status
 
@@ -200,16 +199,15 @@ facts and the BG-7 recipient lookup; a source-scanning test pins them to it.
 (KundenIdentitaeten). A B2B company has one Kunde record and N employee logins.
 
 ```text
-Customer logs into portald
-  → portald extracts the verified JWT `sub`
-  → GET vertragd /api/v1/kunden/by-sub/{sub}
-     → { kunde, rolle, standort_filter, active_malo_ids }
-  → portald scopes every later request to those MaLos
+Customer calls portald /api/v1/portal/{malo_id}/…
+  → portald forwards the customer's Bearer token to
+    GET vertragd /api/v1/kunden/authenticate?malo_id={malo_id}
+     → 200 { kunden_id, kundentyp, rolle, malo_id }  or  403
 ```
 
 **`standort_filter` is the scope that is enforced.** It narrows an identity to
 the MaLos whose `standort_bezeichnung` matches, on every read that returns
-customer data.
+customer data, the per-request check included.
 
 **`rolle` is recorded, not enforced**: all five values grant the same access.
 Scope with `standort_filter`, or gate in the portal.
@@ -222,9 +220,10 @@ Scope with `standort_filter`, or gate in the portal.
 | `TECHNIK` | Lastgang, readings, device status — no billing |
 | `READONLY` | Read-only within the site scope |
 
-`GET /api/v1/kunden/authenticate?malo_id=…` is the per-request check. Every
-"not authorized" outcome returns the **same `403`**, so a token holder cannot
-probe which subjects and MaLo-IDs exist (DSGVO Art. 32). `portald`, `billingd`
+Every "not authorized" outcome of `GET /api/v1/kunden/authenticate` — unknown
+subject, no customer, a MaLo not owned or outside the `standort_filter` — is the
+**same `403`**, so a token holder cannot probe which subjects and MaLo-IDs exist
+(DSGVO Art. 32). `portald`, `billingd`
 and `accountingd` keep no customer↔MaLo map of their own.
 
 ## Kündigung
@@ -463,8 +462,7 @@ out first either way. A missing `[absender]` or no customer on file makes the
 document unissuable; the failure is recorded on the slice (`notif_versuche`,
 `notif_letzter_fehler`) and retried. The document is issued before the event and
 `preisanpassung_notif_sent` commit together; a crash re-issues, and `outputd`
-returns the document it already recorded. A change that took effect without its
-notice is logged at `ERROR` on every run until resolved.
+returns the document it already recorded.
 
 § 41 Abs. 5 Satz 1 also wants the **Umfang** of the change:
 
@@ -558,8 +556,7 @@ existing `kuendigung_zum` opens the Kap. 2.2.3 table (`Z34`), `beendet_am` is
 The `GET` returns the contract plus `naechstmoeglich`, the date a Kündigung
 received on `?on=` could take effect. It is **derived** from
 `kuendigungsfrist_monate` by the same [`domain`](#the-rules-live-in-one-module)
-cap that governs a Versorgungsvertrag, so there is one date to keep correct
-rather than two. `?haushaltskunde=false` opts out of the § 309 Nr. 9 lit. c BGB
+cap that governs a Versorgungsvertrag. `?haushaltskunde=false` opts out of the § 309 Nr. 9 lit. c BGB
 one-month cap for a business customer.
 
 `kunden_id` is optional: a gMSB under its Grundzuständigkeit (§ 3 MsbG) has no
@@ -637,8 +634,7 @@ they differ in a shared install.
 18 read-only tools and 4 prompts at `/mcp`, behind OIDC or an `[mcp]` key. `compute_kuendigungsfrist` returns the earliest lawful end date for
 **every** termination reason with the rule that produced it;
 `check_mako_trigger_status` distinguishes a registration still waiting in the
-outbound queue from one the NB has not answered — a distinction an operator
-otherwise cannot see.
+outbound queue from one the NB has not answered.
 
 ## Related
 

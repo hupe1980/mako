@@ -7,7 +7,8 @@
 //! workers.
 //!
 //! The full endpoint surface is documented in the crate README and in
-//! the published service documentation; `/api/v1/docs/` serves it live.
+//! the published service documentation; `/api/v1/openapi.json` serves the
+//! OpenAPI document live.
 
 use std::{sync::Arc, time::Duration};
 
@@ -80,7 +81,7 @@ use crate::{
         tranche::{get_tranche, list_tranchen, put_tranche},
         versorgung::{get_versorgungsstatus, get_versorgungsstatus_history, put_versorgungsstatus},
     },
-    openapi::swagger_ui,
+    openapi::openapi_router,
     pg,
 };
 
@@ -226,7 +227,7 @@ impl Daemon for Marktd {
             .merge(subscription_routes())
             .merge(admin_routes())
             .route(&cfg.webhook.inbound_path, post(ingest_event))
-            .merge(swagger_ui())
+            .merge(openapi_router())
             .with_state(state)
             .layer(Extension(mako_service::oidc::ExpectedTenant(
                 cfg.markt.tenant.clone(),

@@ -34,7 +34,7 @@ just dev einsd         # dev/config/einsd.toml against the dev PostgreSQL
 
 ## MCP server — `/mcp` (20 tools, 6 prompts)
 
-Sixteen tools read; three write — `trigger_settle`, `import_marktwert` and
+Seventeen tools read; three write — `trigger_settle`, `import_marktwert` and
 `import_epex_monthly_price`. Money crosses the surface as exact decimals.
 
 ## Configuration

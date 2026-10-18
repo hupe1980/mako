@@ -21,10 +21,6 @@ SEPA messages: **pain.008** direct debit, **pain.001** credit transfer,
 **pain.007** creditor reversal, **pain.002** bank status, **camt.052/053/054**
 account reports, **camt.055/029** recall and its answer.
 
-The ledger is event-driven and idempotent: every posting carries an idempotency
-key (the CloudEvent id for inbound events), and an identical replay is a
-store-level no-op.
-
 ```mermaid
 graph TB
     billingd["billingd :9280"]
@@ -65,7 +61,8 @@ store-level idempotency. accountingd owns the chart of accounts
 doubleentry owns the invariants.
 
 Soll = Haben is enforced in the engine and by a deferred constraint trigger (§
-238 HGB).
+238 HGB). Every posting carries an idempotency key; an identical replay is a
+store-level no-op.
 
 Each Buchungsart is one entry with two legs: the customer's **Kontokorrent**
 (`Kontokorrent:<lf_mp>:<malo>`, the SKR 1400 Debitoren subledger) and a GL
@@ -319,8 +316,10 @@ Phases 1 and 2 commit the state and the event in one transaction. Phase 3 marks
 the case **before** enqueueing, so a lost announcement is replayable and a
 second disconnection order is impossible. Phase 4 is a sweep because restoration
 is owed *unverzüglich* without the customer asking. Phases 3 and 4 are market
-messages: the NB answers with ORDRSP 19116/19117 and reports execution with
-IFTSTA 21039, tracked by the LF's `gpke-sperrung-lf` process.
+messages: on the NB side the order lands in processd's
+[Sperr-/Entsperrauftrag queue](@/docs/services/processd.md#sperr-entsperrauftrag-queue-nb-role),
+which answers with ORDRSP 19116/19117 and reports execution with IFTSTA 21039,
+tracked by the LF's `gpke-sperrung-lf` process.
 
 **Thresholds (§ 41f Abs. 3), re-checked at every phase.** The case stays eligible
 only while both hold:
@@ -937,8 +936,8 @@ Every handler extracts `Claims` (a JWT) and checks one Cedar action from
 
 Roles are market roles from `mako_roles`; an MSB runs the same receivable
 machinery for its Messentgelte. `tests/it/authorization_guard.rs` fails the build
-on a routed handler without `Claims` or without a Cedar check, on an action in
-code but not in policy (or the reverse), and on an MCP tool without a mapping.
+on a routed handler without a Cedar check, on policy/code action drift, and on an
+MCP tool without a mapping.
 
 ### Inbound webhook
 
@@ -995,7 +994,7 @@ sepa_pre_notification_days = 14
 [http]
 addr = "0.0.0.0:9380"
 
-[creditor_address]   # optional until 2026-11-15; never half-filled
+[creditor_address]   # optional; never half-filled
 street          = "Musterstraße"
 building_number = "12"
 post_code       = "10115"
@@ -1072,8 +1071,5 @@ cargo test -p accountingd --all-features   # unit, pure-logic and guard tests
 just test-accountingd-db                   # DB scenarios against a throwaway PostgreSQL
 ```
 
-The DB scenarios (`tests/it/db_scenarios.rs`, `#[ignore]` without
-`DATABASE_URL`) cover replay idempotency, a year of advances through the
-Endrechnung, clearing with a balanced trial balance, sealing and the watermark
-(including across a restart), inclusion, balance and consistency proofs, and the
-two distinct „nothing to prove" answers.
+The DB scenarios live in `tests/it/db_scenarios.rs` (`#[ignore]` without
+`DATABASE_URL`).

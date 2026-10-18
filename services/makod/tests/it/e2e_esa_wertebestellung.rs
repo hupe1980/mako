@@ -64,12 +64,14 @@ fn party_registry() -> makod::party_registry::MpIdRegistry {
             roles: vec!["ESA".to_owned()],
             primary: true,
             agency: None,
+            as4: None,
         },
         PartyConfig {
             mp_id: MSB_MP_ID.to_owned(),
             roles: vec!["MSB".to_owned()],
             primary: false,
             agency: None,
+            as4: None,
         },
     ])
     .expect("valid registry")

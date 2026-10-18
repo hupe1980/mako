@@ -193,7 +193,9 @@ pub use mako_service::config::DatabaseConfig;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IdentityConfig {
-    /// Tenant identifier written to every receipt row.
+    /// Tenant identifier — data-isolation key written to every receipt row.
+    /// Typically the operator's BDEW- or DVGW-Codenummer, but any stable
+    /// unique string is valid.
     pub tenant: String,
     /// The Marktrolle this deployment **receives** invoices in.
     ///
@@ -205,8 +207,7 @@ pub struct IdentityConfig {
     /// different numbers, and an answer naming the wrong one is undefined at
     /// the counterparty.
     ///
-    /// Defaults to [`EmpfaengerRolle::Lieferant`], which is what the previous
-    /// behaviour amounted to.
+    /// Defaults to [`EmpfaengerRolle::Lieferant`].
     #[serde(default)]
     pub marktrolle: EmpfaengerRolle,
 }

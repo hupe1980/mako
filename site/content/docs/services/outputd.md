@@ -56,9 +56,7 @@ What "about" means depends on the kind:
 | `MAHNUNG`, `PREISANPASSUNG` | `view` — the kind's own view | their producer has no EN 16931 model, and the view *is* the contract |
 
 `POST /api/v1/documents/issue/{kind}` takes the same body plus `subject_ref`,
-`recipient` and `channels`. Sending the model rather than a caller-projected view
-keeps one implementation of `en16931::Invoice → DocumentView` — the one the
-publish gate proves templates against.
+`recipient` and `channels`.
 
 An `INVOICE` sent by `POST` alone is a sonstige Rechnung, which § 14 Abs. 2
 Satz 2 Nr. 1 UStG does not admit for a Leistung „an einen anderen Unternehmer
@@ -174,12 +172,14 @@ operator's file:
 | `TEMPLATE_IDENTITY_TAKEN` | 409 | you have already published this exact source under another kind |
 | `TEMPLATE_DID_NOT_COMPILE`, `TEMPLATE_REJECTED_BY_GATE` | 422 | with `diagnostics` |
 | `TEMPLATE_NOT_PUBLISHED` | 422 | the rollout names a hash never published as this kind |
-| `TEMPLATE_WRONG_KIND`, `SUBJECT_MUST_BE_A_MODEL`, `SUBJECT_MUST_BE_A_VIEW` | 422 | the render's parts do not agree |
+| `TEMPLATE_WRONG_KIND`, `SUBJECT_REQUIRED`, `SUBJECT_MUST_BE_A_MODEL`, `SUBJECT_MUST_BE_A_VIEW` | 422 | the render's parts do not agree |
+| `PAPIER_UNZULAESSIG` | 422 | a `POST`-only invoice the UStG does not admit on paper, or a missing fact |
 | `ATTACHMENT_REQUIRED`, `ATTACHMENT_NOT_ALLOWED`, `ATTACHMENT_UNUSABLE`, `ATTACHMENT_NAME_INVALID` | 422 | the carrier contract |
 | `PDF_STANDARD_UNUSABLE` | 422 | a level that would silently drop the invoice |
 | `DATE_NOT_REPRESENTABLE` | 422 | a document date the PDF date format cannot carry |
 | `NO_SPECIMEN` | 422 | this kind has no preview specimen — publish it instead |
 | `RENDER_BUDGET_EXCEEDED` | 422 | the template is doing far more work than one document needs |
+| `INTERNAL` | 500 | an unexpected failure; the cause is logged, never returned |
 
 ## Templates
 
@@ -261,9 +261,7 @@ ZUGFeRD 2.3 requires four things of the carrier:
 
 The XMP is added by **incremental update** — the renderer's bytes stay in place
 and a new metadata object is appended, the mechanism a digital signature uses.
-Reading a finished document back is `en16931-formats::zugferd::extract` under
-its default `Limits`, with that crate's `Profile`; the payload comes back as
-bytes and `en16931_formats::read` parses it. The profile is derived from BT-24, never configured:
+The profile is derived from BT-24, never configured:
 plain EN 16931 gets `factur-x.xml` and level `EN 16931`; the XRechnung CIUS gets
 `xrechnung.xml` and `XRECHNUNG`.
 
@@ -334,18 +332,10 @@ gate renders a mixed specimen (one price up, one down) and requires the
 declarant, the Wirksamkeit, both changed prices and the Kündigungsrecht date.
 The views live with the renderer; `accountingd` and `vertragd` conform to them.
 
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/api/v1/templates` | Every template this tenant published (`?kind=&limit=`), newest first, `is_current` marking the one in use — how a rollback finds its hash |
-| `POST` | `/api/v1/templates` | Prove a template and publish it; returns its hash, proof, page count and any Typst warnings. Idempotent — identical source stores nothing new |
-| `POST` | `/api/v1/templates/preview` | Render an `INVOICE` or `MAHNUNG` candidate against its specimen and return the PDF. Stores nothing; `PREISANPASSUNG` answers `422 NO_SPECIMEN` |
-| `GET` | `/api/v1/templates/reference/{kind}` | The reference layout mako ships — one per kind, each passing its own gate |
-| `PUT` | `/api/v1/templates/{kind}/current` | Roll a published template out. `422` when the hash was never published |
-| `GET` | `/api/v1/templates/{kind}/current` | What this tenant renders with now |
-| `GET` | `/api/v1/templates/by-hash/{hash}` | Resolve any template by hash — how an audit answers *why did the 2027 invoice look like that* |
-
-Publishing and rolling out are separate decisions; a rollback is the same `PUT`
-with the previous hash from `GET /api/v1/templates`. There is **no update and no
+Publishing returns the hash, proof, page count and any Typst warnings;
+identical source stores nothing new. Publishing and rolling out are separate
+decisions: `GET /api/v1/templates` lists newest first with `is_current`, and a
+rollback is the same `PUT` with the previous hash. There is **no update and no
 delete** endpoint. The listing omits the source; `by-hash` returns it.
 
 ### Verifying a generated document
@@ -363,12 +353,8 @@ delete** endpoint. The listing omits the source; `by-hash` returns it.
 | XRechnung-profile payload (core + BR-DE) | `en16931 validate` | **valid — 0 findings of 282 rules** |
 | Carrier + payload against the ZUGFeRD specification | Mustang 2.25.0 (reference validator) | **valid, both profiles** — XRechnung profile with zero findings; core profile carries one upstream warning (below) |
 
-`tests/it/zugferd_carrier.rs` parses the stamped XMP, requires every `fx:`
-property to be declared in the fx extension schema, requires the
-`pdfaExtension:schemas` bag to occur once (a second occurrence breaks PDF/A
-6.6.2.1 / 6.6.4), and walks every object of the pre- and post-stamp files, the
-`/Metadata` stream being the single permitted difference. veraPDF is not part of
-`just ci`; re-run it after any change to `document::facturx`.
+veraPDF and Mustang are not part of `just ci`; re-run `just zugferd-verify`
+after any change to `document::facturx`.
 
 Mustang raises `PEPPOL-EN16931-R008` on the core-profile file for the empty
 `<ram:ApplicableHeaderTradeDelivery/>`. It is a false positive: the element is
@@ -378,16 +364,11 @@ carries no BG-13 delivery term, which the specimen does not;
 `zugferd_carrier::the_cii_payload_keeps_the_mandatory_empty_delivery_element`
 pins it.
 
-`document::facturx` writes the carrier, and `en16931-formats`' `zugferd`
-reader plus `en16931_formats::read` of the extracted payload are what the gate
-checks it with: any entry the reader reports — an element outside the EN 16931
-subset, a value it could not represent, a duplicate — fails the publish.
-
 ## Configuration
 
 ```toml
 # outputd.toml
-tenant = "9900357000004"   # the operator's MP-ID — every template row is scoped to it
+tenant = "9900357000004"   # data-isolation key — every template row is scoped to it
 
 [http]
 addr = "0.0.0.0:9880"

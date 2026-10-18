@@ -69,6 +69,7 @@ async fn ingest_state() -> makod::edifact_api::EdifactApiState {
                 roles: vec!["NB".to_owned()],
                 primary: true,
                 agency: None,
+                as4: None,
             }])
             .expect("valid registry"),
         ),

@@ -603,8 +603,7 @@ async fn bilateral_lieferbeginn_rejection_path() {
 ///
 /// The window is the one BK6-24-174 GPKE Teil 2 publishes for the
 /// Prüfidentifikator — 11:00 Uhr des 1. Werktags nach dem ÜT for a 55001 — and
-/// it is neither an APERAK window nor 24 wall-clock hours, which is what the old
-/// name of this test claimed.
+/// it is neither an APERAK window nor 24 wall-clock hours.
 #[tokio::test]
 async fn bilateral_antwortfrist_deadline_fires_on_timeout() {
     let platform = Platform::with_all_profiles();

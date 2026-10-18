@@ -37,8 +37,8 @@ Emitters pass a constant from this catalogue as the `type`.
 - `matches()` implements the shared glob matcher (`de.markt.*`) used by every
   subscription mechanism (marktd fan-out, agentd triggers, ERP webhooks).
 - A constant **no service in this workspace emits** carries a `⚠ phantom:` doc
-  note saying so and why, and a test demands the note — honest drift tracking
-  instead of silent divergence. The note is about emission only: some phantoms
+  note saying so and why, and a test demands the note. The note is about
+  emission only: some phantoms
   are subscriptions placed ahead of their emitter, others are neither emitted
   nor consumed. A phantom is a recorded gap, not a promise.
 

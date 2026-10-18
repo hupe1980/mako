@@ -76,14 +76,14 @@ graph TB
 |---|---|---|---|
 | [makod](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 71 workflows over 469 Prüfidentifikatoren, AS4/REST/iMS |
 | [marktd](@/docs/services/marktd.md) | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus, typed BO4E API, durable fan-out, MMMA monthly import worker |
-| [processd](@/docs/services/processd.md) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP ≥95%, LF answers to the NB-initiated GPKE processes, MSB REQOTE auto-response, §14a Steuerungsauftrag produktcode check; the process read model — per-PID KPIs with the APERAK and Antwortfrist clocks reported separately, deadlines read from `mako-fristen`, `GET /api/v1/audit/gleichbehandlung` for the § 7a Abs. 5 EnWG filing, rebuildable from marktd's replay log; the NB Sperr-/Entsperrauftrag queue with IFTSTA 21039 on field confirmation; role-gated binaries, which cannot answer as a role they were not built for |
+| [processd](@/docs/services/processd.md) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP ≥95%, LF answers to the NB-initiated GPKE processes, MSB REQOTE auto-response, §14a produktcode check; the process read model (per-PID KPIs, `GET /api/v1/audit/gleichbehandlung` for § 7a Abs. 5 EnWG); the NB Sperr-/Entsperrauftrag queue with IFTSTA 21039; role-gated builds |
 
 ## Invoice & Grid Billing
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [invoicd](@/docs/services/invoicd.md) | `:8280` | LF | INVOIC plausibility-check — eight stages plus the WiM 31003 send window (incl. ToU band routing via `zaehlzeitregister`), auto-settle/dispute, § 147 AO / GoBD receipts |
-| [netzbilanzd](@/docs/services/netzbilanzd.md) | `:8680` | NB/ÜNB | NNE/KA/MMM/MSB/AWH billing — generates INVOIC 31001/31002/31005/31009/31011, full REMADV lifecycle, §14a Modul 3 ToU, §42b EnWG GGV, Redispatch 2.0 Kostenblatt; MaBiS Summenzeitreihen per Bilanzierungsgebiet filed with the BIKO as MSCONS 13003 on the 10. Werktag, with the BIKO-assigned Datenstatus and open Korrekturbedarf; 12-tool MCP server |
+| [netzbilanzd](@/docs/services/netzbilanzd.md) | `:8680` | NB/ÜNB | NNE/KA/MMM/MSB/AWH billing — INVOIC 31001/31002/31005/31009/31011, REMADV lifecycle, §14a Modul 3 ToU, §42b EnWG GGV, Redispatch 2.0 Kostenblatt; MaBiS Summenzeitreihen filed with the BIKO as MSCONS 13003 on the 10. Werktag; 12-tool MCP server |
 
 ## Energy Data & Observability
 
@@ -92,38 +92,22 @@ graph TB
 | [edmd](@/docs/services/edmd.md) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, quality scoring and validation, virtual meters, tiered storage; 16-tool MCP server |
 | [einsd](@/docs/services/einsd.md) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes; issues the **§14 UStG Gutschrift** (Gutschriftverfahren) per billable settlement as a BO4E `Rechnung` with per-rate USt breakdown; 20-tool MCP server |
 
-`edmd`'s quality layer is `metering`'s validation rules, run per register with an A/B/C/F
-grade, and its Ersatzwertbildung; its derived products are virtual meters (UTILTS
-Berechnungsformel, § 42b EnWG GGV), the § 40a Abs. 2 EnWG
-Verbrauchsschätzung, Resampling and Ablesesteuerung (INSRPT auto-order). `meterstore` tiers
-hot PostgreSQL against cold Apache Iceberg with cross-tier OLAP and a read-only Iceberg REST
-catalog, and every Cedar write action is role-gated to MSB/NB/admin.
-
 ## Retail Billing (LF)
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [productd](@/docs/services/productd.md) | `:9080` | LF | Product & Tariff Catalog — user-defined energy products, EPEX Spot for §41a, B2B Angebote/quotations |
 | [billingd](@/docs/services/billingd.md) | `:9280` | LF | Energy Billing Engine — 13 categories, §41a dynamic, §42b EnWG GGV community solar, EN 16931 e-invoicing (XRechnung 3.0 CII / PEPPOL UBL); the ZUGFeRD PDF renders via outputd |
-| [outputd](@/docs/services/outputd.md) | `:9880` | — | Customer Communications — operator Typst templates, the ZUGFeRD PDF/A-3 carrier, the append-only store of issued documents and their delivery |
-| [accountingd](@/docs/services/accountingd.md) | `:9380` | LF | Customer Account Ledger — tamper-evident double-entry ledger (`doubleentry`: Merkle proofs, period seals for GoBD/§146 AO); per-MaLo Kontokorrent, FIFO open-item clearing, Summen- und Saldenliste §238 HGB, Verzugszinsen §288 BGB, Zahlungsvereinbarung; SEPA pain.008 and CAMT.054; dunning delivered through outputd; §40b Abs. 1 Jahresabschluss; GDPR Art. 17 |
-
-`outputd`'s templates are content-addressed and append-only, and a publish is gated by
-proof; besides the invoice it renders the Textform kinds — Mahnung (§ 126b BGB) and
-Preisanpassung (§ 41 Abs. 5 EnWG) — and delivers over portal, e-mail, print spool and ERP
-with per-channel evidence.
+| [outputd](@/docs/services/outputd.md) | `:9880` | — | Customer Communications — operator Typst templates, the ZUGFeRD PDF/A-3 carrier, Mahnung and Preisanpassung, the append-only store of issued documents and their delivery evidence (portal, e-mail, print, ERP) |
+| [accountingd](@/docs/services/accountingd.md) | `:9380` | LF | Customer Account Ledger — tamper-evident double-entry ledger (`doubleentry`, period seals for GoBD/§146 AO); per-MaLo Kontokorrent, FIFO clearing, Verzugszinsen §288 BGB; SEPA pain.008 and CAMT.054; dunning delivered through outputd |
 
 ## B2C & AI
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [vertragd](@/docs/services/vertragd.md) | `:9780` | LF + MSB | Contract & Customer Management — Kunden (B2C+B2B), Rahmenverträge, Versorgungsverträge, kunden_identitaeten (N portal users per company), Tarifwechsel with its § 41 Abs. 5 EnWG Preisänderungsanzeige (rendered and delivered through outputd), Kündigung, OIDC→MaLo auth gateway for portald |
-| [portald](@/docs/services/portald.md) | `:9480` | LF | Customer Portal gateway — stateless aggregation over all LF services plus the §41 EnWG self-service writes (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16) and the document inbox served out of outputd; every route resolves customer ownership through `vertragd`; no MCP server — agents read each datum from the service that owns it |
+| [vertragd](@/docs/services/vertragd.md) | `:9780` | LF + MSB | Contract & Customer Management — Kunden (B2C+B2B), Rahmenverträge, Versorgungsverträge, Tarifwechsel with its § 41 Abs. 5 EnWG Preisänderungsanzeige, Kündigung, OIDC→MaLo auth gateway for portald |
+| [portald](@/docs/services/portald.md) | `:9480` | LF | Customer Portal gateway — stateless aggregation over the LF services plus the §41 EnWG self-service writes (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16) and the outputd document inbox; ownership resolved through `vertragd`; no MCP server |
 | [agentd](@/docs/services/agentd.md) | `:9580` | All | Multi-agent LLM orchestration — **28 declarative manifests** on the agentplane durable runtime, every effect journaled; read-only by construction, so oversight is a triage worklist |
-
-`agentd`'s manifests are activated through `[bundled_agents]`; one event yields
-one journaled run per subscribing specialist, and since no manifest grants a
-mutating tool, a finding opens a triage row rather than suspending the run.
 
 ---
 
@@ -178,13 +162,11 @@ fan-out, and `invoicd` retries ERP notifications from columns on
 `invoic_receipts`. Emission always goes through `CloudEvent::new` +
 `post_ce_with_retry`, signed as Standard Webhooks (`webhook-signature`).
 
-Both outboxes wake their worker from an `AFTER INSERT` trigger's `NOTIFY`, which
-Postgres holds until commit; the 30 s poll is the fallback.
-`cargo xtask check-outbox-notify` holds trigger, channel and listener together.
+The SDK outbox and marktd's `event_log` wake their worker from an `AFTER INSERT`
+trigger's `NOTIFY`, which Postgres holds until commit; the 30 s poll is the fallback.
 
-`makod` alone keeps a bespoke `main` for its SlateDB event store and AS4
-runtime; every other service, the stateless `portald` and `agentd` included,
-runs on `mako_service::run`.
+`makod` alone keeps its own `main` (SlateDB event store, AS4 runtime); every
+other service runs on `mako_service::run`.
 
 ---
 
@@ -202,11 +184,11 @@ cd mako/demos/nb-stp
 docker compose up
 
 # EEG billing demo — solar plant registration + §21 EEG 2023 settlement
-cd mako/demos/eeg-billing
+cd ../eeg-billing
 docker compose up
 
 # Order-to-cash demo — Tarif → Vertrag → Rechnung → Dokument → Offener Posten
-cd mako/demos/o2c
+cd ../o2c
 docker compose up
 ```
 

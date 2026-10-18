@@ -241,7 +241,7 @@ Pass 5  Cancellation sign reversal   (Stornorechnung)
 | [`doubleentry`](https://crates.io/crates/doubleentry) | `0.7` | Double-entry ledger — append-only BLAKE3 Merkle log, inclusion and consistency proofs, period seals |
 | [`rubo4e`](https://crates.io/crates/rubo4e) | `0.14` | BO4E business-object types — the `rubo4e::current` versioned schema with validation |
 | [`agentplane`](https://crates.io/crates/agentplane) | `0.47` | Durable agent runtime behind `agentd` — journaled effects, typed manifests, human triage |
-| [`asx-rs`](https://crates.io/crates/asx-rs) | `0.15` | AS4/ebMS3 stack under the BDEW MaKo profile — signer pins, claim/accept/abandon dedup store |
+| [`asx-rs`](https://crates.io/crates/asx-rs) | `0.16.2` | AS4/ebMS3 — `Profile::bdew()` fixes BDEW AS4-Profil 1.2's security and wire settings; one client per MP-ID, the `Inbound` service, token-fenced `DedupStore`, verified receipts |
 | [`edifact-rs`](https://crates.io/crates/edifact-rs) | `~0.17` | EDIFACT syntax layer beneath `edi-energy` — parse, serialise, directory validation |
 
 `cargo xtask check-dep-versions` holds this table to the manifests.
@@ -250,7 +250,7 @@ Pass 5  Cancellation sign reversal   (Stornorechnung)
 
 ## Companion daemons
 
-All **17** daemons share one operational model:
+All **14** daemons share one operational model:
 
 - **TOML configuration** loaded from `NAME.toml`, with `NAME_…` environment
   overrides and `env:VAR_NAME` secret interpolation.
@@ -259,8 +259,9 @@ All **17** daemons share one operational model:
   omitting `[oidc]` is dev mode.
 - **OpenTelemetry** OTLP traces on workflow commands, event appends and webhook
   deliveries.
-- **MCP server** (`POST|GET /mcp`, Streamable HTTP) on **15 of the 17**: all
-  except `outputd` and `agentd`, which is the MCP *host* that calls the others.
+- **MCP server** (`POST|GET /mcp`, Streamable HTTP) on **11 of the 14**: all
+  except `outputd`, `portald` and `agentd`, which is the MCP *host* that calls
+  the others.
 
 Ports, market roles and per-daemon design live in the
 [Services section](@/docs/services/_index.md). `makod` is the protocol gateway
@@ -284,20 +285,16 @@ AS4 ingest and the deadline scheduler.
   field, not a setting that does nothing.
 
 `mako_service::Json` is the extractor, so both refusals render the platform's
-`{error, detail, …}` problem body rather than `axum::Json`'s `text/plain`. It
-refuses an undeclared key itself, at any depth, whatever attributes the type
-carries: the `422` carries `code: "unknown_field"` and the keys' JSON paths in
-`paths` (`["adresse.plz", "intervalle.3.qualitaet"]`). A key left over inside
-a `#[serde(flatten)]` member, an `#[serde(untagged)]` or an internally tagged
-enum is read from a buffer `serde` filled itself and is out of the extractor's
-sight, so a body declares its fields rather than flattening them, and a
-buffered enum and everything read out of it carry
-`#[serde(deny_unknown_fields)]`. `mako_service::Lenient` is the same extractor
-without the unknown-key refusal, for a body whose schema a published external
-specification defines. `cargo xtask check-request-bodies` walks every body
-inwards and names a buffered shape that does not deny, and a `Lenient` or
-`axum::Json` extraction, unless its list carries it with a reason; it holds
-the BO4E rule too.
+`{error, detail, …}` problem body. It refuses an undeclared key at any depth:
+the `422` carries `code: "unknown_field"` and the keys' JSON paths in `paths`
+(`["adresse.plz", "intervalle.3.qualitaet"]`). A key inside a
+`#[serde(flatten)]` member, an `#[serde(untagged)]` or an internally tagged
+enum is out of the extractor's sight, so such a shape carries
+`#[serde(deny_unknown_fields)]`. `mako_service::Lenient` drops the unknown-key
+refusal, for a body whose schema an external specification defines.
+`cargo xtask check-request-bodies` names a buffered shape that does not deny,
+and a `Lenient` or `axum::Json` extraction its list does not carry with a
+reason.
 
 ### Every failure, everywhere
 
@@ -333,7 +330,7 @@ report.
 ```mermaid
 graph TD
     A["makod :8080"] & B["marktd :8180"] & C["processd :8580"] & D["invoicd :8280"]
-    E["edmd :8380"] & F["netzbilanzd :8680"] & G["einsd :9180"] & H["…10 more"]
+    E["edmd :8380"] & F["netzbilanzd :8680"] & G["einsd :9180"] & H["…7 more"]
 
     subgraph sdk ["mako-service SDK"]
         direction LR
@@ -502,11 +499,14 @@ The APERAK goes out within 45 minutes (APERAK AHB 1.1 §2.4.1).
 
 ### AS4 EDIFACT delivery
 
-`OutboxWorker` polls `OutboxStore` every 5 seconds. For each pending message it
-renders the interchange through the `edi-energy` builders, looks up the
-partner's AS4 endpoint in `PartnerStore`, signs and encrypts with the operator's
-BrainpoolP256r1 credentials (`asx-rs`), and posts it. Success acknowledges the
-entry; a failure backs off and retries.
+`OutboxWorker` polls `OutboxStore` every 5 seconds. For each pending message
+`BdewAs4Sender` looks up the recipient's `[[as4.partner]]` (endpoint and
+encryption certificate), renders the interchange through the `edi-energy`
+builders and passes it back through the AHB gate, then sends it with the AS4
+client of the interchange's sender (UNB DE0004, its `[[party]]` keys), which
+signs, encrypts and verifies the receipt (`asx-rs`). Success acknowledges the
+entry; a failure retries inside the 72-hour window, then dead-letters. An
+unknown recipient dead-letters at once.
 
 A message addressed to the operator's own MP-ID bypasses AS4: `BdewAs4Sender`
 renders it, re-parses it with `Platform::parse_interchange` and hands each
@@ -556,7 +556,7 @@ registered for the `[deployment] rollen` that need it:
 | `mako_gpke::GpkeModule` | GPKE UTILMD, INVOIC 31001/31002/31005/31006, ORDERS Sperrung Strom 17115–17117, Konfiguration 17134/17135/19001/19002, PARTIN 37000–37006 |
 | `mako_wim::WimModule` | WiM in both Sparten — 55039/55042/55051/55168 and the Gas twins, Geräteübernahme, INSRPT, INVOIC 31009/31003/31004, ESA Wertebestellung |
 | `mako_geli_gas::GeliGasModule` | GeLi Gas 44001–44024, ORDERS Sperrung Gas 17115–17117, PARTIN 37008–37014, INVOIC 31011 |
-| `mako_gabi_gas::GaBiGasModule` | INVOIC 31007/31008/31010, MSCONS 13013 Allokationsliste |
+| `mako_gabi_gas::GaBiGasModule` | INVOIC 31007/31008/31010, REMADV 33001, COMDIS 29001, MSCONS 13013 Allokationsliste |
 | `mako_mabis::MabisModule` | MaBiS — Summenzeitreihen, IFTSTA Datenstatus, Clearinglisten, the ZP lifecycle |
 | `mako_emob::EmobModule` | NZR-EMob / Modell 2 — UTILMD 55238–55243 |
 | `mako_redispatch::RedispatchModule` | Redispatch 2.0 XML routing and IFTSTA 21037/21038 |

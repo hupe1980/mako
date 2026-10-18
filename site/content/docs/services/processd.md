@@ -37,8 +37,10 @@ graph TB
     subgraph NB ["NB module (--features nb-only)"]
         NC["mako-pruefung<br/>NB: E_0622 · E_0623 · E_0607 · E_0608 · G_0011 · G_0007<br/>LF: E_0609 · E_0624 · E_0614 · E_0615<br/>STP target ≥ 95%"]
         EOG["EoG gap closure<br/>§36/§38 EnWG · §38 timer"]
+        SPERR["Sperrauftrag queue<br/>sperr_orders · IFTSTA 21039"]
         NC --> pg
         EOG --> pg
+        SPERR --> pg
     end
 
     subgraph LF ["LF module (--features lf-only)"]
@@ -81,15 +83,12 @@ decision is still the first answer; past it they answer `501 Not Implemented` �
 the build does not serve them, and a retry against it cannot succeed.
 
 The flags gate handlers, not linked code: `mako-gpke`, `mako-geli-gas` and
-`mako-wim` are unconditional dependencies, so a role-gated build still links
-their catalogues. The legal separation of §§ 6a/7/7a EnWG happens at the level
-of the legal entity and its operations; the build only makes the operator's
-obligations readable off the binary.
+`mako-wim` are unconditional dependencies. A role build cannot answer as a role
+it was not built for; the §§ 6a/7/7a EnWG separation is a matter of the legal
+entity and of access control, not of the binary.
 
-**PID 55016 „Kündigung" is an LF process.** The *Anwendungsübersicht der
-Prüfidentifikatoren 4.0* (lfd. Nr. 20030) has it going LFN → LFA, answered
-55017/55018 by the Altlieferant under `E_0614`, so it belongs to
-`role-lf-strom`.
+PID 55016 „Kündigung" is an LF process: LFN → LFA, answered 55017/55018 under
+`E_0614` (*Anwendungsübersicht der Prüfidentifikatoren 4.0*, lfd. Nr. 20030).
 
 ---
 
@@ -630,28 +629,13 @@ The answer is MSCONS 13007 or ORDRSP 19103; a delivery updates `edmd`
 
 ---
 
-## Gleichbehandlung evidence
-
-Every `anmeldung_decisions` row carries `initiator_is_affiliate` (TRUE when
-`lf_mp_id == own_mp_id`) — the evidence behind the § 7a Abs. 5 EnWG
-Gleichbehandlungsbericht that the [process read model](#ss-7a-abs-5-enwg-gleichbehandlung-parity)
-assembles. The duty it evidences is § 20 Abs. 1 Satz 1 EnWG: a systematically
-faster decision for affiliates is a violation.
-
----
-
 ## Process read model
 
-Every `de.mako.*` lifecycle event the one `POST /webhook` receives is projected
-into one `process_projections` row per business process **before** any
-decision module sees it, in every role build. From that row processd answers
-three questions the engine's own metrics cannot:
-
-- **Which processes are at risk** of missing their business answer window?
-- **How did this Prüfidentifikator perform** last month?
-- **Did we treat our own Lieferant better** than a third party's?
-
-A projection write that fails is not acknowledged, so the fan-out redelivers;
+The read model is a module of every role build. Every `de.mako.*` lifecycle
+event the one `POST /webhook` receives is projected into one
+`process_projections` row per business process **before** any decision module
+sees it: the Antwortfrist at risk, the per-PID KPIs and the affiliate parity
+are read from that row. A projection write that fails is not acknowledged, so the fan-out redelivers;
 every module behind it is idempotent against a redelivery. The **STP rate** of
 the read model is completions over the processes that *ended* in the window.
 
@@ -678,7 +662,7 @@ Antwortfrist sweep.
 |-------|-------------|
 | `process_id` | UUID — the CloudEvent `subject` |
 | `pid` | BDEW Prüfidentifikator (e.g. 55001) |
-| `family` | `gpke`, `wim`, `geli-gas`, `wim-gas`, `gabi-gas`, `mabis`, `emob`, `redispatch`, `invoic-storno`, `unknown`. A PID with a published Antwortfrist takes the family of its Festlegung. The WiM PIDs of both Sparten (INSRPT, INVOIC 31003) take `wim` or `wim-gas` from the event's `data.sparte`, else from the counterparty's coding authority (BDEW-Codenummer `293` Strom, DVGW-Codenummer `332` Gas), else `wim`. Then the workflow-name prefix, then the PID table |
+| `family` | `gpke`, `wim`, `geli-gas`, `wim-gas`, `gabi-gas`, `mabis`, `emob`, `redispatch`, `invoic-storno`, `unknown` — the Festlegung of the PID's Antwortfrist; a two-Sparten WiM PID by `data.sparte`, else the counterparty's coding authority (`293` / `332`) |
 | `workflow_name` | From the `makoworkflow` CE extension |
 | `state` | `initiated` \| `running` \| `aperak_timeout` \| `completed` \| `rejected` \| `failed` |
 | `malo_id` | 11-digit Marktlokations-ID |
@@ -797,13 +781,13 @@ warning; a sweep returning a full batch reports `saturated`.
 
 ## Sperr-/Entsperrauftrag queue (NB role)
 
-An NB build (`role-nb-strom` / `role-nb-gas`) carries the Netzbetreiber's work
-queue for the physical acts GPKE orders it to perform. An **ORDERS 17115
+The Sperrauftrag queue is a module of an NB build (`role-nb-strom` /
+`role-nb-gas`): the Netzbetreiber's work queue for the physical acts GPKE orders it to perform. An **ORDERS 17115
 Sperrauftrag** or **17117 Entsperrauftrag** from a Lieferant becomes a job for
 the field team; the outcome goes back as **IFTSTA 21039** (Auftragsstatus
 Sperren/Entsperren). Without the IFTSTA the Lieferant's `gpke-sperrung-lf`
-process never reaches a terminal state, so its dispatch is the one state the
-queue will not let fall silently.
+process never reaches a terminal state, so the queue retries and reports its
+dispatch.
 
 ```mermaid
 flowchart LR

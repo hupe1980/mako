@@ -1,10 +1,11 @@
 //! Ingest coverage for the WiM Preisanfrage QUOTES Angebot reply PIDs.
 //!
-//! REQOTE 35001/35002/35004/35005 (Preisanfrage) opened the `wim-preisanfrage` process, but
-//! the MSB's answering QUOTES 15001/15002/15004/15005 (Angebot) had no ingest arm and fell
-//! through to `Skipped { pid_not_in_dispatch_table }` — the Angebot was dropped.
+//! REQOTE 35001/35002/35004/35005 (Preisanfrage) opens the `wim-preisanfrage` process, and
+//! the MSB's answering QUOTES 15001/15002/15004/15005 (Angebot) must resume it: a PID with
+//! no ingest arm falls through to `Skipped { pid_not_in_dispatch_table }` and the Angebot is
+//! dropped.
 //!
-//! QUOTES carries the MaLo in LOC (like REQOTE), so the Angebot now resumes the
+//! QUOTES carries the MaLo in LOC (like REQOTE), so the Angebot resumes the
 //! process by MaLo. With no process registered the outcome is
 //! `Skipped { process_not_found }` — proving the PID reaches the resume path
 //! rather than being dropped at routing.

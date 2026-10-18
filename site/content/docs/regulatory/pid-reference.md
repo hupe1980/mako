@@ -26,10 +26,11 @@ a workflow by PID.
 
 Reading the **Crate / Workflow** column: `—` means no workflow registers the PID,
 and the cell says why. `⁽ᴺᴮ⁾` marks a registration that only happens in an
-NB-role deployment. Several entries separated by ` · ` mean the same PID is
-registered independently in more than one crate, which is safe because those
-crates are commodity-isolated: each is loaded only in the Strom or the Gas
-deployment, never both.
+NB-role deployment. Several entries separated by ` · ` mean more than one crate
+registers the PID; makod loads the crates its `[deployment] rollen` name, and
+when two loaded crates claim one PID, one module owns it and the engine
+build logs a warning — unless the PID is registered per Sparte, in which case
+it resolves by the Sparte of the interchange recipient's MP-ID.
 
 `services/makod/tests/it/pid_reference_guard.rs` parses this column: a PID
 credited to a workflow must be routed by the compiled modules, to the named
@@ -48,8 +49,6 @@ REQOTE 35001 / QUOTES 15001, the IFTSTA Statusmeldungen, and INVOIC 31003. The S
 not in the message body: it is the Sparte of the **interchange recipient's MP-ID**
 (BDEW Allgemeine Festlegungen §2.13), which the ingest layer resolves and passes
 to the workflow.
-
-Source: BDEW PID 3.3 xlsx (Fehlerkorrektur 27.03.2026) and PID 4.0 xlsx (01.04.2026).
 
 ---
 
@@ -143,7 +142,7 @@ routed inbound:
 | Situation | PIDs |
 |---|---|
 | **Outbound-only** — generated or dispatched by mako, never received | 17134, 17135 (ORDERS sent by `GpkeKonfigurationWorkflow`); 19003, 19004 (the MSBA's answer to ORDERS 17002) |
-| **Role-conditional** — registered only under an explicit `NMSB` role build | 19001, 19002 (ORDRSP Bestellbestätigung/Ablehnung, answering ORDERS 17001) — GPKE Konfiguration claims the same two on an NB instance |
+| **Role-conditional** — registered only when the deployment roles name `NMSB` | 19001, 19002 (ORDRSP Bestellbestätigung/Ablehnung, answering ORDERS 17001) — GPKE Konfiguration claims the same two on an NB instance |
 | **Named but not routed** — outside the band the named workflow registers | 55035, 55060, 55095, 55173, 55175, 55177, 55180, 55194, 55225, 55227, 55553 |
 
 An inbound message carrying one of the last group is dead-lettered as
@@ -158,10 +157,6 @@ one-way: no Bestätigung, so a missing one raises no timeout and no dead letter.
 They route to `gpke-zuordnungsmeldung` and `geli-gas-zuordnungsmeldung`;
 `mako_fristen::meldung` catalogues their windows and Fundstellen, and
 `meldepflicht_coverage.rs` cross-checks it against the `PidRouter`.
-
-**Not listed in the BDEW tables above:** the DVGW Prüfidentifikatoren
-(70001–70039). They are published by DVGW rather than BDEW and have their own
-section on this page.
 
 ---
 
@@ -762,10 +757,6 @@ BDEW ones.
 
 ---
 
-*Source: BDEW PID 3.3 (FV2025-10-01, Fehlerkorrektur 27.03.2026) and PID 4.0 (FV2026-10-01).*
-
----
-
 ## Redispatch 2.0 — XML document types (not EDIFACT PIDs)
 
 Redispatch 2.0 uses CIM/IEC 62325-based **XML** documents, not EDIFACT. These
@@ -776,7 +767,7 @@ BDEW PID overview. They are handled by the `redispatch-xml` crate.
 |---|---|---|
 | `ActivationDocument` | 1.1f | `redispatch-xml` |
 | `PlannedResourceScheduleDocument` | 1.0f | `redispatch-xml` |
-| `AcknowledgementDocument` | 1.0f | `redispatch-xml` |
+| `AcknowledgementDocument` | 1.0g | `redispatch-xml` |
 | `Stammdaten` | 1.4b | `redispatch-xml` |
 | `StatusRequest_MarketDocument` | 1.1 | `redispatch-xml` |
 | `Unavailability_MarketDocument` | 1.1b | `redispatch-xml` |
@@ -785,7 +776,7 @@ BDEW PID overview. They are handled by the `redispatch-xml` crate.
 | `Kostenblatt` | 1.0d | `redispatch-xml` |
 
 IFTSTA status messages that accompany Redispatch 2.0 workflows are EDIFACT and
-use PIDs 21035–21047 (see the IFTSTA AHB section above).
+use PIDs 21037 and 21038 (see the IFTSTA AHB section above).
 
 See [`crates/redispatch-xml`](https://github.com/hupe1980/mako/blob/main/crates/redispatch-xml/README.md) for schema
 documentation and the parse/serialize/validate API.

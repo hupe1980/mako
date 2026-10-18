@@ -47,12 +47,14 @@ mako-redispatch  = { path = "../../crates/mako-redispatch" }
 # DocumentType → RedispatchDocumentKind mapping lives in redispatch_xml_ingest.
 redispatch-xml   = { path = "../../crates/redispatch-xml" }
 edifact-rs       = { workspace = true }
-mako-as4     = { path = "../../crates/mako-as4", features = ["server"] }
+mako-as4     = { path = "../../crates/mako-as4" }
 energy-api   = { path = "../../crates/energy-api", features = ["server", "client"] }
 rubo4e       = { workspace = true }
 mako-markt   = { path = "../../crates/mako-markt", features = ["marktd-client"] }
 rust_decimal = { workspace = true }
-asx-rs       = { workspace = true, features = ["as4", "client", "interop-strict", "server"] }
+asx-rs       = { workspace = true }
+# `RequestBodyTimeoutLayer` bounds how long the AS4 inbox waits for a body.
+tower-http   = { workspace = true, features = ["timeout"] }
 # Structured logging + optional OTLP span export (OTEL_EXPORTER_OTLP_ENDPOINT).
 mako-service = { workspace = true, features = ["otel", "oidc", "cedar"] }
 edi-energy   = { path = "../../crates/edi-energy", default-features = false, features = [
@@ -84,7 +86,6 @@ sha2               = "0.10"
 # fingerprint can be pinned on the inbound AS4 session.
 base64             = { version = "0.22" }
 utoipa             = { version = "5", features = ["axum_extras", "uuid", "time"] }
-utoipa-swagger-ui  = { version = "9", features = ["axum"] }
 rmcp = { workspace = true }
 schemars = { version = "1.2.1", features = ["chrono04"] }
 governor = "0.6"
@@ -94,7 +95,9 @@ governor = "0.6"
 # enabling InMemoryEventStore, NoopDeadLetterSink, InMemoryInboxStore.
 # Must never appear in a production build.
 mako-engine  = { path = "../../crates/mako-engine", features = ["testing"] }
-mako-as4     = { path = "../../crates/mako-as4", features = ["testing"] }
+# `asx::testkit`: an SM-PKI-like test CA, BDEW parties with the MP-ID as OU,
+# an in-process loopback partner and the dedup conformance suite.
+asx-rs       = { workspace = true, features = ["test-util"] }
 tempfile     = "3"
 tokio        = { version = "1", features = ["full"] }
 serde_json   = { workspace = true }
@@ -105,3 +108,8 @@ http-body-util = "0.1"
 
 [lints]
 workspace = true
+
+# The package `asx-rs` is imported under its library name `asx`, which
+# cargo-machete does not map back to the package.
+[package.metadata.cargo-machete]
+ignored = ["asx-rs"]

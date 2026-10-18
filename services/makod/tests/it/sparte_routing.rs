@@ -30,6 +30,7 @@ fn party(mp_id: &str, role: &str, primary: bool) -> PartyConfig {
         roles: vec![role.to_owned()],
         primary,
         agency: None,
+        as4: None,
     }
 }
 

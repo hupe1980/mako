@@ -439,10 +439,10 @@ fn the_billing_period_reaches_the_semantic_model() {
 
 /// The gate specimen's stamped terms match what production stamps.
 ///
-/// The specimen itself lives with the renderer now
+/// The specimen itself lives with the renderer
 /// (`outputd::document::gate::specimen_invoice`), where its own suite asserts
 /// the same terms with the same expected values — the two tests together are
-/// the cross-service drift tripwire the old in-process equality check was.
+/// the cross-service drift tripwire.
 /// This side pins what *production* stamps.
 #[test]
 fn production_stamps_the_terms_the_gate_specimen_proves_templates_against() {

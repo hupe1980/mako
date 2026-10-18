@@ -14,11 +14,12 @@
 //! use mako_engine::inbox::{InboxStore, InMemoryInboxStore, inbox_key};
 //!
 //! let inbox = InMemoryInboxStore::new();
-//! let key = inbox_key(&sender_party_id, &message_ref)?;;
-//! if !inbox.accept(&key).await? {
-//!     return Ok(()); // duplicate — drop silently
-//! }
-//! // process the message ...
+//! let key = inbox_key(&sender_party_id, &message_ref)?;
+//! let InboxClaim::Claimed(claim) = inbox.claim(&key).await? else {
+//!     return Ok(()); // duplicate or in flight
+//! };
+//! // process the message, then settle the claim it holds:
+//! inbox.accept(&key, claim).await?;
 //! ```
 
 #[cfg(any(test, feature = "testing"))]
@@ -27,6 +28,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::error::EngineError;
+use crate::ids::InboxClaimId;
 
 /// Maximum byte length of the **caller-supplied** inbox deduplication key.
 ///
@@ -50,7 +52,7 @@ pub const MAX_INBOX_KEY_LEN: usize = 509;
 /// So a key is **claimed** first, and settled afterwards:
 ///
 /// - [`claim`](Self::claim) takes the key, atomically, and says which of three
-///   things happened.
+///   things happened. A successful claim carries a fresh [`InboxClaimId`].
 /// - [`accept`](Self::accept) settles it once the message is *durably* handled
 ///   — dispatched, persisted, or dead-lettered. From then on every
 ///   retransmission is a duplicate.
@@ -60,7 +62,10 @@ pub const MAX_INBOX_KEY_LEN: usize = 509;
 ///
 /// A claim that is never settled — the process died mid-message — must not
 /// block the key forever, so an unsettled claim carries a lease
-/// ([`CLAIM_LEASE`]) after which another delivery may take it over.
+/// ([`CLAIM_LEASE`]) after which another delivery may take it over. Settling is
+/// **fenced by the claim id**: once a lease has been taken over, the first
+/// holder's `accept` and `abandon` fail and change nothing, so a slow handler
+/// cannot settle a claim it no longer holds.
 #[expect(
     async_fn_in_trait,
     reason = "the trait is implemented and awaited within this workspace, where the future's Send bound is known"
@@ -78,17 +83,16 @@ pub trait InboxStore: Send + Sync {
     /// a storage error is not "first seen".
     async fn claim(&self, key: &str) -> Result<InboxClaim, EngineError>;
 
-    /// Phase 2a: settle a claim as handled.
-    ///
-    /// Idempotent — settling a key that is not currently claimed is a no-op,
-    /// because settlement itself can be retried.
+    /// Phase 2a: settle the claim `claim` as handled.
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::Store`] on storage failure.
-    async fn accept(&self, key: &str) -> Result<(), EngineError>;
+    /// [`EngineError::Inbox`] when `claim` does not hold `key` — it was
+    /// settled already, or its lease was taken over — and on storage failure.
+    /// A refused settlement changes nothing.
+    async fn accept(&self, key: &str, claim: InboxClaimId) -> Result<(), EngineError>;
 
-    /// Phase 2b: settle a claim as *not* handled, releasing the key.
+    /// Phase 2b: settle the claim `claim` as *not* handled, releasing the key.
     ///
     /// Never releases a key that was already accepted: an accepted key is a
     /// statement that the message was handled, and a later abandon would
@@ -96,8 +100,9 @@ pub trait InboxStore: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::Store`] on storage failure.
-    async fn abandon(&self, key: &str) -> Result<(), EngineError>;
+    /// [`EngineError::Inbox`] when `claim` does not hold `key`, and on storage
+    /// failure. A refused settlement changes nothing.
+    async fn abandon(&self, key: &str, claim: InboxClaimId) -> Result<(), EngineError>;
 }
 
 /// How long an unsettled claim holds a key before another delivery may take it.
@@ -112,8 +117,8 @@ pub const CLAIM_LEASE: std::time::Duration = std::time::Duration::from_secs(300)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InboxClaim {
     /// First occurrence, or a lease that had expired. The caller now owns an
-    /// unsettled claim and **must** settle it.
-    Claimed,
+    /// unsettled claim and **must** settle it, naming this id.
+    Claimed(InboxClaimId),
     /// Another delivery of the same message holds an unsettled claim.
     ///
     /// Not a duplicate: nothing has been handled yet, so acknowledging it would
@@ -125,15 +130,24 @@ pub enum InboxClaim {
     Duplicate,
 }
 
+/// The refusal of a settlement whose claim does not hold the key.
+#[cfg_attr(
+    not(any(test, feature = "testing", feature = "slatedb")),
+    allow(dead_code, reason = "used by the in-memory and SlateDB stores only")
+)]
+pub(crate) fn stale_claim(phase: &str, key: &str) -> EngineError {
+    EngineError::inbox(format!(
+        "inbox {phase} refused: the claim does not hold {key:?} (settled already, or its lease \
+         was taken over)"
+    ))
+}
+
 // ── InMemoryInboxStore ────────────────────────────────────────────────────────
 
 /// An in-memory [`InboxStore`] for tests and development.
 ///
-/// Backed by a `HashSet` protected by a `RwLock`. Cloning shares the underlying
+/// Backed by a `HashMap` protected by a `RwLock`. Cloning shares the underlying
 /// data via `Arc` — all clones see the same deduplication state.
-///
-/// For production use, replace with a persistent backend (e.g. a PostgreSQL
-/// table or a redb database) to survive process restarts.
 ///
 /// Only available in `#[cfg(test)]` or with the `testing` feature enabled.
 #[cfg(any(test, feature = "testing"))]
@@ -147,7 +161,10 @@ pub struct InMemoryInboxStore {
 #[derive(Debug, Clone, Copy)]
 enum InboxState {
     /// Claimed but not settled; the lease runs out at `until`.
-    Claimed { until: std::time::Instant },
+    Claimed {
+        id: InboxClaimId,
+        until: std::time::Instant,
+    },
     /// Settled as handled.
     Accepted,
 }
@@ -178,39 +195,46 @@ impl InboxStore for InMemoryInboxStore {
         let mut seen = self.seen.write().await;
         match seen.get(key) {
             Some(InboxState::Accepted) => Ok(InboxClaim::Duplicate),
-            Some(InboxState::Claimed { until }) if *until > std::time::Instant::now() => {
+            Some(InboxState::Claimed { until, .. }) if *until > std::time::Instant::now() => {
                 Ok(InboxClaim::InFlight)
             }
             // Absent, or a lease that has run out and may be taken over.
             _ => {
+                let id = InboxClaimId::new();
                 seen.insert(
                     key.to_owned(),
                     InboxState::Claimed {
+                        id,
                         until: std::time::Instant::now() + CLAIM_LEASE,
                     },
                 );
-                Ok(InboxClaim::Claimed)
+                Ok(InboxClaim::Claimed(id))
             }
         }
     }
 
-    async fn accept(&self, key: &str) -> Result<(), EngineError> {
-        check_key_len(key)?;
-        self.seen
-            .write()
-            .await
-            .insert(key.to_owned(), InboxState::Accepted);
-        Ok(())
-    }
-
-    async fn abandon(&self, key: &str) -> Result<(), EngineError> {
+    async fn accept(&self, key: &str, claim: InboxClaimId) -> Result<(), EngineError> {
         check_key_len(key)?;
         let mut seen = self.seen.write().await;
-        // Only drop our own unsettled claim — never an accepted key.
-        if matches!(seen.get(key), Some(InboxState::Claimed { .. })) {
-            seen.remove(key);
+        match seen.get(key) {
+            Some(InboxState::Claimed { id, .. }) if *id == claim => {
+                seen.insert(key.to_owned(), InboxState::Accepted);
+                Ok(())
+            }
+            _ => Err(stale_claim("accept", key)),
         }
-        Ok(())
+    }
+
+    async fn abandon(&self, key: &str, claim: InboxClaimId) -> Result<(), EngineError> {
+        check_key_len(key)?;
+        let mut seen = self.seen.write().await;
+        match seen.get(key) {
+            Some(InboxState::Claimed { id, .. }) if *id == claim => {
+                seen.remove(key);
+                Ok(())
+            }
+            _ => Err(stale_claim("abandon", key)),
+        }
     }
 }
 
@@ -259,13 +283,17 @@ pub fn inbox_key(sender_party_id: &str, message_ref: &str) -> Result<String, &'s
 mod tests {
     use super::*;
 
+    async fn claimed(inbox: &InMemoryInboxStore, key: &str) -> InboxClaimId {
+        match inbox.claim(key).await.unwrap() {
+            InboxClaim::Claimed(id) => id,
+            other => panic!("expected a claim, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn a_new_message_is_claimed() {
         let inbox = InMemoryInboxStore::new();
-        assert_eq!(
-            inbox.claim("sender:ref-001").await.unwrap(),
-            InboxClaim::Claimed
-        );
+        claimed(&inbox, "sender:ref-001").await;
     }
 
     /// A claim that is not settled blocks a concurrent delivery — and says so,
@@ -276,10 +304,7 @@ mod tests {
     #[tokio::test]
     async fn an_unsettled_claim_is_in_flight_not_a_duplicate() {
         let inbox = InMemoryInboxStore::new();
-        assert_eq!(
-            inbox.claim("sender:ref-001").await.unwrap(),
-            InboxClaim::Claimed
-        );
+        claimed(&inbox, "sender:ref-001").await;
         assert_eq!(
             inbox.claim("sender:ref-001").await.unwrap(),
             InboxClaim::InFlight
@@ -290,8 +315,8 @@ mod tests {
     #[tokio::test]
     async fn an_accepted_message_is_a_duplicate() {
         let inbox = InMemoryInboxStore::new();
-        inbox.claim("sender:ref-001").await.unwrap();
-        inbox.accept("sender:ref-001").await.unwrap();
+        let id = claimed(&inbox, "sender:ref-001").await;
+        inbox.accept("sender:ref-001", id).await.unwrap();
         assert_eq!(
             inbox.claim("sender:ref-001").await.unwrap(),
             InboxClaim::Duplicate
@@ -300,78 +325,60 @@ mod tests {
 
     /// Abandoning releases the key, which is what makes a retransmission a
     /// recovery path instead of a silent drop.
-    ///
-    /// This is the whole reason the store has three phases. With a two-state
-    /// store the key is recorded before the message is handled, so a message
-    /// that fails afterwards can never be retried: its retransmission carries
-    /// the same key and is answered "duplicate" while nothing was done.
     #[tokio::test]
     async fn abandoning_lets_the_retransmission_through() {
         let inbox = InMemoryInboxStore::new();
-        inbox.claim("sender:ref-001").await.unwrap();
-        inbox.abandon("sender:ref-001").await.unwrap();
-        assert_eq!(
-            inbox.claim("sender:ref-001").await.unwrap(),
-            InboxClaim::Claimed,
-            "a released key must be claimable again"
-        );
+        let id = claimed(&inbox, "sender:ref-001").await;
+        inbox.abandon("sender:ref-001", id).await.unwrap();
+        claimed(&inbox, "sender:ref-001").await;
     }
 
-    /// Abandon never re-opens an accepted key.
-    ///
-    /// An accepted key states that the message was handled. Releasing it would
-    /// invite the same message to be processed twice — a second Lieferantenwechsel
-    /// from one Anmeldung.
+    /// Abandon never re-opens an accepted key: the late abandon fails and the
+    /// key stays a duplicate. Releasing it would invite the same message to be
+    /// processed twice — a second Lieferantenwechsel from one Anmeldung.
     #[tokio::test]
-    async fn abandoning_an_accepted_key_does_nothing() {
+    async fn abandoning_an_accepted_key_is_refused() {
         let inbox = InMemoryInboxStore::new();
-        inbox.claim("sender:ref-001").await.unwrap();
-        inbox.accept("sender:ref-001").await.unwrap();
-        inbox.abandon("sender:ref-001").await.unwrap();
+        let id = claimed(&inbox, "sender:ref-001").await;
+        inbox.accept("sender:ref-001", id).await.unwrap();
+        assert!(inbox.abandon("sender:ref-001", id).await.is_err());
         assert_eq!(
             inbox.claim("sender:ref-001").await.unwrap(),
             InboxClaim::Duplicate
         );
     }
 
-    /// Settling is idempotent: the recovery path may retry it.
+    /// A claim id is spent once settled.
     #[tokio::test]
-    async fn accepting_twice_is_not_an_error() {
+    async fn a_settled_claim_cannot_settle_again() {
         let inbox = InMemoryInboxStore::new();
-        inbox.claim("sender:ref-001").await.unwrap();
-        inbox.accept("sender:ref-001").await.unwrap();
-        inbox.accept("sender:ref-001").await.unwrap();
-        assert_eq!(
-            inbox.claim("sender:ref-001").await.unwrap(),
-            InboxClaim::Duplicate
-        );
+        let id = claimed(&inbox, "sender:ref-001").await;
+        inbox.accept("sender:ref-001", id).await.unwrap();
+        assert!(inbox.accept("sender:ref-001", id).await.is_err());
     }
 
-    /// Accepting a key nobody claimed is a no-op, not an error.
+    /// A claim id that never held the key settles nothing.
     #[tokio::test]
-    async fn accepting_an_unclaimed_key_is_a_no_op() {
+    async fn a_foreign_claim_settles_nothing() {
         let inbox = InMemoryInboxStore::new();
-        inbox.accept("sender:never-claimed").await.unwrap();
+        claimed(&inbox, "sender:ref-001").await;
+        assert!(
+            inbox
+                .accept("sender:ref-001", InboxClaimId::new())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            inbox.claim("sender:ref-001").await.unwrap(),
+            InboxClaim::InFlight
+        );
     }
 
     #[tokio::test]
     async fn different_senders_same_ref_are_independent() {
         let inbox = InMemoryInboxStore::new();
-        assert_eq!(
-            inbox
-                .claim(&inbox_key("sender-A", "ref-001").unwrap())
-                .await
-                .unwrap(),
-            InboxClaim::Claimed
-        );
-        assert_eq!(
-            inbox
-                .claim(&inbox_key("sender-B", "ref-001").unwrap())
-                .await
-                .unwrap(),
-            InboxClaim::Claimed,
-            "the sender is part of the key"
-        );
+        claimed(&inbox, &inbox_key("sender-A", "ref-001").unwrap()).await;
+        claimed(&inbox, &inbox_key("sender-B", "ref-001").unwrap()).await;
     }
 
     #[test]

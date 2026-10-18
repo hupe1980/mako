@@ -283,8 +283,8 @@ sequenceDiagram
     Note right of FNB: SLP D-1 12:00 · RLM end of M+14 WT · §47 Ziff.1<br/>GasDay::finale_allokation_deadline_utc()
 ```
 
-`AllocationVersion` (`Initial`/`Correction`/`Final`) is the typed form of the
-three landings, and each deadline is registered as a `mako_engine::deadline`
+`AllocationVersion` (`Initial`, `Correction(n)`, `Endgueltig`, `Final`) is the
+typed form of the landings, and each deadline is registered as a `mako_engine::deadline`
 when the preceding event is persisted — so a missed one surfaces as an alert
 rather than as a silent gap.
 
@@ -446,7 +446,7 @@ stops; `makod::dvgw_ingest::try_ingest` calls it first on all three inbound path
 | `gabi-gas-allocation` | 70001–70023 (ALOCAT) | NB → MGV, MGV → BKV, ENB/ANB → NB, MGV → NB, NB → BKV |
 | `gabi-gas-mehr-mindermengen` | 70095 (SLP), 70096 (RLM) (SSQNOT) | NB → MGV — one process per Netzkonto and Abrechnungszeitraum, hosting both ends: `ReceiveSsqnot` records what a Netzbetreiber reports, `Melden` enqueues this tenant's own SSQNOT; a later report for the same period stands, and a RLM report for a Zeitraum from 1.10.2015 is refused |
 
-Three properties of the dispatch are worth stating:
+Four properties of the dispatch:
 
 - **The gas day comes from `DTM+Z01`** and a message without a usable one is
   refused, not booked against today.
@@ -502,7 +502,7 @@ messages validated through the AHB/MIG profile layer:
 | `GasQuantity` | Decimal-precision kWh_Hs with m³ + conversion metadata |
 | `GasBeschaffenheit` | Brennwert (Hs/Hu) + Zustandszahl; `.validate()` checks DVGW G 260 ranges |
 | `GasQualityFlag` | 7-state quality flag — see the note below on where the substitution rules come from |
-| `AllocationVersion` | Initial/Correction(n)/Final per §§46/47 KoV XV |
+| `AllocationVersion` | Initial/Correction(n)/Endgueltig/Final per §§46/47 KoV XV |
 | `GasImbalanceSaldo` | Mehr/Minder/Balanced with `ausgleichsenergie_price_ct_per_kwh` per KoV §9 |
 | `GasMarketRole` | Which role a party plays, and whether it nominates, receives allocations, or carries an imbalance obligation |
 | `PortfolioPosition` | One Bilanzkreis' nomination against its allocation for a gas day |

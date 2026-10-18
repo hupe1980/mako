@@ -183,8 +183,8 @@ impl EdifactIngestDispatcher {
             //
             // **No deadline is registered.** BK6-24-174 Anlage 3 gives the
             // Prüfmitteilung an empty Frist cell (Kap. 9.8.2 Nr. 1: the
-            // receiving party „kann" answer), and Kap. 13.8.2 — which the old
-            // 1-Werktag deadline cited — defines no answer at all. What bounds
+            // receiving party „kann" answer), and Kap. 13.8.2 defines no answer
+            // at all, so it supports no 1-Werktag deadline either. What bounds
             // a Prüfmitteilung is the clearing window of Tabelle 2, which is a
             // date range on the Bilanzierungsmonat rather than a countdown from
             // this arrival. See `mako_mabis::fristen`.

@@ -1,947 +1,808 @@
-//! AS4 transport security tests — sign+encrypt, replay dedup, policy contracts.
+//! The AS4 boundary on `asx-rs` 0.16: makod's clients against a BDEW partner
+//! client over an in-process loopback, with test SM-PKI material.
 //!
-//! Uses `mako-as4`'s built-in test helpers so no WIRK certificates are required.
+//! The partner is a real `asx::as4::As4` client of its own; nothing here
+//! weakens a check. `asx::testkit::pki::TestCa::sm_pki()` plays the SM-PKI
+//! root and issues each MP-ID separate signing, encryption and TLS key pairs
+//! with the MP-ID as subject OU; `asx::testkit::loopback::Loopback` carries
+//! the requests and serves each test CA's CRL.
 //!
-//! ## Coverage
-//!
-//! | Test | Contract | Regulatory basis |
-//! |---|---|---|
-//! | `policy_without_key_no_encryption_required` | Dev-mode behaviour | BDEW AS4-Profil v1.2 §2.2.6.2.2 |
-//! | `policy_with_key_requires_encryption` | Prod-mode behaviour | BDEW AS4-Profil v1.2 §2.2.6.2.2 |
-//! | `fragment_scope_is_strict_default` | No-fragmentation contract | BDEW AS4-Profil v1.2 OneWayPush |
-//! | `sign_encrypt_pmode_defaults` | `bdew_pmode` encrypt:true | BDEW AS4-Profil v1.2 §2.2.6.2.2 |
-//! | `sign_only_pmode_disables_encryption` | `sign_only` contract | BDEW AS4-Profil v1.2 dev variant |
-//! | `replay_dedup_blocks_duplicate` | 72h replay window | BDEW AS4-Profil v1.2 §4.2 |
-//! | `sign_encrypt_policy_is_bdew_compliant` | Smoke | BDEW AS4-Profil v1.2 §2.2.6.2.1+2 |
-//! | `tampered_signature_is_rejected` | Signature integrity | BDEW AS4-Profil v1.2 §2.2.6.2.1 |
-//! | `inbound_encryption_enforced_when_decryption_key_set` | `require_encrypted_inbound` | BDEW AS4-Profil v1.2 §2.2.6.2.2 |
-//! | `sign_encrypt_round_trip_via_mock_endpoint` | Round-trip | BDEW AS4-Profil v1.2 §2.2.6 |
-//! | `sign_only_round_trip_envelope_contains_wssec_signature` | Signing | BDEW AS4-Profil v1.2 §2.2.6.2.1 |
+//! | Test | Contract |
+//! |---|---|
+//! | `slatedb_dedup_conforms` | `SlateDbDedup` is an `asx::DedupStore`: atomic claim, token-fenced settlement |
+//! | `an_outbound_message_is_delivered_with_its_receipt_evidence` | send: Service MP, `{outbox id}@{domain}`, §2.12 file name, receipt evidence kept |
+//! | `a_retry_resends_the_first_attempts_message_id_and_timestamp` | the retry's `eb:MessageId`, `eb:Timestamp` and digests are the first attempt's |
+//! | `a_partner_refusal_is_retried_and_a_receipt_failure_is_not_acknowledged` | delivery errors stay in the outbox |
+//! | `an_interchange_from_a_configured_partner_is_routed` | inbound: verified, dispatched, receipted |
+//! | `a_refusal_is_dead_lettered_before_the_claim_is_released_for_good` | dead letter before the claim settles, `EBMS:0004` not retried |
+//! | `an_unrecorded_refusal_is_retryable` | dead-letter write fails → `EBMS:0202`, the retry is reprocessed |
+//! | `an_accepted_interchange_settles_after_its_dead_letters` | dead letters before `accept` |
+//! | `an_unconfigured_sender_is_refused_under_nur_konfigurierte` | `[policy.as4] unbekannte_absender` default |
+//! | `an_unconfigured_sender_is_served_under_bdew_ou_zulassen` | §2.3.2 option |
+//! | `a_tampered_request_is_refused_ebms_0101` | signature integrity |
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use mako_as4::{bdew_pmode, bdew_pmode_sign_only, bdew_push_policy, pmode::BdewAction};
+use asx::testkit::loopback::Loopback;
+use asx::testkit::pki::{KeyAlg, TestCa, TestParty};
+use asx::{BoxFuture, Claim, ClaimToken, DedupStore};
+use mako_as4::{LocalIdentity, MessageIdDomain, PartnerDirectory, PartnerEntry};
+use mako_engine::dead_letter::{DeadLetterReason, DeadLetterSink, RejectFuture};
+use mako_engine::error::EngineError;
+use mako_engine::store_slatedb::SlateDbStore;
+use makod::as4_clients::{As4Clients, As4Setup};
+use makod::as4_evidence::As4Evidence;
+use makod::as4_ingest::{self, BdewAs4IngestHandler, SlateDbDedup};
+use makod::config::UnbekannteAbsender;
 
-// ── bdew_push_policy encryption enforcement ───────────────────────────────
+/// makod's own MP-ID (NB).
+const OWN: &str = "9900001000001";
+/// The configured partner (LF).
+const PARTNER: &str = "9900001000002";
+/// A market participant with an SM-PKI certificate and no `[[as4.partner]]`.
+const STRANGER: &str = "9900001000003";
 
-/// Without a decryption key, `bdew_push_policy` must NOT set
-/// `require_encrypted_inbound`. This is correct for development mode (before
-/// WIRK certificates arrive) — a hard requirement would block onboarding.
-#[test]
-fn policy_without_key_no_encryption_required() {
-    let policy = bdew_push_policy(None);
-    assert!(
-        !policy.require_encrypted_inbound,
-        "Without a decryption key bdew_push_policy must not require inbound \
-         encryption (would block onboarding before WIRK certs arrive)"
-    );
+const OWN_URL: &str = "https://makod.test/as4/inbox/9900001000001";
+const PARTNER_URL: &str = "https://partner.test/as4/inbox/9900001000002";
+
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+// ── Fixture ───────────────────────────────────────────────────────────────────
+
+/// One SM-PKI, makod's party, the partner and a stranger.
+struct Pki {
+    ca: TestCa,
+    crl_signer: asx::Certificate,
+    own: TestParty,
+    partner: TestParty,
+    stranger: TestParty,
 }
 
-/// With a decryption key configured, `bdew_push_policy` must enforce
-/// `require_encrypted_inbound = true` — BDEW AS4-Profil v1.2 §2.2.6.2.2.
-#[test]
-fn policy_with_key_requires_encryption() {
-    // Provide any bytes — the key content is not validated by policy construction.
-    let dummy_key = vec![0u8; 32];
-    let policy = bdew_push_policy(Some(dummy_key));
-    assert!(
-        policy.require_encrypted_inbound,
-        "With a decryption key, bdew_push_policy must enforce \
-         require_encrypted_inbound — BDEW AS4-Profil v1.2 §2.2.6.2.2"
-    );
-}
-
-// ── fragment scope policy ─────────────────────────────────────────────────
-
-/// BDEW AS4 uses `OneWayPush` with single `UserMessage` — no fragmentation.
-/// The strict default `RequireAuthenticatedScope` is kept: asx-rs 0.11 clarified
-/// that the fragment-scope policy is consulted for *fragmented* messages only, so
-/// a `None` `authenticated_sender_scope` is already safe for non-fragmenting BDEW
-/// traffic — overriding to `UseSoapSenderId` would only weaken the policy if a
-/// fragment ever arrived.
-#[test]
-fn fragment_scope_is_strict_default() {
-    use asx_rs::as4::FragmentScopePolicy;
-    let policy = bdew_push_policy(None);
-    assert_eq!(
-        policy.fragment_scope_policy,
-        FragmentScopePolicy::RequireAuthenticatedScope,
-        "BDEW does not fragment; the strict default is kept — a None scope is safe \
-         for single-message traffic and stays strict if a fragment ever arrives"
-    );
-}
-
-// ── P-Mode sign+encrypt defaults ─────────────────────────────────────────
-
-/// `bdew_pmode()` must default to `sign=true, encrypt=true` per BDEW
-/// AS4-Profil v1.2 §2.2.6.2.2. This is the canonical production P-Mode.
-#[test]
-fn sign_encrypt_pmode_defaults() {
-    let pm = bdew_pmode("pm-1", "9900000000001", BdewAction::Utilmd);
-    assert!(pm.security.sign, "bdew_pmode must have sign=true");
-    assert!(
-        pm.security.encrypt,
-        "bdew_pmode must have encrypt=true — BDEW AS4-Profil v1.2 §2.2.6.2.2"
-    );
-}
-
-/// `bdew_pmode_sign_only()` disables encryption — explicitly documented as
-/// non-BDEW-compliant for dev/test only.
-#[test]
-fn sign_only_pmode_disables_encryption() {
-    let pm = bdew_pmode_sign_only("pm-dev", "9900000000001", BdewAction::Aperak);
-    assert!(pm.security.sign, "sign_only must still have sign=true");
-    assert!(
-        !pm.security.encrypt,
-        "sign_only must have encrypt=false — non-compliant dev/test variant"
-    );
-}
-
-// ── 72-hour replay deduplication ─────────────────────────────────────────
-
-/// BDEW AS4-Profil v1.2 §4.2 — duplicate `message_id` within the 72-hour
-/// dedup window must be detected. Exercises `SlateDbDedupBridge::first_seen`
-/// with an in-memory backing store.
-#[tokio::test]
-async fn replay_dedup_blocks_duplicate_message_id() {
-    use asx_rs::storage::DedupStorage as _;
-    use mako_engine::store_slatedb::SlateDbStore;
-    use makod::as4_ingest::SlateDbDedupBridge;
-
-    let store = Arc::new(
-        SlateDbStore::open_in_memory()
-            .await
-            .expect("in-memory SlateDB for dedup test"),
-    );
-    // SlateDbDedupBridge takes Arc<SlateDbInboxStore> and a durable flag.
-    let inbox = Arc::new(store.as_inbox_store());
-    // durable=false because in-memory store has volatile dedup state.
-    let dedup = SlateDbDedupBridge::new(inbox, false);
-
-    use asx_rs::storage::DedupVerdict;
-
-    let message_id = format!("dedup-test-{}", uuid::Uuid::new_v4());
-
-    // First delivery takes the key.
-    assert_eq!(
-        dedup.claim(&message_id).await.expect("claim 1"),
-        DedupVerdict::Claimed,
-        "the first delivery of a message_id must be claimable"
-    );
-
-    // Still unsettled: a concurrent delivery is in flight, *not* a duplicate.
-    // Answering "duplicate" here would acknowledge a message nothing has
-    // handled yet, which is the failure the three phases exist to prevent.
-    assert_eq!(
-        dedup.claim(&message_id).await.expect("claim 2"),
-        DedupVerdict::InFlight,
-        "an unsettled claim is in flight, not a replay"
-    );
-
-    // Once settled as handled, every later delivery is a replay — BDEW
-    // AS4-Profil v1.2 §4.2 (72-hour dedup window).
-    dedup.accept(&message_id).await.expect("accept");
-    assert_eq!(
-        dedup.claim(&message_id).await.expect("claim 3"),
-        DedupVerdict::Duplicate,
-        "a settled message_id must be detected as a replay"
-    );
-
-    // A message that was *not* handled releases its key, so the counterparty's
-    // retransmission is a recovery path rather than a silent drop.
-    let unhandled = format!("dedup-test-{}", uuid::Uuid::new_v4());
-    assert_eq!(
-        dedup.claim(&unhandled).await.expect("claim 4"),
-        DedupVerdict::Claimed
-    );
-    dedup.abandon(&unhandled).await.expect("abandon");
-    assert_eq!(
-        dedup.claim(&unhandled).await.expect("claim 5"),
-        DedupVerdict::Claimed,
-        "an abandoned key must be claimable again"
-    );
-}
-
-// ── sign+encrypt policy smoke ────────────────────────────────────────────
-
-/// BDEW AS4-Profil v1.2 §2.2.6.2.1 + §2.2.6.2.2 — the `As4SendPolicyBuilder`
-/// correctly accepts a BDEW-compliant sign+encrypt policy.
-///
-/// Verifies that:
-/// - Building a policy with `sign=true, encrypt=true` succeeds without error
-/// - The resulting policy has the correct key info profile (X509PKIPathv1) per §2.2.6.2.1
-/// - Encryption mode is Aes128Gcm per §2.2.6.2.2 + BSI TR-03116-3 §9.2
-///
-/// Actual SOAP envelope generation is covered by asx-rs's own test suite.
-/// This test validates that the mako-as4 constant values satisfy the BDEW spec.
-#[test]
-fn sign_encrypt_policy_is_bdew_compliant() {
-    use asx_rs::as4::As4SendPolicy;
-    use asx_rs::crypto::wssec::XmlEncPayloadAlgorithm;
-    use mako_as4::constants;
-
-    let policy = As4SendPolicy {
-        sign: true,
-        encrypt: true,
-        action: format!("{}:UTILMD", constants::SERVICE),
-        service: constants::SERVICE.to_owned(),
-        service_type: constants::SERVICE_TYPE.to_owned(),
-        outbound_key_info_profile:
-            asx_rs::crypto::wssec::WsSecOutboundKeyInfoProfile::X509PKIPathv1,
-        outbound_xmlenc_payload_algorithm: XmlEncPayloadAlgorithm::Aes128Gcm,
-        ..As4SendPolicy::default()
-    };
-
-    assert!(
-        policy.sign,
-        "BDEW AS4-Profil v1.2 §2.2.6.2.1 requires signing"
-    );
-    assert!(
-        policy.encrypt,
-        "BDEW AS4-Profil v1.2 §2.2.6.2.2 requires encryption"
-    );
-    assert_eq!(
-        policy.outbound_key_info_profile,
-        asx_rs::crypto::wssec::WsSecOutboundKeyInfoProfile::X509PKIPathv1,
-        "§2.2.6.2.1 requires X509PKIPathv1 BST token type"
-    );
-    assert_eq!(
-        policy.outbound_xmlenc_payload_algorithm,
-        XmlEncPayloadAlgorithm::Aes128Gcm,
-        "§2.2.6.2.2 + BSI TR-03116-3 §9.2 requires AES-128-GCM"
-    );
-    assert_eq!(
-        policy.action, "urn:bdew:as4:service:UTILMD",
-        "BDEW AS4-Profil §3.1: action must be urn:bdew:as4:service:<TYPE>"
-    );
-}
-
-// ── sign+encrypt end-to-end round-trip via MockAs4Endpoint ─────────────
-
-/// BDEW AS4-Profil v1.2 §2.2.6 — full sign+encrypt end-to-end round-trip using
-/// ephemeral BrainpoolP256r1 test certificates (no WIRK material required).
-///
-/// ## What this test covers
-///
-/// **Part A — Cryptographic output verification (sign+encrypt):**
-/// - `asx_rs::as4::send_async()` correctly signs and encrypts a UTILMD payload
-///   using BrainpoolP256r1 keypairs (BDEW AS4-Profil v1.2 §2.2.6.2.1/§2.2.6.2.2).
-/// - The SOAP envelope embeds a `BinarySecurityToken` (X509PKIPathv1, §2.2.6.2.1).
-/// - The SOAP envelope contains XML-DSig `Signature` (§2.2.6.2.1).
-/// - The envelope carries `EncryptedData` (AES-128-GCM, §2.2.6.2.2).
-///
-/// **Part B — Full sign+encrypt→transport→decrypt round-trip:**
-/// - `MockAs4Endpoint::builder().with_decryption_key_pem(key_pem)` configures
-///   the mock to decrypt inbound ECDH-ES messages using the receiver's EC key.
-/// - The encrypted AS4 message is delivered via `As4HttpTransport::new_for_localhost_testing()`.
-/// - The mock decrypts and delivers the plaintext payload via `next_received()`.
-///
-/// ## asx-rs APIs used
-///
-/// - `SessionContextBuilder::with_signing_material(cert, key)` — single-call signing
-///   setup; `key_id` auto-derived from `partner_id`
-/// - `EventBus::new_for_testing()` — zero-config `BestEffort` bus
-/// - `MockAs4Endpoint::builder().with_decryption_key_pem(key_pem)` — full encrypt round-trip
-/// - `As4HttpTransport::new_for_localhost_testing()` — bypass SSRF guard for tests
-/// - Partial `As4SendCredentials` — `recipient_cert_pem` only; session fallback for signing
-#[tokio::test]
-async fn sign_encrypt_round_trip_via_mock_endpoint() {
-    use asx_rs::as4::{As4SendRequest, send_async};
-    use asx_rs::core::SessionContextBuilder;
-    use asx_rs::observability::EventBus;
-    use asx_rs::transport::As4HttpTransport;
-    use mako_as4::pmode::{BdewAction, bdew_pmode_with_endpoint};
-    use mako_as4::profile::BdewAs4Profile;
-    use mako_as4::testing::{BdewTestPki, MockAs4Endpoint};
-
-    let sender_pki = BdewTestPki::generate("Test NB 9900000000001");
-    let receiver_pki = BdewTestPki::generate("Test LF 9900000000002");
-
-    const SENDER_GLN: &str = "9900000000001";
-    const RECEIVER_GLN: &str = "9900000000002";
-
-    // ── Start mock receiver with decryption key ─────────
-    let mock_endpoint = MockAs4Endpoint::builder()
-        .with_decryption_key_pem(receiver_pki.encryption.key_pem.clone())
-        .bind("127.0.0.1:0")
-        .await
-        .expect("MockAs4Endpoint must bind");
-    let endpoint_url = mock_endpoint.local_url();
-
-    // ── Build sender SessionContext ──
-    // `with_signing_material` auto-derives `key_id = "cert:{partner_id}"` and
-    // eliminates the need to construct a CertHandle manually or depend on `zeroize`.
-    let session = Arc::new(
-        SessionContextBuilder::new("test-session-nb", SENDER_GLN)
-            .with_signing_material(
-                sender_pki.signing.cert_pem_str(),
-                sender_pki.signing.key_pem_str(),
-            )
-            .with_trust_anchor_pem(sender_pki.signing.cert_pem_str())
-            .build()
-            .expect("SessionContext must build with valid BrainpoolP256r1 credentials"),
-    );
-
-    // ── Zero-config test event bus ──────────────────────
-    let event_bus = Arc::new(EventBus::new_for_testing());
-
-    let payload = b"UNB+UNOC:3+9900000000001:500+9900000000002:500+260101:0000+1'\
-                    UNH+1+UTILMD:D:11A:UN:5.2S'\
-                    UNZ+1+1'";
-
-    // ── Part A: verify sign+encrypt SOAP output has all required elements ─────
-    let mut profile = BdewAs4Profile::new();
-    profile
-        .register_partner_encryption_cert(RECEIVER_GLN, receiver_pki.encryption.cert_pem.clone());
-    profile.register_pmode(bdew_pmode_with_endpoint(
-        "pm-utilmd-lf",
-        RECEIVER_GLN,
-        BdewAction::Utilmd,
-        &endpoint_url,
-    ));
-
-    let pm = profile
-        .resolve_pmode_by_action(RECEIVER_GLN, &BdewAction::Utilmd)
-        .expect("P-Mode must be registered");
-    assert!(pm.security.sign, "bdew_pmode must sign");
-    assert!(pm.security.encrypt, "bdew_pmode must encrypt");
-
-    let mut policy = pm.to_send_policy().expect("sign+encrypt policy must build");
-    policy.conversation_id = Some("CONV-ENCRYPT".to_owned());
-
-    // Partial As4SendCredentials: recipient_cert_pem only; session fallback for
-    // signing (partial override).
-    let output = send_async(
-        &session,
-        &event_bus,
-        As4SendRequest {
-            message_id: format!("enc-msg-{}", uuid::Uuid::new_v4()),
-            payload: payload.to_vec(),
-            policy,
-            credentials: Some(asx_rs::as4::As4SendCredentials {
-                recipient_cert_pem: Some(std::sync::Arc::from(
-                    receiver_pki.encryption.cert_pem.as_slice(),
-                )),
-                // signing material falls back to session cert_handle
-                signing_cert_pem: None,
-                signing_key_pem: None,
-            }),
-            payload_filename: None,
-            payload_mime_type: Some(mako_as4::constants::PAYLOAD_MIME_TYPE.to_owned()),
-            payload_content_id: None,
-            additional_payloads: Vec::new(),
-        },
-    )
-    .await
-    .expect("sign+encrypt send_async must succeed with BrainpoolP256r1 material");
-
-    // The body is a MIME multipart: a UTF-8 SOAP root part plus the gzip-
-    // compressed, encrypted payload attachment (§2.2.3.2/§2.2.3.3), so only the
-    // SOAP part is text. Scan lossily rather than asserting UTF-8 over binary.
-    let soap_str = String::from_utf8_lossy(&output.soap_envelope.body);
-
-    assert!(
-        soap_str.contains("BinarySecurityToken"),
-        "SOAP must contain BinarySecurityToken (X509PKIPathv1 per §2.2.6.2.1)"
-    );
-    assert!(
-        soap_str.contains("ds:Signature") || soap_str.contains("Signature"),
-        "SOAP must contain XML-DSig Signature (§2.2.6.2.1)"
-    );
-    assert!(
-        soap_str.contains("EncryptedData") || soap_str.contains("multipart"),
-        "SOAP must contain EncryptedData (ECDH-ES + AES-128-GCM per §2.2.6.2.2)"
-    );
-
-    // ── Part B: full sign+encrypt→transport→decrypt round-trip ───────────────
-    // As4HttpTransport::new_for_localhost_testing() — use the real
-    // transport layer (Content-Type, receipt inspection) instead of raw reqwest.
-    // `send_to_localhost()` bypasses the SSRF URL guard; regular `send()` still validates.
-    let transport =
-        As4HttpTransport::new_for_localhost_testing().expect("localhost test transport must build");
-    transport
-        .send_to_localhost(&endpoint_url, &output)
-        .await
-        .expect("As4HttpTransport must deliver to MockAs4Endpoint");
-
-    let received = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        mock_endpoint.next_received(),
-    )
-    .await
-    .expect("MockAs4Endpoint must receive within 5 seconds")
-    .expect("MockAs4Endpoint channel must be open");
-
-    assert_eq!(
-        received.action,
-        BdewAction::Utilmd.as_uri(),
-        "Received action must match UTILMD action URI"
-    );
-    // Payload is decrypted: should contain the original UTILMD bytes.
-    assert!(
-        received.payload.windows(3).any(|w| w == b"UNB"),
-        "Decrypted payload must contain the original UTILMD bytes (UNB…)"
-    );
-}
-
-/// BDEW AS4-Profil v1.2 §2.2.6.2.1 — sign-only (development mode) round-trip.
-///
-/// Verifies that `bdew_pmode_sign_only()` produces a valid SOAP envelope that
-/// the mock endpoint accepts, and that the envelope still contains the
-/// WS-Security signature (but no XML encryption elements).
-///
-/// This path is used by operators during onboarding before WIRK certificates
-/// arrive.  It is **not** BDEW-compliant for production — the test explicitly
-/// documents this restriction.
-///
-/// Uses asx-rs convenience APIs:
-/// - `SessionContextBuilder::with_signing_material()`
-/// - `EventBus::new_for_testing()`
-/// - `As4HttpTransport::new_for_localhost_testing()`
-#[tokio::test]
-async fn sign_only_round_trip_envelope_contains_wssec_signature() {
-    use asx_rs::as4::{As4SendRequest, send_async};
-    use asx_rs::core::SessionContextBuilder;
-    use asx_rs::observability::EventBus;
-    use asx_rs::transport::As4HttpTransport;
-    use mako_as4::pmode::{BdewAction, bdew_pmode_sign_only};
-    use mako_as4::testing::{BdewTestPki, MockAs4Endpoint};
-
-    let sender_pki = BdewTestPki::generate("Test NB 9900000000003");
-    const SENDER_GLN: &str = "9900000000003";
-    const RECEIVER_GLN: &str = "9900000000004";
-
-    let mock_endpoint = MockAs4Endpoint::bind("127.0.0.1:0")
-        .await
-        .expect("MockAs4Endpoint must bind");
-    let endpoint_url = mock_endpoint.local_url();
-
-    // with_signing_material — no manual CertHandle, no zeroize dep
-    let session = Arc::new(
-        SessionContextBuilder::new("test-session-sign-only", SENDER_GLN)
-            .with_signing_material(
-                sender_pki.signing.cert_pem_str(),
-                sender_pki.signing.key_pem_str(),
-            )
-            .with_trust_anchor_pem(sender_pki.signing.cert_pem_str())
-            .build()
-            .expect("SessionContext must build"),
-    );
-    // zero-config test bus
-    let event_bus = Arc::new(EventBus::new_for_testing());
-
-    let pm = bdew_pmode_sign_only("pm-sign-only", RECEIVER_GLN, BdewAction::Aperak);
-    assert!(!pm.security.encrypt, "sign-only P-Mode must not encrypt");
-
-    let output = send_async(
-        &session,
-        &event_bus,
-        As4SendRequest {
-            message_id: format!("sign-only-{}", uuid::Uuid::new_v4()),
-            payload: b"UNB+UNOC:3+0001+0002+260101:0000+1'".to_vec(),
-            policy: pm.to_send_policy().expect("sign-only policy must build"),
-            credentials: None,
-            payload_filename: None,
-            payload_mime_type: Some(mako_as4::constants::PAYLOAD_MIME_TYPE.to_owned()),
-            payload_content_id: None,
-            additional_payloads: Vec::new(),
-        },
-    )
-    .await
-    .expect("sign-only send_async must succeed");
-
-    // Compressed payload attachment ⇒ the multipart body is not wholly UTF-8.
-    let soap_str = String::from_utf8_lossy(&output.soap_envelope.body);
-
-    assert!(
-        soap_str.contains("BinarySecurityToken"),
-        "sign-only envelope must embed X509PKIPathv1 BinarySecurityToken"
-    );
-    assert!(
-        soap_str.contains("ds:Signature") || soap_str.contains("Signature"),
-        "sign-only envelope must contain XML-DSig Signature"
-    );
-    assert!(
-        !soap_str.contains("EncryptedKey"),
-        "sign-only envelope must NOT contain EncryptedKey"
-    );
-
-    // As4HttpTransport::new_for_localhost_testing() — use the real
-    // transport layer (Content-Type, receipt inspection) instead of raw reqwest.
-    let transport =
-        As4HttpTransport::new_for_localhost_testing().expect("localhost test transport must build");
-    transport
-        .send_to_localhost(&endpoint_url, &output)
-        .await
-        .expect("As4HttpTransport must deliver to MockAs4Endpoint");
-
-    let received = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        mock_endpoint.next_received(),
-    )
-    .await
-    .expect("MockAs4Endpoint must receive within 5 seconds")
-    .expect("channel open");
-
-    assert_eq!(
-        received.action,
-        BdewAction::Aperak.as_uri(),
-        "sign-only round-trip must preserve APERAK action URI"
-    );
-}
-
-// ── signature integrity — tampered payload is rejected ───────────────────
-
-/// BDEW AS4-Profil v1.2 §2.2.6.2.1 — the real `As4WsSecVerifier` (not the
-/// `InsecureBypassAs4Verifier` used in the mock endpoint) must reject an AS4
-/// message whose WS-Security signature does not match the payload.
-///
-/// Test flow:
-/// 1. Build a valid signed SOAP envelope using `send_async`.
-/// 2. Corrupt one byte in the payload region of the envelope.
-/// 3. Feed the tampered bytes to `receive_push_with_dedup_async` (which uses
-///    the real `As4WsSecVerifier` with strict PKI verification).
-/// 4. Assert the receive returns an error (not `Ok(As4ReceiveOutcome::FirstSeen)`).
-///
-/// This test verifies that `makod`'s inbound AS4 pipeline cannot be bypassed
-/// by forging a valid outer SOAP envelope and injecting a different payload.
-///
-/// Regulatory basis: BDEW AS4-Profil v1.2 §2.2.6.2.1 (mandatory signing).
-#[tokio::test]
-async fn tampered_signature_is_rejected() {
-    use asx_rs::as4::{
-        As4ReceivePush, As4ReceivePushRequest, As4SendRequest, As4WsSecVerifier,
-        receive_push_with_custom_verifier, send_async,
-    };
-    use asx_rs::core::SessionContextBuilder;
-    use asx_rs::observability::EventBus;
-    use asx_rs::storage::DurableInMemoryDedupBackend;
-    use mako_as4::testing::BdewTestPki;
-    use mako_as4::{bdew_pmode_sign_only, bdew_push_policy, pmode::BdewAction};
-    use std::sync::Arc;
-
-    let sender_pki = BdewTestPki::generate("Tamper NB 9900000000010");
-    const SENDER_GLN: &str = "9900000000010";
-    const RECEIVER_GLN: &str = "9900000000011";
-
-    // Build sender session with real signing material.
-    let sender_session = Arc::new(
-        SessionContextBuilder::new("tamper-test-sender", SENDER_GLN)
-            .with_signing_material(
-                sender_pki.signing.cert_pem_str(),
-                sender_pki.signing.key_pem_str(),
-            )
-            .with_trust_anchor_pem(sender_pki.signing.cert_pem_str())
-            .build()
-            .expect("sender session must build"),
-    );
-
-    // Build receiver session that trusts the sender's signing certificate.
-    let receiver_session = Arc::new(
-        SessionContextBuilder::new("tamper-test-receiver", RECEIVER_GLN)
-            // The receiver trusts the sender's signing cert as its own CA.
-            .with_trust_anchor_pem(sender_pki.signing.cert_pem_str())
-            .build()
-            .expect("receiver session must build"),
-    );
-
-    let event_bus = Arc::new(EventBus::new_for_testing());
-
-    // Step 1: produce a valid, correctly-signed SOAP envelope.
-    let pm = bdew_pmode_sign_only("pm-tamper", RECEIVER_GLN, BdewAction::Aperak);
-    let output = send_async(
-        &sender_session,
-        &event_bus,
-        As4SendRequest {
-            message_id: format!("tamper-base-{}", uuid::Uuid::new_v4()),
-            payload: b"UNB+UNOC:3+original+payload+260101:0000+1'".to_vec(),
-            policy: pm.to_send_policy().expect("policy must build"),
-            credentials: None,
-            payload_filename: None,
-            payload_mime_type: Some(mako_as4::constants::PAYLOAD_MIME_TYPE.to_owned()),
-            payload_content_id: None,
-            additional_payloads: Vec::new(),
-        },
-    )
-    .await
-    .expect("valid signed SOAP must be built");
-
-    let content_type = output.http_content_type.clone();
-    let mut tampered_body = output.soap_envelope.body.to_vec();
-
-    // Step 2: corrupt the payload by flipping a byte in the middle of the body.
-    // The SOAP body contains the EDIFACT payload string. Find "UNB" and mutate it.
-    if let Some(pos) = tampered_body.windows(3).position(|w| w == b"UNB") {
-        tampered_body[pos] = b'X'; // "UNB" → "XNB" — valid UTF-8 but wrong content
+impl Pki {
+    fn new() -> Self {
+        let ca = TestCa::sm_pki();
+        let crl_signer = ca
+            .crl_signer("CCRL-S(Root)", KeyAlg::EcBrainpoolP256r1)
+            .certificate();
+        Self {
+            own: ca.bdew_party(OWN),
+            partner: ca.bdew_party(PARTNER),
+            stranger: ca.bdew_party(STRANGER),
+            crl_signer,
+            ca,
+        }
     }
 
-    let dedup = Arc::new(DurableInMemoryDedupBackend::new(
-        std::time::Duration::from_secs(3600),
-    ));
+    /// makod's clients, built the way the preflight builds them.
+    fn makod(&self, loopback: &Loopback, policy: UnbekannteAbsender) -> As4Clients {
+        let mut partners = PartnerDirectory::default();
+        partners
+            .insert(PartnerEntry {
+                mp_id: PARTNER.to_owned(),
+                agency: "293".to_owned(),
+                endpoint: Some(PARTNER_URL.to_owned()),
+                encryption_cert: Some(self.partner.encryption.certificate()),
+                signing_certs: vec![self.partner.signing.certificate()],
+                quirks: Vec::new(),
+            })
+            .unwrap();
+        let setup = As4Setup {
+            domain: MessageIdDomain::parse("as4.makod.test").unwrap(),
+            trust_anchor: self.ca.anchor(),
+            crl_signer: self.crl_signer.clone(),
+            identities: vec![LocalIdentity {
+                mp_id: OWN.to_owned(),
+                agency: "293".to_owned(),
+                signer: self.own.signing.key_pair(),
+                decrypter: self.own.encryption.key_pair(),
+                tls: self.own.tls.key_pair(),
+            }],
+            partners,
+            unbekannte_absender: policy,
+        };
+        As4Clients::build_with_http(setup, loopback.clone()).expect("makod's clients build")
+    }
 
-    // Step 3: feed the tampered bytes to the REAL As4WsSecVerifier.
-    // Set fail_closed_audit_events = false so the test is compatible with
-    // EventBus::new_for_testing() (no durable audit sink configured).
-    let mut receive_policy = bdew_push_policy(None);
-    receive_policy.fail_closed_audit_events = false;
-
-    let result = receive_push_with_custom_verifier(
-        &receiver_session,
-        &event_bus,
-        As4ReceivePush {
-            request: As4ReceivePushRequest {
-                http_content_type: content_type,
-                payload: Arc::from(tampered_body.as_slice()),
-                receipt_payload: None,
-                policy: receive_policy,
-                authenticated_sender_scope: Some(Arc::from("test-sender")),
-            },
-            dedup,
-            ordering: None,
-            signer_pins: None,
-        },
-        As4WsSecVerifier,
-    )
-    .await;
-
-    // Step 4: assert rejection.
-    assert!(
-        result.is_err(),
-        "As4WsSecVerifier must reject a message with a tampered payload — \
-         BDEW AS4-Profil v1.2 §2.2.6.2.1 mandatory signing requirement"
-    );
-    let err = result.unwrap_err();
-    // The error must be a cryptographic verification failure, not a parse error
-    // or policy check — it must specifically be the signature mismatch.
-    let err_str = format!("{err:?}");
-    assert!(
-        err_str.contains("signature")
-            || err_str.contains("Signature")
-            || err_str.contains("verify")
-            || err_str.contains("Verify")
-            || err_str.contains("CryptoFailure")
-            || err_str.contains("InvalidSignature")
-            || err_str.contains("WsSecVerification"),
-        "Error must indicate signature verification failure, not a different error; got: {err}"
-    );
+    /// A counterparty's own `asx-rs` client, with makod as its partner.
+    fn counterparty(&self, party: &TestParty, loopback: &Loopback) -> asx::as4::As4 {
+        asx::as4::As4::builder(asx::Profile::bdew())
+            .local(party.local())
+            .trust_anchor(self.ca.anchor())
+            .crl_signer(self.crl_signer.clone())
+            .partner(self.own.partner(OWN_URL))
+            .http_client(loopback.clone())
+            .build()
+            .expect("the counterparty builds")
+    }
 }
 
-// ── require_encrypted_inbound enforcement ─────────────────────────────────
+/// The settlement log shared by the recording dedup store and dead-letter
+/// sink, so a test reads the order of the two.
+#[derive(Clone, Default)]
+struct Log(Arc<Mutex<Vec<&'static str>>>);
 
-/// BDEW AS4-Profil v1.2 §2.2.6.2.2 — `bdew_push_policy(Some(key))` must
-/// reject inbound AS4 messages that are not encrypted.
-///
-/// When the operator has configured an AS4 decryption key (production mode),
-/// `require_encrypted_inbound` is set to `true`.  A plain-signed (unencrypted)
-/// message must be rejected with a policy violation error.
-///
-/// This verifies the inbound enforcement leg of BDEW AS4-Profil v1.2 §2.2.6.2.2
-/// is wired correctly in `makod`'s `as4_ingest.rs`.
-#[tokio::test]
-async fn inbound_encryption_enforced_when_decryption_key_set() {
-    use asx_rs::as4::{
-        As4ReceivePushRequest, As4SendRequest, InsecureBypassAs4Verifier, send_async,
+impl Log {
+    fn push(&self, e: &'static str) {
+        self.0.lock().unwrap().push(e);
+    }
+    fn take(&self) -> Vec<&'static str> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+    }
+}
+
+/// `SlateDbDedup` that logs every phase it is asked for.
+#[derive(Clone, Debug)]
+struct RecordingDedup {
+    inner: SlateDbDedup,
+    log: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl DedupStore for RecordingDedup {
+    fn claim<'a>(&'a self, key: &'a str) -> BoxFuture<'a, Result<Claim, BoxError>> {
+        self.log.lock().unwrap().push("claim");
+        self.inner.claim(key)
+    }
+    fn accept<'a>(
+        &'a self,
+        key: &'a str,
+        t: &'a ClaimToken,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        self.log.lock().unwrap().push("accept");
+        self.inner.accept(key, t)
+    }
+    fn abandon<'a>(
+        &'a self,
+        key: &'a str,
+        t: &'a ClaimToken,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        self.log.lock().unwrap().push("abandon");
+        self.inner.abandon(key, t)
+    }
+}
+
+/// A dead-letter sink that logs, and fails while `fail` is set.
+struct RecordingSink {
+    log: Log,
+    fail: Arc<std::sync::atomic::AtomicBool>,
+    reasons: Mutex<Vec<String>>,
+}
+
+impl DeadLetterSink for RecordingSink {
+    fn reject<'a>(&'a self, reason: &'a DeadLetterReason) -> RejectFuture<'a> {
+        if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            self.log.push("dead_letter_failed");
+            return Box::pin(std::future::ready(Err(EngineError::dead_letter(
+                "the dead-letter store is closed",
+            ))));
+        }
+        self.log.push("dead_letter");
+        self.reasons.lock().unwrap().push(reason.to_string());
+        Box::pin(std::future::ready(Ok(())))
+    }
+}
+
+fn registry() -> Arc<makod::party_registry::MpIdRegistry> {
+    use makod::config::PartyConfig;
+    Arc::new(
+        makod::party_registry::MpIdRegistry::from_config(&[PartyConfig {
+            mp_id: OWN.to_owned(),
+            roles: vec!["NB".to_owned()],
+            primary: true,
+            agency: None,
+            as4: None,
+        }])
+        .unwrap(),
+    )
+}
+
+/// makod's inbox for `OWN` behind `loopback`, dispatching into `store` (or
+/// routing nothing when `dispatch` is false), with the recording seams.
+struct Inbox {
+    log: Log,
+    fail_dead_letters: Arc<std::sync::atomic::AtomicBool>,
+    sink: Arc<RecordingSink>,
+    store: SlateDbStore,
+}
+
+async fn mount_inbox(
+    pki: &Pki,
+    loopback: &Loopback,
+    policy: UnbekannteAbsender,
+    dispatch: bool,
+) -> Inbox {
+    let store = SlateDbStore::open_in_memory().await.unwrap();
+    let registry = registry();
+    let tenant = mako_engine::ids::TenantId::from_party_id(OWN);
+    let log = Log::default();
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let sink = Arc::new(RecordingSink {
+        log: log.clone(),
+        fail: Arc::clone(&fail),
+        reasons: Mutex::new(Vec::new()),
+    });
+    let mut pid_router = mako_engine::pid_router::PidRouter::new();
+    let dispatcher = if dispatch {
+        // 55001 — Anmeldung Lieferbeginn (LF → NB), spawn-capable on the NB side.
+        pid_router.register(55001, "gpke-supplier-change");
+        Some(Arc::new(
+            makod::ingest_dispatcher::EdifactIngestDispatcher::new(
+                Arc::new(store.clone()),
+                store.as_snapshot_store(),
+                100,
+                tenant,
+            ),
+        ))
+    } else {
+        None
     };
-    use asx_rs::core::SessionContextBuilder;
-    use asx_rs::observability::EventBus;
-    use asx_rs::storage::DurableInMemoryDedupBackend;
-    use mako_as4::testing::BdewTestPki;
-    use mako_as4::{bdew_pmode_sign_only, bdew_push_policy, pmode::BdewAction};
-    use std::sync::Arc;
-
-    let sender_pki = BdewTestPki::generate("EncReq NB 9900000000020");
-    const SENDER_GLN: &str = "9900000000020";
-    const RECEIVER_GLN: &str = "9900000000021";
-
-    let sender_session = Arc::new(
-        SessionContextBuilder::new("enc-req-sender", SENDER_GLN)
-            .with_signing_material(
-                sender_pki.signing.cert_pem_str(),
-                sender_pki.signing.key_pem_str(),
-            )
-            .with_trust_anchor_pem(sender_pki.signing.cert_pem_str())
-            .build()
-            .expect("sender session must build"),
+    let state = Arc::new(makod::edifact_api::EdifactApiState {
+        platform: Arc::new(edi_energy::Platform::with_all_profiles()),
+        pid_router,
+        mp_id_registry: Arc::clone(&registry),
+        cedar: Arc::new(makod::cedar_authz::CedarAuthorizer::unauthenticated().unwrap()),
+        max_body_bytes: 64 << 20,
+        partner_store: None,
+        tenant_id: tenant,
+        dl_sink: Arc::clone(&sink) as Arc<dyn DeadLetterSink>,
+        dispatcher,
+        contrl_ack: None,
+    });
+    let clients = pki.makod(loopback, policy);
+    let handler = Arc::new(
+        BdewAs4IngestHandler::new(state, OWN, clients.clone())
+            .with_evidence(As4Evidence::new(store.clone())),
     );
-    let event_bus = Arc::new(EventBus::new_for_testing());
-
-    // Produce a valid SIGN-ONLY (not encrypted) SOAP envelope.
-    let pm = bdew_pmode_sign_only("pm-enc-req", RECEIVER_GLN, BdewAction::Utilmd);
-    let output = send_async(
-        &sender_session,
-        &event_bus,
-        As4SendRequest {
-            message_id: format!("enc-req-{}", uuid::Uuid::new_v4()),
-            payload: b"UNB+UNOC:3+plain+message+260101:0000+1'".to_vec(),
-            policy: pm.to_send_policy().expect("policy must build"),
-            credentials: None,
-            payload_filename: None,
-            payload_mime_type: Some(mako_as4::constants::PAYLOAD_MIME_TYPE.to_owned()),
-            payload_content_id: None,
-            additional_payloads: Vec::new(),
-        },
-    )
-    .await
-    .expect("sign-only SOAP must be built");
-
-    // Configure the inbound policy with a decryption key (production mode).
-    // This sets `require_encrypted_inbound = true`.
-    // Set fail_closed_audit_events = false to be compatible with EventBus::new_for_testing().
-    let dummy_decryption_key = vec![0u8; 32]; // content not validated at policy level
-    let mut strict_policy = bdew_push_policy(Some(dummy_decryption_key));
-    strict_policy.fail_closed_audit_events = false;
-    assert!(
-        strict_policy.require_encrypted_inbound,
-        "bdew_push_policy with a key must set require_encrypted_inbound = true"
+    let dedup = RecordingDedup {
+        inner: SlateDbDedup::new(store.as_inbox_store()),
+        log: Arc::clone(&log.0),
+    };
+    loopback.mount(
+        OWN_URL,
+        as4_ingest::inbound(clients.client(OWN).unwrap(), dedup, handler),
     );
+    Inbox {
+        log,
+        fail_dead_letters: fail,
+        sink,
+        store,
+    }
+}
 
-    let dedup = Arc::new(DurableInMemoryDedupBackend::new(
-        std::time::Duration::from_secs(3600),
-    ));
+/// A UTILMD 55001 Übertragungsdatei from `from` to `to`, rendered by makod's
+/// own renderer with `from` as the sending party.
+fn utilmd_55001(from: &str, to: &str) -> Vec<u8> {
+    use makod::config::PartyConfig;
+    let sender_registry = makod::party_registry::MpIdRegistry::from_config(&[PartyConfig {
+        mp_id: from.to_owned(),
+        roles: vec!["LF".to_owned()],
+        primary: true,
+        agency: None,
+        as4: None,
+    }])
+    .unwrap();
+    let msg = crate::support::outbox_message(
+        "UTILMD",
+        to,
+        serde_json::json!({
+            "pid": 55001,
+            "sender": from,
+            "receiver": to,
+            "malo": "51238696781",
+            "process_date": "2026-03-01",
+            "bilanzkreis": "11XBK-EEG-----1",
+            "transaktionsgrund": "E03",
+            "kundengruppe": "Z15",
+            "enfg_grundlage": "ZG0",
+            "kunde_name": "Mustermann, Max",
+            "kunde_anschrift": { "strasse": "Musterstr. 1", "plz": "10115", "ort": "Berlin", "land": "DE" },
+        }),
+    );
+    makod::edifact_renderer::render_to_wire_bytes(&msg, &sender_registry)
+        .expect("renders")
+        .bytes
+}
 
-    // Feed the SIGN-ONLY (unencrypted) message to a receiver with strict
-    // inbound-encryption policy.  Use InsecureBypassAs4Verifier so the test
-    // exercises only the policy-level encryption check, not PKI verification.
-    let result = asx_rs::as4::receive_push_with_custom_verifier(
-        &sender_session, // receiver session; PKI not relevant here
-        &event_bus,
-        asx_rs::as4::As4ReceivePush {
-            request: As4ReceivePushRequest {
-                http_content_type: output.http_content_type.clone(),
-                payload: Arc::from(output.soap_envelope.body.as_ref()),
-                receipt_payload: None,
-                policy: strict_policy,
-                authenticated_sender_scope: Some(Arc::from("test-sender")),
+fn push(to: &asx::Partner, bytes: Vec<u8>, id: &str) -> asx::as4::Message {
+    asx::as4::Message::to(to)
+        .service(mako_as4::Service::Marktprozesse.uri())
+        .message_id(format!("{id}@partner.test"))
+        .payload(asx::Payload::new(
+            bytes,
+            mako_as4::constants::PAYLOAD_MIME_TYPE,
+        ))
+}
+
+// ── Dedup ─────────────────────────────────────────────────────────────────────
+
+/// `asx::testkit::dedup::conformance` over `SlateDbDedup`.
+///
+/// The SlateDB lease runs on the wall clock, so the store is given a one-second
+/// lease and the suite runs unpaused (the suite's documented shape for a store
+/// with its own clock). Every check opens a fresh, empty store.
+#[tokio::test(flavor = "multi_thread")]
+async fn slatedb_dedup_conforms() {
+    struct Harness(Mutex<Vec<SlateDbDedup>>);
+    impl std::fmt::Debug for Harness {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("SlateDbDedup harness")
+        }
+    }
+    impl asx::testkit::dedup::DedupHarness for Harness {
+        type Store = SlateDbDedup;
+        fn open(&self) -> SlateDbDedup {
+            self.0
+                .lock()
+                .unwrap()
+                .pop()
+                .expect("enough pre-opened stores")
+        }
+        fn lease(&self) -> std::time::Duration {
+            std::time::Duration::from_secs(1)
+        }
+    }
+    let mut stores = Vec::new();
+    for _ in 0..(asx::testkit::dedup::CHECKS.len() * 2) {
+        let store = SlateDbStore::open_in_memory().await.unwrap();
+        stores.push(SlateDbDedup::new(
+            store
+                .as_inbox_store()
+                .with_claim_lease(std::time::Duration::from_secs(1)),
+        ));
+    }
+    let failures = asx::testkit::dedup::conformance(&Harness(Mutex::new(stores))).await;
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+// ── Outbound ──────────────────────────────────────────────────────────────────
+
+/// One message the partner's handler saw: message id, service, payload,
+/// payload name and the evidence as JSON.
+type Seen = (String, String, Vec<u8>, Option<String>, serde_json::Value);
+
+/// What the partner's handler saw.
+#[derive(Clone, Default)]
+struct Received(Arc<Mutex<Vec<Seen>>>);
+
+/// Mount the partner's inbox; its handler refuses (retryably) the first
+/// `refuse_first` messages, then accepts.
+fn mount_partner(pki: &Pki, loopback: &Loopback, refuse_first: usize) -> Received {
+    let received = Received::default();
+    let seen = received.clone();
+    let partner = pki.counterparty(&pki.partner, loopback);
+    let refused = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    loopback.mount(
+        PARTNER_URL,
+        partner.inbound(
+            asx::MemoryDedup::default(),
+            move |msg: asx::Verified<asx::as4::UserMessage>| {
+                let seen = seen.clone();
+                let refused = Arc::clone(&refused);
+                async move {
+                    let payload = &msg.payloads()[0];
+                    seen.0.lock().unwrap().push((
+                        msg.message_id().to_owned(),
+                        msg.service().to_owned(),
+                        payload.bytes().to_vec(),
+                        payload.name().map(str::to_owned),
+                        serde_json::to_value(msg.evidence()).unwrap(),
+                    ));
+                    if refused.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < refuse_first {
+                        return Err(asx::Reject::new("not yet"));
+                    }
+                    Ok(())
+                }
             },
-            dedup,
-            ordering: None,
-            signer_pins: None,
-        },
-        InsecureBypassAs4Verifier,
-    )
-    .await;
-
-    assert!(
-        result.is_err(),
-        "Unencrypted inbound message must be rejected when require_encrypted_inbound=true — \
-         BDEW AS4-Profil v1.2 §2.2.6.2.2"
+        ),
     );
-    let err_str = format!("{:?}", result.unwrap_err());
+    received
+}
+
+async fn sender(pki: &Pki, loopback: &Loopback) -> (makod::as4_sender::BdewAs4Sender, As4Evidence) {
+    let store = SlateDbStore::open_in_memory().await.unwrap();
+    let evidence = As4Evidence::new(store.clone());
+    let malo_sender = makod::malo_ident_sender::MaloIdentSender::new(
+        makod::malo_cache::SlateDbMaloCache::new(store.clone()),
+        reqwest::Client::new(),
+        std::collections::HashMap::new(),
+        None,
+        store.clone(),
+        None,
+    );
+    let sender = makod::as4_sender::BdewAs4Sender::new(
+        pki.makod(loopback, UnbekannteAbsender::NurKonfigurierte),
+        evidence.clone(),
+        malo_sender,
+        registry(),
+        None,
+        Arc::new(edi_energy::Platform::with_all_profiles()),
+    );
+    (sender, evidence)
+}
+
+/// An APERAK 29002 from makod (NB) to the partner (LF), stamped as the
+/// outbox worker stamps it.
+fn aperak() -> mako_engine::outbox::OutboxMessage {
+    let pending = mako_engine::outbox::PendingOutbox::aperak_anerkennung(OWN, PARTNER, "ORIGREF1");
+    let mut msg =
+        crate::support::outbox_message(&pending.message_type, &pending.recipient, pending.payload);
+    msg.first_attempt_at = Some(
+        time::OffsetDateTime::now_utc()
+            .replace_millisecond(0)
+            .unwrap(),
+    );
+    msg
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_outbound_message_is_delivered_with_its_receipt_evidence() {
+    use mako_engine::builder::As4Sender as _;
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    let received = mount_partner(&pki, &loopback, 0);
+    let (sender, evidence) = sender(&pki, &loopback).await;
+    let msg = aperak();
+
+    sender.send(&msg).await.expect("delivered and receipted");
+
+    let got = received.0.lock().unwrap().clone();
+    assert_eq!(got.len(), 1);
+    let (id, service, bytes, name, _) = &got[0];
+    assert_eq!(id, &format!("{}@as4.makod.test", msg.message_id));
+    // BDEW AS4-Profil 1.2 §2.3.1.2.1: the Marktprozesse service.
+    assert_eq!(service, "https://www.bdew.de/as4/communication/services/MP");
     assert!(
-        err_str.contains("encrypt")
-            || err_str.contains("Encrypt")
-            || err_str.contains("PolicyViolation"),
-        "Rejection must cite encryption policy violation; got: {err_str}"
+        bytes.starts_with(b"UNA") || bytes.starts_with(b"UNB"),
+        "the Übertragungsdatei"
+    );
+    assert!(
+        name.is_none(),
+        "asx-rs does not surface the part's file name inbound"
+    );
+    // The file name rides the part's Content-Disposition on the wire.
+    let wire = loopback.last_request().expect("the request");
+    let wire = String::from_utf8_lossy(wire.body());
+    let expected = format!("filename=\"APERAK__{OWN}_{PARTNER}_");
+    assert!(
+        wire.contains(&expected),
+        "Allgemeine Festlegungen V6.1d §2.12 file name on the payload part"
+    );
+
+    let record = evidence
+        .outbound(&msg.message_id.to_string())
+        .await
+        .unwrap()
+        .expect("the receipt evidence is kept");
+    assert_eq!(record.message_id(), id);
+    assert!(record.signal().is_some(), "the partner's signed receipt");
+}
+
+/// Every attempt of one outbox entry is the same AS4 message: id, timestamp
+/// and the digests the signature covers. The partner's first answer is a
+/// retryable refusal (`EBMS:0202`), so the second attempt reaches its handler.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_retry_resends_the_first_attempts_message_id_and_timestamp() {
+    use mako_engine::builder::As4Sender as _;
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    let received = mount_partner(&pki, &loopback, 1);
+    let (sender, _) = sender(&pki, &loopback).await;
+    let msg = aperak();
+
+    let first = sender
+        .send(&msg)
+        .await
+        .expect_err("the partner refuses once");
+    assert!(
+        matches!(first, EngineError::Transport { .. }),
+        "a partner refusal is retryable: {first:?}"
+    );
+    sender.send(&msg).await.expect("the retry is delivered");
+
+    let got = received.0.lock().unwrap().clone();
+    assert_eq!(got.len(), 2, "both attempts reached the partner");
+    assert_eq!(got[0].0, got[1].0, "same eb:MessageId");
+    let field = |i: usize, f: &str| got[i].4[f].clone();
+    assert!(field(0, "message_timestamp").is_string());
+    assert_eq!(
+        field(0, "message_timestamp"),
+        field(1, "message_timestamp"),
+        "same eb:Timestamp"
+    );
+    assert_eq!(
+        field(0, "references"),
+        field(1, "references"),
+        "same digests"
     );
 }
 
-// ── synchronous receipt verification via asx-rs 0.11 ───────────────────
-
-/// Exercises the receipt-verification path end to end: the sender pushes a
-/// signed AS4 message and `send_and_verify` parses the mock's synchronous
-/// `eb:Receipt` namespace-correctly and correlates it to the sent `message_id`.
-/// Signed-receipt / Non-Repudiation-of-Receipt digest verification is owned and
-/// exhaustively tested by asx-rs itself; here `relaxed()` keeps the fixture free
-/// of PKI-fingerprint pinning while still proving mako's integration.
-#[tokio::test]
-async fn sync_receipt_is_verified_and_correlated() {
-    use asx_rs::as4::{As4ReceiptPolicy, As4SendRequest, send_async};
-    use asx_rs::core::SessionContextBuilder;
-    use asx_rs::observability::EventBus;
-    use asx_rs::transport::As4HttpTransport;
-    use mako_as4::pmode::{BdewAction, bdew_pmode_sign_only};
-    use mako_as4::testing::{BdewTestPki, MockAs4Endpoint};
-
-    let sender_pki = BdewTestPki::generate("Test NB 9900000000001");
-    let receiver_pki = BdewTestPki::generate("Test LF 9900000000002");
-    const SENDER_GLN: &str = "9900000000001";
-    const RECEIVER_GLN: &str = "9900000000002";
-
-    // Mock receiver answers with a SIGNED receipt (its NRI echoes the inbound signature).
-    let mock_endpoint = MockAs4Endpoint::builder()
-        .bind("127.0.0.1:0")
+/// A delivery whose receipt does not verify is not acknowledged: the outbox
+/// keeps the entry and resends it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_partner_refusal_is_retried_and_a_receipt_failure_is_not_acknowledged() {
+    use mako_engine::builder::As4Sender as _;
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    mount_partner(&pki, &loopback, 0);
+    let (sender, evidence) = sender(&pki, &loopback).await;
+    // Corrupt every receipt the partner returns.
+    loopback.intercept(|response| {
+        let mut body = response.body().to_vec();
+        if let Some(i) = body.windows(9).position(|w| w == b"Signature") {
+            body[i + 20] ^= 0x01;
+        }
+        *response.body_mut() = body.into();
+    });
+    let msg = aperak();
+    let err = sender
+        .send(&msg)
         .await
-        .expect("MockAs4Endpoint must bind");
-    let endpoint_url = mock_endpoint.local_url();
-
-    // The sender signs, and must TRUST the receiver's receipt-signing cert so the
-    // receipt signature verifies against the session's trust anchors.
-    let session = Arc::new(
-        SessionContextBuilder::new("test-session-nb", SENDER_GLN)
-            .with_signing_material(
-                sender_pki.signing.cert_pem_str(),
-                sender_pki.signing.key_pem_str(),
-            )
-            .with_trust_anchor_pem(sender_pki.signing.cert_pem_str())
-            .with_trust_anchor_pem(receiver_pki.signing.cert_pem_str())
-            .build()
-            .expect("SessionContext must build"),
+        .expect_err("an unverifiable receipt is no delivery");
+    assert!(matches!(err, EngineError::Transport { .. }), "{err:?}");
+    assert!(
+        evidence
+            .outbound(&msg.message_id.to_string())
+            .await
+            .unwrap()
+            .is_none(),
+        "no evidence for an unverified receipt"
     );
-    let event_bus = Arc::new(EventBus::new_for_testing());
+}
 
-    let payload = b"UNB+UNOC:3+9900000000001:500+9900000000002:500+260101:0000+1'\
-                    UNH+1+APERAK:D:07B:UN:2.1i'UNZ+1+1'";
+// ── Inbound ───────────────────────────────────────────────────────────────────
 
-    // A sign-only send is enough for a receipt round trip (no recipient encryption cert).
-    let policy = bdew_pmode_sign_only("pm-aperak", RECEIVER_GLN, BdewAction::Aperak)
-        .to_send_policy()
-        .expect("sign-only policy must build");
-    let output = send_async(
-        &session,
-        &event_bus,
-        As4SendRequest {
-            message_id: format!("nrr-msg-{}", uuid::Uuid::new_v4()),
-            payload: payload.to_vec(),
-            policy,
-            credentials: None,
-            payload_filename: None,
-            payload_mime_type: Some(mako_as4::constants::PAYLOAD_MIME_TYPE.to_owned()),
-            payload_content_id: None,
-            additional_payloads: Vec::new(),
-        },
-    )
-    .await
-    .expect("sign-only send_async must succeed");
+/// A correctly signed interchange from a pinned partner, addressed to us,
+/// passes the UNB guards and spawns its process; the partner holds a verified
+/// receipt.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_interchange_from_a_configured_partner_is_routed() {
+    use mako_engine::registry::ProcessRegistry as _;
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    let inbox = mount_inbox(&pki, &loopback, UnbekannteAbsender::NurKonfigurierte, true).await;
+    let partner = pki.counterparty(&pki.partner, &loopback);
 
-    // Send + verify the synchronous receipt in one call (regulated ⇒ NRR required).
-    let transport =
-        As4HttpTransport::new_for_localhost_testing().expect("localhost test transport");
-    let outcome = transport
-        .send_and_verify_to_localhost(
-            &endpoint_url,
-            &session,
-            &event_bus,
-            &output,
-            &As4ReceiptPolicy::relaxed(),
+    let receipt = partner
+        .send(push(
+            &pki.own.partner(OWN_URL),
+            utilmd_55001(PARTNER, OWN),
+            "m1",
+        ))
+        .await
+        .expect("receipted");
+    assert_eq!(receipt.evidence().message_id(), "m1@partner.test");
+    assert_eq!(inbox.log.take(), ["claim", "accept"]);
+
+    let found = inbox
+        .store
+        .as_process_registry()
+        .lookup_correlated(
+            mako_engine::ids::TenantId::from_party_id(OWN),
+            "51238696781",
         )
         .await
-        .expect("send_and_verify must deliver and parse the receipt");
+        .unwrap();
+    assert!(
+        found
+            .iter()
+            .any(|id| id.workflow_id.name.as_ref() == "gpke-supplier-change"),
+        "the interchange spawned its process: {found:?}"
+    );
+    let kept = As4Evidence::new(inbox.store.clone())
+        .inbound(OWN)
+        .await
+        .unwrap();
+    assert_eq!(kept.len(), 1, "the inbound evidence is kept");
 
-    assert_eq!(outcome.http.status, 200, "mock must answer 200");
-    let receipt = outcome
-        .into_receipt()
-        .expect("a verified receipt, not an eb:Error signal");
-    assert_eq!(
-        receipt.ref_to_message_id, output.message_id,
-        "verify_sync_response must correlate the receipt to the sent message_id"
+    // The retransmission is a duplicate: a fresh receipt, no second dispatch.
+    partner
+        .send(push(
+            &pki.own.partner(OWN_URL),
+            utilmd_55001(PARTNER, OWN),
+            "m1",
+        ))
+        .await
+        .expect("a duplicate is receipted");
+    assert_eq!(inbox.log.take(), ["claim"]);
+}
+
+/// A refused message is durably dead-lettered before its claim is
+/// settled, and the refusal is permanent (`EBMS:0004`) — the sender does not
+/// retransmit a message that is recorded and could never pass. An interchange
+/// addressed to a foreign MP-ID (Allgemeine Festlegungen V6.1d §2.13) is one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refusal_is_dead_lettered_before_the_claim_is_released_for_good() {
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    let inbox = mount_inbox(&pki, &loopback, UnbekannteAbsender::NurKonfigurierte, false).await;
+    let partner = pki.counterparty(&pki.partner, &loopback);
+
+    let err = partner
+        .send(push(
+            &pki.own.partner(OWN_URL),
+            utilmd_55001(PARTNER, STRANGER),
+            "m2",
+        ))
+        .await
+        .expect_err("refused");
+    assert_eq!(err.kind(), asx::ErrorKind::PartnerError);
+    assert_eq!(err.ebms_code(), Some("EBMS:0004"));
+    assert!(!err.is_retryable(), "a permanent refusal is not retried");
+    assert_eq!(inbox.log.take(), ["claim", "dead_letter", "abandon"]);
+    assert!(
+        inbox.sink.reasons.lock().unwrap()[0].contains("foreign MP-ID"),
+        "the dead letter names the refusal"
     );
 }
 
-// ── the inbound path accepts a well-formed signed message ────────────────
-
-/// A correctly signed, untampered message is **accepted**.
-///
-/// This is the control for [`tampered_signature_is_rejected`], and without it
-/// that test proves nothing: it asserts `is_err()`, and a pipeline that refused
-/// *every* signed message would satisfy it. Its error-substring check does not
-/// separate the two either — `asx-rs` refuses a signed message carrying no
-/// pinned fingerprint with „AS4 receive requires cert_handle.fingerprint_sha256
-/// when verifying signed messages", and that sentence contains „verify".
-///
-/// What this pins is the property the transport exists for: BDEW AS4-Profil
-/// v1.2 §2.2.6.2.1 makes signing mandatory, so *every* conformant message a
-/// counterparty sends is signed. A receiver that rejects them all is not
-/// strict, it is offline — and it fails in a way that reads, in the log, like
-/// the counterparty's fault.
-#[tokio::test]
-async fn an_untampered_signed_message_is_accepted() {
-    use asx_rs::as4::{
-        As4ReceiveOutcome, As4ReceivePush, As4ReceivePushRequest, As4SendRequest, As4WsSecVerifier,
-        receive_push_with_custom_verifier, send_async,
+/// A refusal whose dead letter cannot be written leaves no record, so it is
+/// retryable (`EBMS:0202`) and the retransmission is processed again.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unrecorded_refusal_is_retryable() {
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    let inbox = mount_inbox(&pki, &loopback, UnbekannteAbsender::NurKonfigurierte, false).await;
+    let partner = pki.counterparty(&pki.partner, &loopback);
+    let message = || {
+        push(
+            &pki.own.partner(OWN_URL),
+            utilmd_55001(PARTNER, STRANGER),
+            "m3",
+        )
     };
-    use asx_rs::core::SessionContextBuilder;
-    use asx_rs::observability::EventBus;
-    use asx_rs::storage::DurableInMemoryDedupBackend;
-    use mako_as4::testing::BdewTestPki;
-    use mako_as4::{bdew_pmode_sign_only, bdew_push_policy, pmode::BdewAction};
-    use std::sync::Arc;
 
-    let sender_pki = BdewTestPki::generate("Control NB 9900000000012");
-    const SENDER_GLN: &str = "9900000000012";
-    const RECEIVER_GLN: &str = "9900000000013";
+    inbox
+        .fail_dead_letters
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let err = partner.send(message()).await.expect_err("refused");
+    assert_eq!(err.ebms_code(), Some("EBMS:0202"));
+    assert!(err.is_retryable());
+    assert_eq!(inbox.log.take(), ["claim", "dead_letter_failed", "abandon"]);
 
-    let sender_session = Arc::new(
-        SessionContextBuilder::new("control-sender", SENDER_GLN)
-            .with_signing_material(
-                sender_pki.signing.cert_pem_str(),
-                sender_pki.signing.key_pem_str(),
-            )
-            .with_trust_anchor_pem(sender_pki.signing.cert_pem_str())
-            .build()
-            .expect("sender session must build"),
+    inbox
+        .fail_dead_letters
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let err = partner.send(message()).await.expect_err("refused again");
+    assert_eq!(err.ebms_code(), Some("EBMS:0004"));
+    assert_eq!(
+        inbox.log.take(),
+        ["claim", "dead_letter", "abandon"],
+        "the retransmission is processed as first-seen and now recorded"
     );
+}
 
-    // The receiver pins the sender's signing certificate. Trusting the CA says
-    // the signer is *a* market participant; the pin is what says *which*.
-    let receiver_session = Arc::new(
-        SessionContextBuilder::new("control-receiver", RECEIVER_GLN)
-            .with_trust_anchor_pem(sender_pki.signing.cert_pem_str())
-            // The fixture PKI publishes no OCSP responder; revocation is a
-            // separate control and not what this test is about.
-            .with_ocsp_mode(asx_rs::core::OcspMode::Disabled)
-            // The pin: the trust anchor says the signer is *a* BDEW market
-            // participant, and ~1500 parties hold such a certificate. This says
-            // *which*, and without it `asx-rs` refuses the message outright.
-            .with_fingerprint_sha256(
-                asx_rs::crypto::CertFingerprint::from_cert_pem(
-                    sender_pki.signing.cert_pem_str().as_bytes(),
-                )
-                .expect("fingerprint of the test signing certificate")
-                .to_string(),
-            )
-            .build()
-            .expect("receiver session must build"),
+/// An interchange that is accepted while a message in it is dead-lettered
+/// (unroutable here: no workflow serves it) settles its claim only after the
+/// dead letter is written.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_accepted_interchange_settles_after_its_dead_letters() {
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    let inbox = mount_inbox(&pki, &loopback, UnbekannteAbsender::NurKonfigurierte, false).await;
+    let partner = pki.counterparty(&pki.partner, &loopback);
+
+    partner
+        .send(push(
+            &pki.own.partner(OWN_URL),
+            utilmd_55001(PARTNER, OWN),
+            "m4",
+        ))
+        .await
+        .expect("the interchange is receipted");
+    assert_eq!(inbox.log.take(), ["claim", "dead_letter", "accept"]);
+}
+
+/// `[policy.as4] unbekannte_absender = "nur_konfigurierte"` (the default):
+/// a sender whose SM-PKI certificate carries its MP-ID, but who is not a
+/// configured partner, is refused before dispatch, retryably.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unconfigured_sender_is_refused_under_nur_konfigurierte() {
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    let inbox = mount_inbox(&pki, &loopback, UnbekannteAbsender::NurKonfigurierte, false).await;
+    let stranger = pki.counterparty(&pki.stranger, &loopback);
+
+    let err = stranger
+        .send(push(
+            &pki.own.partner(OWN_URL),
+            utilmd_55001(STRANGER, OWN),
+            "m5",
+        ))
+        .await
+        .expect_err("not a configured partner");
+    assert_eq!(err.ebms_code(), Some("EBMS:0202"));
+    assert_eq!(
+        inbox.log.take(),
+        ["claim", "abandon"],
+        "nothing dispatched, nothing recorded"
     );
+}
 
-    let event_bus = Arc::new(EventBus::new_for_testing());
-    let pm = bdew_pmode_sign_only("pm-control", RECEIVER_GLN, BdewAction::Aperak);
-    let output = send_async(
-        &sender_session,
-        &event_bus,
-        As4SendRequest {
-            message_id: format!("control-{}", uuid::Uuid::new_v4()),
-            payload: b"UNB+UNOC:3+original+payload+260101:0000+1'".to_vec(),
-            policy: pm.to_send_policy().expect("policy must build"),
-            credentials: None,
-            payload_filename: None,
-            payload_mime_type: Some(mako_as4::constants::PAYLOAD_MIME_TYPE.to_owned()),
-            payload_content_id: None,
-            additional_payloads: Vec::new(),
-        },
-    )
-    .await
-    .expect("valid signed SOAP must be built");
+/// `bdew_ou_zulassen` (BDEW AS4-Profil 1.2 §2.3.2): the same sender is served.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unconfigured_sender_is_served_under_bdew_ou_zulassen() {
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    let inbox = mount_inbox(&pki, &loopback, UnbekannteAbsender::BdewOuZulassen, false).await;
+    let stranger = pki.counterparty(&pki.stranger, &loopback);
 
-    let mut receive_policy = bdew_push_policy(None);
-    receive_policy.fail_closed_audit_events = false;
+    stranger
+        .send(push(
+            &pki.own.partner(OWN_URL),
+            utilmd_55001(STRANGER, OWN),
+            "m6",
+        ))
+        .await
+        .expect("served and receipted");
+    assert_eq!(inbox.log.take(), ["claim", "dead_letter", "accept"]);
+}
 
-    let result = receive_push_with_custom_verifier(
-        &receiver_session,
-        &event_bus,
-        As4ReceivePush {
-            request: As4ReceivePushRequest {
-                http_content_type: output.http_content_type.clone(),
-                payload: Arc::from(output.soap_envelope.body.to_vec().as_slice()),
-                receipt_payload: None,
-                policy: receive_policy,
-                authenticated_sender_scope: Some(Arc::from("test-sender")),
+/// A request whose signed bytes were altered in transit is refused
+/// `EBMS:0101` before any claim is taken.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tampered_request_is_refused_ebms_0101() {
+    use tower::Service as _;
+    let pki = Pki::new();
+    let loopback = Loopback::new();
+    let inbox = mount_inbox(&pki, &loopback, UnbekannteAbsender::NurKonfigurierte, false).await;
+    let partner = pki.counterparty(&pki.partner, &loopback);
+    partner
+        .send(push(
+            &pki.own.partner(OWN_URL),
+            utilmd_55001(PARTNER, OWN),
+            "m7",
+        ))
+        .await
+        .expect("the original is receipted");
+    inbox.log.take();
+    let original = loopback.last_request().expect("the request");
+
+    // Change one character of the signed eb:MessageId and resend the bytes.
+    let body = String::from_utf8_lossy(original.body())
+        .replacen("m7@partner.test", "m8@partner.test", 1)
+        .into_bytes();
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri(OWN_URL)
+        .body(http_body_util::Full::new(axum::body::Bytes::from(body)))
+        .unwrap();
+    *request.headers_mut() = original.headers().clone();
+
+    let mut inbound = {
+        let clients = pki.makod(&loopback, UnbekannteAbsender::NurKonfigurierte);
+        let state = Arc::new(makod::edifact_api::EdifactApiState {
+            platform: Arc::new(edi_energy::Platform::with_all_profiles()),
+            pid_router: mako_engine::pid_router::PidRouter::new(),
+            mp_id_registry: registry(),
+            cedar: Arc::new(makod::cedar_authz::CedarAuthorizer::unauthenticated().unwrap()),
+            max_body_bytes: 64 << 20,
+            partner_store: None,
+            tenant_id: mako_engine::ids::TenantId::from_party_id(OWN),
+            dl_sink: Arc::clone(&inbox.sink) as Arc<dyn DeadLetterSink>,
+            dispatcher: None,
+            contrl_ack: None,
+        });
+        as4_ingest::inbound(
+            clients.client(OWN).unwrap(),
+            RecordingDedup {
+                inner: SlateDbDedup::new(inbox.store.as_inbox_store()),
+                log: Arc::clone(&inbox.log.0),
             },
-            dedup: Arc::new(DurableInMemoryDedupBackend::new(
-                std::time::Duration::from_secs(3600),
-            )),
-            ordering: None,
-            signer_pins: None,
-        },
-        As4WsSecVerifier,
-    )
-    .await;
-
-    match result.map(asx_rs::as4::As4Ordered::into_inner) {
-        Ok(As4ReceiveOutcome::FirstSeen { .. }) => {}
-        Ok(other) => panic!("expected FirstSeen, got {other:?}"),
-        Err(e) => panic!(
-            "a correctly signed, untampered message must be accepted, but the inbound \
-             pipeline refused it: {e}"
-        ),
-    }
+            Arc::new(BdewAs4IngestHandler::new(state, OWN, clients.clone())),
+        )
+    };
+    let response = inbound.call(request).await.unwrap();
+    assert_eq!(response.status(), 400);
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    assert!(
+        String::from_utf8_lossy(&body).contains("EBMS:0101"),
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    assert!(
+        inbox.log.take().is_empty(),
+        "no claim for an unverified message"
+    );
 }

@@ -29,12 +29,14 @@ fn registry() -> MpIdRegistry {
             roles: vec!["GNB".to_owned()],
             primary: true,
             agency: None,
+            as4: None,
         },
         PartyConfig {
             mp_id: LFN.to_owned(),
             roles: vec!["LF".to_owned()],
             primary: false,
             agency: None,
+            as4: None,
         },
     ])
     .expect("valid registry")

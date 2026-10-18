@@ -85,8 +85,8 @@ posts into the real request type.
 | `http://localhost:9180/api/v1/anlagen/TR0000000001/settlements?year=2026&month=6` | The June settlement receipt — addressed by month, because later months exist too (as `no_data`) |
 | `http://localhost:9180/api/v1/einspeiser/EIN-0001` | Operator record — § 19 UStG election, payout account |
 | `http://localhost:8380/api/v1/energy/17835382008?direction=EINSPEISUNG&from=2026-06-01T00:00:00%2B02:00&to=2026-07-01T00:00:00%2B02:00` | The projected Einspeisung series the settlement reads |
-| `http://localhost:9180/mcp` | einsd MCP server (19 tools) |
-| `http://localhost:8380/mcp` | edmd MCP server (15 tools) |
+| `http://localhost:9180/mcp` | einsd MCP server (20 tools) |
+| `http://localhost:8380/mcp` | edmd MCP server (16 tools) |
 | `http://localhost:8000/events` | ERP webhook event log |
 
 `settlement_model` in `fixtures/anlage.json` takes one of twelve tokens and

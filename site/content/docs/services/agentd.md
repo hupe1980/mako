@@ -50,7 +50,7 @@ different model is a manifest edit.
 
 ### Two properties that matter for a regulated deployment
 
-**The active plane is advisory.** All 150 grants are read-only. Model-backed
+**The active plane is advisory.** All 151 grants are read-only. Model-backed
 specialists collect evidence and return structured findings; terminal findings
 open triage rows. An approved decision becomes an ordinary `makod` command, so
 what goes on the wire is still a pure function of a recorded command.
@@ -74,11 +74,9 @@ checkpoint only when it provably extends the last one it saw, so a split view
 becomes a refusal or two contradicting cosignatures. A witness you host
 yourself proves nothing about you.
 
-`plane::attest` signs records (store) and outward claims (runtime) from one key.
-The key comes from the deployment and is never minted here. An unattested plane
-starts with a warning; `required = true` refuses. History written unattested
-stays unattested. `tests/it/evidence.rs` verifies a real run's records against
-the public key and checks a different key is rejected.
+`plane::attest` signs records (store) and outward claims (runtime) from one key,
+which the deployment supplies. An unattested plane starts with a warning;
+`required = true` refuses. History written unattested stays unattested.
 
 Witnessing runs **off the run path**, after sealing. A shortfall is reported as
 a finding, and a witness that remembers a different history is reported even
@@ -135,14 +133,13 @@ completion.
 
 ---
 
-## Role scoping (§§ 6a, 7a EnWG)
+## Role scoping
 
 `agentd` builds role-scoped: `role-lf`, `role-nb`, `role-msb`, no flags meaning
-all roles. It reaches every other service, so in a combined-role deployment a
-role build **does not contain** the other arm's specialists — Cedar refusing an
-NB principal LF state is a runtime control; absence is structural. The five
-cross-cutting specialists (`mako-agent`, deadlines, compliance, process,
-regulatory reporting) carry no gate.
+all roles. A role build **does not contain** the other arms' specialists, so it
+cannot answer as a role it was not built for. The five cross-cutting specialists
+(`mako-agent`, deadlines, compliance, process, regulatory reporting) carry no
+gate.
 
 | Build | Specialists |
 |---|---|
@@ -380,13 +377,11 @@ The `plane::` suite parses every manifest and refuses:
   policy set does not admit;
 - a model id nobody reviewed.
 
-`check-prompt-tools` runs both ways. A procedure naming an ungranted tool does
-not crash — agentplane reports the unknown tool to the model, which improvises —
-so the check reads each *sentence*: an instruction verb outside the backticks
-(call, use, query, fetch, retrieve, invoke, consult, poll, check), no negation,
-and a tool-shaped backticked name. A grant no step mentions is refused too, so
-the grants and the procedure are the **same set** —
-151 grants across 28 manifests.
+`check-prompt-tools` reads each procedure *sentence* — an instruction verb
+outside the backticks, no negation, a tool-shaped backticked name — because a
+procedure naming an ungranted tool does not crash: agentplane reports the unknown
+tool to the model, which improvises. Run both ways, it holds the grants and the
+procedure to the **same set** — 151 grants across 28 manifests.
 
 ---
 
@@ -517,8 +512,8 @@ The key must match the `provider` a manifest's `spec.models` names.
 | Anthropic | `anthropic` | Claude — the default in every shipped manifest |
 | OpenAI | `openai` | `api_base` overrides the endpoint (Azure, a gateway, a recording proxy) |
 | Google Gemini | `gemini` | |
-| Self-hosted | `chat-completions` | The OpenAI-compatible wire: TGI, vLLM, Ollama, llama.cpp. `api_base` is **required** — there is no default for your own server — and a local endpoint may have no key at all |
-| AWS Bedrock | `bedrock` | Behind `--features bedrock`: the AWS SDK is a substantial dependency tree, so a deployment that does not use it does not pay for it. Credentials come from the standard AWS chain, never from `agentd.toml` |
+| Self-hosted | `chat-completions` | The OpenAI-compatible wire: TGI, vLLM, Ollama, llama.cpp. `api_base` is **required**; a local endpoint may have no key |
+| AWS Bedrock | `bedrock` | Behind `--features bedrock`. Credentials come from the standard AWS chain, never from `agentd.toml` |
 
 The table key is the name a manifest refers to; `backend` is the wire. So
 `[providers.anthropic]` backed by `chat-completions` against your own vLLM
@@ -549,9 +544,9 @@ changes not one of the 28 manifests — and keeps customer data off a third-part
 | **Split-view detection** | `[witness]` submits checkpoints for cosignature over C2SP `tlog-witness`; a witness refuses a history that does not extend the one it saw |
 | **Back-pressure** | `[quota] max_concurrent_runs`, reserved in the store at admission — durable, cross-instance, and released when a run suspends. 429 when exhausted |
 | **Readiness** | `/health/ready` reads a journal checkpoint under a two-second ceiling — the store this plane cannot admit without, and the one the built-in database ping does not cover |
-| **Arm boundary on a worklist row** | A role build asserts no compiled specialist hands a finding to another arm; a role-scoped deployment may not even contain that desk. That fails a misconfiguration closed — the confidentiality duty of §§ 6a, 7a EnWG is the deployment's Cedar policy, enforced at runtime |
+| **Arm boundary on a worklist row** | A role build asserts no compiled specialist hands a finding to another arm's desk, so a misconfiguration fails closed. The confidentiality duty of §§ 6a, 7a EnWG is the deployment's Cedar policy, enforced at runtime |
 | **Declaration identity** | `/api/v1/agents` and `/agents/catalog` report each specialist's `version` and the digest over its canonical manifest, so a running plane can be checked against the file a reviewer approved |
-| **Observability** | agentplane's instrument catalogue is bridged onto `GET /metrics` — runs by terminal status, policy denials, budget refusals, quarantines, breached obligations, open cases and tasks. Emitted at `info` under the global filter, so a `warn` deployment must admit `agentplane.metric=info` or the series flatline |
+| **Observability** | agentplane's instruments (runs by terminal status, policy denials, budget refusals, quarantines, breached obligations, open cases and tasks) are bridged onto `GET /metrics`. They are emitted at `info`: a `warn` deployment must admit `agentplane.metric=info` |
 | **Manual-run timeout** | `session_timeout_secs` bounds a *manual* run's wait; `POST /webhook` waits for nothing. Each run stays journaled and resumable either way |
 | **API keys** | `api_key`, `mcp_api_key`, `keyring.vault.token`, `audit_hmac_secret` are `SecretString` — never in logs or debug output. Bedrock credentials come from the AWS chain, not from config |
 | **Grant truth** | `cargo xtask check-tool-grants` checks every `tool://` grant against the server's own `read_only_hint`, and refuses a mutating grant on a `tool-calling` agent |
@@ -604,13 +599,10 @@ The `agentplane` operator CLI against the store takes `--store` as a path or a
 ```toml
 # agentd.toml
 #
-# Every top-level key comes first. TOML binds a bare key to the most recent
-# table header, so a key written after `[mcp_servers]` is read as an MCP
-# endpoint — and every config type here is `deny_unknown_fields`, so the
-# deployment refuses to start rather than running with the key ignored.
+# Every top-level key comes before the first table header: TOML binds a bare
+# key to the most recent table, and every config type is `deny_unknown_fields`.
 #
-# `tenant` scopes every store key and the erasure keys with them, so one
-# operator's cryptographic erasure cannot reach another's bytes.
+# `tenant` scopes every store key and the erasure keys with them.
 tenant          = "9900357000004"
 public_base_url = "https://agentd.internal:9580"
 
@@ -624,28 +616,24 @@ inbound_hmac_secret = "env:AGENTD_INBOUND_HMAC_SECRET"
 audit_webhook_url = "https://erp.example/hooks/agent-decisions"
 audit_hmac_secret = "env:AGENTD_AUDIT_HMAC"
 
-# How long a claimed admission key is kept. Absent means forever, which is the
-# only setting that cannot admit a duplicate on a timer: retiring a key reopens
-# the door it closed. 30 days is sized for an operator replaying a
-# dead-lettered delivery, not for the emitter's retry schedule. `0` is refused.
+# How long a claimed admission key is kept; absent means forever. A retired key
+# admits its duplicate again. `0` is refused.
 # admission_retention_days = 30
 
+[http]
+addr = "0.0.0.0:9580"
+
 # ── Back-pressure ─────────────────────────────────────────────────────────────
-# Per-tenant, reserved in the store at admission — so it holds across instances
-# and survives a restart — a per-process counter fails open on scale-out.
-# A slot is released when a run seals, fails or *suspends*, so runs parked on
-# approvals do not stop new work. Absent means unbounded; every run is still
-# held to its manifest's mandatory `budgets`. Exceeding it answers /webhook 429,
-# which an at-least-once emitter retries.
+# Per-tenant, reserved in the store at admission, so it holds across instances.
+# A slot is released when a run seals, fails or *suspends*. Absent means
+# unbounded (each run is still held to its manifest's `budgets`). Exceeding it
+# answers /webhook 429.
 [quota]
 # max_concurrent_runs  = 64
 # max_tokens_per_month = 200_000_000
 
 # ── Who wrote each record ─────────────────────────────────────────────────────
-# Without this the chain says *what happened* and nothing says *which workload
-# wrote it*, and no checkpoint can be submitted to a witness. The key comes from
-# you and cannot be minted here: a plane that generated its own identity would
-# produce records that look attested and prove nothing.
+# Required for [witness]. The key comes from you and is never minted here.
 # `openssl rand -base64 32` produces a seed. Publish the public half.
 # [attestation]
 # required = true
@@ -653,9 +641,7 @@ audit_hmac_secret = "env:AGENTD_AUDIT_HMAC"
 # seed     = "env:AGENTD_SIGNING_SEED"
 
 # ── Somebody else who saw the log grow ────────────────────────────────────────
-# Requires [attestation]. A witness cosigns a checkpoint only when it provably
-# extends the last one it saw, so two histories cannot both be cosigned.
-# A witness you host yourself proves nothing about you.
+# Requires [attestation].
 # [witness]
 # quorum        = 1     # zero is refused; above the witness count is refused
 # interval_secs = 3600
@@ -666,7 +652,7 @@ audit_hmac_secret = "env:AGENTD_AUDIT_HMAC"
 
 # ── Durable state ─────────────────────────────────────────────────────────────
 # One backend holds the journal, the cases, the tasks, the timers and the
-# events. Durable audit evidence belongs on persistent storage, not a container filesystem.
+# events. Put it on persistent storage.
 [journal]
 backend = "redb"                        # a single instance
 path    = "/var/lib/agentd/journal.redb"
@@ -685,30 +671,23 @@ api_key = "env:ANTHROPIC_API_KEY"
 # api_base = "http://vllm:8000/v1"      # required — no default for your server
 
 # ── Which specialists this deployment runs ────────────────────────────────────
-# There are no per-agent overrides. Prompts, models, tool grants and ceilings
-# are declared in agents/<name>.yaml, where the digest covers them.
-#
-# There is no `trigger_event_types` key either, deliberately: which events wake
-# an agent is the manifests' subscription table, and a second list in config
-# that nothing checks against it is a mute switch.
+# Prompts, models, tool grants, ceilings and subscriptions are the manifests'
+# and the subscription table's; config only picks which specialists run.
 [bundled_agents]
 enable_all = true
 # enable = ["mako-agent", "billing-anomaly-agent"]   # or name them
 
 # ── Identity ──────────────────────────────────────────────────────────────────
-# Required for the oversight surface. Without it the worklist is not mounted,
-# and every approval a manifest declares would wait for somebody who cannot act.
-# It also supplies the roles `api:run.start` and `api:agent.list` are decided
-# from. Production startup refuses its absence; local development must set
-# allow_insecure_no_auth = true explicitly.
+# Required for the oversight surface and the roles `api:run.start` and
+# `api:agent.list` are decided from. Startup refuses its absence unless
+# allow_insecure_no_auth = true (development only).
 [oidc]
 issuer   = "https://keycloak:8080/realms/mako"
 audience = "agentd"
 
 # ── Sealing ───────────────────────────────────────────────────────────────────
-# The wrapping key is created inside Vault and never leaves it, so erasure is
-# something mako asks for and cannot undo. Omit and the plane starts unsealed,
-# with a warning that names the consequence.
+# The wrapping key is created inside Vault and never leaves it. Omit and the
+# plane starts unsealed, with a warning.
 [keyring]
 required = true
 [keyring.vault]
@@ -724,10 +703,8 @@ token   = "env:VAULT_TOKEN"
 # path = "/etc/agentd/policy.cedar"
 
 # ── Tool transports ───────────────────────────────────────────────────────────
-# Every server a manifest grants a tool on must appear here. One that is missing
-# is a startup failure, not a specialist that fails at its first tool call. A
-# key may not contain `-` (agentplane reserves hyphens in tool wire names), so a
-# hyphenated service is keyed with an underscore.
+# Every server a manifest grants a tool on must appear here, or startup fails.
+# A key may not contain `-` (agentplane reserves hyphens in tool wire names).
 [mcp_servers]
 makod       = "http://makod:8080/mcp"
 marktd      = "http://marktd:8180/mcp"

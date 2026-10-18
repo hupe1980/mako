@@ -34,8 +34,7 @@ primary = true
 [erp]
 webhook_url = "http://127.0.0.1:8180/api/v1/events"
 
-# No AS4 key material in dev: outbound EDIFACT is not delivered, and inbound AS4
-# signatures are not checked against a trust anchor.
+# No AS4 key material in dev ([party.as4] unset): outbound EDIFACT is not
+# delivered, and the AS4 listener does not start.
 [as4]
-allow_no_signing      = true
-allow_no_trust_anchor = true
+allow_no_signing = true

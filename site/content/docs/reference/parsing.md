@@ -72,12 +72,9 @@ from the same bytes.
 
 ## `Parser::with_config` — Custom DoS Limits
 
-The default `ParseConfig` is generous but bounded.
-Build a `Parser` with a custom config to override limits for
-resource-constrained environments:
-
-The fields are public; construct a config with a struct literal, filling the
-rest from `ParseConfig::default()`:
+The default `ParseConfig` is generous but bounded. Its fields are public;
+override a limit with a struct literal, filling the rest from
+`ParseConfig::default()`:
 
 ```rust
 use edi_energy::{Parser, ParseConfig};
@@ -227,10 +224,15 @@ if let AnyMessage::Utilmd(m) = &msg {
 
 ```rust
 if let AnyMessage::Mscons(m) = &msg {
-    for group in m.meter_reading_groups() {
-        println!("loc: {}", group.location.as_deref().unwrap_or("-"));
-        for reading in &group.readings {
-            println!("  qty: {}", reading.quantity.as_deref().unwrap_or("-"));
+    // SG5 delivery point → SG6 time series (LOC) → SG9 line item → SG10 QTY
+    for point in m.delivery_points() {
+        for series in &point.time_series {
+            println!("loc: {}", series.loc.location_id.as_deref().unwrap_or("-"));
+            for item in &series.items {
+                for q in &item.quantities {
+                    println!("  qty: {}", q.qty.value.as_deref().unwrap_or("-"));
+                }
+            }
         }
     }
 }
@@ -313,10 +315,10 @@ at build time instead.
 - **Fuzz tested**: `fuzz_parse_validate` drives arbitrary bytes through
   `parse → validate → serialize → re-parse` and asserts the message type survives
   the round trip; seven further targets cover the interchange envelope, the
-  builders, format-version detection, AS4 envelopes, OBIS codes, the metering
+  builders, format-version detection, the AS4 inbox, OBIS codes, the metering
   validation engine and tariff input. All eight compile on every push
-  (`just check-fuzz`, part of `just ci`) and run weekly; a crash writes its
-  reproducer to `fuzz/artifacts/`.
+  (`just check-fuzz`, part of `just ci`) and run on demand (`audit.yml`); a
+  crash writes its reproducer to `fuzz/artifacts/`.
 
 ---
 

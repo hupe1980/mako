@@ -30,7 +30,6 @@ use mako_engine::{
     ids::TenantId,
     store_slatedb::{SlateDbDeadLetterSink, SlateDbInboxStore, SlateDbStore},
 };
-use secrecy::{ExposeSecret as _, SecretString};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -197,7 +196,7 @@ pub(crate) async fn serve_http(
         snapshot_store: deps.store.as_snapshot_store(),
         malo_cache: Arc::clone(&cfg.malo_cache),
         maloid_result_cache: malo_cache::MaloIdentResultCache::new(deps.store.clone()),
-        // M1: Konfigurationsprodukt guard — enabled when --marktd-url is set.
+        // Konfigurationsprodukt guard — enabled when --marktd-url is set.
         // Falls back to `None` (guard disabled) when not configured.
         marktd_client: cfg.marktd_client,
     });
@@ -272,64 +271,23 @@ pub(crate) async fn serve_http(
 // ── AS4 inbound (:4080) ───────────────────────────────────────────────────────
 
 /// Everything the AS4 port needs beyond [`ServerDeps`].
-///
-/// The key material is not `Option` here: the preflight has already refused to
-/// start an AS4 listener without it, so this struct can only be built from a
-/// configuration that proved usable.
 pub(crate) struct As4ServerConfig {
     pub addr: SocketAddr,
-    /// `<eb:From>/<eb:PartyId>` — must match the signing certificate's subject
-    /// (BDEW AS4-Profil §2.3.2).
-    pub party_id: String,
-    pub signing_key_pem: SecretString,
-    pub signing_cert_pem: String,
-    pub trust_anchor_pem: Option<String>,
-    pub decryption_key_pem: Option<SecretString>,
-    /// Counterparty **signing** certificates in PEM, by MP-ID.
-    ///
-    /// Inbound messages are verified against a session pinned to the signing
-    /// certificate of the MP-ID they claim to come from; the trust anchor alone
-    /// says only that the signer is some BDEW/DVGW market participant.
-    pub sender_signing_certs: Vec<(String, String)>,
+    /// One client per local MP-ID, built and checked by the preflight.
+    pub clients: crate::as4_clients::As4Clients,
+    /// The dedup store of every inbox.
     pub inbox_store: SlateDbInboxStore,
-    /// `false` in volatile mode: dedup state is not preserved across restarts,
-    /// and the asx-rs pipeline is told so rather than left to assume durability.
-    pub dedup_is_durable: bool,
 }
 
 /// Build and start the AS4/ebMS3 inbound transport.
 ///
 /// The mandatory production transport for BDEW MaKo since 2024-04-01
-/// (electricity) / 2025-04-01 (gas).
+/// (electricity) / 2025-04-01 (gas). Each local MP-ID is served at
+/// `/as4/inbox/<MP-ID>`.
 pub(crate) async fn serve_as4(
     deps: &ServerDeps,
     cfg: As4ServerConfig,
 ) -> anyhow::Result<JoinHandle<()>> {
-    let session = {
-        let session_id = format!("makod-{}", uuid::Uuid::new_v4());
-        let trust_anchor = cfg
-            .trust_anchor_pem
-            .clone()
-            .unwrap_or_else(|| cfg.signing_cert_pem.clone());
-        asx_rs::core::SessionContextBuilder::new(&session_id, &cfg.party_id)
-            .with_signing_material(
-                cfg.signing_cert_pem.clone(),
-                cfg.signing_key_pem.expose_secret(),
-            )
-            .with_trust_anchor_pem(trust_anchor)
-            .build()
-            .map_err(|e| anyhow::anyhow!("AS4 SessionContext build failed: {e}"))?
-    };
-
-    let event_bus = Arc::new(
-        asx_rs::observability::EventBus::new(256)
-            .map_err(|e| anyhow::anyhow!("AS4 EventBus init failed: {e}"))?,
-    );
-
-    let dedup: Arc<dyn asx_rs::storage::DedupStorage> = Arc::new(
-        as4_ingest::SlateDbDedupBridge::new(Arc::new(cfg.inbox_store), cfg.dedup_is_durable),
-    );
-
     // The AS4 envelope is authenticated by WS-Security, not by a bearer token,
     // so the ingest path behind it carries an unauthenticated authorizer.
     let ingest_state = deps.ingest_state(
@@ -337,43 +295,42 @@ pub(crate) async fn serve_as4(
             CedarAuthorizer::unauthenticated()
                 .expect("CedarAuthorizer::unauthenticated is infallible"),
         ),
-        mako_as4::bdew_router_config().max_body_bytes,
+        usize::try_from(mako_as4::constants::MAX_MESSAGE_BYTES).unwrap_or(usize::MAX),
         Some(deps.contrl_ack()),
     );
-
-    let handler = Arc::new(
-        as4_ingest::BdewAs4IngestHandler::new(ingest_state, Arc::new(session), event_bus, dedup)
-            .with_sender_pins(cfg.sender_signing_certs)?
-            .with_decryption_key_pem(
-                cfg.decryption_key_pem
-                    .as_ref()
-                    .map(|s| s.expose_secret().as_bytes().to_vec()),
+    let evidence = crate::as4_evidence::As4Evidence::new(deps.store.clone());
+    let clients = cfg.clients.clone();
+    let app = as4_ingest::router(
+        &cfg.clients,
+        as4_ingest::SlateDbDedup::new(cfg.inbox_store),
+        |mp_id| {
+            Arc::new(
+                as4_ingest::BdewAs4IngestHandler::new(
+                    Arc::clone(&ingest_state),
+                    mp_id,
+                    clients.clone(),
+                )
+                .with_evidence(evidence.clone())
+                .with_contrl_ack(deps.contrl_ack()),
             )
-            // BDEW AS4-Profil §2.2.4: sign synchronous receipts (NRR) with the
-            // operator's signing key pair — the same material used for the AS4
-            // session signing context above.
-            .with_receipt_credentials(
-                cfg.signing_key_pem.expose_secret().as_bytes().to_vec(),
-                cfg.signing_cert_pem.into_bytes(),
-            )
-            .with_contrl_ack(deps.contrl_ack()),
-    );
+        },
+    )
+    .merge(health::router(deps.health_state.clone()))
+    // OWASP A05 — per-peer and per-sender GCRA limits before any cryptography.
+    .layer(axum::middleware::from_fn(
+        as4_ingest::as4_rate_limit_middleware,
+    ))
+    // W3C trace-context capture for end-to-end tracing.
+    .layer(axum::middleware::from_fn(super::trace_ctx_middleware));
 
-    let app = as4_ingest::router(handler, mako_as4::bdew_router_config())
-        .merge(health::router(deps.health_state.clone()))
-        // OWASP A05 — rate limit the AS4 inbound endpoint to prevent capacity
-        // exhaustion by a misconfigured or malicious counterparty. Per-peer GCRA
-        // token bucket: 100 req/s sustained, burst of 50, keyed by client IP.
-        // Returns HTTP 429 when a peer's bucket is exhausted.
-        .layer(axum::middleware::from_fn(
-            as4_ingest::as4_rate_limit_middleware,
-        ))
-        // W3C trace-context capture for end-to-end tracing.
-        .layer(axum::middleware::from_fn(super::trace_ctx_middleware));
-
+    let inboxes: Vec<String> = cfg
+        .clients
+        .iter()
+        .map(|(mp_id, _)| as4_ingest::inbox_path(mp_id))
+        .collect();
     info!(
-        addr     = %cfg.addr,
-        party_id = %cfg.party_id,
+        addr    = %cfg.addr,
+        inboxes = ?inboxes,
         "AS4 inbound transport listening (BDEW MaKo mandatory since 2024-04-01)",
     );
     bind_and_spawn("AS4", cfg.addr, app, deps.shutdown_token.clone()).await

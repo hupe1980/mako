@@ -1,4 +1,4 @@
-# docker-bake.hcl — builds all 16 mako service images from one build graph.
+# docker-bake.hcl — one image per service, every image from one build graph.
 #
 # This file is the **CI** build path: `_base` fixes `push-by-digest`, so every
 # target pushes to `$REGISTRY` and none of them loads an image into the local
@@ -9,15 +9,17 @@
 # For a local image the demos can run, use `just build-demo`, which tags
 # `makod:dev` / `marktd:dev` / `processd:dev` the way the compose files expect.
 #
+# `services` below is the one list of released images: `release.yml` reads it
+# back with `docker buildx bake --print` to export each digest and tag each
+# image, and `ci.yml` lints every stage it names with `docker buildx bake
+# --check`.
+#
 # CI (per-platform, native runner):
 #   docker buildx bake \
 #     --set "*.platform=linux/amd64" \
 #     --set "*.cache-from=type=registry,ref=ghcr.io/hupe1980/mako-builder:linux-amd64" \
 #     --metadata-file /tmp/bake-meta.json \
 #     --push
-#
-# The `_base` target is inherited by every service target.
-# BuildKit executes the shared `builder` stage once and fans out to one runtime stage per service.
 
 variable "REGISTRY" {
   default = "ghcr.io/hupe1980"
@@ -35,24 +37,25 @@ variable "OCI_CREATED" {
   default = "unknown"
 }
 
-# Build every service image
-group "default" {
-  targets = [
-    "makod", "marktd", "processd", "invoicd", "edmd",
-    "netzbilanzd", "einsd",
-    "productd", "billingd", "outputd", "accountingd", "vertragd",
-    "portald", "agentd",
+variable "services" {
+  default = [
+    "makod", "marktd", "processd", "invoicd", "edmd", "netzbilanzd", "einsd",
+    "productd", "billingd", "outputd", "accountingd", "vertragd", "portald",
+    "agentd",
   ]
 }
 
-# ── Shared base ───────────────────────────────────────────────────────────────
+group "default" {
+  targets = ["service"]
+}
+
 # `platform` is NOT set here — callers supply it via --set "*.platform=..."
 # so that native runners compile for their own arch without QEMU.
 target "_base" {
   context    = "."
   dockerfile = "Dockerfile"
-  # Push each image by OCI digest (no tag yet).
-  # The docker-manifest CI job attaches semver tags from both platform digests.
+  # Push each image by OCI digest (no tag yet); the docker-manifest job in
+  # release.yml attaches the semver tags from both platform digests.
   output = ["type=image,push-by-digest=true,name-canonical=true,push=true"]
   args = {
     OCI_REVISION = "${OCI_REVISION}"
@@ -61,88 +64,12 @@ target "_base" {
   }
 }
 
-# ── Service targets ───────────────────────────────────────────────────────────
-
-target "makod" {
+# One target per service, named after it. makod's stage is the Dockerfile's
+# `runtime`; every other service's is `<service>-runtime`.
+target "service" {
+  matrix   = { svc = services }
+  name     = svc
   inherits = ["_base"]
-  target   = "runtime"
-  tags     = ["${REGISTRY}/mako-makod"]
-}
-
-target "marktd" {
-  inherits = ["_base"]
-  target   = "marktd-runtime"
-  tags     = ["${REGISTRY}/mako-marktd"]
-}
-
-target "processd" {
-  inherits = ["_base"]
-  target   = "processd-runtime"
-  tags     = ["${REGISTRY}/mako-processd"]
-}
-
-target "invoicd" {
-  inherits = ["_base"]
-  target   = "invoicd-runtime"
-  tags     = ["${REGISTRY}/mako-invoicd"]
-}
-
-target "edmd" {
-  inherits = ["_base"]
-  target   = "edmd-runtime"
-  tags     = ["${REGISTRY}/mako-edmd"]
-}
-
-target "netzbilanzd" {
-  inherits = ["_base"]
-  target   = "netzbilanzd-runtime"
-  tags     = ["${REGISTRY}/mako-netzbilanzd"]
-}
-
-target "einsd" {
-  inherits = ["_base"]
-  target   = "einsd-runtime"
-  tags     = ["${REGISTRY}/mako-einsd"]
-}
-
-target "productd" {
-  inherits = ["_base"]
-  target   = "productd-runtime"
-  tags     = ["${REGISTRY}/mako-productd"]
-}
-
-target "billingd" {
-  inherits = ["_base"]
-  target   = "billingd-runtime"
-  tags     = ["${REGISTRY}/mako-billingd"]
-}
-
-target "outputd" {
-  inherits = ["_base"]
-  target   = "outputd-runtime"
-  tags     = ["${REGISTRY}/mako-outputd"]
-}
-
-target "accountingd" {
-  inherits = ["_base"]
-  target   = "accountingd-runtime"
-  tags     = ["${REGISTRY}/mako-accountingd"]
-}
-
-target "vertragd" {
-  inherits = ["_base"]
-  target   = "vertragd-runtime"
-  tags     = ["${REGISTRY}/mako-vertragd"]
-}
-
-target "portald" {
-  inherits = ["_base"]
-  target   = "portald-runtime"
-  tags     = ["${REGISTRY}/mako-portald"]
-}
-
-target "agentd" {
-  inherits = ["_base"]
-  target   = "agentd-runtime"
-  tags     = ["${REGISTRY}/mako-agentd"]
+  target   = svc == "makod" ? "runtime" : "${svc}-runtime"
+  tags     = ["${REGISTRY}/mako-${svc}"]
 }

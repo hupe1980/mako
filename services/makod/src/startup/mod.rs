@@ -16,7 +16,7 @@
 //! | Function | Phase |
 //! |---|---|
 //! | [`lock_data_dir`] | Refuse a second writer on the same SlateDB path |
-//! | [`build_engine`] | Register the compiled-in domain modules; build the [`EngineContext`] |
+//! | [`build_engine`] | Register the domain modules of `[deployment] rollen`; build the [`EngineContext`] |
 //! | [`validate_adapter_coverage`] | Every adapter registry covers every active format version |
 //! | [`validate_dispatch_completeness`] | Every routed workflow has an ingest arm |
 //! | [`servers`] | Bind and spawn the HTTP, AS4 and API-Webdienste ports |
@@ -422,24 +422,11 @@ pub(crate) fn validate_adapter_coverage() {
 /// Validate that every workflow name reachable via `PidRouter` has a
 /// corresponding dispatch arm in [`EdifactIngestDispatcher`].
 ///
-/// This is a startup guard against the gap where a domain crate registers a
-/// new PID → workflow mapping, but the developer forgets to add a matching
-/// `match` arm in `ingest_dispatcher.rs`.  Without this check, inbound
-/// messages for the new PID would be silently dead-lettered at runtime.
-///
-/// # How it works
-///
-/// 1. Enumerate all unique workflow names from `router` (both unambiguous and
-///    commodity-qualified entries).
-/// 2. Compare against [`EdifactIngestDispatcher::KNOWN_WORKFLOW_NAMES`] — the
-///    compile-time list of workflow names that have a dispatch arm.
-/// 3. Panic with an actionable message listing every undispatched workflow.
-///
-/// # When to update `KNOWN_WORKFLOW_NAMES`
-///
-/// When adding a new PID in a domain crate's `register_pids`:
-/// 1. Add a dispatch arm in `ingest_dispatcher.rs::dispatch`.
-/// 2. Add the workflow name string to `EdifactIngestDispatcher::KNOWN_WORKFLOW_NAMES`.
+/// A PID → workflow mapping without a `match` arm in the ingest dispatcher
+/// dead-letters every inbound message for that PID, so every workflow name in
+/// `router` (unambiguous and commodity-qualified entries) must appear in
+/// [`EdifactIngestDispatcher::KNOWN_WORKFLOW_NAMES`], the list of names with a
+/// dispatch arm. A new workflow needs both the arm and the name.
 ///
 /// # Panics
 ///
@@ -559,12 +546,6 @@ pub(crate) struct WorkersConfig {
     /// EMT.API signing key and certificate for content-layer signing, when
     /// the operator configured them.
     pub webdienste_signing: Option<crate::transport::webdienste::ContentSigning>,
-    /// WIRK TLS identity presented to a partner MSH, when the operator holds it
-    /// here rather than on an egress proxy.
-    ///
-    /// Parsed at startup so a mismatched certificate/key pair fails where it is
-    /// configured, not on the first delivery.
-    pub as4_client_identity: Option<asx_rs::transport::ClientIdentity>,
     /// MaLo cache (for MaloIdentSender and MCP server).
     pub malo_cache: Arc<malo_cache::SlateDbMaloCache>,
     /// Graceful-shutdown token. Every worker below observes it and returns at
@@ -577,16 +558,10 @@ pub(crate) struct WorkersConfig {
     /// Built from `[[party]]` entries in `makod.toml`. The primary MP-ID is used
     /// as the storage partition key (`TenantId`) and AS4 `partyId` fallback.
     pub mp_id_registry: Arc<MpIdRegistry>,
-    /// Configuration validated by `core::preflight` — the AS4 partner P-Mode
-    /// registry, MaLo-ID callback endpoints, and the Verzeichnisdienst URL are
-    /// already parsed and proven here, so this module never re-parses a flag.
+    /// Configuration validated by `core::preflight` — the AS4 clients,
+    /// MaLo-ID callback endpoints, and the Verzeichnisdienst URL are already
+    /// parsed and proven here, so this module never re-parses a flag.
     pub checked: crate::preflight::Preflight,
-    pub as4_signing_key_pem: Option<SecretString>,
-    pub as4_signing_cert_pem: Option<String>,
-    pub as4_trust_anchor_pem: Option<String>,
-    /// When `true`, a missing/mismatched synchronous `eb:Receipt` only warns
-    /// instead of failing the delivery (interop debugging; strict by default).
-    pub as4_lenient_receipts: bool,
     // ── ERP webhook config ───────────────────────────────────────────────
     pub erp_webhook_url: Option<String>,
     pub erp_webhook_secret: Option<SecretString>,
@@ -672,16 +647,13 @@ impl WorkerHandles {
 ///
 /// # Errors
 ///
-/// Returns an error if the outbound AS4 session cannot be built (invalid PEM)
-/// or the AS4 event bus cannot be created. Everything else this function needs
-/// was already parsed and proven by `core::preflight`.
+/// Everything this function needs was already parsed and proven by
+/// `core::preflight`; the `Result` is kept for the workers' own setup.
 pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHandles> {
     use crate::as4_sender::BdewAs4Sender;
     use crate::malo_ident_sender::MaloIdentSender;
     use crate::verzeichnisdienst_worker;
     use crate::worker_health::new_heartbeat;
-    use secrecy::ExposeSecret as _;
-
     let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     // ── MaLo-ID partner directory (parsed by the preflight) ──────────────
@@ -729,15 +701,11 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
         cfg.webdienste_signing.clone(),
     );
 
-    // ── AS4 partner P-Mode registry (built by the preflight) ─────────────
-    let as4_profile = cfg.checked.as4_profile;
-    if !as4_profile.registry().is_empty() {
-        let mut seen = std::collections::BTreeSet::new();
-        for pm in as4_profile.all_pmodes() {
-            seen.insert(pm.partner_id.as_str());
-        }
-        let glns: Vec<&str> = seen.into_iter().collect();
-        info!(partners = ?glns, "AS4 partner P-Mode registry loaded");
+    // ── AS4 clients (built by the preflight) ─────────────────────────────
+    if let Some(clients) = &cfg.checked.as4 {
+        let partners: Vec<&str> = clients.partners().iter().map(|(id, _)| id).collect();
+        let identities: Vec<&str> = clients.iter().map(|(id, _)| id).collect();
+        info!(identities = ?identities, partners = ?partners, "AS4 clients built");
     }
 
     // ── §20b Netzzugangsplattform sender (shared by both outbox senders) ──
@@ -751,43 +719,12 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
 
     // ── Outbox delivery worker ────────────────────────────────────────────
     //
-    // BdewAs4Sender when signing credentials are present; MaloIdentSender
-    // (MaLo-ID callbacks only) otherwise.
-    if let (Some(key_pem), Some(cert_pem)) = (
-        cfg.as4_signing_key_pem.as_ref().map(|s| s.expose_secret()),
-        cfg.as4_signing_cert_pem.as_deref(),
-    ) {
-        let party_id = cfg.checked.as4_party_id.clone();
-
-        // NOTE: One outbound SessionContext / signing key is used for ALL mp_ids.
-        // For a combined Strom+Gas deployment the Gas mp_id's outbound AS4 messages
-        // are signed with the Strom (primary) cert.  Counterparties validate the cert
-        // against the BDEW/SM-PKI CA trust anchor, not against <eb:From>, so this is
-        // accepted in practice.  Full per-mp_id cert isolation would require separate
-        // SessionContexts keyed by sender mp_id — tracked as a future enhancement.
-        // See site/content/docs/reference/as4-bdew.md §"Signing cert and <eb:From>" for guidance.
-
-        let outbound_session = {
-            let session_id = format!("makod-outbound-{}", uuid::Uuid::new_v4());
-            let trust_anchor = cfg
-                .as4_trust_anchor_pem
-                .clone()
-                .unwrap_or_else(|| cert_pem.to_owned());
-            asx_rs::core::SessionContextBuilder::new(&session_id, &party_id)
-                .with_signing_material(cert_pem, key_pem)
-                .with_trust_anchor_pem(trust_anchor)
-                .build()
-                .map_err(|e| anyhow::anyhow!("AS4 outbound session build failed: {e}"))?
-        };
-        let outbound_bus = Arc::new(
-            asx_rs::observability::EventBus::new(256)
-                .map_err(|e| anyhow::anyhow!("AS4 EventBus (outbound) init failed: {e}"))?,
-        );
-
+    // BdewAs4Sender when AS4 is configured; the EDIFACT webhook (development)
+    // otherwise; MaloIdentSender alone under `allow_no_signing`.
+    if let Some(clients) = cfg.checked.as4.clone() {
         let sender = BdewAs4Sender::new(
-            Arc::new(outbound_session),
-            outbound_bus,
-            Arc::new(as4_profile),
+            clients,
+            crate::as4_evidence::As4Evidence::new(cfg.store.clone()),
             malo_sender,
             Arc::clone(&cfg.mp_id_registry),
             Some(Arc::new(crate::edifact_api::EdifactApiState {
@@ -814,18 +751,11 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
                 contrl_ack: None,
             })),
             Arc::clone(&cfg.platform),
-            cfg.as4_lenient_receipts,
-            cfg.as4_client_identity.clone(),
-        )?
-        .with_netzzugang(Arc::clone(&netzzugang_sender))
-        // `<eb:From>/<eb:PartyId>` must match the signing certificate's subject
-        // (AS4-Profil §2.3.2), and this is the identity that cert was issued to.
-        .with_party_id(party_id.as_str());
+        )
+        .with_netzzugang(Arc::clone(&netzzugang_sender));
 
         info!(
-            party_id        = %party_id,
-            primary_mp_id     = %cfg.mp_id_registry.primary_mp_id(),
-            own_mp_ids        = ?cfg.mp_id_registry.own_mp_ids().collect::<Vec<_>>(),
+            own_mp_ids = ?cfg.mp_id_registry.own_mp_ids().collect::<Vec<_>>(),
             "AS4 outbound sender active (BdewAs4Sender)",
         );
         let (outbox_hb, outbox_watch) = new_heartbeat("outbox-worker", 120);
@@ -875,8 +805,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
         // The preflight already refused this combination unless
         // `--allow-no-as4-signing` was passed, so reaching here is deliberate.
         tracing::warn!(
-            "AS4 signing credentials not configured \
-             (--as4-signing-key-pem / --as4-signing-cert-pem not set). \
+            "AS4 not configured (no [party.as4] key material). \
              Outbox delivery is running in MaloIdentCallback-only mode — \
              all EDIFACT messages will be logged and rescheduled without transmission. \
              Pass --allow-no-as4-signing to silence this warning.",
@@ -1016,10 +945,11 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
     // Sweeps the two time-bounded key spaces: the AS4 inbox dedup index and the
     // `Idempotency-Key` records behind `POST /api/v1/commands`.
     //
-    // The BDEW AS4 retry window is 72 hours; a dedup entry evicted at exactly
-    // 72h could let a final retry at the window's edge re-process as a new
-    // message. Retention adds a 24-hour safety margin on top of the window.
-    const INBOX_DEDUP_RETENTION: time::Duration = time::Duration::hours(72 + 24);
+    // An accepted AS4 key is remembered for `as4_ingest::DEDUP_RETENTION`
+    // (8 days): asx-rs 0.16.2 accepts an `eb:Timestamp` up to 7 days old and
+    // requires the dedup store to remember accepted keys at least that long.
+    // The API-Webdienste request keys share the store and the retention.
+    const INBOX_DEDUP_RETENTION: time::Duration = crate::as4_ingest::DEDUP_RETENTION;
     let inbox_store_for_purge = cfg.inbox_store_for_purge;
     let idempotency_store = cfg.store.clone();
 
@@ -1062,8 +992,8 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
         }
     }));
     info!(
-        "retention purge worker started (daily; 96h AS4 inbox dedup for the 72h \
-         retry window, 24h Idempotency-Key records)"
+        "retention purge worker started (daily; 8-day AS4 inbox dedup, 24h \
+         Idempotency-Key records)"
     );
 
     Ok(WorkerHandles(handles))

@@ -27,9 +27,8 @@ use super::structure::{InstanceId, Kind, NodeId, Resolution, Structure};
 
 /// Rule id prefix of a Formatbedingung finding (`FMT-<pid>-<nr>-<tag>-<de>-<n>`).
 ///
-/// Advisory for now: the registry is new, and a verdict that refuses a
-/// counterparty message which passes today is a change to make once the
-/// findings have been read for a release. [`super::formatbedingung`].
+/// A Formatbedingung finding is a `Warning`, never an `Error`: it is advisory
+/// and does not refuse the message. See [`super::formatbedingung`].
 pub const FMT_PREFIX: &str = "FMT-";
 
 /// Rule id of the advisory raised when no Anwendungsfall can be selected.

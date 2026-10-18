@@ -15,7 +15,7 @@ carrier (`ORDERS`/`ORDRSP`); `BGM` C002 DE 1001 says which message it is, and
 
 ## Examples
 
-```rust
+```rust,no_run
 use dvgw_edi::{DvgwMessageType, DvgwPlatform};
 
 let raw = std::fs::read("alocat.edi")?;

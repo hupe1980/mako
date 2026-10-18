@@ -24,7 +24,7 @@ overrides any key, and a `*_FILE` variable reads a value from a file.
 | **BO4E** | `GET` returns `rubo4e::current` types; every `PUT` validates `_typ` and refuses out-of-schema values (`422`) |
 | **Supply status** | `de.mako.process.*` events drive `lf_zuordnung` (one row per assignment: supplier, share, Tranche, `Angekuendigt`/`Aktiv`); every transition writes history (`?at=YYYY-MM-DD`) and emits `de.markt.versorgung.changed` |
 | **Events** | CloudEvents 1.0 from `urn:mako:marktd:tenant:{tenant}`, HMAC-signed, durable two-phase fan-out ordered per aggregate |
-| **API spec** | OpenAPI 3.1 at `/api/v1/openapi.json`, Swagger UI at `/api/v1/docs/` |
+| **API spec** | OpenAPI 3.1 at `/api/v1/openapi.json` — open it in any Swagger UI or Redoc |
 | **MCP** | 17 read-only tools and 4 prompts at `/mcp` |
 
 Startup refuses a missing `[oidc]` or `webhook.inbound_secret` unless

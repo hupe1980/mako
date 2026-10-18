@@ -920,6 +920,33 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                     continue;
                 }
 
+                // ── First-attempt stamp ───────────────────────────────
+                // Recorded durably *before* the first send, so a retry —
+                // after a crash between send and reschedule as well — carries
+                // the same instant. Without the stamp on disk there is no
+                // send: a retry could not reproduce what this attempt signed.
+                let mut msg = msg;
+                if msg.first_attempt_at.is_none() {
+                    match self
+                        .store
+                        .record_first_attempt(msg.message_id, time::OffsetDateTime::now_utc())
+                        .await
+                    {
+                        Ok(Some(at)) => msg.first_attempt_at = Some(at),
+                        // Acknowledged by someone else meanwhile.
+                        Ok(None) => continue,
+                        Err(e) => {
+                            tracing::error!(
+                                message_id = %msg.message_id,
+                                error = %e,
+                                "outbox worker: first attempt not recorded; not sending, the \
+                                 message stays queued",
+                            );
+                            continue;
+                        }
+                    }
+                }
+
                 match self.sender.send(&msg).await {
                     Ok(()) => {
                         if let Err(e) = self.store.acknowledge(msg.message_id).await {
@@ -942,7 +969,7 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                         self.discharge_delivery_window(&msg).await;
                     }
                     // Permanent error: dead-letter immediately without retrying.
-                    // PartnerUnknown requires operator intervention (add --as4-partner);
+                    // PartnerUnknown requires operator intervention (configure the partner);
                     // Serialization errors will never succeed on retry; a missing
                     // wire-format renderer cannot appear between attempts — its own
                     // documentation promises immediate dead-lettering, and until this
@@ -2955,6 +2982,79 @@ mod tests {
             vec![1],
             "the window, not the attempt belt, must have dead-lettered it",
         );
+    }
+
+    /// Records the first-attempt stamp of every send, failing the first one.
+    #[derive(Clone, Default)]
+    struct FailsOnce(std::sync::Arc<std::sync::Mutex<Vec<Option<time::OffsetDateTime>>>>);
+    impl As4Sender for FailsOnce {
+        async fn send(&self, msg: &crate::outbox::OutboxMessage) -> Result<(), EngineError> {
+            let mut seen = self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            seen.push(msg.first_attempt_at);
+            if seen.len() == 1 {
+                Err(EngineError::Transport {
+                    endpoint: "test".into(),
+                    message: "first attempt fails".to_owned(),
+                })
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    /// The first send is stamped before it goes out, and the retry carries the
+    /// same stamp: a transport that signs the timestamp (AS4 `eb:Timestamp`)
+    /// resends the first attempt's message unchanged.
+    #[tokio::test(start_paused = true)]
+    async fn a_retry_carries_the_first_attempts_timestamp() {
+        let stream_id = crate::ids::StreamId::new("test-first-attempt");
+        let msg = outbox_message(&stream_id, "UTILMD");
+        let id = msg.message_id;
+        let outbox = InMemoryOutboxStore::new();
+        outbox.enqueue(std::slice::from_ref(&msg)).await.unwrap();
+        let sender = FailsOnce::default();
+        let run = |outbox: InMemoryOutboxStore, sender: FailsOnce| async move {
+            let worker = OutboxWorker {
+                store: outbox,
+                sender,
+                deadline_store: InMemoryDeadlineStore::new(),
+                batch_size: 10,
+                poll_interval: std::time::Duration::from_millis(5),
+                max_attempts: 48,
+                max_retry_window: std::time::Duration::from_secs(72 * 3600),
+                dead_letter_sink: std::sync::Arc::new(
+                    std::sync::Arc::new(RecordingSink::default()),
+                ),
+                heartbeat: None,
+                shutdown: None,
+            };
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(300), worker.run()).await;
+        };
+        run(outbox.clone(), sender.clone()).await;
+        // Make the rescheduled entry due again without waiting out the backoff.
+        outbox
+            .reschedule(
+                id,
+                time::OffsetDateTime::now_utc() - time::Duration::seconds(1),
+            )
+            .await
+            .unwrap();
+        run(outbox.clone(), sender.clone()).await;
+
+        let seen = sender.0.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2, "one failed attempt and one retry: {seen:?}");
+        assert!(
+            seen[0].is_some(),
+            "the first attempt is stamped before it is sent"
+        );
+        assert_eq!(
+            seen[0], seen[1],
+            "the retry reuses the first attempt's timestamp"
+        );
+        assert!(outbox.pending_now(10).await.unwrap().is_empty());
     }
 
     /// A message that aged past the window while the worker was down still

@@ -93,10 +93,9 @@ not net plus tax) is **disputable** and answered by a REMADV from check stage 7.
 | 31011 | Rechnung sonstige Leistung (NB → LF) — in practice the Sperr-/Entsperrkosten | Inbound | **Strom + Gas** | ✅ |
 
 **PID 31010 is refused into `invoic_dlq`.** INVOIC AHB 1.0b Kap. 3.1.4 states
-the Kommunikation as „NB an KN" (the Kapazitätsnutzer), a role this deployment
-does not play and no answer command permits, and `BGM` DE1004 names the PDF
-Kapazitätsrechnung that is the actual document (Änd-ID 26872). The DLQ row
-carries that reason, so it is settled by hand.
+the Kommunikation as „NB an KN" (the Kapazitätsnutzer), a role no answer command
+permits; `BGM` DE1004 names the PDF Kapazitätsrechnung that is the actual
+document (Änd-ID 26872). It is settled by hand.
 
 **PID 31009** prices metering service and is checked against
 `PreisblattMessung`; when the Rechnung is not in the process payload, `invoicd`
@@ -120,7 +119,7 @@ Prüfschritt 40 checks; both ride the process, as BO4E has no field for them.
 |---|---|
 | `AngebotDeviation` | a position billed away from the agreed price — dispute |
 | `AngebotPositionUnknown` | an Artikel-ID the offer never priced — a charge nobody agreed to; dispute |
-| `TariffNotFound` | no accepted offer on record — **warn and skip**, never dispute: a gap in mako's records is not a defect in the invoice |
+| `TariffNotFound` | no accepted offer on record — **warn and skip**, never dispute |
 
 ### The answer names the tree the Use-Case publishes
 
@@ -167,7 +166,7 @@ answer is `invoic.stornorechnung.{annehmen,ablehnen}`. Any Rechnung flagged
 `ist_storno` takes the same arithmetic-only check.
 
 **MMM reference prices.** Strom is one nationwide monthly BDEW series (§ 13
-Abs. 3 StromNZV; GPKE Teil 1 Kap. 8.4 from 01.01.2026), keyed on the month
+Abs. 3 StromNZV bis 31.12.2025; GPKE Teil 1 Kap. 8.4 ab 01.01.2026), keyed on the month
 alone; Gas prices are per Marktgebiet (Trading Hub Europe).
 
 ---
@@ -383,12 +382,12 @@ url       = "env:DATABASE_URL"   # required; use env: for secrets
 pool_size = 10                   # default
 
 [identity]
-tenant     = "9900357000004"           # required — MP-ID of the operator
+tenant     = "9900357000004"           # required — data-isolation key, typically the operator's MP-ID
 marktrolle = "lieferant"               # lieferant (default) | netzbetreiber | esa
 
 [makod]
 url     = "http://makod:8080"          # required
-api_key = "env:INVOICD_MAKOD_API_KEY" # required
+api_key = "env:INVOICD_MAKOD_API_KEY" # optional
 
 [marktd]
 url     = "http://marktd:8180"            # required

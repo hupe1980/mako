@@ -157,6 +157,7 @@ fn party_registry_rejects_mixed_strom_gas_roles() {
         roles: vec!["NB".to_owned(), "GNB".to_owned()],
         agency: None,
         primary: true,
+        as4: None,
     }];
 
     let result = MpIdRegistry::from_config(&parties);
@@ -186,12 +187,14 @@ fn party_registry_accepts_valid_viu_strom_gas_split() {
             roles: vec!["NB".to_owned()],
             agency: None,
             primary: true,
+            as4: None,
         },
         PartyConfig {
             mp_id: "9800000000001".to_owned(), // DVGW Gas GNB
             roles: vec!["GNB".to_owned()],
             agency: None,
             primary: false,
+            as4: None,
         },
     ];
 
@@ -226,12 +229,14 @@ fn party_registry_rejects_duplicate_role() {
             roles: vec!["LF".to_owned()],
             agency: None,
             primary: true,
+            as4: None,
         },
         PartyConfig {
             mp_id: "9900000000002".to_owned(),
             roles: vec!["LF".to_owned()], // duplicate role!
             agency: None,
             primary: false,
+            as4: None,
         },
     ];
 

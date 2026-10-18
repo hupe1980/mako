@@ -3,8 +3,8 @@ title = "Getting Started"
 description = "Run the mako NB straight-through-processing demo in about five minutes: submit a UTILMD 55001 Anmeldung and receive the 55002 confirmation back."
 weight = 2
 +++
-This guide runs the full NB STP demo stack locally and walks through the
-complete end-to-end flow: UTILMD 55001 → automatic NB decision → UTILMD 55002.
+This guide runs the NB STP demo stack locally: UTILMD 55001 → automatic NB
+decision → UTILMD 55002.
 
 ## What you're running
 
@@ -37,11 +37,6 @@ sequenceDiagram
     makod-->>webhook: UTILMD 55002 Bestätigung
 ```
 
-Total time once the images are built: **~5 minutes**. The first build takes
-longer — see [Step 1](#step-1-clone-and-build), and rather longer again for the
-[second demo](#the-second-demo-eeg-feed-in-settlement), whose two services come
-out of the full builder stage.
-
 ---
 
 ## Prerequisites
@@ -72,16 +67,10 @@ docker build --target marktd-runtime   -t marktd:dev    .
 docker build --target processd-runtime -t processd:dev  .
 ```
 
-> Not `docker buildx bake` — `docker-bake.hcl` is the CI push path
-> (`push-by-digest`), so it fails on the default docker driver and tags
-> `ghcr.io/hupe1980/mako-*` rather than the `:dev` images the compose file starts.
-
-> The `processd-runtime` stage builds with `--features integrated` (includes
-> both the NB `mako-pruefung` and the LF answer modules).
-
-These three come from a builder stage carrying only their dependencies — no
-Iceberg/DataFusion — so a cold build is a few minutes and a warm one under a
-minute.
+`docker buildx bake` is the CI push path and does not produce the `:dev`
+tags. The `processd-runtime` stage builds with `--features integrated` (the NB
+and LF modules). The three come from a builder stage without Iceberg/DataFusion,
+so a cold build takes a few minutes.
 
 ---
 
@@ -104,10 +93,8 @@ nb-stp-processd-1    processd:dev       Up             0.0.0.0:8580->8580/tcp
 nb-stp-makod-1       makod:dev          Up             0.0.0.0:8080->8080/tcp
 ```
 
-**What happens at startup:**  
-`processd` self-registers its fan-out subscription with `marktd` on startup —
-no manual subscription curl required. Both `marktd` and `processd` run SQLx
-migrations automatically on first boot (databases are created by `init-db.sh`).
+`processd` registers its fan-out subscription with `marktd` at startup, and
+both run their migrations on first boot (`init-db.sh` creates the databases).
 
 ---
 
@@ -181,10 +168,8 @@ curl -s -X PUT http://localhost:8080/admin/partners/4012345000023 \
 
 > **Two registries, two shapes.** `marktd` holds the partner's BO4E
 > `Geschaeftspartner` and its AS4 endpoints (`makoadresse`); `makod` holds the
-> PARTIN record with its communication `channels`, `roles` and `contacts`. The
-> bodies are not interchangeable, and both refuse a field they do not have —
-> so a body sent to the wrong one is a `422` naming the field rather than a
-> `200` with the values dropped.
+> PARTIN record (`channels`, `roles`, `contacts`). Both refuse a field they do
+> not have, so a body sent to the wrong one is a `422` naming the field.
 
 ---
 
@@ -275,9 +260,9 @@ out-of-order command and is rejected as `invalid_state`.
 
 | Interface | URL |
 |---|---|
-| makod Swagger UI | http://localhost:8080/api/v1/docs/ |
+| makod OpenAPI document | http://localhost:8080/api/v1/openapi.json |
 | makod MCP server | http://localhost:8080/mcp |
-| marktd Swagger UI | http://localhost:8180/api/v1/docs/ |
+| marktd OpenAPI document | http://localhost:8180/api/v1/openapi.json |
 | marktd DLQ admin | http://localhost:8180/admin/fanout/dlq |
 | marktd metrics | http://localhost:8180/metrics |
 | processd decisions | http://localhost:8580/api/v1/decisions |
@@ -317,11 +302,9 @@ docker compose up -d
 bash smoke.sh
 ```
 
-The recipe rebuilds `marktd` too, which is a cache hit after the first demo.
-`edmd` and `einsd` are the expensive half of this page: both copy from the full
-`builder` stage, which compiles every service in the workspace in one
-`cargo build` — Iceberg/DataFusion included. Budget **20–45 minutes**
-cold, a few minutes on a warm BuildKit cache.
+`edmd` and `einsd` copy from the full `builder` stage, which compiles every
+service in one `cargo build`, Iceberg/DataFusion included: budget **20–45
+minutes** cold, a few minutes on a warm BuildKit cache.
 
 It registers the Anlagenbetreiber and a 9.8 kWp rooftop plant behind it, pushes a
 month of quarter-hour readings under OBIS `1-0:2.8.0`, settles the month at EUR
@@ -336,10 +319,8 @@ USt.
 
 ## The third demo — order-to-cash
 
-`demos/o2c` runs the retail money path: what the supplier sells, who bought it,
-what they owe, the document that says so, and the receivable behind it. No
-EDIFACT at all — `demos/nb-stp` is where a market message goes out; this is what
-happens on the supplier's own books once supply is running.
+`demos/o2c` runs the retail money path on the supplier's own books — tariff,
+contract, invoice, document, receivable — with no EDIFACT.
 
 | Service | Port | Role |
 |---|---|---|
@@ -350,10 +331,9 @@ happens on the supplier's own books once supply is running.
 | `accountingd` | `9380` | Massenkontokorrent — the double-entry ledger |
 | `webhook` | `8001` | ERP CloudEvent receiver, so this stack runs beside `demos/nb-stp` |
 
-`marktd`, `edmd` and `makod` are deliberately absent — the smoke test names the
-Netzbetreiber and supplies the meter reading, so no lookup happens. Their URLs
-are configured to hostnames that do **not** resolve, so an override that is ever
-dropped fails loudly instead of quietly billing zero.
+`marktd`, `edmd` and `makod` are absent: the smoke test names the
+Netzbetreiber and supplies the meter reading, and their URLs point at hostnames
+that do not resolve, so a dropped override fails instead of billing zero.
 
 ```bash
 # from the repo root
@@ -382,8 +362,7 @@ stacks start with — no Docker, seconds.
 The smoke test computes the expected amount itself: `20 ct/Tag × 31 Tage`,
 `32 ct/kWh × 250 kWh`, the § 3 StromStG Stromsteuer at `2.05 ct/kWh` and an
 `8.00 ct/kWh` Netznutzungsentgelt from the `grid` override, each line rounded to
-the cent — `111.33` netto, `132.48` gross at 19 % USt. A wrong tariff version or
-the other rounding direction fails the assertion.
+the cent — `111.33` netto, `132.48` gross at 19 % USt.
 
 ---
 
@@ -430,7 +409,7 @@ covers building, testing one crate and running the gate.
 | processd — NB STP + LF answer automation | [processd guide](@/docs/services/processd.md) |
 | INVOIC plausibility, § 147 AO / GoBD | [invoicd guide](@/docs/services/invoicd.md) |
 | Energy data, imbalance, billing periods | [edmd guide](@/docs/services/edmd.md) |
-| Process observability, §20 parity | [processd guide — process read model](@/docs/services/processd.md#process-read-model) |
+| Process read model, § 7a Abs. 5 EnWG parity | [processd guide — process read model](@/docs/services/processd.md#process-read-model) |
 | Full system architecture | [Architecture](@/docs/architecture/_index.md) |
 | Process catalogue (GPKE, WiM, …) | [Processes](@/docs/reference/processes.md) |
 | mako-service SDK | [mako-service README](https://github.com/hupe1980/mako/tree/main/crates/mako-service) |

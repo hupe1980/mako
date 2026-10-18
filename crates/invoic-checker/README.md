@@ -41,11 +41,11 @@ if report.outcome != CheckOutcome::Ok {
 | 2 | **Period validity** — `rechnungsperiode_start < end`, both within plausible range | `Dispute` |
 | 3 | **Zahlungsziel** — `faelligkeitsdatum < rechnungsdatum` (invalid) or beyond `max_zahlungsziel_days` (exceeded; default 30 per §7 Allg. Festlegungen) | `Dispute` · `Warn` |
 | 3a | **WiM 31003 send window** — a Dienstleistungsrechnung dated more than 20 Werktage after the period it bills (WiM Teil 1 Kap. 3.7.2 Nr. 1). Only PID 31003 | `Warn` |
-| 4 | **Currency agreement** — the document totals, every position's `gesamtpreis` and every `steuerbetraege` entry agree on one currency. Runs *before* the arithmetic, because every amount is read as EUR and a `CHF` field would otherwise compare silently right | `Dispute` |
+| 4 | **Currency agreement** — the document totals, every position's `gesamtpreis` and every `steuerbetraege` entry agree on one currency. Runs before the arithmetic, which reads every amount as EUR | `Dispute` |
 | 5 | **Position arithmetic** — every `Rechnungsposition` satisfies `menge × einzelpreis ≈ gesamtpreis`. An unrepresentable product is itself a finding, not a panic | `Dispute` |
 | 6 | **Document total** — the positions sum to `gesamtnetto` | `Warn` |
 | 7 | **Umsatzsteuer** — a rate and an amount are stated (§14 Abs. 4 Nr. 8 UStG); `gesamtbrutto = gesamtnetto + gesamtsteuer`; each breakdown entry's `steuerwert` is its rate on its `basiswert` (± one cent); a reverse-charged invoice states **no** tax | `Dispute` |
-| 8 | **Tariff / Angebot** — `einzelpreis` against the published Preisblatt, or against the accepted QUOTES for an ESA invoice. **Skipped for a Stornorechnung**, which carries the original's negated amounts rather than new tariff positions. For PIDs 31005–31008 this is the Mehr-/Mindermengen price from the MMMA store | `Warn` or `Dispute` |
+| 8 | **Tariff / Angebot** — `einzelpreis` against the published Preisblatt, or against the accepted QUOTES for an ESA invoice. **Skipped for a Stornorechnung**. For PIDs 31005–31008 this is the Mehr-/Mindermengen price from the MMMA store | `Warn` or `Dispute` |
 
 `CheckConfig` holds the tolerances (`arithmetic_tolerance_ppm`,
 `total_tolerance_ppm`, `tariff_tolerance_ppm`), `require_tariff` and

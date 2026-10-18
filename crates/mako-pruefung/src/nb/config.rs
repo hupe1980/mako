@@ -2,8 +2,8 @@
 //!
 //! `mako-pruefung` stays a pure, I/O-free library: the only tunables that vary
 //! by operator or by regulatory ambiguity are collected here and passed in by
-//! value. Defaults reproduce the exact behaviour the crate shipped with before
-//! the config seam existed, so `NetzCheckConfig::default()` is always safe.
+//! value. `NetzCheckConfig::default()` is the reading each tunable's own
+//! documentation names as the default, so it is always safe.
 
 use mako_fristen::HolidayCalendar;
 

@@ -57,7 +57,7 @@ pub struct CommandsApiState {
     /// so operators can tune replay latency vs. write amplification without
     /// recompiling.
     pub snapshot_interval: u64,
-    /// Optional `marktd` client for M1 Konfigurationsprodukt guard.
+    /// Optional `marktd` client for the Konfigurationsprodukt guard.
     ///
     /// When set, `wim.steuerungsauftrag.bestaetigen` checks that the contracted
     /// `produkt_code` (from the original ORDERS) is in the SR's

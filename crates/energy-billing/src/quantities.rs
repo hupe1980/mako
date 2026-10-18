@@ -971,7 +971,6 @@ impl EnergyShareMeterInput {
 
 /// All metered quantities for one billing period.
 ///
-/// Replaces the scattered positional parameters of the old `calculate_*` functions.
 /// Set only the fields relevant for the current billing run — defaults are `None`/
 /// empty for unused products.
 ///
@@ -1377,7 +1376,7 @@ mod tests {
         assert_eq!(sum, total, "sum must equal total exactly");
     }
 
-    /// With 3 equal tenants the old "dump remainder on last" method would give
+    /// With 3 equal tenants, dumping the remainder on the last would give the
     /// last tenant 0.001 kWh extra. LRM distributes evenly.
     #[test]
     fn allocate_lrm_distributes_evenly_not_just_last_entry() {

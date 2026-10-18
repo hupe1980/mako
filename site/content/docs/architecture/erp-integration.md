@@ -180,7 +180,7 @@ with `200 OK` without re-processing.
 | ERP → makod | `PUT /admin/malo/{malo_id}` | Push MaLo master data to the local cache |
 | ERP → makod | `PUT /admin/partners/{mp_id}` | Register or update a trading-partner endpoint |
 | marktd → invoicd | `POST /webhook` CloudEvents | GPKE/WiM billing notifications for automatic plausibility check |
-| invoicd → makod | `POST /api/v1/commands` | the answering PID's accept/reject command (`gpke.abrechnung.*`, `wim.*`, `gabi.*`, `geli.*`, `invoic.*`) |
+| invoicd → makod | `POST /api/v1/commands` | the answering PID's accept/reject command (`gpke.abrechnung.*`, `wim.rechnung.*`, `gabi.rechnung.*`, `invoic.*`) |
 | invoicd → ERP | `de.invoic.receipt.settled/disputed` CloudEvents | Durable at-least-once payment notifications |
 | invoicd → ERP | `de.invoic.payment.overdue` CloudEvents | Announced once per receipt when `pay_by` passes without `confirm-payment` |
 | ERP → invoicd | `POST /api/v1/receipts/{id}/confirm-payment` | Close § 147 AO / GoBD payment audit trail when bank transfer confirmed |
@@ -227,7 +227,7 @@ graph TB
 
     billingd -->|"render · pin template hash"| outputd
     billingd -->|"de.billing.rechnung.erstellt"| accountingd
-    ERP -.->|"GET /open-items<br/>GET /trial-balance"| accountingd
+    ERP -.->|"GET /api/v1/offene-posten<br/>GET /api/v1/trial-balance"| accountingd
 ```
 
 `marktd`'s fan-out is persist-before-fan-out: an event lands in `event_log`
@@ -439,24 +439,31 @@ Authorization: Bearer <token>
 ```
 
 `marktrolle` is required only for a command more than one role may issue (such
-as `wim.geraetewechsel.beauftragen`, permitted for `NB` and `MSB`); for a
-single-role command it is inferred from the name. Never include
+as `invoic.nne.stellen`, permitted for `NB` and `GNB`); for a single-role
+command it is inferred from the name. Never include
 `sender_party_id`, `receiver_party_id`, `pruefidentifikator` or `message_ref` —
 those are engine-owned.
 
-A **billing** command carries a BO4E object in `payload`:
+A **billing** command names the invoice by `invoice_ref` — the
+`rechnungsnummer` the counterparty's REMADV correlates on — and carries the
+BO4E `Rechnung` beside it:
 
 ```json
 {
-  "command": "invoic.netznutzungsrechnung.senden",
+  "command": "invoic.nne.stellen",
   "marktrolle": "NB",
   "payload": {
-    "_typ": "RECHNUNG",
-    "_version": "202607.1.0",
-    "rechnungsnummer": "NN-2026-000123",
-    "gesamtnetto":  { "_typ": "BETRAG", "wert": "300.00", "waehrung": "EUR" },
-    "gesamtsteuer": { "_typ": "BETRAG", "wert": "57.00",  "waehrung": "EUR" },
-    "gesamtbrutto": { "_typ": "BETRAG", "wert": "357.00", "waehrung": "EUR" }
+    "invoice_ref":     "NN-2026-000123",
+    "sender_mp_id":    "9900357000004",
+    "recipient_mp_id": "9900357000011",
+    "rechnung": {
+      "_typ": "RECHNUNG",
+      "_version": "202607.1.0",
+      "rechnungsnummer": "NN-2026-000123",
+      "gesamtnetto":  { "_typ": "BETRAG", "wert": "300.00", "waehrung": "EUR" },
+      "gesamtsteuer": { "_typ": "BETRAG", "wert": "57.00",  "waehrung": "EUR" },
+      "gesamtbrutto": { "_typ": "BETRAG", "wert": "357.00", "waehrung": "EUR" }
+    }
   }
 }
 ```
@@ -511,15 +518,8 @@ one, an executed Sperrung does not block the Entsperrung, and a process of a
 different family on the same MaLo is allowed. Derive keys from the business
 event (MaLo *and* process date), not the MaLo alone.
 
-**BO4E `_typ` → PID mapping:**
-
-| BO4E `_typ` | `marktrolle` / context | PID family |
-|---|---|---|
-| `VERTRAG` (Beginn, Strom) | `LF` | GPKE 55001 |
-| `VERTRAG` (Ende, Strom) | `LF` | GPKE 55004 |
-| `VERTRAG` (Beginn, Gas) | `LF` | GeLi Gas 44001 |
-| `ZAEHLER` (Geräteübernahme) | `MSB` | WiM ORDERS 17001/17002 |
-| `RECHNUNG` | `BKV` | MABIS 13003 |
+The `command` name selects the process and its PID; a BO4E `_typ` in the
+payload selects nothing.
 
 ---
 
@@ -687,28 +687,6 @@ app.post(
 );
 ```
 
-### SAP BTP / Cloud Integration
-
-SAP Business Technology Platform can consume CloudEvents 1.0 natively via
-[SAP Event Mesh](https://help.sap.com/docs/event-mesh) or the
-[SAP Integration Suite](https://help.sap.com/docs/cloud-integration). Configure
-a webhook receiver channel with:
-
-- **Channel type**: HTTP-based receiver
-- **Authentication**: [Standard Webhooks] (`webhook-signature`)
-- **Content type**: `application/cloudevents+json`
-- **Format**: JSON
-
-The `type` attribute (`de.mako.*`) maps to an SAP Event Mesh topic; you can
-route events to different integration flows using the topic filter.
-
-### AWS EventBridge
-
-Register `makod` as a [partner event source](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-saas.html)
-or configure a direct API Gateway → EventBridge target. CloudEvents `type`
-maps to an EventBridge `detail-type`. Set the HMAC verification in an API
-Gateway Lambda authorizer.
-
 ---
 
 ## Idempotency implementation notes
@@ -801,8 +779,8 @@ webhook_secret = "env:ERP_WEBHOOK_SECRET"   # read from environment at startup
 
 ## Testing
 
-`mako-engine`'s `testing` feature provides `NoopErpAdapter` (succeeds without
-delivering) and `LogErpAdapter` (logs at `INFO`). After a `Process::run`,
+`mako-engine`'s `testing` feature provides `NoopErpAdapter`, which succeeds
+without delivering; `LogErpAdapter` (logs at `INFO`) is always available. After a `Process::run`,
 assert on `InMemoryOutboxStore::pending_now` for the ERP-targeted entry.
 
 ---
@@ -850,9 +828,10 @@ CloudEvents types. The BO4E schema tag is `v202607.1.0`; a payload's
 ## Automated Billing Settlement
 
 [`invoicd`](@/docs/services/invoicd.md) checks every received INVOIC — ten
-PIDs across four answer-command families: GPKE (31001, 31002, 31005, 31006),
-WiM (31003, 31009), GaBi Gas (31007, 31008), and the Sparte-neutral 31004
-Storno and 31011 sonstige Leistung. It subscribes to
+PIDs across four answer-command families: `gpke.abrechnung.*` (31001, 31002,
+31005, 31006), `wim.rechnung.*` (31003, 31009), `gabi.rechnung.*` (31007,
+31008), and `invoic.*` for the 31004 Stornorechnung and the 31011 Rechnung
+sonstige Leistung. It subscribes to
 `de.mako.process.initiated` from `marktd`, runs `invoic-checker`, persists the
 receipt (a Buchungsbeleg — § 147 Abs. 3 AO / § 14b UStG) and issues the
 settlement command without ERP involvement.

@@ -89,13 +89,11 @@ agentplane = { version = "0.47", features = [
 tokio = { version = "1", features = ["full"] }
 toml  = "0.9"
 
-# ── Role-isolation feature flags (§§ 6a, 7a EnWG) ───────────────────────────
+# ── Role feature flags ──────────────────────────────────────────────────────
 #
-# Mirrors the flags every other daemon carries. An `role-lf` build compiles no
-# NB or MSB specialist and configures no NB or MSB MCP endpoint — structural
-# separation rather than a policy decision at request time.
-#
-# Default (no flags): all roles, matching the other services.
+# A `role-lf` build registers no NB or MSB specialist and configures no NB or
+# MSB MCP endpoint, so a misconfiguration fails closed. Default (no flags): all
+# roles.
 [features]
 # Amazon Bedrock Converse, off by default. The AWS SDK is a substantial
 # dependency tree — and pulls `http` 0.2 alongside the workspace's 1.x, which

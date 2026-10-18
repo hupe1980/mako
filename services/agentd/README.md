@@ -35,7 +35,7 @@ a model-backed specialist.
 
 | Route | Purpose |
 |---|---|
-| `POST /webhook` | CloudEvent ingest. Admission commits before the answer: `202` admitted, `204` no subscriber, `429` transient (quota), `422` unprocessable — dead-letter now |
+| `POST /webhook` | CloudEvent ingest. Admission commits before the answer: `202` admitted, `204` no subscriber, `429` transient (quota), `422` unprocessable, dead-lettered |
 | `POST /api/v1/run` | start a run and wait for it (`session_timeout_secs`); honours `Idempotency-Key` |
 | `GET /api/v1/agents`, `/api/v1/agents/catalog` | each specialist's version and manifest digest |
 | `POST /api/v1/erasure` | `case_id` and/or `memory_subject`, plus a mandatory `reason` |

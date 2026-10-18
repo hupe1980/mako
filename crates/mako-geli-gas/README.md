@@ -32,7 +32,7 @@ assert!(ctx.registered_workflows().contains(&mako_geli_gas::lieferbeginn::WORKFL
 | Aspect | GPKE (Strom) | GeLi Gas |
 |---|---|---|
 | Festlegung | BK6-24-174 (Teil 1–3), BK6-22-024 Anlage 1d (Teil 4) | **BK7-24-01-009** (GeLi Gas 3.0) |
-| Antwortfrist shape | wall-clock instant on the 1. WT nach dem ÜT (07:00 / 09:00 / 11:00 / 12:00) | **Ablauf des 4. / 3. / 2. Werktags** nach Eingang |
+| Antwortfrist shape | wall-clock instant on the 1. WT nach dem ÜT (11:00 / 06:00 / 05:00 / 09:00) | **Ablauf des 4. / 3. / 2. Werktags** nach Eingang |
 | Zuordnungszeitpunkt | 00:00 Uhr | **06:00 Uhr** — the Gastag runs 06:00–06:00 |
 | Vorlauffrist des LF | — | **10 WT** Anmeldung, **7 WT** Abmeldung, bei Lieferantenwechsel |
 | Entscheidungsbäume | `E_06xx` | **`E_30xx`** |

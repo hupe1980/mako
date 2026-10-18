@@ -59,6 +59,7 @@ and `build_for_test::<D>(cfg)` (feature `testing`) builds the router exactly as
 | `headers` | `single_str` | Identity/idempotency headers — a repeated header is refused, never first-wins |
 | `dates` | `parse_iso_date`, `DateError` | The one request-date parser — a malformed date is a 400 naming the field, never `None` |
 | `config` | `load_config`, `DatabaseConfig`, `HttpConfig` | Layered TOML + env-var config loading |
+| `policy` | `policy_choice!`, `Policy`, `PolicyReport`, `router` | Operator settings under `[policy]` — each option sourced, logged at startup, exported as `mako_policy_info`, changes recorded in `service_policy_log`, served at `GET /api/v1/policy` |
 | `shutdown` | `token()`, `serve()` | Graceful shutdown — SIGINT **and** SIGTERM |
 | `oidc` | `OidcConfig`, `OidcVerifier`, `Claims`, `ExpectedTenant` | OIDC/JWT verification + `build_verifier()` factory |
 | `mcp_auth` | `McpAuth`, `McpAuthConfig`, `McpApiKey`, `McpIdentity` | Unified MCP server authentication (needs `cedar` **and** `oidc`) |

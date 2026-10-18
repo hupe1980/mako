@@ -397,9 +397,8 @@ proptest! {
     /// § 9a/§ 9b/§ 9c StromStG are reliefs the customer claims from the
     /// Hauptzollamt after being invoiced in full. Declaring one must leave
     /// netto, MwSt and brutto bit-identical for any tariff and any consumption
-    /// — the only difference is one 0-EUR note. This is the property the old
-    /// model could not have: its `industrie_stromsteuer_befreiung` flag zeroed
-    /// the levy, so declaring the relief changed the invoice by 2,05 ct/kWh.
+    /// — the only difference is one 0-EUR note. A model that zeroes the levy
+    /// for the relief changes the invoice by 2,05 ct/kWh and fails this.
     #[test]
     fn an_entlastung_leaves_every_total_untouched(
         ap in arb_arbeitspreis(),
@@ -442,8 +441,7 @@ proptest! {
     ///
     /// Both are supplier-side, so both change the invoice — the property is
     /// that they change it by exactly the levy and by nothing else. An
-    /// Ermäßigung that dropped the line instead (the old `Bahnstrom` shape)
-    /// would fail the second assertion.
+    /// Ermäßigung that drops the line instead fails the second assertion.
     #[test]
     fn a_befreiung_and_an_ermaessigung_move_only_the_levy(
         ap in arb_arbeitspreis(),

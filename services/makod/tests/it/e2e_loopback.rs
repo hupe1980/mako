@@ -27,12 +27,14 @@ fn viu_registry() -> makod::party_registry::MpIdRegistry {
             roles: vec!["NB".to_owned()],
             primary: true,
             agency: None,
+            as4: None,
         },
         PartyConfig {
             mp_id: OWN_LF.to_owned(),
             roles: vec!["LF".to_owned()],
             primary: false,
             agency: None,
+            as4: None,
         },
     ])
     .expect("valid VIU registry")
@@ -43,9 +45,6 @@ fn viu_registry() -> makod::party_registry::MpIdRegistry {
 /// process registry holds the spawned process for the MaLo.
 #[tokio::test]
 async fn loopback_round_trip_spawns_process() {
-    use asx_rs::core::SessionContextBuilder;
-    use asx_rs::observability::EventBus;
-    use mako_as4::testing::{BdewCertPurpose, generate_self_signed_bdew_keypair};
     use mako_engine::ids::TenantId;
     use mako_engine::registry::ProcessRegistry as _;
     use mako_engine::store_slatedb::SlateDbStore;
@@ -85,14 +84,27 @@ async fn loopback_round_trip_spawns_process() {
         contrl_ack: None,
     });
 
-    // Real sender with test PKI — signing material never used on loopback,
-    // but constructing it proves the production wiring shape.
-    let signing = generate_self_signed_bdew_keypair("CN=VIU Test", BdewCertPurpose::Signing);
-    let session = SessionContextBuilder::new("loopback-test", OWN_LF)
-        .with_signing_material(signing.cert_pem_str().to_owned(), signing.key_pem_str())
-        .with_trust_anchor_pem(signing.cert_pem_str().to_owned())
-        .build()
-        .expect("session");
+    // Real sender with test SM-PKI material — the loopback opens no
+    // connection, but constructing the clients proves the production wiring.
+    let ca = asx::testkit::pki::TestCa::sm_pki();
+    let party = ca.bdew_party(OWN_LF);
+    let clients = makod::as4_clients::As4Clients::build(makod::as4_clients::As4Setup {
+        domain: mako_as4::MessageIdDomain::parse("as4.viu.test").unwrap(),
+        trust_anchor: ca.anchor(),
+        crl_signer: ca
+            .crl_signer("CCRL-S(Root)", asx::testkit::pki::KeyAlg::EcBrainpoolP256r1)
+            .certificate(),
+        identities: vec![mako_as4::LocalIdentity {
+            mp_id: OWN_LF.to_owned(),
+            agency: "293".to_owned(),
+            signer: party.signing.key_pair(),
+            decrypter: party.encryption.key_pair(),
+            tls: party.tls.key_pair(),
+        }],
+        partners: mako_as4::PartnerDirectory::default(),
+        unbekannte_absender: makod::config::UnbekannteAbsender::NurKonfigurierte,
+    })
+    .expect("clients build");
     let malo_sender = makod::malo_ident_sender::MaloIdentSender::new(
         makod::malo_cache::SlateDbMaloCache::new(store.clone()),
         reqwest::Client::new(),
@@ -104,19 +116,13 @@ async fn loopback_round_trip_spawns_process() {
         None,
     );
     let sender = makod::as4_sender::BdewAs4Sender::new(
-        Arc::new(session),
-        Arc::new(EventBus::new_for_testing()),
-        Arc::new(mako_as4::BdewAs4Profile::new()),
+        clients,
+        makod::as4_evidence::As4Evidence::new(store.clone()),
         malo_sender,
         Arc::clone(&registry),
         Some(loopback),
         platform,
-        false,
-        // The loopback opens no outbound connection, so there is no partner MSH
-        // to present a client certificate to.
-        None,
-    )
-    .expect("sender");
+    );
 
     // A UTILMD 55001 addressed to OUR OWN NB MP-ID.
     let malo = "51238696781";

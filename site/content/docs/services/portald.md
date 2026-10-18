@@ -41,8 +41,7 @@ Port: **`:9480`**
 ## Design principles
 
 - **Stateless.** No database, no cache, no session store. Every response is
-  assembled from the authoritative services on the request path, so a portal
-  reply can never be staler than they are and replicas need no coordination.
+  assembled from the authoritative services on the request path.
 - **No domain policy.** Notice periods, tariff rules, IBAN validation and
   invoice rendering belong to the services that own them. `portald` validates
   request *shape* and relays their verdicts unchanged.
@@ -63,16 +62,14 @@ header.
 | `vertragd` answers | `portald` answers |
 |---|---|
 | `2xx` with a `kunden_id` | the request proceeds |
-| `401` / no bearer / no customer profile | `401` |
+| `401` or `404`, or no bearer token on the request | `401` |
 | `403` | `403` |
 | unreachable, `5xx`, or `2xx` without a `kunden_id` | `503` |
 
-`auth::authorize` is the only way to obtain a `PortalAuthCtx`, and every
-customer-scoped handler takes one by value. `tests/it/authorization_guard.rs`
-drives every customer-scoped method handler against a refusing `vertragd` and
-fails if any answers with upstream data, or if the router gains a handler the
-test does not list.
-`…/invoices/{record_id}/download` also compares the record's `malo_id` with the
+Every customer-scoped handler takes the `PortalAuthCtx` only `auth::authorize`
+returns; `tests/it/authorization_guard.rs` fails if any handler answers a
+refusing `vertragd` with upstream data. `…/invoices/{record_id}/download` also
+compares the record's `malo_id` with the
 authorised one. Starting without `vertragd_url` is refused unless
 `allow_insecure_no_auth = true`.
 
@@ -87,7 +84,7 @@ All paths are prefixed `/api/v1/portal/{malo_id}`.
 | `GET` | `/dashboard` | `marktd` · `accountingd` · `billingd` · `edmd` — five reads, concurrently |
 | `GET` | `/lastgang?from=&to=` | `edmd` — BO4E `Lastgang` array |
 | `GET` | `/invoices?limit=&outcome=` | `billingd` — page size defaults to 24, clamped to 1–100 |
-| `GET` | `/invoices/{record_id}/download` | `billingd` — the EN 16931 CII XML of the stored model (`GET /billing/{id}/xrechnung`). BT-24 declares plain EN 16931 for a retail invoice; only the B2G path declares the XRechnung CIUS |
+| `GET` | `/invoices/{record_id}/download` | `billingd` — the EN 16931 CII XML of the stored model (`GET /billing/{id}/xrechnung`); BT-24 declares the XRechnung CIUS only on the B2G path |
 | `GET` | `/dokumente?kind=&limit=` | `outputd` — the **document inbox**: what was issued and sent. `kind` is an allowlist (`INVOICE`, `MAHNUNG`, `PREISANPASSUNG`); page size defaults to 50, clamped to 1–200 |
 | `GET` | `/dokumente/{document_id}` | `outputd` — the bytes as issued; opening it records the portal read receipt |
 | `GET` | `/balance` | `accountingd` — open-items balance |
@@ -99,8 +96,8 @@ All paths are prefixed `/api/v1/portal/{malo_id}`.
 | `GET` | `/kuendigungsfrist` | `vertragd` — reachable end dates per reason |
 | `POST` | `/tarifwechsel` | `vertragd` |
 | `POST` | `/kuendigen` | `vertragd` |
-| `GET` | `/kontakt` | `vertragd` — DSGVO Art. 15, and the **read half** of the rectification flow: a `PUT` replaces the stored `Geschaeftspartner` whole, so a client that has not read it first cannot change one field without dropping the rest. Projected, not proxied: operator notes and the ERP key are not the customer's to see |
-| `PUT` | `/kontakt` | `vertragd` — DSGVO Art. 16. The body's `geschaeftspartner` is a BO4E `Geschaeftspartner` and crosses [the gate](@/docs/architecture/domain-model.md#the-bo4e-gate) **here**, at the edge the customer reaches: a portal user who mistypes an enum gets the field named back, not a `502` from one hop away |
+| `GET` | `/kontakt` | `vertragd` — DSGVO Art. 15; read it before a `PUT`, which replaces the `Geschaeftspartner` whole. Projected: operator notes and the ERP key are left out |
+| `PUT` | `/kontakt` | `vertragd` — DSGVO Art. 16. `geschaeftspartner` crosses [the BO4E gate](@/docs/architecture/domain-model.md#the-bo4e-gate) here, so a mistyped enum is a `422` naming the field |
 | `PUT` | `/sepa` | `accountingd` |
 
 `/health/live`, `/health/ready` and `/metrics` come from the service runner.
@@ -227,6 +224,7 @@ portald:
   volumes:
     - ./portald.toml:/etc/mako/portald.toml:ro
   environment:
+    PORTALD_CONFIG: /etc/mako/portald.toml
     PORTALD_VERTRAGD_SERVICE_KEY: "${PORTALD_VERTRAGD_SERVICE_KEY}"
 ```
 
@@ -247,7 +245,7 @@ data from the service that owns it, each behind that service's Cedar policy:
 | EEG/KWKG plants | [`einsd`](@/docs/services/einsd.md) `list_plants`, `get_plant` |
 | Supply status | [`marktd`](@/docs/services/marktd.md) `get_versorgungsstatus` |
 
-`agentd`'s `portald-agent` is granted these reads, all non-mutating.
+`agentd`'s `portald-agent` holds read grants on these services, none mutating.
 
 ---
 

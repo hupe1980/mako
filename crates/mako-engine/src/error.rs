@@ -174,7 +174,7 @@ pub enum EngineError {
     /// registered for the recipient GLN.
     ///
     /// This is a **permanent** failure: the operator must add the missing
-    /// `--as4-partner <GLN>=<URL>` entry before delivery can succeed.
+    /// AS4 partner (with its endpoint) before delivery can succeed.
     /// The outbox worker should dead-letter immediately rather than retrying.
     #[error("no AS4 endpoint configured for recipient {recipient}")]
     PartnerUnknown {
@@ -421,7 +421,7 @@ impl EngineError {
     /// Return `true` when this is a [`EngineError::PartnerUnknown`].
     ///
     /// `PartnerUnknown` is a **permanent** failure: no retry will succeed until
-    /// the operator registers the missing `--as4-partner` entry. The outbox
+    /// the operator registers the missing AS4 partner. The outbox
     /// worker should dead-letter the message immediately.
     #[must_use]
     pub fn is_partner_unknown(&self) -> bool {

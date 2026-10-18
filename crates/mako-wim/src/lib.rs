@@ -546,10 +546,9 @@ impl mako_engine::builder::EngineModule for WimModule {
         //
         // GPKE billing registers 33003/33004 (Strom Abweisung Kopf und Summe /
         // Position — itemized rejections). Per REMADV AHB 1.0a, WiM Strom billing
-        // (incl. ESA→MSB) ALSO rejects with the itemized 33003/33004; today mako-wim
+        // (incl. ESA→MSB) ALSO rejects with the itemized 33003/33004; mako-wim
         // registers only 33001/33002 and leans on GPKE's 33003/34 registration, so a
-        // WiM itemized rejection is not yet routed to `wim-invoic`
-        // "REMADV itemized rejections in WiM scope". The registrations coexist because
+        // WiM itemized rejection is not routed to `wim-invoic`. The registrations coexist because
         // the makod router disambiguates shared REMADV PIDs by conversation ID
         // (invoice correlation), not by PID alone.
         //

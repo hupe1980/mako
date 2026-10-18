@@ -905,7 +905,7 @@ pub fn geli_gas_mscons_registry() -> AdapterRegistry<GeliGasMsconsWorkflow> {
                 validation_errors,
                 brennwert_kwh_per_m3: extract_qty_z08(m),
                 zustandszahl: extract_qty_z10(m),
-                // H2-readiness: gas quality type not yet in MSCONS AHB — None until standardized
+                // The MSCONS AHB carries no gas quality type.
                 gasqualitaet: None,
             })
         },

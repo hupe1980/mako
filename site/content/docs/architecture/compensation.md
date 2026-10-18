@@ -24,11 +24,12 @@ disagree about a deadline:
 | WiM Gas | the same four windows on the Gas twins | 3 (44039) / 5 (44042) / 7 (44051) / 1 (44168) |
 | GeLi Gas | Ablauf des *n*-ten Werktags | 4 (44001), 3 (44004/44007/44010/44016), 2 (44013) |
 | NZR-EMob (Modell 2) | Ablauf des *n*-ten Werktags | 7 (55238), 3 (55240, 55242) |
+| MaBiS (ZP lifecycle, BIKO answers) | Ablauf des 1. Werktags | 55203, 55206, 55209, 55212 (Anlage 3 Kap. 17.3.3 / 17.3.5) |
 
-`Family` names exactly these five. MaBiS publishes no answer Frist — the
-Prüfmitteilung's cell in Kap. 9.8.2 Nr. 1 is empty and the NB „kann" answer; the
-Kap. 3.10 Tabelle 2 clearing window bounds it. The two 1-Werktag MaBiS
-obligations belong to the BIKO (Kap. 9.8.2 Nr. 3, Kap. 9.9.2 Nr. 1) and live in
+`Family` names exactly these six. The MaBiS Prüfmitteilung has no answer Frist —
+its cell in Kap. 9.8.2 Nr. 1 is „–" and the NB „kann" answer; the Kap. 3.10
+Tabelle 2 clearing window bounds it. The BIKO's 1-Werktag duties to forward it
+and to send the Datenstatus (Kap. 9.8.2 Nr. 3, Kap. 9.9.2 Nr. 1) live in
 `mako_mabis::fristen`.
 
 `mako_fristen::antwort::antwortfrist` returns `None` for a PID the Festlegungen

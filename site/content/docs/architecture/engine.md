@@ -51,8 +51,7 @@ graph TD
     end
 
     subgraph Partners["Partner Store"]
-        PT["PartnerStore<br/>pt/ — MP-ID → AS4 endpoint"]
-        OW --> PT
+        PIN["inbound PARTIN · admin API"] --> PT["PartnerStore<br/>pt/ — MP-ID → partner record"]
     end
 ```
 
@@ -313,6 +312,7 @@ per-family entries differ only in the `FristShape` they carry.
 | `WimGas` | the same four on the Gas twins | 3 (44039) / 5 (44042) / 7 (44051) / 1 (44168) |
 | `GeliGas` | Ablauf des *n*-ten Werktags nach Eingang | 4 (44001) / 3 (44004, 44007, 44010, 44016) / 2 (44013) |
 | `Emob` | Ablauf des *n*-ten Werktags | 7 (55238) / 3 (55240, 55242) |
+| `Mabis` | Ablauf des 1. Werktags (the BIKO answers the MaBiS-ZP Aktivierung/Deaktivierung) | 1 (55203, 55206, 55209, 55212) |
 
 Two obligations sit outside that catalogue because they are not keyed on an
 inbound PID:
@@ -320,7 +320,7 @@ inbound PID:
 | Obligation | Resolver |
 |---|---|
 | INVOIC — zum Zahlungsziel der Rechnung; der NB bei 31009 zum 4. WT davor | `mako_fristen::vorlauf::rechnung_antwort_spaetester_uet` |
-| MaBiS — **no response Frist is published**; the Kap. 3.10 Tabelle 2 clearing window bounds it instead | `mako_mabis::Bilanzierungsmonat::clearing(zeitreihe, lauf)` |
+| MaBiS Prüfmitteilung — **no response Frist is published**; the Kap. 3.10 Tabelle 2 clearing window bounds it instead | `mako_mabis::Bilanzierungsmonat::clearing(zeitreihe, lauf)` |
 
 `mako_wim::antwort_frist_werktage(pid)` returns the bare Werktage count for a WiM
 PID, for callers that need the number rather than a resolved instant.
@@ -410,12 +410,14 @@ workflow's snapshots across a cutover, which `makod`'s migration endpoint uses.
 ## Trading-partner master data (`PartnerStore`)
 
 `PartnerStore` is the durable, PARTIN-aware partner directory (`pt/`). `makod`
-seeds it from config at startup, inbound PARTIN updates it, and the outbox
-worker reads the AS4 endpoint from it:
+seeds it at startup with the endpoint of every `[[as4.partner]]`, and inbound
+PARTIN updates it. The AS4 sender delivers through the `asx-rs` clients built
+from `[[as4.partner]]` — endpoint, encryption and signing certificates together —
+so a partner it sends to is a configured one:
 
 ```rust
 let partners = store.as_partner_store();
-for record in PartnerRecord::from_cli_pairs(&config.as4.partners)? {
+for record in PartnerRecord::from_cli_pairs(&as4_partner_endpoints)? {
     partners.upsert(tenant_id, &record).await?;
 }
 let endpoint = partners.as4_endpoint(tenant_id, &recipient).await?;
@@ -456,7 +458,7 @@ Partners are managed at runtime via the
 | `mako-gpke` | GPKE — Lieferbeginn/-ende Strom, Beendigung der Zuordnung, Ersatz-/Grundversorgung, Neuanlage, Sperrung, Konfiguration, INVOIC | clock time per PID, from `mako_fristen::antwort` |
 | `mako-wim` | WiM Strom und Gas — Messstellenwechsel, Geräteübernahme, INSRPT, WiM-Rechnung, ESA | 3 / 5 / 7 / 1 Werktage per PID, in beiden Sparten |
 | `mako-geli-gas` | GeLi Gas — Lieferbeginn/-ende Gas, Stornierung 44022–44024, Sperrung Gas, Datenabruf, INVOIC 31011 | per PID, from `mako_fristen::antwort` |
-| `mako-mabis` | MaBiS — Bilanzkreisabrechnung Strom, MaBiS-ZP lifecycle, Clearingliste, Listenabgleich | none published — the Kap. 3.10 clearing window bounds it |
+| `mako-mabis` | MaBiS — Bilanzkreisabrechnung Strom, MaBiS-ZP lifecycle, Clearingliste, Listenabgleich | 1 Werktag for the BIKO's ZP-lifecycle answers; none for a Prüfmitteilung — the Kap. 3.10 clearing window bounds it |
 | `mako-gabi-gas` | GaBi Gas — Allokation, MMM- und Kapazitäts-INVOIC, DVGW gas transport | KoV deadlines |
 | `mako-emob` | NZR-EMob / Modell 2 — the three Modellwechsel legs | 7 / 3 Werktage per PID; an unanswered leg escalates |
 | `mako-redispatch` | Redispatch 2.0 — activation, Stammdaten, acknowledge-and-forward | 3-minute ACK |
@@ -498,9 +500,10 @@ name that resumes another workflow's process (`gabi-gas-mmma` →
 
 ### MABIS architecture note
 
-MaBiS aggregates across thousands of MaLo streams for a billing period, so its
-aggregate is a projection (`ProjectionRunner::catch_up_persistent`) rather than
-a per-MaLo `Process`.
+A view across many process streams is a projection, not a `Process`: the
+MaBiS-ZP register (`mako_mabis::zp_register::ZpRegister`) is folded by
+`makod`'s `ProjectionWorker` through `ProjectionRunner::catch_up_persistent`,
+while each Bilanzkreisabrechnung stays a `mabis-billing` process.
 
 ---
 
@@ -565,8 +568,8 @@ per-stream cursor map; `0` means replay from the beginning.
 
 ## `makod` production daemon
 
-`makod` assembles every domain module its Marktrolle features enable into one
-`EngineContext`. Configuration, deployment and health checks:
+`makod` registers the domain modules its `[deployment] rollen` need
+(`makod::startup::MODULE_TABLE`) into one `EngineContext`. Configuration, deployment and health checks:
 **[`makod` Operator Guide →](@/docs/services/makod.md)**.
 
 ```bash

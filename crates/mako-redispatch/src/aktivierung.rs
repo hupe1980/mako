@@ -859,7 +859,7 @@ impl Workflow for AktivierungWorkflow {
             .into()),
 
             // MSCONS/ORDERS/ORDRSP: audit record in any state — every
-            // registered PID now has a handler.
+            // registered PID has a handler.
             AktivierungCommand::ReceiveMarketMessage {
                 pid,
                 sender,

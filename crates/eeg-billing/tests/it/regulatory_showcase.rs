@@ -898,10 +898,9 @@ fn s24_zusammenlegung_crosses_tariff_band() {
 /// **EEG 2023 Anlage 1 correction**: Managementprämie is NOT a guaranteed
 /// floor. eff_AW = 5.5 + 0.4 = 5.9 ct; EPEX = 28.0 ct >> 5.9 ct → total = 0.
 ///
-/// Under the old (incorrect) EEG ≤2012 model this would have been:
-///   0.4 ct × 80,000 kWh / 100 = 320 EUR (Managementprämie flat payment)
-/// Under the correct EEG 2023 model:
-///   total = max(0, 5.9 − 28.0) = 0 EUR
+/// A flat Managementprämie floor would wrongly pay
+///   0.4 ct × 80,000 kWh / 100 = 320 EUR;
+/// EEG 2023 pays total = max(0, 5.9 − 28.0) = 0 EUR.
 ///
 /// The plant operator bears full market price risk. No payment from the NB.
 /// The Direktvermarkter sells at 28 ct EPEX — operator benefits through revenue
@@ -3489,8 +3488,8 @@ fn settlement_state_payable_and_terminal_semantics() {
 /// EEG 2023 Anlage 1 — Partial Managementprämie when EPEX is between AW and AW+Mgmt.
 ///
 /// When AW ≤ EPEX < AW + Managementprämie, the plant receives only the residual
-/// management component (not the full 0.4 ct). This is the key difference from
-/// the old EEG ≤2012 model.
+/// management component (not the full 0.4 ct), so no intermediate band keeps
+/// the claim alive.
 #[test]
 fn anlage1_marktwert_just_above_aw_pays_nothing() {
     // AW = 5.0, MW = 5.2 → MP = max(0, −0.2) = 0. There is no intermediate band

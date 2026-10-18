@@ -15,9 +15,6 @@ Sources:
 
 ## Beschlusskammer 6 — Electricity (Strom)
 
-BK6 is responsible for electricity network access, metering, and market communication.
-All GPKE, WiM, and MaBiS processes are regulated under BK6.
-
 ### GPKE — Geschäftsprozesse zur Kundenbelieferung mit Elektrizität
 
 **Page:** <https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/831_gpke/gpke_node.html>
@@ -29,9 +26,8 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
   WiM keeps its own Aktenzeichen, BK6-09-034.
 - **BK6-22-024** (Beschluss 21.03.2024) — **LFW24-Festlegung** („beschleunigter werktäglicher
   Lieferantenwechsel in 24 Stunden", statutory anchor **§20a EnWG**): re-issued GPKE Teil 2
-  und Teil 4 and absorbed the MPES processes into the GPKE (effective 06.06.2025).
-  Go-live 06.06.2025 — postponed from 04.04.2025 by Mitteilung Nr. 4 vom 06.12.2024
-- **Gültig seit: 06.06.2025**
+  und Teil 4, which carry the MPES processes.
+- **Gültig seit: 06.06.2025** (Mitteilung Nr. 4 vom 06.12.2024)
 
 **Process documents (Lesefassungen):**
 
@@ -48,11 +44,10 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
     Anmeldung; 55005/55006 Bestätigung/Ablehnung Abmeldung; 55016 Kündigung Lieferbeginn
     (LFN → LFA); 55017/55018 Bestätigung/Ablehnung Kündigung
 - Neuanlage MaLo (UTILMD E, PIDs 55600–55605)
-- Sperrauftrag / Entsperrauftrag Strom (ORDERS, PIDs 17115–17117)
+- Sperrauftrag / Entsperrauftrag Strom (ORDERS, PIDs 17115–17117; Stornierung ORDCHG 39000/39001)
 - Anfrage Daten der individuellen Bestellung (UTILMD, PID 55555) — GPKE Teil 4 data request
 - Konfigurationseinrichtung Rollenzuordnung MSB (ORDERS/ORDRSP, PIDs 17134–17135, 19001–19002) — via BK6-22-024 GPKE Teil 4
 - Abschlagsrechnung / NN-Rechnung Netz (INVOIC, PIDs 31001–31002)
-- Stornorechnung Netz (INVOIC, PID 31004)
 - **Mehr-/Mindermengen Strom** (INVOIC, PIDs 31005–31006) — see Mitteilung Nr. 72 below
 - **Mehr-/Mindermengen Gas** (INVOIC, PIDs 31007–31008; NB → MGV, Gas-only) — belongs to GaBi Gas (`mako-gabi-gas`)
 
@@ -86,11 +81,9 @@ Geschäftsprozesses — siehe [unten](#antwortfristen-summary).
 
 ### MPES — Marktprozesse für erzeugende Marktlokationen (Strom)
 
-**Status:** merged into GPKE.
-
-- **BK6-20-160** (standalone MPES) — gültig bis **05.06.2025**
-- Seit **06.06.2025** sind die MPES-Prozesse in **GPKE Teil 2** aufgegangen (via BK6-22-024 / LFW24)
-- Erzeugende-MaLo PIDs **55077/55078/55080** und **55601** live in der GPKE
+The MPES processes are part of **GPKE Teil 2** (BK6-22-024); the standalone
+MPES Festlegung BK6-20-160 was gültig bis 05.06.2025. The erzeugende-MaLo PIDs
+**55077/55078/55080** and **55601** are GPKE PIDs.
 
 ---
 
@@ -140,8 +133,8 @@ Geschäftsprozesses — siehe [unten](#antwortfristen-summary).
 - **BK6-09-034** (Beschluss 09.09.2010) is the WiM Festlegung and keeps its own
   Aktenzeichen. Its Anlage 1 — Teil 1 „Fokus Basis-Prozesse" und Teil 2 „Fokus
   Übermittlung von Werten" — is amended by **BK6-24-174 Tenorziffer 2** through
-  that Beschluss's Anlagen 2a/2b; the amendment before it was **BK6-22-024**
-  (21.03.2024). Cite the Teil and chapter, and BK6-24-174 for the current text.
+  that Beschluss's Anlagen 2a/2b. Cite the Teil and chapter, and BK6-24-174 for
+  the current text.
 
 **Process documents:**
 
@@ -155,9 +148,9 @@ Geschäftsprozesses — siehe [unten](#antwortfristen-summary).
   — 55039 Kündigung MSB, 55042 Anmeldung MSB, 55051 Ende MSB, 55168 Verpflichtungsanfrage;
     11001–11003 are not in the current AHB
 - Geräteübernahme ORDERS (PIDs 17001, 17002, 17009)
-- Stammdaten ORDERS (PIDs 17101–17135; 17101 inbound Anforderung, 17102–17135 outbound Übermittlung)
-- Stornierung ORDCHG (PID 39000; 39001–39002 outbound responses)
+- Stornierung der Bestellung (ORDCHG, PID 39002, ESA → MSB, WiM Teil 2)
 - WiM-Rechnung (INVOIC, PID 31003) — Abrechnung von Dienstleistungen im Messwesen, beide Sparten
+- Stornorechnung (INVOIC, PID 31004, Sparte-neutral; hosted by `wim-invoic`)
 - MSB-Rechnung (INVOIC, PID 31009) — Messstellenbetrieb an NB, LF oder ESA
 
 **Fristen (WiM Strom):** die fachliche Antwort ist **je Prozess** befristet — Kündigung (55039) **3 WT**, Anmeldung (55042) **5 WT**, Abmeldung (55051) **7 WT**, Verpflichtungsanfrage (55168) **1 WT** (BK6-24-174 Anlage 2a, Kap. 2.2.2 / 2.3.2 /
@@ -202,7 +195,7 @@ configuration, not a Festlegung (`crates/mako-redispatch/src/fristen.rs`).
 The one published Redispatch deadline is in the format documentation: the
 `AcknowledgementDocument` is due „unverzüglich, jedoch spätestens **3 Minuten**
 nach Erhalt der Übertragungsdatei" (EDI@Energy `AcknowledgementDocument`
-Formatbeschreibung 1.0g, Stand 01.10.2025) — not 6 hours.
+Formatbeschreibung 1.0g, Stand 01.10.2025).
 
 **Next binding documents (01.04.2027):** [Mitteilung Nr. 58](https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/835_mitteilungen_datenformate/Mitteilung_58/Mitteilung_Nr_58.html)
 (01.10.2026) publishes **ActivationDocument AWT 1.1g** — „lediglich ein minimaler
@@ -252,9 +245,6 @@ a plant onto the Jahresmarktwert (Anlage 1 Nr. 2 Satz 3 EEG).
 ---
 
 ## Beschlusskammer 7 — Gas (Erdgas)
-
-BK7 is responsible for gas network access, metering, balancing, and market communication.
-GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) is also BK7.
 
 ### GeLi Gas — Geschäftsprozesse Lieferantenwechsel Gas
 
@@ -364,22 +354,18 @@ keine Antwortfrist; die Abmeldung hat dafür **7 WT** (Kap. 3.2.2).
 | WiM (Strom) | **3 / 5 / 7 / 1 Werktage** je PID | `FristShape::EndOfWerktag` |
 | GeLi Gas | **Ablauf des 4. / 3. / 2. Werktags** je Prozess | `FristShape::EndOfWerktag` |
 
-Alle vier Familien stehen in **einer** Tabelle, `mako_fristen::antwort` — `makod`
+Alle Zeilen stehen in **einer** Tabelle, `mako_fristen::antwort` — `makod`
 registriert daraus die Prozessfrist, `processd` bemisst die Operator-Queue
 und meldet die Verletzung. Eine PID ohne veröffentlichte Frist liefert `None`:
 **unbekannt**, nie *unbefristet*.
 
-> GPKE Teil 2 nennt jede Antwortfrist als Uhrzeit auf einem Werktag, nie als
-> Dauer. Die 10 Werktage bei GeLi Gas sind die **Vorlauffrist des Lieferanten**,
-> nicht die Antwortfrist des Netzbetreibers.
-
 > **Werktag rule:** Saturdays, Sundays and public holidays are not Werktage (GPKE Teil 1). 24.12. and 31.12. count as holidays.
 
-> **Redispatch 2.0 deadlines are separate** — they use UTC wall-clock time, not Werktage:
-> **3 Minuten** (`AcknowledgementDocument`, „unverzüglich, jedoch spätestens 3 Minuten nach
-> Erhalt der Übertragungsdatei" — EDI@Energy Formatbeschreibung 1.0g), 24 h (`StatusRequest`),
-> and 5 min (Activation response) — not 6 hours.
-> The full deadline table is in the [PID reference](@/docs/regulatory/pid-reference.md#redispatch-2-0-xml-document-types-not-edifact-pids).
+> **Redispatch 2.0 deadlines are separate** and run in wall-clock time, not
+> Werktage: the `AcknowledgementDocument` is due within **3 Minuten**
+> (Formatbeschreibung 1.0g); the `StatusRequest` and Activation windows are
+> operator configuration (see [Redispatch 2.0](#redispatch-2-0-koordination-von-einspeisungen)).
+> The full table is in the [PID reference](@/docs/regulatory/pid-reference.md#redispatch-2-0-xml-document-types-not-edifact-pids).
 
 ---
 
@@ -387,12 +373,12 @@ und meldet die Verletzung. Eine PID ohne veröffentlichte Frist liefert `None`:
 
 | Domain | BK | Crate | INVOIC billing? |
 |---|---|---|---|
-| GPKE Lieferantenwechsel + MMM Strom | BK6 | `mako-gpke` | PIDs 31001–31002, 31004–31006 ✅ |
+| GPKE Lieferantenwechsel + MMM Strom | BK6 | `mako-gpke` | PIDs 31001–31002, 31005–31006 ✅ |
 | MaBiS Bilanzkreisabrechnung | BK6 | `mako-mabis` | PID 13003 (MSCONS) |
-| WiM Messwesen / MSB | BK6 | `mako-wim` | PIDs 31003, 31009 ✅ |
+| WiM Messwesen / MSB | BK6 | `mako-wim` | PIDs 31003, 31004 (Storno), 31009 ✅ |
 | GeLi Gas Lieferantenwechsel + AWH Sperrprozesse | BK7 | `mako-geli-gas` | PID 31011 (Rechnung sonstige Leistung, NB → LF) ✅ |
 | GaBi Gas Bilanzierung / MMM Gas | BK7 | `mako-gabi-gas` | PIDs 31007–31008 (Aggreg. MMM, NB → MGV) + PID 31010 (Kapazitätsrechnung) ✅ |
 
-> INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) is billed by the GNB/VNB
-> to the LFN/LFA for AWH performed during the Sperrprozess — it belongs to GeLi Gas (BK7-24-01-009),
-> not GaBi Gas. INVOIC 31010 (Kapazitätsrechnung, NB → KN — INVOIC AHB 1.0b Kap. 3.1.4) is GaBi Gas (BK7-24-01-008).
+> INVOIC 31011 is billed by the GNB/VNB to the LFN/LFA for AWH during the
+> Sperrprozess (GeLi Gas, BK7-24-01-009); INVOIC 31010 (NB → KN — INVOIC AHB 1.0b
+> Kap. 3.1.4) is GaBi Gas (BK7-24-01-008).

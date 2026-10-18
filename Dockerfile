@@ -1,33 +1,22 @@
 # ── mako — multi-stage Docker build ──────────────────────────────────────────
 #
 # Uses cargo-chef for proper Rust dependency layer caching. One runtime stage
-# per service binary, `runtime` (makod) being the default target.
+# per service binary; `runtime` (makod) is the last stage and so the default
+# target.
 #
 # Stages:
-#   chef          cargo-chef + Rust toolchain + native build deps
-#   planner       Analyse workspace, emit recipe.json
-#   demo-builder  makod, marktd, processd — what `just build-demo` builds
-#   builder       Every other service
-#   *-runtime     gcr.io/distroless/cc-debian12:nonroot, one per binary
+#   chef           cargo-chef + Rust toolchain + native build deps
+#   planner        Analyse workspace, emit recipe.json
+#   demo-builder   makod, marktd, processd — what `just build-demo` builds
+#   builder        Every other service
+#   runtime-base   gcr.io/distroless/cc-debian12:nonroot + Europe/Berlin zone data
+#   *-runtime      One per binary, on runtime-base
 #
-# Build one image:
-#   docker build --target runtime             -t makod:dev       .
-#   docker build --target marktd-runtime      -t marktd:dev      .
-#   docker build --target processd-runtime    -t processd:dev    .
-#   docker build --target invoicd-runtime     -t invoicd:dev     .
-#   docker build --target edmd-runtime        -t edmd:dev        .
-#   docker build --target netzbilanzd-runtime -t netzbilanzd:dev .
-#   docker build --target einsd-runtime       -t einsd:dev       .
-#   docker build --target productd-runtime    -t productd:dev    .
-#   docker build --target billingd-runtime    -t billingd:dev    .
-#   docker build --target outputd-runtime     -t outputd:dev     .
-#   docker build --target accountingd-runtime -t accountingd:dev .
-#   docker build --target vertragd-runtime    -t vertragd:dev    .
-#   docker build --target portald-runtime     -t portald:dev     .
-#   docker build --target agentd-runtime      -t agentd:dev      .
+# Build one image (makod's stage is `runtime`, every other `<service>-runtime`):
+#   docker build --target runtime        -t makod:dev  .
+#   docker build --target marktd-runtime -t marktd:dev .
 #
-# `docker-bake.hcl` has a target per service and builds them in groups;
-# `just build-demo` builds the three `demos/nb-stp` starts.
+# `docker-bake.hcl` holds the list of released images, one target per service.
 #
 # Runtime library notes
 # ─────────────────────
@@ -169,7 +158,7 @@ RUN --mount=type=cache,id=cargo-registry-demo,sharing=locked,target=/usr/local/c
     && install -d -o 65532 -g 65532 -m 0700 /var/lib/makod
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 3b — builder  (every other service — production / CI release pipeline)
+# ║ Stage 3b — builder  (every service demo-builder does not build)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM chef AS builder
 ARG PROFILE=release
@@ -186,8 +175,7 @@ COPY --from=planner /build/recipe.json recipe.json
 RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target-full,sharing=locked,target=/build/target \
     cargo chef cook --profile ${PROFILE} \
-                    -p makod -p marktd -p processd -p invoicd -p edmd \
-                    -p netzbilanzd -p einsd \
+                    -p invoicd -p edmd -p netzbilanzd -p einsd \
                     -p productd -p billingd -p outputd -p accountingd -p vertragd \
                     -p portald -p agentd \
                     --recipe-path recipe.json
@@ -196,496 +184,205 @@ RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/
 COPY . .
 RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target-full,sharing=locked,target=/build/target \
-    CARGO_INCREMENTAL=1 mold -run cargo auditable build --profile ${PROFILE} -p makod -p marktd -p invoicd -p edmd \
-                                     -p netzbilanzd -p einsd \
-                                     -p productd -p billingd -p outputd -p accountingd \
-                                     -p vertragd -p portald -p agentd \
-    && CARGO_INCREMENTAL=1 mold -run cargo auditable build --profile ${PROFILE} -p processd --features integrated \
+    CARGO_INCREMENTAL=1 mold -run cargo auditable build --profile ${PROFILE} \
+                -p invoicd -p edmd -p netzbilanzd -p einsd \
+                -p productd -p billingd -p outputd -p accountingd -p vertragd \
+                -p portald -p agentd \
     && BIN_DIR="$([ "${PROFILE}" = "release" ] && echo target/release || echo target/debug)" \
-    && for bin in makod marktd processd invoicd edmd netzbilanzd einsd \
+    && for bin in invoicd edmd netzbilanzd einsd \
                   productd billingd outputd accountingd vertragd portald agentd; do \
          cp "${BIN_DIR}/${bin}" "/usr/local/bin/${bin}" && strip "/usr/local/bin/${bin}" || exit 1; \
          rust-audit-info "/usr/local/bin/${bin}" > /dev/null \
            || { echo "${bin}: no cargo-auditable manifest after strip" >&2; exit 1; }; \
-       done \
-    && install -d -o 65532 -g 65532 -m 0700 /var/lib/makod
+       done
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 4 — runtime (distroless)
+# ║ Stage 4 — runtime-base (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
 # gcr.io/distroless/cc-debian12:nonroot contains:
 #   • glibc, libgcc (required by Rust's x86_64/aarch64-unknown-linux-gnu target)
 #   • ca-certificates (system trust store for TLS)
 #   • No shell, no package manager, no coreutils
 #   • UID/GID 65532 "nonroot" pre-configured
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS runtime
+#
+# Every service stage below starts here and adds its binary, port, health check
+# and title. A service's `--check` probes its own /health/ready over loopback,
+# which is what a distroless image can do without a shell or curl.
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS runtime-base
 
-# tzdata: distroless/cc does not ship /usr/share/zoneinfo.
-# Copy only the zone data needed for TZ=Europe/Berlin (CET/CEST).
-# time::OffsetDateTime reads the zone file at the path pointed to by $TZ.
-COPY --from=demo-builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=demo-builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=demo-builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-# Set /etc/localtime so that localtime(3) resolves correctly for code that
-# does not consult $TZ directly.
-COPY --from=demo-builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
+# tzdata: distroless/cc does not ship /usr/share/zoneinfo. Only the zone data
+# for TZ=Europe/Berlin (CET/CEST) is copied; /etc/localtime serves code that
+# does not consult $TZ.
+COPY --from=chef /usr/share/zoneinfo/Europe            /usr/share/zoneinfo/Europe
+COPY --from=chef /usr/share/zoneinfo/UTC               /usr/share/zoneinfo/UTC
+COPY --from=chef /usr/share/zoneinfo/leap-seconds.list /usr/share/zoneinfo/leap-seconds.list
+COPY --from=chef /usr/share/zoneinfo/Europe/Berlin     /etc/localtime
 
-ENV TZ=Europe/Berlin
+# `LOG_FORMAT` is the fallback every mako-service daemon reads after its own
+# `<SERVICE>_LOG_FORMAT`.
+ENV TZ=Europe/Berlin \
+    LOG_FORMAT=json
 
-# Binary — root:root 0755, runs as uid 65532 (distroless nonroot).
+# OCI image labels. CI passes OCI_VERSION, OCI_REVISION and OCI_CREATED; each
+# service stage adds its title and description.
+ARG OCI_VERSION=dev
+ARG OCI_REVISION=unknown
+ARG OCI_CREATED=unknown
+LABEL org.opencontainers.image.version="${OCI_VERSION}" \
+      org.opencontainers.image.revision="${OCI_REVISION}" \
+      org.opencontainers.image.created="${OCI_CREATED}" \
+      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
+      org.opencontainers.image.licenses="MIT OR Apache-2.0"
+
+# ╔══════════════════════════════════════════════════════════════════════════════
+# ║ Stage 5 — one runtime stage per service
+# ╚══════════════════════════════════════════════════════════════════════════════
+# Binaries are root:root 0755 and run as uid 65532 (distroless nonroot).
+
+FROM runtime-base AS marktd-runtime
+COPY --from=demo-builder --chown=root:root /usr/local/bin/marktd /usr/local/bin/marktd
+EXPOSE 8180
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
+    CMD ["/usr/local/bin/marktd", "--check"]
+ENTRYPOINT ["/usr/local/bin/marktd"]
+LABEL org.opencontainers.image.title="marktd" \
+      org.opencontainers.image.description="Market Data Hub daemon — MaLo/MeLo master data, Versorgungsstatus, Preisblätter, event fan-out"
+
+FROM runtime-base AS processd-runtime
+COPY --from=demo-builder --chown=root:root /usr/local/bin/processd /usr/local/bin/processd
+EXPOSE 8580
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
+    CMD ["/usr/local/bin/processd", "--check"]
+ENTRYPOINT ["/usr/local/bin/processd"]
+LABEL org.opencontainers.image.title="processd" \
+      org.opencontainers.image.description="Process Decision Engine — NB STP (mako-pruefung) and LF auto-response, process read model, Sperrauftrag queue"
+
+FROM runtime-base AS invoicd-runtime
+COPY --from=builder --chown=root:root /usr/local/bin/invoicd /usr/local/bin/invoicd
+EXPOSE 8280
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
+    CMD ["/usr/local/bin/invoicd", "--check"]
+ENTRYPOINT ["/usr/local/bin/invoicd"]
+LABEL org.opencontainers.image.title="invoicd" \
+      org.opencontainers.image.description="INVOIC plausibility-check daemon — LF role, § 147 AO / GoBD receipt retention"
+
+FROM runtime-base AS edmd-runtime
+COPY --from=builder --chown=root:root /usr/local/bin/edmd /usr/local/bin/edmd
+EXPOSE 8380
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
+    CMD ["/usr/local/bin/edmd", "--check"]
+ENTRYPOINT ["/usr/local/bin/edmd"]
+LABEL org.opencontainers.image.title="edmd" \
+      org.opencontainers.image.description="Energy Data Management daemon — MSCONS meter readings, MeterBillingPeriod"
+
+FROM runtime-base AS netzbilanzd-runtime
+COPY --from=builder --chown=root:root /usr/local/bin/netzbilanzd /usr/local/bin/netzbilanzd
+EXPOSE 8680
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
+    CMD ["/usr/local/bin/netzbilanzd", "--check"]
+ENTRYPOINT ["/usr/local/bin/netzbilanzd"]
+LABEL org.opencontainers.image.title="netzbilanzd" \
+      org.opencontainers.image.description="NNE/KA/MMM/MSB/AWH billing and MaBiS Summenzeitreihen — NB role, GridSettlement, CalculationTrace"
+
+FROM runtime-base AS einsd-runtime
+COPY --from=builder --chown=root:root /usr/local/bin/einsd /usr/local/bin/einsd
+EXPOSE 9180
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
+    CMD ["/usr/local/bin/einsd", "--check"]
+ENTRYPOINT ["/usr/local/bin/einsd"]
+LABEL org.opencontainers.image.title="einsd" \
+      org.opencontainers.image.description="Einspeiser registry and EEG/KWKG settlement daemon"
+
+FROM runtime-base AS productd-runtime
+COPY --from=builder --chown=root:root /usr/local/bin/productd /usr/local/bin/productd
+EXPOSE 9080
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
+    CMD ["/usr/local/bin/productd", "--check"]
+ENTRYPOINT ["/usr/local/bin/productd"]
+LABEL org.opencontainers.image.title="productd" \
+      org.opencontainers.image.description="Product & Tariff Catalog daemon — LF role, dynamic tariffs (§ 41a EnWG), B2B Angebote"
+
+FROM runtime-base AS billingd-runtime
+COPY --from=builder --chown=root:root /usr/local/bin/billingd /usr/local/bin/billingd
+EXPOSE 9280
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
+    CMD ["/usr/local/bin/billingd", "--check"]
+ENTRYPOINT ["/usr/local/bin/billingd"]
+LABEL org.opencontainers.image.title="billingd" \
+      org.opencontainers.image.description="Energy Billing Engine daemon — LF role, XRechnung, § 14a EnWG, § 41a EnWG"
+
+FROM runtime-base AS outputd-runtime
+COPY --from=builder --chown=root:root /usr/local/bin/outputd /usr/local/bin/outputd
+EXPOSE 9880
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
+    CMD ["/usr/local/bin/outputd", "--check"]
+ENTRYPOINT ["/usr/local/bin/outputd"]
+LABEL org.opencontainers.image.title="outputd" \
+      org.opencontainers.image.description="Customer-communications daemon — Typst templates, ZUGFeRD PDF/A-3, issued-document store, delivery evidence"
+
+FROM runtime-base AS accountingd-runtime
+COPY --from=builder --chown=root:root /usr/local/bin/accountingd /usr/local/bin/accountingd
+EXPOSE 9380
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
+    CMD ["/usr/local/bin/accountingd", "--check"]
+ENTRYPOINT ["/usr/local/bin/accountingd"]
+LABEL org.opencontainers.image.title="accountingd" \
+      org.opencontainers.image.description="Customer Account Ledger daemon — LF role, SEPA pain.008/pain.001, dunning, GDPR Art. 17"
+
+FROM runtime-base AS vertragd-runtime
+COPY --from=builder --chown=root:root /usr/local/bin/vertragd /usr/local/bin/vertragd
+EXPOSE 9780
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
+    CMD ["/usr/local/bin/vertragd", "--check"]
+ENTRYPOINT ["/usr/local/bin/vertragd"]
+LABEL org.opencontainers.image.title="vertragd" \
+      org.opencontainers.image.description="Contract & Customer Management daemon — LF role, B2C + B2B, OIDC → MaLo auth gateway"
+
+FROM runtime-base AS portald-runtime
+COPY --from=builder --chown=root:root /usr/local/bin/portald /usr/local/bin/portald
+EXPOSE 9480
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
+    CMD ["/usr/local/bin/portald", "--check"]
+ENTRYPOINT ["/usr/local/bin/portald"]
+LABEL org.opencontainers.image.title="portald" \
+      org.opencontainers.image.description="Customer Portal gateway — LF role, REST + SSE customer self-service"
+
+FROM runtime-base AS agentd-runtime
+COPY --from=builder --chown=root:root /usr/local/bin/agentd /usr/local/bin/agentd
+EXPOSE 9580
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
+    CMD ["/usr/local/bin/agentd", "--check"]
+ENTRYPOINT ["/usr/local/bin/agentd"]
+LABEL org.opencontainers.image.title="agentd" \
+      org.opencontainers.image.description="Multi-agent LLM orchestration daemon — agentplane durable runtime, LanceDB RAG, MCP tools"
+
+# makod — last, so a plain `docker build .` builds it.
+FROM runtime-base AS runtime
 COPY --from=demo-builder --chown=root:root /usr/local/bin/makod /usr/local/bin/makod
 
 # Persistent state directory — pre-created with uid 65532 ownership so that
 # SlateDB can write here even when no volume is mounted (e.g. --check mode).
 # VOLUME is declared AFTER this COPY so Docker does not discard the ownership.
-COPY --from=demo-builder /var/lib/makod /var/lib/makod
-
-# Persistent state directory.
 # Mount a named volume or PVC here; ensure it is writable by uid 65532.
+COPY --from=demo-builder /var/lib/makod /var/lib/makod
 VOLUME ["/var/lib/makod"]
 
-# Default environment — override via `docker run -e` or Kubernetes envFrom.
+# makod reads its own MAKOD_* variables, not the mako-service fallbacks.
 ENV MAKOD_LOG_FORMAT=json \
-    MAKOD_LOG_LEVEL=info \
     MAKOD_DATA_DIR=/var/lib/makod \
     MAKOD_HTTP_ADDR=0.0.0.0:8080
 
 # Exposed ports:
-#   8080  HTTP REST API + Swagger UI + MCP server
+#   8080  HTTP REST API + MCP server
 #   4080  AS4 inbound transport  (--as4-addr)
 #   8090  API-Webdienste Strom   (--api-webdienste-addr)
 EXPOSE 8080 4080 8090
 
-# Health-check for docker / docker-compose.
-# --check validates config, profiles, and adapters then exits 0.
-# In Kubernetes use httpGet probes against /health/live (liveness) and
-# /health/ready (readiness) instead — no shell needed.
+# --check validates config, profiles, and adapters then exits 0. In Kubernetes
+# use httpGet probes against /health/live and /health/ready instead.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
     CMD ["/usr/local/bin/makod", "--check"]
 
 ENTRYPOINT ["/usr/local/bin/makod"]
-
-# OCI image labels.
-# Set OCI_REVISION and OCI_CREATED at CI time, e.g.:
-#   docker build \
-#     --build-arg OCI_REVISION=$(git rev-parse HEAD) \
-#     --build-arg OCI_CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ) …
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="makod" \
-      org.opencontainers.image.description="Mako process engine daemon — German energy market communication (MaKo/BDEW EDI@Energy)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 5 — marktd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS marktd-runtime
-
-COPY --from=demo-builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=demo-builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=demo-builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=demo-builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-
-ENV TZ=Europe/Berlin
-
-COPY --from=demo-builder --chown=root:root /usr/local/bin/marktd /usr/local/bin/marktd
-
-EXPOSE 8180
-
-ENV MARKTD_LOG_FORMAT=json \
-    MARKTD_LOG_LEVEL=info
-
-# `--check` probes this instance's own /health/ready over loopback (a DB ping
-# plus the daemon's readiness), which is what a distroless image can do without
-# a shell or curl. It does not open a second pool or re-run migrations.
-HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
-    CMD ["/usr/local/bin/marktd", "--check"]
-
-ENTRYPOINT ["/usr/local/bin/marktd"]
-
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="marktd" \
-      org.opencontainers.image.description="Market Data Hub daemon — German energy market (MaKo/marktd)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 6 — processd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS processd-runtime
-
-COPY --from=demo-builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=demo-builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=demo-builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=demo-builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-
-ENV TZ=Europe/Berlin
-
-COPY --from=demo-builder --chown=root:root /usr/local/bin/processd /usr/local/bin/processd
-
-EXPOSE 8580
-
-ENV PROCESSD_LOG_FORMAT=json \
-    PROCESSD_LOG_LEVEL=info
-
-HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
-    CMD ["/usr/local/bin/processd", "--check"]
-
-ENTRYPOINT ["/usr/local/bin/processd"]
-
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="processd" \
-      org.opencontainers.image.description="Process Decision Engine — NB STP auto-responder (MaKo)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 7 — invoicd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS invoicd-runtime
-
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-
-ENV TZ=Europe/Berlin
-
-COPY --from=builder --chown=root:root /usr/local/bin/invoicd /usr/local/bin/invoicd
-
-EXPOSE 8280
-
-ENV INVOICD_LOG_FORMAT=json \
-    INVOICD_LOG_LEVEL=info
-
-HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
-    CMD ["/usr/local/bin/invoicd", "--check"]
-
-ENTRYPOINT ["/usr/local/bin/invoicd"]
-
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="invoicd" \
-      org.opencontainers.image.description="INVOIC plausibility-check daemon — LF role, § 147 AO / GoBD (MaKo)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 8 — edmd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS edmd-runtime
-
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-
-ENV TZ=Europe/Berlin
-
-COPY --from=builder --chown=root:root /usr/local/bin/edmd /usr/local/bin/edmd
-
-EXPOSE 8380
-
-ENV EDMD_LOG_FORMAT=json \
-    EDMD_LOG_LEVEL=info
-
-HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
-    CMD ["/usr/local/bin/edmd", "--check"]
-
-ENTRYPOINT ["/usr/local/bin/edmd"]
-
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="edmd" \
-      org.opencontainers.image.description="Energy Data Management daemon — MSCONS meter readings, MeterBillingPeriod (MaKo)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 9 — netzbilanzd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS netzbilanzd-runtime
-
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-ENV TZ=Europe/Berlin
-COPY --from=builder --chown=root:root /usr/local/bin/netzbilanzd /usr/local/bin/netzbilanzd
-EXPOSE 8680
-ENV NETZBILANZD_LOG_FORMAT=json \
-    NETZBILANZD_LOG_LEVEL=info
-HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
-    CMD ["/usr/local/bin/netzbilanzd", "--check"]
-ENTRYPOINT ["/usr/local/bin/netzbilanzd"]
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="netzbilanzd" \
-      org.opencontainers.image.description="NNE/KA/MMM/MSB/AWH billing and MaBiS Summenzeitreihen (MSCONS 13003) — NB role, GridSettlement, CalculationTrace (MaKo)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 10 — einsd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS einsd-runtime
-
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-ENV TZ=Europe/Berlin
-COPY --from=builder --chown=root:root /usr/local/bin/einsd /usr/local/bin/einsd
-EXPOSE 9180
-ENV EINSD_LOG_FORMAT=json \
-    EINSD_LOG_LEVEL=info
-HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
-    CMD ["/usr/local/bin/einsd", "--check"]
-ENTRYPOINT ["/usr/local/bin/einsd"]
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="einsd" \
-      org.opencontainers.image.description="Einspeiser Registry + EEG/KWKG Settlement daemon — 9 settlement schemes, 324 tests (MaKo)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 11 — productd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS productd-runtime
-
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-ENV TZ=Europe/Berlin
-COPY --from=builder --chown=root:root /usr/local/bin/productd /usr/local/bin/productd
-EXPOSE 9080
-ENV PRODUCTD_LOG_FORMAT=json \
-    PRODUCTD_LOG_LEVEL=info
-HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
-    CMD ["/usr/local/bin/productd", "--check"]
-ENTRYPOINT ["/usr/local/bin/productd"]
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="productd" \
-      org.opencontainers.image.description="Product & Tariff Catalog daemon — LF role, EPEX §41a, B2B Angebote (MaKo)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 12 — billingd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS billingd-runtime
-
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-ENV TZ=Europe/Berlin
-COPY --from=builder --chown=root:root /usr/local/bin/billingd /usr/local/bin/billingd
-EXPOSE 9280
-ENV BILLINGD_LOG_FORMAT=json \
-    BILLINGD_LOG_LEVEL=info
-HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
-    CMD ["/usr/local/bin/billingd", "--check"]
-ENTRYPOINT ["/usr/local/bin/billingd"]
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="billingd" \
-      org.opencontainers.image.description="Energy Billing Engine daemon — LF role, 12 categories, XRechnung 3.0, §14a, §41a (MaKo)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 13 — outputd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS outputd-runtime
-
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-ENV TZ=Europe/Berlin
-COPY --from=builder --chown=root:root /usr/local/bin/outputd /usr/local/bin/outputd
-EXPOSE 9880
-ENV OUTPUTD_LOG_FORMAT=json \
-    OUTPUTD_LOG_LEVEL=info
-HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
-    CMD ["/usr/local/bin/outputd", "--check"]
-ENTRYPOINT ["/usr/local/bin/outputd"]
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="outputd" \
-      org.opencontainers.image.description="Customer Communications daemon — operator Typst templates, ZUGFeRD PDF/A-3 carrier, publish gates (MaKo)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 14 — accountingd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS accountingd-runtime
-
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-ENV TZ=Europe/Berlin
-COPY --from=builder --chown=root:root /usr/local/bin/accountingd /usr/local/bin/accountingd
-EXPOSE 9380
-ENV ACCOUNTINGD_LOG_FORMAT=json \
-    ACCOUNTINGD_LOG_LEVEL=info
-HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
-    CMD ["/usr/local/bin/accountingd", "--check"]
-ENTRYPOINT ["/usr/local/bin/accountingd"]
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="accountingd" \
-      org.opencontainers.image.description="Customer Account Ledger daemon — LF role, SEPA pain.008/001, auto-dunning, GDPR Art.17 (MaKo)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 15 — vertragd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS vertragd-runtime
-
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-ENV TZ=Europe/Berlin
-COPY --from=builder --chown=root:root /usr/local/bin/vertragd /usr/local/bin/vertragd
-EXPOSE 9780
-ENV VERTRAGD_LOG_FORMAT=json \
-    VERTRAGD_LOG_LEVEL=info
-HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
-    CMD ["/usr/local/bin/vertragd", "--check"]
-ENTRYPOINT ["/usr/local/bin/vertragd"]
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="vertragd" \
-      org.opencontainers.image.description="Contract & Customer Management daemon — LF role, B2C+B2B, OIDC→MaLo auth gateway (MaKo)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 16 — portald-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS portald-runtime
-
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-ENV TZ=Europe/Berlin
-COPY --from=builder --chown=root:root /usr/local/bin/portald /usr/local/bin/portald
-EXPOSE 9480
-ENV PORTALD_LOG_FORMAT=json \
-    PORTALD_LOG_LEVEL=info
-HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
-    CMD ["/usr/local/bin/portald", "--check"]
-ENTRYPOINT ["/usr/local/bin/portald"]
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="portald" \
-      org.opencontainers.image.description="Customer Portal gateway — LF role, REST+SSE, §41 EnWG self-service (MaKo)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 17 — agentd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS agentd-runtime
-
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-ENV TZ=Europe/Berlin
-COPY --from=builder --chown=root:root /usr/local/bin/agentd /usr/local/bin/agentd
-EXPOSE 9580
-ENV AGENTD_LOG_FORMAT=json \
-    AGENTD_LOG_LEVEL=info
-HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
-    CMD ["/usr/local/bin/agentd", "--check"]
-ENTRYPOINT ["/usr/local/bin/agentd"]
-ARG OCI_VERSION=dev
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="agentd" \
-      org.opencontainers.image.description="Multi-agent LLM orchestration daemon — 28 specialists, LanceDB RAG, MCP tools (MaKo)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
+      org.opencontainers.image.description="Mako process engine daemon — German energy market communication (MaKo/BDEW EDI@Energy)"

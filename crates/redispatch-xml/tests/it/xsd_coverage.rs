@@ -65,7 +65,7 @@ const NOT_MODELLED: &[(&str, &str)] = &[
         "SendersTimeSeriesIdentification",
         "child of TimeSeriesRejection, which mako does not emit for the same reason",
     ),
-    // ── Stammdaten: object types mako does not yet exchange ──────────────────
+    // ── Stammdaten: object types mako does not exchange ──────────────────────
     (
         "CR_Objekt",
         "Cluster objects — the clusternder NB's own Stammdaten. mako holds the ANB \

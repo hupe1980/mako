@@ -4081,8 +4081,7 @@ fn stromsteuer_positions(
             ),
         }],
         StromsteuerTarif::Ermaessigung { grund } => {
-            // A reduction is still a levy line. Dropping it — the shape the old
-            // `StromsteuerBefreiung::Bahnstrom` variant produced — left 1,142
+            // A reduction is still a levy line. Dropping it leaves 1,142
             // ct/kWh of Fahrstrom tax off every invoice.
             let mut p = levy_position(
                 grund.label(),

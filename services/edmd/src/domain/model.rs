@@ -894,7 +894,7 @@ pub struct ImbalanceReport {
 /// Consumed by `invoicd` for INVOIC plausibility checks and by `netzbilanzd`
 /// for NNE invoice generation.  Covers both SLP and RLM metering.
 ///
-/// ## M15 requirement
+/// ## Billing inputs
 ///
 /// This struct provides the inputs for all NNE billing positions:
 /// - SLP: `arbeitsmenge_kwh` (total energy quantity)

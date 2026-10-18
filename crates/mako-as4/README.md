@@ -2,78 +2,63 @@
 
 [![Crates.io](https://img.shields.io/crates/v/mako-as4?label=mako-as4&color=f59e0b&logo=rust)](https://crates.io/crates/mako-as4)
 
-The BDEW AS4-Profil v1.2 on top of [`asx-rs`](https://crates.io/crates/asx-rs):
-pre-configured P-Modes, the sign-and-encrypt security policy with
-BrainpoolP256r1, a bilateral partner directory and test PKI helpers for German
-Strom and Gas market communication.
+BDEW AS4-Profil 1.2 for German Strom and Gas market communication, on
+[`asx-rs`](https://crates.io/crates/asx-rs) 0.16. `asx::Profile::bdew()` fixes
+every security and wire setting of the profile — ECDSA on BrainpoolP256r1,
+ECDH-ES with AES-128-GCM, sign then encrypt, gzip, the fixed Action, roles and
+`AgreementRef`, CRL revocation — and nothing here can relax it. This crate holds
+what a deployment decides: one identity and client per MP-ID, the partners, the
+AS4 service of a message, its file name and message id, and the retry window.
 
 ## Example
 
 ```rust
-use mako_as4::BdewAs4Profile;
+use mako_as4::{BdewAction, MessageIdDomain, Service, bdew_action_from_str, uebertragungsdatei_name};
 
-// 1. Register bilateral P-Modes for each trading partner.
-let mut profile = BdewAs4Profile::new();
-profile.register_partner_all_actions(
-    "9900000000001",
-    "https://partner.example/as4/inbox",
+// Every EDIFACT Übertragungsdatei is sent under the Marktprozesse service
+// (BDEW AS4-Profil 1.2 §2.3.1.2.1); the AS4 Action is the profile's fixed one.
+let action = bdew_action_from_str("UTILMD");
+assert_eq!(action, BdewAction::Utilmd);
+assert_eq!(action.service(), Service::Marktprozesse);
+
+// eb:MessageId — `<outbox id>@<domain>`, the same on every retry.
+let domain = MessageIdDomain::parse("as4.stadtwerke.example").unwrap();
+assert_eq!(domain.message_id("42"), "42@as4.stadtwerke.example");
+
+// The payload part's name (Allgemeine Festlegungen V6.1d §2.12).
+let name = uebertragungsdatei_name(
+    "UTILMD", "", "9900000000003", "9900000000010", (2026, 10, 1), "DAR1",
 );
-
-// 2. Register the partner's EC encryption certificate (BrainpoolP256r1).
-//    asx-rs auto-selects ECDH-ES when an EC cert is supplied.
-let partner_encrypt_cert_pem: Vec<u8> = std::fs::read("/etc/partner/encrypt.pem").unwrap_or_default();
-profile.register_partner_encryption_cert("9900000000001", partner_encrypt_cert_pem);
-
-// 3. Fail-fast at startup.
-profile.validate().expect("BDEW MaKo profile must satisfy all security invariants");
-
-// 4. Build inbound push policy with own decryption key.
-let own_decrypt_key_pem: Vec<u8> = std::fs::read("/etc/certs/as4-encrypt.key.pem").unwrap_or_default();
-let push_policy = mako_as4::bdew_push_policy(Some(own_decrypt_key_pem));
-// push_policy.require_encrypted_inbound == true (rejects unencrypted inbound)
+assert_eq!(name, "UTILMD__9900000000003_9900000000010_20261001_DAR1.txt");
 ```
 
-`bdew_mako_profile_stack()` declares sign **and** encrypt as the stack's
-security floor (§ 2.2.6.2.2), and `asx-rs` refuses any override layer — a
-partner overlay included — that relaxes it (`SecurityFloorViolation`).
-`validate()` runs at startup, so a downgraded profile never serves traffic.
+A client per local MP-ID:
 
-## Profile requirements
+```rust,ignore
+let builder = mako_as4::client_builder(&identity, sm_pki_root, ccrl_s_root, &partners)?;
+let as4 = builder.build()?; // the startup check: asx::ErrorKind::Config names the setting
+```
 
-| Requirement | Value | Spec |
-|---|---|---|
-| Transport | HTTPS + mTLS (TLS 1.2 minimum) | §2.2.1 |
-| SOAP version | 1.2 | §2.2.3 |
-| MEP | One-Way/Push (mandatory) | §2.2.5 |
-| **Signing algorithm** | **ECDSA-SHA256 + BrainpoolP256r1** | §2.2.6.2.1 / BSI TR-03116-3 §9.1 |
-| **Signing token type** | **`BinarySecurityToken` / X509PKIPathv1** | §2.2.6.2.1 |
-| **Encryption** | **ECDH-ES + ConcatKDF + AES-128-GCM — mandatory** | §2.2.6.2.2 / BSI TR-03116-3 §9.2 |
-| **Key reference** | **X509SKI** | §2.2.6.2.2 |
-| Payload | gzip-compressed, carried as `application/octet-stream` in its own MIME part; the SOAP Body stays empty | §2.2.3.2 |
-| Party ID | 13-digit GLN, ISO 6523 ICD 0088 | §2.2.4 |
-| Retry window | 72 hours, up to 5 attempts | §2.2.7 |
-| Deduplication | Required (persistent dedup store) | §4.2 |
-| Synchronous receipt | Mandatory | §4.6.3 |
-
-BDEW requires three separate BrainpoolP256r1 keypairs: mTLS, WS-Security
-signing and XML encryption.
+`client_builder` refuses two of an identity's signing, encryption and TLS
+certificates that certify one key pair (BDEW AS4-Profil 1.2 §2.3.4.4) — compared
+by public key, which `build()` does not do — and registers the CRL signer.
 
 ## API
 
 | Module | Contents |
 |---|---|
-| `constants` | BDEW-specific service URIs, algorithm identifiers (`SIG_ALGO_ECDSA_SHA256`, `ENC_KEY_AGREEMENT_ECDH_ES`, …) |
-| `pmode` | `BdewAction` enum + `bdew_pmode()` / `bdew_pmode_sign_only()` factory functions; `WsSecOutboundKeyInfoProfile` |
-| `profile` | `BdewAs4Profile` entry point + `bdew_mako_profile_stack()` + `bdew_push_policy()` |
-| `partner_directory` | `PartnerDirectory` — GLN-to-endpoint resolution |
-| `server` *(feature)* | Axum AS4 inbound router + `bdew_router_config()` |
-| `testing` *(feature)* | `BdewTestPki`, `generate_self_signed_bdew_keypair()`, `MockAs4Endpoint` |
+| `identity` | `LocalIdentity` (MP-ID, signer, decrypter, TLS key pair) and `client_builder` |
+| `partner_directory` | `PartnerDirectory` / `PartnerEntry` — one `asx::Partner` per counterparty; `parse_quirk` |
+| `action` | `BdewAction` — the 16 standard EDIFACT message types, `Custom` for any other; `service()` |
+| `service` | `Service` — the five `eb:Service` URIs of §2.3.1.2.1 |
+| `file_name` | `uebertragungsdatei_name` — Allgemeine Festlegungen V6.1d §2.12 |
+| `message_id` | `MessageIdDomain` — RFC 2822 `eb:MessageId` values |
+| `keys` | `subject_public_key_info`, `same_public_key` |
+| `constants` | party types per issuing agency (§2.3.1.1), `PAYLOAD_MIME_TYPE`, `MAX_MESSAGE_BYTES`, `MAX_RETRY_DURATION_SECS` (72 h) |
 
-| Feature | Enables |
-|---|---|
-| `server` | the Axum AS4 inbound router (`bdew_router_config`) |
-| `testing` | `BdewTestPki` (all three keypairs in memory), `MockAs4Endpoint`, `generate_self_signed_bdew_keypair` |
-
-`services/makod/tests/it/as4_security.rs` holds the end-to-end compliance tests.
-API documentation: <https://docs.rs/mako-as4>; operator reference:
+Tests use `asx::testkit` (`asx-rs` feature `test-util`, dev-dependencies only):
+a test SM-PKI root issuing each MP-ID separate BrainpoolP256r1 key pairs with the
+MP-ID as subject OU, and an in-process loopback between two clients.
+`services/makod/tests/it/as4_security.rs` holds the end-to-end tests. API
+documentation: <https://docs.rs/mako-as4>; operator reference:
 [AS4 (BDEW)](https://hupe1980.github.io/mako/docs/reference/as4-bdew/).

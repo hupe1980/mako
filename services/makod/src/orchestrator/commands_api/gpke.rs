@@ -354,14 +354,6 @@ pub(super) async fn dispatch_lf_anmeldung(
         })?
         .to_owned();
 
-    // Optional: ERP may supply `alter_lf_mp_id` for Kündigung (PID 55016) when
-    // the old supplier is a different legal entity.  Not yet used in the domain
-    // command but extracted here for future use.
-    let _alter_lf_mp_id = payload
-        .get("alter_lf_mp_id")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
-
     // ── Resolve NB MP-ID from MaLo cache ───────────────────────────────────────
     //
     // `data_market_location_network_operators` is a time-sliced list of NBs.

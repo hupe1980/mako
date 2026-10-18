@@ -5,6 +5,8 @@
 //! (peer-directory) worker, and the BDEW API-Webdienste surface.
 
 pub mod api_bridge;
+pub mod as4_clients;
+pub mod as4_evidence;
 pub mod as4_ingest;
 pub mod as4_sender;
 pub mod contrl_ack;

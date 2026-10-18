@@ -350,28 +350,32 @@ async fn inbox_claim_accept_abandon() {
 
     let store = open().await;
     let inbox = store.as_inbox_store();
+    let claimed = |c: InboxClaim| match c {
+        InboxClaim::Claimed(id) => id,
+        other => panic!("expected a claim, got {other:?}"),
+    };
 
     // First delivery takes the key.
-    assert_eq!(inbox.claim("msg-001").await.unwrap(), InboxClaim::Claimed);
+    let first = claimed(inbox.claim("msg-001").await.unwrap());
     // A concurrent one is told so, rather than being called a duplicate:
     // nothing has been handled yet, so acknowledging it would be a lie.
     assert_eq!(inbox.claim("msg-001").await.unwrap(), InboxClaim::InFlight);
 
     // Settled as handled — now every later delivery is a replay.
-    inbox.accept("msg-001").await.unwrap();
+    inbox.accept("msg-001", first).await.unwrap();
     assert_eq!(inbox.claim("msg-001").await.unwrap(), InboxClaim::Duplicate);
 
     // An unrelated key is untouched.
-    assert_eq!(inbox.claim("msg-002").await.unwrap(), InboxClaim::Claimed);
+    let second = claimed(inbox.claim("msg-002").await.unwrap());
 
     // Released, because nothing durable recorded it: the retransmission is a
     // recovery path, not a silent drop.
-    inbox.abandon("msg-002").await.unwrap();
-    assert_eq!(inbox.claim("msg-002").await.unwrap(), InboxClaim::Claimed);
+    inbox.abandon("msg-002", second).await.unwrap();
+    let third = claimed(inbox.claim("msg-002").await.unwrap());
 
     // An accepted key is never re-opened by an abandon.
-    inbox.accept("msg-002").await.unwrap();
-    inbox.abandon("msg-002").await.unwrap();
+    inbox.accept("msg-002", third).await.unwrap();
+    assert!(inbox.abandon("msg-002", third).await.is_err());
     assert_eq!(inbox.claim("msg-002").await.unwrap(), InboxClaim::Duplicate);
 }
 
@@ -382,7 +386,7 @@ async fn inbox_key_too_long_returns_error() {
 
     let oversized = "x".repeat(MAX_INBOX_KEY_LEN + 1);
     let err = inbox
-        .accept(&oversized)
+        .claim(&oversized)
         .await
         .expect_err("oversized key must be rejected");
     assert!(
@@ -469,7 +473,7 @@ async fn inbox_concurrent_accept_exactly_one_winner() {
                 // Exactly one delivery may take the key. The rest see an
                 // unsettled claim, not a duplicate — nothing is handled yet.
                 match inbox.claim("concurrent-key").await {
-                    Ok(mako_engine::inbox::InboxClaim::Claimed) => {
+                    Ok(mako_engine::inbox::InboxClaim::Claimed(_)) => {
                         wins.fetch_add(1, Ordering::Relaxed);
                     }
                     Ok(_) => {}
@@ -590,11 +594,20 @@ async fn dead_letter_key_space_is_isolated() {
         ))
         .await
         .expect("register deadline must succeed");
-    store
-        .as_inbox_store()
-        .accept("isolation-test-key")
-        .await
-        .expect("accept must succeed");
+    {
+        let inbox = store.as_inbox_store();
+        let mako_engine::inbox::InboxClaim::Claimed(claim) = inbox
+            .claim("isolation-test-key")
+            .await
+            .expect("claim must succeed")
+        else {
+            panic!("a fresh key is claimed");
+        };
+        inbox
+            .accept("isolation-test-key", claim)
+            .await
+            .expect("accept must succeed");
+    }
 
     // Write a dead-letter record.
     sink.reject(&DeadLetterReason::VersionMismatch {

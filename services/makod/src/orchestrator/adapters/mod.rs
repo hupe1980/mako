@@ -978,7 +978,7 @@ fn build_position(group: &[&OwnedSegment]) -> bo4e::Rechnungsposition {
         .and_then(|s| s.component_str(1, 0))
         .map(str::to_owned);
 
-    // Delivery period now lives in lieferungszeitraum (v202607).
+    // The delivery period lives in `lieferungszeitraum`.
     let lieferung_von = dtm_in_group(group, "163").and_then(edifact_date_to_date);
     let lieferung_bis = dtm_in_group(group, "164").and_then(edifact_date_to_date);
     let lieferungszeitraum = if lieferung_von.is_some() || lieferung_bis.is_some() {

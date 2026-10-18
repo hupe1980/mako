@@ -369,8 +369,6 @@ Modul 1 + Modul 3, the one permitted pair, is not representable in one settlemen
 
 ### A fifth Arbeitspreis shape that is not a §14a module
 
-`ArbeitspreisModell` has one more variant, which is not a §14a module:
-
 ```jsonc
 "arbeitspreis": { "SpotpreisNetzentgelt": { "intervalle": [
   { "period_from": "2026-01-15T11:00:00Z", "period_to": "2026-01-15T11:15:00Z",
@@ -401,7 +399,7 @@ not qualify. The agreed percentage is an input and may not fall below the floor.
 |---|---|
 | NNE | Arbeit (flat, or one per §14a module) · Leistung (RLM) · Gas Grundpreis (§15 Abs. 7 GasNEV) · Gas Kapazitätsentgelt (§15 GasNEV, pro-rated by calendar days over the actual year length) · Konzessionsabgabe · the three EnFG levies (Strom only) · Blindmehrarbeit |
 | MMM | Mehrmengen (Gutschrift, negated) · Mindermengen |
-| MSB | Grundgebühr Messstellenbetrieb · Messdienstleistung, both measured together against the §30 Abs. 1 MsbG Preisobergrenze when `messstellen_kategorie` is supplied — and only for a period ending from 01.01.2025, which is what that schedule dates itself to · Steuerungseinrichtung am Netzanschlusspunkt, which §30 Abs. 2 charges „zusätzlich“ and caps separately at 50 EUR brutto/Jahr |
+| MSB | Grundgebühr Messstellenbetrieb · Messdienstleistung, together capped by the §30 Abs. 1 MsbG Preisobergrenze (with `messstellen_kategorie`, periods ending from 01.01.2025) · Steuerungseinrichtung am Netzanschlusspunkt, capped separately at 50 EUR brutto/Jahr (§30 Abs. 2) |
 | NNE (privileged) | the §19 Aufschlag splits into two positions where the period straddles the EnFG 1-GWh boundary |
 | Gas AWH | one per chargeable action: `anzahl × preis_eur` |
 
@@ -618,8 +616,7 @@ canonical round-trip.
    none. For a 15-minute activation this is wrong by up to two orders of magnitude: check
    `dispatch_source` and supply `dispatch_kwh_override`. No Einspeisung that day → `404`.
 
-The BO4E `/lastgang` export is never folded into a figure: it mixes registers, directions and
-non-billable qualities. `coverage_pct` from the projection is logged; a partial window still
+`coverage_pct` from the projection is logged; a partial window still
 yields a figure. `Einsatzkosten = dispatch_kwh × arbeitspreis_eur_per_kwh` is a generated column.
 
 ### The redispatch case selects the §13a counterfactual
@@ -656,17 +653,15 @@ Every JSON request body here rejects unknown fields; query strings are not stric
 is the monthly ¼-h series a grid operator files for one **Bilanzierungsgebiet**,
 summed from each
 [MaLo](@/docs/architecture/domain-model.md#malo-vs-melo-the-critical-distinction)'s
-Lastgang. `netzbilanzd` files it with the BIKO (Bilanzkoordinator) when its
-configuration carries a `[mabis]` section; without one the `/api/v1/mabis/*`
-routes are not mounted and no submission is scheduled. Metering comes from
+Lastgang. The `mabis` module of `netzbilanzd` files it with the BIKO (Bilanzkoordinator)
+when the configuration carries a `[mabis]` section; without one the
+`/api/v1/mabis/*` routes are not mounted and no submission is scheduled. Metering comes from
 [`edmd`](@/docs/services/edmd.md), master data from
 [`marktd`](@/docs/services/marktd.md), and the message leaves through
 [`makod`](@/docs/services/makod.md). Strom only — Gas balances under GaBi Gas.
 
 A Summenzeitreihe is an **MSCONS** message, Prüfidentifikator **13003**
-("Übertragung Summenzeitreihe", MSCONS AHB 3.2 §8.3.1). UTILTS carries
-Berechnungsformel and Zählzeit-/Schaltzeitdefinitionen and has no Summenzeitreihe
-use case. Submission goes out through `makod` as
+("Übertragung Summenzeitreihe", MSCONS AHB 3.2 §8.3.1). Submission goes out through `makod` as
 `mabis.summenzeitreihe.uebermitteln` (Marktrolle `NB`/`ÜNB`), which enqueues the
 MSCONS directly rather than spawning a workflow; the BIKO's Datenstatus (IFTSTA
 21003/21004) and Prüfmitteilung (21000/21001) are recorded here, where the
@@ -830,11 +825,9 @@ records each territory's `message_ref` or failure, a retry skips the acked ones,
 and the run still fails as a whole. A re-filing of a period with a live run is a
 correction under `corrects_run_id`.
 
-The three write bodies are typed. An unknown key, or a value that does not
-parse — a `period_from` that is no ISO-8601 date, an `as_of` that is no RFC 3339
-instant, a `corrects_run_id` that is no UUID — is a `422` naming the field, never
-a default: a dropped `corrects_run_id` would turn a correction into a first
-filing. A Prüfmitteilung requires `sender_mp_id` and a `pid` of `21000` (LF → NB)
+An unknown key or an unparseable value in the three write bodies is a `422`
+naming the field, never a default: a dropped `corrects_run_id` would turn a
+correction into a first filing. A Prüfmitteilung requires `sender_mp_id` and a `pid` of `21000` (LF → NB)
 or `21001` (benachbarter NB → NB); anything else is a `422`.
 
 ```bash
@@ -929,7 +922,7 @@ Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6 (valid 01.09.2025).
 | Messdienstleistung | `EntgeltMessungAblesung` | `9990001 00062 3` |
 | Blindmehrarbeit | `Blindmehrarbeit` | `9990001 00047 5` |
 | §19 StromNEV-Umlage | `Paragraf19StromNevUmlage` | — |
-| Offshore-Netzumlage | `OffshoreHaftungsumlage` *(the BO4E `BdewArtikelnummer` variant for this levy; its wire value is `OFFSHORE_HAFTUNGSUMLAGE`)* | — |
+| Offshore-Netzumlage | `OffshoreHaftungsumlage` (wire value `OFFSHORE_HAFTUNGSUMLAGE`) | — |
 | KWKG-Umlage | `AbgabeKwkg` | — |
 
 No Artikelnummer: an Abschlag, Gas AWH positions (`2-01-7-xxx` Artikel-ID), a §19 Abs. 2
@@ -988,8 +981,7 @@ With `[mabis]`, a fourth worker runs regardless of `erp_webhook_url`: the MaBiS 
 which wakes every five minutes and files the previous Bilanzierungsmonat at `run_hour_utc` on
 the `erstaufschlag_werktag`, skipping a period that already has a live run.
 
-Both alerts enqueue on the outbox. The overdue alert reports `zu_zahlen_eur` and `due_date`, and
-skips drafts the checker disputed (blocked, not overdue).
+The overdue alert skips drafts the checker disputed (blocked, not overdue).
 
 ## CloudEvents
 
@@ -1065,11 +1057,8 @@ Seven prompts walk the common workflows: `nb-invoic-overview`, `run-nne-billing`
 | MaBiS — filing a Summenzeitreihe | `trigger-mabis-run` | `NB` or `UENB` — the roles that aggregate a Bilanzierungsgebiet; an acked filing cannot be withdrawn |
 | MCP | `use-mcp` | a matching tenant; the tools are read-only by construction |
 
-`tests/it/authorization_guard.rs` pins every handler to a `Claims` extractor and an
-authorization call, and the action sets of code and policy to each other; the REMADV webhook is
-the documented HMAC exception; `tests/it/mabis/authorization_guard.rs` asserts the two BIKO
-ingest routes do **not** require `trigger-mabis-run`. There is no four-eyes split: `mako_roles` carries market roles
-only, so "may settle" and "may dispatch" are one grant. Denials are logged with `sub` and action.
+There is no four-eyes split: `mako_roles` carries market roles only, so "may settle" and "may
+dispatch" are one grant. Denials are logged with `sub` and action.
 
 ---
 
@@ -1181,7 +1170,7 @@ PostgreSQL.
 | BK6-24-174 Anlage 3 (MaBiS) §§3.8.2, 3.8.3, 3.10, 9.8.1 | Summenzeitreihe versioning, BIKO-assigned Datenstatus, the Tabelle 2 windows, the correction after a negative Prüfmitteilung |
 | MSCONS AHB 3.2 §8.3.1 · IFTSTA AHB 2.1 | PID 13003 Summenzeitreihe; 21000/21001 Prüfmitteilung, 21003/21004 Datenstatus |
 | §14 Abs. 4 Nr. 4 UStG | consecutive, single-use invoice numbering |
-| § 147 Abs. 3 AO · § 14b UStG | invoices are Buchungsbelege — 8 years, reduced from 10 with effect from 01.01.2025 |
+| § 147 Abs. 3 AO · § 14b UStG | invoices are Buchungsbelege — 8 years |
 
 ---
 

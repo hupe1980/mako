@@ -159,7 +159,7 @@ BIKO cannot tell from a correct submission.
 
 ---
 
-## Fristen: five shapes, one table
+## Fristen: four shapes, one table
 
 Regulated processes are deadline-driven, so time is an input, never ambient. The
 calendar is BDEW's **conservative-inclusive** one: a day observed as a holiday in
@@ -350,9 +350,8 @@ code — so it cannot contradict it.
 `release_for(message_type, on, sparte)`, `releases(message_type)` and
 `format_versions()` expose what the build can validate against.
 
-Building and validation are deliberately **separate steps**: a test must be able
-to construct a knowingly-invalid message and assert that the right rule rejects
-it.
+Building and validation are **separate steps**, so a test can construct a
+knowingly invalid message and assert that the right rule rejects it.
 
 ---
 
@@ -402,9 +401,8 @@ system defect.
 
 EDIFACT is one wire contract a MaKo platform exposes; the event stream is the
 other. Asserting on it carries the mirror image of vacuous validation: a test
-naming a type the platform does not declare — a typo, or one retired by a rename
-(`de.edmd.*` became `de.messwert.*`) — passes forever as *"no such event was
-emitted"*, and that is precisely what a missing-event assertion expects to find.
+naming a type the platform does not declare — a typo, or a retired type —
+passes forever as *"no such event was emitted"*, and that is precisely what a missing-event assertion expects to find.
 
 So the catalog is bound rather than copied, and so is the glob matcher every
 subscription mechanism in the platform uses.
@@ -597,7 +595,7 @@ Which matters because an obligation whose answer message type cannot be built is
 one no test can answer. All **65** published obligations are answerable — UTILMD
 40, ORDRSP 11, IFTSTA 7, QUOTES 5, ORDERS 2 — and
 `TestCoverage::test_every_published_obligation_is_answerable`
-(`makotest/tests/test_wim_esa.py:187`) holds it there.
+(`makotest/tests/test_wim_esa.py`) holds it there.
 
 **A code has no meaning without its tree.** `A02` is „Vorlauffrist nicht
 eingehalten" in `E_0607` and „Marktlokation nimmt nicht an der Marktkommunikation
@@ -702,10 +700,6 @@ Three states, three obligations, and a platform has to tell them apart:
 
 Values are decimal strings: energy is a decimal quantity, and a JSON float
 carries a binary rounding error into whatever the platform settles against.
-
-A counterparty is modelled once it has a consumer. One written ahead of its
-consumer encodes guesses about an interface nobody has implemented, and to the
-next reader those guesses are indistinguishable from requirements.
 
 ---
 

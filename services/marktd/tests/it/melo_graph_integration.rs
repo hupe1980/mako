@@ -943,7 +943,7 @@ async fn pg_container() -> Option<(String, PgContainer)> {
 /// The version the upsert returns settles it without a probe: the row is
 /// inserted with `1` and every conflict does `version + 1`, so `version == 1`
 /// is exactly "this call created it". This pins that property of the
-/// repository, which is what the handler now reads.
+/// repository, which is what the handler reads.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_upsert_reports_creation_exactly_once() {

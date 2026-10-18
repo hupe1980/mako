@@ -12,20 +12,11 @@ publish          = false
 # ── Role-gated feature flags ──────────────────────────────────────────────────
 # Compile with exactly the Marktrolle(n) you operate.
 #
-# What these features are and are not. They select which **decision paths** are
-# compiled and registered, so a deployment carries only the answers it is meant
-# to give and an operator can read its obligations off the build. They are not a
-# regulatory artefact: §7 EnWG requires a separate *legal entity* for a VNB with
-# 100 000 or more connected customers (§7 Abs. 2 is the de-minimis threshold),
-# §7a operational and §6a informational separation — none of them speaks about
-# binaries, and no BNetzA procedure inspects a build hash. The separation that
-# matters legally happens above this file; what happens here is that a
-# `nb-only` binary cannot accidentally answer as an LF.
-#
-# Nor is the compiled artefact hermetic: `mako-gpke`, `mako-geli-gas` and
-# `mako-wim` are unconditional dependencies and each pins the `mako-pruefung`
-# trees it needs, so a role-gated build still *links* those catalogues. What the
-# feature gates is the handler that would use them.
+# The features select which **decision paths** are compiled and registered, so
+# an `nb-only` binary cannot answer as an LF. They are not a § 6a/§ 7/§ 7a EnWG
+# control, and the build is not hermetic: `mako-gpke`, `mako-geli-gas` and
+# `mako-wim` are unconditional dependencies and still link their `mako-pruefung`
+# trees. What a feature gates is the handler that would use them.
 #
 # Features:
 #   role-lf-strom  — LF answers to the nine GPKE processes it is asked about,
@@ -42,9 +33,7 @@ publish          = false
 #
 # The MSB role is its own feature because its work is its own: a Kündigung MSB
 # (55039) is MSBN → MSBA and never reaches the NB, and a Steuerungsauftrag
-# ORDRSP is the MSB's answer. Before it existed a pure MSB could not deploy the
-# automation at all, and an `nb-only` build answered messages the NB never
-# receives.
+# ORDRSP is the MSB's answer.
 #
 # Compound feature flags:
 #   lf-only    = ["role-lf-strom", "role-lf-gas"]
@@ -89,11 +78,11 @@ name = "processd"
 path = "src/lib.rs"
 
 [dependencies]
+# The GPKE / GeLi Gas answer-Frist tables. The operator queue must expire on the
+# same instant makod registers on the process, so both read one table.
 mako-fristen = { workspace = true }
 mako-events = { workspace = true }
 mako-markt    = { workspace = true, features = ["makod-client", "marktd-client"] }
-# The GPKE / GeLi Gas answer-Frist tables. The operator queue must expire on the
-# same instant makod registers on the process, so both read one table.
 # The UTILMD wire-code tables. `mako-gpke` already pulls it in, and the NB
 # module reads `SG4 STS+7` DE 9013 directly, so it is named rather than
 # re-spelled as string literals beside the ones edi-energy defines.
@@ -101,8 +90,7 @@ edi-energy    = { workspace = true }
 mako-gpke     = { path = "../../crates/mako-gpke" }
 mako-geli-gas = { path = "../../crates/mako-geli-gas" }
 mako-wim      = { workspace = true }
-# The role features above select which Entscheidungsbäume compile in, so a
-# role features above select which decision paths compile in — see the header.
+# The role features above select which decision paths compile in — see the header.
 mako-pruefung  = { workspace = true }
 
 anyhow             = { workspace = true }
@@ -132,7 +120,7 @@ mako-service = { workspace = true, features = ["testing"] }
 mako-markt   = { workspace = true }
 # The LF answer path is a contract between two producers (`mako-gpke`,
 # `mako-geli-gas`) and one consumer. The round-trip tests build the event with
-# the real builder rather than by hand — which is how the two drifted.
+# the real builder rather than by hand, so the two cannot drift.
 mako-engine  = { workspace = true }
 # `role-nb` only: the SQL integration test builds a `Marktlokationsart` for the
 # `E_0608` Prüflauf. A bare path dependency here would pull the crate's default

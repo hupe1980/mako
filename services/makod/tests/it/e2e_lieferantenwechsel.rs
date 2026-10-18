@@ -87,6 +87,7 @@ fn make_registry(mp_id: &str, role: &str) -> MpIdRegistry {
         roles: vec![role.to_owned()],
         primary: true,
         agency: None,
+        as4: None,
     }])
     .expect("test registry")
 }

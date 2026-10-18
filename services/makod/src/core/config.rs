@@ -23,14 +23,6 @@
 //!
 //! | Inline | File companion |
 //! |---|---|
-//! | `as4.signing_key_pem` | `as4.signing_key_pem_file` |
-//! | `as4.signing_cert_pem` | `as4.signing_cert_pem_file` |
-//! | `as4.decryption_key_pem` | `as4.decryption_key_pem_file` |
-//! | `as4.trust_anchor_pem` | `as4.trust_anchor_pem_file` |
-//! | `as4.partner_certs` | `as4.partner_cert_files` |
-//! | `as4.partner_signing_certs` | `as4.partner_signing_cert_files` |
-//! | `as4.client_tls_cert_pem` | `as4.client_tls_cert_pem_file` |
-//! | `as4.client_tls_key_pem` | `as4.client_tls_key_pem_file` |
 //! | `webdienste.client_cert_pem` | `webdienste.client_cert_pem_file` |
 //! | `webdienste.client_key_pem` | `webdienste.client_key_pem_file` |
 //! | `webdienste.signing_key_pem` | `webdienste.signing_key_pem_file` |
@@ -38,6 +30,10 @@
 //! | `erp.webhook_secret` | `erp.webhook_secret_file` |
 //! | `marktd.api_key` | `marktd.api_key_file` |
 //! | `marktd.webhook_secret` | `marktd.webhook_secret_file` |
+//!
+//! AS4 key material and certificates are files only: `[party.as4]` names each
+//! MP-ID's signing, encryption and TLS pairs, `[as4]` the SM-PKI root and the
+//! CRL signer, `[[as4.partner]]` each partner's certificates.
 //!
 //! ## Minimal example
 //!
@@ -61,18 +57,29 @@
 //! mp_id = "9900000000001"
 //! roles = ["NB", "LF", "MSB"]
 //!
+//! [party.as4]
+//! signing_cert_pem_file    = "/etc/makod/9900000000001/signing.cert.pem"
+//! signing_key_pem_file     = "/etc/makod/9900000000001/signing.key.pem"
+//! encryption_cert_pem_file = "/etc/makod/9900000000001/encryption.cert.pem"
+//! encryption_key_pem_file  = "/etc/makod/9900000000001/encryption.key.pem"
+//! tls_cert_pem_file        = "/etc/makod/9900000000001/tls.cert.pem"
+//! tls_key_pem_file         = "/etc/makod/9900000000001/tls.key.pem"
+//!
 //! [http]
 //! addr      = "0.0.0.0:8080"
 //! auth_keys = ["erp-prod=<token>"]
 //!
 //! [as4]
 //! addr                  = "0.0.0.0:4080"
-//! signing_key_pem_file  = "/etc/makod/signing.key.pem"
-//! signing_cert_pem_file = "/etc/makod/signing.cert.pem"
-//! decryption_key_pem_file = "/etc/makod/decryption.key.pem"
-//! trust_anchor_pem_file   = "/etc/makod/bdew-ca.pem"
-//! partners = ["9900000000002=https://partner-a.example/as4/inbox"]
-//! partner_cert_files = ["9900000000002=/etc/makod/partners/9900000000002.pem"]
+//! message_id_domain     = "as4.stadtwerke-musterstadt.de"
+//! trust_anchor_pem_file = "/etc/makod/sm-pki-root.pem"
+//! crl_signer_pem_file   = "/etc/makod/sm-pki-ccrl-s-root.pem"
+//!
+//! [[as4.partner]]
+//! mp_id                    = "9900000000002"
+//! endpoint                 = "https://partner-a.example/as4/inbox"
+//! encryption_cert_pem_file = "/etc/makod/partners/9900000000002.enc.pem"
+//! signing_cert_pem_files   = ["/etc/makod/partners/9900000000002.sig.pem"]
 //! ```
 //!
 //! ## Notes
@@ -127,6 +134,57 @@ pub struct ConfigFile {
     /// roles = ["LF"]
     /// ```
     pub party: Option<Vec<PartyConfig>>,
+    /// `[policy]` — the operator readings this deployment runs under.
+    #[serde(default)]
+    pub policy: MakodPolicy,
+}
+
+/// `[policy]` — makod's operator settings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MakodPolicy {
+    /// `[policy.as4]`.
+    #[serde(default)]
+    pub as4: As4Policy,
+}
+
+/// `[policy.as4]` — the AS4 inbox's operator settings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct As4Policy {
+    /// Whether a sender that is not a configured `[[as4.partner]]` is served.
+    #[serde(default)]
+    pub unbekannte_absender: mako_service::policy::Policy<UnbekannteAbsender>,
+}
+
+impl MakodPolicy {
+    /// The policy makod runs under — logged at startup and by `--check`.
+    #[must_use]
+    pub fn report(&self) -> mako_service::policy::PolicyReport {
+        mako_service::policy::PolicyReport::new().with(&self.as4.unbekannte_absender)
+    }
+}
+
+mako_service::policy_choice! {
+    /// Whether the AS4 inbox serves a sender that is not a configured partner.
+    ///
+    /// BDEW AS4-Profil 1.2 accepts any sender whose SM-PKI certificate carries
+    /// the claimed MP-ID (§2.3.2) and lets a receiver reject certificates by
+    /// that MP-ID as a whitelist (§2.3.7). Which of the two a deployment runs
+    /// is the operator's choice.
+    pub enum UnbekannteAbsender {
+        key: "as4.unbekannte_absender",
+        doc: "@/docs/services/makod.md#policy-as4-unbekannte-absender",
+        default: tightening(NurKonfigurierte, "a sender the operator has not configured is never acted on: a forged or misrouted Abmeldung from an SM-PKI certificate holder is refused rather than processed, and the operator admits a new partner by configuring it"),
+        options: {
+            /// Only senders listed in `[[as4.partner]]`: any other is refused
+            /// before dispatch and answered `EBMS:0202`.
+            NurKonfigurierte = "nur_konfigurierte" => "BDEW AS4-Profil 1.2 Kap. 2.3.7 (S. 19): Zertifikate KÖNNEN auf der Grundlage der MP-ID im OU-Feld abgelehnt werden (Whitelist); die Whitelist sind die Partnerstammdaten des Betreibers",
+            /// Any sender whose verified SM-PKI certificate carries the claimed
+            /// MP-ID in its OU.
+            BdewOuZulassen = "bdew_ou_zulassen" => "BDEW AS4-Profil 1.2 Kap. 2.3.2 (S. 16): Nachrichten mit beliebigen Werten in eb:From/eb:PartyId werden akzeptiert, sofern sie mit den Betreff-Feldern im vorgelegten Zertifikat übereinstimmen; Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.2 (S. 6): das OU des Subject enthält die MP-ID",
+        }
+    }
 }
 
 /// One `[[party]]` entry — a single BDEW market-participant identity.
@@ -173,6 +231,34 @@ pub struct PartyConfig {
     /// `98…` → `"332"`, 16-char EIC → `"ZEW"`, otherwise `"9"`). Set explicitly
     /// only for a GS1-issued GLN, which needs `"305"`.
     pub agency: Option<String>,
+    /// `[party.as4]` — this MP-ID's AS4 key material. Every `[[party]]` needs
+    /// one as soon as any does: a receiving MSH checks the signing
+    /// certificate's OU against `eb:From`, so each MP-ID signs, decrypts and
+    /// connects with its own key pairs.
+    pub as4: Option<PartyAs4Config>,
+}
+
+/// `[party.as4]` — one MP-ID's three AS4 key pairs, as PEM files.
+///
+/// BDEW AS4-Profil 1.2 §2.3.4.4 (S. 17): different EC key pairs for signing,
+/// encryption and TLS, issued by an SM-PKI CA, with the MP-ID in the subject —
+/// in its OU (Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.2, S. 6). The
+/// signing file holds the EMT.MAK leaf first, then the intermediates.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PartyAs4Config {
+    /// Signing certificate chain (leaf first).
+    pub signing_cert_pem_file: PathBuf,
+    /// Signing private key.
+    pub signing_key_pem_file: PathBuf,
+    /// Encryption certificate; partners encrypt to it.
+    pub encryption_cert_pem_file: PathBuf,
+    /// Decryption private key.
+    pub encryption_key_pem_file: PathBuf,
+    /// TLS client certificate chain, presented to a partner MSH.
+    pub tls_cert_pem_file: PathBuf,
+    /// TLS private key.
+    pub tls_key_pem_file: PathBuf,
 }
 
 // ── Sections ─────────────────────────────────────────────────────────────────
@@ -461,177 +547,74 @@ pub struct EngineConfig {
 
 /// `[as4]` — AS4 / ebMS3 inbound and outbound transport.
 ///
-/// BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every message to be signed **and**
-/// encrypted, which means three distinct pieces of key material: the operator's
-/// signing key pair, the operator's own decryption key, and one encryption
-/// certificate per trading partner.
-#[derive(Deserialize)]
+/// `asx::Profile::bdew()` fixes every security setting; what remains to
+/// configure is who the partners are, the SM-PKI trust and where to listen.
+/// Each local MP-ID's key pairs are its `[party.as4]`.
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct As4Config {
-    /// AS4 inbound listen address, e.g. `"0.0.0.0:4080"`.
+    /// AS4 inbound listen address, e.g. `"0.0.0.0:4080"`. Each local MP-ID is
+    /// served at `/as4/inbox/<MP-ID>`.
     pub addr: Option<std::net::SocketAddr>,
 
-    /// BDEW party ID for this MSH. Defaults to the primary `[[party]]` MP-ID.
-    /// Must match the subject of the signing certificate (AS4-Profil §2.3.2).
-    pub party_id: Option<String>,
+    /// The `id-right` of every `eb:MessageId` this deployment sends
+    /// (`<outbox id>@<domain>`, RFC 2822 §3.6.4). A domain the operator
+    /// controls.
+    pub message_id_domain: Option<String>,
 
-    /// PEM-encoded EC (BrainpoolP256r1) private key for WS-Security XML-DSig
-    /// signing, inline.
-    ///
-    /// Provide either this field **or** `signing_key_pem_file`, not both.
-    pub signing_key_pem: Option<String>,
-
-    /// Path to the PEM file holding the XML-DSig signing private key.
-    ///
-    /// The recommended production form — combine with Kubernetes Secrets,
-    /// a Secrets Store CSI driver, a vault-agent tmpfs sink, or systemd
-    /// `LoadCredential=`.
-    pub signing_key_pem_file: Option<PathBuf>,
-
-    /// PEM-encoded X.509 certificate matching the signing key, inline.
-    pub signing_cert_pem: Option<String>,
-
-    /// Path to the PEM file holding the signing certificate.
-    pub signing_cert_pem_file: Option<PathBuf>,
-
-    /// PEM-encoded EC private key used to decrypt inbound AS4 messages, inline.
-    ///
-    /// Without it the daemon cannot prove an inbound message was encrypted and
-    /// refuses to start unless `allow_unencrypted = true`.
-    pub decryption_key_pem: Option<String>,
-
-    /// Path to the PEM file holding the inbound decryption private key.
-    pub decryption_key_pem_file: Option<PathBuf>,
-
-    /// PEM-encoded trust anchor for verifying counterparty signatures, inline.
-    ///
-    /// In production this is the BDEW/BNetzA PKI CA certificate. Leaving it
-    /// unset falls back to the operator's own signing certificate, which
-    /// rejects every counterparty.
-    pub trust_anchor_pem: Option<String>,
-
-    /// Path to the PEM file holding the trust anchor certificate.
+    /// The SM-PKI root certificate — the one trust anchor every partner and
+    /// every local signer chains to.
     pub trust_anchor_pem_file: Option<PathBuf>,
 
-    /// Trading-partner AS4 endpoints as `"MP-ID=HTTPS-URL"` pairs.
-    ///
-    /// These entries are **bootstrapped** into the durable `PartnerStore` at
-    /// startup and survive restarts. Once seeded, individual records can be
-    /// updated at runtime via `PUT /admin/partners/{mp_id}` or by an inbound
-    /// PARTIN interchange (`POST /admin/partners/import`).
-    pub partners: Option<Vec<String>>,
+    /// The SM-PKI CCRL-S(Root) certificate, which signs the indirect CRL of
+    /// the Root-CA (BSI TR-03109-4 §4.2.1); `asx-rs` checks it chains to the
+    /// trust anchor and asserts `cRLSign`.
+    pub crl_signer_pem_file: Option<PathBuf>,
 
-    /// Trading-partner encryption certificates as `"MP-ID=<PEM>"` pairs.
-    ///
-    /// Required for every entry in `partners`: the send path refuses to encrypt
-    /// without the recipient's certificate, so a missing one dead-letters every
-    /// delivery to that partner.
-    pub partner_certs: Option<Vec<String>>,
-
-    /// Trading-partner encryption certificates as `"MP-ID=/path/to/cert.pem"`
-    /// pairs. Preferred over `partner_certs` — keeps PEM blobs out of the
-    /// config file.
-    pub partner_cert_files: Option<Vec<String>>,
-
-    /// PEM certificate chain of the **WIRK TLS** certificate, presented when
-    /// connecting to a partner MSH.
-    ///
-    /// The third certificate of the BDEW triplet, and the only one that is a
-    /// *transport* credential: the signing certificate proves who wrote the
-    /// message and this one proves who opened the connection. A partner MSH
-    /// that requires client-certificate authentication refuses the connection
-    /// without it.
-    ///
-    /// Optional, because an egress proxy may present it instead — `makod`
-    /// cannot tell the two deployments apart and will not guess. Absent, no
-    /// client certificate is offered.
-    pub client_tls_cert_pem: Option<String>,
-    /// Path form of [`Self::client_tls_cert_pem`].
-    pub client_tls_cert_pem_file: Option<PathBuf>,
-    /// PEM private key for [`Self::client_tls_cert_pem`].
-    pub client_tls_key_pem: Option<String>,
-    /// Path form of [`Self::client_tls_key_pem`].
-    pub client_tls_key_pem_file: Option<PathBuf>,
-
-    /// Trading-partner **signing** certificates as `"MP-ID=<PEM>"` pairs.
-    ///
-    /// Distinct from `partner_certs`, which are the *encryption* certificates
-    /// used on the send path. These are what inbound messages are authenticated
-    /// against: the SHA-256 of each certificate is pinned on the session used
-    /// to verify a message claiming to come from that MP-ID.
-    ///
-    /// Required for every counterparty mako accepts messages from. The BDEW and
-    /// DVGW PKIs issue a certificate to every market participant, so chaining to
-    /// the trust anchor proves only that the signer is *a* market participant —
-    /// the pin is what establishes *which*.
-    pub partner_signing_certs: Option<Vec<String>>,
-
-    /// Trading-partner signing certificates as `"MP-ID=/path/to/cert.pem"`
-    /// pairs. Preferred over `partner_signing_certs` — keeps PEM blobs out of
-    /// the config file.
-    pub partner_signing_cert_files: Option<Vec<String>>,
-
-    /// DEV/TEST ONLY. Downgrade the missing-encryption-material refusals
-    /// (inbound decryption key, per-partner certificates) to warnings.
+    /// `[[as4.partner]]` — one entry per counterparty MP-ID.
     #[serde(default)]
-    pub allow_unencrypted: bool,
+    pub partner: Vec<As4PartnerConfig>,
 
-    /// DEV/TEST ONLY. Start without AS4 signing credentials and without an
-    /// EDIFACT outbox webhook, so outbound EDIFACT is logged rather than sent.
+    /// DEV/TEST ONLY. Start without AS4 key material and without an EDIFACT
+    /// outbox webhook, so outbound EDIFACT is logged rather than sent.
     #[serde(default)]
     pub allow_no_signing: bool,
 
-    /// DEV/TEST ONLY. Start the AS4 listener without a counterparty trust
-    /// anchor, accepting that every partner's signature will be rejected.
+    /// Removed: refused at startup with the per-partner replacement named.
     #[serde(default)]
-    pub allow_no_trust_anchor: bool,
-
-    /// Treat a missing or unverifiable synchronous `eb:Receipt` as a warning
-    /// instead of a delivery failure. Interop debugging only.
-    #[serde(default)]
-    pub lenient_receipts: bool,
+    pub lenient_receipts: Option<serde::de::IgnoredAny>,
 }
 
-/// Hand-written so the two inline private keys cannot reach a log.
-///
-/// `signing_key_pem` and `decryption_key_pem` are the operator's own key
-/// material: one `tracing::debug!(?as4)` or a `{as4:?}` in a panic message
-/// would put an AS4 signing key into the log stream. Their presence is worth
-/// printing — it decides whether the daemon can start — their content is not.
-/// Certificates and trust anchors are public and print in full.
-impl std::fmt::Debug for As4Config {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
-        f.debug_struct("As4Config")
-            .field("addr", &self.addr)
-            .field("party_id", &self.party_id)
-            .field("signing_key_pem", &redact(&self.signing_key_pem))
-            .field("signing_key_pem_file", &self.signing_key_pem_file)
-            .field("signing_cert_pem", &self.signing_cert_pem)
-            .field("signing_cert_pem_file", &self.signing_cert_pem_file)
-            .field("decryption_key_pem", &redact(&self.decryption_key_pem))
-            .field("decryption_key_pem_file", &self.decryption_key_pem_file)
-            .field("trust_anchor_pem", &self.trust_anchor_pem)
-            .field("trust_anchor_pem_file", &self.trust_anchor_pem_file)
-            .field("partners", &self.partners)
-            .field("partner_certs", &self.partner_certs)
-            .field("partner_cert_files", &self.partner_cert_files)
-            .field("client_tls_cert_pem", &self.client_tls_cert_pem)
-            .field("client_tls_cert_pem_file", &self.client_tls_cert_pem_file)
-            .field("client_tls_key_pem", &redact(&self.client_tls_key_pem))
-            .field("client_tls_key_pem_file", &self.client_tls_key_pem_file)
-            .field("partner_signing_certs", &self.partner_signing_certs)
-            .field(
-                "partner_signing_cert_files",
-                &self.partner_signing_cert_files,
-            )
-            .field("allow_unencrypted", &self.allow_unencrypted)
-            .field("allow_no_signing", &self.allow_no_signing)
-            .field("allow_no_trust_anchor", &self.allow_no_trust_anchor)
-            .field("lenient_receipts", &self.lenient_receipts)
-            .finish()
-    }
+/// `[[as4.partner]]` — one AS4 counterparty.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct As4PartnerConfig {
+    /// The partner's MP-ID.
+    pub mp_id: String,
+    /// NAD DE3055 agency of the MP-ID; derived from its prefix when omitted.
+    pub agency: Option<String>,
+    /// The partner's AS4 inbox, `https://` only. Omit for a partner mako only
+    /// receives from.
+    pub endpoint: Option<String>,
+    /// The partner's encryption certificate — required with `endpoint`.
+    pub encryption_cert_pem_file: Option<PathBuf>,
+    /// Signing certificates pinned for the partner (several for a rollover).
+    /// Without any, a message from it is verified against the SM-PKI chain and
+    /// the MP-ID in the certificate's OU.
+    #[serde(default)]
+    pub signing_cert_pem_files: Vec<PathBuf>,
+    /// Interoperability quirks: `"receipt-without-non-repudiation"` accepts the
+    /// partner's *signed* receipt without NonRepudiationInformation. An
+    /// unsigned or mis-signed receipt is refused whatever is set here.
+    #[serde(default)]
+    pub quirks: Vec<String>,
 }
+
+/// The refusal of the removed `as4.lenient_receipts` key.
+pub const LENIENT_RECEIPTS_REMOVED: &str = "as4.lenient_receipts (MAKOD_AS4_LENIENT_RECEIPTS) is \
+     removed: every synchronous eb:Receipt is verified. For a partner whose signed receipt \
+     carries no NonRepudiationInformation, declare it per partner: [[as4.partner]] quirks = \
+     [\"receipt-without-non-repudiation\"]. An unsigned or mis-signed receipt is never accepted.";
 
 /// `[erp]` — ERP / backend integration settings (BO4E contract).
 #[derive(Debug, Deserialize)]
@@ -780,29 +763,6 @@ pub fn read_pairs_file(field: &str, path: &Path) -> anyhow::Result<Vec<String>> 
     Ok(out)
 }
 
-/// Read `"KEY=/path/to/file"` pairs into `"KEY=<file contents>"` pairs.
-///
-/// Used for `as4.partner_cert_files`, which references one PEM file per
-/// trading partner.
-///
-/// # Errors
-///
-/// Returns an error when an entry has no `=` or a referenced file is unreadable.
-pub fn read_keyed_files(field: &str, entries: &[String]) -> anyhow::Result<Vec<String>> {
-    use anyhow::Context as _;
-    entries
-        .iter()
-        .map(|entry| {
-            let (key, path) = entry.split_once('=').ok_or_else(|| {
-                anyhow::anyhow!("config: {field}: expected MP-ID=PATH, got {entry:?}")
-            })?;
-            let content = std::fs::read_to_string(path.trim())
-                .with_context(|| format!("config: {field}: reading {path}"))?;
-            Ok(format!("{}={content}", key.trim()))
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -837,17 +797,37 @@ roles = ["NB", "LF", "MSB"]
 addr      = "0.0.0.0:8080"
 auth_keys = ["erp-prod=token"]
 
+[party.as4]
+signing_cert_pem_file    = "/etc/makod/9900000000001/signing.cert.pem"
+signing_key_pem_file     = "/etc/makod/9900000000001/signing.key.pem"
+encryption_cert_pem_file = "/etc/makod/9900000000001/encryption.cert.pem"
+encryption_key_pem_file  = "/etc/makod/9900000000001/encryption.key.pem"
+tls_cert_pem_file        = "/etc/makod/9900000000001/tls.cert.pem"
+tls_key_pem_file         = "/etc/makod/9900000000001/tls.key.pem"
+
 [as4]
-addr                    = "0.0.0.0:4080"
-signing_key_pem_file    = "/etc/makod/signing.key.pem"
-signing_cert_pem_file   = "/etc/makod/signing.cert.pem"
-decryption_key_pem_file = "/etc/makod/decryption.key.pem"
-trust_anchor_pem_file   = "/etc/makod/bdew-ca.pem"
-partners = ["9900000000002=https://partner-a.example/as4/inbox"]
-partner_cert_files = ["9900000000002=/etc/makod/partners/9900000000002.pem"]
+addr                  = "0.0.0.0:4080"
+message_id_domain     = "as4.stadtwerke-musterstadt.de"
+trust_anchor_pem_file = "/etc/makod/sm-pki-root.pem"
+crl_signer_pem_file   = "/etc/makod/sm-pki-ccrl-s-root.pem"
+
+[[as4.partner]]
+mp_id                    = "9900000000002"
+endpoint                 = "https://partner-a.example/as4/inbox"
+encryption_cert_pem_file = "/etc/makod/partners/9900000000002.enc.pem"
+signing_cert_pem_files   = ["/etc/makod/partners/9900000000002.sig.pem"]
+quirks                   = ["receipt-without-non-repudiation"]
+
+[policy.as4]
+unbekannte_absender = "bdew_ou_zulassen"
 "#;
         let cfg: ConfigFile = toml::from_str(src).expect("documented example parses");
-        assert_eq!(cfg.party.expect("party").len(), 1);
+        assert!(cfg.party.expect("party")[0].as4.is_some());
+        assert_eq!(cfg.as4.expect("as4").partner.len(), 1);
+        assert_eq!(
+            cfg.policy.as4.unbekannte_absender.get(),
+            UnbekannteAbsender::BdewOuZulassen
+        );
         assert_eq!(cfg.deployment.expect("deployment").rollen.len(), 3);
         assert!(cfg.otel.expect("otel").endpoint.is_some());
     }
@@ -857,7 +837,7 @@ partner_cert_files = ["9900000000002=/etc/makod/partners/9900000000002.pem"]
     #[test]
     fn inline_and_file_conflict_is_rejected() {
         let err = either_inline_or_file(
-            "as4.signing_key_pem",
+            "erp.webhook_secret",
             Some("inline".to_owned()),
             Some(&PathBuf::from("/dev/null")),
         )
@@ -928,73 +908,13 @@ partner_cert_files = ["9900000000002=/etc/makod/partners/9900000000002.pem"]
         assert!(err.to_string().contains("expected NAME=VALUE"), "{err}");
     }
 
-    /// The hand-written `Debug` for [`As4Config`] must keep the two inline
-    /// private keys out of the output — and must not silently miss a field
-    /// added later. The exhaustive destructuring below fails to compile when a
-    /// field appears, which is the point at which someone decides whether it is
-    /// secret.
+    /// The removed `as4.lenient_receipts` key still parses, so startup can
+    /// refuse it naming the per-partner setting instead of a generic
+    /// unknown-field error.
     #[test]
-    fn as4_config_debug_redacts_key_material() {
-        let cfg = As4Config {
-            addr: None,
-            party_id: Some("9900000000001".to_owned()),
-            signing_key_pem: Some("-----BEGIN EC PRIVATE KEY-----secret".to_owned()),
-            signing_key_pem_file: None,
-            signing_cert_pem: None,
-            signing_cert_pem_file: None,
-            decryption_key_pem: Some("-----BEGIN EC PRIVATE KEY-----other".to_owned()),
-            decryption_key_pem_file: None,
-            trust_anchor_pem: None,
-            trust_anchor_pem_file: None,
-            partners: None,
-            partner_certs: None,
-            partner_cert_files: None,
-            client_tls_cert_pem: None,
-            client_tls_cert_pem_file: None,
-            client_tls_key_pem: None,
-            client_tls_key_pem_file: None,
-            partner_signing_certs: None,
-            partner_signing_cert_files: None,
-            allow_unencrypted: false,
-            allow_no_signing: false,
-            allow_no_trust_anchor: false,
-            lenient_receipts: false,
-        };
-        let As4Config {
-            addr: _,
-            party_id: _,
-            signing_key_pem: _,
-            signing_key_pem_file: _,
-            signing_cert_pem: _,
-            signing_cert_pem_file: _,
-            decryption_key_pem: _,
-            decryption_key_pem_file: _,
-            trust_anchor_pem: _,
-            trust_anchor_pem_file: _,
-            partners: _,
-            partner_certs: _,
-            partner_cert_files: _,
-            client_tls_cert_pem: _,
-            client_tls_cert_pem_file: _,
-            client_tls_key_pem: _,
-            client_tls_key_pem_file: _,
-            partner_signing_certs: _,
-            partner_signing_cert_files: _,
-            allow_unencrypted: _,
-            allow_no_signing: _,
-            allow_no_trust_anchor: _,
-            lenient_receipts: _,
-        } = &cfg;
-
-        let rendered = format!("{cfg:?}");
-        assert!(
-            !rendered.contains("PRIVATE KEY"),
-            "no key material may reach Debug output: {rendered}"
-        );
-        assert_eq!(rendered.matches("<redacted>").count(), 2);
-        assert!(
-            rendered.contains("9900000000001"),
-            "non-secret fields still print: {rendered}"
-        );
+    fn the_removed_lenient_receipts_key_is_recognised() {
+        let cfg: ConfigFile = toml::from_str("[as4]\nlenient_receipts = true\n").expect("parses");
+        assert!(cfg.as4.expect("as4").lenient_receipts.is_some());
+        assert!(LENIENT_RECEIPTS_REMOVED.contains("receipt-without-non-repudiation"));
     }
 }

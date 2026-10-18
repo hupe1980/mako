@@ -1,4 +1,4 @@
-# Justfile for edi-energy-rs / mako
+# Justfile for mako
 # Install just: https://github.com/casey/just
 #
 # Usage:
@@ -264,11 +264,13 @@ doc-check:
 # `just test` only runs --all-features, which cannot catch a module whose
 # `#[cfg(feature = ...)]` gate is missing or misplaced — that only shows up when
 # the feature is off. The feature list is read from each manifest by
-# `cargo hack`, so a new feature is built with no edit here or in CI.
+# `cargo hack`, so a new feature is built with no edit here or in CI. Each crate
+# is also built with its default features, the build `cargo publish` verifies.
+# CI shards the runs with `just check-features --partition M/N`.
 #
 # Build every feature of every crate on its own (needs cargo-hack)
-check-features:
-    cargo hack check --each-feature --workspace
+check-features *args:
+    cargo hack check --each-feature --workspace {{ args }}
 
 # A dependency no source names still compiles and links, and still carries its
 # advisories; `[package.metadata.cargo-machete] ignored` names, with a reason,
@@ -518,8 +520,8 @@ zugferd-specimen out="target/zugferd-specimen.pdf":
 # no host Java, no host veraPDF. `verapdf/cli` is the veraPDF Foundation's own
 # image; Mustang is the ZUGFeRD project's reference validator, fetched once into
 # target/ and run under Temurin. Both must report every file valid/compliant.
-# In-repo checks cannot replace these: the duplicate-schemas XMP defect was
-# invisible to four layers of our own checking and found only by veraPDF.
+# In-repo checks cannot replace these: an XMP defect can pass every in-repo
+# layer and fail only veraPDF.
 #
 # Expected notices on the *core* specimen (not the XRechnung one, which is
 # clean): Mustang applies XRechnung/Peppol rules informationally to a document
@@ -527,8 +529,7 @@ zugferd-specimen out="target/zugferd-specimen.pdf":
 # empty `ram:ApplicableHeaderTradeDelivery` is a false positive — the element
 # is mandatory in the D16B XSD (omitting it fails schema validation) and
 # KoSIT's own Schematron carves exactly this element out of the R008
-# empty-element rule; Peppol publishes no CII Schematron at all. Settled with
-# en16931-formats 0.5.0 (the writer documents the evidence). Do not "fix" it.
+# empty-element rule; Peppol publishes no CII Schematron at all. Do not "fix" it.
 
 # Validate the specimens with veraPDF + Mustang, containerized (needs Docker only)
 zugferd-verify: zugferd-specimen
@@ -883,8 +884,8 @@ check-pid-coverage:
     cargo xtask check-pid-coverage
 
 # The licence governance page tells a compliance reader what this workspace may
-# depend on, and instructs a maintainer to keep it in step with `deny.toml` —
-# a promise nothing enforced until this ran. Both directions: an allowed licence
+# depend on, and instructs a maintainer to keep it in step with `deny.toml`.
+# Both directions: an allowed licence
 # nobody recorded a review for, and a page stating a permission `cargo deny`
 # refuses.
 check-licenses:
@@ -945,8 +946,8 @@ check-request-bodies:
     cargo xtask check-request-bodies
 
 # A service is a library: `main.rs` is `mako_service::run::<D>().await` and
-# nothing else, so a test can build the router the binary ships. The services
-# not there yet are listed in the guard, and the list only shrinks.
+# nothing else, so a test can build the router the binary ships. makod, which
+# drives its own `main`, is the one exemption the guard names.
 check-thin-main:
     cargo xtask check-thin-main
 
@@ -979,7 +980,6 @@ check-crate-lints:
 # The runner merges the daemon's router onto one that already carries
 # `/health/*` and `/metrics`, and `Router::merge` panics on an overlapping
 # method route — while the router is assembled, so the daemon does not boot.
-# `accountingd` shipped exactly that for its ledger gauges.
 # Refuse a workflow job that compiles this workspace without first reclaiming
 # runner disk. A hosted runner has ~14 GB free; the overflow arrives as
 # `No space left on device` mid-compile or as a linker SIGBUS, and neither reads

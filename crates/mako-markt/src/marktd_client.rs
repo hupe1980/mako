@@ -1626,7 +1626,7 @@ impl MarktdClient {
     /// `GET /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte`
     ///
     /// Returns the contracted `Konfigurationsprodukte` for a `SteuerbareRessource`.
-    /// Used by `makod` M1 guard to verify that the requested `produkt_code` is
+    /// Used by the `makod` Konfigurationsprodukt guard to verify that the requested `produkt_code` is
     /// in the list before dispatching a positive ORDRSP `bestaetigen`.
     ///
     /// Returns `None` on 404 (SR not found in `marktd`).

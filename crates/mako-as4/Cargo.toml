@@ -1,7 +1,7 @@
 [package]
 name         = "mako-as4"
 version.workspace     = true
-description  = "BDEW AS4 profile for German energy market communication: ebMS3 sign, encrypt and signed receipts"
+description  = "BDEW AS4-Profil 1.2 for German energy market communication on asx-rs: partners, services, file names and the retry window"
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true
@@ -12,17 +12,16 @@ keywords     = ["as4", "ebms", "energy", "mako", "bdew"]
 categories   = ["network-programming", "encoding"]
 
 [dependencies]
-asx-rs = { workspace = true, features = ["as4", "interop-strict"] }
+asx-rs = { workspace = true }
 thiserror = { workspace = true }
 
-[features]
-## Activates the `asx-rs/server` feature (Axum router helpers) so dependents
-## can wire BDEW router defaults without taking a direct `asx-rs` dep.
-server = ["asx-rs/server"]
-## Activates test-only helpers: `BdewTestPki`, `generate_self_signed_bdew_keypair`,
-## and `MockAs4Endpoint`. Delegates to `asx-rs/testing` — no additional deps.
-## Never enable in production binaries.
-testing = ["asx-rs/testing", "server"]
+[dev-dependencies]
+asx-rs = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true
+
+# The package `asx-rs` is imported under its library name `asx`, which
+# cargo-machete does not map back to the package.
+[package.metadata.cargo-machete]
+ignored = ["asx-rs"]

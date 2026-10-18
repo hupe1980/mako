@@ -363,6 +363,12 @@ pub fn to_json(decls: &[PolicyDecl]) -> Value {
 }
 
 pub fn run(root: &Path, args: &[String]) -> bool {
+    if let Some(bad) = unknown_argument(args) {
+        eprintln!(
+            "policy-inventory: unknown argument `{bad}` — usage: cargo xtask policy-inventory [--check | --json <file>]"
+        );
+        return false;
+    }
     let decls = collect(root);
     if decls.is_empty() {
         eprintln!(
@@ -404,9 +410,46 @@ pub fn run(root: &Path, args: &[String]) -> bool {
     true
 }
 
+/// The first argument that is neither `--check` nor `--json <file>`: an
+/// unrecognised flag must refuse, not fall through to writing the page.
+fn unknown_argument(args: &[String]) -> Option<&str> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--check" => {}
+            "--json" => {
+                it.next();
+            }
+            other => return Some(other),
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--help` (or any unknown flag) refuses and writes nothing: running the
+    /// tool to read its usage must not regenerate the tracked page.
+    #[test]
+    fn an_unknown_argument_is_refused_and_writes_nothing() {
+        let args = |v: &[&str]| v.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        assert_eq!(unknown_argument(&args(&["--help"])), Some("--help"));
+        assert_eq!(unknown_argument(&args(&["--check", "-v"])), Some("-v"));
+        assert_eq!(unknown_argument(&args(&["--check"])), None);
+        assert_eq!(unknown_argument(&args(&["--json", "out.json"])), None);
+        assert_eq!(unknown_argument(&[]), None);
+        let dir = std::env::temp_dir().join("mako-policy-inventory-unknown-arg");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!run(&dir, &args(&["--help"])));
+        assert!(
+            !dir.join(PAGE).exists(),
+            "a refused run must not write the page"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     const SRC: &str = r#"
 mako_service::policy_choice! {

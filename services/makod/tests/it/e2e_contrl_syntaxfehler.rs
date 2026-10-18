@@ -30,6 +30,7 @@ fn registry(mp_id: &str, role: &str) -> Arc<MpIdRegistry> {
             roles: vec![role.to_owned()],
             primary: true,
             agency: None,
+            as4: None,
         }])
         .expect("valid registry"),
     )

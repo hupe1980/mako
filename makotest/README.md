@@ -12,8 +12,7 @@ pip install makotest                  # no runtime dependencies
 pip install 'makotest[hypothesis]'    # + property-based strategies
 ```
 
-Wheels are abi3 (`abi3-py311`): one wheel serves Python 3.11 and later, with no
-runtime dependencies.
+Wheels are abi3 (`abi3-py311`): one wheel serves Python 3.11 and later.
 
 ## Example
 

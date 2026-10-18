@@ -1,6 +1,6 @@
-# portald.toml — local development: `just dev portald` starts portald with this file against
-# the PostgreSQL of dev/docker-compose.yml (`just infra-up`). Authentication is
-# off and the secrets are fixed strings. DO NOT use in production.
+# portald.toml — local development: `just dev portald` starts portald with this file.
+# portald is stateless (no database). Authentication is off and the secrets are
+# fixed strings. DO NOT use in production.
 #
 # Every key can be overridden by an environment variable — `PORTALD_<KEY>`, nested
 # keys joined with `__`. `portald --help` lists the conventions.

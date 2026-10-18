@@ -696,7 +696,7 @@ mod listener_tests {
             .port()
     }
 
-    /// M66 T016: a second listener is bound, served with an unauthenticated
+    /// A second listener is bound, served with an unauthenticated
     /// `/health/live`, and stops with the main port on shutdown.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_declared_listener_is_served_with_health_outside_its_layers() {

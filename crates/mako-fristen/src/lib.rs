@@ -1661,8 +1661,8 @@ mod tests {
         assert!(is_bdew_mako_holiday(date(2025, 6, 19)), "Fronleichnam");
     }
 
-    /// Verify the Anonymous Gregorian algorithm is correct beyond the old 2035
-    /// table ceiling.
+    /// Verify the Anonymous Gregorian algorithm is correct beyond 2035, where
+    /// a lookup table would end.
     #[test]
     fn easter_beyond_2035_table_ceiling() {
         // 2036: Easter Sunday = 13 April (verified against multiple Easter calculators)

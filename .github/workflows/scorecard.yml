@@ -1,6 +1,6 @@
 name: Scorecard
 
-# OpenSSF Scorecard, weekly and on every push to main: the repository's
+# OpenSSF Scorecard on every push to main: the repository's
 # supply-chain posture — pinned dependencies, token permissions, dangerous
 # workflow patterns, signed releases and the rest — scored by a third party and
 # published to the Scorecard API, where the badge and anyone else can read it.
@@ -10,9 +10,6 @@ name: Scorecard
 # floor is therefore checked in a second job that reads the uploaded result.
 
 on:
-  schedule:
-    # Every Monday at 07:30 UTC, after the advisory sweep in audit.yml.
-    - cron: "30 7 * * 1"
   push:
     branches: [main]
   workflow_dispatch:
@@ -24,6 +21,7 @@ jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       id-token: write   # publishes the result to the Scorecard API
@@ -52,6 +50,7 @@ jobs:
   floor:
     name: Score at or above the floor
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: analysis
     env:
       SCORECARD_FLOOR: "5.0"

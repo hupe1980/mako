@@ -38,7 +38,7 @@ rubo4e       = { workspace = true }
 sepa         = { workspace = true, features = ["time"] }
 # Tamper-evident double-entry ledger kernel — accountingd's accounting/storage base.
 doubleentry  = { workspace = true, features = ["postgres", "serde"] }
-# Keyed hashing for the IBAN lookup key (app-layer, replaces pgcrypto digest()).
+# Keyed hashing for the IBAN lookup key (computed in the application, not by pgcrypto).
 blake3       = "1"
 tracing      = "0.1"
 tokio-util   = { workspace = true }

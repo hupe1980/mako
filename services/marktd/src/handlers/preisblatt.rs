@@ -266,7 +266,7 @@ pub async fn put_preisblatt(
                 )
                 .into_response();
             }
-            // M7.2: tarifkalkulationsmethode must be SPOTPREIS for §14a Modul 3 NNE
+            // tarifkalkulationsmethode must be SPOTPREIS for §14a Modul 3 NNE
             if let Some(method) = item
                 .get("tarifkalkulationsmethode")
                 .and_then(|v| v.as_str())
@@ -278,7 +278,7 @@ pub async fn put_preisblatt(
                 ))
                 .into_response();
             }
-            // M7.3: preisBezugseinheit must be KWH
+            // preisBezugseinheit must be KWH
             if let Some(unit) = item.get("preisBezugseinheit").and_then(|v| v.as_str())
                 && unit != "KWH"
             {
@@ -430,7 +430,7 @@ pub type PreisblattMessungRepoExt = Arc<PgPreisblattMessungRepository>;
 /// band code without JSON path traversal.
 ///
 /// `schema_drift` counts elements that could not be deserialized (indicates stale data
-/// written before M5 validation — re-PUT to normalize).
+/// written before the band-code validation — re-PUT to normalize).
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PreisblattMessungResponse {
     /// The full BO4E `PreisblattMessung` payload.
@@ -465,7 +465,7 @@ pub struct PreisblattMessungResponse {
     #[schema(value_type = Vec<Object>)]
     pub zeitvariable_preispositionen: Vec<ZeitvariablePreisposition>,
     /// Number of `zeitvariablePreispositionen` elements that failed schema validation.
-    /// Non-zero indicates stale pre-M5 data — re-PUT the sheet to normalize.
+    /// Non-zero indicates data stored before the band-code validation — re-PUT the sheet to normalize.
     #[serde(skip_serializing_if = "is_zero")]
     pub schema_drift_count: u32,
 }

@@ -1942,7 +1942,7 @@ pub fn gpke_eog_registry() -> AdapterRegistry<mako_gpke::GpkeEogWorkflow> {
             match pid.as_u32() {
                 55013 => {
                     let (validation_passed, validation_errors) = super::ahb_verdict(msg);
-                    // 55013 now has an authored AHB rulepack (UTILMD AHB Strom 2.2
+                    // 55013 has an authored AHB rulepack (UTILMD AHB Strom 2.2
                     // Kap. 2 — BGM+E01, SG4 IDE 7495=24, STS 9013=E06
                     // Ersatzbelieferung), so `validate()` is a real MIG/AHB check.
                     let transaktionsgrund = first_tx

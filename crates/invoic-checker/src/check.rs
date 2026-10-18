@@ -1223,7 +1223,7 @@ impl InvoicCheckEngine {
             };
 
             // Extract (zaehlzeitregister, price) pairs from zeitvariablePreispositionen.
-            // Band codes are validated on PUT (M5) — every entry has a non-empty register.
+            // Band codes are validated on PUT — every entry has a non-empty register.
             use rubo4e::json::Bo4eExtensionData as _;
             let tou_bands: Vec<(String, EuroAmount)> = preisblatt
                 .extension_data()
@@ -2782,9 +2782,9 @@ mod tests {
 
     /// The window is read from `mako_fristen`, not restated here.
     ///
-    /// If the catalogued row ever moved off 20 Werktage this would fail rather
-    /// than silently keep checking the old number — which is the whole reason
-    /// the check looks the window up.
+    /// A catalogued row that moves off 20 Werktage fails this test rather than
+    /// leaving the check on a stale number — which is why the check looks the
+    /// window up.
     #[test]
     fn the_window_comes_from_the_published_catalogue() {
         let row =

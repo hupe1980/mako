@@ -707,9 +707,8 @@ impl MpIdRegistry {
 
             // ── GPKE Teil 4 Geschäftsdatenanfrage vom MSB Gas ───────────────
             // PID overview 4.0 row 25560: **MSB (Gas) → NB (Strom)** — a Gas
-            // Messstellenbetreiber asking a Strom Netzbetreiber. Neither of the
-            // two roles the old `resolve_ambiguous(LFG, GNB)` weighed is the
-            // sender.
+            // Messstellenbetreiber asking a Strom Netzbetreiber. Neither LFG nor
+            // GNB is the sender.
             17104 => self.mp_id_for_role_or_primary("GMSB"),
 
             // ── GeLi Gas Geschäftsdatenanfrage (LF → NB, Gas) ───────────────
@@ -814,6 +813,7 @@ mod role_resolution_tests {
             roles: roles.iter().map(|r| (*r).to_owned()).collect(),
             primary,
             agency: None,
+            as4: None,
         }
     }
 
@@ -908,6 +908,7 @@ mod tests {
             roles: roles.iter().map(|s| s.to_string()).collect(),
             primary,
             agency: None,
+            as4: None,
         }
     }
 
@@ -1287,6 +1288,7 @@ mod orders_sender_coverage {
             roles: roles.iter().map(|s| (*s).to_owned()).collect(),
             primary,
             agency: None,
+            as4: None,
         };
         MpIdRegistry::from_config(&[
             party("9900001000001", &["NB"], true),

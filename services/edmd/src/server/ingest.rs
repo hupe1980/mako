@@ -638,7 +638,7 @@ pub(crate) async fn post_direct_reads_inner(
         .into_response()
 }
 
-// ─── M7 unit tests ────────────────────────────────────────────────────────────
+// ─── Ingest contract tests ────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod ingest_contract_tests {

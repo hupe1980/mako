@@ -10,7 +10,9 @@ pub struct OutputdConfig {
     /// `[http]` — the listen address. Defaults to every interface on `9880`.
     #[serde(default = "default_http")]
     pub http: mako_service::config::HttpConfig,
-    /// The operator's MP-ID — the tenant every template row is scoped to.
+    /// Tenant identifier — data-isolation key written to every template row.
+    /// Typically the operator's BDEW- or DVGW-Codenummer, but any stable
+    /// unique string is valid.
     pub tenant: String,
     /// OIDC verification for the HTTP API. Fail closed: without it, anyone can
     /// publish the layout every customer document renders with, and render

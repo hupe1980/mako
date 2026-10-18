@@ -85,7 +85,7 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
     ///
     /// Returns `None` when no reads exist for the period.
     ///
-    /// Consumed by `invoicd` for RLM plausibility checks (M16) and by
+    /// Consumed by `invoicd` for RLM plausibility checks and by
     /// `netzbilanzd` for INVOIC generation.
     async fn billing_period(
         &self,

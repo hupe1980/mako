@@ -143,7 +143,7 @@ async fn end_to_end_geraetewechsel_pipeline() {
     // ── Step 4: Build command ─────────────────────────────────────────────────
     //
     // In production the device_id is extracted from LOC+172 in the transaction.
-    // The UtilmdMessage API does not yet expose LOC segments directly, so we
+    // The UtilmdMessage API does not expose LOC segments directly, so we
     // fall back to a well-known value from the fixture for this test.
     let device_id = DeviceId::new("ZHR-12345678");
     let command = DeviceChangeCommand::ReceiveUtilmd {

@@ -9,8 +9,8 @@
 //! - `geli-gas-sperrung-nb`: **19118/19119** (ORDRSP gMSB answer to the forwarded
 //!   Anfrage Sperrung).
 //!
-//! Each now has an arm that resumes the process by MaLo (the ORDRSP carries it in
-//! LOC, exactly like the sibling 19116/19117 arms that already shipped). With no
+//! Each has an arm that resumes the process by MaLo (the ORDRSP carries it in
+//! LOC, exactly like the sibling 19116/19117 arms). With no
 //! process registered the outcome is `Skipped { process_not_found }` — proving the
 //! PID reaches the resume path (adapter built the command, MaLo looked up) rather
 //! than being dropped at routing.

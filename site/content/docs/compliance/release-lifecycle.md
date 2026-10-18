@@ -88,8 +88,10 @@ The predecessor gets its `valid_until` (the day before the successor's `valid_fr
 `cargo xtask profile-diff <type> <from-fv> <to-fv>` is the reader's half of the same
 set: per Prüfidentifikator, which appeared or were withdrawn, which places changed
 their status, which codes gained or lost an operand, and which Bedingungen and
-Pakete were rewritten. It reads the committed profiles alone, so it runs in the
-release PR without the document mirror.
+Pakete were rewritten. It reads the committed profiles alone, so it runs without
+the document mirror; `--pid 55001` narrows it to one column, and places are named
+by position and MIG name because the MIG renumbers its segments between
+Nachrichtentypversionen.
 
 ---
 
@@ -108,7 +110,7 @@ When all profile and code changes are merged and `just ci` is green:
      over every crate the workflow publishes): a public-API break the new
      version number does not admit stops the release before anything is
      published. It runs only here, not in `just ci`.
-   - Publishes the 24 published library crates (every crate under `crates/`
+   - Publishes the 23 library crates (every crate under `crates/`
      but `mako-service`, which is `publish = false`) to [crates.io](https://crates.io)
      with `cargo publish`, in dependency order, by Trusted Publishing.
    - Builds and pushes multi-arch Docker images (`linux/amd64`, `linux/arm64`)
@@ -122,9 +124,8 @@ When all profile and code changes are merged and `just ci` is green:
 
 ### What a release carries
 
-A release answers two questions for an operator, an auditor or an incident
-responder: what is in it, and who built it. Each answer is an artefact a third
-party checks without trusting this repository.
+Each artefact below is checkable by a third party without trusting this
+repository.
 
 | Artefact | Where | How to check it |
 |---|---|---|
@@ -172,7 +173,7 @@ v1.0 Build Level 2.
 **Publishing without a stored secret.** crates.io trusts repository
 `hupe1980/mako`, workflow `release.yml` and environment `crates-io` for each
 crate. `rust-lang/crates-io-auth-action` exchanges the job's OIDC token for a
-crates.io token valid for 30 minutes, revoked when the job ends; because 24
+crates.io token valid for 30 minutes, revoked when the job ends; because 23
 verified publishes take longer than that, each crate mints its own immediately
 before it publishes. The workflow reads no repository secret to publish. Trusted
 Publishing takes over an existing crate only: a new crate is published once by
@@ -195,7 +196,7 @@ from hash-pinned requirements files under `.github/requirements/`
 `site/package-lock.json`. `cargo xtask check-action-pins` refuses a
 tag-pinned `uses:`, a digest-less `FROM`, a wider workflow default, an
 unpinned `pip install` and an `npm install`; a pin moves only in a reviewed
-change. OpenSSF Scorecard scores the repository weekly
+change. OpenSSF Scorecard scores the repository on every push to `main`
 (`scorecard.yml`), publishes the result and fails below a recorded floor.
 
 #### The evidence pack
@@ -254,14 +255,8 @@ CI builds the sdist and installs it into a clean virtualenv on every run, so a
 tarball that cannot build standalone fails before a tag is ever cut.
 
 The Docker images are built from the workspace `Dockerfile` (cargo-chef +
-distroless) via `docker buildx bake`. See the
-[makod Operator Guide](@/docs/services/makod.md#docker-deployment) for image details and
-deployment patterns.
-
-`cargo xtask profile-diff utilmd fv20251001 fv20261001 [--pid 55001]` reads
-the delta between two releases (see [CI Gates](#ci-gates)); places are named by
-position and MIG name, because the MIG renumbers its segments between
-Nachrichtentypversionen.
+distroless) via `docker buildx bake`; see the
+[makod Operator Guide](@/docs/services/makod.md#docker-deployment).
 
 ---
 
@@ -279,8 +274,6 @@ time and read as data:
 - A profile is loaded once per process through `LazyLock`, so repeated
   validation does not re-parse the JSON.
 
-Adding a message type or a Formatversion is therefore an import and a
-`sources.json` entry — never a generated-source review.
 
 ---
 

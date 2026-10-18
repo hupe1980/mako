@@ -285,6 +285,21 @@ pub struct OutboxMessage {
     /// [`OutboxStore::reschedule`].
     pub attempt_count: u32,
 
+    /// When the first delivery attempt began.
+    ///
+    /// The delivery worker stamps it — durably, through
+    /// [`OutboxStore::record_first_attempt`] — before the first send, and every
+    /// retry carries the same value. A transport that signs a timestamp into
+    /// the message (the AS4 `eb:Timestamp`) resends it unchanged, so a retry
+    /// reproduces the first attempt's digests and the receiver recognises it as
+    /// a duplicate rather than as a new message. `None` until the first attempt.
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub first_attempt_at: Option<OffsetDateTime>,
+
     /// Workflow family name that produced this message (e.g. `"gpke-sperrung"`).
     ///
     /// Stamped from the `EventEnvelope::workflow_id.name` at materialisation
@@ -339,6 +354,7 @@ pub(crate) fn materialise(
         created_at: now,
         deliver_after: pending.deliver_after,
         attempt_count: 0,
+        first_attempt_at: None,
         workflow_name: env.workflow_id.name.clone(),
     }
 }
@@ -382,6 +398,7 @@ impl OutboxMessage {
             created_at: OffsetDateTime::now_utc(),
             deliver_after: None,
             attempt_count: 0,
+            first_attempt_at: None,
             workflow_name: "".into(),
             trace_context: crate::trace_ctx::current().map(Into::into),
         }
@@ -493,6 +510,24 @@ pub trait OutboxStore: Send + Sync {
         deliver_after: OffsetDateTime,
     ) -> Result<(), EngineError>;
 
+    /// Record `at` as the instant of the entry's first delivery attempt,
+    /// unless one is already recorded, and return the recorded instant.
+    ///
+    /// The worker calls it before the first send, so a crash between the send
+    /// and the reschedule still leaves the stamp the retry reuses. A second
+    /// call never overwrites the first value. `None` when the entry is gone
+    /// (acknowledged meanwhile).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Outbox`] on storage failure.
+    #[must_use = "dropping a record_first_attempt Result silently hides a store error"]
+    async fn record_first_attempt(
+        &self,
+        id: OutboxMessageId,
+        at: OffsetDateTime,
+    ) -> Result<Option<OffsetDateTime>, EngineError>;
+
     /// Return the total number of messages currently in the outbox.
     ///
     /// # Errors
@@ -536,6 +571,14 @@ impl<S: OutboxStore> OutboxStore for Arc<S> {
         deliver_after: OffsetDateTime,
     ) -> Result<(), EngineError> {
         self.as_ref().reschedule(id, deliver_after).await
+    }
+
+    async fn record_first_attempt(
+        &self,
+        id: OutboxMessageId,
+        at: OffsetDateTime,
+    ) -> Result<Option<OffsetDateTime>, EngineError> {
+        self.as_ref().record_first_attempt(id, at).await
     }
 
     async fn len(&self) -> Result<usize, EngineError> {
@@ -597,6 +640,14 @@ impl OutboxStore for NoopOutboxStore {
         _deliver_after: OffsetDateTime,
     ) -> Result<(), EngineError> {
         Ok(())
+    }
+
+    async fn record_first_attempt(
+        &self,
+        _id: OutboxMessageId,
+        _at: OffsetDateTime,
+    ) -> Result<Option<OffsetDateTime>, EngineError> {
+        Ok(None)
     }
 
     async fn len(&self) -> Result<usize, EngineError> {
@@ -676,6 +727,17 @@ impl OutboxStore for InMemoryOutboxStore {
             msg.attempt_count += 1;
         }
         Ok(())
+    }
+
+    async fn record_first_attempt(
+        &self,
+        id: OutboxMessageId,
+        at: OffsetDateTime,
+    ) -> Result<Option<OffsetDateTime>, EngineError> {
+        let mut map = self.inner.write().await;
+        Ok(map
+            .get_mut(&id)
+            .map(|msg| *msg.first_attempt_at.get_or_insert(at)))
     }
 
     async fn len(&self) -> Result<usize, EngineError> {
@@ -817,6 +879,28 @@ mod tests {
         let stored = inner.get(&id).unwrap();
         assert_eq!(stored.attempt_count, 1);
         assert_eq!(stored.deliver_after, Some(new_time));
+    }
+
+    /// The first stamp wins: a second call returns it unchanged, so every
+    /// retry signs the timestamp of the first attempt.
+    #[tokio::test]
+    async fn the_first_attempt_is_recorded_once() {
+        let store = InMemoryOutboxStore::new();
+        let msg = make_msg();
+        let id = msg.message_id;
+        store.enqueue(&[msg]).await.unwrap();
+        let first = OffsetDateTime::now_utc();
+        let later = first + time::Duration::minutes(10);
+        assert_eq!(
+            store.record_first_attempt(id, first).await.unwrap(),
+            Some(first)
+        );
+        assert_eq!(
+            store.record_first_attempt(id, later).await.unwrap(),
+            Some(first)
+        );
+        store.acknowledge(id).await.unwrap();
+        assert_eq!(store.record_first_attempt(id, later).await.unwrap(), None);
     }
 
     #[tokio::test]

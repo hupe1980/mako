@@ -18,272 +18,34 @@ env:
   # workspace inside a hosted runner's ~14 GB.
   #
   # Incremental compilation is a dev-loop optimisation and a one-shot job
-  # recompiles from scratch anyway, so its artefacts are pure disk cost. They
-  # are also the *largest* single share: an isolated `just ci` target directory
-  # measured 126 GB, of which `debug/incremental` was 75 GB — the feature
-  # permutations `clippy-roles` and `check-features` build each keep their own.
+  # recompiles from scratch anyway, so its artefacts are pure disk cost — and
+  # the largest single share: an isolated `just ci` target directory measured
+  # 126 GB, of which `debug/incremental` was 75 GB.
   CARGO_INCREMENTAL: 0
+  # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
+  # command needs an interpreter >= 3.11. `.cargo/config.toml` points
+  # PYO3_PYTHON at the developer's `.venv`, which does not exist here, and cargo
+  # leaves an already-set variable alone. The runner image's `python3` is above
+  # the floor; only the `makotest` job pins the floor itself.
+  PYO3_PYTHON: python3
 
+# The toolchain is `rust-toolchain.toml`'s in every job: rustup reads the file
+# on the first cargo call. `guards` asserts it once for the runner image.
 jobs:
-  # ── Lockfile freshness ──────────────────────────────────────────────────────
-  lockfile:
-    name: Lockfile up-to-date
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - name: Verify Cargo.lock is up-to-date
-        run: cargo update --locked
-        # `cargo update --locked` fails if Cargo.lock is stale (i.e., any
-        # dependency in Cargo.toml does not match what is recorded in Cargo.lock).
-        # This catches accidental Cargo.toml edits that weren't followed by a
-        # `cargo update` / `cargo build` to refresh the lockfile.
-
-  # ── Formatting ──────────────────────────────────────────────────────────────
-  fmt:
-    name: Formatting
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - run: cargo fmt --all --check
-
-  # ── Clippy ──────────────────────────────────────────────────────────────────
-  clippy:
-    name: Clippy (-D warnings, all targets)
-    runs-on: ubuntu-latest
-    env:
-      PYO3_PYTHON: python3
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
-      # command needs an interpreter >= 3.11. `.cargo/config.toml` points
-      # PYO3_PYTHON at the developer's `.venv`, which does not exist here — and
-      # cargo leaves an already-set variable alone, so naming the runner's
-      # interpreter here is what makes the workspace build.
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.11"
-      - name: Install protoc
-        run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
-      - name: Reclaim runner disk
-        run: |
-          df -h /
-          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
-                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
-          df -h /
-      # -D warnings: clippy lints are hard errors. RUSTFLAGS='-D warnings' (from
-      # the top-level env) already promotes compiler warnings to errors; the
-      # '-- -D warnings' suffix promotes clippy lints to errors as well.
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-  # ── Tests ───────────────────────────────────────────────────────────────────
-  # Every feature of every crate, each built alone. The list comes from the
-  # manifests, so a feature added to a crate is built here with no edit to this
-  # file — a hand-kept matrix is a second enumeration that drifts.
-  features:
-    name: Each feature alone (cargo hack)
-    runs-on: ubuntu-latest
-    env:
-      PYO3_PYTHON: python3
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.11"
-      - name: Install protoc
-        run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
-      - name: Reclaim runner disk
-        run: |
-          df -h /
-          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
-                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
-          df -h /
-      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
-        with:
-          tool: cargo-hack,just
-      - run: just check-features
-
-  # ── Workspace tests ─────────────────────────────────────────────────────────
-  test-workspace:
-    name: Test workspace crates
-    runs-on: ubuntu-latest
-    env:
-      PYO3_PYTHON: python3
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
-      # command needs an interpreter >= 3.11. `.cargo/config.toml` points
-      # PYO3_PYTHON at the developer's `.venv`, which does not exist here — and
-      # cargo leaves an already-set variable alone, so naming the runner's
-      # interpreter here is what makes the workspace build.
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.11"
-      - name: Install protoc
-        run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
-      # This is the job that ran out of disk. The runner ships ~25 GB of
-      # toolchains none of this build uses; dropping them buys back more than
-      # the whole target directory needs.
-      - name: Reclaim runner disk
-        run: |
-          df -h /
-          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
-                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
-          df -h /
-      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
-        with:
-          tool: cargo-nextest
-      # makod has its own job below. nextest runs every test in its own process;
-      # it does not run doctests, which the `doc` job does.
-      - run: cargo nextest run --workspace --all-features --all-targets --exclude makod
-
-  # ── makod binary and integration tests ──────────────────────────────────────
-  test-makod:
-    name: Test makod (binary + integration)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # Run all makod unit and integration tests. The slatedb feature is
-      # enabled transitively via the production dep on mako-engine. The
-      # `testing` feature of mako-engine is available via dev-dependencies
-      # so integration tests can use InMemory stores.
-      - name: Reclaim runner disk
-        run: |
-          df -h /
-          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
-                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
-          df -h /
-      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
-        with:
-          tool: cargo-nextest
-      - name: cargo nextest makod
-        run: cargo nextest run -p makod --all-targets
-
-  # ── energy-api feature-matrix ────────────────────────────────────────────────
-  test-energy-api:
-    name: Test energy-api (${{ matrix.features }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        features:
-          - --features client
-          - --features client,server
-          - --no-default-features
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo test -p energy-api ${{ matrix.features }}
-
-
-  # ── Unused dependencies ─────────────────────────────────────────────────────
-  machete:
-    name: No unused dependencies (cargo-machete)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
-        with:
-          tool: cargo-machete,just
-      - run: just machete
-
-  # ── One service from a fresh clone ──────────────────────────────────────────
+  # ── Source checks ───────────────────────────────────────────────────────────
   #
-  # What CONTRIBUTING.md promises: every service starts from its
-  # dev/config/<service>.toml against dev/docker-compose.yml, answers `--help`
-  # without a config, accepts its dev config under `--print-config`, and
-  # reaches /health/ready.
-  dev-smoke:
-    name: Every service starts from its dev config
+  # Everything that needs no workspace build: the lockfile, formatting, unused
+  # dependencies, licences and advisories, every xtask guard of `just ci`, the
+  # fuzz targets, the Dockerfile and the SQL. One job, because each is seconds
+  # to minutes and the setup would otherwise be paid once per check.
+  guards:
+    name: Guards, lints and SQL
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: Install protoc
-        run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
-      - name: Reclaim runner disk
-        run: |
-          df -h /
-          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
-                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
-          df -h /
-      - uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
-      - run: just smoke-dev
-
-  # ── SQL against a real schema ───────────────────────────────────────────────
-  #
-  # mako uses `sqlx::query`, which prepares at run time. Nothing in the build or
-  # the test suite sees the SQL, so a statement Postgres will not accept
-  # compiles, ships, and fails on the first request that reaches it. Two did —
-  # a `melo.tenant` column that does not exist, and an INSERT naming nineteen
-  # columns against eighteen placeholders.
-  #
-  # `just ci` cannot run this: it starts a container, and the gate refuses
-  # rather than reporting green when there is no daemon. So it ran nowhere. A
-  # service container gives the runner a server on a port, and
-  # `MAKO_CHECK_SQL_URL` points the check at it instead of `docker run`.
-  check-sql:
-    name: SQL parses against its own schema
-    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # mako uses `sqlx::query`, which prepares at run time, so a statement
+    # Postgres will not accept compiles and ships. `just ci` cannot run
+    # `check-sql` (it would start a container); here a service container gives
+    # it a server and `MAKO_CHECK_SQL_URL` points the check at it.
     services:
       postgres:
         image: postgres:17-alpine
@@ -291,9 +53,8 @@ jobs:
           POSTGRES_PASSWORD: check-sql
         ports:
           - 5432:5432
-        # Without this the job races the server's first boot: the first `psql`
-        # arrives before Postgres is listening and the check reports every
-        # statement broken.
+        # Without this the check races the server's first boot and reports
+        # every statement broken.
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s
@@ -302,188 +63,31 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Toolchain is rust-toolchain.toml's
-        shell: bash
         run: |
           want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
           have=$(rustc --version | cut -d' ' -f2)
           case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
             *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo xtask check-sql
-        env:
-          MAKO_CHECK_SQL_URL: postgres://postgres:check-sql@localhost:5432/postgres
-
-
-  # ── Examples ────────────────────────────────────────────────────────────────
-  #
-  # `cargo check --all-targets` compiles the examples but never runs them, which
-  # is how three of six rotted: `05_validate` — the one demonstrating a *valid*
-  # message — shipped a fixture missing a mandatory segment group and exited
-  # non-zero, and two workflow examples drove their state machine into a
-  # transition the domain refuses. An example is copied by whoever reads it, so
-  # the gate is a real run.
-  examples:
-    name: Examples (run, not just compile)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
-      - run: just examples
-
-
-  # ── Fuzz targets ────────────────────────────────────────────────────────────
-  #
-  # `fuzz/` is excluded from the workspace, so every other job here walks past
-  # it: nothing in this file compiles it and `cargo check --all-targets` at the
-  # root never reaches it. Its manifest also restates each dependency version by
-  # hand, because an excluded crate cannot inherit `[workspace.dependencies]` —
-  # so a bump on the workspace side is only ever proved compatible here.
-  #
-  # A `cargo check`, not `cargo fuzz build`: the latter needs nightly and links
-  # every target with the sanitiser runtime, which is minutes per run. Actual
-  # fuzzing is the weekly job in `audit.yml`.
-  fuzz:
-    name: Fuzz targets compile
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      # `fuzz/` carries its own lockfile and target directory; naming it here is
-      # what makes the cache key hash `fuzz/Cargo.lock` rather than the root one.
+      # `fuzz/` is excluded from the workspace and carries its own lockfile and
+      # target directory, so it is cached as a workspace of its own.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: "fuzz"
-      - uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
-      - run: just check-fuzz
-
-
-  # ── Documentation ───────────────────────────────────────────────────────────
-  doc:
-    name: Documentation
-    runs-on: ubuntu-latest
-    env:
-      PYO3_PYTHON: python3
-      RUSTDOCFLAGS: "-D warnings"
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: Reclaim runner disk
-        run: |
-          df -h /
-          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
-                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
-          df -h /
-      # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
-      # command needs an interpreter >= 3.11. `.cargo/config.toml` points
-      # PYO3_PYTHON at the developer's `.venv`, which does not exist here — and
-      # cargo leaves an already-set variable alone, so naming the runner's
-      # interpreter here is what makes the workspace build.
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+          workspaces: |
+            .
+            fuzz
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
         with:
-          python-version: "3.11"
-      - name: Install protoc
-        run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
-      - run: cargo doc --workspace --no-deps --all-features
-      # Every test job passes `--all-targets`, which selects libs, bins, tests,
-      # benches and examples and **excludes doctests**. Without this step no
-      # `/// ```rust` block in the workspace is compiled by anything, and a doc
-      # example may name a function that does not exist. `cargo doc` above does
-      # not compile them either — it only renders them.
-      - name: Doc examples
-        run: cargo test --workspace --all-features --doc
-
-  # ── MSRV ────────────────────────────────────────────────────────────────────
-  msrv:
-    name: Minimum Supported Rust Version (1.94)
-    runs-on: ubuntu-latest
-    env:
-      PYO3_PYTHON: python3
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
-        with:
-          toolchain: "1.94"
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: Reclaim runner disk
-        run: |
-          df -h /
-          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
-                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
-          df -h /
-      # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
-      # command needs an interpreter >= 3.11. `.cargo/config.toml` points
-      # PYO3_PYTHON at the developer's `.venv`, which does not exist here — and
-      # cargo leaves an already-set variable alone, so naming the runner's
-      # interpreter here is what makes the workspace build.
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.11"
-      - name: Install protoc
-        run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
-      - run: cargo check --workspace --all-features
-
-  # ── Deny ────────────────────────────────────────────────────────────────────
-  deny:
-    name: Licenses & Advisories (cargo-deny)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          command: check
-          arguments: --all-features
-      # `fuzz/` is outside the workspace and locks its own graph; the run above
-      # never reads `fuzz/Cargo.lock`. Same `deny.toml`, advisories only.
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          manifest-path: fuzz/Cargo.toml
-          command: check advisories
-          arguments: --all-features
-
-  # ── xtask smoke ─────────────────────────────────────────────────────────────
-  xtask:
-    name: xtask builds
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
-      - run: cargo build -p xtask
-      - run: cargo run -p xtask -- help
+          tool: just@1.58.0,cargo-machete@0.9.2
+      # Fails when a Cargo.toml edit was not followed by a lockfile refresh.
+      - name: Cargo.lock is up to date
+        run: cargo update --locked
+      - run: just fmt-check
+      - run: just machete
       # Every `just ci` recipe whose body is one xtask call, read out of the
       # justfile's `_ci` prerequisites rather than restated here: a guard added
       # to `just ci` is in the pull-request gate the moment it is added, and
       # `check-ci-guards` (one of them) refuses this workflow without this
-      # step. Each is a source scan that costs seconds, so one job runs them
-      # all; every recipe runs, and the step fails naming each one that failed.
+      # step. Every recipe runs, and the step fails naming each one that failed.
       - name: Every xtask guard among the `_ci` prerequisites
         run: |
           set -uo pipefail
@@ -500,131 +104,210 @@ jobs:
             for recipe in $failed; do echo "::error::just $recipe failed"; done
             exit 1
           fi
-      # `rubo4e::v202xyy::` pins a BO4E version alias; `rubo4e::current::` is
-      # the one that moves with the crate.
-      - name: No hardcoded rubo4e version alias
-        run: just no-version-alias
+      - run: just no-version-alias
+      - run: cargo xtask check-sql
+        env:
+          MAKO_CHECK_SQL_URL: postgres://postgres:check-sql@localhost:5432/postgres
+      # `fuzz/` restates each dependency version by hand (an excluded crate
+      # cannot inherit `[workspace.dependencies]`), so a bump on the workspace
+      # side is only proved compatible here. A `cargo check`, not `cargo fuzz
+      # build`, which needs nightly and the sanitiser runtime; `audit.yml`
+      # runs the targets.
+      - run: just check-fuzz
+      # Same `deny.toml` for both locks; `fuzz/Cargo.lock` gets advisories only.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          arguments: --all-features
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: fuzz/Cargo.toml
+          command: check advisories
+          arguments: --all-features
+      # Every runtime stage `docker-bake.hcl` releases is linted and its build
+      # graph validated without compiling anything, so a broken COPY or
+      # `--target` is found here and not by the release tag. The output is
+      # overridden because the bake file's push-by-digest is no lint's concern.
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Lint every released Dockerfile stage
+        run: docker buildx bake --check --set '*.output=type=cacheonly'
 
-  # ── Release image coverage ──────────────────────────────────────────────────
-  # `docker-bake.hcl` decides what is *built*; `release.yml` decides what is
-  # *tagged*. They are two hand-maintained service lists (three, counting the
-  # digest-export loop), and nothing links them — a service added to the bake
-  # group and forgotten in the release workflow is pushed to ghcr.io by digest
-  # and then never given a name anyone can pull.
-  #
-  # The failure is silent by construction — the bake succeeds, the manifest job
-  # simply does not exist for that service — so it cannot be caught by anything
-  # downstream. It has to be caught here.
-  release-images:
-    name: Every baked service is released
+  clippy:
+    name: Clippy (-D warnings, all targets)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Bake group, digest loop and manifest matrix agree
-        run: |
-          set -euo pipefail
-          # The `targets = [...]` list of the `default` group in docker-bake.hcl.
-          baked=$(sed -n '/^group "default"/,/^}/p' docker-bake.hcl \
-                  | sed -n '/targets = \[/,/\]/p' \
-                  | grep -o '"[a-z0-9-]*"' | tr -d '"' | sort -u)
-          # The `for service in ... ; do` loop that exports one digest per service.
-          looped=$(sed -n '/for service in /,/; do/p' .github/workflows/release.yml \
-                   | sed -e 's/.*for service in //' -e 's/; do.*//' -e 's/\\//g' \
-                   | tr -s ' \t' '\n' | grep -E '^[a-z0-9-]+$' | sort -u)
-          # The docker-manifest matrix.
-          matrix=$(grep -oE '^ *- service: [a-z0-9-]+' .github/workflows/release.yml \
-                   | awk '{print $3}' | sort -u)
-
-          # Three empty extractions compare equal, and the job passes having
-          # compared nothing. Each list is read out of a file whose shape may
-          # change, so each has to be non-empty before the comparison means
-          # anything.
-          test -n "$baked" || { echo "::error::no targets in the docker-bake.hcl default group"; exit 1; }
-          test -n "$looped" || { echo "::error::no digest-export loop found in release.yml"; exit 1; }
-          test -n "$matrix" || { echo "::error::no docker-manifest matrix found in release.yml"; exit 1; }
-
-          fail=0
-          for name in looped matrix; do
-            eval "actual=\$$name"
-            if [ "$baked" != "$actual" ]; then
-              echo "::error::docker-bake.hcl and the release $name disagree:"
-              diff <(echo "$baked") <(echo "$actual") || true
-              fail=1
-            fi
-          done
-          [ "$fail" -eq 0 ] || exit 1
-          echo "$baked" | wc -l | xargs printf '%s services baked, looped and tagged\n'
-
-  # ── Role-scoped builds ──────────────────────────────────────────────────────
-  # `--all-features` cannot catch a module whose `#[cfg(feature = …)]` gate is
-  # missing or misplaced — that only shows up with the feature off. It is also
-  # the evidence behind the § 7 EnWG separation claim: an nb-only `processd`
-  # must contain no LF or MSB answer path, and only a role-scoped build proves
-  # it.
-  roles:
-    name: Role-scoped builds (§ 7 EnWG separation)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
       - name: Install protoc
         run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  # Every feature of every crate, each built alone — and each crate with its
+  # default features, which is the build `cargo publish` verifies. The list
+  # comes from the manifests, so a feature added to a crate is built here with
+  # no edit to this file. Two shards keep each under the timeout.
+  features:
+    name: Each feature alone (cargo hack ${{ matrix.partition }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: ["1/2", "2/2"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install protoc
+        run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
         with:
-          python-version: "3.11"
-      - run: just clippy-roles
-        env:
-          PYO3_PYTHON: python3
+          tool: just@1.58.0,cargo-hack@0.6.45
+      - run: just check-features --partition ${{ matrix.partition }}
+
+  # makod has its own job below. nextest runs every test in its own process and
+  # no doctests, which the `doc` job runs. The examples run after the suite on
+  # the same build: `cargo check --all-targets` compiles an example and never
+  # runs it, and an example is copied by whoever reads it.
+  test:
+    name: Test workspace crates and run the examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install protoc
+        run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@1.58.0,cargo-nextest@0.9.146
+      - run: cargo nextest run --workspace --all-features --all-targets --exclude makod
+      - run: just examples
+
+  test-makod:
+    name: Test makod (binary + integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: cargo-nextest@0.9.146
+      - run: cargo nextest run -p makod --all-targets
+
+  # What CONTRIBUTING.md promises: every service starts from its
+  # dev/config/<service>.toml against dev/docker-compose.yml and reaches
+  # /health/ready. Then makod boots once per `[deployment] rollen` declaration
+  # and passes `--check`, which runs the startup assertions (adapter coverage,
+  # dispatch completeness) only a start can.
+  dev-smoke:
+    name: Every service starts; makod starts in every role
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install protoc
+        run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@1.58.0
+      - run: just smoke-dev
       - run: just smoke-roles
-        env:
-          PYO3_PYTHON: python3
+
+  doc:
+    name: Documentation and doc examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install protoc
+        run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
+      - run: cargo doc --workspace --no-deps --all-features
+      # Every test job passes `--all-targets`, which excludes doctests, and
+      # `cargo doc` only renders them; this is the step that compiles and runs
+      # every `/// ```rust` block.
+      - run: cargo test --workspace --all-features --doc
+
+  # `--all-features` turns on every role at once, which is the one
+  # configuration in which a misplaced `#[cfg(feature = "role-…")]` cannot
+  # show. Each role-scoped build of processd, mako-pruefung and agentd is
+  # linted on its own.
+  roles:
+    name: Role-scoped builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install protoc
+        run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@1.58.0
+      - run: just clippy-roles
 
   makotest:
     name: makotest (Python toolkit)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"   # the abi3 floor — the wheel must work here
 
-      # Use the action rather than `pip install maturin`: this workflow sets
-      # RUSTFLAGS="-D warnings" globally, and pip builds maturin from source,
-      # so maturin's own lint warnings become hard errors. The action downloads
-      # a prebuilt binary and sidesteps that entirely.
-      #
-      # `maturin build` (not `develop`) also avoids needing a virtualenv, while
-      # still enabling pyo3/extension-module via `[tool.maturin] features` —
-      # plain `cargo test --workspace` deliberately does not, so both paths are
-      # exercised.
+      # The action rather than `pip install maturin`: RUSTFLAGS="-D warnings"
+      # is set workflow-wide and pip builds maturin from source, so maturin's
+      # own lint warnings would become hard errors. `maturin build` enables
+      # pyo3/extension-module via `[tool.maturin] features`, which plain
+      # `cargo test --workspace` deliberately does not, so both paths run.
       - name: Build the extension wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          maturin-version: v1.15.0
           command: build
           args: --manifest-path makotest/Cargo.toml --out dist
 
       # `hypothesis` is an optional extra, but the strategy tests
-      # `importorskip` it — without it installed they would silently skip and
-      # the property-based surface would go untested in CI. Every package from
-      # the index is pinned by hash (`--require-hashes`); the wheel is the one
-      # built above and is installed alone (`--no-deps`), so nothing else is
-      # resolved from PyPI.
+      # `importorskip` it — without it they would silently skip. Every package
+      # from the index is pinned by hash; the wheel built above is installed
+      # alone (`--no-deps`), so nothing else is resolved from PyPI.
       - name: Install the wheel and run the Python suite
         run: |
           pip install --require-hashes -r .github/requirements/makotest-ci.txt
@@ -632,33 +315,31 @@ jobs:
           cd makotest && pytest -q
           python -c "import makotest.strategies"   # the extra really is importable
 
-      # `makotest` is published to PyPI, so its Python surface gets the same
-      # gate the Rust side does — a consumer reads these files.
+      # `makotest` is published to PyPI, so a consumer reads these files.
       - name: Lint the Python layer
         working-directory: makotest
         run: |
           ruff check .
           ruff format --check .
 
-      # The sdist is only exercised at release time otherwise, and it is the
-      # artifact pip falls back to when no wheel matches. It must build
-      # standalone: makotest depends on workspace crates by `path`, so maturin
-      # has to vendor them into the tarball. Verify that here, not on the tag.
+      # The sdist is what pip falls back to when no wheel matches, and it must
+      # build standalone: makotest depends on workspace crates by `path`, so
+      # maturin has to vendor them into the tarball.
       - name: Build the sdist
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          maturin-version: v1.15.0
           command: sdist
           args: --manifest-path makotest/Cargo.toml --out sdist-out
 
       - name: Verify the sdist builds standalone
         # RUSTFLAGS is cleared for this step only: the sdist build compiles our
         # crates from scratch under pip, and a warning in a transitive build
-        # script must not fail the check.
+        # script must not fail the check. The build backend comes from a
+        # hash-pinned file and the sdist builds without build isolation, so pip
+        # fetches nothing unpinned.
         env:
           RUSTFLAGS: ""
-        # The build backend (maturin) is installed from a hash-pinned file and
-        # the sdist is built against it without build isolation, so pip fetches
-        # nothing unpinned to build it.
         run: |
           python -m venv /tmp/sdist-venv
           /tmp/sdist-venv/bin/pip install --require-hashes -r .github/requirements/makotest-sdist.txt
@@ -670,61 +351,3 @@ jobs:
           assert makotest.antwort_obligation(55001).clock_time == '11:00'
           print('sdist OK', makotest.__version__)
           "
-
-  # ── Publishability ──────────────────────────────────────────────────────────
-  # Every other job builds `--all-features`; `cargo publish` builds the crate's
-  # **default** features. A crate that only compiles with a feature on is found
-  # halfway through the release, after the crates ahead of it in the order are
-  # already on crates.io and cannot be taken back.
-  check-publishable:
-    name: Published crates build with default features
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Toolchain is rust-toolchain.toml's
-        shell: bash
-        run: |
-          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
-          have=$(rustc --version | cut -d' ' -f2)
-          case "$have" in "$want"|"$want".*) echo "rustc $have = rust-toolchain.toml $want" ;;
-            *) echo "::error::rustc $have, but rust-toolchain.toml pins $want"; exit 1 ;; esac
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2.0.0
-      - name: Install protoc
-        run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.11"
-      - run: just check-publishable
-        env:
-          PYO3_PYTHON: python3
-
-  # ── Dockerfile lint ─────────────────────────────────────────────────────────
-  # `docker buildx build --check` performs Dockerfile linting and build-graph
-  # validation without invoking the builder backend or compiling any Rust code,
-  # so it catches syntax errors, broken COPY paths and invalid `--target`
-  # references before they reach the release pipeline. Every runtime stage is
-  # checked, because a broken COPY in a stage nothing lints is found by the
-  # release tag.
-  dockerfile-lint:
-    name: Dockerfile lint (every runtime stage)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-
-      # The stage list is `docker-bake.hcl`'s own, read out of it rather than
-      # restated: a service added there and not here would go unlinted.
-      - name: Lint every runtime stage
-        run: |
-          set -euo pipefail
-          targets=$(grep -oE '^\s*target\s+=\s+"[a-z0-9-]+"' docker-bake.hcl \
-                    | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u)
-          test -n "$targets" || { echo "no runtime stages found in docker-bake.hcl"; exit 1; }
-          for t in $targets; do
-            echo "==> --target $t"
-            docker buildx build --check --target "$t" .
-          done
-          echo "linted $(echo "$targets" | wc -w | tr -d ' ') runtime stages"

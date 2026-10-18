@@ -18,7 +18,7 @@ categories   = ["asynchronous", "data-structures"]
 testing = []
 
 ## Enables `#[tracing::instrument]` spans on key engine operations:
-## `execute_command`, `state`, `state_with_snapshot`, `drain_outbox`.
+## `Process::run`, `Process::state`, `Process::state_with_snapshot`.
 ## `tracing` itself is always a dependency (the crate no-ops without a
 ## subscriber, so library consumers pay no runtime cost unless they install
 ## one). This feature controls only the heavier `#[instrument]` annotation.

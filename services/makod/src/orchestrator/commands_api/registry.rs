@@ -16,7 +16,7 @@ use super::*;
 // - a `command_primary_pid` match arm
 //
 // Adding a command here without supplying a `dispatch` function pointer is a
-// **compile error**.  Stub commands that are not yet fully implemented carry an
+// **compile error**.  A command without a domain implementation carries an
 // explicit `cmd_*` stub function that returns `NotImplemented`.
 //
 // Sources:
@@ -733,7 +733,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         dispatch: cmd_wim_stoerung_ergebnis_melden,
     },
     // ── WiM Preisanfrage (REQOTE 35001/35002/35004/35005 → QUOTES 15001/15002/15004/15005) ────────────
-    // aMSB answers an inbound REQOTE with the QUOTES Angebot. `processd` M3
+    // aMSB answers an inbound REQOTE with the QUOTES Angebot. `processd`
     // auto-dispatches this when a current PreisblattMessung exists.
     CommandDescriptor {
         name: "wim.preisanfrage.angebot-senden",

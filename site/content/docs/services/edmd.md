@@ -51,8 +51,7 @@ The domain arithmetic is the [`metering`](https://github.com/hupe1980/metering)
 crate (zero I/O, no async, no clock). Its input is a validated `Series` —
 sorted, unique, on one grid, one channel — so edmd splits a measuring point's
 readings by register and builds each into a series on its observed grid
-(`edmd::domain::vee`). The BSI TR-03109 SMGW device model is not energy
-arithmetic and lives in `edmd::smgw_model`. `metering::MaloId` enforces the MaLo
+(`edmd::domain::vee`). `metering::MaloId` enforces the MaLo
 check digit at the store boundary; a malformed ID is `400`.
 
 | `metering` | §-basis | Used in |
@@ -187,6 +186,7 @@ graph TB
 │  POST|GET /mcp                                             ← MCP Streamable HTTP              │
 │  GET  /metrics                                             ← the runner's request metrics     │
 │  GET  /edmd/metrics                                        ← edmd's own gauges                │
+│  GET  /api/v1/policy                                       ← operator policy report           │
 │  GET  /health/live  /health/ready                          ← liveness + real DB ping          │
 └───────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -300,7 +300,7 @@ curl -s http://marktd:8180/api/v1/subscriptions/edmd -H "Authorization: Bearer <
 included — so edmd refuses to start unless `allow_insecure_no_auth = true` is
 set, and logs a warning when it is.
 
-**Service keys.** Sibling services (`einsd`, `billingd`, `vertragd`, `portald`)
+**Service keys.** Sibling services (`einsd`, `billingd`, `netzbilanzd`, `vertragd`, `portald`)
 send a static opaque `Authorization: Bearer <key>`, matched in constant time
 against `[[oidc.service_keys]]` and admitted as a service principal of the
 deployment tenant with the declared `roles` (default NB/LF/MSB) and `sparte`
@@ -315,7 +315,7 @@ additionally require a market role (`mako_roles` claim). The policy is
 
 | Action group | Actions | Required role |
 |---|---|---|
-| Reads | `read-timeseries`, `read-imbalance`, `read-billing-period`, `read-archive-olap`, `read-archive-status`, `read-reading-order`, `use-mcp` | any (tenant match) |
+| Reads | `read-timeseries`, `read-imbalance`, `read-billing-period`, `read-archive-olap`, `read-archive-status`, `read-reading-order`, `use-mcp`, `read-policy` | any (tenant match) |
 | Reading ingest | `write-meter-reads` (direct push, gas, IoT, ZSG, SMGW registry, virtual-meter configs) | `MSB`, `ADMIN` |
 | Series mutation | `write-timeseries` (bulk import, corrections, § 60 Abs. 1 Ersatzwerte), `write-quality-rescore` (rescore) | `MSB`, `NB`, `ADMIN` |
 | Field dispatch | `write-reading-order` (orders, §40b campaign) | `NB`, `MSB`, `ADMIN` |
@@ -353,12 +353,12 @@ boundary.
 | Rule | Detail |
 |---|---|
 | **Tenant is part of a reading's identity** | `meter_reads` is keyed `(tenant, malo_id, dtm_from, obis_code_norm)`; `tenant` is meterstore's identity column, so two tenants' readings for one MaLo never merge, and every read binds it |
-| **One batched, validated write** | Every door goes through `store_reads`, one meterstore `append` that splits the batch across tiers and lands whole or not at all. It accepts only a `ValidatedReads`, whose sole constructor runs the validation — no path reaches the store unvalidated |
+| **One batched, validated write** | Every door goes through `store_reads`: one meterstore `append`, whole or not at all, accepting only a `ValidatedReads` — whose sole constructor runs the validation |
 | **The operator is a checked Marktpartner-ID** | The version scope is keyed on the reading's `sender_mp_id`, else the tenant, parsed as a `metering::ids::BdewCode`: its thirteenth digit must satisfy the BDEW or the GS1 procedure. Any other is refused (`422`) before it is stored |
 | **Provenance rides along** | `source` (`IngestionSource`), `sender_mp_id` (§ 60 Abs. 1 per-interval MSB attribution) and `allocation_version` are meterstore attribute columns folded from the newest delivery; `source` is CHECK-constrained |
 | **Billing unit** | Gas is converted with the Brennwert before storage, so the stored `unit` is the Sparte's billing unit (`kWh`); water stays `m³`; heat is `kWh_th`. The unit reaches BO4E `Mengeneinheit` and the Iceberg Parquet |
 | **Constraints** | The 8-value `QualityFlag` vocabulary is a `CHECK` on every quality column; every interval/period table enforces `dtm_to > dtm_from`, and a read whose end is not after its start is refused at the store boundary |
-| **Version resolution** | A stated MSCONS version (≥ 14 digits) decides which delivery wins; without one, arrival milliseconds (13 digits) — so a stated version always outranks it. Values edmd authors (corrections, Ersatzwerte) are re-appended above the version in force (up to four attempts) |
+| **Version resolution** | A stated MSCONS version (≥ 14 digits) decides which delivery wins; without one, arrival milliseconds (13 digits), so a stated version always outranks it. Values edmd authors (corrections, Ersatzwerte) are appended above the version in force |
 | **Displacement audit** | An overwritten interval leaves an immutable § 60 Abs. 6 MsbG audit row spanning `[dtm_from, dtm_to)` |
 | **Billing cache** | `store_reads` drops any cached `meter_billing_periods` row the new readings fall inside |
 
@@ -391,7 +391,7 @@ defaulted to zero.
 | `de.mako.process.completed` | 55004 / 55007 | `LIEFERENDE` reading order |
 | `de.mako.process.initiated` | 23001 (INSRPT Störungsmeldung) | `INSRPT_STOERUNG` reading order |
 | `de.mako.process.initiated` | 23003 / 23004 / 23008 | `SONDERABLESUNG` reading order |
-| `de.mako.process.initiated` | 23005 / 23009 (WiM Gas INSRPT) | `SONDERABLESUNG` reading order |
+| `de.mako.process.initiated` | 23005 / 23009 (INSRPT, Strom and Gas) | `SONDERABLESUNG` reading order |
 | anything else | — | 204 (ignored) |
 
 ### MSCONS PIDs handled
@@ -447,7 +447,7 @@ Content-Type: application/json
 | Field | Note |
 |---|---|
 | `source` | Optional; one of `MSCONS`, `DIRECT_PUSH`, `DIRECT_GAS`, `API_IMPORT`, `AUTO_SUBSTITUTE`, `CORRECTION`, `MANUAL`, `ESTIMATED`, `IOT_PUSH`. Anything else is `422`. Default `DIRECT_PUSH` / `DIRECT_GAS`, `API_IMPORT` on bulk |
-| `sender_mp_id` | The reporting MSB/NB's Codenummer; keys the version scope, so omitting it means the push cannot supersede the MSCONS delivery it corrects. Its check digit must hold under the BDEW or the GS1 procedure — the store refuses any other (`422`), and without it the tenant keys the scope and must pass the same check |
+| `sender_mp_id` | The reporting MSB/NB's Codenummer; keys the version scope, so omitting it means the push cannot supersede the MSCONS delivery it corrects. Check digit as in the [storage model](#storage-model); absent, the tenant keys the scope |
 | `max_plant_power_kw` | Enables `CAPACITY`; absent, the rule is off |
 | `mscons_version` | Correction version (≥ 14 digits); absent, arrival order decides |
 | `unit` | Parsed with `metering::Unit::parse_scaled` and checked against the Sparte's measured or billing unit |
@@ -485,7 +485,7 @@ Content-Type: application/json
 | `session_id` | **Required** — `devEUI:fCnt` (LoRaWAN) or the telegram access number (OMS/M-Bus) |
 | `device_id`, `transport` | Recorded on the session row; `device_id` is **not** the `sender_mp_id` (that is a BDEW Codenummer keying the version scope) |
 | Payload | Must be decoded upstream — edmd does not decode wM-Bus/OMS frames (vendor payloads and keys are proprietary). `raw_payload` is kept verbatim for re-derivation |
-| Units | `STROM` kWh · `GAS` m³ or kWh · `WAERME` kWh · `WASSER` m³. Gas in m³ requires `brennwert_kwh_per_m3`; `zustandszahl` defaults to 1.0. `kWh`/`Wh`/`MWh`/`GWh`/`GJ`/`MJ` and `m³`/`m3`/`cbm`/`l` are accepted and rescaled exactly (3.6 GJ = 1000 kWh). The response reports `unit_submitted`, `unit_stored`, `converted` |
+| Units | `STROM` kWh · `GAS` m³ or kWh · `WAERME` kWh · `WASSER` m³; gas in m³ requires `brennwert_kwh_per_m3` (`zustandszahl` default 1.0). Scaled units (`Wh`…`GWh`, `GJ`, `MJ`, `m3`, `cbm`, `l`) are rescaled exactly; the response reports `unit_submitted`, `unit_stored`, `converted` |
 | Negative values | Rejected — direction belongs in the OBIS code |
 | Outliers (`SPIKE`, `CAPACITY`) | Stored as `PRELIMINARY` (MSCONS Z84), not discarded |
 | Eichfrist | An expired `eichung_bis` is a **warning**, never a rejection — see below |
@@ -769,8 +769,7 @@ energy register.
 `de.messwert.reading.quality.warning` fires on a grade C/F **or** any finding,
 from every door; `ingest_door` names it (`mscons`, `rlm-direct-push`,
 `iot-push`, `bulk-import`, `kafka-ingest`). The same predicate decides `202` vs
-`201`. In `agentd` the event starts `msb-history-agent`, `meter-data-agent` and
-`replacement-value-agent`.
+`201`.
 
 Re-scoring supersedes the previous verdict for the same source:
 
@@ -991,11 +990,10 @@ which advances the watermark. The hot tier is reclaimed by tiering, not
 provisions both tiers and adds every declared column a table lacks, and until it
 has run a store refuses to build, archive or write.
 
-Data written by an earlier meterstore is not always readable: substitute
-payloads, resolutions spelled in seconds and Marktpartner-IDs that fail both
-check-digit procedures do not decode, and an erasure registry without
-`hmac_key_id` is refused by `create_tables`. A deployment holding such data is
-rebuilt — in development `just infra-reset`.
+Rows meterstore cannot decode (substitute payloads, resolutions spelled in
+seconds, Marktpartner-IDs failing both check-digit procedures) and an erasure
+registry without `hmac_key_id` are refused; such a deployment is rebuilt — in
+development `just infra-reset`.
 
 ```toml
 [archive]
@@ -1110,7 +1108,7 @@ Orders live in `ablese_auftraege`, linked to their origin by
 | `JAHRESABLESUNG` | LF, NB | Campaign or ERP (§40 EnWG) |
 | `ZWISCHENABLESUNG` | LF, ESA | On demand; an ESA may order value delivery (WiM Strom Teil 2 Kap. 4 / § 60 Abs. 1 MsbG) |
 | `SPERRUNG` · `ENTSPERRUNG` | NB | `processd` Sperrauftrag queue (§41f EnWG; Wiederherstellung §41f Abs. 7) |
-| `SONDERABLESUNG` | MSB | INSRPT 23003/23004/23008, Gas 23005/23009 |
+| `SONDERABLESUNG` | MSB | INSRPT 23003/23004/23005/23008/23009 |
 | `INSRPT_STOERUNG` | MSB | INSRPT 23001 — `geplant_am` tomorrow, `ausfuehrt_bis` +7 days, idempotent on `insrpt_process_id` |
 | `ISMS_AUSLESUNG` | MSB | iMSys auto-readout |
 
@@ -1233,9 +1231,6 @@ Wege der rechnerischen Aufteilung innerhalb eines 15-Minuten-Zeitintervalls
 zuteilbare Strommenge ist begrenzt auf die durch ihn in diesem Zeitintervall
 verbrauchte Strommenge." The proportional ratio is cut to six places toward
 zero, so the shares never exceed the generation.
-
-Routes: `POST|GET /api/v1/virtual`, `GET|DELETE /api/v1/virtual/{virtual_malo_id}`,
-`GET /api/v1/virtual/{virtual_malo_id}/lastgang`.
 
 ### §42c allocation and readiness
 
@@ -1423,7 +1418,7 @@ pool (the registry shares the database):
 
 | Treatment | Tables |
 |---|---|
-| `malo_id` → subject reference (Buchungsbelege: § 147 Abs. 1 Nr. 4, Abs. 3 AO, eight years; Art. 17 Abs. 3 lit. b DSGVO). A MaLo with no mapping gets a freshly minted reference recorded nowhere else, so these rows are never deleted | `zsg_conversion_log`, `meter_read_corrections`, `substitute_value_log`, `meter_data_receipts`, `ablese_auftraege`, `gas_quality_data` |
+| `malo_id` → subject reference, never deleted (Buchungsbelege: § 147 Abs. 1 Nr. 4, Abs. 3 AO, eight years; Art. 17 Abs. 3 lit. b DSGVO); a MaLo with no mapping gets a fresh reference recorded nowhere else | `zsg_conversion_log`, `meter_read_corrections`, `substitute_value_log`, `meter_data_receipts`, `ablese_auftraege`, `gas_quality_data` |
 | deleted (derived, operational, device) | `meter_billing_periods`, `quality_assessments`, `estimated_read_confirmations`, `direct_push_sessions`, `smgw_sessions`, `cls_compliance_issues`, `delivery_surveillance`, `smgw_cert_expiry_alerts` |
 | deleted where it names the MaLo as `virtual_malo_id` or as a source in `rule_json` (bound JSON path variable) | `virtual_meter_configs` |
 
@@ -1520,10 +1515,6 @@ the REST write action.
 
 Prompts: `analyze-consumption`, `submit-mscons`, `quality-assessment`,
 `jahresablesung-workflow`, `reading-order-lifecycle`.
-
-Each tool shares its REST twin's implementation (the register projection, the
-validation pass, the forecast, the repository methods), so both surfaces answer
-alike.
 
 ---
 

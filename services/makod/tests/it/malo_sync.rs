@@ -124,6 +124,7 @@ async fn harness() -> Harness {
             roles: vec!["NB".to_owned()],
             primary: true,
             agency: None,
+            as4: None,
         }])
         .expect("registry"),
     );

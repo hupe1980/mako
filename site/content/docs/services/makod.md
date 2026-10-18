@@ -38,10 +38,10 @@ Daemons `makod` exchanges commands and events with most directly:
 | Daemon | Port | Role |
 |--------|------|------|
 | [`marktd`](@/docs/services/marktd.md) | `:8180` | Master data (MaLo/MeLo/contracts), webhook fan-out, price sheets |
-| `invoicd` | `:8280` | INVOIC plausibility, receipt persistence, REMADV auto-dispatch |
+| [`invoicd`](@/docs/services/invoicd.md) | `:8280` | INVOIC plausibility, receipt persistence, REMADV auto-dispatch |
 | [`edmd`](@/docs/services/edmd.md) | `:8380` | Meter-data store (MSCONS), time-series API, Mehr-/Mindermengen |
 | [`processd`](@/docs/services/processd.md) | `:8580` | Walks the Entscheidungsbäume and posts the answer command back; keeps the process read model (BNetzA KPIs, Fristen alerts) and the NB Sperrauftrag queue |
-| `netzbilanzd` | `:8680` | NNE/MMM/MSB INVOIC generation |
+| [`netzbilanzd`](@/docs/services/netzbilanzd.md) | `:8680` | NNE/MMM/MSB INVOIC generation |
 
 The [service index](@/docs/services/_index.md) lists every daemon.
 
@@ -78,8 +78,7 @@ roles   = ["NB", "LF", "MSB"]
 primary = true
 
 [as4]
-allow_no_signing      = true   # no AS4 credentials: log outbound EDIFACT
-allow_no_trust_anchor = true
+allow_no_signing = true        # no [party.as4]: log outbound EDIFACT
 ```
 
 Each of those is a startup refusal without its opt-in:
@@ -89,7 +88,7 @@ Each of those is a startup refusal without its opt-in:
 | `allow_volatile` (`MAKOD_ALLOW_VOLATILE`, `--allow-volatile`) | No `data_dir` and no object store |
 | `auth_keys` or an `[oidc]` issuer | `[http] addr` set with no authentication |
 | `permit_all` or `cedar_policy_dir` | Default-deny authorization with no policy — every request would be `403` |
-| `allow_no_signing` | No AS4 signing material and no `[erp] edifact_outbox_webhook_url` |
+| `allow_no_signing` | No `[party.as4]` key material and no `[erp] edifact_outbox_webhook_url` |
 
 > **⚠ Volatile mode is development and CI only.** All event streams, outbox
 > messages, snapshots, registry entries and deadlines live in RAM. Any exit,
@@ -170,21 +169,28 @@ addr = "0.0.0.0:8090"
 # marktrollen                 = ["NB"]   # defaults to the [[party]] union
 
 [as4]
-addr                    = "0.0.0.0:4080"
-party_id                = "9900357000004"
-signing_key_pem_file    = "/etc/makod/signing.key.pem"
-signing_cert_pem_file   = "/etc/makod/signing.cert.pem"
-decryption_key_pem_file = "/etc/makod/decryption.key.pem"
-trust_anchor_pem_file   = "/etc/makod/bdew-pki-ca.pem"
-partners = [
-  "9900000000001=https://partner-a.example/as4/inbox",
-]
-partner_cert_files = [
-  "9900000000001=/etc/makod/partners/9900000000001.enc.pem",
-]
-partner_signing_cert_files = [
-  "9900000000001=/etc/makod/partners/9900000000001.sig.pem",
-]
+addr                  = "0.0.0.0:4080"
+message_id_domain     = "as4.stadtwerke-beispiel.de"
+trust_anchor_pem_file = "/etc/makod/sm-pki-root.pem"
+crl_signer_pem_file   = "/etc/makod/sm-pki-ccrl-s-root.pem"
+
+[[as4.partner]]
+mp_id                    = "9900000000001"
+endpoint                 = "https://partner-a.example/as4/inbox"
+encryption_cert_pem_file = "/etc/makod/partners/9900000000001.enc.pem"
+signing_cert_pem_files   = ["/etc/makod/partners/9900000000001.sig.pem"]
+
+# Each [[party]] (above) carries its own key pairs:
+# [party.as4]
+# signing_cert_pem_file    = "/etc/makod/9900357000004/signing.cert.pem"
+# signing_key_pem_file     = "/etc/makod/9900357000004/signing.key.pem"
+# encryption_cert_pem_file = "/etc/makod/9900357000004/encryption.cert.pem"
+# encryption_key_pem_file  = "/etc/makod/9900357000004/encryption.key.pem"
+# tls_cert_pem_file        = "/etc/makod/9900357000004/tls.cert.pem"
+# tls_key_pem_file         = "/etc/makod/9900357000004/tls.key.pem"
+
+[policy.as4]
+# unbekannte_absender = "nur_konfigurierte"   # the default
 
 [erp]
 webhook_url         = "https://erp.example.com/mako/events"
@@ -210,14 +216,15 @@ environment and the container spec.
 
 | Inline | File companion |
 |---|---|
-| `as4.signing_key_pem` · `signing_cert_pem` · `decryption_key_pem` · `trust_anchor_pem` | the same key with `_file` |
-| `as4.partner_certs` · `as4.partner_signing_certs` | `as4.partner_cert_files` · `as4.partner_signing_cert_files` |
-| `as4.client_tls_cert_pem` · `client_tls_key_pem` | the same key with `_file` |
 | `webdienste.client_cert_pem` · `client_key_pem` · `signing_key_pem` · `signing_cert_pem` | the same key with `_file` |
 | `http.auth_keys` | `http.auth_keys_file` |
 | `erp.webhook_secret` | `erp.webhook_secret_file` |
 | `marktd.api_key` | `marktd.api_key_file` |
 | `marktd.webhook_secret` | `marktd.webhook_secret_file` |
+
+AS4 key material and certificates have only the file form: `[party.as4]`,
+`as4.trust_anchor_pem_file`, `as4.crl_signer_pem_file` and the
+`[[as4.partner]]` certificate files.
 
 ---
 
@@ -425,9 +432,8 @@ workload identity).
   is rejected.
 - `iss`, `aud` and `exp` are checked on every token.
 - **`mako_tenant` must equal the primary MP-ID**, and a missing claim is
-  rejected. In a shared realm another operator's token is otherwise
-  cryptographically valid here. The check sits in `BearerAuthenticator`, which
-  every Cedar-gated endpoint uses.
+  rejected: in a shared realm another operator's token is otherwise
+  cryptographically valid here.
 - The JWT `sub` becomes the Cedar principal ID (for a Kubernetes service account,
   `system:serviceaccount:<namespace>:<name>`).
 
@@ -437,68 +443,107 @@ API keys and OIDC can be active at the same time.
 
 ### `[as4]` — AS4/ebMS3 inbound and outbound
 
-Four kinds of certificate material, each with a different job:
+`asx-rs` 0.16's `Profile::bdew()` fixes every security and wire setting of BDEW
+AS4-Profil 1.2: ECDSA on brainpoolP256r1 with an `X509PKIPathv1` token,
+ECDH-ES/ConcatKDF/AES-128-GCM with an `X509SKI` reference, sign then encrypt,
+gzip, the fixed Action, roles and `AgreementRef`, an empty `ConversationId`, CRL
+revocation with the three-day distrust rule (Regelungen zum Übertragungsweg für
+AS4 2.6 Kap. 5.4). Nothing in the configuration can relax it. What is
+configured is who the parties are:
 
-| Material | Keys | Used for |
+| Material | Where | Used for |
 |---|---|---|
-| Own identity | `signing_key_pem` / `signing_cert_pem`, `decryption_key_pem` | Signing outbound, decrypting inbound |
-| Trust anchor | `trust_anchor_pem` | Proves a signer is *a* BDEW/DVGW market participant |
-| Partner encryption certs | `partner_certs` | Encrypting what is **sent** to each partner |
-| Partner signing certs | `partner_signing_certs` | Authenticating what each partner **sends** |
-| WIRK TLS client cert | `client_tls_cert_pem` / `client_tls_key_pem` | Transport credential to a partner MSH (optional; an egress proxy may present it) |
+| Each MP-ID's signing, encryption and TLS key pairs | `[party.as4]` of every `[[party]]` | Signing outbound messages and receipts, decrypting inbound, the mutual-TLS connection |
+| SM-PKI root | `as4.trust_anchor_pem_file` | The one trust anchor every signer — partner and own — chains to |
+| CCRL-S(Root) | `as4.crl_signer_pem_file` | Signs the indirect Root-CA CRL (BSI TR-03109-4 §4.2.1) |
+| Partner encryption cert | `[[as4.partner]] encryption_cert_pem_file` | Encrypting what is **sent** to the partner |
+| Partner signing certs | `[[as4.partner]] signing_cert_pem_files` | Pins: the partner's messages must be signed by one of them (several for a rollover) |
 
-BDEW AS4-Profil v1.2 §2.2.6.2.1/§2.2.6.2.2 (with BSI TR-03116-3 §9.1) requires
-EC keys on BrainpoolP256r1 and separate keypairs for signing and encryption.
+BDEW AS4-Profil 1.2 §2.3.4.4 requires different EC key pairs for signing,
+encryption and TLS, issued by an SM-PKI CA, with the MP-ID in the subject — in
+its OU (Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.2: „Das Feld
+Organisational Unit („OU") des Subject muss die MP-ID enthalten"). A receiving
+MSH checks that OU against `eb:From`, so **every MP-ID has its own key pairs and
+its own AS4 client**: a combined Strom+Gas deployment holds two `[party.as4]`.
 
-| TOML key | Env var | CLI flag | Description |
-|---|---|---|---|
-| `addr` | `MAKOD_AS4_ADDR` | `--as4-addr` | Listen address |
-| `party_id` | `MAKOD_AS4_PARTY_ID` | `--as4-party-id` | Operator MP-ID (default: primary `[[party]]`) |
-| `signing_key_pem` / `_file` | `MAKOD_AS4_SIGNING_KEY_PEM` | `--as4-signing-key-pem` | Own signing key |
-| `signing_cert_pem` / `_file` | `MAKOD_AS4_SIGNING_CERT_PEM` | `--as4-signing-cert-pem` | Own signing certificate |
-| `decryption_key_pem` / `_file` | `MAKOD_AS4_DECRYPTION_KEY_PEM` | `--as4-decryption-key-pem` | Own inbound decryption key |
-| `trust_anchor_pem` / `_file` | `MAKOD_AS4_TRUST_ANCHOR_PEM` | `--as4-trust-anchor-pem` | BDEW/BNetzA PKI CA certificate |
-| `partners` | `MAKOD_AS4_PARTNER` | `--as4-partner` | `MP-ID=HTTPS-URL` pairs (repeatable; comma-separated in the env var) |
-| `partner_certs` / `partner_cert_files` | `MAKOD_AS4_PARTNER_CERT` | `--as4-partner-cert` | Partner **encryption** certs, `MP-ID=<PEM or path>` |
-| `partner_signing_certs` / `partner_signing_cert_files` | `MAKOD_AS4_PARTNER_SIGNING_CERT` | `--as4-partner-signing-cert` | Partner **signing** certs |
-| `client_tls_cert_pem` / `_file` | `MAKOD_AS4_CLIENT_TLS_CERT_PEM` | `--as4-client-tls-cert-pem` | WIRK TLS client chain |
-| `client_tls_key_pem` / `_file` | `MAKOD_AS4_CLIENT_TLS_KEY_PEM` | `--as4-client-tls-key-pem` | Its key |
-| `allow_unencrypted` | `MAKOD_ALLOW_UNENCRYPTED_AS4` | `--allow-unencrypted-as4` | **Dev/test:** downgrade the encryption and partner-signing-cert refusals to warnings |
-| `allow_no_signing` | `MAKOD_ALLOW_NO_AS4_SIGNING` | `--allow-no-as4-signing` | **Dev/test:** start without signing material or outbox webhook; outbound EDIFACT is logged |
-| `allow_no_trust_anchor` | `MAKOD_ALLOW_NO_AS4_TRUST_ANCHOR` | `--allow-no-as4-trust-anchor` | **Dev/test:** run with no trust anchor (every partner signature is rejected) |
-| `lenient_receipts` | `MAKOD_AS4_LENIENT_RECEIPTS` | `--as4-lenient-receipts` | Interop bring-up: tolerate an unsigned or non-NRR `eb:Receipt` |
+| Key | Description |
+|---|---|
+| `[as4] addr` (`MAKOD_AS4_ADDR`, `--as4-addr`) | Listen address. Each `[[party]]` is served at `/as4/inbox/<MP-ID>` — one web-service address per certificate (RzÜ AS4 2.6 Kap. 5.2) |
+| `[as4] message_id_domain` | The `id-right` of every `eb:MessageId`: `<outbox id>@<domain>` (RFC 2822 §3.6.4) |
+| `[as4] trust_anchor_pem_file` | SM-PKI root certificate |
+| `[as4] crl_signer_pem_file` | SM-PKI CCRL-S(Root) certificate |
+| `[as4] allow_no_signing` (`MAKOD_ALLOW_NO_AS4_SIGNING`, `--allow-no-as4-signing`) | **Dev/test:** start without AS4 key material and without an outbox webhook; outbound EDIFACT is logged |
+| `[party.as4] signing_cert_pem_file` · `signing_key_pem_file` | The MP-ID's EMT.MAK signing certificate (leaf first, then intermediates) and key |
+| `[party.as4] encryption_cert_pem_file` · `encryption_key_pem_file` | Its encryption certificate and decryption key |
+| `[party.as4] tls_cert_pem_file` · `tls_key_pem_file` | Its TLS client certificate and key |
+| `[[as4.partner]] mp_id` · `agency` | The partner's MP-ID; the agency (party type) is derived from its prefix unless set |
+| `[[as4.partner]] endpoint` | Its inbox, `https://` only; omit for a partner makod only receives from |
+| `[[as4.partner]] encryption_cert_pem_file` | Required with `endpoint` |
+| `[[as4.partner]] signing_cert_pem_files` | Pinned signing certificates; without any, the SM-PKI chain and the OU decide |
+| `[[as4.partner]] quirks` | `["receipt-without-non-repudiation"]` accepts that partner's **signed** receipt without NonRepudiationInformation |
 
-Partners are bootstrapped into the durable `PartnerStore`; runtime changes via
+Partner endpoints are seeded into the durable `PartnerStore`; runtime changes via
 `PUT /admin/partners/{mp_id}` or inbound PARTIN survive restarts.
+
+#### `[policy.as4] unbekannte_absender` {#policy-as4-unbekannte-absender}
+
+Whether the inbox serves a sender that is not a `[[as4.partner]]`. `asx-rs`
+verifies every sender against the SM-PKI root and the MP-ID in its certificate's
+OU in either case.
+
+| Value | Behaviour | Source |
+|---|---|---|
+| `nur_konfigurierte` (default) | A sender missing from `[[as4.partner]]` is refused before dispatch, answered `EBMS:0202` — once the operator configures it, the sender's next retry is served | BDEW AS4-Profil 1.2 Kap. 2.3.7 (S. 19): certificates „KÖNNEN … auf der Grundlage der MP-ID im OU-Feld abgelehnt werden (Whitelist)"; the whitelist is the operator's partner master data |
+| `bdew_ou_zulassen` | Any sender whose verified SM-PKI certificate carries the claimed MP-ID in its OU is served | BDEW AS4-Profil 1.2 Kap. 2.3.2 (S. 16): the receiver accepts any `eb:From` PartyId „sofern sie mit den entsprechenden Betreff-Feldern im vorgelegten Zertifikat übereinstimmen" |
+
+The default is the direction that cannot act on a message from a party the
+operator has not chosen to deal with. makod logs the value with its source at
+startup and under `--check`.
 
 **Startup refusals** (all also run under `--check`):
 
 | Condition | Why |
 |---|---|
-| AS4 active, no `partner_signing_certs` | The listener would accept nothing |
-| No trust anchor | The anchor falls back to the own certificate and every inbound message is rejected |
-| No decryption key, or a partner without an encryption certificate | §2.2.6.2.2 requires encryption; the send would fail anyway |
-| Signing key and certificate do not build a session, or a partner endpoint is `http://` | Caught at boot rather than per message |
+| `--as4-addr` with no `[party.as4]`, or one `[[party]]` without it beside one with it | Each MP-ID's inbox and messages need its own key pairs |
+| No `trust_anchor_pem_file`, `crl_signer_pem_file` or `message_id_domain` | Nothing verifies, nothing below the root passes the CRL check, no message id can be formed |
+| `As4::builder(..).build()` refuses (a signer not chaining to the root, no MP-ID in a certificate's OU, an expired certificate, …) | The `asx-rs` refusal names the setting and the profile section |
+| Two of a party's signing, encryption and TLS certificates certify one key pair | §2.3.4.4; compared by public key, not by certificate |
+| A partner endpoint on `http://`, or an endpoint without an encryption certificate | §2.2.6.2.2 encrypts every message for its recipient |
+| `as4.lenient_receipts` or `MAKOD_AS4_LENIENT_RECEIPTS` set | Every receipt is verified; the refusal names the per-partner `quirks` setting |
 
-The BDEW profile stack declares a sign-and-encrypt **security floor**; `asx-rs`
-rejects a relaxing override layer with
-`ProfileValidationCode::SecurityFloorViolation`.
+**Sending.** A message for a partner goes out through the client of the
+interchange's sender (UNB DE0004) under Service
+`https://www.bdew.de/as4/communication/services/MP` — every EDIFACT
+Übertragungsdatei of the Marktkommunikation is a Marktprozess (BDEW AS4-Profil
+1.2 §2.3.1.2.1). The `eb:MessageId` is `<outbox id>@<message_id_domain>`, and
+the `eb:Timestamp` is the outbox entry's first attempt, which the outbox worker
+records durably before the first send. Every retry resends the same id and
+timestamp, so its digests are the first attempt's and a receiver that already
+holds the message answers it as a duplicate (`asx-rs` accepts an `eb:Timestamp`
+up to 7 days old; the retry window is 72 hours).
 
 **Receipts and retries.**
 
-- Inbound messages get a signed `eb:Receipt` with NonRepudiationInformation.
-- An outbound delivery counts only after `verify_sync_response` proves the
-  receipt signature covers the signal, `RefToMessageId` and every NRI digest
-  match, and the receipt is inside the replay window.
-- An `eb:Error` or unverifiable receipt backs off and retries — safe, because the
-  MessageId is the stable outbox id and the receiver deduplicates. P-Mode,
-  partner certificate and rendering are resolved per attempt, so a configuration
-  fix heals delivery without re-enqueueing.
-- The retry budget is **72 hours** from creation. `outbox_delivery_attempted`
-  logs `counterparty_error`, `receipt_unverified` or `transport_error`.
+- A delivery counts only when `As4::send` returns a verified receipt: signed by
+  a pinned or SM-PKI certificate of the partner, referring to the sent message
+  id, echoing the signed digests as NonRepudiationInformation (unless the
+  partner's `quirks` say otherwise). Its evidence is kept (`as4ev/` in the store)
+  before the outbox entry is acknowledged.
+- A partner `eb:Error`, an unverifiable receipt and a transport failure back off
+  and retry inside the **72-hour** window — protocol-safe with the same id and
+  timestamp. `outbox_delivery_attempted` logs `counterparty_error`,
+  `receipt_unverified` or `transport_error`; a configuration refusal is
+  permanent.
+- Inbound: a verified message is claimed in the durable dedup store, dispatched
+  and answered with a signed receipt. A duplicate gets a fresh signed receipt, a
+  message whose claim is still held gets `503`. A refused message is
+  dead-lettered first and answered `EBMS:0004` (not retried); when the dead letter
+  itself cannot be written, the answer is the retryable `EBMS:0202`. Accepted
+  keys are kept 8 days.
 
-**Connectivity pings** carrying both ebMS3 Test Service URIs (Core §5.2.2) are
-acknowledged and not delivered.
+**Connectivity pings** (the ebMS3 test service, BDEW AS4-Profil 1.2 §2.3.6) are
+receipted by `asx-rs` and never delivered. A transmission-path switch (§2.3.7)
+is receipted and logged; the `confirmSwitch` answer is the operator's.
 
 **Outbound wire format.** A complete Übertragungsdatei `UNB … UNZ`. UNB
 sender/receiver equal `NAD+MS`/`NAD+MR` (Allgemeine Festlegungen 6.1d Kap. 2);
@@ -507,8 +552,9 @@ Datenaustauschreferenz — also in UNZ and the §2.12 filename — derives from 
 outbox id, so retries reuse it.
 
 **Tracing.** An inbound `traceparent` is captured into every outbox message the
-request creates and re-injected on the ERP webhook, the CloudEvent and the
-outbound AS4 request.
+request creates and re-injected on the ERP webhook and the CloudEvent. The AS4
+send runs in a span parented on it (`makod.as4.send`, with `asx.send` beneath);
+no `traceparent` header goes to the partner.
 
 **Webhook transport substitute.** With `[erp] edifact_outbox_webhook_url` set,
 outbound interchanges are POSTed as CloudEvents of type
@@ -518,19 +564,6 @@ under `[erp] webhook_secret` — which is then required.
 
 It is a development and ERP-integration path; `MaloIdentCallback` messages still
 go to the MaLo-ID sender.
-
-**Who owns an outbox message.** Two consumers share one outbox: the wire
-transport (`BdewAs4Sender` / `WebhookEdifactSender`) and the ERP notifier
-(`OutboxErpWorker`). `core::erp_adapter::is_erp_notification` decides — types
-mapping to an `ErpEventType` and the `ERP_` prefix belong to the ERP notifier,
-everything else to the transport. A worker leaves the other's messages untouched.
-
-AS4 security tests (sign+encrypt round trip, tamper rejection, replay dedup,
-P-Mode defaults) run without WIRK certificates:
-
-```bash
-cargo test -p makod --test it -- as4_security
-```
 
 ### `[webdienste]` — BDEW API-Webdienste Strom
 
@@ -727,7 +760,7 @@ All on the `--http-addr` port.
 | `POST` | `/admin/migrations` | Bearer · `AdminMigrations` | Migrate in-flight process streams between format versions while live (`{"from":"FV2025-10-01","to":"FV2026-10-01"}`) |
 | `GET` | `/metrics` | Bearer · `ReadMetrics` | Prometheus |
 | `POST` `GET` | `/mcp` | Bearer · `UseMcp` | [MCP server](#mcp-server) |
-| `GET` | `/api/v1/openapi.json` · `/api/v1/docs/` | public | OpenAPI 3.1 spec · Swagger UI |
+| `GET` | `/api/v1/openapi.json` | public | OpenAPI 3.1 document — open it in any Swagger UI or Redoc |
 | `GET` | `/health/live` · `/health/ready` · `/health` | public | [Probes](#health-checks) |
 
 The OpenAPI document is generated from the handler annotations.
@@ -775,20 +808,17 @@ resubmit it.
   AS4: none of its messages is dispatched, each is dead-lettered, and the sender
   gets the CONTRL Syntaxfehlermeldung (CONTRL AHB 1.0 Kap. 1.2; see
   [CONTRL](#contrl)).
-- **A dead letter is written before the door answers.** Every `reject` awaits
-  the `dr/` write; there is no in-memory buffer to overflow or drain on
-  shutdown. On AS4 the dedup claim is accepted only after that write: when it
-  fails, the claim is abandoned and the request answered `500` without a
-  receipt, so the counterparty's retransmission is processed as first-seen
-  rather than answered as a duplicate. The outbox workers likewise delete an
-  exhausted entry only once its dead letter is written.
+- **A dead letter is written before the door answers.** On AS4 the dedup claim
+  is accepted only after that write, so when it fails the counterparty's
+  retransmission is processed as first-seen rather than answered as a
+  duplicate. The outbox workers delete an exhausted entry only once its dead
+  letter is written.
 - **`dispatch_failed` is a rejection** so the gateway redelivers. A routed PID
   with no dispatch arm is dead-lettered as `not_dispatchable` — a coverage bug on
   this side. A reply to a closed process, or one with nothing to correlate on, is
   logged but not recorded.
 - **The PID** is read from `SG1 RFF+Z13` and `BGM` DE 1004 in the order the
   profile's `pid_source` declares; only a plausible 5-digit code is accepted.
-- The AS4 door and `POST /edifact` classify through one shared function.
 
 #### DVGW gas transport
 
@@ -810,8 +840,8 @@ The CONTRL Empfangsbestätigung is owed for a DVGW interchange too (CONTRL AHB
 
 | Property | Mechanism |
 |---|---|
-| **A spawn is one atomic write, on every door** | Events, outbox entries, deadlines and correlation-index entries commit in one SlateDB transaction — inbound message, ERP command or API-Webdienste request alike; a resumed process gains keys in its step's write. `cargo xtask check-atomic-spawn` refuses a key registration outside that batch |
-| **A settled process yields its key** | The correlation index is append-only, so each initiating arm asks its crate's occupancy verdict (`OccupiesBusinessKey`): settled yields, live keeps. An INVOIC is keyed on its own message reference. `cargo xtask check-occupancy` holds the count of arms still deciding on presence |
+| **A spawn is one atomic write, on every door** | Events, outbox entries, deadlines and correlation-index entries commit in one SlateDB transaction — inbound message, ERP command or API-Webdienste request alike |
+| **A settled process yields its key** | Each initiating arm asks the replayed process state (`OccupiesBusinessKey`): settled yields, live keeps. An INVOIC is keyed on its own message reference |
 | **One business key, one process** | Lookup→spawn is serialised per business key on one lock map shared by ingest and the command door, so two initiating messages or commands for one MaLo take turns instead of producing `AmbiguousProcess` later |
 | **Self-addressed messages meet the network's standard** | The [loopback](#integrated-operators-nb-msb-same-mp-id) runs the same pre-send AHB conformance gate, refuses an interchange that will not parse back, and treats "dispatched nothing" as an error — except when no workflow for the receiving side is compiled in, where it acknowledges |
 
@@ -1122,7 +1152,7 @@ NB, `MS` MSB) and the workflow variant — a dispatch hint, not an identity clai
 When the recipient is one of this deployment's own MP-IDs, `BdewAs4Sender`
 renders the interchange as usual, re-parses it via `Platform::parse_interchange`
 and hands each message to `EdifactIngestDispatcher::dispatch` — no AS4 round trip
-and no `--as4-partner` entry. Self-addressed by design:
+and no `[[as4.partner]]` entry. Self-addressed by design:
 
 | Message | Workflow | Sender → Recipient |
 |---|---|---|
@@ -1234,10 +1264,10 @@ sequenceDiagram
 |---|---|
 | **Messprodukt** | From *Codeliste der Konfigurationen* 1.4 Kap. 4.6 (`SG27 PIA+5 … :Z11`); validated before rendering. A code outside Kap. 4.6, one for another Lokationsebene, or a Kap. 4.6.2 (SM-PKI) product without target address and certificates is `422` |
 | **Lokationsebene** | Decided by the Messprodukt, not the ID (`[950]` serves MaLo and Tranche) — `mako_wim::esa::ebene_fuer_messprodukt` |
-| **Angebot** | A priced offer (QUOTES AHB 1.1a §4.3): `SG4 CUX`, 1–3 `PIA+Z02` Artikel-IDs each with `PRI+CAL` (`Z01` Einrichtung, `Z02` Transaktion, `Z03` Betrieb), 1–23 `PIA+5 … :SRW` OBIS, `DTM+469`, `DTM+273` (a duration: count + `802`/`803`/`804`). Prices tell an Angebot from an Ablehnung |
+| **Angebot** | QUOTES AHB 1.1a §4.3: `SG4 CUX`, 1–3 `PIA+Z02` Artikel-IDs each with `PRI+CAL` (`Z01` Einrichtung, `Z02` Transaktion, `Z03` Betrieb), 1–23 `PIA+5 … :SRW` OBIS, `DTM+469`, `DTM+273`. Prices tell an Angebot from an Ablehnung |
 | **Ausführungsdatum** | ORDERS `DTM+203` = `max(Wunschtermin, DTM+469)` |
 | **Subscription** | The (Meldepunkt, Messprodukt) pair; a second product at one location is a new subscription. Follow-up commands take `messprodukt`, optional while only one exists |
-| **Answers** | `SG2 AJT` is Muss on all four ORDRSP PIDs and no free text is published (only `FTX+Z27`/`Z28`, the MSB's IP address); the code is resolved against `mako_pruefung`'s catalogue into `mako_wim::esa::Antwort`. A code whose Cluster contradicts its PID is resolved by the PID |
+| **Answers** | `SG2 AJT` is Muss on all four ORDRSP PIDs; the code is resolved against `mako_pruefung`'s catalogue into `mako_wim::esa::Antwort`, and a code whose Cluster contradicts its PID is resolved by the PID |
 | **Notification** | An MSB deployment emits `de.mako.process.initiated` on 35003/17007/39002/17008 — the input to `processd`'s ESA module |
 
 **Correlation.** Only the REQOTE carries a location; every later message is
@@ -1381,7 +1411,7 @@ makod's PARTIN registry (`channels`, `roles`, `contacts`), distinct from marktd'
 **Delivery channels must be HTTPS.** A channel makod delivers to (`AK`/`AS4`,
 `AW` for the API-Webdienste callback, which carries personal data — DSGVO
 Art. 32) must be `https://` (`localhost` exempt), whichever of the four paths
-sets it: `--as4-partner` / `--maloid-partner`, this endpoint, the
+sets it: `[[as4.partner]]` / `--maloid-partner`, this endpoint, the
 Verzeichnisdienst, or PARTIN `COM` segments.
 
 `PUT` and the flags refuse an
@@ -1660,7 +1690,7 @@ boot consumes the same preflight output.
 | Adapter coverage | Every adapter registry accepts every format version the profile registry declares |
 | Dispatch completeness | Every workflow the `PidRouter` reaches has an ingest dispatch arm |
 | Store | The object store opens and the data-directory lock is acquired |
-| AS4 material | Signing session builds; decryption key present; every partner endpoint HTTPS with an encryption certificate |
+| AS4 material | `As4::builder(..).build()` succeeds for every `[[party]]`; trust anchor, CRL signer and message-id domain set; distinct key pairs; every partner endpoint HTTPS with an encryption certificate |
 | Cedar | The policy set compiles, including `authz.cedar_policy_dir` |
 | Ports | Every authenticated port has a key or an OIDC issuer; an issuer has an audience and HTTPS |
 | Transports | At least one ingest transport, and outbound EDIFACT has somewhere to go |
@@ -1679,7 +1709,7 @@ Mounted on every enabled port, unauthenticated, exempt from rate limiting.
 | Route | Fails when | Probe |
 |---|---|---|
 | `/health/live` | never, if the process answers | `livenessProbe` |
-| `/health/ready` | store unreachable, or a worker heartbeat is stale | `readinessProbe` |
+| `/health/ready` | a startup step (the marktd MaLo backfill) has not finished, the store is unreachable, or a worker heartbeat is stale | `readinessProbe` |
 | `/health` | alias of `/health/ready` | — |
 
 ```
@@ -1688,9 +1718,9 @@ HTTP 503 {"status":"degraded","instance_id":"makod-0-1","version":"<version>",
           "reason":"worker_stale:deadline-scheduler"}
 ```
 
-`reason` is `store_unavailable` or `worker_stale:<name>` — no paths, safe for
-alerts. Dependency state belongs on readiness: a restart fixes neither an
-unreachable store nor a stalled worker.
+`reason` is `not_ready:<step>`, `store_unavailable` or `worker_stale:<name>` —
+no paths, safe for alerts. A restart fixes neither an unreachable store nor a
+stalled worker, so both belong on readiness.
 
 **Fenced writer.** A second process opening the same object-store path fences
 the first, which keeps its listeners and fails every write. makod detects this,
@@ -1722,7 +1752,7 @@ durable for the next start.
 | **OutboxErpWorker** | continuous (with `--erp-webhook-url`) | POSTs CloudEvents to the ERP webhook |
 | **DeadlineScheduler** | `--deadline-poll-interval-secs` (30 s) | Dispatches due deadlines |
 | **MabisZpRegister projection** | `--projection-checkpoint-interval` | Folds the MaBiS-ZP lifecycle into the set of activated Zählpunkte |
-| **retention-purge-worker** | daily | Evicts AS4 dedup entries (72 h + 24 h) and spent `Idempotency-Key` records |
+| **retention-purge-worker** | daily | Evicts AS4 dedup entries after 8 days (`asx-rs` 0.16.2 requires at least 7) and spent `Idempotency-Key` records |
 | JWKS refresh | `oidc.jwks_refresh_secs` | With OIDC enabled |
 
 ### Deadline dispatch
@@ -1823,21 +1853,23 @@ trusted — a load balancer must enforce its own per-client limits.
 ### First-time setup
 
 ```bash
-# 1. Signing keypair — ECDSA-SHA256 over BrainpoolP256r1
-openssl ecparam -name brainpoolP256r1 -genkey -noout -out signing.key.pem
-openssl req -new -x509 -key signing.key.pem -out signing.cert.pem -days 1095 \
-  -subj "/CN=9900357000004/O=Stadtwerke Beispiel/C=DE"
+# Per [[party]] MP-ID: three BrainpoolP256r1 key pairs (BDEW AS4-Profil 1.2
+# §2.3.4.4), each certificate request with the MP-ID as the subject OU
+# (Regelungen zum Übertragungsweg für AS4 2.6 Kap. 5.2). Production
+# certificates are EMT.MAK certificates issued by an SM-PKI CA.
+for use in signing encryption tls; do
+  openssl ecparam -name brainpoolP256r1 -genkey -noout -out "$use.key.pem"
+  openssl req -new -key "$use.key.pem" -out "$use.csr.pem" \
+    -subj "/CN=Stadtwerke Beispiel $use/OU=9900357000004/O=Stadtwerke Beispiel/C=DE"
+done
 
-# 2. Encryption keypair — ECDH-ES, same curve, different key
-openssl ecparam -name brainpoolP256r1 -genkey -noout -out decryption.key.pem
-openssl req -new -x509 -key decryption.key.pem -out encryption.cert.pem -days 1095 \
-  -subj "/CN=9900357000004/O=Stadtwerke Beispiel/C=DE"
-# Production certificates come from the BDEW PKI; self-signed is for a partner test MSH.
+# 2. Submit the requests to the SM-PKI CA; install the issued certificates as
+#    [party.as4] signing/encryption/tls_cert_pem_file (signing: leaf first, then
+#    the intermediates).
 
 # 3. Exchange certificates: publish yours; reference each partner's encryption
-#    and signing certificate from as4.partner_cert_files /
-#    as4.partner_signing_cert_files; install the BDEW PKI CA as
-#    as4.trust_anchor_pem_file.
+#    and signing certificates in its [[as4.partner]]; install the SM-PKI root as
+#    as4.trust_anchor_pem_file and the CCRL-S(Root) as as4.crl_signer_pem_file.
 
 # 4. Validate, then start
 makod --check --config /etc/makod/makod.toml
@@ -1871,7 +1903,8 @@ curl -s http://localhost:8080/admin/partners \
 |---|---|
 | `/health/ready` 503 `worker_stale:deadline-scheduler` | Scheduler stalled — Fristen are not being dispatched |
 | `makod_outbox_pending_total` not falling | `outbox_delivery_attempted` logs: `counterparty_error` / `receipt_unverified` / `transport_error`; partner URL and certificates |
-| Every inbound AS4 message rejected | Trust anchor and `partner_signing_certs` |
+| Every inbound AS4 message rejected | `as4.trust_anchor_pem_file` (the SM-PKI root), the partner's pinned `signing_cert_pem_files`, the CRL signer and CDP reachability (the `asx` WARN events `ca.fingerprint`) |
+| Inbound refused `EBMS:0202` with "not a configured partner" | `[policy.as4] unbekannte_absender` and the sender's `[[as4.partner]]` |
 | `422 malo_not_found` on commands | Seed `PUT /admin/malo/{malo_id}` |
 | `409 duplicate_process` | A live process holds the key — treat as success |
 | `makod_dead_letter_recorded_total{reason="not_dispatchable"}` | A routed PID without a dispatch arm — a mako bug |

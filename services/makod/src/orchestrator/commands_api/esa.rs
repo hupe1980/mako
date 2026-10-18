@@ -737,9 +737,9 @@ pub(super) async fn dispatch_wim_wertebestellung_anfrage_ablehnen(
 ///
 /// The ESA answers are ORDRSP, where `SG2 AJT` is **Muss** and its code must
 /// sit in the named EBD's Zustimmungs- or Ablehnungs-Cluster (ORDRSP AHB 1.1b
-/// §4.15, conditions `[17]`/`[18]`). The **cluster picks the answer PID**, so this
-/// replaces the old `accept: bool` rather than accompanying it — the two could
-/// disagree, and an answer to the market is a binding statement.
+/// §4.15, conditions `[17]`/`[18]`). The **cluster picks the answer PID**, so there is
+/// no separate `accept: bool` beside it — the two could disagree, and an answer
+/// to the market is a binding statement.
 ///
 /// Run [`mako_pruefung::esa::wertebestellung`] to obtain the code from the process facts.
 fn esa_antwort_code(payload: &serde_json::Value, tree: &str) -> Result<String, DispatchError> {

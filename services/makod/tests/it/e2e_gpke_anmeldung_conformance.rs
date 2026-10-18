@@ -28,6 +28,7 @@ fn registry() -> MpIdRegistry {
         roles: vec!["LF".to_owned()],
         primary: true,
         agency: None,
+        as4: None,
     }])
     .expect("valid registry")
 }

@@ -317,19 +317,8 @@ fn build_otel_provider(
 
 // ── init_tracing_from_env ─────────────────────────────────────────────────────
 
-/// Initialize structured logging from environment variables — the standard
-/// one-liner for **all** mako services.
-///
-/// Replaces the weaker `tracing_subscriber::fmt::init()` call:
-///
-/// ```rust,no_run
-/// // Old (no OTel, ignores LOG_LEVEL env var):
-/// tracing_subscriber::fmt::init();
-///
-/// // New — structured JSON, env-configurable level, optional OTel:
-/// # use mako_service::telemetry::init_tracing_from_env;
-/// let _guard = init_tracing_from_env("my-service");
-/// ```
+/// Initialize structured JSON logging from environment variables, with an
+/// env-configurable level and optional OTLP export.
 ///
 /// ## Environment variables
 ///
@@ -406,6 +395,30 @@ pub fn init_tracing_from_env_with(service_name: &str, extra: Option<ExtraLayer>)
     });
 
     init_tracing_with(service_name, &level, format, otel.as_ref(), extra)
+}
+
+/// Make `span` a child of the W3C `traceparent` captured earlier — the trace
+/// context an outbox entry persisted, so work done for it later joins the
+/// request that caused it.
+///
+/// Parenting goes through the global text-map propagator [`init_tracing`]
+/// installs with OpenTelemetry. Without the `otel` feature, or for a
+/// `traceparent` that does not parse, `span` keeps its local parent.
+pub fn set_remote_parent(span: &tracing::Span, traceparent: &str) {
+    #[cfg(feature = "otel")]
+    {
+        use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+        let carrier: std::collections::HashMap<String, String> =
+            std::iter::once(("traceparent".to_owned(), traceparent.to_owned())).collect();
+        let cx = opentelemetry::global::get_text_map_propagator(|p| p.extract(&carrier));
+        // A span outside an OpenTelemetry subscriber cannot take a parent; it
+        // is then traced locally, which is all a span without export can be.
+        let _ = span.set_parent(cx);
+    }
+    #[cfg(not(feature = "otel"))]
+    {
+        let _ = (span, traceparent);
+    }
 }
 
 #[cfg(test)]

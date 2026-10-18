@@ -67,6 +67,7 @@ fn rendered_13027() -> String {
             roles: vec!["MSB".to_owned()],
             primary: true,
             agency: None,
+            as4: None,
         }])
         .expect("registry");
     let out = makod::edifact_renderer::render_to_wire_bytes(&msg, &registry)

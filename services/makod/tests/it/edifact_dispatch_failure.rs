@@ -85,6 +85,7 @@ async fn post_with_failing_store(
                 roles: vec!["NB".to_owned()],
                 primary: true,
                 agency: None,
+                as4: None,
             }])
             .expect("valid registry"),
         ),

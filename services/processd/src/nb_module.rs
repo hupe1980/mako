@@ -1380,7 +1380,7 @@ pub async fn resume_after_lfa_antwort(
 /// **The third, 55038 / 44038 „Aufhebung einer zukünftigen Zuordnung", is not
 /// derived here.** It addresses an **LFZ** whose future Zuordnung this Anmeldung
 /// displaces — an announced assignment held by another supplier, which
-/// `marktd`'s projection now carries beside this one
+/// `marktd`'s projection carries beside this one
 /// (`VersorgungsStatusRecord::andere_anmeldung_in_bearbeitung`). It is not
 /// derived from the *Anmeldung* decision because that decision refuses such an
 /// Anmeldung with `A06`: an LFZ is displaced by a Zuordnung the NB has already

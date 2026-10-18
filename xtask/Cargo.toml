@@ -17,7 +17,7 @@ toml = "0.8"
 # The MIG/AHB table readers match fixed-width `pdftotext -layout` rows.
 regex       = "1"
 time        = { workspace = true }
-zip         = { version = "3", default-features = false, features = ["deflate"] }
+zip         = { version = "9", default-features = false, features = ["deflate"] }
 # The identifier guard validates EIC codes with the same implementation the
 # services use, so the check can never disagree with the validator that matters.
 rubo4e      = { workspace = true }

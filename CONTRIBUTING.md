@@ -61,8 +61,8 @@ Every daemon but `makod` has one shape, and a guard holds each part:
 
 - **A library with a one-line `main`.** The `Daemon` lives in `lib.rs` (or a
   module of it); `main.rs` is `mako_service::run::<D>().await`
-  (`check-thin-main`), and `tests/it/router_builds.rs` builds the router the
-  binary mounts with `mako_service::build_for_test::<D>(cfg)`.
+  (`check-thin-main`), and an integration test builds the router the binary
+  mounts with `mako_service::build_for_test::<D>(cfg)`.
 - **Every failure is an `ApiError`.** Handlers return `ApiResult<T>` and use
   `?`; a refusal is a variant written for the caller (`bad_request`,
   `not_found`, `precondition_failed`, `too_many_requests`, …), with a stable

@@ -147,7 +147,7 @@ pub struct SteuerungsauftragData {
     /// Extracted from the inbound ORDERS `LIN+1` segment at ingestion time.
     /// Used by `makod` to verify that the requested product is in the SR's
     /// `konfigurationsprodukte` list before dispatching the ORDRSP
-    /// `bestaetigen` response (M1 guard).
+    /// `bestaetigen` response.
     ///
     /// `None` for an `InitialZustand` (reset) command, which names no product.
     #[serde(default, skip_serializing_if = "Option::is_none")]

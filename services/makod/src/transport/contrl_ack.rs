@@ -629,7 +629,7 @@ fn unescape(raw: &[u8], release: u8) -> String {
 /// never panics.
 ///
 /// Uses [`SlateDbStore`] directly (not a trait object) because async-fn-in-trait
-/// methods are not yet dyn-compatible in Rust 1.89.
+/// methods are not dyn-compatible.
 pub struct ContrlAckService {
     /// Shared store: the CONTRL message and its 6-hour delivery deadline
     /// (CONTRL AHB 1.0 §2.3.1) are written in **one** transaction via

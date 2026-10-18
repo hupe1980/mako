@@ -84,10 +84,10 @@ shows where each segment sits.
 | Service | URL | Purpose |
 |---|---|---|
 | makod REST API | http://localhost:8080 | EDIFACT ingest, process commands |
-| makod Swagger UI | http://localhost:8080/api/v1/docs/ | Interactive API docs |
+| makod OpenAPI | http://localhost:8080/api/v1/openapi.json | OpenAPI 3.1 document |
 | makod MCP server | http://localhost:8080/mcp | LLM tooling (Claude Desktop, VS Code) |
 | marktd REST API | http://localhost:8180 | Master data (MaLo/MeLo, typed BO4E, VersorgungsStatus) |
-| marktd Swagger UI | http://localhost:8180/api/v1/docs/ | Interactive API docs |
+| marktd OpenAPI | http://localhost:8180/api/v1/openapi.json | OpenAPI 3.1 document |
 | marktd DLQ admin | http://localhost:8180/admin/fanout/dlq | Inspect failed CloudEvent deliveries |
 | marktd metrics | http://localhost:8180/metrics | Prometheus metrics |
 | processd decisions | http://localhost:8580/api/v1/decisions | NB STP audit log |

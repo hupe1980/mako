@@ -1,35 +1,34 @@
 //! BDEW AS4 outbound delivery for the Mako outbox.
 //!
-//! [`BdewAs4Sender`] is wired to the `OutboxWorker` in `main.rs` whenever
-//! a signing key/cert pair is available (i.e. `--as4-signing-key-pem` and
-//! `--as4-signing-cert-pem` are set).  Without one, only the
-//! [`MaloIdentSender`] path runs and EDIFACT messages are not delivered.
+//! [`BdewAs4Sender`] is wired to the `OutboxWorker` whenever AS4 is
+//! configured (every `[[party]]` carries `[party.as4]`). Without it, outbound
+//! EDIFACT goes to the development webhook or, under `allow_no_signing`, is not
+//! delivered.
 //!
 //! ## Design
 //!
 //! ```text
-//! OutboxWorker::run()
+//! OutboxWorker::run()            stamps first_attempt_at durably, once
 //!   → BdewAs4Sender::send(OutboxMessage)
-//!       ├── message_type == "MaloIdentCallback"
-//!       │     → MaloIdentSender (existing cache-lookup path, unchanged)
-//!       └── EDIFACT type (APERAK, CONTRL, UTILMD, …)
-//!             1. resolve P-Mode from BdewAs4Profile (MP-ID + message type)
-//!             2. extract endpoint URL from P-Mode
-//!             3. serialize payload to wire bytes
-//!             4. asx_rs::as4::send_async  →  As4SendOutput (signed SOAP)
-//!             5. As4HttpTransport::send(endpoint_url, &output)
-//!             6. OK  →  OutboxStore::acknowledge(msg.message_id)
-//!             7. Err →  OutboxStore::reschedule(…, exponential backoff)
+//!       ├── MaloIdentCallback / NetzzugangAntrag → their own senders
+//!       ├── recipient is an own MP-ID           → in-process loopback
+//!       └── EDIFACT to a partner
+//!             1. look up the [[as4.partner]] (endpoint + encryption cert)
+//!             2. render the Übertragungsdatei, run the AHB gate
+//!             3. pick the As4 client of the interchange's sender (UNB DE0004)
+//!             4. Message::to(partner).service(MP)
+//!                  .message_id("{outbox id}@{domain}")
+//!                  .timestamp(first_attempt_at)  — identical on every retry
+//!             5. As4::send → Verified<Receipt>   (sign, encrypt, POST, verify)
+//!             6. keep receipt.evidence(), then acknowledge
+//!             Err → retry inside the 72 h window, or dead-letter
 //! ```
 //!
-//! ## P-Mode registry
+//! ## Partners
 //!
-//! Every trading partner's AS4 endpoint and protocol settings must be
-//! registered in the [`BdewAs4Profile`] at startup via
-//! `--as4-partner <MP-ID>=<HTTPS-URL>` (repeatable).  This registers one
-//! P-Mode per standard BDEW EDIFACT message type for the partner.  Messages
-//! destined for an unknown recipient MP-ID or with a missing endpoint URL are
-//! dead-lettered immediately (permanent `PartnerUnknown` error).
+//! Every trading partner is a `[[as4.partner]]` with an endpoint and an
+//! encryption certificate. A message for an unknown or receive-only recipient
+//! is dead-lettered immediately (permanent `PartnerUnknown` error).
 //!
 //! ## Payload encoding
 //!
@@ -54,10 +53,6 @@
 
 use std::sync::Arc;
 
-use asx_rs::as4::As4SendRequest;
-use asx_rs::core::SessionContext;
-use asx_rs::observability::EventBus;
-use asx_rs::transport::{As4HttpTransport, TransportConfig};
 use edi_energy::EdiEnergyMessage as _;
 use mako_as4::bdew_action_from_str;
 use mako_engine::builder::As4Sender;
@@ -65,7 +60,8 @@ use mako_engine::error::EngineError;
 use mako_engine::metrics::EngineMetrics;
 use mako_engine::outbox::OutboxMessage;
 
-use mako_as4::profile::BdewAs4Profile;
+use crate::as4_clients::As4Clients;
+use crate::as4_evidence::As4Evidence;
 
 use crate::edifact_renderer;
 use crate::malo_ident_sender::MaloIdentSender;
@@ -99,8 +95,8 @@ use crate::party_registry::MpIdRegistry;
 /// }
 /// ```
 ///
-/// `MaloIdentCallback` messages are still routed to the embedded
-/// [`MaloIdentSender`] (unchanged from the AS4 path).
+/// `MaloIdentCallback` messages are routed to the embedded
+/// [`MaloIdentSender`], as on the AS4 path.
 ///
 /// Intended for development / ERP integration without an AS4 infrastructure.
 /// In production, use [`BdewAs4Sender`].
@@ -310,10 +306,14 @@ impl As4Sender for WebhookEdifactSender {
 /// blobs over AS4.
 #[derive(Clone)]
 pub struct BdewAs4Sender {
-    session: Arc<SessionContext>,
-    event_bus: Arc<EventBus>,
-    transport: Arc<As4HttpTransport>,
-    profile: Arc<BdewAs4Profile>,
+    /// One `As4` client per local MP-ID and the partner directory.
+    ///
+    /// The client is chosen by the interchange's sender (UNB DE0004): the
+    /// partner checks the signing certificate's OU against `eb:From`, so the
+    /// MP-ID that wrote the interchange is the one that signs it.
+    clients: As4Clients,
+    /// Where each verified receipt's evidence is kept.
+    evidence: As4Evidence,
     malo_sender: MaloIdentSender,
     /// The operator's own MP-ID registry.
     ///
@@ -324,30 +324,15 @@ pub struct BdewAs4Sender {
     mp_id_registry: Arc<MpIdRegistry>,
     /// Optional in-process loopback handle for combined-role deployments.
     ///
-    /// When `Some`, outbox messages addressed to `tenant_party_id` (own MP-ID)
-    /// are delivered in-process via [`crate::edifact_api::EdifactApiState`]
-    /// instead of being dead-lettered.  Required for NB+MSB, GNB+gMSB, and
-    /// NB+LF deployments sharing a single MP-ID.
+    /// When `Some`, outbox messages addressed to an own MP-ID are delivered
+    /// in-process via [`crate::edifact_api::EdifactApiState`] instead of being
+    /// dead-lettered.  Required for NB+MSB, GNB+gMSB, and NB+LF deployments.
     loopback: Option<Arc<crate::edifact_api::EdifactApiState>>,
     /// Parse/validation platform for the pre-send AHB conformance gate.
     platform: Arc<edi_energy::Platform>,
-    /// When `true`, a missing or mismatched synchronous `eb:Receipt` is only
-    /// warned about instead of failing the delivery. BDEW MaKo AS4 requires
-    /// the synchronous receipt, so the strict default treats its absence as a
-    /// retryable delivery failure; this flag exists for interop debugging
-    /// against non-conformant counterparties.
-    lenient_receipts: bool,
     /// §20b Netzzugangsplattform requests must never travel over AS4 — they
     /// route here when wired (see [`crate::netzzugang`]).
     netzzugang_sender: Option<Arc<crate::netzzugang::NetzzugangSender>>,
-    /// The MP-ID emitted as `<eb:From>/<eb:PartyId>` on every outbound message.
-    ///
-    /// BDEW AS4-Profil §2.3.2 lets the receiver accept any value here **only**
-    /// if it matches the subject of the presented certificate. This daemon
-    /// signs everything with one key, so the AS4 party is the signing identity
-    /// — not the interchange's `NAD+MS` sender, which in a combined Strom+Gas
-    /// deployment can be a different own MP-ID.
-    as4_party_id: Arc<str>,
     /// Loopback hops seen per `conversation_id`, for the runaway guard.
     ///
     /// A combined-role deployment delivers self-addressed messages in-process:
@@ -405,65 +390,26 @@ const MAX_LOOPBACK_HOPS: u32 = 32;
 const MAX_TRACKED_CONVERSATIONS: usize = 10_000;
 
 impl BdewAs4Sender {
-    /// Construct from the shared AS4 session context, event bus, P-Mode
-    /// profile, and MaLo cache.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying `reqwest::Client` cannot be built
-    /// (e.g. missing TLS stack).
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
-    )]
+    /// A sender over `clients`, keeping receipt evidence in `evidence`.
+    #[must_use]
     pub fn new(
-        session: Arc<SessionContext>,
-        event_bus: Arc<EventBus>,
-        profile: Arc<BdewAs4Profile>,
+        clients: As4Clients,
+        evidence: As4Evidence,
         malo_sender: MaloIdentSender,
         mp_id_registry: Arc<MpIdRegistry>,
         loopback: Option<Arc<crate::edifact_api::EdifactApiState>>,
         platform: Arc<edi_energy::Platform>,
-        lenient_receipts: bool,
-        client_identity: Option<asx_rs::transport::ClientIdentity>,
-    ) -> anyhow::Result<Self> {
-        // The WIRK **TLS** certificate, when the operator holds it here rather
-        // than on an egress proxy. It authenticates the *connection*; the
-        // signing certificate above authenticates the *message*, and a partner
-        // MSH may require both. Absent, no client certificate is offered and a
-        // partner that demands one refuses the connection — which is why this
-        // is a deployment declaration rather than a default.
-        let mut transport_config = TransportConfig::default();
-        if let Some(identity) = client_identity {
-            transport_config = transport_config.with_client_identity(identity);
-        }
-        let transport = As4HttpTransport::new(transport_config)
-            .map_err(|e| anyhow::anyhow!("AS4 HTTP transport init failed: {e}"))?;
-        let mp_id_registry_party = mp_id_registry.primary_mp_id().to_owned();
-        Ok(Self {
-            session,
-            event_bus,
-            transport: Arc::new(transport),
-            profile,
+    ) -> Self {
+        Self {
+            clients,
+            evidence,
             malo_sender,
             mp_id_registry,
             loopback,
             platform,
-            lenient_receipts,
             netzzugang_sender: None,
-            as4_party_id: Arc::from(mp_id_registry_party),
             loopback_hops: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-        })
-    }
-
-    /// Set the `<eb:From>/<eb:PartyId>` emitted on outbound messages.
-    ///
-    /// Defaults to the registry's primary MP-ID; override it when the AS4
-    /// signing certificate is issued to a different identity (`--as4-party-id`).
-    #[must_use]
-    pub fn with_party_id(mut self, party_id: impl Into<Arc<str>>) -> Self {
-        self.as4_party_id = party_id.into();
-        self
+        }
     }
 
     /// Route `NetzzugangAntrag` outbox messages (§20b EnWG) to the given sender.
@@ -487,10 +433,8 @@ impl As4Sender for BdewAs4Sender {
         &self,
         msg: &OutboxMessage,
     ) -> impl std::future::Future<Output = Result<(), EngineError>> + Send {
-        let session = Arc::clone(&self.session);
-        let event_bus = Arc::clone(&self.event_bus);
-        let transport = Arc::clone(&self.transport);
-        let profile = Arc::clone(&self.profile);
+        let clients = self.clients.clone();
+        let evidence = self.evidence.clone();
         let malo_sender = self.malo_sender.clone();
         let loopback = self.loopback.clone();
 
@@ -502,9 +446,7 @@ impl As4Sender for BdewAs4Sender {
         let message_id_str = msg.message_id.to_string();
         let conversation_id = msg.conversation_id.to_string();
         let mp_id_registry: Arc<MpIdRegistry> = Arc::clone(&self.mp_id_registry);
-        let as4_party_id: Arc<str> = Arc::clone(&self.as4_party_id);
         let platform = Arc::clone(&self.platform);
-        let lenient_receipts = self.lenient_receipts;
         let netzzugang_sender = self.netzzugang_sender.clone();
         let loopback_hops = Arc::clone(&self.loopback_hops);
         async move {
@@ -786,35 +728,21 @@ impl As4Sender for BdewAs4Sender {
                 return Err(EngineError::PartnerUnknown { recipient });
             }
 
-            // Resolve the P-Mode for the recipient MP-ID + message type.
-            // P-Modes are registered at startup via
-            // BdewAs4Profile::register_partner_all_actions.
-            // Use PartnerUnknown (permanent error) so the outbox worker
-            // dead-letters immediately rather than retrying indefinitely.
+            // The recipient must be a configured partner with an inbox. Unknown
+            // or receive-only partners are permanent (`PartnerUnknown`): the
+            // outbox worker dead-letters immediately rather than retrying a
+            // delivery no configuration change during the window can heal
+            // without a restart.
+            let Some(partner) = clients.partners().deliverable(&recipient).cloned() else {
+                tracing::warn!(
+                    message_id   = %message_id_str,
+                    message_type = %message_type,
+                    recipient    = %recipient,
+                    "BdewAs4Sender: the recipient is not an [[as4.partner]] with an endpoint",
+                );
+                return Err(EngineError::PartnerUnknown { recipient });
+            };
             let bdew_action = bdew_action_from_str(&message_type);
-            let Some(pm) = profile.resolve_pmode_by_action(&recipient, &bdew_action) else {
-                tracing::warn!(
-                    message_id   = %message_id_str,
-                    message_type = %message_type,
-                    recipient    = %recipient,
-                    "BdewAs4Sender: no P-Mode registered for this recipient MP-ID. \
-                     Add --as4-partner {}=<URL> to register it.",
-                    recipient,
-                );
-                return Err(EngineError::PartnerUnknown { recipient });
-            };
-            let Some(endpoint_ref) = pm.endpoint_url.as_deref() else {
-                tracing::warn!(
-                    message_id   = %message_id_str,
-                    message_type = %message_type,
-                    recipient    = %recipient,
-                    "BdewAs4Sender: P-Mode has no endpoint_url. \
-                     Re-register with --as4-partner {}=<URL>.",
-                    recipient,
-                );
-                return Err(EngineError::PartnerUnknown { recipient });
-            };
-            let endpoint = endpoint_ref.to_owned();
 
             // Render domain-intent JSON to BDEW-conformant EDIFACT wire bytes.
             //
@@ -906,234 +834,140 @@ impl As4Sender for BdewAs4Sender {
                 },
             }
 
-            let mut policy = pm.to_send_policy().map_err(|e| EngineError::Transport {
-                endpoint: endpoint.clone().into(),
-                message: format!("P-Mode policy materialisation failed for {message_id_str}: {e}"),
-            })?;
-            policy.conversation_id = Some(conversation_id);
+            // The interchange's sender (UNB DE0004) selects the client: the
+            // partner checks that the signing certificate's OU carries the
+            // `eb:From` MP-ID, and it is this MP-ID's certificate that does.
+            let Some(client) = clients.client(&rendered.sender_mp_id).cloned() else {
+                return Err(EngineError::Serialization(format!(
+                    "the interchange {message_id_str} is sent by {}, which has no AS4 identity \
+                     ([party.as4]) in this deployment",
+                    rendered.sender_mp_id
+                )));
+            };
+            // The first attempt's instant, persisted by the outbox worker
+            // before the first send. Every retry signs the same `eb:Timestamp`
+            // under the same `eb:MessageId`, so the digests — and the partner's
+            // NRR — are the first attempt's, and a receiver already holding the
+            // message answers the retry as a duplicate.
+            let Some(first_attempt_at) = msg_owned.first_attempt_at else {
+                return Err(EngineError::Transport {
+                    endpoint: recipient.to_string().into(),
+                    message: format!(
+                        "outbox entry {message_id_str} carries no first-attempt stamp; the \
+                         outbox worker records it before the first send"
+                    ),
+                });
+            };
+            let as4_message_id = clients.message_id(&message_id_str);
 
-            // The ebMS3 party/role/agreement fields carry fixed BDEW values that
-            // `to_send_policy` cannot know — it sees only the P-Mode. The receiving
-            // MSH resolves its P-Mode from them, and §2.3.1.1 requires the PartyId
-            // `type` attribute to name the agency that issued each MP-ID, so the
-            // ebCore URI is derived from the same agency code the EDIFACT layer
-            // puts in NAD DE3055 rather than assumed.
-            policy.from_party_id = Some(as4_party_id.to_string());
-            policy.to_party_id = Some(rendered.receiver_mp_id.to_string());
-            policy.from_party_id_type = Some(
-                mako_as4::constants::party_id_type_for_agency(
-                    mp_id_registry.agency_for_mp_id(&as4_party_id),
-                )
-                .to_owned(),
-            );
-            policy.to_party_id_type = Some(
-                mako_as4::constants::party_id_type_for_agency(
-                    mp_id_registry.agency_for_mp_id(&rendered.receiver_mp_id),
-                )
-                .to_owned(),
-            );
-            policy.from_role = mako_as4::constants::ROLE_INITIATOR.to_owned();
-            policy.to_role = mako_as4::constants::ROLE_RESPONDER.to_owned();
-            // §2.3.2: fixed agreement value, and its `pmode`/`type` attributes
-            // must not be emitted.
-            policy.agreement_ref = Some(mako_as4::constants::AGREEMENT_REF.to_owned());
-            policy.agreement_ref_type = None;
-
-            let action = bdew_action.as_uri();
-
-            // Build the §AF §2.12 Content-Disposition filename:
-            // Nachrichtentyp_Anwendungsreferenz_von_an_yyyymmdd_DAR.txt
-            // (Allgemeine Festlegungen V6.1d §2.12)
-            //
-            // - Nachrichtentyp: EDIFACT message type from UNH DE0065
-            // - Anwendungsreferenz: VL/TL/EM from UNB DE0026; empty for most types
-            //   (UTILMD, APERAK, CONTRL, etc.) — empty → double underscore
-            // - von/an: the interchange's UNB DE0004/DE0010 MP-IDs — the same
-            //   values the renderer put in the envelope and in NAD+MS/NAD+MR
-            // - yyyymmdd: creation date **in UTC** (not German local time)
-            // - DAR: the interchange's UNB DE0020 Datenaustauschreferenz
+            // Allgemeine Festlegungen V6.1d §2.12:
+            // Nachrichtentyp_Anwendungsreferenz_von_an_yyyymmdd_DAR.txt, the
+            // creation date in UTC, von/an from the interchange's UNB.
             let payload_filename = {
                 let now = time::OffsetDateTime::now_utc();
-                let yyyymmdd =
-                    format!("{:04}{:02}{:02}", now.year(), now.month() as u8, now.day(),);
-                // Anwendungsreferenz is empty for all types except MSCONS
-                // (TL = Lastgang, VL = Zählerstand/Energiemenge).
-                // Per §2.12 example: empty → rendered as double underscore.
-                let anwendungsref = anwendungsreferenz_for(&message_type);
-                let name = format!(
-                    "{}_{}_{}_{}_{}_{}.txt",
-                    message_type,
-                    anwendungsref,
-                    rendered.sender_mp_id,
-                    rendered.receiver_mp_id,
-                    yyyymmdd,
-                    rendered.dar,
+                mako_as4::uebertragungsdatei_name(
+                    &message_type,
+                    anwendungsreferenz_for(&message_type),
+                    &rendered.sender_mp_id,
+                    &rendered.receiver_mp_id,
+                    (now.year(), now.month() as u8, now.day()),
+                    &rendered.dar,
+                )
+            };
+
+            let message = asx::as4::Message::to(&partner)
+                // BDEW AS4-Profil 1.2 §2.3.1.2.1: an EDIFACT Übertragungsdatei
+                // of the Marktkommunikation is a Marktprozess.
+                .service(bdew_action.service().uri())
+                .message_id(as4_message_id.clone())
+                .timestamp(std::time::SystemTime::from(first_attempt_at))
+                .payload(
+                    asx::Payload::new(rendered.bytes, mako_as4::constants::PAYLOAD_MIME_TYPE)
+                        .named(payload_filename),
                 );
-                // PayloadFilename validates printable-ASCII + length invariants.
-                // All components are ASCII digits/uppercase letters/underscores.
-                asx_rs::as4::PayloadFilename::new(&name).ok()
-            };
 
-            let request = As4SendRequest {
-                message_id: message_id_str.clone(),
-                payload: rendered.bytes,
-                policy,
-                // Populate the recipient's encryption certificate.
-                // BDEW AS4-Profil v1.2 §2.2.6.2.2: every outbound message must be encrypted
-                // with the recipient's EC (BrainpoolP256r1) certificate via ECDH-ES.
-                // asx-rs v0.7 implements ECDH-ES + ConcatKDF + AES-128-KW when an EC cert
-                // is supplied — no RSA fallback path on the BDEW profile.
-                credentials: profile.get_partner_encryption_cert(recipient.as_ref()).map(
-                    |cert_pem| asx_rs::as4::As4SendCredentials {
-                        recipient_cert_pem: Some(std::sync::Arc::from(cert_pem)),
-                        signing_cert_pem: None,
-                        signing_key_pem: None,
-                    },
-                ),
-                payload_filename,
-                // §2.2.3.2: the payload is an EDIFACT interchange carried as binary
-                // in its own MIME part. Stated explicitly because asx-rs would
-                // otherwise label it `application/xml` — its default whenever
-                // encryption is on, which for this profile is always.
-                payload_mime_type: Some(mako_as4::constants::PAYLOAD_MIME_TYPE.to_owned()),
-                // Derived from the content digest; BDEW pins no Content-ID.
-                payload_content_id: None,
-                // One interchange per AS4 message — the profile defines no
-                // multi-payload UserMessage.
-                additional_payloads: Vec::new(),
-            };
-
-            // Build the signed SOAP envelope (CPU-bound; runs on Tokio blocking pool).
-            let mut output = asx_rs::as4::send_async(&session, &event_bus, request)
-                .await
-                .map_err(|e| {
-                    EngineMetrics::global().outbox_delivery_attempted("transport_error");
-                    EngineError::Transport {
-                        endpoint: endpoint.as_str().into(),
-                        message: format!("AS4 envelope build failed for {message_id_str}: {e}"),
-                    }
-                })?;
-
-            // W3C trace continuity to the counterparty: when the outbox
-            // message carries the trace context of the request that caused
-            // it, forward THAT `traceparent` on the AS4 HTTP egress instead
-            // of the fresh one asx-rs generates — the receiving MSH then
-            // joins the same distributed trace as the original caller.
-            if let Some(tp) = msg_owned
-                .trace_context
-                .as_deref()
-                .and_then(asx_rs::transport::trace_context::normalize_traceparent)
-            {
-                output.traceparent = Some(tp);
+            // Join the trace of the request that caused this message: the
+            // `asx.send` span nests under this one.
+            let span = tracing::info_span!(
+                "makod.as4.send",
+                outbox_id = %message_id_str,
+                as4_message_id = %as4_message_id,
+                recipient = %recipient,
+                message_type = %message_type,
+            );
+            if let Some(tp) = msg_owned.trace_context.as_deref() {
+                mako_service::telemetry::set_remote_parent(&span, tp);
             }
+            let sent = tracing::Instrument::instrument(client.send(message), span).await;
 
-            // HTTP POST to the recipient's AS4 endpoint.
-            let outcome = transport.send(&endpoint, &output).await.map_err(|e| {
-                EngineMetrics::global().outbox_delivery_attempted("transport_error");
-                EngineError::Transport {
-                    endpoint: endpoint.as_str().into(),
-                    message: format!("HTTP POST failed for {message_id_str}: {e}"),
-                }
-            })?;
-
-            // Verify the counterparty's synchronous AS4 signal (BDEW MaKo AS4-Profil
-            // 2.0 §4.6.3). asx-rs parses it namespace-correctly, verifies the receipt
-            // signature *and that it covers the acted-on eb:SignalMessage*, checks
-            // `RefToMessageId`, verifies every NonRepudiationInformation digest against
-            // what the sent message was signed over, and enforces a replay window — the
-            // Non-Repudiation-of-Receipt guarantee, proven end to end rather than assumed.
-            let content_type = outcome
-                .header("Content-Type")
-                .unwrap_or("application/soap+xml")
-                .to_string();
-            let receipt_policy = if lenient_receipts {
-                // Interop bring-up: accept unsigned / non-NRR receipts (still verifies
-                // any signature/digest that IS present). Never a production posture.
-                asx_rs::as4::As4ReceiptPolicy::relaxed()
-            } else {
-                asx_rs::as4::As4ReceiptPolicy::regulated()
+            let receipt = match sent {
+                Ok(receipt) => receipt,
+                Err(e) => return Err(delivery_error(&e, &recipient, &message_id_str)),
             };
-            match asx_rs::as4::verify_sync_response(
-                &session,
-                &event_bus,
-                &output,
-                &outcome.body,
-                &content_type,
-                &receipt_policy,
-            ) {
-                Ok(asx_rs::as4::As4SyncSignal::Receipt(_)) => {
-                    // Delivery confirmed (NRR proven under the regulated policy).
-                }
-                Ok(asx_rs::as4::As4SyncSignal::Error(err)) => {
-                    // The counterparty rejected the message with an eb:Error — a
-                    // confirmed rejection, not a lost receipt. Deliberately still
-                    // *retryable* (bounded by the outbox retry window): re-sending
-                    // is protocol-safe — the ebMS MessageId is the stable outbox id
-                    // and the AS4-Profil mandates receiver duplicate elimination
-                    // (`ReceptionAwareness.DuplicateDetection` MUSS true) — and a
-                    // retry can genuinely succeed, because the P-Mode, partner
-                    // certificate and rendering are resolved per attempt, so an
-                    // operator fixing the configuration the counterparty rejected
-                    // heals the delivery without re-enqueueing. The metrics label
-                    // separates this from a lost receipt for observability.
-                    EngineMetrics::global().outbox_delivery_attempted("counterparty_error");
-                    return Err(EngineError::Transport {
-                        endpoint: endpoint.as_str().into(),
-                        message: format!(
-                            "counterparty rejected {message_id_str} with an AS4 eb:Error: {}",
-                            err.summary()
-                        ),
-                    });
-                }
-                Err(reason) if lenient_receipts => {
-                    tracing::warn!(
-                        message_id   = %message_id_str,
-                        recipient    = %recipient,
-                        message_type = %message_type,
-                        reason       = %reason,
-                        "BdewAs4Sender: --as4-lenient-receipts — receipt verification \
-                         failed; delivery acknowledged anyway",
-                    );
-                }
-                Err(reason) => {
-                    // Strict default: a delivery without a verifiable synchronous receipt
-                    // is not a confirmed delivery. Retryable — the outbox worker backs
-                    // off and dead-letters after the retry budget.
-                    EngineMetrics::global().outbox_delivery_attempted("receipt_unverified");
-                    return Err(EngineError::Transport {
-                        endpoint: endpoint.as_str().into(),
-                        message: format!(
-                            "synchronous eb:Receipt verification failed for \
-                             {message_id_str}: {reason}"
-                        ),
-                    });
-                }
-                Ok(other) if !lenient_receipts => {
-                    // `As4SyncSignal` is #[non_exhaustive]: a future signal variant is
-                    // not a confirmed receipt, so fail closed under the regulated policy.
-                    EngineMetrics::global().outbox_delivery_attempted("receipt_unverified");
-                    return Err(EngineError::Transport {
-                        endpoint: endpoint.as_str().into(),
-                        message: format!(
-                            "unrecognized synchronous AS4 signal for {message_id_str}: {other:?}"
-                        ),
-                    });
-                }
-                Ok(_) => {}
+
+            // The verified receipt is the non-repudiation of receipt; it is
+            // kept before the entry is acknowledged. A failed write keeps the
+            // entry, and the resend is answered as a duplicate with a fresh
+            // receipt.
+            if let Err(e) = evidence
+                .record_outbound(&message_id_str, receipt.evidence())
+                .await
+            {
+                EngineMetrics::global().outbox_delivery_attempted("evidence_unrecorded");
+                return Err(EngineError::Transport {
+                    endpoint: recipient.to_string().into(),
+                    message: format!(
+                        "{message_id_str} was delivered, but its receipt evidence could not be \
+                         kept: {e}"
+                    ),
+                });
             }
 
             tracing::info!(
-                message_id   = %message_id_str,
-                message_type = %message_type,
-                recipient    = %recipient,
-                action       = %action,
-                endpoint     = %endpoint,
-                "BdewAs4Sender: AS4 message delivered",
+                message_id     = %message_id_str,
+                as4_message_id = %as4_message_id,
+                message_type   = %message_type,
+                recipient      = %recipient,
+                "BdewAs4Sender: AS4 message delivered, receipt verified",
             );
 
             EngineMetrics::global().outbox_delivery_attempted("ok");
             Ok(())
         }
+    }
+}
+
+/// The outbox error of a failed send.
+///
+/// Every failure is retryable inside the outbox window except a configuration
+/// refusal (nothing was sent, and a resend sends nothing either): the message
+/// id and timestamp are the first attempt's, so a resend is protocol-safe, and
+/// a partner refusal (`eb:Error`) can heal when the operator fixes what the
+/// partner refused. The metrics label separates the cases.
+fn delivery_error(e: &asx::Error, recipient: &str, message_id: &str) -> EngineError {
+    let label = match e.kind() {
+        asx::ErrorKind::PartnerError => "counterparty_error",
+        asx::ErrorKind::Indeterminate => "receipt_unverified",
+        asx::ErrorKind::Config => "config_error",
+        _ => "transport_error",
+    };
+    EngineMetrics::global().outbox_delivery_attempted(label);
+    let detail = match e.ebms_code() {
+        Some(code) => format!(
+            "AS4 send of {message_id} failed ({code}, retryable: {}): {e}",
+            e.is_retryable()
+        ),
+        None => format!(
+            "AS4 send of {message_id} failed (retryable: {}): {e}",
+            e.is_retryable()
+        ),
+    };
+    if e.kind() == asx::ErrorKind::Config {
+        return EngineError::Serialization(detail);
+    }
+    EngineError::Transport {
+        endpoint: recipient.into(),
+        message: detail,
     }
 }
 
@@ -1250,22 +1084,5 @@ mod bdew_envelope_tests {
                 "agency {agency} must map to its ebCore party type"
             );
         }
-    }
-
-    /// §2.3.2 lets a receiver accept any `<eb:From>/<eb:PartyId>` **only** when
-    /// it matches the subject of the presented certificate. This daemon signs
-    /// every outbound message with one key, so the AS4 party is the signing
-    /// identity — never the interchange's `NAD+MS` sender, which in a combined
-    /// Strom+Gas deployment is a different own MP-ID and would present a
-    /// certificate that does not match.
-    #[test]
-    fn the_agreement_ref_carries_no_type_attribute() {
-        // The fixed agreement value selects the profile's dynamic party model;
-        // §2.3.2 forbids the accompanying `pmode` and `type` attributes, which
-        // the sender expresses by passing `None` for the type.
-        assert_eq!(
-            constants::AGREEMENT_REF,
-            "https://www.bdew.de/as4/communication/agreement"
-        );
     }
 }

@@ -114,6 +114,11 @@ define_id!(
      (e.g. a UTILMD exchange and its APERAK acknowledgement)."
 );
 define_id!(
+    InboxClaimId,
+    "The lease of one unsettled inbox claim: settling a claim names it, so a \
+     holder whose lease expired and was taken over cannot settle the new one."
+);
+define_id!(
     ProcessId,
     "Stable identifier for a single MaKo process instance."
 );

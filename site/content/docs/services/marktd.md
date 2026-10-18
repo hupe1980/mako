@@ -168,7 +168,7 @@ are refused) with these claims:
 
 ### Cedar policy
 
-`policies/marktd.cedar` is loaded at startup and has **five `permit`
+`policies/marktd.cedar` is compiled into the binary and has **five `permit`
 statements over 49 actions**, each starting from tenant equality:
 
 | Group | Actions | Extra condition |
@@ -178,22 +178,6 @@ statements over 49 actions**, each starting from tenant equality:
 | Grid-operator writes | `write-preisblatt`, `write-nelo`, `write-tranche`, `write-malo-grid`, `write-grundversorger`, `write-energiemix`, `write-mmma-preis`, `dispatch-pricat` | `mako_roles` contains `NB` |
 | ESA consent | `read-einwilligung`, `write-einwilligung` | `MSB` **or** `ESA` |
 | Operations | `manage-subscription`, `manage-fanout` | `ADMIN` |
-
-```cedar
-permit(
-    principal,
-    action in [
-        Action::"write-preisblatt", Action::"write-nelo", Action::"write-tranche",
-        Action::"write-malo-grid",  Action::"write-grundversorger",
-        Action::"write-energiemix", Action::"write-mmma-preis",
-        Action::"dispatch-pricat"
-    ],
-    resource
-) when {
-    context.principal_tenant == context.resource_tenant &&
-    context.principal_roles.contains("NB")
-};
-```
 
 Tenant and roles arrive in the **context** — `context.principal_tenant`
 (`mako_tenant`), `context.principal_roles` (`mako_roles`),
@@ -205,14 +189,14 @@ A denial is `403` built by `ApiError::forbidden`:
 (`manage-subscription denied`) or reads `access denied`; it never names the
 resource tenant.
 
-To customise, replace `policies/marktd.cedar` and restart.
+To customise, edit `policies/marktd.cedar` and rebuild.
 
 ### The authorization guard
 
 `marktd` has no global auth middleware: `Claims` is an axum extractor, so a
 handler that does not name it is unauthenticated, and an action missing from
 the policy is a permanent `403`. `services/marktd/tests/it/authorization_guard.rs`
-refuses a build where:
+fails the test suite when:
 
 | Check | Defect caught |
 |---|---|
@@ -222,13 +206,11 @@ refuses a build where:
 | No handler reads `Claims` as an `Extension` | Claims that bypass verification |
 | No request body carries a `tenant` field | A caller naming its own tenant |
 
-A custom policy that drops an action therefore fails the build.
-
 ---
 
 ## REST API
 
-OpenAPI: `GET /api/v1/openapi.json`; interactive browser at `/api/v1/docs/`.
+OpenAPI: `GET /api/v1/openapi.json`, the document to open in any Swagger UI or Redoc.
 Every request body denies unknown fields.
 
 ### Failures
@@ -451,15 +433,8 @@ Modul 3 (BK8-22/010-A).
 
 **`source` and the operator override.** `api` rows come from the REST `PUT`,
 `mako` rows from the PRICAT ingest. An `api` row is never overwritten by a
-`mako` row for the same NB and `valid_from`:
-
-```sql
-ON CONFLICT (nb_mp_id, valid_from)
-DO UPDATE SET data = EXCLUDED.data, ...
-WHERE preisblaetter.source <> 'api' OR EXCLUDED.source = 'api';
-```
-
-`preisblaetter_messung` carries the same protection.
+`mako` row for the same NB and `valid_from`; `preisblaetter_messung` and
+`preisblaetter_konzessionsabgabe` carry the same protection.
 
 ### PRICAT 27003 dispatch
 
@@ -665,11 +640,8 @@ Stammdatenänderung (`TM+Z10`, `CCI+Z24++Z96/Z97`, `CCI+ZA2++ZE9/ZF0`) write
 them. `lokationsbuendel_objektcode` on `malo` and `melo` is validated on write.
 
 The `PUT` calls no other service. It enqueues `de.markt.malo.updated` (data
-`{"version"}`) in the write's transaction, and makod's MaLo-Ident cache follows
-it through the durable fan-out like any subscriber: makod reads the record back
-with `GET /api/v1/malos/{malo_id}`, and a makod that is down when the record
-changes receives it on the fan-out's retry (or finds it in
-[`/admin/fanout/dlq`](#fan-out) once the attempts run out) —
+`{"version"}`) in the write's transaction; makod's MaLo-Ident cache follows it
+through the [fan-out](#fan-out) like any subscriber and reads the record back —
 see [makod's MaLo cache](@/docs/services/makod.md#malo-cache-follows-marktd).
 
 ```json
@@ -1033,10 +1005,9 @@ curl -s -X PUT "http://marktd:8180/api/v1/zaehler/Z001234567/geraete/SMGW-2026-0
 ```
 
 The configuration is master data for the ERP and `agentd`'s
-`smgw-diagnostics-agent`. `processd`'s §14a Steuerungsauftrag decides on the
-SteuerbareRessource's `istFernschaltbar` and Konfigurationsprodukte, not on
-`CLS_FAEHIG`; `edmd`'s certificate-expiry worker sweeps the `SmgwSession`
-registered with edmd, not `SMGW_CERT_ABLAUFDATUM`.
+`smgw-diagnostics-agent`; no service decides on it (`processd`'s §14a
+Steuerungsauftrag reads the SteuerbareRessource, `edmd`'s certificate expiry its
+own `SmgwSession`).
 
 ### TOU registers and Zaehlzeitdefinition
 

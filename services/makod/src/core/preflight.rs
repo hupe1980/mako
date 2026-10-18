@@ -25,9 +25,8 @@
 
 use std::collections::HashMap;
 
+use crate::as4_clients::{As4Clients, As4Setup};
 use anyhow::Context as _;
-use mako_as4::profile::BdewAs4Profile;
-use secrecy::{ExposeSecret as _, SecretString};
 
 use crate::cedar_authz::{CedarAuthorizer, DefaultPolicy, NamedKey};
 
@@ -72,8 +71,16 @@ pub fn is_insecure_delivery_channel(qualifier: &str, address: &str) -> bool {
 /// rather than `&Cli` because `Cli` belongs to the binary target and this module
 /// is compiled into the library target as well.
 pub struct PreflightInput<'a> {
-    /// Primary Marktpartner-ID — the AS4 `<eb:From>` fallback and tenant key.
+    /// Primary Marktpartner-ID — the tenant key.
     pub primary_mp_id: &'a str,
+    /// `[[party]]`, whose `[party.as4]` carry the AS4 key material.
+    pub parties: &'a [crate::config::PartyConfig],
+    /// The registry built from `parties` (agency per MP-ID).
+    pub registry: &'a crate::party_registry::MpIdRegistry,
+    /// `[as4]`.
+    pub as4: &'a crate::config::As4Config,
+    /// `[policy]`.
+    pub policy: &'a crate::config::MakodPolicy,
     /// `--as4-addr` is set, so the inbound transport will start.
     pub as4_inbound_enabled: bool,
     /// `--http-addr` is set.
@@ -89,26 +96,6 @@ pub struct PreflightInput<'a> {
     pub allow_unauthenticated_webdienste_client: bool,
     /// Whether `--webdienste-signing-key-pem` is configured.
     pub webdienste_signing_key: bool,
-    /// `--as4-partner MP-ID=HTTPS-URL` pairs.
-    pub as4_partner: &'a [String],
-    /// `--as4-partner-cert MP-ID=<PEM>` pairs.
-    pub as4_partner_cert: &'a [String],
-    /// `--as4-partner-signing-cert MP-ID=<PEM>` pairs.
-    pub as4_partner_signing_cert: &'a [String],
-    /// `--as4-signing-key-pem`.
-    pub as4_signing_key_pem: Option<&'a SecretString>,
-    /// `--as4-signing-cert-pem`.
-    pub as4_signing_cert_pem: Option<&'a str>,
-    /// `--as4-trust-anchor-pem`.
-    pub as4_trust_anchor_pem: Option<&'a str>,
-    /// `--as4-decryption-key-pem`.
-    pub as4_decryption_key_pem: Option<&'a SecretString>,
-    /// `--as4-party-id`.
-    pub as4_party_id: Option<&'a str>,
-    /// `--allow-unencrypted-as4`.
-    pub allow_unencrypted_as4: bool,
-    /// `--allow-no-as4-trust-anchor`.
-    pub allow_no_as4_trust_anchor: bool,
     /// `--allow-no-as4-signing`.
     pub allow_no_as4_signing: bool,
     /// `--edifact-outbox-webhook-url`.
@@ -146,15 +133,9 @@ pub struct PreflightInput<'a> {
 ///
 /// Producing one of these is the proof that the configuration is startable.
 pub struct Preflight {
-    /// AS4 partner P-Mode registry with every partner endpoint and encryption
-    /// certificate already registered.
-    pub as4_profile: BdewAs4Profile,
-    /// Counterparty **signing** certificates in PEM, by MP-ID.
-    ///
-    /// The inbound handler pins each one on the session it verifies that
-    /// sender's messages against. Separate from the encryption certificates in
-    /// [`Self::as4_profile`], which the send path uses.
-    pub as4_sender_signing_certs: Vec<(String, String)>,
+    /// One AS4 client per local MP-ID, each `As4::builder(..).build()` run —
+    /// `None` when AS4 is not configured.
+    pub as4: Option<As4Clients>,
     /// MaLo-ID callback endpoints, keyed by counterparty Marktpartner-ID.
     pub maloid_partners: HashMap<String, reqwest::Url>,
     /// Verzeichnisdienst base URL.
@@ -165,8 +146,6 @@ pub struct Preflight {
     pub cedar_policies: Option<String>,
     /// Which built-in baseline the authorizer runs with.
     pub cedar_default_policy: DefaultPolicy,
-    /// AS4 `<eb:From>/<eb:PartyId>` used for outbound messages.
-    pub as4_party_id: String,
 }
 
 /// Validate the configuration and resolve it into ready-to-use values.
@@ -177,8 +156,6 @@ pub struct Preflight {
 /// would otherwise abort the real boot, which is precisely why the check runs
 /// them all before `--check` reports success.
 pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
-    let as4_party_id = input.as4_party_id.unwrap_or(input.primary_mp_id).to_owned();
-
     // ── Ingest transport ─────────────────────────────────────────────────────
     //
     // A daemon that can receive nothing is a misconfiguration, not a quiet
@@ -271,153 +248,29 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
     )
     .map_err(|e| anyhow::anyhow!("Cedar policy set is invalid: {e}"))?;
 
-    // ── AS4 inbound material ─────────────────────────────────────────────────
-    if input.as4_inbound_enabled {
-        let key_pem = input.as4_signing_key_pem.ok_or_else(|| {
-            anyhow::anyhow!(
-                "--as4-signing-key-pem / MAKOD_AS4_SIGNING_KEY_PEM is required when --as4-addr is set"
-            )
-        })?;
-        let cert_pem = input.as4_signing_cert_pem.ok_or_else(|| {
-            anyhow::anyhow!(
-                "--as4-signing-cert-pem / MAKOD_AS4_SIGNING_CERT_PEM is required when --as4-addr is set"
-            )
-        })?;
-
-        // BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every inbound message to be
-        // encrypted. Without the operator's own decryption key the inbound
-        // policy cannot demand it, so this is fail-closed.
-        if input.as4_decryption_key_pem.is_none() && !input.allow_unencrypted_as4 {
-            anyhow::bail!(
-                "AS4 inbound decryption key not configured \
-                 (--as4-decryption-key-pem / MAKOD_AS4_DECRYPTION_KEY_PEM not set). \
-                 BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every inbound AS4 message \
-                 to be encrypted; without your own EC (BrainpoolP256r1) private key, \
-                 unencrypted inbound cannot be rejected. Provide the key, or pass \
-                 --allow-unencrypted-as4 for dev/test."
-            );
-        }
-
-        // Counterparty certificates are issued by the BDEW/BNetzA PKI, so
-        // verifying them needs that CA. With none configured the session falls
-        // back to the operator's own leaf certificate, which trusts exactly one
-        // signer — ourselves — and rejects every partner. That is a complete
-        // inbound outage presented by a daemon that reports healthy, so it is
-        // fail-closed like the encryption key above rather than a log line
-        // nobody reads until a counterparty escalates.
-        if !input.allow_no_as4_trust_anchor
-            && input.as4_trust_anchor_pem.is_none_or(|ta| ta == cert_pem)
-        {
-            anyhow::bail!(
-                "AS4 trust anchor not configured, or set to this operator's own \
-                 signing certificate. Counterparty signing certificates are issued \
-                 by the BDEW/BNetzA PKI, so every inbound AS4 message would fail \
-                 signature verification and the listener would accept nothing. \
-                 Set --as4-trust-anchor-pem / MAKOD_AS4_TRUST_ANCHOR_PEM (or \
-                 as4.trust_anchor_pem_file) to the BDEW/BNetzA PKI CA certificate, \
-                 or pass --allow-no-as4-trust-anchor for a loopback test where both \
-                 ends share one certificate."
-            );
-        }
-
-        // Build a throw-away session to prove the PEM material parses and the
-        // key matches the certificate. Deferring this to the real boot meant a
-        // malformed key was found only after `--check` had reported success.
-        let trust_anchor = input.as4_trust_anchor_pem.unwrap_or(cert_pem);
-        asx_rs::core::SessionContextBuilder::new("makod-preflight", &as4_party_id)
-            .with_signing_material(cert_pem, key_pem.expose_secret())
-            .with_trust_anchor_pem(trust_anchor)
-            .build()
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "AS4 signing material is unusable: {e}. Check that \
-                     --as4-signing-cert-pem and --as4-signing-key-pem are a matching \
-                     PEM certificate/key pair and that --as4-trust-anchor-pem parses."
-                )
-            })?;
-    }
-
-    // ── AS4 outbound: partner registry ───────────────────────────────────────
-    let mut as4_profile = BdewAs4Profile::new();
-    for pair in input.as4_partner {
-        let (mp_id, url) = pair.split_once('=').ok_or_else(|| {
-            anyhow::anyhow!("--as4-partner: expected MP-ID=HTTPS-URL, got {pair:?}")
-        })?;
-        let (mp_id, url) = (mp_id.trim(), url.trim());
-        anyhow::ensure!(
-            !mp_id.is_empty(),
-            "--as4-partner: MP-ID must not be empty in {pair:?}"
-        );
-        anyhow::ensure!(
-            url.starts_with("https://"),
-            "--as4-partner: endpoint URL must use HTTPS (got {url:?} for MP-ID {mp_id:?})"
-        );
-        as4_profile.register_partner_all_actions(mp_id, url);
-    }
-
-    for pair in input.as4_partner_cert {
-        let (mp_id, cert_pem) = pair.split_once('=').ok_or_else(|| {
-            anyhow::anyhow!("--as4-partner-cert: expected MP-ID=<PEM>, got {pair:?}")
-        })?;
-        let (mp_id, cert_pem) = (mp_id.trim(), cert_pem.trim());
-        anyhow::ensure!(
-            !mp_id.is_empty(),
-            "--as4-partner-cert: MP-ID must not be empty in {pair:?}"
-        );
-        anyhow::ensure!(
-            cert_pem.contains("-----BEGIN CERTIFICATE-----"),
-            "--as4-partner-cert: value for MP-ID {mp_id:?} is not a PEM certificate \
-             (no -----BEGIN CERTIFICATE----- header). When using a file reference, \
-             set as4.partner_cert_files in makod.toml."
-        );
-        as4_profile.register_partner_encryption_cert(mp_id, cert_pem.as_bytes().to_vec());
-    }
-
-    // Every registered partner endpoint needs an encryption certificate — the
-    // send path refuses `encrypt = true` without one, so a missing certificate
-    // means every delivery to that partner dead-letters. Fail closed and name
-    // the MP-IDs rather than discovering it one dead letter at a time.
-    let cert_mp_ids: std::collections::HashSet<&str> = input
-        .as4_partner_cert
-        .iter()
-        .filter_map(|p| p.split_once('=').map(|(g, _)| g.trim()))
-        .collect();
-    let endpoint_mp_ids: std::collections::HashSet<&str> = input
-        .as4_partner
-        .iter()
-        .filter_map(|p| p.split_once('=').map(|(g, _)| g.trim()))
-        .collect();
-    let missing: Vec<&str> = endpoint_mp_ids
-        .iter()
-        .copied()
-        .filter(|g| !cert_mp_ids.contains(g))
-        .collect();
-    if !missing.is_empty() && !input.allow_unencrypted_as4 {
-        anyhow::bail!(
-            "AS4 partners registered without encryption certificates: {missing:?}. \
-             BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every outbound message to be \
-             encrypted with the recipient's EC (BrainpoolP256r1) certificate. \
-             Add --as4-partner-cert MP-ID=<PEM> (or as4.partner_cert_files in \
-             makod.toml) for each partner, or pass --allow-unencrypted-as4 for dev/test."
-        );
-    }
-
-    // The mirror case: a certificate whose MP-ID has no endpoint. Nothing consumes
-    // it, so the operator has configured a partner that cannot be delivered to
-    // while the config reads as though they can — which is exactly how a
-    // mistyped MP-ID presents. The pair is the unit of configuration, so an
-    // orphaned half is an error rather than a warning.
-    let orphaned: Vec<&str> = cert_mp_ids
-        .iter()
-        .copied()
-        .filter(|g| !endpoint_mp_ids.contains(g))
-        .collect();
+    // ── AS4 clients ──────────────────────────────────────────────────────────
+    //
+    // `As4::builder(Profile::bdew())…build()` per local MP-ID is the startup
+    // check of the AS4 key material: every refusal is `asx::ErrorKind::Config`
+    // naming the setting and the profile section — a signer that does not
+    // chain to the SM-PKI root, a certificate without the MP-ID in its OU, a
+    // partner endpoint without an encryption certificate, a missing decrypter,
+    // a TLS key equal to a signing or encryption key. Running it here is what
+    // makes `--check` report the refusal instead of the first delivery.
+    let as4 = match As4Setup::from_config(
+        input.as4,
+        input.parties,
+        input.registry,
+        input.policy.as4.unbekannte_absender.get(),
+    )? {
+        Some(setup) => Some(As4Clients::build(setup)?),
+        None => None,
+    };
     anyhow::ensure!(
-        orphaned.is_empty(),
-        "AS4 encryption certificates configured for MP-IDs with no endpoint: {orphaned:?}. \
-         A certificate without a matching --as4-partner MP-ID=HTTPS-URL is never used, \
-         and a mistyped MP-ID looks exactly like this. Add the endpoint, or remove the \
-         certificate."
+        !input.as4_inbound_enabled || as4.is_some(),
+        "--as4-addr is set but no [[party]] has [party.as4] key material, so there is no \
+         local MP-ID to serve: each MP-ID's inbox is /as4/inbox/<MP-ID>, served with its own \
+         signing, encryption and TLS key pairs"
     );
 
     // ── API-Webdienste outbound: the identity this daemon calls under ────────
@@ -469,79 +322,14 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
         );
     }
 
-    // ── AS4 inbound: who each message is allowed to claim to be ──────────────
-    //
-    // The trust anchor answers „is the signer a BDEW/DVGW market participant?",
-    // and ~1500 parties hold a certificate chaining to one, so it authenticates
-    // the PKI rather than the counterparty. The per-MP-ID signing certificate is
-    // what binds a message to the party it says sent it.
-    //
-    // Refused at startup rather than per message for two reasons. `asx-rs`
-    // rejects a *signed* message outright when the session pins no fingerprint —
-    // and BDEW AS4-Profil v1.2 §2.2.6.2.1 makes signing mandatory, so a
-    // deployment missing this accepts nothing at all, while its logs blame the
-    // counterparty. And discovering it per message means discovering it on a
-    // Frist.
-    let mut as4_sender_signing_certs: Vec<(String, String)> = Vec::new();
-    for pair in input.as4_partner_signing_cert {
-        let (mp_id, cert_pem) = pair.split_once('=').ok_or_else(|| {
-            anyhow::anyhow!("--as4-partner-signing-cert: expected MP-ID=<PEM>, got {pair:?}")
-        })?;
-        let (mp_id, cert_pem) = (mp_id.trim(), cert_pem.trim());
-        anyhow::ensure!(
-            !mp_id.is_empty(),
-            "--as4-partner-signing-cert: MP-ID must not be empty in {pair:?}"
-        );
-        anyhow::ensure!(
-            cert_pem.contains("-----BEGIN CERTIFICATE-----"),
-            "--as4-partner-signing-cert: value for MP-ID {mp_id:?} is not a PEM certificate \
-             (no -----BEGIN CERTIFICATE----- header). When using a file reference, set \
-             as4.partner_signing_cert_files in makod.toml."
-        );
-        as4_sender_signing_certs.push((mp_id.to_owned(), cert_pem.to_owned()));
-    }
-
-    if input.as4_inbound_enabled
-        && as4_sender_signing_certs.is_empty()
-        && !input.allow_unencrypted_as4
-    {
-        anyhow::bail!(
-            "--as4-addr is set but no AS4 partner signing certificates are configured, so \
-             every inbound message would be refused: BDEW AS4-Profil v1.2 §2.2.6.2.1 makes \
-             signing mandatory, and a signed message is only verifiable against the signing \
-             certificate of the party it claims to come from.\n\
-             Add --as4-partner-signing-cert MP-ID=<PEM> (or as4.partner_signing_cert_files in \
-             makod.toml) for each counterparty, or pass --allow-unencrypted-as4 for dev/test."
-        );
-    }
-
-    // The assembled profile has to satisfy the BDEW security floor before it
-    // carries traffic. BDEW AS4-Profil v1.2 §2.2.6.2.2 requires signing **and**
-    // encryption. `asx-rs` refuses an overlay below its declared security floor
-    // (`SIGN_AND_ENCRYPT`) as `SecurityFloorViolation`, so a sign-only override
-    // does not validate there either.
-    // `BdewAs4Profile::validate` is the check that asserts the mandate over the
-    // base stack and every override on top of it, and it is only a control if it
-    // runs on the path that builds the profile an operator actually deploys.
-    let _report = as4_profile.validate().map_err(|e| {
-        anyhow::anyhow!(
-            "the assembled AS4 profile violates the BDEW security floor: {e}. \
-             BDEW AS4-Profil v1.2 §2.2.6.2.2 mandates signing and encryption on \
-             every message; a layer relaxing either is refused here rather than \
-             discovered as plaintext on the wire."
-        )
-    })?;
-
     // ── Outbound delivery path ───────────────────────────────────────────────
     //
     // Signing material drives the AS4 sender; the EDIFACT webhook is the
     // development substitute. With neither, outbound EDIFACT is logged and
     // rescheduled forever, which is a silent regulatory failure.
-    let has_signing = input.as4_signing_key_pem.is_some() && input.as4_signing_cert_pem.is_some();
     anyhow::ensure!(
-        has_signing || input.edifact_outbox_webhook_url.is_some() || input.allow_no_as4_signing,
-        "AS4 signing credentials not configured \
-         (--as4-signing-key-pem / --as4-signing-cert-pem not set) and no \
+        as4.is_some() || input.edifact_outbox_webhook_url.is_some() || input.allow_no_as4_signing,
+        "AS4 is not configured (no [party.as4] key material) and no \
          --edifact-outbox-webhook-url fallback is configured. \
          Outbound EDIFACT delivery would silently fail for all messages. \
          To suppress this error in non-production environments, pass \
@@ -582,8 +370,7 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
             .ok_or_else(|| anyhow::anyhow!("--maloid-partner: expected MP-ID=URL, got {pair:?}"))?;
         let url = reqwest::Url::parse(url_str.trim())
             .map_err(|e| anyhow::anyhow!("--maloid-partner: invalid URL {url_str:?}: {e}"))?;
-        // The AS4 partner endpoint two blocks up has always had to be HTTPS;
-        // this one carries the Marktlokation's postal address and its NB/MSB
+        // An AS4 partner endpoint has to be HTTPS; this one carries the Marktlokation's postal address and its NB/MSB
         // assignment, and was only checked for parseability.
         anyhow::ensure!(
             is_secure_endpoint(&url),
@@ -622,7 +409,7 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
 
     if input.marktd_url.is_some() {
         // An empty key is worse than no marktd at all. The ESA consent gate and
-        // the M1 Konfigurationsprodukt guard both **fail open** on a lookup
+        // the Konfigurationsprodukt guard both **fail open** on a lookup
         // error — deliberately, because a marktd outage must not reject
         // regulated traffic — so an unauthenticated client turns every check
         // into a silent pass while the operator sees marktd configured and
@@ -638,14 +425,12 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
     }
 
     Ok(Preflight {
-        as4_profile,
-        as4_sender_signing_certs,
+        as4,
         maloid_partners,
         verzeichnisdienst_url,
         auth_keys,
         cedar_policies: input.cedar_policies.clone(),
         cedar_default_policy,
-        as4_party_id,
     })
 }
 
@@ -655,29 +440,11 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
 /// rather than an unstartable one — and because `--check` should report them
 /// too, which is why they are not buried in the server-start branches.
 pub fn warn_on_degraded_config(input: &PreflightInput<'_>, durable_store: bool) {
+    input
+        .policy
+        .report()
+        .log("makod", time::OffsetDateTime::now_utc());
     if input.as4_inbound_enabled {
-        // Reachable only under `--allow-no-as4-trust-anchor`; the preflight
-        // refuses this configuration otherwise. Restated at boot because the
-        // opt-out is easy to leave in a config file and its effect — no
-        // counterparty can reach us — is otherwise invisible.
-        if input
-            .as4_trust_anchor_pem
-            .is_none_or(|ta| Some(ta) == input.as4_signing_cert_pem)
-        {
-            tracing::error!(
-                "--allow-no-as4-trust-anchor: the AS4 trust anchor is this operator's \
-                 own signing certificate. Inbound AS4 messages from all counterparties \
-                 will be REJECTED because their certificates are signed by the BDEW PKI \
-                 CA, not by this operator. Never run the regulated market this way."
-            );
-        }
-        if input.as4_decryption_key_pem.is_none() {
-            tracing::warn!(
-                "--allow-unencrypted-as4: AS4 inbound decryption key not configured. \
-                 Inbound AS4 messages will be accepted WITHOUT verifying that they \
-                 are encrypted, violating BDEW AS4-Profil v1.2 §2.2.6.2.2. Dev/test only."
-            );
-        }
         if !durable_store {
             tracing::warn!(
                 "AS4 inbox dedup storage is volatile (in-memory): duplicate detection \
@@ -690,7 +457,7 @@ pub fn warn_on_degraded_config(input: &PreflightInput<'_>, durable_store: bool) 
             "AS4 inbound transport is NOT configured \
              (--as4-addr / MAKOD_AS4_ADDR unset). \
              BDEW EDIFACT messages cannot be received via the mandatory AS4 \
-             transport. Set --as4-addr and provide signing key/cert PEM for production."
+             transport. Set --as4-addr and [party.as4] key material for production."
         );
     }
     // Reachable only under `--allow-unauthenticated-webdienste-client`.
@@ -712,8 +479,8 @@ pub fn warn_on_degraded_config(input: &PreflightInput<'_>, durable_store: bool) 
 mod tests {
     use super::*;
 
-    /// `Preflight` holds a `SecretString` and an AS4 profile and is
-    /// deliberately not `Debug`, so `expect_err` is unavailable here.
+    /// `Preflight` holds the AS4 clients and is deliberately not `Debug`, so
+    /// `expect_err` is unavailable here.
     fn rejection(input: &PreflightInput<'_>) -> String {
         match preflight(input) {
             Ok(_) => panic!("configuration should have been rejected"),
@@ -721,26 +488,46 @@ mod tests {
         }
     }
 
+    /// The identity tables every fixture shares: one party, no AS4.
+    struct Fixture {
+        parties: Vec<crate::config::PartyConfig>,
+        registry: crate::party_registry::MpIdRegistry,
+        as4: crate::config::As4Config,
+        policy: crate::config::MakodPolicy,
+    }
+
+    static FIXTURE: std::sync::LazyLock<Fixture> = std::sync::LazyLock::new(|| {
+        let parties = vec![crate::config::PartyConfig {
+            mp_id: "9900001000001".to_owned(),
+            roles: vec!["NB".to_owned()],
+            primary: true,
+            agency: None,
+            as4: None,
+        }];
+        Fixture {
+            registry: crate::party_registry::MpIdRegistry::from_config(&parties)
+                .expect("valid party"),
+            parties,
+            as4: crate::config::As4Config::default(),
+            policy: crate::config::MakodPolicy::default(),
+        }
+    });
+
     fn base<'a>() -> PreflightInput<'a> {
+        let f: &'static Fixture = &FIXTURE;
         PreflightInput {
             primary_mp_id: "9900001000001",
+            parties: &f.parties,
+            registry: &f.registry,
+            as4: &f.as4,
+            policy: &f.policy,
             as4_inbound_enabled: false,
             http_enabled: true,
             webdienste_enabled: false,
             webdienste_allow_unauthenticated: false,
-            as4_partner: &[],
-            as4_partner_cert: &[],
-            as4_partner_signing_cert: &[],
             webdienste_client_identity: false,
             allow_unauthenticated_webdienste_client: true,
             webdienste_signing_key: false,
-            as4_signing_key_pem: None,
-            as4_signing_cert_pem: None,
-            as4_trust_anchor_pem: None,
-            as4_decryption_key_pem: None,
-            as4_party_id: None,
-            allow_unencrypted_as4: false,
-            allow_no_as4_trust_anchor: false,
             allow_no_as4_signing: true,
             edifact_outbox_webhook_url: None,
             erp_webhook_secret_set: true,
@@ -760,6 +547,261 @@ mod tests {
         }
     }
 
+    /// AS4 key material on disk, issued by a test SM-PKI: one local party
+    /// (`9900001000001`) and one partner (`9900001000002`).
+    struct As4Files {
+        dir: tempfile::TempDir,
+        ca: asx::testkit::pki::TestCa,
+        party: asx::testkit::pki::TestParty,
+        partner: asx::testkit::pki::TestParty,
+    }
+
+    impl As4Files {
+        fn new() -> Self {
+            let ca = asx::testkit::pki::TestCa::sm_pki();
+            let party = ca.bdew_party("9900001000001");
+            let partner = ca.bdew_party("9900001000002");
+            let dir = tempfile::tempdir().expect("tempdir");
+            let f = Self {
+                dir,
+                ca,
+                party,
+                partner,
+            };
+            let crl =
+                f.ca.crl_signer("CCRL-S(Root)", asx::testkit::pki::KeyAlg::EcBrainpoolP256r1);
+            f.write("root.pem", f.ca.cert_pem());
+            f.write("ccrl-s.pem", crl.cert_pem());
+            for (name, pair) in [
+                ("sig", &f.party.signing),
+                ("enc", &f.party.encryption),
+                ("tls", &f.party.tls),
+            ] {
+                f.write(&format!("{name}.cert.pem"), &pair.cert_pem);
+                f.write(&format!("{name}.key.pem"), &pair.key_pem);
+            }
+            f.write("partner.enc.pem", &f.partner.encryption.cert_pem);
+            f.write("partner.sig.pem", &f.partner.signing.cert_pem);
+            f
+        }
+
+        fn write(&self, name: &str, bytes: &[u8]) {
+            std::fs::write(self.dir.path().join(name), bytes).expect("write");
+        }
+
+        fn path(&self, name: &str) -> std::path::PathBuf {
+            self.dir.path().join(name)
+        }
+
+        fn party_as4(&self) -> crate::config::PartyAs4Config {
+            crate::config::PartyAs4Config {
+                signing_cert_pem_file: self.path("sig.cert.pem"),
+                signing_key_pem_file: self.path("sig.key.pem"),
+                encryption_cert_pem_file: self.path("enc.cert.pem"),
+                encryption_key_pem_file: self.path("enc.key.pem"),
+                tls_cert_pem_file: self.path("tls.cert.pem"),
+                tls_key_pem_file: self.path("tls.key.pem"),
+            }
+        }
+
+        fn as4(&self) -> crate::config::As4Config {
+            crate::config::As4Config {
+                addr: None,
+                message_id_domain: Some("as4.test.example".to_owned()),
+                trust_anchor_pem_file: Some(self.path("root.pem")),
+                crl_signer_pem_file: Some(self.path("ccrl-s.pem")),
+                partner: vec![crate::config::As4PartnerConfig {
+                    mp_id: "9900001000002".to_owned(),
+                    agency: None,
+                    endpoint: Some("https://partner.example/as4/inbox/9900001000002".to_owned()),
+                    encryption_cert_pem_file: Some(self.path("partner.enc.pem")),
+                    signing_cert_pem_files: vec![self.path("partner.sig.pem")],
+                    quirks: Vec::new(),
+                }],
+                allow_no_signing: false,
+                lenient_receipts: None,
+            }
+        }
+
+        fn parties(&self) -> Vec<crate::config::PartyConfig> {
+            vec![crate::config::PartyConfig {
+                mp_id: "9900001000001".to_owned(),
+                roles: vec!["NB".to_owned()],
+                primary: true,
+                agency: None,
+                as4: Some(self.party_as4()),
+            }]
+        }
+    }
+
+    /// Run the preflight over `as4` and `parties`, with AS4 inbound on.
+    fn as4_preflight(
+        as4: &crate::config::As4Config,
+        parties: &[crate::config::PartyConfig],
+    ) -> anyhow::Result<Preflight> {
+        let keys = vec!["erp=token".to_owned()];
+        let registry =
+            crate::party_registry::MpIdRegistry::from_config(parties).expect("valid parties");
+        preflight(&PreflightInput {
+            auth_keys: &keys,
+            parties,
+            registry: &registry,
+            as4,
+            as4_inbound_enabled: true,
+            allow_no_as4_signing: false,
+            ..base()
+        })
+    }
+
+    fn as4_rejection(
+        as4: &crate::config::As4Config,
+        parties: &[crate::config::PartyConfig],
+    ) -> String {
+        match as4_preflight(as4, parties) {
+            Ok(_) => panic!("configuration should have been rejected"),
+            Err(e) => format!("{e:#}"),
+        }
+    }
+
+    /// A complete AS4 configuration builds one client per party and serves
+    /// as the outbound delivery path.
+    #[test]
+    fn a_complete_as4_configuration_builds_its_clients() {
+        let f = As4Files::new();
+        let checked = as4_preflight(&f.as4(), &f.parties()).expect("startable");
+        let clients = checked.as4.expect("AS4 configured");
+        assert!(clients.client("9900001000001").is_some());
+        assert!(clients.partners().deliverable("9900001000002").is_some());
+        assert_eq!(clients.message_id("3f2c0d0e"), "3f2c0d0e@as4.test.example");
+    }
+
+    /// `--as4-addr` with no local identity to serve is refused.
+    #[test]
+    fn an_as4_listener_without_party_keys_is_rejected() {
+        let err = as4_rejection(&crate::config::As4Config::default(), &FIXTURE.parties);
+        assert!(err.contains("[party.as4]"), "{err}");
+    }
+
+    /// Every party needs its own key pairs once one has them.
+    #[test]
+    fn a_party_without_its_keys_beside_one_with_them_is_rejected() {
+        let f = As4Files::new();
+        let mut parties = f.parties();
+        parties.push(crate::config::PartyConfig {
+            mp_id: "9900001000003".to_owned(),
+            roles: vec!["LF".to_owned()],
+            primary: false,
+            agency: None,
+            as4: None,
+        });
+        let err = as4_rejection(&f.as4(), &parties);
+        assert!(
+            err.contains("9900001000003") && err.contains("[party.as4]"),
+            "{err}"
+        );
+    }
+
+    /// The trust anchor, the CRL signer and the message-id domain are
+    /// required; each refusal names its key.
+    #[test]
+    fn the_trust_settings_are_required() {
+        let f = As4Files::new();
+        for (key, as4) in [
+            (
+                "as4.trust_anchor_pem_file",
+                crate::config::As4Config {
+                    trust_anchor_pem_file: None,
+                    ..f.as4()
+                },
+            ),
+            (
+                "as4.crl_signer_pem_file",
+                crate::config::As4Config {
+                    crl_signer_pem_file: None,
+                    ..f.as4()
+                },
+            ),
+            (
+                "as4.message_id_domain",
+                crate::config::As4Config {
+                    message_id_domain: None,
+                    ..f.as4()
+                },
+            ),
+        ] {
+            let err = as4_rejection(&as4, &f.parties());
+            assert!(err.contains(key), "expected {key} in: {err}");
+        }
+    }
+
+    /// The trust anchor is the SM-PKI root only: a signing certificate under
+    /// another CA does not build, and the asx-rs refusal reaches the operator.
+    #[test]
+    fn a_signer_outside_the_trust_anchor_is_rejected() {
+        let f = As4Files::new();
+        let other = asx::testkit::pki::TestCa::sm_pki();
+        f.write("root.pem", other.cert_pem());
+        let err = as4_rejection(&f.as4(), &f.parties());
+        assert!(err.contains("does not build"), "{err}");
+        assert!(err.contains("trust anchor"), "{err}");
+    }
+
+    /// A TLS key pair that is the signing key pair is refused (BDEW
+    /// AS4-Profil 1.2 §2.3.4.4).
+    #[test]
+    fn a_tls_key_pair_equal_to_the_signing_key_pair_is_rejected() {
+        let f = As4Files::new();
+        let mut parties = f.parties();
+        let keys = parties[0].as4.as_mut().expect("as4");
+        keys.tls_cert_pem_file = f.path("sig.cert.pem");
+        keys.tls_key_pem_file = f.path("sig.key.pem");
+        let err = as4_rejection(&f.as4(), &parties);
+        assert!(err.contains("same key pair"), "{err}");
+    }
+
+    /// A partner endpoint without an encryption certificate could deliver
+    /// nothing (§2.2.6.2.2), and a plaintext endpoint is refused.
+    #[test]
+    fn an_undeliverable_partner_is_rejected() {
+        let f = As4Files::new();
+        let mut as4 = f.as4();
+        as4.partner[0].encryption_cert_pem_file = None;
+        let err = as4_rejection(&as4, &f.parties());
+        assert!(err.contains("no encryption certificate"), "{err}");
+
+        let mut as4 = f.as4();
+        as4.partner[0].endpoint = Some("http://partner.example/as4".to_owned());
+        let err = as4_rejection(&as4, &f.parties());
+        assert!(err.contains("HTTPS"), "{err}");
+    }
+
+    /// The removed lenient-receipts switch is refused, naming the per-partner
+    /// quirk that replaces it.
+    #[test]
+    fn the_removed_lenient_receipts_key_is_refused() {
+        let f = As4Files::new();
+        let as4: crate::config::As4Config = toml::from_str("lenient_receipts = true").unwrap();
+        let as4 = crate::config::As4Config {
+            lenient_receipts: as4.lenient_receipts,
+            ..f.as4()
+        };
+        let err = as4_rejection(&as4, &f.parties());
+        assert!(err.contains("receipt-without-non-repudiation"), "{err}");
+        assert!(err.contains("[[as4.partner]] quirks"), "{err}");
+    }
+
+    /// The quirk is the per-partner replacement and is accepted.
+    #[test]
+    fn a_partner_quirk_is_accepted_and_an_unknown_one_refused() {
+        let f = As4Files::new();
+        let mut as4 = f.as4();
+        as4.partner[0].quirks = vec!["receipt-without-non-repudiation".to_owned()];
+        as4_preflight(&as4, &f.parties()).expect("the quirk is a valid setting");
+        as4.partner[0].quirks = vec!["lenient".to_owned()];
+        let err = as4_rejection(&as4, &f.parties());
+        assert!(err.contains("unknown quirk"), "{err}");
+    }
+
     #[test]
     fn a_minimal_http_deployment_passes() {
         let keys = vec!["erp=token".to_owned()];
@@ -768,67 +810,6 @@ mod tests {
             ..base()
         };
         preflight(&input).expect("minimal config is startable");
-    }
-
-    /// `--check` must not report success for a config whose real boot bails on
-    /// the missing certificate.
-    #[test]
-    fn a_partner_without_an_encryption_certificate_is_rejected() {
-        let keys = vec!["erp=token".to_owned()];
-        let partners = vec!["9900001000002=https://p.example/as4".to_owned()];
-        let input = PreflightInput {
-            auth_keys: &keys,
-            as4_partner: &partners,
-            ..base()
-        };
-        let err = rejection(&input);
-        assert!(err.contains("without encryption certificates"), "{err}");
-    }
-
-    #[test]
-    fn a_plaintext_partner_endpoint_is_rejected() {
-        let keys = vec!["erp=token".to_owned()];
-        let partners = vec!["9900001000002=http://p.example/as4".to_owned()];
-        let certs = vec![format!(
-            "9900001000002=-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----"
-        )];
-        let input = PreflightInput {
-            auth_keys: &keys,
-            as4_partner: &partners,
-            as4_partner_cert: &certs,
-            ..base()
-        };
-        let err = rejection(&input);
-        assert!(err.contains("must use HTTPS"), "{err}");
-    }
-
-    /// An AS4 listener with no counterparty signing certificates cannot accept
-    /// anything, and says so at startup.
-    ///
-    /// `asx-rs` refuses a *signed* message whose session pins no fingerprint,
-    /// and BDEW AS4-Profil v1.2 §2.2.6.2.1 makes signing mandatory — so this
-    /// configuration rejects every conformant message a counterparty sends,
-    /// while its logs read as though the counterparty were at fault. Refusing
-    /// to boot turns a silent, permanent outage into one line of startup output.
-    /// Real AS4 key material, because preflight builds a session from it and
-    /// `asx-rs` validates the PEM — a placeholder is refused two checks before
-    /// the one these tests are about.
-    struct As4Material {
-        pki: mako_as4::testing::BdewTestPki,
-    }
-
-    impl As4Material {
-        fn new() -> Self {
-            Self {
-                pki: mako_as4::testing::BdewTestPki::generate("Preflight 9900001000001"),
-            }
-        }
-        fn signing_key(&self) -> SecretString {
-            SecretString::from(self.pki.signing.key_pem_str().to_owned())
-        }
-        fn signing_cert(&self) -> &str {
-            self.pki.signing.cert_pem_str()
-        }
     }
 
     /// Calling an API-Webdienst without an mTLS identity is refused here, not
@@ -919,73 +900,6 @@ mod tests {
             ..base()
         };
         preflight(&signed).expect("a configured signing key is startable");
-    }
-
-    #[test]
-    fn an_as4_listener_without_partner_signing_certificates_is_rejected() {
-        let keys = vec!["erp=token".to_owned()];
-        let material = As4Material::new();
-        let signing = material.signing_key();
-        let decryption = material.signing_key();
-        let input = PreflightInput {
-            auth_keys: &keys,
-            as4_inbound_enabled: true,
-            as4_signing_key_pem: Some(&signing),
-            as4_signing_cert_pem: Some(material.signing_cert()),
-            // A loopback fixture; the trust anchor has its own test above.
-            allow_no_as4_trust_anchor: true,
-            as4_decryption_key_pem: Some(&decryption),
-            ..base()
-        };
-        let err = rejection(&input);
-        assert!(err.contains("partner signing certificates"), "{err}");
-    }
-
-    /// The dev/test escape is the same one the encryption material uses.
-    #[test]
-    fn the_dev_escape_allows_an_as4_listener_without_signing_certificates() {
-        let keys = vec!["erp=token".to_owned()];
-        let material = As4Material::new();
-        let signing = material.signing_key();
-        let input = PreflightInput {
-            auth_keys: &keys,
-            as4_inbound_enabled: true,
-            as4_signing_key_pem: Some(&signing),
-            as4_signing_cert_pem: Some(material.signing_cert()),
-            // A loopback fixture; the trust anchor has its own test above.
-            allow_no_as4_trust_anchor: true,
-            allow_unencrypted_as4: true,
-            ..base()
-        };
-        assert!(
-            preflight(&input).is_ok(),
-            "--allow-unencrypted-as4 must keep dev and the demos startable"
-        );
-    }
-
-    /// A signing certificate that is not a PEM certificate is named, not
-    /// silently pinned as an unusable fingerprint.
-    #[test]
-    fn a_partner_signing_certificate_that_is_not_a_pem_is_rejected() {
-        let keys = vec!["erp=token".to_owned()];
-        let material = As4Material::new();
-        let signing = material.signing_key();
-        let decryption = material.signing_key();
-        let certs = vec!["9900001000002=not-a-certificate".to_owned()];
-        let input = PreflightInput {
-            auth_keys: &keys,
-            as4_inbound_enabled: true,
-            as4_signing_key_pem: Some(&signing),
-            as4_signing_cert_pem: Some(material.signing_cert()),
-            // A loopback fixture; the trust anchor has its own test above.
-            allow_no_as4_trust_anchor: true,
-            as4_decryption_key_pem: Some(&decryption),
-            as4_partner_signing_cert: &certs,
-            ..base()
-        };
-        let err = rejection(&input);
-        assert!(err.contains("is not a PEM certificate"), "{err}");
-        assert!(err.contains("9900001000002"), "the MP-ID is named: {err}");
     }
 
     #[test]
@@ -1142,28 +1056,6 @@ mod tests {
             ..base()
         };
         preflight(&input).expect("a credentialed marktd client is startable");
-    }
-
-    /// The mirror of the missing-certificate case. A certificate whose MP-ID has
-    /// no endpoint is never used, and a mistyped MP-ID presents exactly this way.
-    #[test]
-    fn a_partner_certificate_without_an_endpoint_is_rejected() {
-        let keys = vec!["erp=token".to_owned()];
-        let partners = vec!["9900001000002=https://p.example/as4".to_owned()];
-        let certs = vec![
-            "9900001000002=-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----".to_owned(),
-            // Transposed digits — no endpoint carries this MP-ID.
-            "9900001000020=-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----".to_owned(),
-        ];
-        let input = PreflightInput {
-            auth_keys: &keys,
-            as4_partner: &partners,
-            as4_partner_cert: &certs,
-            ..base()
-        };
-        let err = rejection(&input);
-        assert!(err.contains("no endpoint"), "{err}");
-        assert!(err.contains("9900001000020"), "{err}");
     }
 
     /// Delivery destinations are parsed at startup, not at first delivery: a

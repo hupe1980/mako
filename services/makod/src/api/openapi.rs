@@ -1,8 +1,8 @@
 //! OpenAPI 3.1 specification for the `makod` HTTP API.
 //!
-//! Exposes:
-//! - `GET /api/v1/openapi.json` — raw OpenAPI JSON
-//! - `GET /api/v1/docs/`        — Swagger UI (interactive browser)
+//! Exposes `GET /api/v1/openapi.json` — the OpenAPI 3.1 document, for a client
+//! generator or any Swagger UI / Redoc the operator points at it. makod serves
+//! no browser UI of its own.
 //!
 //! ## Security
 //!
@@ -15,7 +15,6 @@ use utoipa::{
     Modify, OpenApi,
     openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme},
 };
-use utoipa_swagger_ui::SwaggerUi;
 
 /// Security scheme modifier — registers the `bearer_token` HTTP Bearer scheme.
 struct SecurityAddon;
@@ -106,13 +105,56 @@ administrative APIs for MaLo cache and partner directory management.",
 )]
 pub struct ApiDoc;
 
-/// Build the OpenAPI spec + Swagger UI router.
-///
-/// Mounts:
-/// - `GET /api/v1/openapi.json` — machine-readable OpenAPI 3.1 JSON
-/// - `GET /api/v1/docs/`        — Swagger UI (browser-based exploration)
-pub fn router() -> axum::Router {
-    SwaggerUi::new("/api/v1/docs")
-        .url("/api/v1/openapi.json", ApiDoc::openapi())
-        .into()
+/// Mounts `GET /api/v1/openapi.json`, the OpenAPI 3.1 document built once.
+pub fn router<S: Clone + Send + Sync + 'static>() -> axum::Router<S> {
+    let doc = ApiDoc::openapi();
+    axum::Router::new().route(
+        "/api/v1/openapi.json",
+        axum::routing::get(move || {
+            let doc = doc.clone();
+            async move { axum::Json(doc) }
+        }),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    /// The OpenAPI document is served at the platform-wide path, and no
+    /// browser UI is mounted: a bundled Swagger UI would fetch and unpack an
+    /// unverified archive at build time, so the service serves the document alone.
+    #[tokio::test]
+    async fn the_openapi_document_is_served_and_no_ui_is_mounted() {
+        let app: axum::Router = super::router();
+        let res = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get("/api/v1/openapi.json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), axum::http::StatusCode::OK);
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        let doc: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            doc["openapi"]
+                .as_str()
+                .is_some_and(|v| v.starts_with("3.1")),
+            "{doc}"
+        );
+        let ui = app
+            .oneshot(
+                axum::http::Request::get("/api/v1/docs/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ui.status(), axum::http::StatusCode::NOT_FOUND);
+    }
 }

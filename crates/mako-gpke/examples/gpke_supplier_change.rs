@@ -192,10 +192,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // "seen?" check would record the key before the workflow ran, so a failure
     // after it could never be retried: the retransmission carries the same key
     // and would be dismissed as a duplicate.
-    if inbox.claim(&key).await? != InboxClaim::Claimed {
+    let InboxClaim::Claimed(claim) = inbox.claim(&key).await? else {
         println!("  ✗ DUPLICATE — idempotency key: {key}");
         return Ok(());
-    }
+    };
     println!("  ✓ New message claimed — key: {key}");
 
     // Settled below, once the message has actually been handled. Claiming and
@@ -450,7 +450,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Settle it: the process above ran to completion, so the message is
     // handled and every later delivery of it is a replay.
-    inbox.accept(&key).await?;
+    inbox.accept(&key, claim).await?;
 
     println!("[+] Guard: AS4 retry duplicate is rejected by inbox...");
     assert_eq!(

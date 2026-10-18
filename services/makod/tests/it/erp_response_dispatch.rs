@@ -58,7 +58,7 @@ async fn make_state(marktrollen: &[&str]) -> makod::commands_api::CommandsApiSta
         malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store),
-        marktd_client: None, // M1 guard disabled in unit tests
+        marktd_client: None, // Konfigurationsprodukt guard disabled in unit tests
     }
 }
 

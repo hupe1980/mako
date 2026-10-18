@@ -33,8 +33,6 @@ Migration between them is one-way, at quarter boundaries, with ≥6 months' noti
 (the Spitz election is due 30.11.2028), and MaBiS Anlage 1 Kap. 17 was revoked
 **30.09.2026**, its survivors continuing as the Anlage zur BilAReM.
 
-
-
 The BilAReM domain layer spans three seams:
 
 - `mako_redispatch::bilarem` — `Bilanzierungsmodell`, `Abrechnungsverfahren`
@@ -118,7 +116,7 @@ Suppliers (LF) and metering-point operators (MSB) are **not** in scope for
 Redispatch 2.0. These are market-role abbreviations, not `Marktrolle` variants:
 VNB, ANB and ÜNB all deploy under the **NB Strom** role, and the enum has
 `Marktrolle::Nb` and `Marktrolle::Uenb` but no `Anb`
-(`services/makod/src/startup/mod.rs`).
+(`crates/mako-engine/src/marktrolle.rs`).
 
 ---
 
@@ -372,8 +370,8 @@ The chosen basis travels into the result and its calculation trace.
 
 ## Workflow overview
 
-The `mako-redispatch` crate provides 8 fully implemented workflows, all backed
-by the same `mako-engine` `Workflow` + `Process` infrastructure.
+The `mako-redispatch` crate provides eight workflows on the `mako-engine`
+`Workflow` + `Process` infrastructure.
 
 | Workflow | Document type | Direction | Key deadline |
 |---|---|---|---|
@@ -487,9 +485,10 @@ Both transport legs are wired end-to-end:
      (`ReceivingDocumentIdentification` → the process registered under the
      acknowledged document's MRID), never type-routed.
 
-   A parse/validation failure or unroutable document is rejected without an
-   AS4 receipt (the receipt would assert successful reception), so the
-   sender corrects and retransmits. The
+   A parse/validation failure or unroutable document is dead-lettered and
+   refused without an AS4 receipt (`EBMS:0004`, not retried — the receipt
+   would assert successful reception); the sender corrects it and resends
+   under a new `eb:MessageId`. The
    `redispatch_xml_pipeline` integration test in makod proves parse → kind
    → route for all nine document types.
 

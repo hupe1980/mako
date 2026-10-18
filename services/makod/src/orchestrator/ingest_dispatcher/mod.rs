@@ -786,7 +786,7 @@ impl EdifactIngestDispatcher {
             n if n.starts_with("mabis-") => self.dispatch_mabis(msg, n, pid).await,
             n if n.starts_with("emob-") => self.dispatch_emob(msg, n, pid).await,
             n if n.starts_with("redispatch-") => self.dispatch_redispatch(msg, n, pid).await,
-            // ── All other workflows: not yet in Phase 2 dispatch table ────────
+            // ── Any other workflow has no ingest arm ──────────────────────────
             wf_name => unknown_workflow_skip(wf_name, pid),
         }
     }

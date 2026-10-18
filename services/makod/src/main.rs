@@ -1,7 +1,7 @@
 //! `makod` — the Mako process engine daemon.
 //!
-//! Assembles the domain modules (GPKE, WiM, GeLi Gas, WiM Gas, MaBiS, GaBi Gas,
-//! Redispatch 2.0) into one [`EngineContext`], opens the configured transports,
+//! Assembles the domain modules (GPKE, WiM Strom and Gas, GeLi Gas, MaBiS, GaBi
+//! Gas, Redispatch 2.0) into one [`EngineContext`], opens the configured transports,
 //! and runs until a shutdown signal arrives.
 //!
 //! Which modules register is a runtime choice: `[deployment] rollen` in
@@ -69,8 +69,8 @@ use crate::orchestrator::{
     netzzugang, projection_worker,
 };
 use crate::transport::{
-    api_bridge, as4_sender, contrl_ack, malo_ident_sender, redispatch_xml_ingest,
-    verzeichnisdienst_worker,
+    api_bridge, as4_clients, as4_evidence, as4_ingest, as4_sender, contrl_ack, malo_ident_sender,
+    redispatch_xml_ingest, verzeichnisdienst_worker,
 };
 
 use std::sync::Arc;
@@ -431,183 +431,18 @@ struct Cli {
 
     /// TCP address on which the AS4 inbound transport listens.
     ///
-    /// When set, makod exposes `POST /as4/inbox` accepting BDEW EDIFACT
-    /// UserMessages delivered via AS4/ebMS3. This is the mandatory production
-    /// transport since 2024-04-01 (electricity) / 2025-04-01 (gas).
+    /// When set, makod serves `POST /as4/inbox/<MP-ID>` for every `[[party]]`,
+    /// accepting BDEW EDIFACT UserMessages delivered via AS4/ebMS3. This is the
+    /// mandatory production transport since 2024-04-01 (electricity) /
+    /// 2025-04-01 (gas).
     ///
-    /// Requires `--as4-signing-key-pem` and `--as4-signing-cert-pem`.
+    /// Requires `[party.as4]` key material for every `[[party]]`.
     ///
     /// Examples: `0.0.0.0:4080`, `127.0.0.1:4080`
     ///
     /// Can also be set via the `MAKOD_AS4_ADDR` environment variable.
     #[arg(long, value_name = "ADDR", env = "MAKOD_AS4_ADDR")]
     as4_addr: Option<std::net::SocketAddr>,
-
-    /// PEM-encoded EC (BrainpoolP256r1) private key used to sign outbound AS4
-    /// SOAP messages (WS-Security XML-DSig) and synchronous receipts.
-    ///
-    /// BDEW AS4-Profil v1.2 §2.2.6.2.2 mandates ECDSA over BrainpoolP256r1;
-    /// this is the signing half of the keypair, distinct from
-    /// `--as4-decryption-key-pem`. Required when `--as4-addr` is set.
-    ///
-    /// Prefer `as4.signing_key_pem_file` in `makod.toml`: a key passed as a
-    /// flag is visible in `ps` output, and one passed by environment variable
-    /// is visible to anything that can read the process environment.
-    ///
-    /// Can also be set via the `MAKOD_AS4_SIGNING_KEY_PEM` environment variable.
-    #[arg(
-        long,
-        value_name = "PEM",
-        env = "MAKOD_AS4_SIGNING_KEY_PEM",
-        hide_env_values = true,
-        value_parser = |s: &str| Ok::<SecretString, std::convert::Infallible>(SecretString::new(s.into())),
-    )]
-    as4_signing_key_pem: Option<SecretString>,
-
-    /// PEM-encoded X.509 certificate corresponding to `--as4-signing-key-pem`.
-    ///
-    /// Embedded in the WS-Security `<wsse:BinarySecurityToken>` so receiving
-    /// MSHs can verify the signature without out-of-band key exchange.
-    /// Required when `--as4-addr` is set.
-    ///
-    /// Can also be set via the `MAKOD_AS4_SIGNING_CERT_PEM` environment variable.
-    #[arg(long, value_name = "PEM", env = "MAKOD_AS4_SIGNING_CERT_PEM")]
-    as4_signing_cert_pem: Option<String>,
-
-    /// PEM-encoded X.509 CA certificate used as the AS4 WS-Security trust anchor.
-    ///
-    /// **Required for production.** Set this to the BDEW/BNetzA PKI Certificate
-    /// Authority certificate so that inbound AS4 messages from counterparties
-    /// (whose certs are issued by the BDEW CA) pass signature verification.
-    ///
-    /// When omitted, the operator's own signing certificate is used as the
-    /// trust anchor — this means ALL inbound messages from real BDEW participants
-    /// will be rejected, and a startup `error!` log is emitted.
-    ///
-    /// Download the BDEW PKI CA certificate from the BDEW Marktpartner portal.
-    ///
-    /// Can also be set via the `MAKOD_AS4_TRUST_ANCHOR_PEM` environment variable.
-    #[arg(long, value_name = "PEM", env = "MAKOD_AS4_TRUST_ANCHOR_PEM")]
-    as4_trust_anchor_pem: Option<String>,
-
-    /// BDEW party ID (Marktpartner-ID) of this operator's AS4 Message Service Handler.
-    ///
-    /// Used as the `<eb:PartyId>` in generated AS4 signal messages (receipts,
-    /// errors). Defaults to the primary `[[party]]` MP-ID when omitted.
-    ///
-    /// Can also be set via the `MAKOD_AS4_PARTY_ID` environment variable.
-    #[arg(long, value_name = "MP_ID", env = "MAKOD_AS4_PARTY_ID")]
-    as4_party_id: Option<String>,
-
-    /// PEM-encoded ECDSA private key for AS4 inbound **decryption** (own encryption identity).
-    ///
-    /// This is the operator's own EC (BrainpoolP256r1) private key corresponding to
-    /// the encryption certificate published to BDEW trading partners. Trading partners
-    /// use the public key from this certificate to encrypt outbound AS4 messages.
-    /// Provide this key to decrypt inbound AS4 messages.
-    ///
-    /// Separate from `--as4-signing-key-pem`: BDEW requires distinct keypairs for
-    /// signing (ECDSA) and encryption (ECDH-ES), both using BrainpoolP256r1.
-    ///
-    /// Can also be set via the `MAKOD_AS4_DECRYPTION_KEY_PEM` environment variable.
-    #[arg(
-        long,
-        value_name = "PEM",
-        env = "MAKOD_AS4_DECRYPTION_KEY_PEM",
-        hide_env_values = true,
-        value_parser = |s: &str| Ok::<SecretString, std::convert::Infallible>(SecretString::new(s.into())),
-    )]
-    as4_decryption_key_pem: Option<SecretString>,
-
-    /// Register a trading-partner encryption certificate for outbound AS4 encryption.
-    ///
-    /// Format: `<MP-ID>=<PEM>` where PEM is the partner's X.509 encryption certificate
-    /// (not their signing certificate — BDEW uses separate keypairs for each).
-    ///
-    /// Repeat the flag to register multiple partners. Required for every partner
-    /// when `security.encrypt = true` (which is the BDEW-compliant default).
-    ///
-    /// BDEW AS4-Profil v1.2 §2.2.6.2.2: the recipient's encryption certificate
-    /// (BrainpoolP256r1) is used for ECDH-ES key agreement.
-    ///
-    /// Can also be set via the `MAKOD_AS4_PARTNER_CERT` environment variable
-    /// (comma-separated for multiple entries).
-    #[arg(
-        long,
-        value_name = "MP_ID=PEM",
-        env = "MAKOD_AS4_PARTNER_CERT",
-        value_delimiter = ','
-    )]
-    as4_partner_cert: Vec<String>,
-
-    /// Trading-partner **signing** certificates as `MP-ID=<PEM>` pairs.
-    ///
-    /// What inbound AS4 messages are authenticated against. The BDEW/DVGW PKI
-    /// issues a certificate to every market participant, so chaining to the
-    /// trust anchor proves the signer is *a* participant; this pins *which*,
-    /// per MP-ID. A message claiming an MP-ID with no pin is refused.
-    ///
-    /// Can also be set via the `MAKOD_AS4_PARTNER_SIGNING_CERT` environment
-    /// variable (comma-separated for multiple entries).
-    #[arg(
-        long,
-        value_name = "MP_ID=PEM",
-        env = "MAKOD_AS4_PARTNER_SIGNING_CERT",
-        value_delimiter = ','
-    )]
-    as4_partner_signing_cert: Vec<String>,
-
-    /// PEM chain of the WIRK **TLS** certificate, presented to a partner MSH.
-    ///
-    /// The transport credential of the BDEW triplet — distinct from the signing
-    /// certificate, which authenticates the message rather than the connection.
-    /// Optional: an egress proxy may present it instead.
-    #[arg(long, env = "MAKOD_AS4_CLIENT_TLS_CERT_PEM")]
-    as4_client_tls_cert_pem: Option<String>,
-
-    /// PEM private key for `--as4-client-tls-cert-pem`.
-    #[arg(long, env = "MAKOD_AS4_CLIENT_TLS_KEY_PEM")]
-    as4_client_tls_key_pem: Option<SecretString>,
-
-    /// DEV/TEST ONLY: allow AS4 operation without encryption material.
-    ///
-    /// BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every production AS4 message
-    /// to be encrypted. Without this flag, `makod` refuses to start when AS4
-    /// is active but the inbound decryption key (`--as4-decryption-key-pem`)
-    /// is missing, or when a registered AS4 partner has no encryption
-    /// certificate (`--as4-partner-cert`).
-    ///
-    /// Setting this flag downgrades both refusals to warnings. Never set it
-    /// against the regulated market — messages would flow unencrypted.
-    #[arg(long, env = "MAKOD_ALLOW_UNENCRYPTED_AS4")]
-    allow_unencrypted_as4: bool,
-
-    /// DEV/TEST ONLY: run the AS4 listener without a counterparty trust anchor.
-    ///
-    /// Counterparty signing certificates are issued by the BDEW/BNetzA PKI, so
-    /// verifying them needs that CA certificate in
-    /// `--as4-trust-anchor-pem`. Without one the session falls back to the
-    /// operator's own signing certificate as its only trust anchor, which
-    /// accepts exactly one signer — ourselves — and rejects **every** inbound
-    /// message from every partner.
-    ///
-    /// That is a total inbound outage that looks like a healthy daemon, so it
-    /// is a startup refusal rather than a log line. Set this flag for a
-    /// loopback or single-operator test where both ends share one certificate.
-    #[arg(long, env = "MAKOD_ALLOW_NO_AS4_TRUST_ANCHOR")]
-    allow_no_as4_trust_anchor: bool,
-
-    /// INTEROP DEBUGGING ONLY: treat a missing or mismatched synchronous
-    /// `eb:Receipt` as a warning instead of a delivery failure.
-    ///
-    /// The BDEW MaKo AS4 MEP requires the receiver to return a synchronous
-    /// `eb:Receipt` on the same HTTP connection. By default `makod` only
-    /// acknowledges an outbox entry after that receipt is verified to
-    /// reference the sent message id — an unverified delivery is retried and
-    /// eventually dead-lettered. This flag downgrades the check to a warning
-    /// for sessions against non-conformant counterparties.
-    #[arg(long, env = "MAKOD_AS4_LENIENT_RECEIPTS")]
-    as4_lenient_receipts: bool,
 
     /// Disable authentication on the `:8090` API-Webdienste port.
     ///
@@ -681,29 +516,6 @@ struct Cli {
     /// failure from.
     #[arg(long, env = "MAKOD_ALLOW_UNAUTHENTICATED_WEBDIENSTE_CLIENT")]
     allow_unauthenticated_webdienste_client: bool,
-
-    /// Register a trading-partner AS4 endpoint for outbound EDIFACT delivery.
-    ///
-    /// Format: `<MP-ID>=<HTTPS-URL>` (e.g.
-    /// `9900000000001=https://partner.example/as4/inbox`).
-    ///
-    /// Repeat the flag to register multiple partners.  Messages destined for
-    /// an unregistered MP-ID are rescheduled with exponential backoff until a
-    /// matching entry is added and the process is restarted.
-    ///
-    /// Required to deliver APERAK, CONTRL, and other EDIFACT messages via AS4.
-    /// Has no effect if `--as4-signing-key-pem` and `--as4-signing-cert-pem`
-    /// are not provided.
-    ///
-    /// Can also be set via the `MAKOD_AS4_PARTNER` environment variable
-    /// (comma-separated pairs for multiple entries).
-    #[arg(
-        long,
-        value_name = "MP_ID=URL",
-        env = "MAKOD_AS4_PARTNER",
-        value_delimiter = ','
-    )]
-    as4_partner: Vec<String>,
 
     /// Register a trading-partner callback URL for the MaLo Identification API.
     ///
@@ -1001,6 +813,16 @@ struct Cli {
     #[arg(skip)]
     rollen: Vec<deployment::Rolle>,
 
+    /// `[as4]` loaded from `makod.toml`: the trust anchor, the CRL signer, the
+    /// message-id domain and the `[[as4.partner]]` table. Key material is
+    /// `[party.as4]`; there is no flag for either.
+    #[arg(skip)]
+    as4: config::As4Config,
+
+    /// `[policy]` loaded from `makod.toml`.
+    #[arg(skip)]
+    policy: config::MakodPolicy,
+
     /// Subcommand to run instead of the daemon.
     #[command(subcommand)]
     command: Option<CliCommand>,
@@ -1126,6 +948,12 @@ fn main() -> anyhow::Result<()> {
         let cfg = config::load(path)?;
         apply_config_file(cfg, &matches, &mut cli)?;
     }
+    // The removed switch, set through the environment, is refused like the
+    // removed config key rather than ignored.
+    anyhow::ensure!(
+        std::env::var_os("MAKOD_AS4_LENIENT_RECEIPTS").is_none(),
+        config::LENIENT_RECEIPTS_REMOVED
+    );
 
     // Build the Tokio runtime explicitly so the thread count is controllable
     // via `--worker-threads` / `MAKOD_WORKER_THREADS`. Defaulting to
@@ -1312,6 +1140,10 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         .context("loading Cedar policy files from --cedar-policy-dir")?;
     let preflight_input = preflight::PreflightInput {
         primary_mp_id: mp_id_registry.primary_mp_id(),
+        parties: &cli.parties,
+        registry: &mp_id_registry,
+        as4: &cli.as4,
+        policy: &cli.policy,
         as4_inbound_enabled: cli.as4_addr.is_some(),
         http_enabled: cli.http_addr.is_some(),
         webdienste_enabled: cli.api_webdienste_addr.is_some(),
@@ -1320,16 +1152,6 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             && cli.webdienste_client_key_pem.is_some(),
         allow_unauthenticated_webdienste_client: cli.allow_unauthenticated_webdienste_client,
         webdienste_signing_key: cli.webdienste_signing_key_pem.is_some(),
-        as4_partner: &cli.as4_partner,
-        as4_partner_cert: &cli.as4_partner_cert,
-        as4_partner_signing_cert: &cli.as4_partner_signing_cert,
-        as4_signing_key_pem: cli.as4_signing_key_pem.as_ref(),
-        as4_signing_cert_pem: cli.as4_signing_cert_pem.as_deref(),
-        as4_trust_anchor_pem: cli.as4_trust_anchor_pem.as_deref(),
-        as4_decryption_key_pem: cli.as4_decryption_key_pem.as_ref(),
-        as4_party_id: cli.as4_party_id.as_deref(),
-        allow_unencrypted_as4: cli.allow_unencrypted_as4,
-        allow_no_as4_trust_anchor: cli.allow_no_as4_trust_anchor,
         allow_no_as4_signing: cli.allow_no_as4_signing,
         edifact_outbox_webhook_url: cli.edifact_outbox_webhook_url.as_deref(),
         erp_webhook_secret_set: cli
@@ -1378,7 +1200,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // reads, so a pipeline can point `--check` at a live data directory.
     if cli.check {
         info!(
-            as4_partners = checked.as4_profile.registry().len(),
+            as4_partners = checked.as4.as_ref().map_or(0, |c| c.partners().len()),
             maloid_partners = checked.maloid_partners.len(),
             "check mode: all startup validations passed"
         );
@@ -1441,7 +1263,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // ── marktd client ─────────────────────────────────────────────────────────
     //
     // Optional: gates inbound ESA messages against the consent registry and
-    // backs the M1 Konfigurationsprodukt guard. Shared by the ingest dispatcher
+    // backs the Konfigurationsprodukt guard. Shared by the ingest dispatcher
     // and the commands API.
     let marktd_client = cli.marktd_url.as_ref().map(|url| {
         Arc::new(mako_markt::marktd_client::MarktdClient::new(
@@ -1553,33 +1375,6 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         }
     };
 
-    // The WIRK TLS identity for the AS4 send path, parsed here so a mismatched
-    // certificate/key pair fails at the point it is configured rather than on
-    // the first delivery to a partner. Both halves or neither: a certificate
-    // without its key cannot be presented, and silently ignoring one of them
-    // would make an incomplete configuration look like a deliberate absence.
-    let as4_client_identity = match (
-        cli.as4_client_tls_cert_pem.as_deref(),
-        cli.as4_client_tls_key_pem.as_ref(),
-    ) {
-        (Some(cert), Some(key)) => Some(
-            asx_rs::transport::ClientIdentity::from_pem(
-                cert.as_bytes(),
-                secrecy::ExposeSecret::expose_secret(key).as_bytes(),
-            )
-            .map_err(|e| anyhow::anyhow!("AS4 client TLS identity is unusable: {e}"))?,
-        ),
-        (None, None) => None,
-        (Some(_), None) => anyhow::bail!(
-            "--as4-client-tls-cert-pem is set but --as4-client-tls-key-pem is not: a \
-             certificate without its private key cannot be presented"
-        ),
-        (None, Some(_)) => anyhow::bail!(
-            "--as4-client-tls-key-pem is set but --as4-client-tls-cert-pem is not: a key \
-             without its certificate chain cannot be presented"
-        ),
-    };
-
     // ── Build Cedar authorizer (shared by :8080 REST, /mcp, and :8090) ───────
     //
     // The keys, the policy text and the baseline choice were validated by the
@@ -1615,6 +1410,15 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("{e}"))?,
     );
 
+    // The `[[as4.partner]]` endpoints seed the durable partner store, as
+    // `MP-ID=URL` pairs.
+    let as4_partner_endpoints: Vec<String> = cli
+        .as4
+        .partner
+        .iter()
+        .filter_map(|p| p.endpoint.as_ref().map(|e| format!("{}={e}", p.mp_id)))
+        .collect();
+
     let server_deps = startup::servers::ServerDeps {
         store: store.clone(),
         pid_router: ctx.pid_router().clone(),
@@ -1641,7 +1445,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
                     malo_cache: Arc::clone(&malo_cache),
                     marktd_client: marktd_client.clone(),
                     malo_sync: malo_sync.clone(),
-                    as4_partner: &cli.as4_partner,
+                    as4_partner: &as4_partner_endpoints,
                     volatile_mode: cli.data_dir.is_none() && cli.allow_volatile,
                 },
             )
@@ -1658,29 +1462,20 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // ── Optional: AS4 inbound transport (--as4-addr) ──────────────────────────
     //
     // The mandatory production transport for BDEW EDIFACT since 2024-04-01
-    // (electricity) / 2025-04-01 (gas). The signing material, decryption key and
-    // trust anchor were all proven usable by the preflight; the `expect`s below
-    // restate that invariant rather than re-checking it.
+    // (electricity) / 2025-04-01 (gas). The preflight built every client
+    // (`As4::builder(..).build()`); the `expect` below restates that invariant
+    // rather than re-checking it.
     if let Some(addr) = cli.as4_addr {
         server_handles.push(
             startup::servers::serve_as4(
                 &server_deps,
                 startup::servers::As4ServerConfig {
                     addr,
-                    party_id: checked.as4_party_id.clone(),
-                    signing_key_pem: cli
-                        .as4_signing_key_pem
+                    clients: checked
+                        .as4
                         .clone()
-                        .expect("preflight requires signing key material when --as4-addr is set"),
-                    signing_cert_pem: cli
-                        .as4_signing_cert_pem
-                        .clone()
-                        .expect("preflight requires a signing certificate when --as4-addr is set"),
-                    trust_anchor_pem: cli.as4_trust_anchor_pem.clone(),
-                    decryption_key_pem: cli.as4_decryption_key_pem.clone(),
-                    sender_signing_certs: checked.as4_sender_signing_certs.clone(),
+                        .expect("preflight requires AS4 clients when --as4-addr is set"),
                     inbox_store,
-                    dedup_is_durable: cli.data_dir.is_some(),
                 },
             )
             .await?,
@@ -1725,15 +1520,10 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         http_client,
         webdienste_client,
         webdienste_signing,
-        as4_client_identity,
         malo_cache: Arc::clone(&malo_cache),
         shutdown_token: shutdown_token.clone(),
         mp_id_registry: Arc::clone(&mp_id_registry),
         checked,
-        as4_signing_key_pem: cli.as4_signing_key_pem.clone(),
-        as4_signing_cert_pem: cli.as4_signing_cert_pem.clone(),
-        as4_trust_anchor_pem: cli.as4_trust_anchor_pem.clone(),
-        as4_lenient_receipts: cli.as4_lenient_receipts,
         dead_letter_sink: dl_sink_workers,
         erp_webhook_url: cli.erp_webhook_url.clone(),
         erp_webhook_secret: cli.erp_webhook_secret.clone(),
@@ -1930,7 +1720,7 @@ fn apply_config_file(
     cli: &mut Cli,
 ) -> anyhow::Result<()> {
     use clap::{ValueEnum, parser::ValueSource};
-    use config::{either_inline_or_file, read_keyed_files, read_pairs_file};
+    use config::{either_inline_or_file, read_pairs_file};
 
     // True iff the named arg got its value purely from the built-in default
     // (i.e. the user did not pass it on the CLI or via an env var).
@@ -2160,94 +1950,27 @@ fn apply_config_file(
     }
 
     // ── AS4 ───────────────────────────────────────────────────────────────────
+    //
+    // `[as4]` is applied wholesale (`cli.as4 = as4`) apart from the listen
+    // address, which has a flag; the trust settings and the partner table are
+    // TOML-only, like the `[party.as4]` key material.
     if let Some(as4) = cfg.as4 {
+        if as4.lenient_receipts.is_some() {
+            anyhow::bail!(config::LENIENT_RECEIPTS_REMOVED);
+        }
         if cli.as4_addr.is_none() {
             cli.as4_addr = as4.addr;
-        }
-        if cli.as4_party_id.is_none() {
-            cli.as4_party_id = as4.party_id;
-        }
-        if cli.as4_signing_key_pem.is_none()
-            && let Some(pem) = either_inline_or_file(
-                "as4.signing_key_pem",
-                as4.signing_key_pem,
-                as4.signing_key_pem_file.as_ref(),
-            )?
-        {
-            cli.as4_signing_key_pem = Some(SecretString::new(pem.into()));
-        }
-        if cli.as4_signing_cert_pem.is_none() {
-            cli.as4_signing_cert_pem = either_inline_or_file(
-                "as4.signing_cert_pem",
-                as4.signing_cert_pem,
-                as4.signing_cert_pem_file.as_ref(),
-            )?;
-        }
-        if cli.as4_decryption_key_pem.is_none()
-            && let Some(pem) = either_inline_or_file(
-                "as4.decryption_key_pem",
-                as4.decryption_key_pem,
-                as4.decryption_key_pem_file.as_ref(),
-            )?
-        {
-            cli.as4_decryption_key_pem = Some(SecretString::new(pem.into()));
-        }
-        if cli.as4_trust_anchor_pem.is_none() {
-            cli.as4_trust_anchor_pem = either_inline_or_file(
-                "as4.trust_anchor_pem",
-                as4.trust_anchor_pem,
-                as4.trust_anchor_pem_file.as_ref(),
-            )?;
-        }
-        // CLI partners take full precedence; config partners are used only
-        // when the CLI list is empty (no --as4-partner flags were passed).
-        if cli.as4_partner.is_empty()
-            && let Some(partners) = as4.partners
-        {
-            cli.as4_partner = partners;
-        }
-        if cli.as4_partner_cert.is_empty() {
-            let mut certs = as4.partner_certs.unwrap_or_default();
-            if let Some(ref files) = as4.partner_cert_files {
-                certs.extend(read_keyed_files("as4.partner_cert_files", files)?);
-            }
-            cli.as4_partner_cert = certs;
-        }
-        if cli.as4_client_tls_cert_pem.is_none() {
-            cli.as4_client_tls_cert_pem = either_inline_or_file(
-                "as4.client_tls_cert_pem",
-                as4.client_tls_cert_pem,
-                as4.client_tls_cert_pem_file.as_ref(),
-            )?;
-        }
-        if cli.as4_client_tls_key_pem.is_none() {
-            cli.as4_client_tls_key_pem = either_inline_or_file(
-                "as4.client_tls_key_pem",
-                as4.client_tls_key_pem,
-                as4.client_tls_key_pem_file.as_ref(),
-            )?
-            .map(SecretString::from);
-        }
-        if cli.as4_partner_signing_cert.is_empty() {
-            let mut certs = as4.partner_signing_certs.unwrap_or_default();
-            if let Some(ref files) = as4.partner_signing_cert_files {
-                certs.extend(read_keyed_files("as4.partner_signing_cert_files", files)?);
-            }
-            cli.as4_partner_signing_cert = certs;
-        }
-        if as4.allow_unencrypted {
-            cli.allow_unencrypted_as4 = true;
         }
         if as4.allow_no_signing {
             cli.allow_no_as4_signing = true;
         }
-        if as4.allow_no_trust_anchor {
-            cli.allow_no_as4_trust_anchor = true;
-        }
-        if as4.lenient_receipts {
-            cli.as4_lenient_receipts = true;
-        }
+        // Read wholesale below: message_id_domain, trust_anchor_pem_file,
+        // crl_signer_pem_file, partner.
+        cli.as4 = as4;
     }
+
+    // ── [policy] ──────────────────────────────────────────────────────────────
+    cli.policy = cfg.policy;
 
     // ── ERP ───────────────────────────────────────────────────────────────────
     if let Some(erp) = cfg.erp {
@@ -2735,7 +2458,30 @@ mod config_surface_tests {
 
         // `[[party]]` is applied wholesale (`cli.parties = parties`) rather than
         // field by field, so its members never appear by name.
-        const APPLIED_WHOLESALE: &[&str] = &["mp_id", "roles", "primary", "agency"];
+        // `[as4]`, `[[as4.partner]]`, `[party.as4]` and `[policy]` likewise
+        // (`cli.as4 = as4`, `cli.policy`), and are read by `as4_clients`.
+        const APPLIED_WHOLESALE: &[&str] = &[
+            "mp_id",
+            "roles",
+            "primary",
+            "agency",
+            "as4",
+            "message_id_domain",
+            "trust_anchor_pem_file",
+            "crl_signer_pem_file",
+            "partner",
+            "endpoint",
+            "encryption_cert_pem_file",
+            "signing_cert_pem_files",
+            "quirks",
+            "signing_cert_pem_file",
+            "signing_key_pem_file",
+            "encryption_key_pem_file",
+            "tls_cert_pem_file",
+            "tls_key_pem_file",
+            "policy",
+            "unbekannte_absender",
+        ];
 
         let merge_body = MAIN_SOURCE
             .split_once("fn apply_config_file(")
@@ -2810,6 +2556,8 @@ mod config_surface_tests {
             // Populated from the file's `[deployment]` section, not from a flag.
             "rollen",
         ];
+        // `as4` and `policy` are read in apply_config_file as `cli.as4` /
+        // `cli.policy`, so they pass the scan below like any flag.
 
         let struct_body = SOURCE
             .split_once("struct Cli {")

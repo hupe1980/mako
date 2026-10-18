@@ -64,8 +64,8 @@ pub use crate::orchestrator::{
     netzzugang, projection_worker,
 };
 pub use crate::transport::{
-    api_bridge, as4_ingest, as4_sender, contrl_ack, malo_ident_sender, redispatch_xml_ingest,
-    verzeichnisdienst_worker, webdienste,
+    api_bridge, as4_clients, as4_evidence, as4_ingest, as4_sender, contrl_ack, malo_ident_sender,
+    redispatch_xml_ingest, verzeichnisdienst_worker, webdienste,
 };
 
 // startup symbols (MakodCtx, WorkersConfig, spawn_workers, validate_adapter_coverage)
