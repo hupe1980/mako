@@ -1,66 +1,21 @@
 +++
 title = "License Governance"
-description = "License governance for the mako workspace. SPDX identifiers allowed in deny.toml and rationale for each decision."
+description = "License governance for the mako workspace: where the allow list lives, how a licence is added, and which licences are never acceptable."
 weight = 50
 +++
-The rationale for every SPDX licence identifier allowed in `deny.toml`.
-
----
-
-## Standard Allowed Licences
-
-Approved for all direct and transitive dependencies without further review.
-
-| SPDX Identifier | Notes |
-|---|---|
-| `MIT` | Permissive; attribution only. |
-| `Apache-2.0` | Permissive; includes patent grant. |
-| `Apache-2.0 WITH LLVM-exception` | Apache-2.0 with an explicit LLVM linking exception. |
-| `BSD-2-Clause` | Permissive; attribution only. |
-| `BSD-3-Clause` | Permissive; attribution + non-endorsement clause. |
-| `ISC` | Functionally equivalent to MIT/BSD-2-Clause. |
-| `Unicode-3.0` | Unicode data files (ICU, Unicode tables). |
-| `Zlib` | Permissive; commonly used in compression crates. |
-| `CDLA-Permissive-2.0` | Community Data Licence Agreement (permissive variant). No copyleft conditions. |
-| `MIT-0` | MIT without attribution requirement. More permissive than MIT. |
-| `bzip2-1.0.6` | bzip2 compression library licence — BSD-like, no restrictions. |
-| `CC0-1.0` | Creative Commons Zero — public-domain dedication, no conditions. |
-
----
-
-## Licences Requiring Governance Review
-
-Each entry records the decision and the transitive path that introduced the licence.
-
-### `0BSD` — Zero-Clause BSD
-
-**Status:** Approved  
-**Approval owner:** project maintainer (see deny.toml commit)
-
-**Rationale:** public-domain-equivalent — unrestricted use, modification and
-distribution, no attribution requirement.
-
-**Transitive path:** `mailparse` → `quoted_printable` (via `asx-rs`).
-
-**Risk assessment:** None. The licence imposes no obligations. It is on the
-[SPDX approved list](https://spdx.org/licenses/0BSD.html) and is OSI-approved.
-
----
+The licences this workspace may depend on are the `[licenses] allow` list in
+[`deny.toml`](https://github.com/hupe1980/mako/blob/main/deny.toml), and
+`cargo deny` refuses any dependency outside it — in `just ci` and in the release.
+Every identifier beyond the plain permissive ones carries its reason and the
+transitive crate that introduced it as a comment beside it.
 
 ## Review Process
 
-When a new non-standard licence needs to be added to `deny.toml`:
+When a new licence needs to be allowed:
 
-1. Add it to `deny.toml` with a `# reason:` comment identifying the transitive crate.
-2. Add an entry to the **Licences Requiring Governance Review** table above with:
-   - SPDX identifier
-   - Approval status and date
-   - Approval owner
-   - Rationale (< 3 sentences)
-   - Transitive dependency path
-   - Risk assessment
-3. Commit both files together: `cargo xtask check-licenses` fails the build when
-   this page and `deny.toml` disagree in either direction.
+1. Add it to `deny.toml`'s `allow` list with a comment naming the transitive
+   crate that introduced it and why the licence is acceptable.
+2. Have the project maintainer approve it in the pull request that adds it.
 
 **A note on copyleft strength.** *File-level* weak copyleft (`MPL-2.0`)
 constrains only modifications to the licensed files themselves, so it is

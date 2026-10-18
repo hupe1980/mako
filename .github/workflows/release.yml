@@ -142,16 +142,19 @@ jobs:
       - name: Run every guard and record its exit status
         run: |
           set -uo pipefail
-          mkdir -p guards
+          # Outside the checkout: the guards scan the tree, so a log written
+          # into it is read by the next guard as source.
+          guards="$RUNNER_TEMP/guards"
+          mkdir -p "$guards"
           recipes=$(cargo xtask evidence-pack --xtask-recipes)
           test -n "$recipes" || { echo "::error::no xtask recipe found in the justfile's _ci"; exit 1; }
           failed=""
           for recipe in $recipes; do
-            just "$recipe" > "guards/${recipe}.log" 2>&1 && code=0 || code=$?
-            echo "$code" > "guards/${recipe}.exit"
+            just "$recipe" > "$guards/${recipe}.log" 2>&1 && code=0 || code=$?
+            echo "$code" > "$guards/${recipe}.exit"
             echo "${recipe}: exit ${code}"
             if [ "$code" -ne 0 ]; then
-              tail -40 "guards/${recipe}.log"
+              tail -40 "$guards/${recipe}.log"
               failed="$failed $recipe"
             fi
           done
@@ -163,7 +166,7 @@ jobs:
         if: always()
         with:
           name: guard-verdicts
-          path: guards
+          path: ${{ runner.temp }}/guards
           if-no-files-found: error
       - name: Released images, from docker-bake.hcl
         id: services

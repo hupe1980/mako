@@ -230,21 +230,21 @@ Pass 5  Cancellation sign reversal   (Stornorechnung)
 
 ### External crates.io dependencies
 
-| Crate | Version | Purpose |
-|---|---|---|
-| [`billing`](https://crates.io/crates/billing) | `0.16` | Generic billing engine — fixed-point `Amount`, `Tariff`/`Tiers` pricing, a `Document` whose EN 16931 totals are derived once from its lines, exact largest-remainder `split` |
-| [`en16931`](https://crates.io/crates/en16931) | `0.8` | EN 16931 semantic invoice model, business-rule validation and the invoice header and code lists `billing` does not carry |
-| [`en16931-formats`](https://crates.io/crates/en16931-formats) | `0.8` | EN 16931 syntaxes — `write` of a validated invoice, `write_unchecked`, `read` of CII/UBL/ZUGFeRD with a typed entry for everything not mapped, and the ZUGFeRD reader |
-| [`sepa`](https://crates.io/crates/sepa) | `0.9` | IBAN/BIC validation, pain.001/008/007 generation, camt.05x and pain.002 parsing |
-| [`metering`](https://crates.io/crates/metering) | `0.25` | German energy metering quantities over a validated `Series` — validation and Ersatzwertbildung (`vee`), aggregation and resampling, the UTILTS Berechnungsformel and the § 42b/§ 42c community allocation, session splits, gas conversion |
-| [`meterstore`](https://crates.io/crates/meterstore) | `0.15` | Metering time-series store beneath `edmd` — hot PostgreSQL window over TLS (`verify-full` unless the URL names a `sslmode`), settled Iceberg V2 history, version resolution, the delivery and provenance types |
-| [`doubleentry`](https://crates.io/crates/doubleentry) | `0.7` | Double-entry ledger — append-only BLAKE3 Merkle log, inclusion and consistency proofs, period seals |
-| [`rubo4e`](https://crates.io/crates/rubo4e) | `0.14` | BO4E business-object types — the `rubo4e::current` versioned schema with validation |
-| [`agentplane`](https://crates.io/crates/agentplane) | `0.47` | Durable agent runtime behind `agentd` — journaled effects, typed manifests, human triage |
-| [`asx-rs`](https://crates.io/crates/asx-rs) | `0.16.2` | AS4/ebMS3 — `Profile::bdew()` fixes BDEW AS4-Profil 1.2's security and wire settings; one client per MP-ID, the `Inbound` service, token-fenced `DedupStore`, verified receipts |
-| [`edifact-rs`](https://crates.io/crates/edifact-rs) | `~0.18` | EDIFACT syntax layer beneath `edi-energy` — parse, serialise, directory validation, recovering scan for CONTRL fault locations |
+| Crate | Purpose |
+|---|---|
+| [`billing`](https://crates.io/crates/billing) | Generic billing engine — fixed-point `Amount`, `Tariff`/`Tiers` pricing, a `Document` whose EN 16931 totals are derived once from its lines, exact largest-remainder `split` |
+| [`en16931`](https://crates.io/crates/en16931) | EN 16931 semantic invoice model, business-rule validation and the invoice header and code lists `billing` does not carry |
+| [`en16931-formats`](https://crates.io/crates/en16931-formats) | EN 16931 syntaxes — `write` of a validated invoice, `write_unchecked`, `read` of CII/UBL/ZUGFeRD with a typed entry for everything not mapped, and the ZUGFeRD reader |
+| [`sepa`](https://crates.io/crates/sepa) | IBAN/BIC validation, pain.001/008/007 generation, camt.05x and pain.002 parsing |
+| [`metering`](https://crates.io/crates/metering) | German energy metering quantities over a validated `Series` — validation and Ersatzwertbildung (`vee`), aggregation and resampling, the UTILTS Berechnungsformel and the § 42b/§ 42c community allocation, session splits, gas conversion |
+| [`meterstore`](https://crates.io/crates/meterstore) | Metering time-series store beneath `edmd` — hot PostgreSQL window over TLS (`verify-full` unless the URL names a `sslmode`), settled Iceberg V2 history, version resolution, the delivery and provenance types |
+| [`doubleentry`](https://crates.io/crates/doubleentry) | Double-entry ledger — append-only BLAKE3 Merkle log, inclusion and consistency proofs, period seals |
+| [`rubo4e`](https://crates.io/crates/rubo4e) | BO4E business-object types — the `rubo4e::current` versioned schema with validation |
+| [`agentplane`](https://crates.io/crates/agentplane) | Durable agent runtime behind `agentd` — journaled effects, typed manifests, human triage |
+| [`asx-rs`](https://crates.io/crates/asx-rs) | AS4/ebMS3 — `Profile::bdew()` fixes BDEW AS4-Profil 1.2's security and wire settings; one client per MP-ID, the `Inbound` service, token-fenced `DedupStore`, verified receipts |
+| [`edifact-rs`](https://crates.io/crates/edifact-rs) | EDIFACT syntax layer beneath `edi-energy` — parse, serialise, directory validation, recovering scan for CONTRL fault locations |
 
-`cargo xtask check-dep-versions` holds this table to the manifests.
+The pinned versions are in the root `Cargo.toml`.
 
 ---
 

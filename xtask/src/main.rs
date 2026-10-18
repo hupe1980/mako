@@ -94,7 +94,6 @@ Commands:
   check-pid-coverage     Compare the shipped AHB profiles against the published
                         Prüfidentifikator inventory (no source documents needed)
   import-pid-overview    Extract that inventory from the BDEW Anwendungsübersicht .xlsx
-  check-dep-versions     Documented dependency versions must match the manifests
   check-action-pins      Every `uses:` pinned to a commit SHA with its tag in a comment, every
                         Dockerfile `FROM` to a digest, every workflow defaulting to `contents: read`,
                         every pip install hash-pinned and every npm install an `npm ci`
@@ -103,7 +102,6 @@ Commands:
   check-ci-guards        Every `just ci` recipe that is one xtask call is run by a ci.yml job
   evidence-pack          Assemble (--inputs <dir> --out <file>) or verify (--check <file>) the
                         release evidence pack; a section without its input reads `not measured`
-  check-licenses         The licence governance page must state deny.toml's allow list
   check-wire-timestamps  Refuse raw `time` values in JSON output (they serialise as component arrays)
                         under axum 0.8 (the fix is `/{param}`)
   check-answer-commands  Refuse an invoicd PID route naming a makod command that does not exist
@@ -151,13 +149,11 @@ mod check_command_constructors;
 mod check_controls_consulted;
 mod check_crate_lints;
 mod check_db_suites;
-mod check_dep_versions;
 mod check_error_tuples;
 mod check_event_payloads;
 mod check_expected_tenant;
 mod check_frist_literals;
 mod check_known_wrong;
-mod check_licenses;
 mod check_malo_ids;
 mod check_occupancy;
 mod check_outbox_notify;
@@ -234,7 +230,6 @@ fn main() {
         Some("check-rounding") => check_rounding(),
         Some("check-pid-coverage") => check_pid_coverage(),
         Some("import-pid-overview") => import_pid_overview(),
-        Some("check-dep-versions") => check_dep_versions(),
         Some("dep-age") => {
             let (root, _) = workspace_info();
             let args: Vec<String> = std::env::args().skip(2).collect();
@@ -246,7 +241,6 @@ fn main() {
         Some("check-ci-guards") => root_task(check_ci_guards::run),
         Some("check-vex") => root_task(check_vex::run),
         Some("evidence-pack") => evidence_pack(),
-        Some("check-licenses") => check_licenses(),
         Some("check-wire-timestamps") => check_wire_timestamps(),
         Some("check-outbox-notify") => check_outbox_notify(),
         Some("check-atomic-spawn") => check_atomic_spawn(),
@@ -580,13 +574,6 @@ fn import_pid_overview() {
     }
 }
 
-fn check_dep_versions() {
-    let (workspace_root, _) = workspace_info();
-    if !check_dep_versions::run(std::path::Path::new(&workspace_root)) {
-        std::process::exit(1);
-    }
-}
-
 fn root_task(guard: fn(&std::path::Path) -> bool) {
     let (workspace_root, _) = workspace_info();
     if !guard(std::path::Path::new(&workspace_root)) {
@@ -598,13 +585,6 @@ fn evidence_pack() {
     let (workspace_root, _) = workspace_info();
     let args: Vec<String> = std::env::args().skip(2).collect();
     if !evidence_pack::run(std::path::Path::new(&workspace_root), &args) {
-        std::process::exit(1);
-    }
-}
-
-fn check_licenses() {
-    let (workspace_root, _) = workspace_info();
-    if !check_licenses::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

@@ -3,9 +3,8 @@
 //!
 //! A report, not a failure: a pin behind the registry is often a decision (an
 //! upgrade waiting on a migration), and `just ci` must not need the network.
-//! `check-dep-versions` holds the documentation to the manifests; this holds
-//! the manifests up against the registry, so a reader planning an upgrade sees
-//! which pins are behind and by how much.
+//! It holds the manifests up against the registry, so a reader planning an
+//! upgrade sees which pins are behind and by how much.
 //!
 //! The resolved version of each direct dependency is read from `Cargo.lock`;
 //! the newest stable release from `GET https://crates.io/api/v1/crates/<name>`

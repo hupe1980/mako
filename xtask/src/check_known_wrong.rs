@@ -399,10 +399,6 @@ const POINTER_SITES: &[(&str, &str)] = &[
         "scans concepts/ and specs/ when present",
     ),
     (
-        "xtask/src/check_dep_versions.rs",
-        "scans concepts/ and specs/ when present",
-    ),
-    (
         "xtask/src/check_tool_grants.rs",
         "checks the counts concepts/ states when present",
     ),

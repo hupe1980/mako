@@ -586,11 +586,9 @@ engine it silently becomes money.
 
 ## Licenses
 
-`deny.toml` holds the allow-list — thirteen SPDX identifiers, each permissive,
-three of them (`0BSD`, `bzip2-1.0.6`, `CC0-1.0`) carrying a note on the
-transitive dependency that introduced it. `cargo deny` enforces it and
-`check-licenses` pins the operator-facing copy in
-`site/content/docs/compliance/licenses.md`. Read `deny.toml`; do not keep a
-fourth copy of the list here.
+`deny.toml` holds the allow-list, each non-standard identifier with a note on
+the transitive dependency that introduced it, and `cargo deny` enforces it.
+`site/content/docs/compliance/licenses.md` states the policy and points at
+`deny.toml`. Keep no copy of the list anywhere else.
 
 ---
