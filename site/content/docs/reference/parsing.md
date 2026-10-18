@@ -93,11 +93,15 @@ let msg = Parser::with_config(config).parse(bytes)?;
 
 | Limit | Default |
 |---|---|
-| `max_input_bytes` | 10 MiB |
-| `max_segments` | 10 000 |
+| `max_input_bytes` | 10 MiB — the memory bound |
+| `max_segments` | none |
 | `max_segment_bytes` (`DEFAULT_MAX_SEGMENT_BYTES`) | 64 KiB |
 | `max_messages_per_interchange` | 1 000 |
-| `max_segments_per_message` | 500 — a per-UNH ceiling under the interchange-wide `max_segments` |
+| `max_segments_per_message` | none; when set, edifact-rs counts `UNH` to `UNT` and refuses past it as `E036` |
+
+No segment count is capped by default: no BDEW document sets one, and one
+monthly quarter-hour MSCONS carries about 9 000 segments (MSCONS MIG 2.5 lets
+SG10 repeat 9 999 times per position).
 
 Source: `ParseConfig::default`, `crates/edi-energy/src/parse.rs`.
 

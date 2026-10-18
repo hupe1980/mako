@@ -110,13 +110,18 @@ pub struct ParseConfig {
     /// Defaults to [`DEFAULT_MAX_SEGMENT_BYTES`] (64 KiB).  Set to
     /// [`usize::MAX`] to disable the limit for trusted, bounded inputs.
     pub max_segment_bytes: usize,
-    /// Maximum number of segments to parse before returning an error.
+    /// Maximum number of segments in the whole interchange.
     ///
-    /// `None` means no limit (default).
+    /// `None` by default: no BDEW document caps a segment count, and a single
+    /// monthly quarter-hour MSCONS already carries about 9 000 segments (MSCONS
+    /// MIG 2.5 lets SG10 repeat 9 999 times per position). Memory is bounded by
+    /// [`Self::max_input_bytes`] instead.
     pub max_segments: Option<usize>,
-    /// Maximum total input bytes to consume before returning an error.
+    /// Maximum total input bytes to consume before returning an error —
+    /// every byte counts, envelope and whitespace included.
     ///
-    /// `None` means no limit (default).
+    /// Defaults to 10 MiB. This is the parser's memory bound: the heap a parse
+    /// takes grows with the input bytes, whatever the segment count.
     pub max_input_bytes: Option<usize>,
     /// Maximum number of messages (UNH…UNT pairs) allowed per interchange.
     ///
@@ -133,18 +138,13 @@ pub struct ParseConfig {
     ///
     /// `None` (the default) means no limit.
     pub max_messages: Option<usize>,
-    /// Maximum number of segments allowed within a single EDIFACT message (UNH…UNT pair).
+    /// Maximum number of segments within one message, `UNH` to `UNT`
+    /// inclusive; the envelope does not count.
     ///
-    /// Defaults to `Some(500)`.  Set to `None` to disable the limit for
-    /// trusted, size-bounded sources only.
-    ///
-    /// This limit acts as the primary per-message `DoS` defence: an adversary
-    /// who constructs a valid interchange with one very deep message can
-    /// otherwise drive segment allocations up to the interchange-wide
-    /// `max_segments` ceiling (default 10,000) within a single UNH/UNT pair.
-    /// At 500 segments/message × 1,000 messages the interchange limit still
-    /// binds first; this field provides defence-in-depth for the per-message
-    /// allocation cost.
+    /// `None` by default, for the reason [`Self::max_segments`] gives. Set, it
+    /// maps to [`edifact_rs::ReaderConfig::max_segments_per_message`] and a
+    /// longer message is refused as `E036`
+    /// ([`edifact_rs::EdifactError::LimitExceeded`]).
     pub max_segments_per_message: Option<usize>,
     /// Reference date used for profile validity lookups during `validate()`.
     ///
@@ -169,10 +169,10 @@ impl Default for ParseConfig {
     fn default() -> Self {
         Self {
             max_segment_bytes: DEFAULT_MAX_SEGMENT_BYTES,
-            max_segments: Some(10_000),
+            max_segments: None,
             max_input_bytes: Some(10 * 1024 * 1024),
             max_messages_per_interchange: Some(1_000),
-            max_segments_per_message: Some(500),
+            max_segments_per_message: None,
             max_messages: None,
             reference_date: None,
         }
@@ -199,6 +199,9 @@ impl ParseConfig {
         }
         if let Some(n) = self.max_messages {
             cfg = cfg.max_messages(n);
+        }
+        if let Some(n) = self.max_segments_per_message {
+            cfg = cfg.max_segments_per_message(n);
         }
         cfg
     }
@@ -296,18 +299,11 @@ pub(crate) fn parse_with_registry(
     config: ParseConfig,
     registry: &crate::registry::ReleaseRegistry,
 ) -> Result<AnyMessage, Error> {
-    let per_msg_limit = config.max_segments_per_message;
     let cfg = config.to_reader_config();
     let input = decode_repertoire(input)?;
     let segments: Vec<OwnedSegment> = edifact_rs::from_reader_with_config(input.as_ref(), cfg)
         .collect::<Result<_, _>>()
         .map_err(Error::Parse)?;
-    if let Some(lim) = per_msg_limit {
-        let actual = segments.len();
-        if actual > lim {
-            return Err(Error::TooManySegmentsInMessage { limit: lim, actual });
-        }
-    }
     // §2.13 — read the envelope parties before `dispatch_message` consumes the
     // segments; an interchange-less message simply has no UNB and is skipped.
     let (unb_sender, unb_receiver) = segments
@@ -366,7 +362,6 @@ pub(crate) fn parse_interchange_impl(
     registry: std::sync::Arc<crate::registry::ReleaseRegistry>,
 ) -> impl Iterator<Item = Result<AnyMessage, Error>> {
     let limit = config.max_messages_per_interchange;
-    let per_msg_limit = config.max_segments_per_message;
     let reference_date = config.reference_date;
     let cfg = config.to_reader_config();
 
@@ -397,12 +392,6 @@ pub(crate) fn parse_interchange_impl(
                         return Err(Error::TooManyMessages { limit: lim });
                     }
                     let window = window.map_err(Error::Parse)?;
-                    if let Some(lim) = per_msg_limit {
-                        let actual = window.segments.len();
-                        if actual > lim {
-                            return Err(Error::TooManySegmentsInMessage { limit: lim, actual });
-                        }
-                    }
                     dispatch_message_on_date(window.segments, &registry, reference_date)
                 })
         }))

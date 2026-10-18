@@ -63,9 +63,9 @@ pub struct Finding {
     /// Segment group the issue sits in, e.g. `"SG4"`.
     pub segment_group: Option<String>,
     /// 0-based data-element index inside the segment, when known.
-    pub element: Option<u8>,
+    pub element: Option<u16>,
     /// 0-based component index inside the element, when known.
-    pub component: Option<u8>,
+    pub component: Option<u16>,
     /// Remediation hint, where the rule offers one.
     pub suggestion: Option<String>,
     pub message: String,

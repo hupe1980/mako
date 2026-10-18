@@ -106,7 +106,11 @@ pub struct ValidationIssueSummary {
     pub segment_tag: Option<String>,
     /// 0-based index of the occurrence among all segments with `segment_tag`.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub segment_occurrence: Option<u16>,
+    pub segment_occurrence: Option<u32>,
+    /// 1-based position of the segment in its message, `UNH` = 1 — the
+    /// CONTRL DE 0096 value.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub segment_position: Option<u32>,
     /// Segment group name in which the issue occurred (e.g. `"SG4"`), if available.
     ///
     /// Populated from [`edifact_rs::ValidationIssue::segment_group`].
@@ -114,10 +118,10 @@ pub struct ValidationIssueSummary {
     pub segment_group: Option<String>,
     /// 0-based data-element index within the segment.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub element_index: Option<u8>,
+    pub element_index: Option<u16>,
     /// 0-based component index within a composite data element.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub component_index: Option<u8>,
+    pub component_index: Option<u16>,
     /// UNH message reference (DE 0062) the issue belongs to.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub message_ref: Option<String>,
@@ -193,6 +197,7 @@ impl ValidationIssueSummary {
             error_code: issue.error_code.as_deref().map(str::to_owned),
             segment_tag: issue.segment_tag.clone(),
             segment_occurrence: issue.segment_occurrence,
+            segment_position: issue.segment_position,
             segment_group: issue.segment_group.as_deref().map(str::to_owned),
             element_index: issue.element_index,
             component_index: issue.component_index,

@@ -242,7 +242,7 @@ Pass 5  Cancellation sign reversal   (Stornorechnung)
 | [`rubo4e`](https://crates.io/crates/rubo4e) | `0.14` | BO4E business-object types — the `rubo4e::current` versioned schema with validation |
 | [`agentplane`](https://crates.io/crates/agentplane) | `0.47` | Durable agent runtime behind `agentd` — journaled effects, typed manifests, human triage |
 | [`asx-rs`](https://crates.io/crates/asx-rs) | `0.16.2` | AS4/ebMS3 — `Profile::bdew()` fixes BDEW AS4-Profil 1.2's security and wire settings; one client per MP-ID, the `Inbound` service, token-fenced `DedupStore`, verified receipts |
-| [`edifact-rs`](https://crates.io/crates/edifact-rs) | `~0.17` | EDIFACT syntax layer beneath `edi-energy` — parse, serialise, directory validation |
+| [`edifact-rs`](https://crates.io/crates/edifact-rs) | `~0.18` | EDIFACT syntax layer beneath `edi-energy` — parse, serialise, directory validation, recovering scan for CONTRL fault locations |
 
 `cargo xtask check-dep-versions` holds this table to the manifests.
 

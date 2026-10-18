@@ -65,6 +65,7 @@
 use std::sync::Arc;
 
 use edi_energy::{AnyMessage, EdiEnergyMessage as _};
+use edifact_rs::{ContrlLocation, RecoveredInterchange, RecoveryConfig};
 use mako_engine::{
     deadline::Deadline,
     error::EngineError,
@@ -251,14 +252,28 @@ pub struct Datenelement {
     pub komponente: Option<u32>,
 }
 
+/// `UCM` DE 0085 codes — CONTRL AHB 1.0 Kap. 3, SG1 UCM table (S. 26).
+const UCM_0085: &[&str] = &["12", "13", "16", "21", "22", "26", "28", "29", "39"];
+/// `UCS` DE 0085 codes — CONTRL AHB 1.0 Kap. 3, SG2 UCS table (S. 27).
+const UCS_0085: &[&str] = &["13", "15", "16", "22", "35", "36"];
+/// `UCD` DE 0085 codes — CONTRL AHB 1.0 Kap. 3, SG2 UCD table (S. 27).
+const UCD_0085: &[&str] = &["12", "13", "16", "19", "21", "22", "37", "38", "39", "40"];
+
 /// Check one Übertragungsdatei: `results` is what the parser made of each
 /// `UNH`…`UNT` window of `interchange`, in wire order.
 ///
-/// A fault is placed as deep as the parser's error allows (Kap. 2.2.2: „Die
-/// Position des Fehlers ist so genau wie möglich … anzugeben"). When any fault
-/// cannot be placed on a message — or the windows cannot be matched to the
-/// results — the whole file is reported at the `UCI` instead, which is still a
-/// true statement about it.
+/// The windows, each message's `UCM` identity and every fault position come from
+/// one recovering scan of the same bytes ([`RecoveredInterchange`]), so the
+/// CONTRL places a fault where the parser refused it.
+///
+/// A fault is placed as deep as its location is certain (Kap. 2.2.2: „Die
+/// Position des Fehlers ist so genau wie möglich durch die Verwendung der tiefst
+/// möglichen Meldungsebene anzugeben"). Where it is not, it is reported at the
+/// `UCI` instead, which is still a true statement about the file: the `UCM`
+/// carries DE 0085 only for a fault in `UNH` or `UNT`, and without DE 0013 it
+/// needs an `SG2 UCS` (CONTRL AHB 1.0 Kap. 3, S. 26, conditions `[2]`, `[3]`, `[9]`). The same holds when the
+/// windows cannot be matched to the results, or a message has no readable
+/// `UNH` DE 0062 / DE 0065 (both Muss on the `UCM`).
 #[must_use]
 pub fn syntaxpruefung(
     interchange: &[u8],
@@ -270,354 +285,221 @@ pub fn syntaxpruefung(
     };
     let whole_file =
         Syntaxpruefung::Uebertragungsdatei(SyntaxFehler::from_parse_error(first_error));
-    let Some(windows) = raw_windows(interchange) else {
+    let decoded = decoded(interchange);
+    let recovered = RecoveredInterchange::scan(&decoded, &RecoveryConfig::default());
+    let Some(faults) = located_faults(&recovered) else {
         return whole_file;
     };
-    if windows.len() != results.len() {
+    if recovered.messages().len() != results.len() {
         return whole_file;
     }
     let mut fehler = Vec::new();
-    for (window, result) in windows.iter().zip(results) {
+    for (index, (window, result)) in recovered.messages().iter().zip(results).enumerate() {
         let Err(error) = result else { continue };
-        let Some(ort) = fehlerort(window, error) else {
+        let Some(identity) = window
+            .identity()
+            .filter(|i| !i.message_ref().is_empty() && !i.message_type().is_empty())
+        else {
+            return whole_file;
+        };
+        let Some(ort) = fehlerort(&recovered, &faults, index, error) else {
             return whole_file;
         };
         fehler.push(NachrichtenFehler {
-            message_ref: window.unh_component(0, 0),
-            message_type: window.unh_component(1, 0),
-            version: window.unh_component(1, 1),
-            release: window.unh_component(1, 2),
-            agency: window.unh_component(1, 3),
-            association: Some(window.unh_component(1, 4)).filter(|a| !a.is_empty()),
+            message_ref: identity.message_ref().to_owned(),
+            message_type: identity.message_type().to_owned(),
+            version: identity.version().to_owned(),
+            release: identity.release().to_owned(),
+            agency: identity.controlling_agency().to_owned(),
+            association: Some(identity.association_code())
+                .filter(|a| !a.is_empty())
+                .map(str::to_owned),
             fehler: ort,
         });
-    }
-    if fehler
-        .iter()
-        .any(|f| f.message_ref.is_empty() || f.message_type.is_empty())
-    {
-        // `UCM` DE 0062 and DE 0065 are Muss; without them there is no UCM.
-        return whole_file;
     }
     Syntaxpruefung::Nachrichten(fehler)
 }
 
-/// Where in `window` the parser's `error` sits, or `None` when it does not say.
-fn fehlerort(window: &RawWindow, error: &edi_energy::Error) -> Option<Fehlerort> {
-    use edifact_rs::EdifactError as E;
-    let unh = || Fehlerort::Nachricht {
-        code: "12".to_owned(),
-        service_segment: "UNH".to_owned(),
-    };
+/// Where in message `message` of `recovered` the parser's `error` sits, or
+/// `None` when that cannot be said on the message's `UCM` / `SG2`.
+///
+/// An error of the EDIFACT parser is placed by [`RecoveredInterchange::locate`]
+/// — or, when it is one of the scan's own faults inside that message, by that
+/// fault — and the [`ContrlLocation`] maps as follows:
+///
+/// | `ContrlLocation` | `Fehlerort` |
+/// |---|---|
+/// | `UCM` with service segment `UNH` / `UNT` | [`Fehlerort::Nachricht`]: DE 0085, DE 0013 |
+/// | `UCS` | [`Fehlerort::Segment`]: DE 0096, DE 0085, no `UCD` |
+/// | `UCD` | [`Fehlerort::Segment`]: DE 0096 and a [`Datenelement`] with DE 0085, DE 0098, DE 0104 |
+/// | anything else, or another message | `None` — the `UCI` |
+///
+/// Each code must also be one the AHB lists for that segment ([`UCM_0085`],
+/// [`UCS_0085`], [`UCD_0085`]); a code it does not list goes to the `UCI`.
+///
+/// # An inexact location is not a `UCS`
+///
+/// An error without a byte position (`MissingRequiredElement`, …) names only a
+/// tag, and `locate` places it on the **first** segment of the message with that
+/// tag, marked [inexact](ContrlLocation::is_exact). When the tag occurs more than
+/// once in the message that position is a guess, and a guessed DE 0096 names a
+/// segment the fault may not be in. Only a tag that occurs exactly once makes the
+/// position certain, so only then is the `UCS` written.
+///
+/// One level up is not available either: CONTRL AHB 1.0 Kap. 3, SG1 UCM table
+/// (S. 26), gives `UCM` DE 0085 and DE 0013 only under „[2] Wenn Syntaxfehler in
+/// UNH vorhanden" ∨ „[3] Wenn Syntaxfehler in UNT vorhanden", and makes `SG2`
+/// „Muss [9] Wenn SG1 UCM DE0013 nicht vorhanden". A `UCM` for a fault in the
+/// message body therefore cannot stand without a `UCS`, and the fault is reported
+/// in the Übertragungsdatei column instead — `UCI` DE 0085 (S. 25).
+///
+/// Errors of the edi-energy layer — the message type or release in `UNH` names
+/// nothing this side reads — are `UCM` DE 0085 `12` „Ungültiger Wert" on `UNH`:
+/// `locate` knows only [`edifact_rs::EdifactError`]s.
+fn fehlerort(
+    recovered: &RecoveredInterchange<'_>,
+    faults: &[(&edifact_rs::EdifactError, ContrlLocation)],
+    message: usize,
+    error: &edi_energy::Error,
+) -> Option<Fehlerort> {
     match error {
-        // The release or the message type in UNH names nothing this side
-        // reads: `UCM` DE 0085 `12` „Ungültiger Wert" on `UNH`.
         edi_energy::Error::UnknownMessageType { .. }
         | edi_energy::Error::FeatureNotEnabled { .. }
         | edi_energy::Error::MissingRelease
         | edi_energy::Error::InvalidRelease(_)
-        | edi_energy::Error::ProfileNotFound { .. } => Some(unh()),
-        edi_energy::Error::Parse(inner) => match inner {
-            // The tag itself is the faulty element: DE 0098 position 1.
-            E::InvalidSegmentTag(tag) => Some(Fehlerort::Segment {
-                position: window.position_of_tag(tag)?,
-                code: None,
-                datenelement: Some(Datenelement {
-                    code: "12".to_owned(),
-                    position: 1,
-                    komponente: None,
-                }),
-            }),
-            E::SegmentCountMismatch { .. } => Some(Fehlerort::Nachricht {
-                code: "29".to_owned(),
-                service_segment: "UNT".to_owned(),
-            }),
-            E::MissingRequiredElement { tag, element_index } => {
-                missing(window, tag, *element_index, None)
-            }
-            E::MissingRequiredComponent {
-                tag,
-                element_index,
-                component_index,
-            } => missing(window, tag, *element_index, Some(*component_index)),
-            E::InvalidText { offset } => window.at_offset(*offset, "21"),
-            E::InvalidReleaseSequence { offset } | E::InvalidDelimiter { offset, .. } => {
-                window.at_offset(*offset, "22")
-            }
-            _ => None,
-        },
+        | edi_energy::Error::ProfileNotFound { .. } => Some(Fehlerort::Nachricht {
+            code: edifact_rs::contrl::SyntaxError::InvalidValue
+                .code()
+                .to_owned(),
+            service_segment: "UNH".to_owned(),
+        }),
+        edi_energy::Error::Parse(inner) => {
+            let location = faults
+                .iter()
+                .find(|(fault, at)| *fault == inner && at.message() == Some(message))
+                .map(|(_, at)| at.clone())
+                .or_else(|| recovered.locate(inner, Some(message)))?;
+            ort_of(recovered, message, &location)
+        }
         _ => None,
     }
 }
 
-/// A missing (composite) data element: `13` „Fehlt".
-fn missing(
-    window: &RawWindow,
-    tag: &str,
-    element_index: usize,
-    component_index: Option<usize>,
+/// `location` as the `SG1 UCM` / `SG2` of message `message`; see [`fehlerort`].
+fn ort_of(
+    recovered: &RecoveredInterchange<'_>,
+    message: usize,
+    location: &ContrlLocation,
 ) -> Option<Fehlerort> {
-    if tag == "UNH" || tag == "UNT" {
-        return Some(Fehlerort::Nachricht {
-            code: "13".to_owned(),
-            service_segment: tag.to_owned(),
-        });
+    use edifact_rs::contrl::ReportingLevel as L;
+    if location.message() != Some(message) {
+        return None;
     }
-    Some(Fehlerort::Segment {
-        position: window.position_of_tag(tag)?,
-        code: None,
-        datenelement: Some(Datenelement {
-            code: "13".to_owned(),
-            position: u32::try_from(element_index).ok()?.checked_add(2)?,
-            komponente: component_index
-                .and_then(|c| u32::try_from(c).ok())
-                .and_then(|c| c.checked_add(1)),
-        }),
-    })
-}
-
-/// The service characters of an interchange (ISO 9735 `UNA`, or the defaults).
-#[derive(Clone, Copy)]
-struct Delimiters {
-    component: u8,
-    element: u8,
-    release: u8,
-    terminator: u8,
-}
-
-/// One segment of the raw interchange: its byte range, text and tag.
-struct RawSegment {
-    start: usize,
-    end: usize,
-    text: Vec<u8>,
-    tag: String,
-}
-
-/// One `UNH`…`UNT` window of the raw interchange.
-struct RawWindow {
-    /// The `UNH` segment's text, without its terminator.
-    unh: Vec<u8>,
-    /// Every segment from `UNH` to `UNT`, in order.
-    segments: Vec<RawSegment>,
-    delimiters: Delimiters,
-}
-
-impl RawWindow {
-    /// `UNH` element `element`, component `component`, unescaped.
-    fn unh_component(&self, element: usize, component: usize) -> String {
-        let d = self.delimiters;
-        split_unreleased(&self.unh, d.element, d.release)
-            .get(element + 1)
-            .map(|e| split_unreleased(e, d.component, d.release))
-            .and_then(|c| c.get(component).cloned())
-            .map(|c| unescape(&c, d.release))
-            .unwrap_or_default()
-    }
-
-    /// The DE 0096 position of the first segment tagged `tag` (`UNH` = 1).
-    fn position_of_tag(&self, tag: &str) -> Option<u32> {
-        let i = self.segments.iter().position(|s| s.tag == tag)?;
-        u32::try_from(i + 1).ok()
-    }
-
-    /// The segment and data element containing byte `offset` of the
-    /// interchange, as a `UCS` + `UCD` carrying `code`.
-    fn at_offset(&self, offset: usize, code: &str) -> Option<Fehlerort> {
-        let (i, seg) = self
-            .segments
-            .iter()
-            .enumerate()
-            .find(|(_, s)| (s.start..=s.end).contains(&offset))?;
-        let (position, komponente) = self.element_position(seg, offset - seg.start);
-        Some(Fehlerort::Segment {
-            position: u32::try_from(i + 1).ok()?,
-            code: None,
-            datenelement: Some(Datenelement {
+    let code = location.error().code();
+    match location.level() {
+        L::Message => {
+            let service_segment = location.service_segment()?;
+            UCM_0085.contains(&code).then(|| Fehlerort::Nachricht {
                 code: code.to_owned(),
+                service_segment: service_segment.to_owned(),
+            })
+        }
+        level @ (L::Segment | L::DataElement) => {
+            let position = location.segment_position()?;
+            if !location.is_exact() && !tag_is_unique(recovered, message, position) {
+                return None;
+            }
+            if level == L::Segment {
+                return UCS_0085.contains(&code).then(|| Fehlerort::Segment {
+                    position,
+                    code: Some(code.to_owned()),
+                    datenelement: None,
+                });
+            }
+            let element = location.element_position()?;
+            UCD_0085.contains(&code).then(|| Fehlerort::Segment {
                 position,
-                komponente,
-            }),
-        })
+                code: None,
+                datenelement: Some(Datenelement {
+                    code: code.to_owned(),
+                    position: element,
+                    komponente: location.component_position(),
+                }),
+            })
+        }
+        _ => None,
     }
+}
 
-    /// DE 0098 / DE 0104 of byte `at` inside `seg`: the tag is element 1 and
-    /// every unreleased element separator before `at` adds one; inside a
-    /// composite, every component separator before `at` adds one to a count
-    /// starting at 1.
-    fn element_position(&self, seg: &RawSegment, at: usize) -> (u32, Option<u32>) {
-        let d = self.delimiters;
-        let mut element = 1u32;
-        let mut component = 1u32;
-        let mut composite = false;
-        let mut i = 0usize;
-        let upto = at.min(seg.text.len());
-        while i < upto {
-            let b = seg.text[i];
-            if b == d.release {
-                i += 2;
-                continue;
-            }
-            if b == d.element {
-                element += 1;
-                component = 1;
-                composite = false;
-            } else if b == d.component {
-                component += 1;
-                composite = true;
-            }
-            i += 1;
-        }
-        // A component separator after `at` in the same element also makes it a
-        // composite.
-        let rest = &seg.text[upto..];
-        let mut j = 0usize;
-        while j < rest.len() && rest[j] != d.element {
-            if rest[j] == d.release {
-                j += 2;
-                continue;
-            }
-            if rest[j] == d.component {
-                composite = true;
-            }
-            j += 1;
-        }
-        (element, composite.then_some(component))
-    }
+/// Whether the segment at DE 0096 `position` of message `message` is the only
+/// one with its tag in that message — the case where a tag search is exact.
+fn tag_is_unique(recovered: &RecoveredInterchange<'_>, message: usize, position: u32) -> bool {
+    let Some(window) = recovered.messages().get(message) else {
+        return false;
+    };
+    let Some(last) = window.last() else {
+        return false;
+    };
+    let (Ok(first), Ok(last), Ok(position)) = (
+        usize::try_from(window.first()),
+        usize::try_from(last),
+        usize::try_from(position),
+    ) else {
+        return false;
+    };
+    let Some(items) = recovered.items().get(first..=last) else {
+        return false;
+    };
+    let Some(tag) = position
+        .checked_sub(1)
+        .and_then(|i| items.get(i))
+        .and_then(edifact_rs::recover::Scanned::tag)
+    else {
+        return false;
+    };
+    items.iter().filter(|item| item.tag() == Some(tag)).count() == 1
+}
+
+/// Every fault of the scan with its location, in wire order; `None` when a
+/// fault has no location, so the two lists cannot be paired.
+fn located_faults<'r>(
+    recovered: &'r RecoveredInterchange<'_>,
+) -> Option<Vec<(&'r edifact_rs::EdifactError, ContrlLocation)>> {
+    let faults: Vec<_> = recovered
+        .faults()
+        .map(edifact_rs::recover::Fault::error)
+        .collect();
+    let locations = recovered.fault_locations();
+    (faults.len() == locations.len()).then(|| faults.into_iter().zip(locations).collect())
+}
+
+/// `raw` in the repertoire the parser reads it in.
+///
+/// edi-energy transcodes the interchange its `UNB` declares before parsing, so
+/// the byte offsets in its errors are offsets into the transcoded bytes; the
+/// scan runs over the same bytes so that they agree. A repertoire that does not
+/// decode leaves the raw bytes — the parse failed on it, and the scan reports
+/// what it can.
+fn decoded(raw: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    edifact_rs::decode_interchange(raw).unwrap_or(std::borrow::Cow::Borrowed(raw))
 }
 
 /// The `UNB` of a raw interchange: (sender, recipient, control reference).
 ///
-/// Read off the bytes rather than through the parser, because the parser
+/// Read through the recovering scan rather than the parser, because the parser
 /// refuses an interchange whose messages do not tokenize — and a CONTRL for such
 /// an interchange still has to be addressed. `None` when there is no `UNB`
 /// with all three (CONTRL AHB 1.0 Kap. 2.2.2.1: then no CONTRL can be built).
 #[must_use]
 pub fn unb_parties(raw: &[u8]) -> Option<(String, String, String)> {
-    let (d, segments) = raw_segments(raw);
-    let unb = segments.into_iter().find(|s| s.tag == "UNB")?;
-    let elements = split_unreleased(&unb.text, d.element, d.release);
-    let first = |i: usize| -> Option<String> {
-        let e = elements.get(i)?;
-        let c = split_unreleased(e, d.component, d.release);
-        Some(unescape(c.first()?, d.release)).filter(|v| !v.is_empty())
-    };
-    Some((first(2)?, first(3)?, first(5)?))
-}
-
-/// Split `raw` into its `UNH`…`UNT` windows, or `None` when it is not
-/// segmentable at all.
-fn raw_windows(raw: &[u8]) -> Option<Vec<RawWindow>> {
-    let (d, segments) = raw_segments(raw);
-    let mut windows = Vec::new();
-    let mut current: Option<RawWindow> = None;
-    for segment in segments {
-        if segment.tag == "UNH" {
-            current = Some(RawWindow {
-                unh: segment.text.clone(),
-                segments: Vec::new(),
-                delimiters: d,
-            });
-        }
-        let closes = segment.tag == "UNT";
-        if let Some(w) = current.as_mut() {
-            w.segments.push(segment);
-        }
-        if closes && let Some(w) = current.take() {
-            windows.push(w);
-        }
-    }
-    if let Some(w) = current {
-        windows.push(w);
-    }
-    Some(windows)
-}
-
-/// The service characters and segments of a raw interchange.
-fn raw_segments(raw: &[u8]) -> (Delimiters, Vec<RawSegment>) {
-    let mut d = Delimiters {
-        component: b':',
-        element: b'+',
-        release: b'?',
-        terminator: b'\'',
-    };
-    let mut pos = 0usize;
-    if raw.starts_with(b"UNA") && raw.len() >= 9 {
-        d = Delimiters {
-            component: raw[3],
-            element: raw[4],
-            release: raw[6],
-            terminator: raw[8],
-        };
-        pos = 9;
-    }
-    let mut segments = Vec::new();
-    while pos < raw.len() {
-        // Line breaks between segments are not part of either.
-        while pos < raw.len() && matches!(raw[pos], b'\r' | b'\n' | b' ' | b'\t') {
-            pos += 1;
-        }
-        if pos >= raw.len() {
-            break;
-        }
-        let start = pos;
-        let mut end = pos;
-        while end < raw.len() && raw[end] != d.terminator {
-            end += if raw[end] == d.release { 2 } else { 1 };
-        }
-        let end = end.min(raw.len());
-        let text = &raw[start..end];
-        let tag_end = text
-            .iter()
-            .position(|&b| b == d.element)
-            .unwrap_or(text.len());
-        segments.push(RawSegment {
-            start,
-            end,
-            text: text.to_vec(),
-            tag: String::from_utf8_lossy(&text[..tag_end]).into_owned(),
-        });
-        pos = end + 1;
-    }
-    (d, segments)
-}
-
-/// Split `raw` at every `sep` not preceded by the release character.
-fn split_unreleased(raw: &[u8], sep: u8, release: u8) -> Vec<Vec<u8>> {
-    let mut out = vec![Vec::new()];
-    let mut i = 0;
-    while i < raw.len() {
-        let b = raw[i];
-        if b == release && i + 1 < raw.len() {
-            if let Some(last) = out.last_mut() {
-                last.extend_from_slice(&raw[i..i + 2]);
-            }
-            i += 2;
-            continue;
-        }
-        if b == sep {
-            out.push(Vec::new());
-        } else if let Some(last) = out.last_mut() {
-            last.push(b);
-        }
-        i += 1;
-    }
-    out
-}
-
-/// Remove release characters.
-fn unescape(raw: &[u8], release: u8) -> String {
-    let mut out = Vec::with_capacity(raw.len());
-    let mut i = 0;
-    while i < raw.len() {
-        if raw[i] == release && i + 1 < raw.len() {
-            out.push(raw[i + 1]);
-            i += 2;
-        } else {
-            out.push(raw[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
+    let decoded = decoded(raw);
+    let recovered = RecoveredInterchange::scan(&decoded, &RecoveryConfig::default());
+    let address = recovered.address()?;
+    Some((
+        address.sender_id().to_owned(),
+        address.recipient_id().to_owned(),
+        address.control_ref().to_owned(),
+    ))
 }
 
 // ── ContrlAckService ─────────────────────────────────────────────────────────
@@ -1103,30 +985,18 @@ pub fn dvgw_report_has_alocat(report: &crate::dvgw_ingest::DvgwIngestReport) -> 
 /// UTILMD still owes the 15-minute window of §2.4.1, and the message type sits
 /// in the `UNH` whether or not the body behind it is valid.
 ///
-/// Deliberately a scan and not a parse. It reads what it can and returns what it
-/// found; a garbled `UNH` simply contributes nothing, and the Regelfall window
-/// that results is the longer one.
+/// Read through the recovering scan, which reads a `UNH` the parser refused as
+/// well; a `UNH` without a readable DE 0062 / DE 0065 contributes nothing, and
+/// the Regelfall window that results is the longer one.
 fn unh_message_types(interchange: &[u8]) -> Vec<String> {
-    let text = String::from_utf8_lossy(interchange);
-    let mut out = Vec::new();
-    for segment in text.split('\'') {
-        let segment = segment.trim_start_matches(['\n', '\r', ' ']);
-        let Some(rest) = segment.strip_prefix("UNH+") else {
-            continue;
-        };
-        // `UNH+<ref>+<type>:<version>:…`
-        if let Some(after_ref) = rest.split_once('+').map(|(_, r)| r) {
-            let code = after_ref
-                .split([':', '+'])
-                .next()
-                .unwrap_or_default()
-                .trim();
-            if !code.is_empty() {
-                out.push(code.to_owned());
-            }
-        }
-    }
-    out
+    let decoded = decoded(interchange);
+    RecoveredInterchange::scan(&decoded, &RecoveryConfig::default())
+        .messages()
+        .iter()
+        .filter_map(edifact_rs::recover::MessageWindow::identity)
+        .map(|identity| identity.message_type().to_owned())
+        .filter(|code| !code.is_empty())
+        .collect()
 }
 
 /// Returns `true` when the message is a CONTRL.
@@ -1376,6 +1246,119 @@ mod tests {
         // Nothing readable contributes nothing, and the caller keeps the
         // Regelfall window.
         assert!(super::unh_message_types(b"garbage without segments").is_empty());
+    }
+
+    /// One UTILMD with two `DTM` segments (DE 0096 positions 3 and 4).
+    const TWO_DTM: &str = "UNB+UNOC:3+4012345000023:500+9900357000004:500+261001:0700+IC1'\
+                           UNH+1+UTILMD:D:11A:UN:S2.1'BGM+E01+X'\
+                           DTM+137:202610010000?+00:303'DTM+163:202610012200?+00:303'\
+                           UNT+5+1'UNZ+1+IC1'";
+
+    fn parse_error(error: edifact_rs::EdifactError) -> Vec<Result<AnyMessage, edi_energy::Error>> {
+        vec![Err(edi_energy::Error::Parse(error))]
+    }
+
+    /// A fault carrying its byte offset is placed on the segment that contains
+    /// it — the second `DTM` here, not the first segment with that tag.
+    #[test]
+    fn an_offset_fault_in_the_second_dtm_names_the_second_dtm() {
+        let at = TWO_DTM.find("DTM+163").expect("second DTM") + "DTM+163:".len();
+        let results = parse_error(edifact_rs::EdifactError::InvalidText { offset: at });
+        let Syntaxpruefung::Nachrichten(fehler) = syntaxpruefung(TWO_DTM.as_bytes(), &results)
+        else {
+            panic!("an exact fault is reported on the message");
+        };
+        assert_eq!(fehler.len(), 1);
+        assert_eq!(fehler[0].message_ref, "1");
+        assert_eq!(fehler[0].message_type, "UTILMD");
+        assert_eq!(fehler[0].association.as_deref(), Some("S2.1"));
+        assert_eq!(
+            fehler[0].fehler,
+            Fehlerort::Segment {
+                position: 4,
+                code: None,
+                datenelement: Some(Datenelement {
+                    // `21` „Ungültige(s) Zeichen"; C507 is element 2, DE 2380
+                    // its second component.
+                    code: "21".to_owned(),
+                    position: 2,
+                    komponente: Some(2),
+                }),
+            }
+        );
+    }
+
+    /// An error without a byte position names only its tag. With two `DTM`s in
+    /// the message no `UCS` position is certain, and the `UCM` cannot carry a
+    /// body fault without one (CONTRL AHB 1.0 Kap. 3, S. 26, [2]/[3]/[9]) — so
+    /// the file is reported at the `UCI`, never at the first `DTM`.
+    #[test]
+    fn a_tag_only_fault_in_a_repeated_segment_is_not_given_a_ucs_position() {
+        let results = parse_error(edifact_rs::EdifactError::MissingRequiredElement {
+            tag: "DTM".into(),
+            element_index: 1,
+        });
+        assert_eq!(
+            syntaxpruefung(TWO_DTM.as_bytes(), &results),
+            Syntaxpruefung::Uebertragungsdatei(SyntaxFehler::UngueltigerWert)
+        );
+    }
+
+    /// The same error on a tag the message carries once is exact after all.
+    #[test]
+    fn a_tag_only_fault_in_a_unique_segment_is_placed_on_it() {
+        let results = parse_error(edifact_rs::EdifactError::MissingRequiredElement {
+            tag: "BGM".into(),
+            element_index: 1,
+        });
+        let Syntaxpruefung::Nachrichten(fehler) = syntaxpruefung(TWO_DTM.as_bytes(), &results)
+        else {
+            panic!("a unique tag places the fault");
+        };
+        assert_eq!(
+            fehler[0].fehler,
+            Fehlerort::Segment {
+                position: 2,
+                code: None,
+                datenelement: Some(Datenelement {
+                    code: "13".to_owned(),
+                    position: 3,
+                    komponente: None,
+                }),
+            }
+        );
+    }
+
+    /// A message type this side does not read is `UCM` `12` on `UNH`.
+    #[test]
+    fn an_unknown_message_type_is_reported_on_unh() {
+        let results = vec![Err(edi_energy::Error::MissingRelease)];
+        let Syntaxpruefung::Nachrichten(fehler) = syntaxpruefung(TWO_DTM.as_bytes(), &results)
+        else {
+            panic!("reported on the message");
+        };
+        assert_eq!(
+            fehler[0].fehler,
+            Fehlerort::Nachricht {
+                code: "12".to_owned(),
+                service_segment: "UNH".to_owned(),
+            }
+        );
+    }
+
+    /// The `UNB` parties are read although a message behind it is broken.
+    #[test]
+    fn the_unb_parties_survive_a_broken_message() {
+        let raw = TWO_DTM.replacen("BGM+", "BGM", 1);
+        assert_eq!(
+            unb_parties(raw.as_bytes()),
+            Some((
+                "4012345000023".to_owned(),
+                "9900357000004".to_owned(),
+                "IC1".to_owned()
+            ))
+        );
+        assert_eq!(unb_parties(b"UNH+1+UTILMD:D:11A:UN'UNT+2+1'"), None);
     }
 
     /// The Sparte classification must agree with the published Anwendungsübersicht.

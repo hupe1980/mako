@@ -616,9 +616,9 @@ dependencies = [
 
 [[package]]
 name = "edifact-rs"
-version = "0.17.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d58ab8ec144d9d1a0ed713f8ea58db6eca3ef0f076e42ca5243e136e825b94fd"
+checksum = "52048ed0677e360d89fa90d6b4a3017edc03626125ea8f7d02e1250646f8557b"
 dependencies = [
  "edifact-rs-derive",
  "memchr",
@@ -628,9 +628,9 @@ dependencies = [
 
 [[package]]
 name = "edifact-rs-derive"
-version = "0.17.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d6d8459dd064282e16ec34ecd61255bb69c69e0574256fc5d9fcf28d83b583a"
+checksum = "094f587ad16044b1468215cd41eccae3caa7116042f681b6d49a0311ba4dbf68"
 dependencies = [
  "proc-macro2",
  "quote",

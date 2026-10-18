@@ -238,9 +238,10 @@ Each issue carries:
 | `rule_id` | `Option<String>` (`rule_id()` → `Option<&str>`) | Stable rule identifier, e.g. `"AHB-55001-00011-NAD-3055-CODE"` |
 | `error_code` | `Option<Cow<'static, str>>` | Machine-readable error code |
 | `segment_tag` | `Option<String>` | EDIFACT segment tag, e.g. `"DTM"` |
-| `segment_occurrence` | `Option<u16>` | 0-based occurrence index |
-| `element_index` | `Option<u8>` | 0-based data-element index |
-| `component_index` | `Option<u8>` | 0-based component index within a composite |
+| `segment_occurrence` | `Option<u32>` | 0-based occurrence among segments with that tag |
+| `segment_position` | `Option<u32>` | 1-based position in the message, `UNH` = 1 (CONTRL DE 0096) |
+| `element_index` | `Option<u16>` | 0-based data-element index |
+| `component_index` | `Option<u16>` | 0-based component index within a composite |
 | `suggestion` | `Option<String>` | Suggested fix or explanation |
 
 ---

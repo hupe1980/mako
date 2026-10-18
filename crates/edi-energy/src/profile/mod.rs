@@ -18,7 +18,7 @@ pub mod validate;
 use std::collections::HashMap;
 use std::fmt;
 
-use edifact_rs::{GroupDef, Segment, ValidationIssue};
+use edifact_rs::{GroupDef, GroupDefBuilder, Segment, SegmentPlace, ValidationIssue};
 
 use crate::registry::PidSource;
 use crate::{MessageType, ProfileError, Pruefidentifikator, Release};
@@ -41,7 +41,7 @@ pub struct Profile {
     valid_from: Option<time::Date>,
     valid_until: Option<time::Date>,
     by_pid: HashMap<u32, usize>,
-    group_schema: &'static [GroupDef<'static>],
+    group_schema: Vec<GroupDef>,
 }
 
 impl fmt::Debug for Profile {
@@ -126,7 +126,7 @@ impl Profile {
             .enumerate()
             .filter_map(|(i, a)| a.pid.map(|p| (p, i)))
             .collect();
-        let group_schema = leak_group_schema(&structure);
+        let group_schema = group_schema(&structure)?;
         Ok(Self {
             release: Release::new(&mig.release),
             message_type,
@@ -249,16 +249,20 @@ impl Profile {
     /// Group nesting for `edifact_rs::group_segments_indexed`, used by the
     /// semantic rule packs.
     #[must_use]
-    pub fn group_schema(&self) -> &'static [GroupDef<'static>] {
-        self.group_schema
+    pub fn group_schema(&self) -> &[GroupDef] {
+        &self.group_schema
     }
 }
 
-/// Derive the trigger-based group schema and leak it: profiles live for the
-/// whole process, and edifact-rs wants `'static` definitions.
-fn leak_group_schema(structure: &Structure) -> &'static [GroupDef<'static>] {
-    fn build(structure: &Structure, ids: &[structure::NodeId]) -> &'static [GroupDef<'static>] {
-        let mut out: Vec<GroupDef<'static>> = Vec::new();
+/// Derive the trigger-based group schema from the compiled structure: one
+/// open group per MIG segment group, opened by its trigger segment, with its
+/// nested groups beneath it.
+fn group_schema(structure: &Structure) -> Result<Vec<GroupDef>, ProfileError> {
+    fn build(
+        structure: &Structure,
+        ids: &[structure::NodeId],
+    ) -> Result<Vec<GroupDef>, ProfileError> {
+        let mut out: Vec<GroupDef> = Vec::new();
         for &id in ids {
             let Some(group) = structure.group(id) else {
                 continue;
@@ -266,19 +270,27 @@ fn leak_group_schema(structure: &Structure) -> &'static [GroupDef<'static>] {
             let Some(trigger) = structure.trigger(id).and_then(|t| structure.tag(t)) else {
                 continue;
             };
-            if out.iter().any(|g| g.name == group && g.trigger == trigger) {
+            if out
+                .iter()
+                .any(|g| g.name() == group && g.trigger_tag() == trigger)
+            {
                 continue;
             }
-            let name: &'static str = Box::leak(group.to_owned().into_boxed_str());
-            let trigger: &'static str = Box::leak(trigger.to_owned().into_boxed_str());
-            let children = build(structure, &structure.nodes[id].children);
-            out.push(if children.is_empty() {
-                GroupDef::new(name, trigger)
-            } else {
-                GroupDef::with_children(name, trigger, children)
-            });
+            let def = build(structure, &structure.nodes[id].children)?
+                .into_iter()
+                .fold(
+                    GroupDef::builder(group, SegmentPlace::owned(trigger)),
+                    GroupDefBuilder::group,
+                )
+                .build()
+                .map_err(|e| ProfileError::InvalidField {
+                    field: "structure",
+                    value: group.to_owned(),
+                    reason: e.to_string(),
+                })?;
+            out.push(def);
         }
-        Box::leak(out.into_boxed_slice())
+        Ok(out)
     }
     build(structure, &structure.root)
 }

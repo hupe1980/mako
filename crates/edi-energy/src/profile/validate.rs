@@ -229,7 +229,7 @@ fn mig_checks(
             )
             .with_rule_id("MIG-STRUCTURE")
             .with_segment(seg.tag.to_string())
-            .with_segment_occurrence(u16::try_from(i).unwrap_or(u16::MAX))
+            .with_segment_position(i + 1)
             .with_span(seg.span),
         );
     }
@@ -410,8 +410,8 @@ fn element_checks(
                     )
                     .with_rule_id(format!("MIG-{nr}-{tag}-{}-REQUIRED", el.id))
                     .with_segment(tag.clone())
-                    .with_segment_occurrence(u16::try_from(index).unwrap_or(u16::MAX))
-                    .with_element_index(u8::try_from(ei).unwrap_or(u8::MAX)),
+                    .with_segment_position(index + 1)
+                    .with_element_index(ei),
                 );
             }
             if el.status == "N" && present {
@@ -425,8 +425,8 @@ fn element_checks(
                     )
                     .with_rule_id(format!("MIG-{nr}-{tag}-{}-NOTUSED", el.id))
                     .with_segment(tag.clone())
-                    .with_segment_occurrence(u16::try_from(index).unwrap_or(u16::MAX))
-                    .with_element_index(u8::try_from(ei).unwrap_or(u8::MAX)),
+                    .with_segment_position(index + 1)
+                    .with_element_index(ei),
                 );
             }
             // A component's `M` binds only once its composite is used: an
@@ -464,8 +464,8 @@ fn element_checks(
                     )
                     .with_rule_id(format!("MIG-{nr}-{tag}-{}-EXTRA", el.id))
                     .with_segment(tag.clone())
-                    .with_segment_occurrence(u16::try_from(index).unwrap_or(u16::MAX))
-                    .with_element_index(u8::try_from(ei).unwrap_or(u8::MAX)),
+                    .with_segment_position(index + 1)
+                    .with_element_index(ei),
                 );
             }
         }
@@ -486,7 +486,7 @@ fn element_checks(
             )
             .with_rule_id(format!("MIG-{nr}-{tag}-EXTRA"))
             .with_segment(tag.clone())
-            .with_segment_occurrence(u16::try_from(index).unwrap_or(u16::MAX)),
+            .with_segment_position(index + 1),
         );
     }
 }
@@ -513,9 +513,9 @@ fn check_leaf(
             .with_context_entry("nr", nr.to_owned())
             .with_context_entry("de", el.id.clone())
             .with_segment(tag.to_owned())
-            .with_segment_occurrence(u16::try_from(index).unwrap_or(u16::MAX))
-            .with_element_index(u8::try_from(ei).unwrap_or(u8::MAX))
-            .with_component_index(u8::try_from(ci).unwrap_or(u8::MAX))
+            .with_segment_position(index + 1)
+            .with_element_index(ei)
+            .with_component_index(ci)
     };
     if value.is_empty() {
         if composite_used && (el.status == "M" || (el.status == "R" && listed)) {
@@ -1133,8 +1133,8 @@ fn paket_checks(
                             .with_context_entry("nr", layout.nr.clone())
                             .with_context_entry("de", el.id.clone())
                             .with_segment(layout.tag.clone())
-                            .with_element_index(u8::try_from(ei).unwrap_or(u8::MAX))
-                            .with_component_index(u8::try_from(ci).unwrap_or(u8::MAX))
+                            .with_element_index(ei)
+                            .with_component_index(ci)
                     };
                     let where_ = in_group(ctx.structure, ctx.res.instances[scope].node);
                     if let Some(max) = paket.max
@@ -1238,9 +1238,9 @@ fn element_rules(
                 .with_context_entry("nr", nr.to_owned())
                 .with_context_entry("de", el.id.clone())
                 .with_segment(tag.clone())
-                .with_segment_occurrence(u16::try_from(index).unwrap_or(u16::MAX))
-                .with_element_index(u8::try_from(ei).unwrap_or(u8::MAX))
-                .with_component_index(u8::try_from(ci).unwrap_or(u8::MAX))
+                .with_segment_position(index + 1)
+                .with_element_index(ei)
+                .with_component_index(ci)
         };
         if value.is_empty() {
             if required {
@@ -1302,9 +1302,9 @@ fn element_rules(
             .with_context_entry("nr", nr.to_owned())
             .with_context_entry("de", el.id.clone())
             .with_segment(tag.clone())
-            .with_segment_occurrence(u16::try_from(index).unwrap_or(u16::MAX))
-            .with_element_index(u8::try_from(ei).unwrap_or(u8::MAX))
-            .with_component_index(u8::try_from(ci).unwrap_or(u8::MAX)),
+            .with_segment_position(index + 1)
+            .with_element_index(ei)
+            .with_component_index(ci),
         );
     }
 }
@@ -1509,6 +1509,29 @@ mod tests {
             ),
             ["AHB-11111-00004-CAV-7111-PAKET-MAX"]
         );
+    }
+
+    /// A finding names its segment by position in the message, `UNH` = 1 —
+    /// the CONTRL DE 0096 value — and not as a per-tag occurrence, which
+    /// counts something else: the `CAV` below is the 4th segment and the 1st
+    /// `CAV`.
+    #[test]
+    fn a_finding_carries_the_segment_position_from_unh() {
+        let p = profile(
+            r#"{"1P": ""}"#,
+            r#"[{"code":"ZA1","operand":"X [1P0..1]"}]"#,
+        );
+        let issues = validate(
+            &p,
+            &message("UNH+1+UTILMD:D:11A:UN:S2.2'BGM+E01'CCI+++ZB4'CAV+ZA2'UNT+5+1'"),
+            Some(11111),
+        );
+        let cav = issues
+            .iter()
+            .find(|i| i.rule_id().is_some_and(|r| r.contains("-00004-CAV-")))
+            .expect("the CAV code is refused");
+        assert_eq!(cav.segment_position, Some(4), "{cav:?}");
+        assert_eq!(cav.segment_occurrence, None, "{cav:?}");
     }
 
     #[test]

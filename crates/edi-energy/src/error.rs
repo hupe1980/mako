@@ -285,19 +285,6 @@ pub enum Error {
         /// The configured limit.
         limit: usize,
     },
-
-    /// A single EDIFACT message (UNH…UNT) exceeds the configured
-    /// `max_segments_per_message` limit.
-    ///
-    /// Increase [`crate::ParseConfig::max_segments_per_message`] or reject the
-    /// oversized message. This limit is a `DoS` defence for the inbound parser path.
-    #[error("message exceeds the maximum allowed segment count of {limit} (actual: {actual})")]
-    TooManySegmentsInMessage {
-        /// The configured per-message limit.
-        limit: usize,
-        /// The number of segments in the offending message.
-        actual: usize,
-    },
 }
 
 #[cfg(feature = "diagnostics")]
@@ -326,7 +313,6 @@ impl miette::Diagnostic for Error {
             Error::InterchangeRefMismatch { .. } => "edi-energy::interchange-ref-mismatch",
             Error::InterchangePartyMismatch { .. } => "edi-energy::interchange-party-mismatch",
             Error::TooManyMessages { .. } => "edi-energy::too-many-messages",
-            Error::TooManySegmentsInMessage { .. } => "edi-energy::too-many-segments-in-message",
         };
         Some(Box::new(code))
     }

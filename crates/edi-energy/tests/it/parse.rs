@@ -860,3 +860,85 @@ fn the_configured_reference_date_reaches_validation() {
         "a reference date before valid_from must be honoured, not ignored"
     );
 }
+
+// ── A month of quarter-hour values ───────────────────────────────────────────
+
+/// An MSCONS carrying one month of quarter-hour values: 2 976 SG10 groups of
+/// `QTY` + `DTM+163` + `DTM+164`, about 9 000 segments in one message. The
+/// MSCONS MIG 2.5 lets SG10 repeat 9 999 times per position, so this is an
+/// ordinary Lastgang, and no BDEW document caps the segments of a message.
+#[cfg(feature = "mscons")]
+fn monthly_mscons() -> Vec<u8> {
+    let mut body = String::from(
+        "UNH+00001+MSCONS:D:04B:UN:2.4c'BGM+7+00013002+9'DTM+137:202608240900?+00:303'\
+         RFF+Z13:13002'NAD+MS+9800357000004::332'NAD+MR+4012345000023::9'UNS+D'NAD+DP'\
+         LOC+172+DE0000000000000000000000000013002'RFF+MG:REF13002'LIN+1'PIA+5+1-1?:1.8.0:SRW'",
+    );
+    let start = time::macros::datetime!(2026-07-31 22:00 UTC);
+    for i in 0..2976_i64 {
+        let from = start + time::Duration::minutes(15 * i);
+        let to = from + time::Duration::minutes(15);
+        let fmt = time::macros::format_description!("[year][month][day][hour][minute]");
+        body.push_str(&format!(
+            "QTY+220:1.5'DTM+163:{}?+00:303'DTM+164:{}?+00:303'",
+            from.format(&fmt).unwrap(),
+            to.format(&fmt).unwrap()
+        ));
+    }
+    let segments = body.matches('\'').count() + 1;
+    body.push_str(&format!("UNT+{segments}+00001'"));
+    format!("UNB+UNOC:3+9800357000004:502+4012345000023:14+260824:0900+00042'{body}UNZ+1+00042'")
+        .into_bytes()
+}
+
+/// The size limits are what refuse a message for its size.
+#[cfg(feature = "mscons")]
+fn is_limit(e: &edi_energy::Error) -> bool {
+    matches!(
+        e,
+        edi_energy::Error::Parse(edifact_rs::EdifactError::LimitExceeded { .. })
+    )
+}
+
+#[cfg(feature = "mscons")]
+#[test]
+fn a_month_of_quarter_hour_values_is_not_refused_for_its_size() {
+    let input = monthly_mscons();
+    for result in Platform::with_all_profiles().parse_interchange(&input[..]) {
+        if let Err(e) = result {
+            assert!(
+                !is_limit(&e),
+                "a monthly Lastgang is refused for its size: {e}"
+            );
+        }
+    }
+    if let Err(e) = Parser::with_config(ParseConfig::default()).parse(&input) {
+        assert!(
+            !is_limit(&e),
+            "a monthly Lastgang is refused for its size: {e}"
+        );
+    }
+}
+
+/// A per-message limit an operator sets is enforced by edifact-rs, counting
+/// `UNH` to `UNT`: the 8 941-segment message passes at 8 941 and is refused
+/// at 8 940, whatever the envelope adds.
+#[cfg(feature = "mscons")]
+#[test]
+fn a_per_message_limit_counts_unh_to_unt() {
+    let input = monthly_mscons();
+    let parse = |limit| {
+        Platform::with_all_profiles()
+            .parse_interchange_with_config(
+                &input[..],
+                ParseConfig {
+                    max_segments_per_message: Some(limit),
+                    ..ParseConfig::default()
+                },
+            )
+            .find_map(Result::err)
+    };
+    assert!(parse(8_941).is_none_or(|e| !is_limit(&e)));
+    let refused = parse(8_940).expect("one segment over the limit");
+    assert!(is_limit(&refused), "{refused}");
+}
