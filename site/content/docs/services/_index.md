@@ -51,7 +51,7 @@ graph TB
     end
 
     subgraph b2c ["Contract & Customer (LF)"]
-        vertragd[":9780 vertragd<br/>Kunden B2C+B2B · Rahmenverträge<br/>OIDC→MaLo · 18 MCP tools"]
+        vertragd[":9780 vertragd<br/>Kunden B2C+B2B · Rahmenverträge<br/>OIDC→MaLo · 20 MCP tools"]
         portald[":9480 portald<br/>customer portal read-model<br/>§41 self-service"]
     end
 
@@ -74,7 +74,7 @@ graph TB
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [makod](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 71 workflows over 469 Prüfidentifikatoren, AS4/REST/iMS |
+| [makod](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 71 workflows over 472 Prüfidentifikatoren, AS4/REST/iMS |
 | [marktd](@/docs/services/marktd.md) | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus, typed BO4E API, durable fan-out, MMMA monthly import worker |
 | [processd](@/docs/services/processd.md) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP ≥95%, LF answers to the NB-initiated GPKE processes, MSB REQOTE auto-response, §14a produktcode check; the process read model (per-PID KPIs, `GET /api/v1/audit/gleichbehandlung` for § 7a Abs. 5 EnWG); the NB Sperr-/Entsperrauftrag queue with IFTSTA 21039; role-gated builds |
 

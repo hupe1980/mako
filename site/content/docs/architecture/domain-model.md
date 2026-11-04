@@ -94,7 +94,7 @@ whichever the profile declares, and demands a *plausible* code in each, since
 The PID is what everything else is keyed on: `mako_engine::PidRouter` routes it
 to a workflow, `mako_fristen::antwort` resolves its answer Frist, and
 `mako-pruefung` picks the decision tree the answer must come from. `makod`
-routes **469** PIDs across **71** workflows
+routes **472** PIDs across **71** workflows
 (`services/makod/tests/it/published_counts.rs` holds this page to the count).
 
 ### AHB and MIG
@@ -229,7 +229,7 @@ purpose.
 | GPKE Sperrung / Entsperrung (NB-initiated) | NB | MSB | `mako-gpke` |
 | GPKE Sperrung / Entsperrung (LF-initiated, Strom) | LF | NB | `mako-gpke` |
 | WiM Gerätewechsel | MSB | NB | `mako-wim` |
-| WiM Stammdaten | NB | LF / MSB | `mako-wim` |
+| GPKE Geschäftsdatenanfrage | LF / MSB | NB | `mako-gpke` |
 | GeLi Gas Lieferbeginn / Lieferende | LF | GNB (gas DSO) | `mako-geli-gas` |
 | GeLi Gas Sperrung / Entsperrung (LF-initiated, Gas) | LF | GNB | `mako-geli-gas` |
 | WiM Gas Anmeldung / Kündigung gMSB | MSB (gas) | NB (gas) | `mako-wim` |

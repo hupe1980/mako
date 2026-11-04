@@ -257,7 +257,7 @@ identify is re-checked **daily for 60 Werktage** and only then refused `A07` /
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/v1/neuanlage?status=offen` | The Prüflauf view, with `letzter_pruefungstag` (a refusal is admissible only after it) and the `pruefungen` count |
-| `PUT /api/v1/neuanlage/{id}/identifikation` | The MaLo-ID the NB matched from its NIS/GIS; the next pass walks the tree with it |
+| `PUT /api/v1/neuanlage/{id}/identifikation` | Body `{"malo_id": "…"}` (nothing else, not empty): the MaLo-ID the NB matched from its NIS/GIS; the next pass walks the tree with it |
 
 The branches share no code (`A01`–`A09` verbrauchend, `A10`–`A19` erzeugend).
 The Vorlauffrist is measured against the Übertragungstag (GPKE Teil 1 Kap. 7
@@ -504,9 +504,20 @@ shown. Every queueable command has an answer contract (`ANSWER_CONTRACTS` in
 `src/pg/approval.rs`) naming the fields `makod` needs; a decision missing one is
 `422` with the claim released, before anything is sent. `cargo xtask
 check-approval-commands` refuses an enqueue site naming a command without a
-contract. The ESA Werteanfrage dispatches its refusal only; its Angebot needs
-prices and OBIS-Kennzahlen (QUOTES AHB 1.1a §4.3) and goes through the `makod`
-command API.
+contract.
+
+Each entry records the Entscheidungsbaum its module decided with
+(`ablehnung_ebd`) — the NB the tree its walk stopped in, the LF and ESA the
+tree of the process, the MSB `mako_pruefung::msb::baum` — and none where the
+answer carries no code (ESA Werteanfrage refusal, REQOTE, § 14a
+Steuerungsauftrag).
+
+A stated `antwort_code` must come from that tree, in the cluster the answer
+sends: Zustimmung for an escalated approval, Ablehnung for a refusal, the
+other cluster when rejecting overrides a held answer. Anything else is `422`
+with the claim released. The `Freigabe` view offers codes by the same rule.
+The ESA Werteanfrage dispatches its refusal only; its Angebot goes through the
+`makod` command API.
 
 `expires_at` is the business Frist from `mako_fristen::antwort` less one hour:
 
@@ -532,7 +543,7 @@ command API.
 The 45-minute APERAK window is a separate clock, owned by `makod`.
 
 ```
-GET  /api/v1/queue                → list Pending entries (review before expires_at)
+GET  /api/v1/queue                → list entries, the earliest expires_at first
 POST /api/v1/queue/{id}/approve   → dispatch the approve command via makod, mark Approved
 POST /api/v1/queue/{id}/reject    → dispatch the reject command via makod, mark Rejected
 ```
@@ -573,7 +584,10 @@ a request resolving to none is a `422` with `code` `MISSING_BILANZKREIS`.
 Every refusal is the shared problem body — `error`, `detail` (the sentence) and
 `code` (the machine-readable reason: `MISSING_MALO_ID`, `MISSING_LIEFERBEGINN`,
 `INVALID_DATE`, `RETROACTIVE_DATE`, `VORLAUFFRIST_VIOLATION`, and for Gas
-`MISSING_ZAEHLPUNKT`, `MISSING_PROCESS_DATE`). A command `makod` refuses in the
+`MISSING_ZAEHLPUNKT`, `MISSING_PROCESS_DATE`). Each supply body is a fixed
+struct: a key it does not declare is a `422` with `code` `unknown_field` and its
+`paths`, a mandatory key left out is a `422` whose `detail` names the missing
+field, and a mandatory key sent as an empty string is the `MISSING_*` refusal. A command `makod` refuses in the
 process's current state is a `409`; `makod` failing or unreachable is a `502`
 whose body names `upstream` and an `error_id`, never `makod`'s own text.
 
@@ -609,14 +623,18 @@ curl -X POST http://processd:8580/api/v1/start-supply-gas \
 | `bilanzkreis` | ✓* | `SG10 CCI+Z19` DE 7037 (UTILMD AHB Gas 1.2, Muss on 44001) — Gas has no Produktpaket |
 | `transaktionsgrund` | — | `E03` Wechsel (default), `E01`/`E02` Einzug |
 
-\* Same fallback as Strom. A Lieferantenwechsel needs **10 WT** Mindestvorlauf
+\* Same fallback as Strom. A `process_date` that is not a YYYYMMDD date is
+`INVALID_DATE`, and the forwarded payload is exactly the fields above. A Lieferantenwechsel needs **10 WT** Mindestvorlauf
 (AWH GeLi Gas 2.0 Kap. 2.5.2 Nr. 1), enforced here; an Einzug passes with a
 `vorlauffrist_hinweis`, because the NB corrects the date rather than rejecting
 (Kap. 4). The GNB answers 44002 / 44003 by **Ablauf des 4. WT** (Kap. 3.2.3).
 
-`POST /api/v1/end-supply` / `end-supply-gas` take `malo_id` and
-`lieferende_datum` and forward `gpke.lieferende.anmelden` /
-`geli.lieferende.anmelden`; the notice period is `vertragd`'s to enforce.
+`POST /api/v1/end-supply` takes `malo_id` and `lieferende_datum` (ISO-8601) and
+forwards `gpke.lieferende.anmelden` as `LF`. `POST /api/v1/end-supply-gas` takes
+`malo_id`, `zaehlpunkt` and `process_date` (YYYYMMDD, `INVALID_DATE` otherwise)
+— the fields `geli.lieferende.anmelden` reads — and forwards it as `LFG`, the
+only role that command is licensed to. All fields are mandatory; the notice
+period is `vertragd`'s to enforce.
 
 ### Gas Datenabruf
 
@@ -672,7 +690,7 @@ Antwortfrist sweep.
 | `deadline_at` | The **business Antwortfrist**. `null` = no published window for this PID |
 | `deadline_source` | The Festlegung `deadline_at` came from |
 | `deadline_risk` | `unknown` \| `green` \| `amber` (< 24 h) \| `red` (past) |
-| `erc_code` | BDEW ERC code when `state = rejected` |
+| `erc_code` | APERAK ERC code when an APERAK refused the message — not the Antwortcode of a business refusal |
 | `initiator_is_affiliate` | The Lieferant belongs to this operator's own undertaking |
 
 `completed_at` (not on the wire) is the time the first terminal event carries.
@@ -1041,16 +1059,18 @@ handler's `decide-queue` check runs as well.
 | Tool | Cedar action | Description |
 |------|------|-------------|
 | `list_decisions` | `read-decisions` | Last N Anmeldung decisions with ERC codes and affiliate flag |
-| `get_decision` | `read-decisions` | Single Anmeldung decision by `process_id` (UUID) |
+| `get_decision` | `read-decisions` | Single Anmeldung decision by `process_id`, its Antwortcode with tree and BDEW wording |
 | `get_stp_rate` | `read-decisions` | STP rate over last N days vs. 95 % target |
-| `get_stp_breakdown_by_erc` | `read-decisions` | Rejection breakdown by ERC code |
+| `get_stp_breakdown_by_erc` | `read-decisions` | Refusals per Entscheidungsbaum and Antwortcode, each with the BDEW wording |
 | `list_affiliate_decisions` | `read-decisions` | Decisions involving affiliated suppliers (Gleichbehandlung evidence) |
-| `list_pending_approvals` | `read-queue` | Pending approval queue entries (most urgent first) |
-| `get_queue_entry` | `read-queue` | Single queue entry by UUID |
+| `list_pending_approvals` | `read-queue` | Typed `{ freigaben, count, saturated }`, earliest `expires_at` first; filters `status`, `limit` (≤ 200), `marktrolle`. Each `Freigabe`: `art` (`gehalten` with its frozen `antwort`, or `eskaliert`) and per action the codes its tree allows (`codes_freigeben`, `codes_ablehnen`) |
+| `get_queue_entry` | `read-queue` | One `Freigabe` by UUID |
 | `approve_queue_entry` | `decide-queue` | Dispatch the entry's answer; takes `antwort_code` / `antwort_tree` / `antwort_codeliste` / `bemerkung` for an escalation |
 | `reject_queue_entry` | `decide-queue` | Dispatch the refusal with the operator's `antwort_code`, or `bemerkung` as the Begründung |
 | `get_process` | `read-process` | Full process projection — state, deadline, `deadline_source`, ERC code |
 | `list_processes_by_family` | `read-process` | One family, optionally one state; both are enumerated in the schema and an unknown value is refused |
+| `list_open_processes` | `read-process` | Open processes with given PIDs, earliest Frist first, a keyset page at a time (`nach` / `weiter`) |
+| `count_open_processes` | `read-process` | The same filter counted: open in total, Fristen ending before the Berlin day does, and the earliest of them |
 | `list_overdue_processes` | `read-overdue` | Past the business Antwortfrist, most urgent first; reports `saturated` |
 | `get_kpi_report` | `read-kpi` | Per-PID KPIs for a `YYYY-MM` month, both clocks separately |
 | `get_parity_report` | `read-kpi` | § 7a Abs. 5 parity; `gap_pp` = affiliate − third_party |

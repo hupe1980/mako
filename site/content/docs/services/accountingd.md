@@ -149,17 +149,17 @@ Every `/api/v1/*` route requires a JWT and a Cedar action — see
 | `POST` | `/api/v1/accounts/{malo_id}/clear` | Run the FIFO Zahlungszuordnung |
 | `POST` | `/api/v1/clearings/{clearing_id}/reset` | Release a mis-assigned clearing |
 | `GET` | `/api/v1/trial-balance` | Summen- und Saldenliste (§ 238 HGB) |
-| `PUT` | `/api/v1/accounts/{malo_id}/abschlag` | Change the monthly advance |
+| `PUT` | `/api/v1/accounts/{malo_id}/abschlag` | Change the monthly advance; body `{ "abschlag_ct" }` |
 | `GET` | `/api/v1/accounts/{malo_id}/abschlaege` | Deductible advances with their USt rate (`?from=&to=`) |
 | `GET/PUT` | `/api/v1/accounts/{malo_id}/vorauszahlung` | `rubo4e::current::Vorauszahlung` through [the BO4E gate](@/docs/architecture/domain-model.md#the-bo4e-gate) |
-| `GET/PUT` | `/api/v1/accounts/{malo_id}/zahlungsinformation` | `rubo4e::current::Zahlungsinformation` through the gate; strict enums keep `zahlungsart` valid |
+| `GET/PUT` | `/api/v1/accounts/{malo_id}/zahlungsinformation` | `rubo4e::current::Zahlungsinformation` through the gate; strict enums keep `zahlungsart` valid. Both PUTs refuse a key BO4E does not define (`422`, `bo4e.unknown_field`) |
 | `POST` | `/api/v1/accounts/{malo_id}/buchen` | Manual booking |
 | `POST` | `/api/v1/accounts/{malo_id}/reconcile` | Compare `balance_ct` with the ledger; `?repair=true` resets it |
 | `POST` | `/api/v1/accounts/{malo_id}/anonymize` | GDPR Art. 17 pseudonymization |
 | `GET/POST` | `/api/v1/accounts/{malo_id}/interest-charges` | § 288 BGB interest |
 | `GET/POST` | `/api/v1/accounts/{malo_id}/payment-plans` | Zahlungsvereinbarungen |
 | `GET/DELETE` | `/api/v1/payment-plans/{plan_id}` | One plan with its schedule; cancel |
-| `PUT` | `/api/v1/accounts/{malo_id}/business-partner` | Link to a `kunden_nr` |
+| `PUT` | `/api/v1/accounts/{malo_id}/business-partner` | Link to a `kunden_nr`; body `{ "kunden_nr" }` |
 | `GET` | `/api/v1/business-partners/{kunden_nr}/accounts` · `/balance` | A partner's accounts; consolidated balance |
 | `GET` | `/api/v1/aging` | Receivables in 0–30 / 31–60 / 61–90 / >90 day buckets |
 | `GET` | `/api/v1/offene-posten` | Overdue accounts |
@@ -169,7 +169,7 @@ Every `/api/v1/*` route requires a JWT and a Cedar action — see
 | `GET` | `/api/v1/periods/{period_id}/balance-proof` | Closing balance of a Kontokorrent in a sealed period (`?malo_id=&lf_mp_id=`) |
 | `GET` | `/api/v1/entries/consistency-proof` | Append-only proof since `?since=<tree_size>` |
 | `GET` | `/api/v1/dunning` | Open dunning cases |
-| `POST` | `/api/v1/dunning/{account_id}/escalate` | Manual Mahnstufe |
+| `POST` | `/api/v1/dunning/{account_id}/escalate` | Manual Mahnstufe; body `{ "stufe": 1–3, "due_days": ≥ 1 }`, both required |
 | `POST` | `/api/v1/dunning/{id}/resolve` | Resolve a case |
 | `POST` | `/api/v1/dunning/{id}/abwendung/angebot` | Record the Abwendungsvereinbarung offer (§ 41g Abs. 1 S. 2 EnWG) |
 | `GET/POST` | `/api/v1/dunning/{id}/locks` | Mahnsperren: history; place one |
@@ -286,7 +286,9 @@ With `dunning_auto_enabled = true` a daily worker escalates (idempotent through
 `auto_dunning_runs`) and then runs the [Sperr-Sequenz](#sperr-sequenz). Its
 first step closes every open case whose account owes nothing and clears its
 §§ 41f/41g state, so a paid-up customer is never walked into disconnection.
-`POST /api/v1/dunning/{account_id}/escalate` is the manual override.
+`POST /api/v1/dunning/{account_id}/escalate` is the manual override. It takes
+the Mahnstufe and the Zahlungsfrist in days as required fields — they are what
+the Mahnung tells the customer, so an omitted one is refused, not defaulted.
 
 **The Mahnung document.** Every open case without a document is rendered as a
 `MAHNUNG` through `outputd` (`outputd::document::mahnung::MahnungView`) and

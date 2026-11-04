@@ -145,6 +145,7 @@ test-outputd-db:
 # Dispatch integration tests for vertragd.
 test-vertragd-db:
     {{ just_executable() }} suite vertragd dispatch_integration --include-ignored --test-threads=1
+    {{ just_executable() }} suite vertragd bo4e_bodies --include-ignored --test-threads=1
 
 # Catalog integration tests for productd.
 test-productd-db:
@@ -159,7 +160,7 @@ test-marktd-db:
         esa_integration:: registries_integration:: \
         fanout_durable_integration:: mabis_zp_integration:: \
         temporal_constraints_integration:: tenant_isolation_integration:: \
-        overlap_is_a_client_error::
+        overlap_is_a_client_error:: konfigurationsprodukte_body::
 
 # invoicd's receipt store — the § 147 AO / GoBD audit trail, its per-tenant
 # uniqueness and the ERP re-dispatch lease.
@@ -489,7 +490,7 @@ ci:
     RUSTFLAGS="${RUSTFLAGS:--D warnings}" {{ just_executable() }} _ci
 
 [private]
-_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-request-bodies check-thin-main check-error-tuples check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-runner-disk check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-request-bodies check-thin-main check-desk desk-check check-error-tuples check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -699,6 +700,57 @@ smoke-dev *services:
 infra-logs container="postgres":
     docker compose -f dev/docker-compose.yml logs -f {{ container }}
 
+# ── The Desk (desk/) ──────────────────────────────────────────────────────────
+#
+# The operator UI: a React app in desk/ that reads the services' MCP tools
+# through its Vite server, which proxies /svc/<name> to the port dev/ports.toml
+# assigns and attaches a service's `dev=` key from its dev config.
+
+# The inner loop: makod on its dev config, the Desk with hot reload, the browser on :5173
+desk:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -d desk/node_modules ] || (cd desk && npm ci --no-audit --no-fund)
+    . dev/env.sh makod
+    cargo build -q -p makod
+    cargo run -q -p makod &
+    makod=$!
+    trap 'kill $makod 2>/dev/null || true' EXIT
+    cd desk && npx vite --open
+
+# Every service with an mcp.snapshot.json rewrites it from its tool router; then
+# the Desk's types are regenerated from the snapshots.
+#
+# Refresh the MCP tool snapshots and regenerate the Desk's types
+desk-gen:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for snap in services/*/mcp.snapshot.json; do
+        svc="$(basename "$(dirname "$snap")")"
+        BLESS_MCP_SNAPSHOT=1 cargo test -q -p "$svc" --lib -- the_tool_contract_matches_the_snapshot
+    done
+    cd desk && npm run gen
+
+# Vite serves the Desk, makod's answers are recorded, the clock is fixed —
+# no service runs. Needs Playwright's Chromium (`npx playwright install chromium`).
+#
+# Regenerate the Desk's screenshots in site/content/docs/guide/desk/
+desk-screenshots:
+    cd desk && npm run screenshots
+
+# Needs Node (desk/.node-version) and no browser or Docker.
+#
+# The Desk's own gate: generated types current, typecheck, lint, unit tests
+desk-check:
+    cd desk && npm ci --no-audit --no-fund && npm run check
+
+# No desk/src file outside src/format/ builds or parses a date or a number —
+# the Desk renders Fristen and amounts, it never derives them.
+#
+# The Desk's npm licences are in deny.toml's allow list, and it computes no date or number
+check-desk:
+    cargo xtask check-desk
+
 # ── Versioning ────────────────────────────────────────────────────────────────
 
 # Bump workspace version (e.g. `just bump 0.2.0`)
@@ -821,6 +873,11 @@ check-occupancy:
 # back years later, so a removed field must not make a § 147 AO record unfoldable.
 check-event-payloads:
     cargo xtask check-event-payloads
+
+# Refuse an event that is a market message and states none of it — the Desk's
+# Verlauf reads direction and PID off the envelope, never off a type name.
+check-event-verlauf:
+    cargo xtask check-event-verlauf
 
 # Refuse a Festlegung cited in a form it does not publish. BK6-22-024 numbers its
 # operative part in Tenorziffern and carries its substance in Anlagen, so

@@ -202,6 +202,33 @@ a.zola-anchor::before { content: "#"; }
 .doc-body th { background: var(--bg-alt); white-space: nowrap; }
 .doc-body blockquote { border-left: 4px solid var(--primary); margin: 1rem 0; padding: .3rem 1rem; background: var(--bg-alt); border-radius: 0 8px 8px 0; color: var(--text-soft); }
 .doc-body img { max-width: 100%; height: auto; }
+/* A screenshot is a link to its full-size image: it opens enlarged on click
+   (static/js/zoom.js upgrades the click to a dialog; without script it is the
+   image itself). One taken in both appearances follows the site's theme —
+   `name-light.png` in light, `name-dark.png` in dark. */
+.doc-body a:has(> img[src$=".png"]) { display: block; margin: 1.4rem 0; cursor: zoom-in; }
+.doc-body a > img[src$=".png"] {
+  border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
+  transition: transform .2s ease;
+}
+.doc-body a:hover > img[src$=".png"] { transform: translateY(-1px); }
+.doc-body a:has(> img[src$="-dark.png"]) { display: none; }
+:root[data-theme="dark"] .doc-body a:has(> img[src$="-dark.png"]) { display: block; }
+:root[data-theme="dark"] .doc-body a:has(> img[src$="-light.png"]) { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .doc-body a:has(> img[src$="-dark.png"]) { display: block; }
+  :root:not([data-theme="light"]) .doc-body a:has(> img[src$="-light.png"]) { display: none; }
+}
+dialog.zoom {
+  padding: 0; border: 0; background: transparent; max-width: 96vw; max-height: 94vh;
+  cursor: zoom-out;
+}
+dialog.zoom::backdrop { background: rgba(0,0,0,.6); backdrop-filter: blur(6px); }
+dialog.zoom img { display: block; max-width: 96vw; max-height: 94vh; border-radius: 12px; }
+@media (prefers-reduced-motion: no-preference) {
+  dialog.zoom[open] img { animation: zoom-in .18s ease-out; }
+}
+@keyframes zoom-in { from { transform: scale(.96); opacity: .4; } to { transform: none; opacity: 1; } }
 .doc-body ul, .doc-body ol { padding-left: 1.3rem; }
 
 /* GitHub-style alerts (`> [!NOTE]`), which Zola renders as a class on the

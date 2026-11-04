@@ -14,8 +14,10 @@
 //! Each statement must also be well-formed for its status (the OpenVEX specification:
 //! `not_affected` needs a justification or an impact statement, `affected`
 //! an action statement) and name at least one `pkg:cargo/` subcomponent.
-//! When a local copy of the RustSec database is present
-//! (`$CARGO_HOME/advisory-db`, which `cargo deny` maintains), the subcomponent
+//! When a local copy of the RustSec database is present — the one `cargo deny`
+//! maintains, `$CARGO_HOME/advisory-dbs/advisory-db-<hash>` (the most recently
+//! fetched when there are several), else the legacy `$CARGO_HOME/advisory-db`
+//! — the subcomponent
 //! must be the crate the advisory is filed against — the check that catches
 //! two IDs whose reasons have been swapped.
 //!
@@ -93,8 +95,27 @@ fn advisory_db() -> Option<PathBuf> {
     let home = std::env::var_os("CARGO_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cargo")))?;
-    let db = home.join("advisory-db");
-    db.join("crates").is_dir().then_some(db)
+    newest_advisory_db(&home.join("advisory-dbs")).or_else(|| {
+        let legacy = home.join("advisory-db");
+        legacy.join("crates").is_dir().then_some(legacy)
+    })
+}
+
+/// The most recently fetched database under `advisory-dbs/`, where current
+/// `cargo deny` keeps one clone per source. Reading a stale copy would judge
+/// the VEX file against advisories `cargo deny` no longer sees, or miss the
+/// ones it does.
+fn newest_advisory_db(dir: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.join("crates").is_dir())
+        .max_by_key(|p| {
+            std::fs::metadata(p.join("crates"))
+                .and_then(|m| m.modified())
+                .ok()
+        })
 }
 
 /// The RustSec IDs in `deny.toml`'s `[advisories] ignore = [...]`, comment
@@ -323,6 +344,20 @@ fn advisory_package(db: &Path, id: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_database_cargo_deny_maintains_is_the_one_read() {
+        let root = std::env::temp_dir().join(format!("vex-db-{}", std::process::id()));
+        let dbs = root.join("advisory-dbs");
+        std::fs::create_dir_all(dbs.join("advisory-db-old/crates")).expect("old");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::create_dir_all(dbs.join("advisory-db-new/crates")).expect("new");
+        std::fs::create_dir_all(dbs.join("not-a-db")).expect("noise");
+        let found = newest_advisory_db(&dbs).expect("a database");
+        assert!(found.ends_with("advisory-db-new"), "{found:?}");
+        assert!(newest_advisory_db(&root.join("absent")).is_none());
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     const DENY: &str = r#"
 [licenses]

@@ -217,7 +217,7 @@ struct Grant {
 /// it, so there is nothing here to check and passing it silently would be the
 /// worse answer.
 fn parse_manifest(src: &str) -> Option<(bool, Vec<Grant>)> {
-    let manifest: Manifest = serde_yaml_ng::from_str(src).ok()?;
+    let manifest: Manifest = serde_saphyr::from_str(src).ok()?;
     let planned = manifest.spec.execution.kind == "planned";
     let grants = manifest
         .spec

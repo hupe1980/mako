@@ -1189,6 +1189,11 @@ built into one series on its observed grid. Every input must share that grid; a
 source with no series in the window is `422`, a failed read `500` with an
 `error_id`.
 
+The `POST /api/v1/virtual` body takes `virtual_malo_id` and `rule_json`
+(both required), `display_name` (the ID when absent), `sparte` (`STROM` when
+absent; `GAS`, `WAERME`, `WASSER`) and `legal_basis`. An undeclared key, a
+`rule_json` that is not a rule, or another `sparte` is `422`.
+
 **`FORMULA`** is the UTILTS step graph: Rechenschritte keyed by number, each a
 `SUM` of Z69/Z70 terms, a `QUOTIENT` (Z81 ÷ Z80, cut to six places toward zero;
 a zero divisor gives 0, BDEW Anwendungshilfe *Beispiele von Berechnungsformeln
@@ -1316,6 +1321,9 @@ administers, monitors and maintains the iMSys and reports security deficiencies
 to the BSI) and **BSI TR-03109**. A silent gateway breaches the **§ 60 Abs. 1
 MsbG** delivery duty. The §14a Konfigurationsprodukt is **BK6-22-300**. The
 90/30/7-day certificate ladder is an operational choice.
+
+`PUT /api/v1/smgw/{malo_id}` takes an `SmgwSession`; a key it does not
+declare, at any depth, is `422`. The call runs the check below at once.
 
 `check_session_compliance()` is pure; the daily worker
 (`[smgw] sweep_interval_secs`) runs it over every `smgw_sessions` row except

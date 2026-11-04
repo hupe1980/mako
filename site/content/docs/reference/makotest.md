@@ -593,7 +593,7 @@ REMADV, `SG2 AJT` on an ORDRSP. One `antwort_code(tree, code)` for all of them.
 
 Which matters because an obligation whose answer message type cannot be built is
 one no test can answer. All **65** published obligations are answerable — UTILMD
-40, ORDRSP 11, IFTSTA 7, QUOTES 5, ORDERS 2 — and
+41, ORDRSP 11, IFTSTA 7, QUOTES 5, ORDERS 1 — and
 `TestCoverage::test_every_published_obligation_is_answerable`
 (`makotest/tests/test_wim_esa.py`) holds it there.
 

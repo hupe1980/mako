@@ -1060,27 +1060,23 @@ curl -s "http://marktd:8180/api/v1/zaehler/Z001234567/tariff-zone?datetime=2026-
 # → { "zaehler_id": "Z001234567", "local_datetime": "2026-01-15T14:30:00", "tariff_zone": "HT" }
 ```
 
-**From WiM Stammdaten.** A `de.mako.process.completed` for ORDERS 17102–17133
-carrying `melo_id` and `zaehlwerke` (makod's `extract_zak_ze_zaehlwerke` over
-`ZAK`/`ZE`/`ZD`) upserts the registers and seasons of the MeLo's first Zähler,
-with deterministic ids so a redelivery is harmless. A failure is logged and does
-not fail the ingest.
-
 ### SteuerbareRessource and TechnischeRessource
 
 An SR-ID is `C[A-Z0-9]{9}[0-9]` (check digit by the ASCII procedure). The
-`konfigurationsprodukte` sub-resource is replaced as a whole; each element must
-decode as `Konfigurationsprodukt` with a non-empty `produktcode`, and
-`bandNummer` is `422`. A `PUT` emits `de.markt.sr.konfigurationsprodukt.updated`;
+`konfigurationsprodukte` sub-resource is replaced as a whole. The body is
+`{"konfigurationsprodukte": [...]}` — the list is required (`[]` clears it) —
+and each element crosses the BO4E gate as a `Konfigurationsprodukt` with a
+non-empty `produktcode`. A key the body or BO4E does not define, at any depth,
+is `422` (`bo4e.unknown_field` inside an element): `bandNummer` is one. A `PUT` emits `de.markt.sr.konfigurationsprodukt.updated`;
 `processd` refuses a Steuerungsauftrag for an uncontracted `produktcode`.
 
 ```bash
 curl -s -X PUT "http://marktd:8180/api/v1/steuerbare-ressourcen/C0000000011/konfigurationsprodukte" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
-  -d '[
-    { "produktcode": "FLEX-PRODUCT-001", "zaehlzeitregister": "HT" }
-  ]'
+  -d '{
+    "konfigurationsprodukte": [ { "produktcode": "FLEX-PRODUCT-001" } ]
+  }'
 ```
 
 A TechnischeRessource links a charging point, generator or storage unit to a

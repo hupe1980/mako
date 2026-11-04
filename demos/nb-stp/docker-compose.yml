@@ -107,7 +107,8 @@ services:
   # Subscribes to marktd for process.initiated events.
   # Validates each Anmeldung against marktd master data (MaLo, preisblatt, contracts).
   # Dispatches bestaetigen (NB_AUTO_ACCEPT=true) or ablehnen to makod automatically.
-  # Stores all decisions in PostgreSQL for §20 EnWG parity reporting.
+  # Stores all decisions in PostgreSQL, the evidence for the § 20 Abs. 1 EnWG
+  # parity comparison.
   processd:
     image: processd:dev
     depends_on:

@@ -9,21 +9,24 @@
 > **⚠️ Experimental** — pre-1.0. APIs change between releases. Do not run it in
 > production without thorough in-house testing against your own counterparties.
 
-**mako is an open-source market-operations platform for the German energy
-market, in Rust.** It takes BDEW Marktkommunikation (MaKo) from raw EDIFACT and
+**mako is an open-source, AI-first market-operations platform for the German
+energy market, in Rust.** It takes BDEW Marktkommunikation (MaKo) from raw EDIFACT and
 AS4 bytes to event-sourced workflows that answer inside their Frist, and carries
 metering, grid and EEG settlement, retail billing and the ledger on the same
 events — for the NB, LF, MSB and ESA roles. The BDEW formats are read from the
 published MIG and AHB documents as data, so a format release is an import run,
-not a rewrite.
+not a rewrite. AI-first means one typed surface: the services speak MCP, agents
+and the operator Desk read the same tools, and a model reads, explains and
+proposes while code computes every Frist, amount and verdict.
 
 | Layer | What it is |
 |---|---|
-| **Protocol** | `edi-energy` EDIFACT · `dvgw-edi` DVGW gas · `redispatch-xml` Redispatch 2.0 · `mako-engine` event-sourced process runtime · `makod` daemon — 71 workflows over 469 Prüfidentifikatoren |
+| **Protocol** | `edi-energy` EDIFACT · `dvgw-edi` DVGW gas · `redispatch-xml` Redispatch 2.0 · `mako-engine` event-sourced process runtime · `makod` daemon — 71 workflows over 472 Prüfidentifikatoren |
 | **Market data** | `mako-markt` library · `marktd` hub (PostgreSQL, durable CloudEvents fan-out, OIDC/JWT) |
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` · `eeg-billing` + `einsd` · `energy-billing` + `billingd` |
 | **Customer management** | `accountingd` ledger · `portald` portal · `outputd` documents · `vertragd` contracts · `productd` catalogue |
-| **Agent surface** | 11 of the 14 services expose an MCP server — **160 tools** — and `agentd` is the governed consumer: 28 specialists (26 read-only model-backed plus 2 coded) on [agentplane](https://github.com/hupe1980/agentplane), with journaled effects and durable human triage |
+| **Agent surface** | 11 of the 14 services expose an MCP server — **165 tools** — and `agentd` is the governed consumer: 29 specialists (27 read-only model-backed plus 2 coded) on [agentplane](https://github.com/hupe1980/agentplane), with journaled effects and durable human triage |
+| **Operator UI** | `desk/` — mako Desk: processes and their Verlauf, customers, Freigaben, and an assistant that cites every sentence and proposes what a person sends. The `mako-desk` image runs behind an OIDC gateway; `just desk` for development ([guide](https://hupe1980.github.io/mako/docs/guide/desk/), [AGENTS](desk/AGENTS.md)) |
 | **Testing** | `makotest` — Python toolkit over the same Rust core: check digits, the answer Fristen, Entscheidungsbaum codes, AHB-validated EDIFACT, answering counterparties, a `pytest` plugin ([README](makotest/README.md)) |
 
 ## Quick start
@@ -87,7 +90,7 @@ flowchart LR
         ACCOUNTINGD["accountingd<br/>FI-CA ledger"]
         OUTPUTD["outputd<br/>customer documents<br/>+ delivery"]
         PORTALD["portald<br/>customer portal"]
-        AGENTD["agentd<br/>28 specialists<br/>26 model-backed + 2 coded"]
+        AGENTD["agentd<br/>29 specialists<br/>27 model-backed + 2 coded"]
         ERP["ERP / operator systems"]
     end
 
@@ -144,11 +147,11 @@ config, deployment — is [mako docs · Services](https://hupe1980.github.io/mak
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [`makod`](services/makod/) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 71 workflows over 469 Prüfidentifikatoren, AS4 · REST · iMS |
+| [`makod`](services/makod/) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 71 workflows over 472 Prüfidentifikatoren, AS4 · REST · iMS |
 | [`marktd`](services/marktd/) | `:8180` | All | Market data hub — MaLo/MeLo, Versorgungsstatus, registries, durable CloudEvents fan-out |
 | [`processd`](services/processd/) | `:8580` | NB · LF · MSB | Process decision engine — answers the published Entscheidungsbäume, escalates what it cannot decide; the process read model (KPIs, Fristen, the § 7a Abs. 5 EnWG Gleichbehandlung report) and the NB Sperr-/Entsperrauftrag queue |
 | [`edmd`](services/edmd/) | `:8380` | All | Energy data management — MSCONS, Zählerstandsgang, quality scoring, Ablesesteuerung, tiered store · 16 MCP tools |
-| [`vertragd`](services/vertragd/) | `:9780` | LF · MSB | Contracts and customers — every contract with a Kunde on one side · 18 MCP tools |
+| [`vertragd`](services/vertragd/) | `:9780` | LF · MSB | Contracts and customers — every contract with a Kunde on one side · 20 MCP tools |
 | [`productd`](services/productd/) | `:9080` | LF | Product and tariff catalogue — 14 categories, Angebot lifecycle, EPEX and BEHG price series · 13 MCP tools |
 | [`netzbilanzd`](services/netzbilanzd/) | `:8680` | NB · ÜNB | Grid settlement runs — NNE, KA, MMM, MSB, AWH, and the MaBiS Summenzeitreihen filed with the BIKO; issues the INVOIC · 12 MCP tools |
 | [`einsd`](services/einsd/) | `:9180` | NB · LF | Einspeiser registry and EEG/KWKG settlement · 20 MCP tools + 6 prompts |
@@ -157,7 +160,7 @@ config, deployment — is [mako docs · Services](https://hupe1980.github.io/mak
 | [`accountingd`](services/accountingd/) | `:9380` | LF | Massenkontokorrent — tamper-evident double-entry ledger, SEPA, Mahnwesen |
 | [`outputd`](services/outputd/) | `:9880` | — | Customer communications — renders and delivers what other services computed |
 | [`portald`](services/portald/) | `:9480` | LF | Customer portal read-model gateway and the § 41 EnWG self-service writes; no MCP server |
-| [`agentd`](services/agentd/) | `:9580` | All | Advisory agent plane — 28 specialists over the platform's MCP tools, journaled and human-gated |
+| [`agentd`](services/agentd/) | `:9580` | All | Advisory agent plane — 29 specialists over the platform's MCP tools, journaled and human-gated |
 
 ## Use a crate
 

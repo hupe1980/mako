@@ -33,6 +33,20 @@ allow = [
     # CC0-1.0: Creative Commons Zero — public domain dedication.
     # Used by some data/test crates as transitive deps.
     "CC0-1.0",
+    # The identifiers below are introduced by the Desk's npm tree (desk/), which
+    # `cargo xtask check-desk` holds to this same list.
+    # MPL-2.0: file-level copyleft — obligations attach to modified MPL files
+    # only. lightningcss, the CSS transformer of vite 8 and @tailwindcss/vite: a
+    # build tool, not in the Desk bundle.
+    "MPL-2.0",
+    # Unlicense: public-domain dedication. isbot, via @tanstack/react-router.
+    "Unlicense",
+    # BlueOak-1.0.0: permissive. lru-cache, via jsdom (Desk unit tests).
+    "BlueOak-1.0.0",
+    # Python-2.0 / PSF-2.0: permissive. argparse, via js-yaml via
+    # json-schema-to-typescript (the Desk's type generation).
+    "Python-2.0",
+    "PSF-2.0",
 ]
 confidence-threshold = 0.9
 
@@ -75,6 +89,12 @@ deny = [
 # `typst-library` — there is no feature that trims it — so these duplicates
 # arrive with the renderer, as do the hayro image-decoder pairs below, and cannot be resolved by configuration. An invoice
 # template contains no code blocks, so the highlighting path is never entered.
+# energy-api signs on p256 0.14; jsonwebtoken 11.1 still verifies on 0.13.
+[[bans.skip-tree]]
+name    = "p256"
+version = "0.13"
+reason  = "jsonwebtoken 11.1 verifies on p256 0.13 while energy-api signs on the patched 0.14; the old subtree is verification-only."
+
 [[bans.skip]]
 name    = "fancy-regex"
 version = "0.16"
@@ -443,6 +463,15 @@ ignore = [
     # Resolution: drops out when opendal and hayagriva reach quick-xml ≥ 0.41.
     { id = "RUSTSEC-2026-0194", reason = "quick-xml O(N²) DoS, patched in 0.41 — every counterparty-facing parser here is on 0.41; the affected versions remain only under opendal (authenticated cloud APIs) and typst (bundled assets)" },
     { id = "RUSTSEC-2026-0195", reason = "quick-xml NsReader memory-exhaustion DoS; same version constraint and same usage analysis as RUSTSEC-2026-0194." },
+    # Drops out with a jsonwebtoken on elliptic-curve 0.14.
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.5 timing; the signing path (energy-api JWS) is on patched 0.7.10 — 0.5.5 remains only under jsonwebtoken's public-key verification and the unshipped bedrock feature" },
+    # RUSTSEC-2026-0435: thrift < 0.23 allocates an attacker-chosen length in
+    # read_bytes/read_string. parquet 58 decodes Parquet footers with it, under
+    # DataFusion 53 (held by iceberg-datafusion 0.10.1). The footers are the
+    # ones meterstore wrote into the operator's own warehouse; edmd's Iceberg
+    # catalog is a read facade behind Cedar `read-archive-olap`, so no outside
+    # party can plant a file edmd parses. Resolution: parquet 60 drops thrift.
+    { id = "RUSTSEC-2026-0435", reason = "thrift 0.17 unbounded allocation; reached only by parquet decoding footers meterstore wrote into the operator's own warehouse — no peer-supplied Thrift input" },
     # RUSTSEC-2025-0134: rustls-pemfile unmaintained (every version; the PEM
     # parser lives on in rustls-pki-types). Pulled by testcontainers → bollard.
     # Dev-only dependency (integration tests only); not present in any production

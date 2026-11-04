@@ -110,6 +110,8 @@ Commands:
   check-clippy-bans   Every clippy.toml ban fires on its planted use in xtask/clippy-fixtures
   check-thin-main     Refuse a services/*/src/main.rs that is more than
                         `mako_service::run::<D>().await` — the daemon lives in the library
+  check-desk          The Desk's npm licences are within deny.toml's allow list, and
+                        desk/src computes no date or number outside src/format/
   check-error-tuples  Refuse any hand-built `(StatusCode::<non-2xx>, …)` tuple outside
                         `#[cfg(test)]` items under services/*/src — fail with an `ApiError`
   dep-age             Report each direct dependency's pin against crates.io (network; a
@@ -149,8 +151,10 @@ mod check_command_constructors;
 mod check_controls_consulted;
 mod check_crate_lints;
 mod check_db_suites;
+mod check_desk;
 mod check_error_tuples;
 mod check_event_payloads;
+mod check_event_verlauf;
 mod check_expected_tenant;
 mod check_frist_literals;
 mod check_known_wrong;
@@ -250,6 +254,7 @@ fn main() {
         Some("check-workflow-interpolation") => check_workflow_interpolation(),
         Some("check-workflow-purity") => check_workflow_purity(),
         Some("check-event-payloads") => check_event_payloads(),
+        Some("check-event-verlauf") => check_event_verlauf(),
         Some("check-cedar-roles") => check_cedar_roles(),
         Some("check-tenant-predicate") => check_tenant_predicate(),
         Some("check-as4-controls") => check_as4_controls(),
@@ -257,6 +262,7 @@ fn main() {
         Some("check-tool-grants") => check_tool_grants(),
         Some("check-clippy-bans") => root_task(check_clippy_bans::run),
         Some("check-thin-main") => root_task(check_thin_main::run),
+        Some("check-desk") => root_task(check_desk::run),
         Some("check-error-tuples") => root_task(check_error_tuples::run),
         Some("validate-ebd-codes") => validate_ebd_codes(),
         Some("validate-profiles") => validate_profiles(),
@@ -407,6 +413,13 @@ fn check_workflow_purity() {
 fn check_event_payloads() {
     let (workspace_root, _) = workspace_info();
     if !check_event_payloads::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_event_verlauf() {
+    let (workspace_root, _) = workspace_info();
+    if !check_event_verlauf::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

@@ -212,7 +212,8 @@ pub fn run(workspace_root: &Path) -> bool {
         return false;
     }
 
-    let missing_deny = rule_one(&found_extractions, &files);
+    let mut missing_deny = rule_one(&found_extractions, &files);
+    missing_deny.extend(value_bodies(&files));
     let mut ungated = Vec::new();
     let mut escapes = Vec::new();
 
@@ -680,6 +681,39 @@ fn extractions(files: &[(String, String)]) -> Vec<Extraction> {
                     out.push(e);
                 }
                 rest = after;
+            }
+        }
+    }
+    out
+}
+
+/// Handler bodies extracted as `serde_json::Value`: a value has no fields, so
+/// the unknown-key refusal has nothing to refuse against, and a misspelt key
+/// is read as absent — agentd's run request, read that way, started every
+/// subscribing specialist when its `agent` was misspelt. A body is a type.
+fn value_bodies(files: &[(String, String)]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (rel, src) in files {
+        for (n, line) in src.lines().enumerate() {
+            let squeezed: String = line.split_whitespace().collect();
+            let untyped = [
+                "Json<Value>",
+                "Json<serde_json::Value>",
+                "Lenient<Value>",
+                "Lenient<serde_json::Value>",
+            ]
+            .iter()
+            .any(|t| {
+                squeezed.contains(&format!("):{t}"))
+                    || squeezed.contains(&format!("):mako_service::{t}"))
+                    || squeezed.contains(&format!("):axum::{t}"))
+            });
+            if untyped {
+                out.push(format!(
+                    "{rel}:{}  a request body extracted as `serde_json::Value` — no field \
+                     can be refused, so a misspelt one is read as absent; declare its type",
+                    n + 1
+                ));
             }
         }
     }
@@ -1420,6 +1454,21 @@ pub struct AlsoKept { pub b: u8 }
         }
         let out = super::rule_one(&super::extractions(&files), &files);
         assert!(out.is_empty(), "{out:#?}");
+    }
+
+    #[test]
+    fn an_untyped_body_is_refused_and_a_returned_value_is_not() {
+        let files = vec![(
+            "x.rs".to_owned(),
+            "async fn h(claims: Claims, Json(req): Json<Value>) {}\n\
+             async fn g(Json(b): mako_service::Json<serde_json::Value>) {}\n\
+             async fn ok(Json(b): Json<RunRequest>) -> ApiResult<Json<Value>> {}\n"
+                .to_owned(),
+        )];
+        let found = super::value_bodies(&files);
+        assert_eq!(found.len(), 2, "{found:#?}");
+        assert!(found[0].starts_with("x.rs:1"));
+        assert!(found[1].starts_with("x.rs:2"));
     }
 
     #[test]

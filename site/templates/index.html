@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {#- ⚠ Guarded numbers. `services/makod/tests/it/published_counts.rs` reads this file
-    and requires the phrases "469 Prüfidentifikatoren" and "71 workflows" to
+    and requires the phrases "472 Prüfidentifikatoren" and "71 workflows" to
     survive tag-stripping, so a number must stay immediately before its unit with
     only markup between them. `e2e_ahb_rule_coverage_guard.rs` reads the AHB-rule
     count out of the last <strong> element preceding the words it greps for in
@@ -16,13 +16,16 @@
       <span class="tag tag-status">{{ config.extra.status }}</span>
       <span>Rust · MIT or Apache-2.0 · BDEW EDI@Energy {{ config.extra.format_versions }}</span>
     </p>
-    <h1 class="hero-title">German energy-market operations,<br>from raw EDIFACT to production — in Rust.</h1>
+    <h1 class="hero-title">AI-first German energy-market operations,<br>from raw EDIFACT to production — in Rust.</h1>
     <p class="hero-sub">Every German electricity and gas market participant is required to
       exchange regulated messages with its counterparties — <em>Marktkommunikation</em>, MaKo.
       That is a few hundred prescribed processes carried over EDIFACT and AS4, each with a
       published decision tree and a deadline. <strong>mako implements them</strong>: the BDEW
       formats are read as data, every process runs as an event-sourced workflow, and
-      settlement, billing and the ledger sit on the same events.</p>
+      settlement, billing and the ledger sit on the same events. <strong>AI-first</strong>:
+      the services speak MCP, and the operator Desk reads the same typed tools the agents
+      are granted — a model reads, explains and proposes; every Frist, amount and verdict
+      is computed by code.</p>
     <div class="hero-cta">
       <a class="btn btn-primary" href="{{ get_url(path='@/docs/guide/getting-started.md') | safe }}">Get started</a>
       <a class="btn btn-ghost" href="{{ get_url(path='@/docs/_index.md') | safe }}">Read the docs</a>
@@ -40,16 +43,16 @@
 <section class="stats" aria-label="Scope">
   <div class="stats-inner">
     <div><strong>482 / 482</strong><span>published Prüfidentifikatoren imported</span></div>
-    <div><strong>469</strong><span>Prüfidentifikatoren routed</span></div>
+    <div><strong>472</strong><span>Prüfidentifikatoren routed</span></div>
     <div><strong>71</strong><span>MaKo workflows</span></div>
     <div><strong>17</strong><span>EDI@Energy message types</span></div>
     <div><strong>14</strong><span>services</span></div>
     <div><strong>4</strong><span>deployable roles</span></div>
   </div>
   <p class="stats-note wrap">Three views of one catalogue. Every one of the 482
-    Prüfidentifikatoren the BDEW Anwendungsübersicht publishes is imported; 469 are
+    Prüfidentifikatoren the BDEW Anwendungsübersicht publishes is imported; 472 are
     <em>routed</em> to a workflow — including the DVGW gas codes BDEW does not publish — and
-    <strong>434</strong> additionally carry validated AHB segment rules. The 35 that do not
+    <strong>437</strong> additionally carry validated AHB segment rules. The 35 that do not
     are exactly that DVGW block: ALOCAT, NOMINT/NOMRES and SSQNOT ride <code>dvgw-edi</code>,
     for which no BDEW AHB exists to import rules from. A release that would shrink any of the
     three fails the build.</p>
@@ -246,11 +249,14 @@ graph TB
       </div>
       <div class="card">
         <h3>Operations &amp; oversight</h3>
-        <p>BNetzA KPI observability with Fristen tracking, a customer portal, and an
+        <p>The <a href="{{ get_url(path='@/docs/guide/desk/index.md') | safe }}">Desk</a>, an
+          operator UI with every Frist in Berlin time and an assistant whose every sentence
+          cites its source; BNetzA KPI observability, a customer
+          portal, and an
           <!-- check-tool-grants pins the two phrases below verbatim; keep each on one
                line, and update the counts only via the guard's own numbers. -->
-          agent plane over the platform's 160 MCP tools.
-          Its 28 declarative specialists are advisory by
+          agent plane over the platform's 165 MCP tools.
+          Its 29 declarative specialists are advisory by
           construction: no active manifest grants a mutating tool, every model and tool call
           is a journaled effect, and a triage worklist carries what a person has to see.</p>
         <a class="card-count" href="{{ get_url(path='@/docs/services/agentd.md') | safe }}">processd · portald · agentd →</a>
@@ -277,6 +283,7 @@ graph TB
         domain layer is deliberately split from transport and format, so when the market
         moves, the platform moves with an import run — not a rewrite.</p>
       <ul class="check">
+        <li><strong>AI-first, code decides</strong> — agents and people work one typed tool surface; no model sits in a calculation path, and no agent sends a market message.</li>
         <li><strong>Auditable by construction</strong> — event-sourced processes, replayable state, hash-chained ledger with § 147 AO period seals.</li>
         <li><strong>Four market roles, one engine</strong> — NB, LF, MSB and ESA answer from the published Entscheidungsbäume, and a deployment registers only the processes of the roles it declares.</li>
         <li><strong>Validation that fails loudly</strong> — an unregistered Prüfidentifikator is reported, never quietly accepted.</li>

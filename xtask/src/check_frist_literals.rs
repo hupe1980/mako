@@ -151,9 +151,30 @@ pub fn run(workspace_root: &Path) -> bool {
         };
         findings.extend(matcher.findings(&rel, &src));
     }
+    let procedures = procedure_findings(workspace_root, &matcher);
+    for (file, literal, _) in PROCEDURE_EXPLANATIONS {
+        let text =
+            std::fs::read_to_string(workspace_root.join("services/agentd/agents").join(file))
+                .unwrap_or_default();
+        if !matcher
+            .frist
+            .find_iter(&text)
+            .any(|m| m.as_str().eq_ignore_ascii_case(literal))
+        {
+            eprintln!(
+                "check-frist-literals: PROCEDURE_EXPLANATIONS admits `{literal}` in {file}, which no \
+                 longer states it — remove the entry"
+            );
+            return false;
+        }
+    }
+    let procedure_count = procedures.0;
+    findings.extend(procedures.1);
     if findings.is_empty() {
         println!(
-            "check-frist-literals: no string literal in {} file(s) states a Frist beside its source",
+            "check-frist-literals: no string literal in {} file(s) states a Frist beside its \
+             source, and the {procedure_count} agent manifest(s) state none beyond the admitted \
+             explanations",
             files.len()
         );
         return true;
@@ -167,6 +188,120 @@ pub fn run(workspace_root: &Path) -> bool {
         eprintln!("  {path}:{line}  {excerpt}");
     }
     false
+}
+
+/// Procedure lines admitted with a Frist, each `(manifest, literal, reason)`:
+/// an explanation of what a tool's own field means, beside the source the
+/// field implements — never a threshold the model is to apply. A new Frist in
+/// a procedure fails until it is admitted here with its reason, and an entry
+/// whose literal is gone fails as stale.
+const PROCEDURE_EXPLANATIONS: &[(&str, &str, &str)] = &[
+    (
+        "deadline-alert-agent.yaml",
+        "12:00",
+        "explains the APERAK windows the alert carries — APERAK AHB 1.1 § 2.3.1/§ 2.4.1, as AGENTS.md quotes them",
+    ),
+    (
+        "deadline-alert-agent.yaml",
+        "3 Werktage",
+        "the Gas Initialprozess APERAK window, APERAK AHB 1.1 § 2.3.1",
+    ),
+    (
+        "deadline-alert-agent.yaml",
+        "11:00",
+        "the GPKE Anmeldung Antwortfrist the deadline label names, BK6-24-174 GPKE Teil 2",
+    ),
+    (
+        "deadline-alert-agent.yaml",
+        "4 Werktage",
+        "the GeLi Gas Anmeldung Antwortfrist, BK7-24-01-009 Kap. 3.1",
+    ),
+    (
+        "deadline-alert-agent.yaml",
+        "1 WT",
+        "the WiM per-PID windows 3/5/7/1 WT, BK6-24-174 Anlage 2a Kap. 2.2.2–2.5.2",
+    ),
+    (
+        "deadline-alert-agent.yaml",
+        "1. Werktag",
+        "the GPKE Anmeldung's „11:00 of the 1. Werktag“, BK6-24-174 GPKE Teil 2",
+    ),
+    (
+        "mabis-agent.yaml",
+        "10 Werktage",
+        "the BKA Erstaufschlag window, BK6-24-174 Anlage 3 § 3.10",
+    ),
+    (
+        "mabis-agent.yaml",
+        "30 Werktage",
+        "the BKA clearing window, BK6-24-174 Anlage 3 § 3.10",
+    ),
+    (
+        "mabis-agent.yaml",
+        "05:00",
+        "netzbilanzd's own submission schedule, an operating time and not a Frist",
+    ),
+    (
+        "mako-agent.yaml",
+        "3 Werktage",
+        "the Gas Initialprozess APERAK window, APERAK AHB 1.1 § 2.3.1",
+    ),
+    (
+        "mako-agent.yaml",
+        "12:00",
+        "names the APERAK windows of the event, APERAK AHB 1.1 § 2.3/§ 2.4.1",
+    ),
+    (
+        "productd-agent.yaml",
+        "18:00",
+        "the EPEX import's operating cut-off, not a Frist",
+    ),
+    (
+        "productd-agent.yaml",
+        "14:00",
+        "the EPEX import's operating alert time, not a Frist",
+    ),
+    (
+        "sperrd-agent.yaml",
+        "6 Werktage",
+        "explains `frist_ueberschritten`: the execution window of GPKE Teil 2 § 3.5.1.2 Nr. 1",
+    ),
+    (
+        "sperrd-agent.yaml",
+        "1 Werktag",
+        "explains `iftsta_ueberfaellig` and the ORDRSP window the queue's counters implement",
+    ),
+];
+
+/// An agent's procedure is what a model is told to do, so it is held to more
+/// than a string: it states **no** Frist — no Werktage count, no clock time —
+/// with or without a source beside it. A model judging lateness asks the tool
+/// that owns the deadline (makod `get_process`, `list_overdue_deadlines`); a
+/// number in the prompt is a deadline nobody computed and the model believes.
+fn procedure_findings(workspace_root: &Path, matcher: &Matcher) -> (usize, Vec<Finding>) {
+    let dir = workspace_root.join("services/agentd/agents");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return (0, Vec::new());
+    };
+    let mut manifests: Vec<_> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "yaml" || x == "yml"))
+        .collect();
+    manifests.sort();
+    let mut findings = Vec::new();
+    for path in &manifests {
+        let rel = path
+            .strip_prefix(workspace_root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        findings.extend(matcher.procedure_findings(&rel, &text));
+    }
+    (manifests.len(), findings)
 }
 
 fn collect_rs(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
@@ -189,6 +324,27 @@ struct Matcher {
 }
 
 impl Matcher {
+    /// Every line of a manifest that states a Frist, source or none, unless
+    /// `PROCEDURE_EXPLANATIONS` admits that literal for that manifest.
+    fn procedure_findings(&self, rel: &str, text: &str) -> Vec<Finding> {
+        let file = rel.rsplit('/').next().unwrap_or(rel);
+        text.lines()
+            .enumerate()
+            .filter(|(_, line)| !line.trim_start().starts_with('#'))
+            .flat_map(|(n, line)| {
+                self.frist
+                    .find_iter(line)
+                    .filter(|m| {
+                        !PROCEDURE_EXPLANATIONS
+                            .iter()
+                            .any(|(f, lit, _)| *f == file && m.as_str().eq_ignore_ascii_case(lit))
+                    })
+                    .map(move |m| (rel.to_owned(), n + 1, m.as_str().to_owned()))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
     fn new() -> Self {
         Self {
             source: Regex::new(
@@ -360,6 +516,31 @@ fn utf8_len(first: u8) -> usize {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_procedure_threshold_is_refused_without_a_source() {
+        let m = Matcher::new();
+        let line = "      3. For ANGEMELDET > 5 WT (Strom) or 10 WT (Gas): escalate.";
+        let found = m.procedure_findings("services/agentd/agents/vertragd-agent.yaml", line);
+        assert_eq!(found.len(), 2, "{found:?}");
+    }
+
+    #[test]
+    fn an_admitted_explanation_passes_only_in_its_own_manifest() {
+        let m = Matcher::new();
+        let line = "past the 6 Werktage of GPKE Teil 2 § 3.5.1.2 Nr. 1";
+        assert!(
+            m.procedure_findings("services/agentd/agents/sperrd-agent.yaml", line)
+                .is_empty()
+        );
+        assert_eq!(
+            m.procedure_findings("services/agentd/agents/vertragd-agent.yaml", line)
+                .len(),
+            1,
+            "an admission is per manifest"
+        );
+    }
+
     use super::*;
 
     fn refused(src: &str) -> usize {

@@ -332,10 +332,18 @@ Either way the change is one slice write in the contract's transaction.
 `POST /kunden/{id}/vertraege` (`standort_adresse`) all carry BO4E, and each runs
 [the gate](@/docs/architecture/domain-model.md#the-bo4e-gate) before storing.
 
-`geschaeftspartner` is a `Bo4e<Geschaeftspartner>` (`cargo xtask
-check-request-bodies` refuses a raw `Value` there). Each stores the canonical
-round-trip, so the strict-enum stage keeps an unknown `anrede` or `zahlungsart`
-from becoming `"UNKNOWN"`.
+`geschaeftspartner` is a `Bo4e<Geschaeftspartner>`, and the `person`,
+`zahlungsinformation` and `preisgarantie` bodies are the BO4E document itself,
+read as `Bo4e<Person>`, `Bo4e<Zahlungsinformation>` and `Bo4e<Preisgarantie>`
+(`cargo xtask check-request-bodies` refuses a raw `Value` in either place).
+Each stores the canonical round-trip, so the strict-enum stage keeps an unknown
+`anrede` or `zahlungsart` from becoming `"UNKNOWN"`.
+
+Those three documents are also refused, `422` with `code: "bo4e.unknown_field"`
+and the `paths`, when they carry a key BO4E does not define. The gate alone
+keeps such a key under `_additional`, which suits a document a counterparty
+sends; here it is a misspelling — `ibn` for `iban` would store a
+Zahlungsinformation without an IBAN.
 
 **A `geschaeftspartner` on a `PUT` replaces the stored document whole**; read it
 first (`GET /kunden/{id}`, or `portald`'s `GET /portal/{malo}/kontakt`).
@@ -631,10 +639,15 @@ they differ in a shared install.
 
 ## MCP
 
-18 read-only tools and 4 prompts at `/mcp`, behind OIDC or an `[mcp]` key. `compute_kuendigungsfrist` returns the earliest lawful end date for
+20 read-only tools and 4 prompts at `/mcp`, behind OIDC or an `[mcp]` key. `compute_kuendigungsfrist` returns the earliest lawful end date for
 **every** termination reason with the rule that produced it;
 `check_mako_trigger_status` distinguishes a registration still waiting in the
-outbound queue from one the NB has not answered.
+outbound queue from one the NB has not answered. `search_kunden` finds a
+customer by the start of any word of the name or of the Kundennummer, or by
+the MaLo-ID of a Lieferstelle — at most 20 hits, answered from a trigram index
+(`kunden.suchtext`), so a keystroke reads no table scan however many customers
+the tenant holds. `kunden_zu_malos` names the customers of up to 200
+MaLos in one statement — how a worklist page names its rows.
 
 ## Related
 

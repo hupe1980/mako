@@ -125,6 +125,27 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         }
     }
 
+    // CHANGELOG.md's top section is the release being worked on. Opening the
+    // next version here keeps the file and the workspace version in step: an
+    // entry written after the bump lands under the version it ships in.
+    let changelog = std::path::Path::new(workspace_root).join("CHANGELOG.md");
+    if let Ok(text) = std::fs::read_to_string(&changelog) {
+        match open_changelog_section(&text, new_version) {
+            Some(next) if next != text => match std::fs::write(&changelog, next) {
+                Ok(()) => println!("  CHANGELOG.md opened [{new_version}] — unreleased"),
+                Err(e) => {
+                    eprintln!("error: could not write CHANGELOG.md: {e}");
+                    return false;
+                }
+            },
+            Some(_) => {}
+            None => {
+                eprintln!("error: CHANGELOG.md has no `## [` version section to follow");
+                return false;
+            }
+        }
+    }
+
     println!("bumped workspace version -> {new_version}");
     println!("  [workspace.package] version = \"{new_version}\"");
     println!(
@@ -132,6 +153,32 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         internal_deps.len()
     );
     true
+}
+
+/// The changelog with `## [version] — unreleased` on top. A top section that
+/// is itself still unreleased is relabelled — its entries were never released
+/// under the old number, so they ship in this one; a released (dated) top
+/// section gets a new empty section above it. `None` when there is no
+/// version section at all.
+fn open_changelog_section(changelog: &str, version: &str) -> Option<String> {
+    const UNRELEASED: &str = " — unreleased";
+    let heading = format!("## [{version}]{UNRELEASED}");
+    let start = changelog.find("\n## [")? + 1;
+    let end = changelog[start..]
+        .find('\n')
+        .map_or(changelog.len(), |n| start + n);
+    let top = &changelog[start..end];
+    let mut out = String::with_capacity(changelog.len() + heading.len() + 2);
+    out.push_str(&changelog[..start]);
+    if top.ends_with(UNRELEASED) {
+        out.push_str(&heading);
+        out.push_str(&changelog[end..]);
+    } else {
+        out.push_str(&heading);
+        out.push_str("\n\n");
+        out.push_str(&changelog[start..]);
+    }
+    Some(out)
 }
 
 /// Member manifests pinning an internal crate's version themselves.
@@ -286,6 +333,44 @@ fn replace_version_in_inline_table(line: &str, new_version: &str) -> Option<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PREAMBLE: &str = "# Changelog\n\nWhat changed.\n\n";
+
+    #[test]
+    fn an_unreleased_top_section_is_relabelled() {
+        let log = format!("{PREAMBLE}## [0.24.0] — unreleased\n\n- the Desk\n");
+        let next = open_changelog_section(&log, "0.25.0").expect("a section");
+        assert_eq!(
+            next,
+            format!("{PREAMBLE}## [0.25.0] — unreleased\n\n- the Desk\n")
+        );
+    }
+
+    #[test]
+    fn a_released_top_section_gets_a_new_one_above() {
+        let log = format!("{PREAMBLE}## [0.24.0] — 2026-12-01\n\n- the Desk\n");
+        let next = open_changelog_section(&log, "0.25.0").expect("a section");
+        assert_eq!(
+            next,
+            format!(
+                "{PREAMBLE}## [0.25.0] — unreleased\n\n## [0.24.0] — 2026-12-01\n\n- the Desk\n"
+            )
+        );
+    }
+
+    #[test]
+    fn bumping_to_the_open_version_changes_nothing() {
+        let log = format!("{PREAMBLE}## [0.24.0] — unreleased\n\n- x\n");
+        assert_eq!(
+            open_changelog_section(&log, "0.24.0").as_deref(),
+            Some(log.as_str())
+        );
+    }
+
+    #[test]
+    fn a_changelog_without_sections_is_refused() {
+        assert!(open_changelog_section(PREAMBLE, "0.25.0").is_none());
+    }
 
     const SAMPLE: &str = "
 [workspace.package]

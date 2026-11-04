@@ -6,8 +6,10 @@ weight = 50
 The licences this workspace may depend on are the `[licenses] allow` list in
 [`deny.toml`](https://github.com/hupe1980/mako/blob/main/deny.toml), and
 `cargo deny` refuses any dependency outside it — in `just ci` and in the release.
-Every identifier beyond the plain permissive ones carries its reason and the
-transitive crate that introduced it as a comment beside it.
+The Desk's npm tree is held to the same list: `cargo xtask check-desk` reads
+every package's licence from `desk/package-lock.json` and refuses one the list
+does not allow. Every identifier beyond the plain permissive ones carries its
+reason and the transitive package that introduced it as a comment beside it.
 
 ## Review Process
 
@@ -19,8 +21,9 @@ When a new licence needs to be allowed:
 
 **A note on copyleft strength.** *File-level* weak copyleft (`MPL-2.0`)
 constrains only modifications to the licensed files themselves, so it is
-reviewable — it is not in the allow list, and a dependency introducing it fails
-`cargo deny` until one is done. *Library/linking-level* and *network* copyleft
+reviewable. It is allowed for one reviewed case — lightningcss, the CSS
+transformer Vite runs when building the Desk, which ships no MPL file in the
+bundle. *Library/linking-level* and *network* copyleft
 (LGPL, AGPL) impose obligations on the combined or served work and are never
 acceptable for this dual-MIT/Apache workspace.
 

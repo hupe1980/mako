@@ -1,24 +1,13 @@
 // Reject relative Markdown links, and rustdoc intra-doc links, in site content.
 //
 // `zola check` runs with `internal_level = "error"`, so a dead `@/docs/…` link
-// fails the build. That check only applies to Zola's own link syntax: a plain
-// `[text](makod.md)` is passed through to the rendered HTML untouched and never
-// resolved, so it neither fails the build nor works in the browser.
-//
-// That gap was not hypothetical. The docs were reorganised from a flat `docs/`
-// directory into sectioned `site/content/docs/<section>/`, and 21 links kept
-// pointing at the old flat neighbours — `[docs/makod.md](makod.md)` from
-// `architecture/` resolving to `architecture/makod.md`, which does not exist.
-// Every one rendered as a link and 404'd, and the site check reported success
-// for years of builds.
-//
-// The directory form is the same defect without the `.md`: `[Architecture]
-// (architecture/)` is emitted verbatim, resolves against whatever URL the
-// reader happens to be on, and 404s from anywhere but the section index. So the
-// rule is stated as an allow-list rather than a pattern of known-bad shapes —
-// an internal target is `@/`-rooted or it is not a link this site can validate.
+// fails the build. Only Zola's own syntax is resolved: a plain `[text](x.md)`
+// or `(section/)` is emitted verbatim, resolves against whatever URL the reader
+// is on, and 404s without failing anything. So the rule is an allow-list: an
+// internal target is `@/`-rooted, or a file co-located with its page.
 import { readdir, readFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 
 const ROOT = new URL("../content/", import.meta.url).pathname;
 
@@ -36,9 +25,16 @@ const MD_LINK = /!?\[[^\]]*\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g;
  * - `#anchor` — same-page.
  * - `mailto:` — not a page.
  *
+ * - a bare file name (`shot-light.png`) that exists beside the page — a
+ *   co-located asset, which Zola copies next to the rendered page.
+ *
  * Anything else is relative, unresolved and unvalidated.
  */
 const ALLOWED_TARGET = /^(?:@\/|https?:|#|mailto:)/;
+
+/** A file stored beside the page, served beside it: a bare name, not a page. */
+const isColocated = (page, target) =>
+  !target.includes("/") && !target.endsWith(".md") && existsSync(join(dirname(page), target));
 
 async function* markdownFiles(dir) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -75,6 +71,7 @@ for await (const file of markdownFiles(ROOT)) {
   lines.forEach((line, i) => {
     for (const m of line.matchAll(MD_LINK)) {
       if (ALLOWED_TARGET.test(m[1])) continue;
+      if (isColocated(file, m[1])) continue;
       offenders.push(`${relative(ROOT, file)}:${i + 1}  ${m[0]}  → target "${m[1]}"`);
     }
   });

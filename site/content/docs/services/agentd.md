@@ -1,12 +1,12 @@
 +++
 title = "agentd Operator Guide"
-description = "agentd operator guide: 28 specialist manifests on agentplane — typed results, durable triage, semantic trust labels and journal-backed runs."
+description = "agentd operator guide: 29 specialist manifests on agentplane — typed results, durable triage, semantic trust labels and journal-backed runs."
 weight = 38
 +++
 `agentd` is the **AI automation layer**. It connects language models to
 [the production services](@/docs/services/_index.md) over MCP for analysis and
 decision support. Every specialist is a **declarative manifest** run by
-[agentplane](https://github.com/hupe1980/agentplane) 0.47, a journal-first
+[agentplane](https://github.com/hupe1980/agentplane) 0.57, a journal-first
 durable agent runtime: every model call and tool call is a journaled effect, so a
 run resumes after a crash and replays for audit. As an MCP client it offers
 protocol revision `2026-07-28` (`server/discover`), falls back to the
@@ -27,10 +27,13 @@ Port: **`:9580`**
 | Endpoint | Description |
 |---|---|
 | `POST /webhook` | Inbound CloudEvent trigger (Standard Webhooks-verified). Admits durably, then answers `202` with the run ids |
-| `POST /api/v1/run` | Manual agent invocation (OIDC JWT **and** Cedar `api:run.start`; honours `Idempotency-Key`). Waits for the answer |
+| `GET /api/v1/hinweise` | The open worklist rows the caller's roles may answer, each with the skill that opened it, its title, the row's text, priority, due instant and Anker — the run's case's `malo`/`melo`/`process` key. Read under the worklist's verb; the Desk's Hinweise |
+| `GET /api/v1/runs/{run}/antwort` | The answer sentence by sentence, each with its cited call and `belegt` (Belegprüfung); the run's `schritte` (also while running); a `vorschlag` on a Freigabe; the reader's `hilfreich`. Read under `api:run.read` |
+| `POST /api/v1/runs/{run}/bewertung` | `{hilfreich, begruendung?}` or `{vorschlag: sent\|edited\|dismissed}`, recorded as an assessment beside the concluded run under the caller's name; a later one replaces it. `204`, `409` while running. `api:run.assess` |
+| `POST /api/v1/runs` | Start a specialist by hand (OIDC JWT **and** Cedar `api:run.start`; honours `Idempotency-Key`). Admits durably, then answers `202` with the run ids; an unknown body field is `422` |
 | `POST /api/v1/erasure` | Destroy a case wrapping key and/or forget a memory subject (OIDC + `api:erasure.execute`; reason required). `409` when a case is named and no `[keyring]` is configured; a key-service or memory-store failure is a `500` carrying an `error_id` |
 | `GET /api/v1/agents` | Activated specialists and subscriptions. OIDC + `api:agent.list`; version and digest are in `/api/v1/agents/catalog` |
-| `GET /api/v1/agents/catalog` | Every specialist compiled into this binary. OIDC + `api:agent.list` |
+| `GET /api/v1/agents/catalog` | Every specialist compiled into this binary, as the Desk's Beipackzettel shows it: `titel` and `zweck` (the manifest's `mako.de/` annotations), whether it is active here, what starts it, its model or none, every tool it may call with the reason, `nur_lesend`. OIDC + `api:agent.list` |
 | `GET /.well-known/agents/{name}` | A2A Agent Card, derived from the manifest |
 | `/api/v1/oversight/*` | The operator surface: worklist, runs, cases, breached obligations, event delivery (OIDC required) |
 | `GET /health/live` · `GET /health/ready` · `GET /metrics` | Liveness, readiness, agentplane instruments (from the `mako_service` runner) |
@@ -50,7 +53,7 @@ different model is a manifest edit.
 
 ### Two properties that matter for a regulated deployment
 
-**The active plane is advisory.** All 151 grants are read-only. Model-backed
+**The active plane is advisory.** All 150 grants are read-only. Model-backed
 specialists collect evidence and return structured findings; terminal findings
 open triage rows. An approved decision becomes an ordinary `makod` command, so
 what goes on the wire is still a pure function of a recorded command.
@@ -310,7 +313,7 @@ belongs in `skills/` when it is a total function of what the tools return.
 
 ### Every answer is a shape
 
-All 28 specialists declare `output.schema`, and every schema is **closed**
+All 29 specialists declare `output.schema`, and every schema is **closed**
 (`additionalProperties: false`, pinned by a test). Every model-backed schema
 also fits strict constrained decoding — each property listed in `required`, an
 optional one spelled nullable (`type: [string, "null"]`, with `null` in its
@@ -381,7 +384,7 @@ The `plane::` suite parses every manifest and refuses:
 outside the backticks, no negation, a tool-shaped backticked name — because a
 procedure naming an ungranted tool does not crash: agentplane reports the unknown
 tool to the model, which improvises. Run both ways, it holds the grants and the
-procedure to the **same set** — 151 grants across 28 manifests.
+procedure to the **same set** — 155 grants across 29 manifests.
 
 ---
 
@@ -389,17 +392,17 @@ procedure to the **same set** — 151 grants across 28 manifests.
 
 ```mermaid
 graph TB
-    TRIGGER["Trigger<br/>CloudEvent webhook<br/>or POST /api/v1/run"]
+    TRIGGER["Trigger<br/>CloudEvent webhook<br/>or POST /api/v1/runs"]
     ROUTER["Router<br/>event type → subscribing specialists<br/>(src/builtin — the only Rust routing)"]
 
     subgraph plane ["agentplane Runtime"]
-        MANIFEST["28 manifests (agents/*.yaml)<br/>procedure · model pair · tool grants<br/>ceilings · result schema"]
+        MANIFEST["29 manifests (agents/*.yaml)<br/>procedure · model pair · tool grants<br/>ceilings · result schema"]
         POLICY["Cedar policy set<br/>policy/agentd.cedar<br/>DenyAll baseline, no AllowAll"]
         JOURNAL[("Journal + case layer<br/>redb or Postgres<br/>tamper-evident, optionally sealed")]
         OVERSIGHT["Worklist<br/>triage for terminal findings<br/>bounded and escalating"]
     end
 
-    subgraph tools ["MCP Tools — 11 services, 160 tools"]
+    subgraph tools ["MCP Tools — 11 services, 165 tools"]
         T1["makod · marktd · billingd"]
         T2["edmd · accountingd · processd"]
         T3["einsd · netzbilanzd · ..."]
@@ -470,6 +473,7 @@ procedure by `cargo xtask check-prompt-tools`.
 |---|---|---|---|---|
 | `mako-agent` | `mako` | `tool-calling` | 7 on makod, marktd, processd | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.mako.aperak.*` |
 | `deadline-alert-agent` | `deadline.alert` | **coded skill** (no model) | 1 on processd | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.obs.deadline.approaching` |
+| `desk-assistant` | `desk.assistant` | `tool-calling` | 5 on makod, processd, vertragd | none — started from the Desk by a person's question (`POST /api/v1/runs`); every sentence cites its call and is checked (`GET /api/v1/runs/{run}/antwort`); on a held decision it may propose one, which the Desk prefills and never sends |
 | `billing-agent` | `billing` | `tool-calling` | 9 on accountingd, billingd, invoicd, marktd | `de.invoic.receipt.disputed`, `de.accounting.mahnung.issued` |
 | `netzbilanz-agent` | `netzbilanz` | `tool-calling` | 7 on marktd, netzbilanzd | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched`, `de.netzbilanz.invoic.dispatch-overdue`, `de.netzbilanz.invoic.disputed` |
 | `invoice-reconciliation-agent` | `invoice.reconciliation` | `tool-calling` | 6 on accountingd, billingd, invoicd | `de.invoic.payment.overdue`, `de.invoic.receipt.*` |
@@ -517,7 +521,7 @@ The key must match the `provider` a manifest's `spec.models` names.
 
 The table key is the name a manifest refers to; `backend` is the wire. So
 `[providers.anthropic]` backed by `chat-completions` against your own vLLM
-changes not one of the 28 manifests — and keeps customer data off a third-party endpoint
+changes not one of the 29 manifests — and keeps customer data off a third-party endpoint
 (Art. 28 / Art. 44 DSGVO). `agentd` refuses to start with no provider, an unknown
 `backend`, a hosted driver with no key, or `chat-completions` without
 `api_base`.
@@ -528,8 +532,8 @@ changes not one of the 28 manifests — and keeps customer data off a third-part
 
 | Concern | Implementation |
 |---|---|
-| **`POST /api/v1/run` auth** | OIDC/JWT via `Claims`, with the deployment tenant pinned; startup refuses missing OIDC unless `allow_insecure_no_auth = true` |
-| **`POST /api/v1/run` authorization** | Cedar `api:run.start`, from the same compiled set the runtime checks every effect against. `api:agent.list` gates the two inventory reads. A valid token is not a grant |
+| **`POST /api/v1/runs` auth** | OIDC/JWT via `Claims`, with the deployment tenant pinned; startup refuses missing OIDC unless `allow_insecure_no_auth = true` |
+| **`POST /api/v1/runs` authorization** | Cedar `api:run.start`, from the same compiled set the runtime checks every effect against. `api:agent.list` gates the two inventory reads. A valid token is not a grant |
 | **Oversight surface auth** | OIDC only — no dev mode. Not mounted when OIDC is disabled |
 | **Oversight authorization** | Cedar `api:*` verbs; reading, claiming and deciding are separate, and `POST /events` is the machine door |
 | **Effect authorization** | Cedar on every effect: server allowlist, secret-to-model refusal, delegation depth, no declassification. `DenyAll` baseline — there is no `AllowAll` |
@@ -547,7 +551,6 @@ changes not one of the 28 manifests — and keeps customer data off a third-part
 | **Arm boundary on a worklist row** | A role build asserts no compiled specialist hands a finding to another arm's desk, so a misconfiguration fails closed. The confidentiality duty of §§ 6a, 7a EnWG is the deployment's Cedar policy, enforced at runtime |
 | **Declaration identity** | `/api/v1/agents` and `/agents/catalog` report each specialist's `version` and the digest over its canonical manifest, so a running plane can be checked against the file a reviewer approved |
 | **Observability** | agentplane's instruments (runs by terminal status, policy denials, budget refusals, quarantines, breached obligations, open cases and tasks) are bridged onto `GET /metrics`. They are emitted at `info`: a `warn` deployment must admit `agentplane.metric=info` |
-| **Manual-run timeout** | `session_timeout_secs` bounds a *manual* run's wait; `POST /webhook` waits for nothing. Each run stays journaled and resumable either way |
 | **API keys** | `api_key`, `mcp_api_key`, `keyring.vault.token`, `audit_hmac_secret` are `SecretString` — never in logs or debug output. Bedrock credentials come from the AWS chain, not from config |
 | **Grant truth** | `cargo xtask check-tool-grants` checks every `tool://` grant against the server's own `read_only_hint`, and refuses a mutating grant on a `tool-calling` agent |
 | **Least privilege** | `cargo xtask check-prompt-tools` holds the grants and the procedure to the same set in both directions, so a specialist cannot hold a server's whole read surface again |
@@ -606,7 +609,6 @@ The `agentplane` operator CLI against the store takes `--store` as a path or a
 tenant          = "9900357000004"
 public_base_url = "https://agentd.internal:9580"
 
-session_timeout_secs = 300   # bounds a *manual* run's wait; /webhook waits for nothing
 sweep_interval_secs  = 60    # warns, breaches, escalates, expires, wakes, recovers
 
 mcp_api_key         = "env:AGENTD_MCP_API_KEY"
@@ -747,13 +749,15 @@ curl -X POST http://agentd:9580/webhook \
 `type`, `source` and `id` are required; reposting the same envelope answers
 `202` with the run it already started.
 
-**Manual run** — `agent` addresses one specialist directly, bypassing routing.
-An `Idempotency-Key` makes a retried request answer with the run it already
-started; without one, each request is its own event. A name no activated
-specialist answers to is `404`, not an empty result:
+**Starting a run** — `agent` addresses one specialist directly, bypassing
+routing; without it, every specialist subscribed to `event_type` runs, and none
+subscribing is a `422`. An `Idempotency-Key` makes a retried request answer
+with the run it already started. A name no activated specialist answers to is
+`404`, and a field the request does not have is `422`. The answer is `202`
+with the run ids; the run is read at `/api/v1/oversight/runs/{run}`:
 
 ```bash
-curl -X POST http://agentd:9580/api/v1/run \
+curl -X POST http://agentd:9580/api/v1/runs \
   -H "Authorization: Bearer $JWT" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: dispute-R2026-001" \
@@ -796,15 +800,13 @@ The answer is not in it: shipping a run's output would be an undeclared egress.
 attribute — time inside a run comes from journaled `clock.now` effects.
 
 `outcome` is the journal's spelling of the conclusion (`RunStatus::as_str`):
-`succeeded` for a completed run, and otherwise the word `POST /api/v1/run`
-answers with — `failed`, `exhausted`, `quarantined`, `cancelled`, `abandoned`,
-`withheld`. `quarantined` means an effect's outcome cannot be established (a
+`succeeded` for a completed run, and otherwise `failed`, `exhausted`,
+`quarantined`, `cancelled`, `abandoned` or `withheld`. `quarantined` means an effect's outcome cannot be established (a
 failure may be unwound, an unknown outcome may not); `abandoned` is that doubt
 closed by a person; `withheld` is a run paused because the authority it acts
-for was withdrawn by a `subject:` halt, resumed when the halt is lifted. The
-manual-run answer adds `completed` (for `succeeded`), `suspended` (waiting for
-a human or an event), `replanning`, `running` and `not-admitted`. A failed run carries
-**`reason`**, absent (not `null`) on success — asserted in `tests/it/evidence.rs`.
+for was withdrawn by a `subject:` halt, resumed when the halt is lifted. A
+failed run carries **`reason`**, absent (not `null`) on success — asserted in
+`tests/it/evidence.rs`.
 
 ---
 

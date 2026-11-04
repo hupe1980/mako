@@ -344,7 +344,7 @@ consolidated by BK6-23-241).
 
 Every build links every domain crate; the declaration selects registrations,
 and `--marktrollen` additionally refuses commands at runtime. Declaring every
-role registers the full **71 workflows over 469 Prüfidentifikatoren**, and the
+role registers the full **71 workflows over 472 Prüfidentifikatoren**, and the
 startup log records the counts a declaration registers. Which principal may
 read which role's processes is the Cedar policy's decision
 ([Authorization](#authorization)).
@@ -398,7 +398,7 @@ Actions
 | `ReadRechnung` | `GET /api/v1/invoic/{process_id}/rechnung` |
 | `AdminMigrations` | `POST /admin/migrations` — grant to a break-glass principal for the FV cutover only; `conservative.cedar` grants it to nobody |
 | `UseWebdienste` | every `:8090` route |
-| `ReadProcess` | MCP `get_process`, `list_overdue_deadlines`, `list_dead_letters`; carries the workflow name, so an NB principal can be kept off LF process state |
+| `ReadProcess` | MCP `get_process`, `get_process_history`, `list_overdue_deadlines`, `list_dead_letters`; carries the workflow name, so an NB principal can be kept off LF process state |
 
 Policies can name the `AdminMalo` / `AdminPartner` groups:
 
@@ -663,7 +663,7 @@ Cedar `UseMcp` action; unauthenticated requests are `401`.
 
 ### Tools
 
-`makod` ships **12 MCP tools**:
+`makod` ships **13 MCP tools**:
 
 | Tool | Annotations | Description |
 |---|---|---|
@@ -673,9 +673,10 @@ Cedar `UseMcp` action; unauthenticated requests are `401`.
 | `list_partners` | `read_only` | Registered trading partners |
 | `get_partner` | `read_only` | Partner by 13-digit MP-ID |
 | `get_health` | `read_only` | Version, tenant, Marktrollen, MaLo cache stats |
-| `get_process` | `read_only` | Business key (`malo_id`/`melo_id`/`vorgang`) → active process |
-| `list_overdue_deadlines` | `read_only` | Overdue APERAK/response deadlines — alert if non-empty |
-| `list_active_processes` | `read_only` | Count of registered process instances |
+| `get_process` | `read_only` | Business key (`malo_id`/`melo_id`/`vorgang`) or process id → every process indexed under it, each with its pending deadlines (`outputSchema` declared) |
+| `get_process_history` | `read_only` | A process's events, oldest first; a market message carries `richtung`, `pid` and `message_ref` as its workflow states them (`EventPayload::verlauf`), never parsed from the event type (`outputSchema` declared) |
+| `list_overdue_deadlines` | `read_only` | Deadlines past due and not yet fired — the deadline worker's backlog, not missed Fristen (those are processd `list_overdue_processes`) |
+| `list_active_processes` | `read_only` | Processes started for the tenant, finished ones included — one event stream each |
 | `get_outbox_status` | `read_only` | Pending outbox count and oldest age — alert when stuck > 5 min |
 | `list_dead_letters` | `read_only` | 20 most recent dead letters (§ 147 AO / GoBD) |
 | `get_format_version_coverage` | `read_only` | Per message type: `stable` or `transition`, and which releases are in force today |
@@ -692,7 +693,7 @@ the action its REST twin enforces:
 | `submit_command` | `SubmitCommand` (command, Marktrolle, PID) |
 | `get_malo` | `AdminMaloRead` |
 | `list_partners`, `get_partner` | `AdminPartnerRead` |
-| `get_process`, `list_overdue_deadlines` | `ReadProcess`, per workflow (`get_process` denies as `not_found`) |
+| `get_process`, `get_process_history`, `list_overdue_deadlines` | `ReadProcess`, per workflow (`get_process` leaves out each process the caller may not read, and answers `not_found` when none remains; `get_process_history` answers a refused process `not_found`) |
 | `list_dead_letters` | `ReadProcess` across workflows — a workflow-scoped principal is denied outright |
 | `list_commands`, `get_health`, `get_format_version_coverage`, `list_active_processes`, `get_outbox_status` | none — no tenant data |
 
@@ -1073,13 +1074,23 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `geli.kuendigung.ablehnen` | `LFG` | GeLi Gas | 44018 | LFA rejects the Kündigung (`G_0005`) |
 | `geli.eog.ablehnen` | `LFG` | GeLi Gas | 44015 | E/G rejects the EoG Zuordnung |
 | `geli.stornierung.initiieren` | `LFG` | GeLi Gas | 44022 | LF cancels a running Gas Zuordnungsprozess; the GNB answers within the cancelled message's own Antwortfrist; refused with none running (GeLi Gas 3.0 Kap. 2.7) |
+| `geli.stornierung.bestaetigen` | `GNB` | GeLi Gas | 44023 | GNB confirms an inbound Stornierungsanfrage (`E15`, `G_0004`) |
+| `geli.stornierung.ablehnen` | `GNB` | GeLi Gas | 44024 | GNB refuses it — `E14` with `bemerkung`, `Z14` or `ZE1` (`G_0003`) |
+| `gpke.stornierung.bestaetigen` | `NB` | GPKE | 55023 | NB confirms an inbound Stornierungsanfrage (`E15`, `S_0086`) |
+| `gpke.stornierung.ablehnen` | `NB` | GPKE | 55024 | NB refuses it — `E14` with `bemerkung`, `Z14` or `ZE1` (`S_0087`) |
+| `gpke.geschaeftsdatenanfrage.anfragen` | `LF` · `MSB` | GPKE | 17132 | LF or MSB asks the NB for a Lokation's Stammdaten (ORDERS, `BGM+Z14` with the Anfrage-Nummer); answer due 1 WT after the Anfrage (GPKE Teil 4 Kap. 3.2 Nr. 2) |
+| `gpke.geschaeftsdatenanfrage.beantworten` | `NB` | GPKE | 55035 · 55095 · 55060 | NB answers with the Stammdaten (UTILMD, `RFF+AAV` = the Anfrage-Nummer) |
+| `gpke.geschaeftsdatenanfrage.ablehnen` | `NB` | GPKE | 19101 | NB refuses the Anfrage (ORDRSP, `RFF+ON`; `E_0441` for an LF, `E_0443` for an MSB) |
 | `geli.datenabruf.anfragen` | `LFG` | GeLi Gas | 17103 | LF requests Abrechnungsbrennwert and Zustandszahl (ORDERS); `zeitspanne_bis` required — answer due 10 WT after the Anfrage, not before the 10. WT of the following month (GeLi Gas 3.0 Kap. 4.2) |
 | `wim.geraetewechsel.ablehnen` | `NB` or `MSB` | WiM | 55041/55044/55053/55170 | Business Ablehnung — requires an `antwortcode` from the process's EBD |
 | `wim.geraetewechsel.aperak` | `NB` or `MSB` | WiM | 55039/55042/55051/55168 | Technical APERAK (45 min, APERAK AHB 1.1 §2.4.1) — not the business answer |
 | `wim.gesamtvorgang.melden` | `MSB` or `nMSB` | WiM | 21010/21009 | MSBN reports the Gesamtvorgang outcome; its date becomes the Zuordnungsbeginn |
 | `wim.zuordnung.bestaetigen` | `NB` | WiM | 21012 | NB makes the Zuordnung from the reported date, 00:00 Uhr |
 | `wim.zuordnung.ablehnen` | `NB` | WiM | 21011 | NB records the MSB-Scheitermeldung; the MSBA stays assigned |
-| `wim.preisanfrage.angebot-senden` | `MSB` | WiM | 15001 | MSB answers a Preisanfrage with a QUOTES Angebot |
+| `wim.preisanfrage.angebot-senden` | `MSB` | WiM | 15001/15002/15004/15005 | MSB answers a Preisanfrage with the QUOTES Angebot the REQOTE's PID pairs with, back to its sender |
+| `wim.preisanfrage.anfragen` | `NMSB`, `MSB`, `LF` or `NB` | WiM | 35001/35002/35004/35005 | Requester sends the REQOTE; the MSB's QUOTES resumes the process by the location. Answer window per PID: 35001 4 WT, 35002 5 WT, 35005 10 WT, 35004 none |
+| `wim.ersteinbau.vorabinformation-senden` | `MSB` | WiM | 21029 | gMSB announces the Ersteinbau eines iMS to the wMSB; refused later than 3 Monate und 3 WT before the Umstellungszeitpunkt (WiM Teil 1 Kap. 3.5.2 Nr. 1). Opens the wMSB's 3-WT answer window |
+| `wim.ersteinbau.beantworten` | `MSB` | WiM | 21030/21031 | wMSB answers the Vorabinformation; the `E_0233` code picks the PID — `A03` 21030, `A01`/`A02`/`A04` 21031 |
 | `wim.weiterverpflichtung.beantworten` | `MSB` | WiM | 19003/19004 | MSBA answers the Weiterverpflichtungsauftrag; `Z13`/`Z14`/`Z22` against the 3-Monats- resp. 1-Monats-Kappung |
 | `wim.stoerung.bestaetigen` | `MSB` | WiM | 23004 | MSB confirms an inbound Störungsmeldung; opens the Ergebnisfrist |
 | `wim.stoerung.ablehnen` | `MSB` | WiM | 23003 | MSB rejects the Störungsmeldung; the Use-Case ends |
@@ -1133,6 +1144,15 @@ Only fields the ERP owns; MP-IDs are resolved by the engine.
 | `wim.geraetewechsel.aperak` | `melo_id`², **`positiv`** (`true` = `BGM+312`, `false` = `BGM+313`), optional `reason` |
 | `wim.gesamtvorgang.melden` | `melo_id`², **`erfolgreich`**, **`zuordnungsbeginn`** (YYYYMMDD, on success) |
 | `wim.zuordnung.bestaetigen` / `.ablehnen` | `melo_id`² |
+| `gpke.stornierung.bestaetigen` · `geli.stornierung.bestaetigen` | `vorgang_id` (the Anfrage's `IDE+24` Vorgangsnummer) |
+| `gpke.stornierung.ablehnen` · `geli.stornierung.ablehnen` | `vorgang_id`, `antwortcode` (`E14`/`Z14`/`ZE1`), `bemerkung` (with `E14` only) |
+| `gpke.geschaeftsdatenanfrage.anfragen` | `lokation_id`, `nb_mp_id`, `anfrage_nummer` (optional, an..35) |
+| `gpke.geschaeftsdatenanfrage.beantworten` | `anfragender_mp_id`, `anfrage_nummer`, `antwort_pid`, `stammdaten` (`lokationen`, `bloecke`, `sg12`), `transaktionsgrund_ergaenzung` (optional) |
+| `gpke.geschaeftsdatenanfrage.ablehnen` | `anfragender_mp_id`, `anfrage_nummer`, `anfragender` (`LF`/`MSB`), `antwortcode` |
+| `wim.ersteinbau.vorabinformation-senden` | `melo_id`, `wmsb_mp_id`, `umstellungszeitpunkt` (YYYY-MM-DD) |
+| `wim.ersteinbau.beantworten` | `melo_id`, `antwortcode` (`E_0233`) |
+| `wim.preisanfrage.anfragen` | `pid`, `empfaenger_mp_id`, `melo_id` or `malo_id` |
+| `wim.preisanfrage.angebot-senden` | `melo_id` or `malo_id` — the REQOTE's location |
 | `mabis.abrechnung.einleiten` | `zeitreihe`, `mabis_zp_id`, `bilanzierungsmonat`, `version`, `biko_id`, `absender_mp_id` |
 | `mabis.abrechnung.daten-einreichen` | `version`, `pid`, `antwortcode`, `grund` (unless the code is the tree's Zustimmung) |
 
@@ -1913,23 +1933,6 @@ curl -s http://localhost:8080/admin/partners \
 ---
 
 ## Outbox Auto-Integrations
-
-### WiM Stammdaten — register auto-population
-
-An inbound WiM Stammdaten ORDERS from the MSB (PIDs **17102–17133**) is parsed by
-`wim_stammdaten_uebermittlung_registry()`; the `ZAK`/`ZE`/`ZD` segments become
-`zaehlwerke` on the `de.mako.process.completed` event, which marktd upserts into
-`ZaehlzeitRegister` / `ZaehlzeitSaison` — the input to `billingd`'s §14a Modul 3
-tariff zones (HT/ST/NT).
-
-| Segment | Field | Values |
-|---|---|---|
-| `ZAK` el. 0 / 1 / 2 | `obis_kennzahl` / `zaehlerauspraegung` / `bezeichnung` | OBIS · `Z01` HT, `Z02` NT, `Z03` EINZEL · label |
-| `ZE` el. 0 | `saison` | `Z01` SOMMER, `Z02` WINTER, `Z03` GESAMT |
-| `ZD` el. 0 / 1..N | `tagtyp` / time windows | `Z01` WERKTAG, `Z02` SAMSTAG, `Z03` SONNTAG_FEIERTAG · `"HHMM:RegisterCode"` |
-
-Active whenever `wim-stammdaten` is registered (`[deployment] rollen` naming
-`msb-strom` or `nb-strom`).
 
 ### WiM Steuerungsauftrag — VPP dispatch billing
 

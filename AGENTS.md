@@ -17,7 +17,9 @@ neither is restated here. This file is what an agent needs before touching code.
 - **Docs and comments state current truth only** — no changelogs, no "used to",
   no backlog pointers. Open work is planned outside the tracked tree — a
   roadmap for the direction and order, a feature specification per milestone
-  for the detail — and a tracked file never points into it.
+  for the detail — and a tracked file never points into it. Change is recorded
+  in one place, `CHANGELOG.md`, under the version being worked on (the
+  workspace version), in the same change; a breaking one says so.
 
   The rule bites hardest on a regression test, where narrating the incident is
   the natural way to justify the test — and it is the wrong way, because a reader
@@ -107,7 +109,7 @@ Four traps, each of which has produced a false "green" or a stalled run:
 | Which PID belongs to which crate and workflow | `site/content/docs/regulatory/pid-reference.md` |
 | Licence governance | `site/content/docs/compliance/licenses.md` |
 
-Per-area guidance lives in a nested `AGENTS.md`: `crates/edi-energy/`,
+Per-area guidance lives in a nested `AGENTS.md`: `desk/`, `crates/edi-energy/`,
 `crates/mako-engine/`, `services/makod/`, `xtask/`, and the domain-workflow
 crates. The closest one to the file being edited wins.
 
@@ -582,6 +584,8 @@ engine it silently becomes money.
 | "§6b EnWG = an integrated NB+LF deployment" | § 6b EnWG is **Rechnungslegung und Buchführung** — the accounts a vertikal integriertes Unternehmen keeps. It does not make a deployment integrated, and an integrated utility still identifies each role by its own MP-ID: „Für jede Sparte (Gas bzw. Strom) und jede Rolle hat ein Marktteilnehmer genau eine MP-ID" (Identifikatoren AWH V1.2 §2.1) |
 | "APERAK AHB 1.0 states the current APERAK rule" | `profiles/sources.json`: **APERAK AHB 1.1** binds from FV2026-10-01; AHB 1.0 is the FV2025-10-01 edition. Chapters 2.1–2.5 carry the same numbers in both. Cite 1.0 only for what that edition itself states about a message processed under it |
 | "API-Webdienste 2.0.0 applies from 01.10.2027 and retires UTILTS" (or „Nr. 57 proposes …" as the plan for FV 2027-04) | **BNetzA Mitteilung Nr. 58** (01.10.2026) is what was published: no EDIFACT and no API-Webdienste document for 01.04.2027 — only ActivationDocument AWT 1.1g and the Regelungen zum Übertragungsweg 1.11 bind then — and UTILTS stays. Nr. 57 was a proposal |
+| "§ 20 EnWG requires a Diskriminierungsbericht" (or „the § 20 EnWG report") | **§ 20 EnWG is Netzzugang** — non-discriminatory access, and no report. The annual report is the **Gleichbehandlungsbericht of § 7a Abs. 5 Satz 3 EnWG**: the Gleichbehandlungsbeauftragte submits it to the Regulierungsbehörde by 31 March and publishes it. § 20 Abs. 1 is still the right anchor for comparing affiliated and other suppliers; holding an affiliate's Anmeldung for a person is mako's control for that comparison, not a statutory rule |
+| "An Antwortcode has one meaning" („A02 = MaLo not in the NB's grid") | A code is defined only by the **Entscheidungsbaum or Codeliste that publishes it**: `A02` is four unrelated refusals across `E_0607`, `E_0622`, `E_0249` and `E_0250`, and in `E_0622` it is „Marktlokation … nimmt nicht an der Marktkommunikation teil (Prüfschritt 30)". A prompt or description that glosses a bare code hands a model a confident wrong reason. Read the wording with `mako_pruefung::codes::lookup(tree, code)` — processd returns it as `bedeutung` |
 | "Compile-time role features enforce § 6a EnWG" (or „a role build contains no other role's code, in support of § 6a") | A role feature buys one thing: a `processd` or `mako-pruefung` build **cannot answer as a role it was not built for**, so a misconfiguration fails closed. No unbundling duty is discharged by a build flag, and makod has no role features — it registers the modules of its `[deployment] rollen` and every build links every domain crate. The § 6a Abs. 1 EnWG duty — „die Vertraulichkeit wirtschaftlich sensibler Informationen … gewahrt wird" — is an access-control duty, met by Cedar (`ReadProcess` carries the workflow name) |
 
 ## Licenses

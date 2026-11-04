@@ -122,7 +122,9 @@ uncomment the `[target.x86_64-unknown-linux-gnu]` section in
 
 - Breaking changes are fine; the project is unreleased and the SQL schema is
   edited in place.
-- Docs and comments state current truth — no history, no "used to".
+- Docs and comments state current truth — no history, no "used to". A change
+  someone running or building on mako would notice gets a line in
+  `CHANGELOG.md` under the version being worked on; a breaking one says so.
 - A defect class becomes a guard: the deliverable for a bug is the check that
   makes it unrepresentable, seen to fail before it is trusted.
 - Every regulatory claim cites the primary document, chapter and page.

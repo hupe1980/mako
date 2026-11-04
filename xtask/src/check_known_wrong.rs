@@ -270,6 +270,22 @@ const RULES: &[Rule] = &[
                  misconfiguration closed and discharges no unbundling duty; the \
                  confidentiality of § 6a Abs. 1 EnWG is the deployment's access policy (Cedar)",
     },
+    Rule {
+        id: "enwg-20-bericht",
+        row: "§ 20 EnWG requires a Diskriminierungsbericht",
+        pattern: r"(?i)diskriminierungsbericht|§ ?20\b[^;|]{0,40}enwg[^;|]{0,60}\b(bericht|report)\b",
+        reason: "§ 20 EnWG is Netzzugang and requires no report; the annual report is the \
+                 Gleichbehandlungsbericht of § 7a Abs. 5 Satz 3 EnWG, filed by the \
+                 Gleichbehandlungsbeauftragte by 31 March and published",
+    },
+    Rule {
+        id: "antwortcode-meaning",
+        row: "An Antwortcode has one meaning",
+        pattern: r"\bA\d{2} ?= ?[\p{L}„\x22]",
+        reason: "a code is defined only by the Entscheidungsbaum or Codeliste that publishes it \
+                 — `A02` has four meanings across E_0607, E_0622, E_0249 and E_0250; read the \
+                 wording from `mako_pruefung::codes::lookup(tree, code)`",
+    },
 ];
 
 /// Table rows no phrase can catch, by the first cell's text.
@@ -314,6 +330,18 @@ struct Allow {
 /// Sentences that quote a known-wrong claim to refute it, or name a superseded
 /// edition for what that edition itself states.
 const ALLOWED: &[Allow] = &[
+    Allow {
+        path: "services/makod/tests/it/e2e_mabis_dispatch.rs",
+        rule: "antwortcode-meaning",
+        fragment: "(Aktivierung, A13 = Zustimmung)",
+        reason: "names the cluster of a code within the trees named beside it",
+    },
+    Allow {
+        path: "services/makod/tests/it/e2e_mabis_dispatch.rs",
+        rule: "antwortcode-meaning",
+        fragment: "(Deaktivierung, A07 = Zustimmung)",
+        reason: "names the cluster of a code within the trees named beside it",
+    },
     Allow {
         path: "AGENTS.md",
         rule: "aperak-weekday",
@@ -798,6 +826,15 @@ mod tests {
                 "// (vertically integrated utility — §6b EnWG deployment)",
             ),
             ("stromnev-18-blind", "/// Blindmehrarbeit per §18 StromNEV"),
+            (
+                "enwg-20-bericht",
+                "/// BNetzA §20 EnWG annual Diskriminierungsbericht",
+            ),
+            ("enwg-20-bericht", "// the § 20 Abs. 1 EnWG parity report"),
+            (
+                "antwortcode-meaning",
+                "(A02 = MaLo not in the NB's grid, A05 = LF not registered)",
+            ),
             ("gasnev-14", "/// Grundpreis (§14 GasNEV)"),
             (
                 "eeg-42b",

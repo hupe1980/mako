@@ -61,6 +61,7 @@ per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
 | **GPKE Sperrung/Entsperrung (LF-Sicht)** | ⚡ | `mako-gpke` `gpke-sperrung-lf` | ORDERS 17115/17117 (out) · ORDCHG 39000 (out) · ORDRSP 19116/19117 · 19128/19129 · IFTSTA 21039 | Vorlauf 6 WT (nicht termingebunden) / 12 WT (termingebunden) | BK6-24-174 Teil 2 § 3.5 |
 | **GPKE Abrechnung (INVOIC)** | ⚡ | `mako-gpke` `gpke-abrechnung` | INVOIC 31001/31002/31005/31006; REMADV; COMDIS | zum Zahlungsziel (`SG8 DTM+265`) | BK6-24-174 Teil 2 § 3.3 |
 | **GPKE Datenabruf** | ⚡ | `mako-gpke` `gpke-datenabruf` | ORDERS 17004/17102/17113 → ORDRSP rejection | nicht quantifiziert | BK6-24-174 Teil 4 |
+| **GPKE Geschäftsdatenanfrage** | ⚡ | `mako-gpke` `gpke-geschaeftsdatenanfrage` | ORDERS 17132 → UTILMD 55035/55095/55060 · ORDRSP 19101 | **1 WT** (NB antwortet) | BK6-22-024 Anlage 1d Teil 4 Kap. 3.2 |
 | **GPKE Anfrage Bestellung (55555)** | ⚡ | `mako-gpke` `gpke-anfrage-bestellung` | UTILMD 55555 | nicht quantifiziert | BK6-24-174 Teil 4 |
 | **GPKE Allokationsliste Strom** | ⚡ | `mako-gpke` `gpke-allokationsliste` | ORDERS 17110/17114 · ORDRSP 19110/19115 · MSCONS 13014 | nicht quantifiziert | BK6-24-174 |
 | **GPKE Messwerte (MSCONS)** | ⚡ | `mako-gpke` `gpke-messwerte` | MSCONS 13005/13006/13015–13019/13025/13027 | nicht quantifiziert | BK6-24-174 |
@@ -78,7 +79,6 @@ per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
 | **WiM Geräteübernahme** | ⚡ 🔥 | `mako-wim` `wim-geraeteubernahme` | ORDERS 17001 · 17002 · 17009 · ORDRSP 19001/19002 · 19003/19004 · 19015/19016 | 4 WT Angebot · 2 WT Bestellung · Gerätewechseltermin frühestens am 4. WT, Antwort 2 WT davor | BK6-24-174 Kap. 3.1.2 / 3.2.2 |
 | **WiM Abrechnung** | ⚡ 🔥 | `mako-wim` `wim-invoic` | INVOIC 31009 · 31003 · 31004 · REMADV 33001–33004 · COMDIS 29001 | zum Zahlungsziel; NB bei 31009: 4. WT davor | BK6-24-174 Kap. 3.6.3.8 / 3.7 / 6 |
 | **WiM Rechnungsabwicklung MSB über LF** | ⚡ | `mako-wim` `wim-rechnungsabwicklung` | REQOTE 35002 → QUOTES 15002 · ORDERS 17005/17006 · ORDRSP 19009/19010 | 5 WT Angebot · **8 WT** Antwort/Beendigung | BK6-24-174 Kap. 3.6.3.4–3.6.3.7 |
-| **WiM Stammdaten** | ⚡🔥 | `mako-wim` `wim-stammdaten` | UTILMD Stammdaten beider Sparten | per PID, `mako_fristen::antwort` | BK6-24-174 · AWH WiM Gas 2.0 |
 | **WiM Weiterverpflichtung** | ⚡🔥 | `mako-wim` `wim-weiterverpflichtung` | ORDERS 17002 → ORDRSP 19003/19004 | **1 WT** (MSBA antwortet) | BK6-24-174 |
 | **WiM INSRPT Störungsbehebung** | ⚡ 🔥 | `mako-wim` `wim-insrpt` | INSRPT 23001 · 23003/23004 · 23005 · 23008 · 23009 · 23011/23012 | 3/1 WT je Messtechnik · Ergebnisbericht 7/4/2 WT · Weiterleitung 1 WT | BK6-24-174 Anlage 2b Kap. 1.2 |
 | **MaBiS Bilanzkreisabrechnung** | ⚡ | `mako-mabis` `mabis-billing` | MSCONS 13003; IFTSTA 21000–21005 | keine veröffentlicht — das Clearingfenster der Kap. 3.10 Tabelle 2 begrenzt sie | BK6-24-174 Anlage 3 |
@@ -130,7 +130,7 @@ per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
    - [GPKE IFTSTA — Vollzugsmeldungen, Statusmeldungen, EnFG](#gpke-iftsta-vollzugsmeldungen-statusmeldungen-enfg-gpke-teil-2-3-4)
 2. [WiM — Messstellenbetrieb](#wim-messstellenbetrieb)
    - [MSB-Wechsel](#msb-wechsel)
-   - [Geräteübernahme und Stammdaten](#gerateubernahme-und-stammdaten)
+   - [Geräteübernahme](#gerateubernahme)
    - [WiM-Abrechnung](#wim-abrechnung)
    - [Rechnungsabwicklung MSB über LF](#rechnungsabwicklung-msb-uber-lf)
    - [Technik-Änderung und Gerätekonfiguration](#technik-anderung-und-geratekonfiguration)
@@ -385,20 +385,19 @@ business answer is the REMADV, due zum Zahlungsziel (`SG8 DTM+265`).
 
 Data requests and configuration processes under GPKE Teil 4 (BK6-22-024).
 
-> **Multi-crate processes:** Some PIDs appear in more than one crate when the
-> direction or Marktrolle differs. For example, ORDERS 17132 (Stammdaten MeLo)
-> is handled by `mako-wim` because it uses WiM-specific MeLo semantics, while
-> all other GPKE datenabruf PIDs live in `mako-gpke`.
+> **One owner per PID.** ORDERS 17132 is the Geschäftsdatenanfrage of GPKE
+> Teil 4 Kap. 3 for a Markt- or Messlokation alike, answered by UTILMD — not
+> by an ORDERS — or refused by ORDRSP 19101 (ORDERS AHB 1.1b Kap. 4.1.1).
 
 #### Datenabruf
 
 | Process | Initiator → Responder | Anfrage PID | Antwort | Crate |
 |---|---|---|---|---|
 | Anfrage Daten der individuellen Bestellung | LF → NB | UTILMD **55555** | UTILMD 55553 | `mako-gpke` ✅ |
-| Anfrage Werte (GPKE) | LF → MSB/NB | ORDERS **17004** | ORDRSP 19101 | `mako-gpke` ✅ |
-| Anfrage Stammdaten MaLo (Strom) | LF/NB → NB | ORDERS **17102** | ORDRSP 19102 | `mako-gpke` ✅ |
-| Anfrage Stammdaten NNE/NLPV | LF → NB | ORDERS **17113** | ORDRSP 19114 | `mako-gpke` ✅ |
-| Anfrage Stammdaten Messlokation | LF/MSB → NB | ORDERS **17132** | ORDRSP | `mako-wim` ✅ |
+| Anforderung von Werten | LF/NB/MSB → MSB | ORDERS **17004** | ORDRSP 19007 | `mako-gpke` ✅ |
+| Anfrage von Werten | LF → MSB/NB | ORDERS **17102** | ORDRSP 19102 | `mako-gpke` ✅ |
+| Reklamation von Werten | LF/NB/MSB/ÜNB → NB/MSB | ORDERS **17113** | ORDRSP 19114 | `mako-gpke` ✅ |
+| Anfrage Stammdaten (Strom) | LF/MSB → NB | ORDERS **17132** | UTILMD 55035/55095 (LF) · 55060 (MSB) · ORDRSP 19101 | `mako-gpke` ✅ |
 | Anforderung Allokationsliste | LF → NB | ORDERS **17110** | ORDRSP 19110 | `mako-gpke` ✅ |
 | Anforderung bilanzierte Menge | NB/LF → ÜNB | ORDERS **17114** | ORDRSP 19115 | `mako-gpke` ✅ |
 
@@ -541,13 +540,12 @@ reaches the NB. Per Kap. 2.1.3 it is explicitly *non-constitutive*: the switch i
 effected solely by a successful Anmeldung MSBN → NB, so 55042 must never be gated
 on a 55040 Bestätigung.
 
-### Geräteübernahme und Stammdaten
+### Geräteübernahme
 
 | Process | Initiator → Responder | ORDERS PID | Antwort | Crate |
 |---|---|---|---|---|
 | Anzeige Gerätewechselabsicht | MSBN → MSBA | ORDERS **17009** | ORDRSP 19015/19016 | `mako-wim` ✅ |
 | Bestellung Angebot Änderung Technik | NB/LF → MSB | ORDERS **17011** | — | `mako-wim` ✅ |
-| Stammdaten Messlokation (Strom) | LF/MSB → NB | ORDERS **17132** | — | `mako-wim` ✅ |
 | Geräteübernahme Bestellung | MSBN → MSBA | ORDERS **17001/17002** | ORDRSP | `mako-wim` ✅ |
 
 ### WiM-Abrechnung
