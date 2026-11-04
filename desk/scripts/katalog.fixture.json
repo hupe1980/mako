@@ -1,0 +1,237 @@
+{
+  "faehigkeiten": [
+    {
+      "name": "desk-assistant",
+      "titel": "Assistent im Desk",
+      "zweck": "Beantwortet eine Frage zum Kunden, zur Marktlokation oder zum Prozess auf dem Bildschirm, jeden Satz mit seiner Quelle.",
+      "version": "1.0.0",
+      "digest": null,
+      "aktiv": true,
+      "ausloeser": [],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "vertragd/get_kunde",
+          "wozu": "The customer on screen and every Lieferstelle with its status."
+        },
+        {
+          "werkzeug": "makod/get_process",
+          "wozu": "The processes under a MaLo-ID, each with its pending deadlines."
+        },
+        {
+          "werkzeug": "makod/get_process_history",
+          "wozu": "A process's messages in and out, with PID and time."
+        },
+        {
+          "werkzeug": "processd/list_open_processes",
+          "wozu": "Open processes on given MaLos, the earliest Frist first, each with the"
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "deadline-alert-agent",
+      "titel": "Fristen-Wächter",
+      "zweck": "Ordnet jeden Prozess nahe oder nach seiner Antwortfrist nach Dringlichkeit und nennt, wer antworten muss.",
+      "version": "4.0.0",
+      "digest": null,
+      "aktiv": true,
+      "ausloeser": [
+        "mako_events::mako::PROCESS_FAILED",
+        "mako_events::mako::APERAK_TIMEOUT",
+        "mako_events::obs::DEADLINE_APPROACHING"
+      ],
+      "modell": null,
+      "liest": [
+        {
+          "werkzeug": "processd/list_overdue_processes",
+          "wozu": "The overdue set, already ordered most-urgent-first with `deadline_at`"
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "mako-agent",
+      "titel": "Marktprozesse erklären",
+      "zweck": "Erklärt abgelehnte Anmeldungen, APERAK-Fehler und hängende Prozesse.",
+      "version": "2.0.0",
+      "digest": null,
+      "aktiv": true,
+      "ausloeser": [
+        "mako_events::mako::PROCESS_FAILED",
+        "mako_events::mako::APERAK_TIMEOUT",
+        "\"de.mako.aperak.*\""
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "makod/get_process",
+          "wozu": "The workflow state of the process that failed."
+        },
+        {
+          "werkzeug": "makod/get_format_version_coverage",
+          "wozu": "Whether the PID is served in the format version the counterparty used."
+        },
+        {
+          "werkzeug": "makod/get_outbox_status",
+          "wozu": "Whether our own message ever left, before blaming the counterparty."
+        },
+        {
+          "werkzeug": "makod/list_dead_letters",
+          "wozu": "Deliveries that were abandoned, for a process with no APERAK at all."
+        },
+        {
+          "werkzeug": "processd/get_process",
+          "wozu": "The full timeline and deadline status behind the same process."
+        },
+        {
+          "werkzeug": "marktd/get_malo",
+          "wozu": "Master data completeness for an NB rejection: Netzebene,"
+        },
+        {
+          "werkzeug": "marktd/get_nb_contract",
+          "wozu": "Whether the NB contract the Anmeldung needs exists for the period."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "processd-agent",
+      "titel": "Entscheidungen erklären",
+      "zweck": "Erklärt, welcher Prüfschritt eine Anmeldung abgelehnt hat, und verfolgt die Freigabewarteschlange.",
+      "version": "2.0.0",
+      "digest": null,
+      "aktiv": true,
+      "ausloeser": [
+        "mako_events::mako::PROCESS_INITIATED",
+        "mako_events::mako::APERAK_REJECTED",
+        "mako_events::mako::PROCESS_FAILED"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "processd/get_decision",
+          "wozu": "Which of the six checks failed, and why."
+        },
+        {
+          "werkzeug": "processd/list_decisions",
+          "wozu": "Decisions across the period, to tell a one-off from a pattern."
+        },
+        {
+          "werkzeug": "processd/get_queue_entry",
+          "wozu": "One approval-queue item in full."
+        },
+        {
+          "werkzeug": "processd/list_pending_approvals",
+          "wozu": "Anmeldungen waiting on a human rather than on data."
+        },
+        {
+          "werkzeug": "marktd/get_malo",
+          "wozu": "The Marktlokation behind checks 1, 2 and 5."
+        },
+        {
+          "werkzeug": "marktd/get_nb_contract",
+          "wozu": "The NB contract behind checks 3 and 5."
+        },
+        {
+          "werkzeug": "marktd/get_melo",
+          "wozu": "The Messlokation, where the failure is on the metering side."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "vertragd-agent",
+      "titel": "Verträge und Kunden",
+      "zweck": "Wacht über Preisgarantien, Preisänderungsmitteilungen, auslaufende Verträge und hängende Anmeldungen.",
+      "version": "2.1.0",
+      "digest": null,
+      "aktiv": true,
+      "ausloeser": [
+        "\"de.vertrag.*\"",
+        "mako_events::mako::APERAK_REJECTED",
+        "mako_events::mako::PROCESS_FAILED",
+        "mako_events::vertrag::ABLAUF_ANKUENDIGUNG",
+        "mako_events::vertrag::PREISAENDERUNG_ANKUENDIGUNG"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "vertragd/get_vertrag_status",
+          "wozu": "Every Vertragskomponente and its state, including `preisgarantie_bis`."
+        },
+        {
+          "werkzeug": "vertragd/list_anmeldungen",
+          "wozu": "Every Lieferstelle still ANGEMELDET, with its customer and makod process."
+        },
+        {
+          "werkzeug": "makod/get_process",
+          "wozu": "The processes under a MaLo with their pending deadlines — whether an"
+        },
+        {
+          "werkzeug": "vertragd/list_expiring_contracts",
+          "wozu": "Contracts and price guarantees inside the notice window."
+        },
+        {
+          "werkzeug": "vertragd/compute_kuendigungsfrist",
+          "wozu": "The earliest lawful end date, with the rule it rests on named."
+        },
+        {
+          "werkzeug": "vertragd/check_preisgarantie",
+          "wozu": "Whether a Tarifwechsel would cross an active price guarantee."
+        },
+        {
+          "werkzeug": "vertragd/get_kunde",
+          "wozu": "The customer behind the contract, for the notice obligations."
+        },
+        {
+          "werkzeug": "processd/get_process",
+          "wozu": "A process's state and the Antwortcode its answer carried."
+        },
+        {
+          "werkzeug": "productd/list_products",
+          "wozu": "Products a renewal offer could be built from."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    },
+    {
+      "name": "eeg-agent",
+      "titel": "EEG-Anlagen",
+      "zweck": "Begleitet Förderende, Anschlussvermarktung und Abrechnungsfragen der Erzeugungsanlagen.",
+      "version": "2.0.0",
+      "digest": null,
+      "aktiv": false,
+      "ausloeser": [
+        "mako_events::eeg::ANLAGE_FOERDERUNG_AUSLAUFEND",
+        "mako_events::messwert::READING_DIRECT_STORED"
+      ],
+      "modell": "anthropic/claude-sonnet-5",
+      "liest": [
+        {
+          "werkzeug": "einsd/get_plant",
+          "wozu": "Plant master data: Förderende, settlement model, Inbetriebnahmedatum."
+        },
+        {
+          "werkzeug": "einsd/list_expiring",
+          "wozu": "Plants inside the Förderung expiry window, for the operator checklist."
+        },
+        {
+          "werkzeug": "edmd/get_device_history",
+          "wozu": "Whether the plant meters in 15-minute intervals — the iMSys indicator."
+        },
+        {
+          "werkzeug": "productd/check_41a_epex_status",
+          "wozu": "Whether EPEX day-ahead prices exist for a contractually dynamic post-EEG product."
+        }
+      ],
+      "nur_lesend": true,
+      "mit_freigabe": 0
+    }
+  ]
+}

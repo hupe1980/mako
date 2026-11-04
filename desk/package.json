@@ -1,0 +1,50 @@
+{
+  "name": "mako-desk",
+  "version": "0.24.0",
+  "private": true,
+  "description": "mako Desk — the operator's work surface. See site/content/docs/guide/desk/.",
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "gen": "node scripts/gen.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome ci .",
+    "format": "biome check --write .",
+    "test": "vitest run",
+    "check": "node scripts/gen.ts --check && tsc --noEmit && biome ci . && vitest run",
+    "screenshots": "node scripts/screenshots.ts"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.105.3",
+    "@tanstack/react-router": "1.170.46",
+    "@tanstack/react-virtual": "3.14.26",
+    "react": "19.3.1",
+    "react-aria-components": "1.22.1",
+    "react-dom": "19.3.1",
+    "uplot": "1.6.32"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.4",
+    "@tailwindcss/vite": "4.3.4",
+    "@testing-library/react": "16.3.3",
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.2.1",
+    "jsdom": "30.1.3",
+    "json-schema-to-typescript": "16.0.0",
+    "playwright": "1.64.1",
+    "smol-toml": "1.9.1",
+    "tailwindcss": "4.3.4",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "vitest": "5.1.0"
+  },
+  "allowScripts": {
+    "fsevents": false
+  }
+}

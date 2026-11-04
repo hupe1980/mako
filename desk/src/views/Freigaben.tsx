@@ -1,0 +1,371 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRouter, useSearch } from "@tanstack/react-router";
+import { useState } from "react";
+import {
+  Button as AriaButton,
+  GridList,
+  GridListItem,
+  Label,
+  Radio,
+  RadioGroup,
+  TextArea,
+  TextField,
+} from "react-aria-components";
+import { DIENST, nichtErreichbar } from "../app/dienste";
+import { ROLLEN, useRolle } from "../app/rollen";
+import { type Schicksal, schicksal, type Vorschlag } from "../data/agent";
+import { Abgelehnt, type Entscheidung, entscheiden } from "../data/freigabe";
+import type { Freigabe } from "../data/gen/processd";
+import { call, ServiceUnavailable } from "../data/mcp";
+import { FristUhr } from "../design/FristUhr";
+import { Icon } from "../design/Icon";
+import { EmptyState, Notice, Panel } from "../design/Panel";
+import { formatCount } from "../format/count";
+import { Fragen } from "./Fragen";
+import { Verlauf } from "./Verlauf";
+
+const ROW =
+  "focus-ring flex cursor-default items-center gap-3 border-b border-separator px-4 py-3 outline-none last:border-b-0 data-[focused]:bg-fill data-[hovered]:bg-fill data-[selected]:bg-fill-strong";
+
+const ART: Record<string, string> = {
+  gehalten: "Antwort steht fest",
+  eskaliert: "Antwort offen",
+};
+
+function useFreigaben() {
+  const { rolle } = useRolle();
+  const marktrolle = ROLLEN[rolle].marktrolle;
+  return useQuery({
+    queryKey: [rolle, "processd", "list_pending_approvals", marktrolle],
+    queryFn: () => call("processd", "list_pending_approvals", { marktrolle }),
+    refetchInterval: 30_000,
+  });
+}
+
+/** The count the sidebar shows beside „Freigaben" — processd's, not a page's. */
+export function useFreigabenZahl(): number | undefined {
+  return useFreigaben().data?.count;
+}
+
+/** Where a proposal came from, so sending it can say whether it was changed. */
+interface Herkunft {
+  run: string;
+  v: Vorschlag;
+}
+
+function Entscheiden({ f, onDone }: { f: Freigabe; onDone: () => void }) {
+  const [aktion, setAktion] = useState<"freigeben" | "ablehnen" | null>(null);
+  const [code, setCode] = useState<string | null>(null);
+  const [bemerkung, setBemerkung] = useState("");
+  const [bestaetigen, setBestaetigen] = useState(false);
+  const [herkunft, setHerkunft] = useState<Herkunft | null>(null);
+
+  // processd states, per action, the codes pressing it needs — none where the
+  // answer goes as held — by the same rule it checks the code against.
+  const codes =
+    aktion === "ablehnen" ? f.codes_ablehnen : aktion === "freigeben" ? f.codes_freigeben : null;
+  const brauchtCode = Boolean(codes);
+  const vollstaendig = aktion !== null && (!brauchtCode || code !== null);
+
+  const senden = useMutation({
+    mutationFn: async () => {
+      if (!aktion) return;
+      const e: Entscheidung = { aktion };
+      if (brauchtCode && code && codes) {
+        e.antwort_code = code;
+        e.antwort_tree = codes.ebd;
+      }
+      if (bemerkung.trim()) e.bemerkung = bemerkung.trim();
+      await entscheiden(f.id, e);
+      if (herkunft) {
+        const unveraendert =
+          herkunft.v.aktion === aktion && (herkunft.v.antwortcode ?? null) === (code ?? null);
+        const was: Schicksal = unveraendert ? "sent" : "edited";
+        // The decision went out; the record of what became of the proposal
+        // is the assistant's quality signal and never blocks it.
+        await schicksal(herkunft.run, was).catch(() => undefined);
+      }
+    },
+    onSuccess: onDone,
+  });
+
+  const uebernehmen = (v: Vorschlag, run: string) => {
+    setHerkunft({ run, v });
+    setAktion(v.aktion);
+    setCode(v.antwortcode);
+    setBestaetigen(false);
+  };
+
+  return (
+    <>
+      <Panel className="flex flex-col gap-4 p-5">
+        <h3 className="m-0 text-callout font-semibold">Entscheidung</h3>
+        {herkunft && (
+          <p className="m-0 flex items-center gap-2 text-caption text-ai">
+            <Icon name="sparkle" size={12} /> Vom Assistenten vorgeschlagen — prüfen, dann senden.
+          </p>
+        )}
+        <RadioGroup
+          aria-label="Entscheidung"
+          value={aktion}
+          onChange={(v) => {
+            setAktion(v as "freigeben" | "ablehnen");
+            setCode(null);
+            setBestaetigen(false);
+          }}
+          orientation="horizontal"
+          className="flex gap-2"
+        >
+          {(["freigeben", "ablehnen"] as const).map((a) => (
+            <Radio
+              key={a}
+              value={a}
+              isDisabled={a === "freigeben" ? !f.kann_freigeben : !f.kann_ablehnen}
+              className="focus-ring flex h-9 cursor-default items-center rounded-control border border-separator px-4 text-body font-medium text-text-2 data-[disabled]:opacity-40 data-[hovered]:bg-fill data-[selected]:border-accent data-[selected]:bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] data-[selected]:text-accent"
+            >
+              {a === "freigeben" ? "Freigeben" : "Ablehnen"}
+            </Radio>
+          ))}
+        </RadioGroup>
+
+        {aktion === "freigeben" && f.art === "gehalten" && f.antwort && (
+          <p className="m-0 text-callout text-text">
+            Gesendet wird die festgehaltene Antwort:{" "}
+            <span className="font-mono">{f.antwort.code}</span>
+            {f.antwort.bedeutung && <> — {f.antwort.bedeutung}</>}
+          </p>
+        )}
+
+        {brauchtCode && codes && (
+          <RadioGroup
+            value={code}
+            onChange={(c) => {
+              setCode(c);
+              setBestaetigen(false);
+            }}
+            className="flex flex-col gap-1.5"
+          >
+            <Label className="text-caption text-text-2">
+              Antwortcode aus <span className="font-mono">{codes.ebd}</span>
+            </Label>
+            {codes.codes.map((c) => (
+              <Radio
+                key={c.code}
+                value={c.code}
+                className="focus-ring flex cursor-default items-start gap-3 rounded-[10px] border border-separator px-3 py-2 data-[hovered]:bg-fill data-[selected]:border-accent"
+              >
+                <span className="font-mono text-body font-semibold text-text">{c.code}</span>
+                <span className="text-body text-text-2">{c.bedeutung}</span>
+              </Radio>
+            ))}
+          </RadioGroup>
+        )}
+
+        {aktion && (
+          <TextField value={bemerkung} onChange={setBemerkung} className="flex flex-col gap-1">
+            <Label className="text-caption text-text-2">Bemerkung (optional)</Label>
+            <TextArea
+              rows={2}
+              maxLength={512}
+              className="focus-ring rounded-control border border-separator bg-surface px-3 py-2 text-body text-text outline-none"
+            />
+          </TextField>
+        )}
+
+        {senden.isError && (
+          <Notice
+            tone="refusal"
+            title="Die Prozessüberwachung hat die Entscheidung nicht angenommen"
+          >
+            {senden.error instanceof Abgelehnt ? senden.error.message : nichtErreichbar("processd")}
+          </Notice>
+        )}
+
+        {!bestaetigen ? (
+          <div className="flex justify-end">
+            <AriaButton
+              isDisabled={!vollstaendig}
+              onPress={() => setBestaetigen(true)}
+              className="focus-ring h-9 rounded-control bg-accent px-4 text-body font-semibold text-on-accent data-[disabled]:opacity-40"
+            >
+              {aktion === "ablehnen" ? "Ablehnen …" : "Freigeben …"}
+            </AriaButton>
+          </div>
+        ) : (
+          <div
+            role="alertdialog"
+            aria-label="Senden bestätigen"
+            className="flex flex-wrap items-center gap-3 rounded-[10px] bg-fill px-3 py-2"
+          >
+            <p className="m-0 flex-1 text-body text-text">
+              Das sendet die Antwort als Marktnachricht an den Marktpartner — sie lässt sich nicht
+              zurückholen.
+            </p>
+            <AriaButton
+              onPress={() => setBestaetigen(false)}
+              className="focus-ring h-8 rounded-control px-3 text-body text-text-2 data-[hovered]:bg-fill-strong"
+            >
+              Abbrechen
+            </AriaButton>
+            <AriaButton
+              autoFocus
+              isDisabled={senden.isPending}
+              onPress={() => senden.mutate()}
+              className="focus-ring h-8 rounded-control bg-accent px-3 text-body font-semibold text-on-accent data-[disabled]:opacity-40"
+            >
+              {senden.isPending ? "Sendet …" : "Jetzt senden"}
+            </AriaButton>
+          </div>
+        )}
+      </Panel>
+      <Fragen anker={{ freigabe: f.id }} onVorschlag={uebernehmen} />
+    </>
+  );
+}
+
+function Detail({ f }: { f: Freigabe }) {
+  const client = useQueryClient();
+  const router = useRouter();
+  const [erledigt, setErledigt] = useState(false);
+  if (erledigt) {
+    return (
+      <Panel>
+        <EmptyState title="Entschieden.">
+          Die Prozessüberwachung hat die Antwort an die Marktkommunikation gegeben.
+        </EmptyState>
+      </Panel>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-4">
+      <Panel className="flex flex-col gap-3 p-5">
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="m-0 text-caption font-semibold tracking-wide text-text-2 uppercase">
+              {ART[f.art] ?? f.art} · PID <span className="font-mono">{f.pid}</span>
+            </p>
+            <h2 className="m-0 mt-1 text-title font-semibold">{f.grund}</h2>
+          </div>
+          <span className="flex flex-col items-end gap-1 text-caption text-text-2">
+            entscheiden bis
+            <FristUhr due={f.expires_at} />
+          </span>
+        </div>
+        {f.malo_id && (
+          <AriaButton
+            onPress={() => router.navigate({ to: "/prozess", search: { key: f.malo_id ?? "" } })}
+            className="focus-ring inline-flex h-7 w-fit items-center gap-1 rounded-full border border-separator px-3 text-body text-text data-[hovered]:bg-fill"
+          >
+            MaLo <span className="font-mono">{f.malo_id}</span>
+            <Icon name="chevron" size={12} />
+          </AriaButton>
+        )}
+      </Panel>
+      <Entscheiden
+        f={f}
+        onDone={() => {
+          setErledigt(true);
+          void client.invalidateQueries({ queryKey: ["processd", "list_pending_approvals"] });
+          void client.invalidateQueries();
+        }}
+      />
+      <Panel className="overflow-hidden">
+        <Verlauf processId={f.process_id} deadlines={[]} />
+      </Panel>
+    </div>
+  );
+}
+
+/**
+ * Freigaben: the decisions processd held for a person — the earliest Frist
+ * first, as processd orders them. Each opens with its facts, the codes its
+ * Entscheidungsbaum allows, the process's Verlauf and the assistant; nothing
+ * is sent until the person confirms.
+ */
+export function FreigabenView() {
+  const router = useRouter();
+  const { id } = useSearch({ from: "/freigaben" });
+  const list = useFreigaben();
+  const rows = list.data?.freigaben ?? [];
+  const selected = rows.find((f) => f.id === id) ?? rows[0];
+
+  return (
+    <div className="mx-auto flex max-w-6xl flex-col gap-6 px-8 py-10">
+      <header>
+        <h1 className="m-0 text-large font-bold tracking-tight">Freigaben</h1>
+        <p className="m-0 mt-1 text-callout text-text-2">
+          Was die {DIENST.processd} einer Person zur Entscheidung vorlegt — die nächste Frist
+          zuerst.
+        </p>
+      </header>
+      {list.isError && (
+        <Notice
+          tone="failure"
+          title={
+            list.error instanceof ServiceUnavailable
+              ? nichtErreichbar(list.error.service)
+              : "Die Freigaben ließen sich nicht lesen"
+          }
+        >
+          {list.error.message}
+        </Notice>
+      )}
+      {list.isPending && <div className="skeleton h-40" />}
+      {list.data && rows.length === 0 && (
+        <Panel>
+          <EmptyState title="Nichts zu entscheiden.">
+            Die {DIENST.processd} hat alles selbst beantwortet.
+          </EmptyState>
+        </Panel>
+      )}
+      {selected && (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
+          <section
+            aria-label="Offene Freigaben"
+            className="flex flex-col gap-2 lg:sticky lg:top-20 lg:self-start"
+          >
+            <Panel className="overflow-hidden">
+              <GridList
+                aria-label="Offene Freigaben"
+                selectionMode="single"
+                disallowEmptySelection
+                selectedKeys={[selected.id]}
+                onSelectionChange={(keys) => {
+                  const next = [...keys][0];
+                  if (next) router.navigate({ to: "/freigaben", search: { id: String(next) } });
+                }}
+                className="outline-none"
+              >
+                {rows.map((f) => (
+                  <GridListItem key={f.id} id={f.id} textValue={f.grund} className={ROW}>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-body font-medium text-text">
+                        {f.grund}
+                      </span>
+                      <span className="block text-caption text-text-2">
+                        {ART[f.art] ?? f.art} · PID <span className="font-mono">{f.pid}</span>
+                        {f.malo_id && (
+                          <>
+                            {" · "}
+                            <span className="font-mono">{f.malo_id}</span>
+                          </>
+                        )}
+                      </span>
+                    </span>
+                    <FristUhr due={f.expires_at} />
+                  </GridListItem>
+                ))}
+              </GridList>
+            </Panel>
+            {list.data?.saturated && (
+              <p className="m-0 px-1 text-caption text-text-2">
+                Die ersten {formatCount(rows.length)} — mehr liegen an.
+              </p>
+            )}
+          </section>
+          <Detail key={selected.id} f={selected} />
+        </div>
+      )}
+    </div>
+  );
+}

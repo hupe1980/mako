@@ -5,6 +5,8 @@
 # Compiled artefacts — do not send gigabytes of build cache to the daemon.
 target/
 fuzz/target/
+desk/node_modules/
+desk/dist/
 
 # Developer tooling
 .git/

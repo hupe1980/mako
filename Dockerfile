@@ -356,6 +356,33 @@ ENTRYPOINT ["/usr/local/bin/agentd"]
 LABEL org.opencontainers.image.title="agentd" \
       org.opencontainers.image.description="Multi-agent LLM orchestration daemon — agentplane durable runtime, LanceDB RAG, MCP tools"
 
+# The Desk — the operator's web UI as a static bundle, served behind the
+# gateway (oauth2-proxy, `desk/deploy/gateway.yaml`), which signs the person
+# in and forwards `/svc/<service>/` with their access token.
+FROM node:26-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9 AS desk-builder
+WORKDIR /desk
+COPY desk/package.json desk/package-lock.json ./
+RUN npm ci --ignore-scripts
+COPY desk/ ./
+RUN npm run build
+
+FROM nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6 AS desk-runtime
+ARG OCI_VERSION=dev
+ARG OCI_REVISION=unknown
+ARG OCI_CREATED=unknown
+COPY desk/deploy/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=desk-builder /desk/dist /usr/share/nginx/html
+EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=5 \
+    CMD ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+LABEL org.opencontainers.image.title="desk" \
+      org.opencontainers.image.description="mako Desk — the operator's web UI, served behind the OIDC gateway" \
+      org.opencontainers.image.version="${OCI_VERSION}" \
+      org.opencontainers.image.revision="${OCI_REVISION}" \
+      org.opencontainers.image.created="${OCI_CREATED}" \
+      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
+      org.opencontainers.image.licenses="MIT OR Apache-2.0"
+
 # makod — last, so a plain `docker build .` builds it.
 FROM runtime-base AS runtime
 COPY --from=demo-builder --chown=root:root /usr/local/bin/makod /usr/local/bin/makod

@@ -1,0 +1,42 @@
+# oauth2-proxy alpha config — the Desk's gateway (one origin, no token in the
+# browser). It signs the person in by OIDC, serves the Desk from the
+# `mako-desk` image, and forwards `/svc/<service>/…` to each service with the
+# person's access token as `Authorization: Bearer`.
+#
+# Each service verifies that token as today: its `[oidc] audience` must be in
+# the token's `aud` (an audience mapper at the IdP, or one shared audience for
+# every service). Cedar decides what the person may do.
+#
+# Run it with: oauth2-proxy --alpha-config=gateway.yaml --config=oauth2-proxy.cfg
+# (provider, client id/secret, cookie secret and redirect URL live in the
+# legacy config or the environment, as oauth2-proxy expects).
+injectRequestHeaders:
+  - name: Authorization
+    values:
+      - claimSource:
+          claim: access_token
+          prefix: "Bearer "
+upstreamConfig:
+  upstreams:
+    - id: desk
+      path: /
+      uri: http://desk:8080
+    # One entry per service the Desk reads; the prefix is stripped.
+    - id: makod
+      path: ^/svc/makod/(.*)$
+      rewriteTarget: /$1
+      uri: http://makod:8080
+    - id: processd
+      path: ^/svc/processd/(.*)$
+      rewriteTarget: /$1
+      uri: http://processd:8580
+    - id: vertragd
+      path: ^/svc/vertragd/(.*)$
+      rewriteTarget: /$1
+      uri: http://vertragd:9780
+    - id: agentd
+      path: ^/svc/agentd/(.*)$
+      rewriteTarget: /$1
+      uri: http://agentd:9580
+server:
+  BindAddress: 0.0.0.0:4180

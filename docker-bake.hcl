@@ -41,7 +41,7 @@ variable "services" {
   default = [
     "makod", "marktd", "processd", "invoicd", "edmd", "netzbilanzd", "einsd",
     "productd", "billingd", "outputd", "accountingd", "vertragd", "portald",
-    "agentd",
+    "agentd", "desk",
   ]
 }
 
@@ -65,7 +65,7 @@ target "_base" {
 }
 
 # One target per service, named after it. makod's stage is the Dockerfile's
-# `runtime`; every other service's is `<service>-runtime`.
+# `runtime`; every other image's — the Desk's included — is `<name>-runtime`.
 target "service" {
   matrix   = { svc = services }
   name     = svc
