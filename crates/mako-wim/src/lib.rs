@@ -18,7 +18,6 @@
 //! | Geräteübernahme Bestellung (MSBN → MSBA) | 17001 → 19001/19002 | ORDERS/ORDRSP | `geraeteubernahme` | `E_0247` |
 //! | Anzeige Gerätewechselabsicht (MSBN → MSBA) | 17009 → 19015/19016 | ORDERS/ORDRSP | `geraeteubernahme` | `E_0204` |
 //! | Messlokationsänderung (NB/LF → MSB) | 17011/17118 → 19005/19006 | ORDERS/ORDRSP | `technik_aenderung` | `E_0249`/`E_0250` |
-//! | Stammdaten Anfrage / Übermittlung | 17132 (req), 17102–17133 (resp) | ORDERS | `stammdaten` | — |
 //! | Preisanfrage (REQOTE/QUOTES) | 35001/35002/35004/35005 → 15001/15002/15004/15005 | REQOTE, QUOTES | `preisanfrage` | — |
 //! | Rechnungsabwicklung über den LF | 17005/17006 → 19009/19010 | ORDERS/ORDRSP | `rechnungsabwicklung` | `E_0206`/`E_0209` |
 //! | Preisliste (PRICAT) | 27001–27003 | PRICAT | `preisliste` | — |
@@ -138,7 +137,6 @@ pub mod invoic;
 pub mod preisanfrage;
 pub mod preisliste;
 pub mod rechnungsabwicklung;
-pub mod stammdaten;
 pub mod steuerungsauftrag;
 pub mod technik_aenderung;
 pub mod weiterverpflichtung;
@@ -186,11 +184,6 @@ pub use rechnungsabwicklung::{
     RechnungsabwicklungEvent, RechnungsabwicklungState,
     WORKFLOW_NAME as RECHNUNGSABWICKLUNG_WORKFLOW_NAME, WimRechnungsabwicklungWorkflow,
 };
-pub use stammdaten::{
-    ANFORDERUNG_PID, STAMMDATEN_DEADLINE_LABEL, StammdatenCommand, StammdatenData, StammdatenEvent,
-    StammdatenProjection, StammdatenRecord, StammdatenRecordData, StammdatenState,
-    UEBERMITTLUNG_PIDS, WORKFLOW_NAME as STAMMDATEN_WORKFLOW_NAME, WimStammdatenWorkflow,
-};
 pub use steuerungsauftrag::{
     STEUERUNGSAUFTRAG_DEADLINE_LABEL, SteuerungsCommandType, SteuerungsauftragCommand,
     SteuerungsauftragData, SteuerungsauftragEvent, SteuerungsauftragState,
@@ -224,8 +217,6 @@ pub use weiterverpflichtung::{
 /// | 55051 | `wim-device-change` | Ende MSB / Abmeldung (MSBA → NB) | any |
 /// | 55168 | `wim-device-change` | Verpflichtungsanfrage / Aufforderung (NB → gMSB) | any |
 /// | 17001, 17002, 17009 | `wim-geraeteubernahme` | Geräteübernahme ORDERS | any |
-/// | 17132 | `wim-stammdaten` | Stammdaten Anforderung Strom (NB → MSB), MSB role | any |
-/// | 17102–17133 | `wim-stammdaten` | Stammdatenübermittlung responses (MSB → NB), NB role | **Nb only** |
 /// | 39002 | `wim-wertebestellung` | ESA Stornierung der Bestellung (ORDCHG) | **Msb only** |
 /// | 19001, 19002 | `wim-geraeteubernahme` | ORDRSP Bestellbestätigung/Ablehnung from NB | **nMSB only** |
 /// | 19015, 19016 | `wim-geraeteubernahme` | ORDRSP Gerätewechselabsicht Bestätigung/Ablehnung | any |
@@ -265,7 +256,6 @@ impl mako_engine::builder::EngineModule for WimModule {
                 geraeteubernahme::WORKFLOW_NAME,
             ),
             WorkflowDriver::of::<ersteinbau::WimErsteinbauWorkflow>(ersteinbau::WORKFLOW_NAME),
-            WorkflowDriver::of::<stammdaten::WimStammdatenWorkflow>(stammdaten::WORKFLOW_NAME),
             WorkflowDriver::of::<wertebestellung::WimWertebestellungWorkflow>(
                 wertebestellung::WORKFLOW_NAME,
             ),
@@ -371,71 +361,11 @@ impl mako_engine::builder::EngineModule for WimModule {
             }
         }
 
-        // ORDERS 17132 — Stammdaten Anforderung Strom (NB → MSB).
-        //
-        // When makod acts as MSB it receives this inbound (NB sends the request).
-        // When makod acts as NB it sends this outbound via the outbox; the MSB responds
-        // with one of the UEBERMITTLUNG_PIDS (17102–17133) which the NB then receives
-        // inbound — those are registered below under the Nb role guard.
-        //
-        // Note: 17101 („Anfrage zur Übermittlung von Stammdaten Gas") is the Gas
-        // counterpart. It is a GeLi Gas Geschäftsdatenanfrage, not a WiM
-        // Stammdatenanforderung, and is not routed here.
-        router.register(stammdaten::ANFORDERUNG_PID.as_u32(), "wim-stammdaten");
-
-        // Nb role: inbound Stammdatenübermittlung responses (MSB → NB).
-        //
-        // When makod acts as NB it sends ORDERS 17132 outbound and receives the MSB's
-        // response (one of PIDs 17102–17133) inbound. These are registered only for
-        // explicit Nb deployments to avoid routing conflicts on MSB-only instances.
-        //
-        // PIDs 17134/17135 are excluded: they are GPKE Konfiguration PIDs owned by
-        // mako-gpke and must not be claimed by the WiM Stammdaten module.
-        //
-        // PIDs 17115–17117 are excluded: GPKE/AWH Sperrprozesse ORDERS PIDs
-        // (Sperrauftrag / Aufhebung Sperrauftrag / Sperrung nicht möglich) owned by
-        // mako-gpke as "gpke-sperrung".
-        //
-        // The following GPKE-owned PIDs fall inside the 17102–17133 range and must
-        // not be claimed by wim-stammdaten to avoid ownership conflicts on combined NB
-        // deployments (both GpkeModule and WimModule active):
-        //
-        //   17102 (gpke-datenabruf, Datenabruf Anfrage LF→NB)
-        //   17110 (gpke-allokationsliste, Anforderung Allokationsliste)
-        //   17113 (gpke-datenabruf, Weitere Datenabruf Anfrage)
-        //   17114 (gpke-allokationsliste, Abmeldung Allokationsliste)
-        //   17120 (gpke-konfiguration-aenderung, Bestellung Konfiguration LF→NB)
-        //   17121 (gpke-konfiguration-aenderung, Bestellung Konfiguration LF→NB)
-        //   17122 (gpke-konfiguration-aenderung, Bestellung Konfigurationsänderung)
-        //   17123 (gpke-konfiguration-aenderung, Stornierung Konfigurationsbestellung)
-        //   17128 (gpke-konfiguration-aenderung, Bestellung Konfiguration LF→MSB)
-        //   17129 (gpke-konfiguration-aenderung, Bestellung Konfiguration LF→MSB)
-        //   17130 (gpke-konfiguration-aenderung, Bestellung Konfigurationsänderung LF→MSB)
-        //   17131 (gpke-konfiguration-aenderung, Stornierung Konfigurationsbestellung LF→MSB)
-        //   17133 (gpke-konfiguration-aenderung, Bestellung Konfiguration Reklamation)
-        //
-        // Source: site/content/docs/regulatory/pid-reference.md (generated from BDEW xlsx PID 3.3 + PID 4.0).
-        #[rustfmt::skip]
-        const GPKE_OWNED_IN_RANGE: &[u32] = &[
-            17102, 17113,                        // gpke-datenabruf
-            17110, 17114,                        // gpke-allokationsliste
-            17120, 17121, 17122, 17123,          // gpke-konfiguration-aenderung (LF→NB)
-            17128, 17129, 17130, 17131, 17133,   // gpke-konfiguration-aenderung (LF→MSB)
-            // 17115, 17116, 17117 already excluded by the matches!() guard below
-        ];
-        if !roles.is_all() && roles.contains(mako_engine::marktrolle::Marktrolle::Nb) {
-            for pid in stammdaten::UEBERMITTLUNG_PIDS {
-                if matches!(pid, 17115..=17117) {
-                    // Sperrung PIDs — owned by mako-gpke (gpke-sperrung).
-                    continue;
-                }
-                if GPKE_OWNED_IN_RANGE.contains(&pid) {
-                    // GPKE-owned PIDs — must not be claimed by wim-stammdaten.
-                    continue;
-                }
-                router.register(pid, "wim-stammdaten");
-            }
-        }
+        // No ORDERS Stammdaten PID is WiM's. ORDERS 17132 is the GPKE Teil 4
+        // Geschäftsdatenanfrage (LF · MSB → NB), answered by UTILMD and refused
+        // by ORDRSP 19101 — `mako-gpke` `gpke-geschaeftsdatenanfrage`. The
+        // ORDERS PIDs beside it are other Anwendungsfälle with owners of their
+        // own (ORDERS AHB 1.1b Kap. 4; Anwendungsübersicht 4.0).
 
         // REQOTE 35001/35002/35004/35005 (Preisanfrage) and QUOTES 15001/15002/15004/15005 (Angebot).
         for &pid in preisanfrage::REQOTE_PIDS
@@ -663,7 +593,7 @@ impl mako_engine::builder::EngineModule for WimModule {
             },
             ProfileRequirement {
                 message_type: "ORDERS",
-                label: "ORDERS (WiM Geräteübernahme/Stammdaten)",
+                label: "ORDERS (WiM Geräteübernahme, Technik-Änderung, Rechnungsabwicklung)",
             },
             ProfileRequirement {
                 message_type: "ORDRSP",
@@ -733,12 +663,6 @@ impl mako_engine::builder::EngineModule for WimModule {
                 ));
             }
         }
-        // UEBERMITTLUNG_PIDS is a RangeInclusive<u32>, not a slice; verify it is non-empty.
-        if stammdaten::UEBERMITTLUNG_PIDS.is_empty() {
-            return Err("wim: stammdaten::UEBERMITTLUNG_PIDS is empty — \
-                 at least one PID must be registered for the Stammdaten workflow"
-                .to_owned());
-        }
         Ok(())
     }
 }
@@ -752,127 +676,36 @@ mod tests {
         pid_router::PidRouter,
     };
 
-    /// Regression test for the NB-role PID conflict between WiM Stammdaten
-    /// UEBERMITTLUNG_PIDS (17102..=17133) and GPKE-owned PIDs in that range.
-    ///
-    /// A bare `!roles.is_all() && roles.contains(Nb)` has WiM register the
-    /// GPKE-owned PIDs in that range to "wim-stammdaten", overwriting GPKE's
-    /// entries and silently misrouting the messages.
+    /// WiM owns no ORDERS Stammdaten PID on any deployment. ORDERS 17132 is the
+    /// GPKE Teil 4 Geschäftsdatenanfrage (ORDERS AHB 1.1b Kap. 4.1.1; PID
+    /// overview 4.0 lfd. Nr. 25540–25640), and the PIDs beside it are other
+    /// Anwendungsfälle: 17103 Brennwert and 17104 Anfrage vom MSB Gas
+    /// (`geli-gas-datenabruf`), 17126 Stammdaten Messlokation Gas (no owner), and
+    /// 17118 Konfigurationsänderung, which WiM routes to `wim-technik-aenderung`.
+    /// A WiM registration of any of them would turn a foreign Anwendungsfall into
+    /// a WiM process.
     #[test]
-    fn nb_role_sperrung_not_overwritten_by_stammdaten_range() {
-        let nb = DeploymentRoles::from_roles([Marktrolle::Nb]);
-        let mut router = PidRouter::new();
-        // Simulate GPKE registration first (as it happens in makod startup order).
-        router.register(17115, "gpke-sperrung");
-        router.register(17116, "gpke-sperrung");
-        router.register(17117, "gpke-sperrung");
-        // GPKE-owned PIDs in the 17102..=17133 range
-        router.register(17102, "gpke-datenabruf");
-        router.register(17113, "gpke-datenabruf");
-        router.register(17110, "gpke-allokationsliste");
-        router.register(17114, "gpke-allokationsliste");
-        router.register(17120, "gpke-konfiguration-aenderung");
-        router.register(17121, "gpke-konfiguration-aenderung");
-        router.register(17122, "gpke-konfiguration-aenderung");
-        router.register(17123, "gpke-konfiguration-aenderung");
-        router.register(17128, "gpke-konfiguration-aenderung");
-        router.register(17129, "gpke-konfiguration-aenderung");
-        router.register(17130, "gpke-konfiguration-aenderung");
-        router.register(17131, "gpke-konfiguration-aenderung");
-        router.register(17133, "gpke-konfiguration-aenderung");
-
-        // WiM registration must NOT overwrite GPKE entries.
-        WimModule.register_pids_with_roles(&mut router, &nb);
-
-        // Sperrung PIDs must still route to gpke-sperrung, not wim-stammdaten.
-        assert_eq!(
-            router.route(17115),
-            Some("gpke-sperrung"),
-            "17115 must route to gpke-sperrung"
-        );
-        assert_eq!(
-            router.route(17116),
-            Some("gpke-sperrung"),
-            "17116 must route to gpke-sperrung"
-        );
-        assert_eq!(
-            router.route(17117),
-            Some("gpke-sperrung"),
-            "17117 must route to gpke-sperrung"
-        );
-
-        // GPKE-owned PIDs in range must not be overwritten by wim-stammdaten.
-        assert_eq!(
-            router.route(17102),
-            Some("gpke-datenabruf"),
-            "17102 must route to gpke-datenabruf"
-        );
-        assert_eq!(
-            router.route(17113),
-            Some("gpke-datenabruf"),
-            "17113 must route to gpke-datenabruf"
-        );
-        assert_eq!(
-            router.route(17110),
-            Some("gpke-allokationsliste"),
-            "17110 must route to gpke-allokationsliste"
-        );
-        assert_eq!(
-            router.route(17114),
-            Some("gpke-allokationsliste"),
-            "17114 must route to gpke-allokationsliste"
-        );
-        assert_eq!(
-            router.route(17120),
-            Some("gpke-konfiguration-aenderung"),
-            "17120 must route to gpke-konfiguration-aenderung"
-        );
-        assert_eq!(
-            router.route(17122),
-            Some("gpke-konfiguration-aenderung"),
-            "17122 must route to gpke-konfiguration-aenderung"
-        );
-        assert_eq!(
-            router.route(17128),
-            Some("gpke-konfiguration-aenderung"),
-            "17128 must route to gpke-konfiguration-aenderung"
-        );
-        assert_eq!(
-            router.route(17133),
-            Some("gpke-konfiguration-aenderung"),
-            "17133 must route to gpke-konfiguration-aenderung"
-        );
-
-        // True WiM Stammdaten PIDs in the range must still resolve to wim-stammdaten.
-        assert_eq!(
-            router.route(17132),
-            Some("wim-stammdaten"),
-            "17132 (ANFORDERUNG_PID) must route to wim-stammdaten"
-        );
-        // 17103 is a genuine wim-stammdaten PID (not GPKE-owned).
-        assert_eq!(
-            router.route(17103),
-            Some("wim-stammdaten"),
-            "17103 must route to wim-stammdaten"
-        );
-    }
-
-    /// Sanity: with DeploymentRoles::all() (default/dev), the NB gate does not
-    /// fire at all, so the UEBERMITTLUNG range is not registered and any prior
-    /// sperrung registration is undisturbed.
-    #[test]
-    fn all_roles_uebermittlung_gate_does_not_fire() {
-        let all = DeploymentRoles::all();
-        let mut router = PidRouter::new();
-        router.register(17115, "gpke-sperrung");
-        router.register(17116, "gpke-sperrung");
-        router.register(17117, "gpke-sperrung");
-        WimModule.register_pids_with_roles(&mut router, &all);
-
-        assert_eq!(router.route(17115), Some("gpke-sperrung"));
-        assert_eq!(router.route(17116), Some("gpke-sperrung"));
-        assert_eq!(router.route(17117), Some("gpke-sperrung"));
-        // 17132 ANFORDERUNG_PID should also be registered by the non-role-gated path.
-        assert_eq!(router.route(17132), Some("wim-stammdaten"));
+    fn wim_routes_no_orders_stammdaten_pid() {
+        for roles in [
+            DeploymentRoles::from_roles([Marktrolle::Nb]),
+            DeploymentRoles::from_roles([Marktrolle::Msb]),
+            DeploymentRoles::from_roles([Marktrolle::Lf]),
+            DeploymentRoles::all(),
+        ] {
+            let mut router = PidRouter::new();
+            WimModule.register_pids_with_roles(&mut router, &roles);
+            for pid in (17_101..=17_133).filter(|p| *p != 17_118) {
+                assert_eq!(
+                    router.route(pid),
+                    None,
+                    "WiM must not route ORDERS {pid} ({roles:?})"
+                );
+            }
+            assert_eq!(
+                router.route(17_118),
+                Some(technik_aenderung::WORKFLOW_NAME),
+                "17118 is the Konfigurationsänderung ({roles:?})"
+            );
+        }
     }
 }

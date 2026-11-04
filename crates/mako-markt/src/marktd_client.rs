@@ -1669,15 +1669,13 @@ impl MarktdClient {
 
     /// `PATCH /api/v1/melos/{melo_id}/standorteigenschaften`
     ///
-    /// Auto-populates `Standorteigenschaften` on a `Messlokation` from `WiM` Stammdaten
-    /// (PIDs 17102–17133).  Called by `makod` when a `StammdatenUebermittelt` event
-    /// is received.
+    /// Sets the `Standorteigenschaften` of a `Messlokation`.
     ///
     /// Fields accepted: `regelzone` (EIC code → ÜNB for Redispatch 2.0 routing),
     /// `bilanzierungsgebiet`, `netzgebiet`, `gasqualitaet`, `druckstufe` (Gas),
     /// plus the full `eigenschaftenStrom` / `eigenschaftenGas` BO4E arrays.
     ///
-    /// Idempotent — safe to call on every Stammdaten receipt.
+    /// Idempotent — safe to call repeatedly with the same values.
     ///
     /// # Errors
     ///
@@ -1708,10 +1706,7 @@ impl MarktdClient {
             );
             return Err(MarktdClientError::Http(format!("HTTP {s}")));
         }
-        info!(
-            melo_id,
-            "MarktdClient: standorteigenschaften updated from WiM Stammdaten"
-        );
+        info!(melo_id, "MarktdClient: standorteigenschaften updated");
         Ok(())
     }
 
@@ -1841,9 +1836,6 @@ impl MarktdClient {
     /// Upsert a `ZaehlzeitRegisterRecord` for a given Zähler.  Idempotent: the
     /// server uses `ON CONFLICT (zaehler_id, tenant, bezeichnung, valid_from) DO
     /// UPDATE` so repeated calls with the same business key are safe.
-    ///
-    /// Called by `makod` after processing an inbound ORDERS 17102–17133 that
-    /// carries ZAK+ZE register definitions.
     pub async fn put_zaehler_register(
         &self,
         zaehler_id: &str,
@@ -1870,7 +1862,7 @@ impl MarktdClient {
         info!(
             zaehler_id,
             bezeichnung = %rec.bezeichnung,
-            "MarktdClient: ZaehlzeitRegister upserted from WiM Stammdaten"
+            "MarktdClient: ZaehlzeitRegister upserted"
         );
         Ok(())
     }

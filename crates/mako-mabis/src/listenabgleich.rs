@@ -96,6 +96,7 @@
 //! So a whole-list Ablehnung renders as a single Vorgang and a Korrekturliste
 //! as a list, which is the same split the two commands make.
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     outbox::PendingOutbox,
@@ -302,6 +303,27 @@ impl EventPayload for ListenabgleichEvent {
             Self::KorrekturGesendet { .. } => "MabisKorrekturGesendet",
             Self::GesamtAblehnungGesendet { .. } => "MabisGesamtAblehnungGesendet",
             Self::ValidationFailed { .. } => "MabisListenabgleichValidationFailed",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::ListeErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::KorrekturGesendet { antwort_pid, .. }
+            | Self::GesamtAblehnungGesendet { antwort_pid, .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(antwort_pid.as_u32()),
+                message_ref: None,
+            }),
+            Self::ValidationFailed { .. } => None,
         }
     }
 }
@@ -809,6 +831,29 @@ mod tests {
         events.iter().fold(ListenabgleichState::default(), |s, e| {
             MabisListenabgleichWorkflow::apply(s, e)
         })
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_nothing_else() {
+        assert_eq!(
+            ListenabgleichEvent::KorrekturGesendet {
+                antwort_pid: Pruefidentifikator::const_new(55066),
+                korrekturen: 0,
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(55066),
+                message_ref: None,
+            })
+        );
+        assert_eq!(
+            ListenabgleichEvent::ValidationFailed {
+                reason: "x".to_owned(),
+            }
+            .verlauf(),
+            None
+        );
     }
 
     #[test]

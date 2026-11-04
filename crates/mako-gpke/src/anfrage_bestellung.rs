@@ -46,6 +46,7 @@
 //! - **APERAK Frist: 45 Minuten** für eine UTILMD (APERAK AHB 1.1 § 2.4.1, same as all GPKE
 //!   processes)
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     deadline::Deadline,
     error::WorkflowError,
@@ -138,6 +139,28 @@ impl EventPayload for AnfrageBestellungEvent {
             Self::ValidationFailed { .. } => "AnfrageBestellungValidationFailed",
             Self::ResponseDispatched { .. } => "AnfrageBestellungResponseDispatched",
             Self::DeadlineExpired { .. } => "AnfrageBestellungDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AnfrageErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::ResponseDispatched { .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            Self::ValidationPassed { .. }
+            | Self::ValidationFailed { .. }
+            | Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -534,6 +557,38 @@ mod tests {
             validation_passed: false,
             validation_errors: vec!["segment BGM missing qualifier E03".to_owned()],
         }
+    }
+
+    #[test]
+    fn verlauf_states_the_inbound_55555_and_the_dispatched_response() {
+        let out =
+            GpkeAnfrageBestellungWorkflow::handle(&AnfrageBestellungState::New, receive_valid())
+                .unwrap();
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(55_555),
+                message_ref: Some("MSG-ANFR-001".to_owned()),
+            })
+        );
+        assert_eq!(
+            out.events[1].verlauf(),
+            None,
+            "ValidationPassed is no message"
+        );
+        let response = AnfrageBestellungEvent::ResponseDispatched {
+            data_provided: true,
+            reason: None,
+        };
+        assert_eq!(
+            response.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            })
+        );
     }
 
     // ── ReceiveAnfrage ────────────────────────────────────────────────────

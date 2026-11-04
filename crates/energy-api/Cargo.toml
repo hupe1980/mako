@@ -51,7 +51,7 @@ futures-util      = { version = "0.3", optional = true }
 tokio             = { version = "1", features = ["rt", "sync"], optional = true }
 
 # ── Content signing and directory JWS (always compiled) ──────────────────────
-p256      = { version = "0.13", features = ["ecdsa", "pem"] }
+p256      = { version = "0.14", features = ["ecdsa", "pem"] }
 sha2      = { version = "0.10" }
 base64ct  = { version = "1", features = ["alloc"] }
 serde_jcs = { version = "0.1" }

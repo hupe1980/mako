@@ -35,6 +35,7 @@
 //!   a decision, not an echo — it arrives through the ERP command API, exactly
 //!   like a Sperrung confirmation.
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
@@ -205,6 +206,31 @@ impl EventPayload for RechnungsabwicklungEvent {
             Self::Rejected { .. } => "RechnungsabwicklungRejected",
             Self::DeadlineExpired { .. } => "RechnungsabwicklungDeadlineExpired",
         }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        let (richtung, pid, message_ref) = match self {
+            Self::BestellungErhalten { message_ref, .. }
+            | Self::AngebotAbgelehnt { message_ref, .. }
+            | Self::BeendigungErhalten { message_ref, .. } => {
+                (Richtung::Eingang, None, message_ref)
+            }
+            Self::BeendigungGesendet { message_ref } => (Richtung::Ausgang, None, message_ref),
+            Self::AntwortGesendet {
+                response_pid,
+                message_ref,
+            } => (Richtung::Ausgang, Some(response_pid), message_ref),
+            Self::AntwortErhalten {
+                response_pid,
+                message_ref,
+            } => (Richtung::Eingang, Some(response_pid), message_ref),
+            Self::Rejected { .. } | Self::DeadlineExpired { .. } => return None,
+        };
+        Some(Verlauf {
+            richtung,
+            pid: pid.map(|p| p.as_u32()),
+            message_ref: Some(message_ref.as_str().to_owned()),
+        })
     }
 }
 
@@ -934,6 +960,49 @@ mod tests {
                 cmd(AngebotHerkunft::AnfrageDurchLf, "A05"),
             )
             .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod verlauf_tests {
+    use super::*;
+    use mako_engine::types::{MessageRef, Pruefidentifikator};
+
+    fn pid(p: u32) -> Pruefidentifikator {
+        Pruefidentifikator::new(p).expect("valid PID")
+    }
+
+    fn stated(richtung: Richtung, pid: Option<u32>, message_ref: Option<&str>) -> Verlauf {
+        Verlauf {
+            richtung,
+            pid,
+            message_ref: message_ref.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_only_the_messages() {
+        let antwort = RechnungsabwicklungEvent::AntwortGesendet {
+            response_pid: pid(19_009),
+            message_ref: MessageRef::new("RSP-1"),
+        };
+        assert_eq!(
+            antwort.verlauf(),
+            Some(stated(Richtung::Ausgang, Some(19_009), Some("RSP-1")))
+        );
+        let beendigung = RechnungsabwicklungEvent::BeendigungErhalten {
+            sender: MarktpartnerCode::new("9900000000001"),
+            receiver: MarktpartnerCode::new("9900000000002"),
+            message_ref: MessageRef::new("ORD-1"),
+        };
+        assert_eq!(
+            beendigung.verlauf(),
+            Some(stated(Richtung::Eingang, None, Some("ORD-1")))
+        );
+        assert_eq!(
+            RechnungsabwicklungEvent::Rejected { reason: "x".into() }.verlauf(),
+            None
         );
     }
 }

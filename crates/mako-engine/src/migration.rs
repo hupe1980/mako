@@ -711,6 +711,7 @@ mod tests {
             event_type: "Incremented".into(),
             schema_version: 1,
             payload: serde_json::to_value(CounterEventV1::Incremented).unwrap(),
+            verlauf: None,
         }
     }
 

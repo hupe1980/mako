@@ -48,6 +48,7 @@
 //! - Saturdays, Sundays and gesetzliche Feiertage are not Werktage
 //!   (GeLi Gas 3.0 Kap. 2.6)
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -138,6 +139,8 @@ pub enum GasSperrungLfEvent {
     },
     /// LF sent a Stornierung (ORDCHG 39000) to cancel the pending Gas-Sperrauftrag.
     StornierungGesendet {
+        /// The Prüfidentifikator the queued ORDCHG carries (39000).
+        pid: u32,
         /// EDIFACT message reference of the outbound ORDCHG.
         message_ref: MessageRef,
     },
@@ -169,6 +172,40 @@ impl EventPayload for GasSperrungLfEvent {
             Self::StornierungGesendet { .. } => "GasSperrungLfStornierungGesendet",
             Self::StornoOrdrspEmpfangen { .. } => "GasSperrungLfStornoOrdrspEmpfangen",
             Self::DeadlineExpired { .. } => "GasSperrungLfDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AuftragInitiiert {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::OrdrspEmpfangen {
+                pruefidentifikator,
+                message_ref,
+                ..
+            }
+            | Self::StornoOrdrspEmpfangen {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::StornierungGesendet { pid, message_ref } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(*pid),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -533,17 +570,18 @@ impl Workflow for GeliGasSperrungLfWorkflow {
 
             GasSperrungLfCommand::SendStornierung { message_ref } => match state {
                 GasSperrungLfState::AuftragGesendet(data) => {
+                    let pid = 39000_u32;
                     let outbox = PendingOutbox::new(
                         "ORDCHG",
                         data.gnb_gln.as_str(),
                         serde_json::json!({
                             "type":        "GasSperrungStornierung",
-                            "pid":         39000,
+                            "pid":         pid,
                             "location_id": data.location_id.as_str(),
                             "message_ref": message_ref.as_str(),
                         }),
                     );
-                    let event = GasSperrungLfEvent::StornierungGesendet { message_ref };
+                    let event = GasSperrungLfEvent::StornierungGesendet { pid, message_ref };
                     Ok(WorkflowOutput::with_outbox(vec![event], vec![outbox]))
                 }
                 other => Err(WorkflowError::invalid_state(
@@ -625,6 +663,55 @@ mod tests {
 
     fn pid_ablehnung() -> Pruefidentifikator {
         Pruefidentifikator::new(19117).expect("valid PID")
+    }
+
+    #[test]
+    fn verlauf_states_the_messages() {
+        let auftrag = GasSperrungLfEvent::AuftragInitiiert {
+            location_id: malo(),
+            gnb_gln: gnb(),
+            pruefidentifikator: pid_sperrauftrag(),
+            message_ref: mref("ORD-1"),
+        };
+        assert_eq!(
+            auftrag.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(17115),
+                message_ref: Some("ORD-1".to_owned()),
+            })
+        );
+        let ordrsp = GasSperrungLfEvent::OrdrspEmpfangen {
+            pruefidentifikator: pid_ablehnung(),
+            is_confirmed: false,
+            message_ref: mref("RSP-1"),
+            sender: gnb(),
+        };
+        assert_eq!(
+            ordrsp.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(19117),
+                message_ref: Some("RSP-1".to_owned()),
+            })
+        );
+        let storno = GasSperrungLfEvent::StornierungGesendet {
+            pid: 39000,
+            message_ref: mref("CHG-1"),
+        };
+        assert_eq!(
+            storno.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(39000),
+                message_ref: Some("CHG-1".to_owned()),
+            })
+        );
+        let lapsed = GasSperrungLfEvent::DeadlineExpired {
+            deadline_id: DeadlineId::new(),
+            label: ANTWORT_WINDOW_LABEL.into(),
+        };
+        assert_eq!(lapsed.verlauf(), None);
     }
 
     /// The Auftrag starts the GNB's answer window — the Sparte-neutral 1-WT row

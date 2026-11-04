@@ -258,6 +258,18 @@ pub trait EventPayload:
     fn schema_version(&self) -> u32 {
         1
     }
+
+    /// The market message this event is — its direction, PID and reference —
+    /// for a reader's history of the process. `None` for an event that is no
+    /// message (a state change, a lapsed Frist).
+    ///
+    /// Stamped on the envelope at append, so a history read needs none of the
+    /// workflow's types. A variant named for a message (`…Empfangen`,
+    /// `…Gesendet`, `…Received`, `…Sent`, `…Dispatched`) states it;
+    /// `cargo xtask check-event-payloads` holds that.
+    fn verlauf(&self) -> Option<crate::envelope::Verlauf> {
+        None
+    }
 }
 
 // ── CommandPayload ────────────────────────────────────────────────────────────
@@ -589,6 +601,7 @@ impl CommandContext {
             event_type: event.event_type().into(),
             schema_version: event.schema_version(),
             payload,
+            verlauf: event.verlauf(),
         })
     }
 }
@@ -635,6 +648,7 @@ impl EventEnvelope {
             event_type: event.event_type().into(),
             schema_version: event.schema_version(),
             payload,
+            verlauf: event.verlauf(),
         })
     }
 }

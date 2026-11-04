@@ -59,6 +59,7 @@
 
 use std::collections::HashMap;
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::payload::AperakPayload;
 use mako_engine::{
     envelope::EventEnvelope,
@@ -271,6 +272,29 @@ impl EventPayload for GeraeteubernahmeEvent {
             Self::Abgeschlossen { .. } => "WimGeraeteubernahmeAbgeschlossen",
             Self::Abgelehnt { .. } => "WimGeraeteubernahmeAbgelehnt",
             Self::DeadlineExpired { .. } => "WimGeraeteubernahmeDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::OrdersEmpfangen {
+                pid, message_ref, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AntwortGesendet {
+                pruefidentifikator, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: None,
+            }),
+            Self::ValidationPassed { .. }
+            | Self::Abgeschlossen { .. }
+            | Self::Abgelehnt { .. }
+            | Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -1345,5 +1369,45 @@ mod tests {
         )
         .expect_err("ZB4 is not an E_0247 code");
         assert!(err.to_string().contains("E_0247"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod verlauf_tests {
+    use super::*;
+    use mako_engine::types::{MessageRef, Pruefidentifikator};
+
+    fn pid(p: u32) -> Pruefidentifikator {
+        Pruefidentifikator::new(p).expect("valid PID")
+    }
+
+    fn stated(richtung: Richtung, pid: Option<u32>, message_ref: Option<&str>) -> Verlauf {
+        Verlauf {
+            richtung,
+            pid,
+            message_ref: message_ref.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_only_the_messages() {
+        let antwort = GeraeteubernahmeEvent::AntwortGesendet {
+            pruefidentifikator: pid(19_001),
+            antwort_code: "A01".into(),
+            antwort_ebd: "E_0247".into(),
+            zustimmung: true,
+        };
+        assert_eq!(
+            antwort.verlauf(),
+            Some(stated(Richtung::Ausgang, Some(19_001), None))
+        );
+        let validiert = GeraeteubernahmeEvent::ValidationPassed {
+            message_ref: MessageRef::new("ORD-1"),
+        };
+        assert_eq!(validiert.verlauf(), None);
+        assert_eq!(
+            GeraeteubernahmeEvent::Abgelehnt { reason: "x".into() }.verlauf(),
+            None
+        );
     }
 }

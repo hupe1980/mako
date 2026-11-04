@@ -25,7 +25,7 @@
 //! | 13003        | MABIS Bilanzkreisabrechnung (MSCONS) |
 //! | 13002–13028  | Messwerte Gas/Strom/Redispatch (MSCONS) — fragmented across GaBi Gas, Redispatch, GPKE support |
 //! | 17001, 17002, 17009 | WiM Geräteübernahme (ORDERS) |
-//! | 17101–17135 | WiM Stammdaten / Konfiguration (ORDERS) |
+//! | 17101–17135 | ORDERS Anfragen and Bestellungen — Geschäftsdatenanfrage, Werte, Konfiguration, Sperrung; one owner per PID |
 //! | 31001–31002, 31004–31008 | GPKE Netznutzungsabrechnung / MMM-Rechnung (INVOIC) |
 //! | 31003, 31009 | WiM-Rechnung / MSB-Rechnung (INVOIC) — WiM domain |
 //! | 31010 | Kapazitätsrechnung (INVOIC) — Kapazitätsabrechnung Ausspeisepunkte Gas |

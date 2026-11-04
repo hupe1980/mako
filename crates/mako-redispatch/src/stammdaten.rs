@@ -55,6 +55,7 @@
 //! `gueltig_ab` Werktag rules and the two-year ceiling; *`AcknowledgementDocument`*
 //! FB 1.0g for the 3-minute Frist.
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     deadline::Deadline,
     error::WorkflowError,
@@ -134,6 +135,29 @@ impl EventPayload for StammdatenEvent {
             Self::Acknowledged { .. } => "StammdatenAcknowledged",
             Self::Forwarded { .. } => "StammdatenForwarded",
             Self::DeadlineExpired { .. } => "StammdatenDeadlineExpired",
+        }
+    }
+
+    /// The `Stammdaten` documents are XML and carry no Prüfidentifikator; the
+    /// document's MRID is its reference.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::Received { mrid, .. } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: None,
+                message_ref: Some(mrid.clone()),
+            }),
+            Self::Acknowledged { ack_mrid } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: Some(ack_mrid.clone()),
+            }),
+            Self::Forwarded { upstream_mrid } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: Some(upstream_mrid.clone()),
+            }),
+            Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -441,6 +465,29 @@ mod tests {
             anlagen_count: 3,
             received_at: "2025-10-15T10:00:00Z".into(),
         }
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_nothing_else() {
+        assert_eq!(
+            StammdatenEvent::Forwarded {
+                upstream_mrid: "u1".into(),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: Some("u1".to_owned()),
+            })
+        );
+        assert_eq!(
+            StammdatenEvent::DeadlineExpired {
+                deadline_id: DeadlineId::new(),
+                label: "x".into(),
+            }
+            .verlauf(),
+            None
+        );
     }
 
     #[test]

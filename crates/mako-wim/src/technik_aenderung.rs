@@ -43,6 +43,7 @@
 //!   Vorlauffrist Prüfschritt at all; its Umsetzungszeitraum was agreed in the
 //!   Angebot.
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
@@ -146,6 +147,31 @@ impl EventPayload for TechnikAenderungEvent {
             Self::AuftragAbgelehnt { .. } => "TechnikAenderungAuftragAbgelehnt",
             Self::DeadlineExpired { .. } => "TechnikAenderungDeadlineExpired",
         }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        let (richtung, pid, message_ref) = match self {
+            Self::AuftragGesendet {
+                orders_pid,
+                message_ref,
+                ..
+            } => (Richtung::Ausgang, orders_pid, message_ref),
+            Self::AuftragBestaetigt {
+                ordrsp_pid,
+                message_ref,
+            }
+            | Self::AuftragAbgelehnt {
+                ordrsp_pid,
+                message_ref,
+                ..
+            } => (Richtung::Eingang, ordrsp_pid, message_ref),
+            Self::DeadlineExpired { .. } => return None,
+        };
+        Some(Verlauf {
+            richtung,
+            pid: Some(pid.as_u32()),
+            message_ref: Some(message_ref.as_str().to_owned()),
+        })
     }
 }
 
@@ -501,5 +527,51 @@ mod tests {
         )
         .expect("accepted");
         assert!(out.deadlines.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod verlauf_tests {
+    use super::*;
+    use mako_engine::types::{MessageRef, Pruefidentifikator};
+
+    fn pid(p: u32) -> Pruefidentifikator {
+        Pruefidentifikator::new(p).expect("valid PID")
+    }
+
+    fn stated(richtung: Richtung, pid: Option<u32>, message_ref: Option<&str>) -> Verlauf {
+        Verlauf {
+            richtung,
+            pid,
+            message_ref: message_ref.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_only_the_messages() {
+        let auftrag = TechnikAenderungEvent::AuftragGesendet {
+            orders_pid: pid(17_011),
+            recipient: MarktpartnerCode::new("9900000000001"),
+            location_id: None,
+            message_ref: MessageRef::new("ORD-1"),
+        };
+        assert_eq!(
+            auftrag.verlauf(),
+            Some(stated(Richtung::Ausgang, Some(17_011), Some("ORD-1")))
+        );
+        let abgelehnt = TechnikAenderungEvent::AuftragAbgelehnt {
+            ordrsp_pid: pid(19_006),
+            reason: None,
+            message_ref: MessageRef::new("RSP-1"),
+        };
+        assert_eq!(
+            abgelehnt.verlauf(),
+            Some(stated(Richtung::Eingang, Some(19_006), Some("RSP-1")))
+        );
+        let abgelaufen = TechnikAenderungEvent::DeadlineExpired {
+            deadline_id: DeadlineId::new(),
+            label: "x".into(),
+        };
+        assert_eq!(abgelaufen.verlauf(), None);
     }
 }

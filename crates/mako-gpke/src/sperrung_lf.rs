@@ -53,6 +53,7 @@
 //!   Abschluss, the MSB's answer to an Anfrage Sperrung in 3 WT with silence
 //!   counting as consent, and at most **two** Sperrversuche per Auftrag.
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -158,6 +159,8 @@ pub enum SperrungLfEvent {
     },
     /// LF sent a Stornierung (ORDCHG 39000) to cancel the pending Sperrauftrag.
     StornierungGesendet {
+        /// The Prüfidentifikator the queued ORDCHG carries (39000).
+        pid: u32,
         /// EDIFACT message reference of the outbound ORDCHG.
         message_ref: MessageRef,
     },
@@ -190,6 +193,45 @@ impl EventPayload for SperrungLfEvent {
             Self::StornierungGesendet { .. } => "SperrungLfStornierungGesendet",
             Self::StornoOrdrsepEmpfangen { .. } => "SperrungLfStornoOrdrsepEmpfangen",
             Self::DeadlineExpired { .. } => "SperrungLfDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AuftragInitiiert {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::OrdrsepEmpfangen {
+                pruefidentifikator,
+                message_ref,
+                ..
+            }
+            | Self::IftstaAuftragsstatus {
+                pruefidentifikator,
+                message_ref,
+                ..
+            }
+            | Self::StornoOrdrsepEmpfangen {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::StornierungGesendet { pid, message_ref } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(*pid),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -607,17 +649,18 @@ impl Workflow for GpkeSperrungLfWorkflow {
                     .auftrag_data()
                     .map(|d| d.nb_mp_id.as_str().to_owned())
                     .unwrap_or_default();
+                let pid = 39000_u32;
                 let outbox = PendingOutbox::new(
                     "ORDCHG",
                     nb_mp_id.as_str(),
                     serde_json::json!({
                         "type":        "SperrungStornierung",
-                        "pid":         39000_u32,
+                        "pid":         pid,
                         "message_ref": message_ref.as_str(),
                     }),
                 );
                 Ok(WorkflowOutput::with_outbox(
-                    vec![SperrungLfEvent::StornierungGesendet { message_ref }],
+                    vec![SperrungLfEvent::StornierungGesendet { pid, message_ref }],
                     vec![outbox],
                 ))
             }
@@ -652,5 +695,62 @@ impl Workflow for GpkeSperrungLfWorkflow {
                 Ok(vec![SperrungLfEvent::DeadlineExpired { deadline_id, label }].into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pid(code: u32) -> Pruefidentifikator {
+        Pruefidentifikator::new(code).expect("valid PID")
+    }
+
+    #[test]
+    fn verlauf_states_orders_out_and_ordrsp_and_iftsta_in() {
+        let auftrag = SperrungLfEvent::AuftragInitiiert {
+            location_id: MaLo::new("51238696012"),
+            nb_mp_id: MarktpartnerCode::new("9900357000004"),
+            pruefidentifikator: pid(17_115),
+            message_ref: MessageRef::new("ORD-1"),
+        };
+        assert_eq!(
+            auftrag.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(17_115),
+                message_ref: Some("ORD-1".to_owned()),
+            })
+        );
+        let iftsta = SperrungLfEvent::IftstaAuftragsstatus {
+            pruefidentifikator: pid(21_039),
+            message_ref: MessageRef::new("IFT-1"),
+            sender: MarktpartnerCode::new("9900357000004"),
+        };
+        assert_eq!(
+            iftsta.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(21_039),
+                message_ref: Some("IFT-1".to_owned()),
+            })
+        );
+        let storno = SperrungLfEvent::StornierungGesendet {
+            pid: 39000,
+            message_ref: MessageRef::new("CHG-1"),
+        };
+        assert_eq!(
+            storno.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(39000),
+                message_ref: Some("CHG-1".to_owned()),
+            })
+        );
+        let expired = SperrungLfEvent::DeadlineExpired {
+            deadline_id: DeadlineId::new(),
+            label: "x".into(),
+        };
+        assert_eq!(expired.verlauf(), None);
     }
 }

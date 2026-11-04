@@ -89,7 +89,7 @@ use time::{Date, Duration, OffsetDateTime};
 use mako_markt::domain::Sparte;
 use mako_markt::repository::{LieferStatus, VersorgungsStatusRecord};
 
-use crate::codes::{self, AntwortCode, EBD_ABMELDUNG_GAS_NB, EBD_ABMELDUNG_NB};
+use crate::codes::{self, AntwortCode, EBD_ABMELDUNG_NB};
 
 use super::anmeldung::{GAS_RUECKWIRKUNG_WOCHEN, has_werktag_strictly_between, months_before};
 use super::config::NetzCheckConfig;
@@ -127,10 +127,7 @@ const AUFHEBUNG_VERTRAGSVERHAELTNIS: &str = "ZH2";
 
 /// The tree that governs an Abmeldung of this Sparte.
 const fn tree(sparte: Sparte) -> &'static str {
-    match sparte {
-        Sparte::Strom => EBD_ABMELDUNG_NB,
-        Sparte::Gas => EBD_ABMELDUNG_GAS_NB,
-    }
+    super::baum::abmeldung(sparte)
 }
 
 fn code(sparte: Sparte, code: &'static str) -> &'static AntwortCode {

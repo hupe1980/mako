@@ -458,6 +458,9 @@ pub mod rff {
     /// `Z60` — „Informativ zur Umsetzung geplantes Produktpaket": the
     /// Produktpaket-ID the NB will implement, Muss on a Bestätigung Anmeldung.
     pub const GEPLANTES_PRODUKTPAKET: &str = "Z60";
+    /// `AAV` — „Nummer der Anfrage": the `BGM` DE 1004 of the ORDERS a
+    /// Stammdaten-Antwort answers (UTILMD AHB Strom 2.2 Kap. 9.5).
+    pub const NUMMER_DER_ANFRAGE: &str = "AAV";
 }
 
 /// `NAD` `C080` DE 3045 — Format für den Namen des Beteiligten.

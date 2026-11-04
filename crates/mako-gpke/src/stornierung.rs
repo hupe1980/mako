@@ -1,11 +1,22 @@
-//! GPKE Stornierung — cancellation of supplier-change requests (PIDs 55022–55024).
+//! GPKE Stornierung — cancellation of a still unanswered request (PIDs 55022–55024).
 //!
-//! A Lieferant (LFN) may request cancellation of a previously submitted
-//! Anmeldung (55001), Abmeldung (55004), or Kündigung (55016) by sending a
-//! UTILMD Strom message with PID 55022 (Anfrage nach Stornierung) to the NB,
-//! which answers with either:
-//! - PID 55023 (Bestätigung Stornierung) — cancellation accepted; original process cancelled.
-//! - PID 55024 (Ablehnung Stornierung) — cancellation rejected; original process continues.
+//! A party to an Ursprungsnachricht — in this workflow the LF that sent an
+//! Anmeldung, Abmeldung or Kündigung to the NB — cancels it with a UTILMD
+//! Strom 55022 „Anfrage nach Stornierung". The receiver answers „zurück an den
+//! Absender" with a **UTILMD** of its own (UTILMD AHB Strom 2.2 Kap. 9.6
+//! „Stornierungsmeldung", S. 782–787):
+//! - 55023 „Bestätigung Anfrage Stornierung" — `SG4 STS+E01` from Codeliste
+//!   `S_0086`, whose only code is `E15` „Zustimmung ohne Korrekturen";
+//! - 55024 „Ablehnung Anfrage Stornierung" — `SG4 STS+E01` from Codeliste
+//!   `S_0087`: `E14` „Ablehnung Sonstiges" (with `FTX+ACB`), `Z14` „Ablehnung
+//!   (Doppelmeldung)", `ZE1` „Ablehnung – zu stornierender Vorgang wurde schon
+//!   beantwortet" (EBD 4.3 Kap. 6.27.1 / 6.27.2, S. 315).
+//!
+//! That answer is the business answer; it is not the APERAK. APERAK AHB 1.1
+//! § 2.4 has the receiver of every Strom Geschäftsvorfall state the result of
+//! its Verarbeitbarkeitsprüfung by APERAK — Anerkennungsmeldung or
+//! Verarbeitbarkeitsfehlermeldung — so a processable 55022 is acknowledged with
+//! APERAK 29002 on receipt, and the 55023/55024 follows when the NB decides.
 //!
 //! # The window is the original message's, not a window of its own
 //!
@@ -27,25 +38,26 @@
 //! # Process flow
 //!
 //! ```text
-//! LFN ──── 55022 Anfrage nach Stornierung ────►
-//!     ◄─── 55023 Bestätigung                   ── NB, before it answers the original
-//!      or ◄─ 55024 Ablehnung                   ──
+//! LF ──── 55022 Anfrage nach Stornierung ────►
+//!    ◄─── APERAK 29002 Anerkennungsmeldung   ── NB, within 45 Minuten
+//!    ◄─── UTILMD 55023 Bestätigung            ── NB, before it answers the original
+//!     or ◄─ UTILMD 55024 Ablehnung            ──
 //! ```
 //!
 //! # BGM qualifier semantics
 //!
-//! The BGM 1001 qualifier in PID 55022 encodes the **type of the original message**
-//! being cancelled, not the Stornierung action itself:
-//! - `E01` — cancelling an Anmeldung Lieferbeginn (55001)
-//! - `E02` — cancelling an Abmeldung Lieferende (55002)
-//! - `E35` — cancelling a Kündigung Lieferbeginn (55016)
-//!
-//! The Stornierung action is indicated by `STS+7+E05` (Transaktionsgrund = Stornierung).
+//! `BGM` DE 1001 names the **category of the cancelled message**, not the
+//! Stornierung — „Code ist gemäß der Kategorie der zu stornierenden Meldung zu
+//! wählen" (Bedingung `[500]`, Muss in all three columns): `E01` Anmeldungen,
+//! `E02` Abmeldungen, `E35` Kündigung. The answer therefore repeats the
+//! 55022's code. The Stornierung itself is `SG4 STS+7++E05`, in the Anfrage
+//! and both answers.
 //!
 //! # Regulatory basis
 //!
-//! - **BDEW UTILMD AHB Strom 2.1 / 2.2** — AHB rules for PIDs 55022–55024
-//!   (GPKE Teil 4); the answers are decided by `S_0087` / `S_0088`
+//! - **BDEW UTILMD AHB Strom 2.2 Kap. 9.6** — the three Anwendungsfälle
+//!   55022–55024; their `STS+E01` codes come from Codelisten `S_0086` /
+//!   `S_0087` (Entscheidungsbaum-Diagramme und Codelisten 4.3 Kap. 6.27)
 //! - **BNetzA BK6-22-024 Anlage 1d, GPKE Teil 4 Kap. 5** — Stornierung und
 //!   Rückabwicklung. It scopes the Stornierung to the Teil-2 Use-Cases
 //!   Kündigung, Lieferbeginn, Neuanlage, Beginn der Ersatz-/Grundversorgung,
@@ -53,8 +65,10 @@
 //!   the WiM Teil 1 Kündigung Messstellenbetrieb — and states no Frist.
 //! - **EDI@Energy Allgemeine Festlegungen 6.1d § 7.3** — a Stornierung is a new
 //!   message carrying Transaktionsgrund „Stornierung"; also no Frist.
-//! - **APERAK Frist: 45 Minuten** für eine UTILMD (APERAK AHB 1.1 § 2.4.1)
+//! - **APERAK AHB 1.1 § 2.4 / § 2.4.1** — Anerkennungs- or
+//!   Verarbeitbarkeitsfehlermeldung for the 55022, within 45 Minuten for a UTILMD
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -87,10 +101,70 @@ pub const STORNIERUNG_ANTWORT_WINDOW_LABEL: &str = "gpke-stornierung-antwort";
 
 /// PIDs handled by the GPKE Stornierung workflow (UTILMD Strom).
 ///
-/// - 55022: Anfrage nach Stornierung (LFN → NB)
-/// - 55023: Bestätigung Stornierung  (NB response — accepted)
-/// - 55024: Ablehnung Stornierung    (NB response — rejected)
+/// - 55022: Anfrage nach Stornierung (Beteiligte aus Ursprungsnachricht → its receiver)
+/// - 55023: Bestätigung Anfrage Stornierung (zurück an den Absender)
+/// - 55024: Ablehnung Anfrage Stornierung (zurück an den Absender)
 pub const STORNIERUNG_PIDS: &[u32] = &[55022, 55023, 55024];
+
+/// 55023 „Bestätigung Anfrage Stornierung" (UTILMD AHB Strom 2.2 Kap. 9.6).
+pub const BESTAETIGUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(55023);
+
+/// 55024 „Ablehnung Anfrage Stornierung" (UTILMD AHB Strom 2.2 Kap. 9.6).
+pub const ABLEHNUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(55024);
+
+/// Codeliste of the 55023's `SG4 STS+E01` DE 1131 (UTILMD AHB Strom 2.2 Kap. 9.6).
+pub const BESTAETIGUNG_CODELISTE: &str = "S_0086";
+
+/// Codeliste of the 55024's `SG4 STS+E01` DE 1131 (UTILMD AHB Strom 2.2 Kap. 9.6).
+pub const ABLEHNUNG_CODELISTE: &str = "S_0087";
+
+/// `E15` „Zustimmung ohne Korrekturen" — the only code of `S_0086`
+/// (Entscheidungsbaum-Diagramme und Codelisten 4.3 Kap. 6.27.1, S. 315).
+pub const ZUSTIMMUNG_CODE: &str = "E15";
+
+/// Why the NB refuses a Stornierung — the three codes of Codeliste `S_0087`
+/// (Entscheidungsbaum-Diagramme und Codelisten 4.3 Kap. 6.27.2, S. 315).
+///
+/// A closed set, so a code the Codeliste does not publish cannot ride a 55024.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "code")]
+pub enum StornoAblehnung {
+    /// `E14` „Ablehnung Sonstiges" — „Bei Verwendung von E14 muss in FTX+ACB,
+    /// C108 als Freitext eine Erläuterung eingefügt werden"; the 55024 column
+    /// makes `SG4 FTX` Muss under the same condition (Bedingung `[49]`).
+    #[serde(rename = "E14")]
+    Sonstiges {
+        /// The `FTX+ACB` Erläuterung.
+        bemerkung: String,
+    },
+    /// `Z14` „Ablehnung (Doppelmeldung)" — „Die Meldung liegt schon vor."
+    #[serde(rename = "Z14")]
+    Doppelmeldung,
+    /// `ZE1` „Ablehnung – zu stornierender Vorgang wurde schon beantwortet".
+    #[serde(rename = "ZE1")]
+    SchonBeantwortet,
+}
+
+impl StornoAblehnung {
+    /// The `SG4 STS+E01` DE 9013 code.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Sonstiges { .. } => "E14",
+            Self::Doppelmeldung => "Z14",
+            Self::SchonBeantwortet => "ZE1",
+        }
+    }
+
+    /// The `FTX+ACB` Erläuterung, present exactly on `E14`.
+    #[must_use]
+    pub fn bemerkung(&self) -> Option<&str> {
+        match self {
+            Self::Sonstiges { bemerkung } => Some(bemerkung),
+            Self::Doppelmeldung | Self::SchonBeantwortet => None,
+        }
+    }
+}
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 
@@ -102,12 +176,17 @@ pub enum GpkeStornierungEvent {
     StornierungReceived {
         /// Prüfidentifikator (must be 55022).
         pruefidentifikator: Pruefidentifikator,
-        /// GLN of the message sender (LFN).
+        /// MP-ID of the message sender (the LF that sent the Ursprungsnachricht).
         sender: MarktpartnerCode,
-        /// GLN of the NB receiving the request.
+        /// MP-ID of the NB receiving the request.
         receiver: MarktpartnerCode,
-        /// Vorgangsnummer from `SG4 IDE+24` DE 7402 (the process being cancelled).
+        /// The 55022's own Vorgangsnummer (`SG4 IDE+24` DE 7402) — the answer
+        /// carries it back in `SG4 SG6 RFF+TN`. The cancelled Vorgang is named
+        /// by the 55022's `RFF+ACW`, not here.
         vorgang_id: MaLo,
+        /// `BGM` DE 1001 of the 55022 — the category of the cancelled message
+        /// (`E01` / `E02` / `E35`), which the answer repeats.
+        document_code: String,
         /// EDIFACT document date string (YYYYMMDDHHMMZZZ from DTM+137+303).
         document_date: String,
         /// EDIFACT message reference (UNH 0062).
@@ -118,20 +197,20 @@ pub enum GpkeStornierungEvent {
         /// Reference of the validated message.
         message_ref: MessageRef,
     },
-    /// AHB profile validation failed — message rejected without an APERAK.
+    /// AHB profile validation failed — answered with APERAK 29001.
     ValidationFailed {
         /// Human-readable list of validation issue strings.
         errors: Vec<String>,
     },
-    /// NB dispatched a positive or negative APERAK response.
+    /// The NB's UTILMD answer to the 55022 was queued.
     ///
-    /// Positive → process moves to `Completed`.
-    /// Negative → process moves to `Rejected`.
-    AperakDispatched {
-        /// `true` = positive APERAK (PID 55023), `false` = negative (PID 55024).
-        positive: bool,
-        /// Rejection reason code or text (only meaningful when `positive = false`).
-        reason: Option<String>,
+    /// Bestätigung → `Completed`, Ablehnung → `Rejected`.
+    AntwortGesendet {
+        /// 55023 (Bestätigung) or 55024 (Ablehnung) — derived from `ablehnung`,
+        /// never chosen beside it.
+        response_pid: Pruefidentifikator,
+        /// The `S_0087` ground of a 55024; `None` on a 55023.
+        ablehnung: Option<StornoAblehnung>,
     },
     /// Process terminated because the Antwortfrist expired.
     DeadlineExpired {
@@ -148,8 +227,30 @@ impl EventPayload for GpkeStornierungEvent {
             Self::StornierungReceived { .. } => "GpkeStornierungReceived",
             Self::ValidationPassed { .. } => "GpkeStornierungValidationPassed",
             Self::ValidationFailed { .. } => "GpkeStornierungValidationFailed",
-            Self::AperakDispatched { .. } => "GpkeStornierungAperakDispatched",
+            Self::AntwortGesendet { .. } => "GpkeStornierungAntwortGesendet",
             Self::DeadlineExpired { .. } => "GpkeStornierungDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::StornierungReceived {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AntwortGesendet { response_pid, .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: None,
+            }),
+            Self::ValidationPassed { .. }
+            | Self::ValidationFailed { .. }
+            | Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -161,12 +262,15 @@ impl EventPayload for GpkeStornierungEvent {
 pub struct GpkeStornierungData {
     /// Prüfidentifikator of the inbound 55022 message.
     pub pruefidentifikator: Pruefidentifikator,
-    /// GLN of the sender (LFN initiating the cancellation).
+    /// MP-ID of the sender (the LF requesting the cancellation).
     pub sender: MarktpartnerCode,
-    /// GLN of the NB receiving the request.
+    /// MP-ID of the NB receiving the request.
     pub receiver: MarktpartnerCode,
-    /// Vorgangsnummer (`SG4 IDE+24` DE 7402) of the process to be cancelled.
+    /// The 55022's own Vorgangsnummer (`SG4 IDE+24` DE 7402), returned in the
+    /// answer's `SG4 SG6 RFF+TN` „Referenz Vorgangsnummer (aus Anfragenachricht)".
     pub vorgang_id: MaLo,
+    /// `BGM` DE 1001 of the 55022, repeated on the answer (Bedingung `[500]`).
+    pub document_code: String,
     /// EDIFACT document date from DTM+137.
     pub document_date: String,
     /// EDIFACT message reference from the 55022 message.
@@ -180,8 +284,8 @@ pub struct GpkeStornierungData {
 /// # Lifecycle
 ///
 /// ```text
-/// New → Initiated → ValidationPassed → AperakSent → Completed
-///                                    ↘ Rejected
+/// New → Initiated → ValidationPassed → Completed   (55023 sent)
+///                                    ↘ Rejected    (55024 sent)
 ///     ↘ ValidationFailed → Rejected
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -197,11 +301,9 @@ pub enum GpkeStornierungState {
     /// **original** message's Antwortfrist, per
     /// [`STORNIERUNG_ANTWORT_WINDOW_LABEL`].
     ValidationPassed(GpkeStornierungData),
-    /// Positive APERAK (55023) dispatched; cancellation accepted.
-    AperakSent(GpkeStornierungData),
-    /// Cancellation fully completed (positive APERAK sent, original process cancelled).
+    /// 55023 Bestätigung sent; the cancelled Vorgang is not answered any more.
     Completed(GpkeStornierungData),
-    /// Process rejected — validation failure or negative APERAK.
+    /// Process rejected — validation failure or 55024 Ablehnung.
     Rejected {
         /// Human-readable reason for the rejection.
         reason: String,
@@ -229,7 +331,6 @@ impl GpkeStornierungState {
             Self::New => "New",
             Self::Initiated(_) => "Initiated",
             Self::ValidationPassed(_) => "ValidationPassed",
-            Self::AperakSent(_) => "AperakSent",
             Self::Completed(_) => "Completed",
             Self::Rejected { .. } => "Rejected",
             Self::FristAbgelaufen { .. } => "FristAbgelaufen",
@@ -258,12 +359,14 @@ pub enum GpkeStornierungCommand {
     ReceiveUtilmd {
         /// Must be 55022.
         pid: Pruefidentifikator,
-        /// GLN of the sender (LFN requesting cancellation).
+        /// MP-ID of the sender (the LF requesting cancellation).
         sender: MarktpartnerCode,
-        /// GLN of the receiver (NB).
+        /// MP-ID of the receiver (NB).
         receiver: MarktpartnerCode,
-        /// Vorgangsnummer from `SG4 IDE+24` DE 7402.
+        /// The 55022's own Vorgangsnummer, `SG4 IDE+24` DE 7402.
         vorgang_id: MaLo,
+        /// `BGM` DE 1001 of the 55022 (`E01` / `E02` / `E35`).
+        document_code: String,
         /// EDIFACT document date from DTM+137.
         document_date: String,
         /// EDIFACT message reference from UNH.
@@ -273,17 +376,16 @@ pub enum GpkeStornierungCommand {
         /// Human-readable validation error strings (empty when `validation_passed = true`).
         validation_errors: Vec<String>,
     },
-    /// NB dispatches a positive (55023) or negative (55024) APERAK response.
+    /// The NB answers the 55022 with UTILMD 55023 (`ablehnung: None`) or
+    /// 55024 (`Some`).
     ///
     /// The window is the **original** message's Antwortfrist, which
     /// [`STORNIERUNG_ANTWORT_WINDOW_LABEL`] carries: a Stornierung is
     /// admissible only while that message is unanswered (GPKE Teil 4 Kap. 5),
     /// and no Festlegung publishes a duration of its own for this step.
-    DispatchAperak {
-        /// `true` for Bestätigung (55023), `false` for Ablehnung (55024).
-        positive: bool,
-        /// Rejection reason — required when `positive = false`.
-        reason: Option<String>,
+    SendAntwort {
+        /// The `S_0087` ground of an Ablehnung; `None` confirms with `E15`.
+        ablehnung: Option<StornoAblehnung>,
     },
     /// The Antwortfrist fired.
     TimeoutExpired {
@@ -296,13 +398,47 @@ pub enum GpkeStornierungCommand {
 
 impl CommandPayload for GpkeStornierungCommand {}
 
+/// The UTILMD 55023 / 55024 outbox entry answering the 55022 in `data`.
+///
+/// Every field is a column of UTILMD AHB Strom 2.2 Kap. 9.6: `BGM` repeats the
+/// 55022's category, `STS+7++E05` the Transaktionsgrund, `STS+E01` the code
+/// with its Codeliste, `RFF+TN` the 55022's Vorgangsnummer. The column carries
+/// no `SG5 LOC` and no `SG4 DTM`, so the payload names neither.
+fn antwort_outbox(
+    data: &GpkeStornierungData,
+    ablehnung: Option<&StornoAblehnung>,
+) -> PendingOutbox {
+    let (pid, code, codeliste) = match ablehnung {
+        None => (BESTAETIGUNG_PID, ZUSTIMMUNG_CODE, BESTAETIGUNG_CODELISTE),
+        Some(a) => (ABLEHNUNG_PID, a.code(), ABLEHNUNG_CODELISTE),
+    };
+    PendingOutbox::typed(
+        data.sender.as_str(),
+        &mako_engine::payload::UtilmdPayload {
+            pid: pid.as_u32(),
+            // The answer travels back the way the request came.
+            sender: data.receiver.as_str().to_owned(),
+            receiver: Some(data.sender.as_str().to_owned()),
+            document_code: Some(data.document_code.clone()),
+            transaktionsgrund: Some("E05".to_owned()),
+            antwort_code: Some(code.to_owned()),
+            antwort_codeliste: Some(codeliste.to_owned()),
+            bemerkung: ablehnung
+                .and_then(StornoAblehnung::bemerkung)
+                .map(str::to_owned),
+            referenz_vorgangsnummer: Some(data.vorgang_id.as_str().to_owned()),
+            ..Default::default()
+        },
+    )
+}
+
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
 /// GPKE Stornierung workflow (PIDs 55022–55024).
 ///
 /// The receiver of the original message is the process owner: PID 55022
 /// (Anfrage nach Stornierung) arrives from whoever sent it, and is answered
-/// with PID 55023 (Bestätigung) or 55024 (Ablehnung).
+/// with UTILMD 55023 (Bestätigung) or 55024 (Ablehnung).
 ///
 /// The window is the **original** message's Antwortfrist, because a Stornierung
 /// is only admissible while that message is unanswered (GPKE Teil 4 Kap. 5).
@@ -352,6 +488,7 @@ impl Workflow for GpkeStornierungWorkflow {
                 sender,
                 receiver,
                 vorgang_id,
+                document_code,
                 document_date,
                 message_ref,
             } => GpkeStornierungState::Initiated(GpkeStornierungData {
@@ -359,6 +496,7 @@ impl Workflow for GpkeStornierungWorkflow {
                 sender: sender.clone(),
                 receiver: receiver.clone(),
                 vorgang_id: vorgang_id.clone(),
+                document_code: document_code.clone(),
                 document_date: document_date.clone(),
                 message_ref: message_ref.clone(),
             }),
@@ -375,18 +513,13 @@ impl Workflow for GpkeStornierungWorkflow {
                 reason: errors.join("; "),
             },
 
-            GpkeStornierungEvent::AperakDispatched { positive, reason } => match state {
-                GpkeStornierungState::ValidationPassed(data) => {
-                    if *positive {
-                        GpkeStornierungState::Completed(data)
-                    } else {
-                        GpkeStornierungState::Rejected {
-                            reason: reason
-                                .clone()
-                                .unwrap_or_else(|| "negative APERAK".to_owned()),
-                        }
-                    }
-                }
+            GpkeStornierungEvent::AntwortGesendet { ablehnung, .. } => match state {
+                GpkeStornierungState::ValidationPassed(data) => match ablehnung {
+                    None => GpkeStornierungState::Completed(data),
+                    Some(a) => GpkeStornierungState::Rejected {
+                        reason: format!("Ablehnung Anfrage Stornierung ({})", a.code()),
+                    },
+                },
                 _ => state,
             },
 
@@ -416,6 +549,7 @@ impl Workflow for GpkeStornierungWorkflow {
                 sender,
                 receiver,
                 vorgang_id,
+                document_code,
                 document_date,
                 message_ref,
                 validation_passed,
@@ -436,12 +570,28 @@ impl Workflow for GpkeStornierungWorkflow {
                     sender,
                     receiver,
                     vorgang_id,
+                    document_code,
                     document_date,
                     message_ref: message_ref.clone(),
                 }];
                 if validation_passed {
-                    events.push(GpkeStornierungEvent::ValidationPassed { message_ref });
-                    Ok(WorkflowOutput::events(events))
+                    events.push(GpkeStornierungEvent::ValidationPassed {
+                        message_ref: message_ref.clone(),
+                    });
+                    // APERAK 29002 Anerkennungsmeldung — in the Sparte Strom the
+                    // receiver states the result of its Verarbeitbarkeitsprüfung
+                    // either way (APERAK AHB 1.1 § 2.4), within 45 Minuten for a
+                    // UTILMD (§ 2.4.1). The 55023/55024 is the separate business
+                    // answer that `SendAntwort` queues.
+                    let outbox = vec![
+                        PendingOutbox::aperak_anerkennung(
+                            receiver_gln.as_str(),
+                            sender_mp_id.as_str(),
+                            message_ref.as_str(),
+                        )
+                        .caused_by(1),
+                    ];
+                    Ok(WorkflowOutput::with_outbox(events, outbox))
                 } else {
                     let reason = validation_errors.join("; ");
                     events.push(GpkeStornierungEvent::ValidationFailed {
@@ -449,9 +599,9 @@ impl Workflow for GpkeStornierungWorkflow {
                     });
                     // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
                     // It has to be emitted here: `ValidationFailed` folds to
-                    // `Rejected`, which is terminal, and `DispatchAperak`
-                    // requires `ValidationPassed` — so a refusal raised later
-                    // is unreachable and the counterparty gets no answer.
+                    // `Rejected`, which is terminal, and `SendAntwort` requires
+                    // `ValidationPassed` — so a refusal raised later is
+                    // unreachable and the counterparty gets no answer.
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
                             receiver_gln.as_str(),
@@ -466,7 +616,7 @@ impl Workflow for GpkeStornierungWorkflow {
                 }
             }
 
-            GpkeStornierungCommand::DispatchAperak { positive, reason } => {
+            GpkeStornierungCommand::SendAntwort { ablehnung } => {
                 let data = match state {
                     GpkeStornierungState::ValidationPassed(d) => d,
                     _ => {
@@ -476,26 +626,27 @@ impl Workflow for GpkeStornierungWorkflow {
                         ));
                     }
                 };
-                // APERAK AHB 1.1 §2.4: Strom UTILMD always requires APERAK (BGM+312 or BGM+313).
-                // Strom UTILMD: 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.1 §2.4.1).
-                let aperak = if positive {
-                    PendingOutbox::aperak_anerkennung(
-                        data.receiver.as_str(),
-                        data.sender.as_str(),
-                        data.message_ref.as_str(),
-                    )
+                if let Some(StornoAblehnung::Sonstiges { bemerkung }) = &ablehnung
+                    && bemerkung.trim().is_empty()
+                {
+                    return Err(WorkflowError::validation(
+                        "E14 „Ablehnung Sonstiges\" needs its FTX+ACB Erläuterung \
+                         (Codeliste S_0087)",
+                    ));
+                }
+                let response_pid = if ablehnung.is_some() {
+                    ABLEHNUNG_PID
                 } else {
-                    PendingOutbox::aperak_fehler(
-                        data.receiver.as_str(),
-                        data.sender.as_str(),
-                        data.message_ref.as_str(),
-                        mako_engine::erc::codes::Z29,
-                        reason.clone().unwrap_or_default(),
-                    )
+                    BESTAETIGUNG_PID
                 };
-                let outbox = vec![aperak.caused_by(0)];
+                // The outbox entry *is* the answer: without it the event log
+                // records the Stornierung as answered while the LF sees nothing.
+                let outbox = vec![antwort_outbox(data, ablehnung.as_ref()).caused_by(0)];
                 Ok(WorkflowOutput::with_outbox(
-                    vec![GpkeStornierungEvent::AperakDispatched { positive, reason }],
+                    vec![GpkeStornierungEvent::AntwortGesendet {
+                        response_pid,
+                        ablehnung,
+                    }],
                     outbox,
                 ))
             }
@@ -530,6 +681,7 @@ mod tests {
             sender: MarktpartnerCode::new("4012345000023"),
             receiver: MarktpartnerCode::new("9907317000007"),
             vorgang_id: MaLo::new("STORNO0000A"),
+            document_code: "E01".to_owned(),
             document_date: "20251001000000+00".to_owned(),
             message_ref: MessageRef::new("00001"),
             validation_passed,
@@ -539,6 +691,145 @@ mod tests {
                 vec!["missing DTM".to_owned()]
             },
         }
+    }
+
+    #[test]
+    fn verlauf_states_the_inbound_55022_and_the_outbound_answer() {
+        let output = GpkeStornierungWorkflow::handle(
+            &GpkeStornierungState::New,
+            stornierung_cmd(55022, true),
+        )
+        .unwrap();
+        assert_eq!(
+            output.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(55_022),
+                message_ref: Some("00001".to_owned()),
+            })
+        );
+        assert_eq!(
+            output.events[1].verlauf(),
+            None,
+            "ValidationPassed is no message"
+        );
+        let state = output
+            .events
+            .iter()
+            .fold(GpkeStornierungState::New, GpkeStornierungWorkflow::apply);
+        for (ablehnung, expected) in [
+            (None, 55_023),
+            (Some(StornoAblehnung::Doppelmeldung), 55_024),
+        ] {
+            let out = GpkeStornierungWorkflow::handle(
+                &state,
+                GpkeStornierungCommand::SendAntwort { ablehnung },
+            )
+            .unwrap();
+            assert_eq!(
+                out.events[0].verlauf(),
+                Some(Verlauf {
+                    richtung: Richtung::Ausgang,
+                    pid: Some(expected),
+                    message_ref: None,
+                })
+            );
+        }
+    }
+
+    fn validated() -> GpkeStornierungState {
+        GpkeStornierungWorkflow::handle(&GpkeStornierungState::New, stornierung_cmd(55022, true))
+            .unwrap()
+            .events
+            .iter()
+            .fold(GpkeStornierungState::New, GpkeStornierungWorkflow::apply)
+    }
+
+    /// A processable 55022 is acknowledged by APERAK 29002 on receipt — the
+    /// Sparte Strom states the Verarbeitbarkeitsprüfung either way (APERAK AHB
+    /// 1.1 § 2.4) — and nothing else goes out until the NB decides.
+    #[test]
+    fn a_processable_55022_is_acknowledged_by_aperak_29002() {
+        let out = GpkeStornierungWorkflow::handle(
+            &GpkeStornierungState::New,
+            stornierung_cmd(55022, true),
+        )
+        .unwrap();
+        assert_eq!(out.outbox.len(), 1, "exactly the Anerkennungsmeldung");
+        assert_eq!(out.outbox[0].message_type.as_ref(), "APERAK");
+        assert_eq!(out.outbox[0].payload["pid"], 29002);
+    }
+
+    /// The Bestätigung is a UTILMD 55023, not an APERAK: UTILMD AHB Strom 2.2
+    /// Kap. 9.6 answers „zurück an den Absender" with `STS+E01` code `E15` from
+    /// Codeliste `S_0086`, `BGM` repeating the 55022's category and `RFF+TN`
+    /// its Vorgangsnummer.
+    #[test]
+    fn a_bestaetigung_queues_utilmd_55023() {
+        let out = GpkeStornierungWorkflow::handle(
+            &validated(),
+            GpkeStornierungCommand::SendAntwort { ablehnung: None },
+        )
+        .unwrap();
+        assert_eq!(out.outbox.len(), 1);
+        let entry = &out.outbox[0];
+        assert_eq!(entry.message_type.as_ref(), "UTILMD");
+        assert_eq!(entry.recipient.as_ref(), "4012345000023", "back to the LF");
+        let p = &entry.payload;
+        assert_eq!(p["pid"], 55_023);
+        assert_eq!(p["sender"], "9907317000007");
+        assert_eq!(p["receiver"], "4012345000023");
+        assert_eq!(p["document_code"], "E01");
+        assert_eq!(p["transaktionsgrund"], "E05");
+        assert_eq!(p["antwort_code"], "E15");
+        assert_eq!(p["antwort_codeliste"], "S_0086");
+        assert_eq!(p["referenz_vorgangsnummer"], "STORNO0000A");
+        assert!(p.get("malo").is_none(), "the 9.6 columns carry no SG5 LOC");
+    }
+
+    /// The Ablehnung is a UTILMD 55024 with an `S_0087` code; `E14` carries
+    /// its `FTX+ACB` Erläuterung (Codelisten 4.3 Kap. 6.27.2).
+    #[test]
+    fn an_ablehnung_queues_utilmd_55024() {
+        let out = GpkeStornierungWorkflow::handle(
+            &validated(),
+            GpkeStornierungCommand::SendAntwort {
+                ablehnung: Some(StornoAblehnung::Sonstiges {
+                    bemerkung: "Vorgang bereits in Bearbeitung".to_owned(),
+                }),
+            },
+        )
+        .unwrap();
+        let p = &out.outbox[0].payload;
+        assert_eq!(out.outbox[0].message_type.as_ref(), "UTILMD");
+        assert_eq!(p["pid"], 55_024);
+        assert_eq!(p["antwort_code"], "E14");
+        assert_eq!(p["antwort_codeliste"], "S_0087");
+        assert_eq!(p["bemerkung"], "Vorgang bereits in Bearbeitung");
+
+        let out = GpkeStornierungWorkflow::handle(
+            &validated(),
+            GpkeStornierungCommand::SendAntwort {
+                ablehnung: Some(StornoAblehnung::SchonBeantwortet),
+            },
+        )
+        .unwrap();
+        assert_eq!(out.outbox[0].payload["antwort_code"], "ZE1");
+        assert!(out.outbox[0].payload.get("bemerkung").is_none());
+    }
+
+    /// `E14` without its Erläuterung is refused before the wire.
+    #[test]
+    fn an_e14_without_erlaeuterung_is_refused() {
+        let err = GpkeStornierungWorkflow::handle(
+            &validated(),
+            GpkeStornierungCommand::SendAntwort {
+                ablehnung: Some(StornoAblehnung::Sonstiges {
+                    bemerkung: "  ".to_owned(),
+                }),
+            },
+        );
+        assert!(err.is_err());
     }
 
     #[test]
@@ -570,7 +861,7 @@ mod tests {
     ///
     /// APERAK AHB 1.1 § 2.1.1 makes it mandatory, and it has to be emitted on
     /// this transition: `ValidationFailed` folds to `Rejected`, which is
-    /// terminal, and `DispatchAperak` requires `ValidationPassed` — so a refusal
+    /// terminal, and `SendAntwort` requires `ValidationPassed` — so a refusal
     /// raised anywhere later is unreachable and the counterparty waits with no
     /// answer at all. The GeLi Gas twin has always emitted it here.
     #[test]
@@ -604,7 +895,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_positive_aperak_completes_process() {
+    fn a_bestaetigung_completes_the_process() {
         let state = GpkeStornierungState::New;
         let output = GpkeStornierungWorkflow::handle(&state, stornierung_cmd(55022, true)).unwrap();
         let state = output
@@ -615,10 +906,7 @@ mod tests {
 
         let output = GpkeStornierungWorkflow::handle(
             &state,
-            GpkeStornierungCommand::DispatchAperak {
-                positive: true,
-                reason: None,
-            },
+            GpkeStornierungCommand::SendAntwort { ablehnung: None },
         )
         .unwrap();
         let state = output
@@ -627,12 +915,12 @@ mod tests {
             .fold(state, GpkeStornierungWorkflow::apply);
         assert!(
             matches!(state, GpkeStornierungState::Completed(_)),
-            "positive APERAK must complete stornierung; got: {state:?}"
+            "a 55023 must complete the Stornierung; got: {state:?}"
         );
     }
 
     #[test]
-    fn dispatch_negative_aperak_rejects_process() {
+    fn an_ablehnung_rejects_the_process() {
         let state = GpkeStornierungState::New;
         let output = GpkeStornierungWorkflow::handle(&state, stornierung_cmd(55022, true)).unwrap();
         let state = output
@@ -642,9 +930,8 @@ mod tests {
 
         let output = GpkeStornierungWorkflow::handle(
             &state,
-            GpkeStornierungCommand::DispatchAperak {
-                positive: false,
-                reason: Some("Vorgang nicht stornierbar".to_owned()),
+            GpkeStornierungCommand::SendAntwort {
+                ablehnung: Some(StornoAblehnung::SchonBeantwortet),
             },
         )
         .unwrap();
@@ -697,6 +984,7 @@ mod tests {
             sender: MarktpartnerCode::new("4012345000023"),
             receiver: MarktpartnerCode::new("9907317000007"),
             vorgang_id: MaLo::new("STORNO0000A"),
+            document_code: "E01".to_owned(),
             document_date: "20251001000000+00".to_owned(),
             message_ref: MessageRef::new("00001"),
         };

@@ -9,12 +9,15 @@
 //! | 17004 | LF → NB/MSB | Anforderung von Werten |
 //! | 17102 | LF → NB/MSB | Anfrage von Werten (data value request) |
 //! | 17113 | LF → NB/MSB | Reklamation von Werten/Lastgängen |
-//! | 19101 | NB → LF     | Ablehnung Anfrage Stammdaten |
 //! | 19102 | NB/MSB → LF | Ablehnung Anfrage Werte |
 //! | 19114 | NB/MSB → LF | Ablehnung der Reklamation von Werten |
 //!
 //! Positive responses to data requests arrive via **MSCONS** (handled by
-//! [`crate::messwerte`]); only rejections (ORDRSP 19101/19102/19114) are handled here.
+//! [`crate::messwerte`]); only rejections (ORDRSP 19102/19114) are handled here.
+//!
+//! The Anfrage von **Stammdaten** (ORDERS 17132) is a different exchange — its
+//! answer is a UTILMD and its refusal the ORDRSP 19101 — and lives in
+//! [`crate::geschaeftsdatenanfrage`].
 //!
 //! # Regulatory basis
 //!
@@ -22,6 +25,7 @@
 //!   spätester ÜZ ist 1 WT nach dem ÜZ von Nr. 1"
 //! - APERAK Frist: 45 Minuten für ORDERS (APERAK AHB 1.1 § 2.4.1)
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
@@ -48,10 +52,9 @@ pub const ORDERS_ANFRAGE_PIDS: &[u32] = &[17004, 17102, 17113];
 ///
 /// | PID   | Description |
 /// |-------|-------------|
-/// | 19101 | Ablehnung Anfrage Stammdaten (NB → LF) |
 /// | 19102 | Ablehnung Anfrage Werte (NB/MSB → LF) |
 /// | 19114 | Ablehnung der Reklamation von Werten (NB/MSB → LF) |
-pub const ORDRSP_ABLEHNUNG_PIDS: &[u32] = &[19101, 19102, 19114];
+pub const ORDRSP_ABLEHNUNG_PIDS: &[u32] = &[19102, 19114];
 
 /// Deadline label for the answer window on an inbound Geschäftsdatenanfrage.
 ///
@@ -79,7 +82,7 @@ pub enum DatenabrufEvent {
         /// Message reference of the sent ORDERS.
         message_ref: MessageRef,
     },
-    /// NB or MSB rejected the data request (ORDRSP 19101/19102/19114).
+    /// NB or MSB rejected the data request (ORDRSP 19102/19114).
     AnfrageAbgelehnt {
         /// ORDRSP Prüfidentifikator.
         ordrsp_pid: Pruefidentifikator,
@@ -109,6 +112,36 @@ impl EventPayload for DatenabrufEvent {
             Self::AnfrageAbgelehnt { .. } => "DatenabrufAnfrageAbgelehnt",
             Self::DatenGeliefert { .. } => "DatenabrufDatenGeliefert",
             Self::DeadlineExpired { .. } => "DatenabrufDeadlineExpired",
+        }
+    }
+
+    /// `DatenGeliefert` is the inbound MSCONS; it carries no PID.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AnfrageGesendet {
+                orders_pid,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(orders_pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AnfrageAbgelehnt {
+                ordrsp_pid,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(ordrsp_pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::DatenGeliefert { message_ref } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: None,
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -144,7 +177,7 @@ pub enum DatenabrufState {
     New,
     /// LF sent the ORDERS; awaiting ORDRSP or MSCONS delivery.
     AnfrageGesendet(AnfrageData),
-    /// NB/MSB rejected the request (ORDRSP 19101/19102/19114).
+    /// NB/MSB rejected the request (ORDRSP 19102/19114).
     Abgelehnt {
         /// Original request.
         anfrage: AnfrageData,
@@ -224,7 +257,7 @@ pub enum DatenabrufCommand {
     },
     /// Inbound ORDRSP rejection received.
     ReceiveAblehnung {
-        /// ORDRSP Prüfidentifikator (19101/19102/19114).
+        /// ORDRSP Prüfidentifikator (19102/19114).
         ordrsp_pid: Pruefidentifikator,
         /// Rejection reason.
         reason: Option<String>,
@@ -476,5 +509,50 @@ mod tests {
             GpkeDatenabrufWorkflow::handle(&DatenabrufState::default(), anfrage(17_004, sent))
                 .expect("accepted");
         assert!(out.deadlines.is_empty());
+    }
+
+    #[test]
+    fn verlauf_states_orders_out_ordrsp_and_mscons_in() {
+        let sent = time::macros::datetime!(2026-10-07 10:00 UTC);
+        let out =
+            GpkeDatenabrufWorkflow::handle(&DatenabrufState::default(), anfrage(17_102, sent))
+                .expect("accepted");
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(17_102),
+                message_ref: Some("ORDERS-1".to_owned()),
+            })
+        );
+        let abgelehnt = DatenabrufEvent::AnfrageAbgelehnt {
+            ordrsp_pid: Pruefidentifikator::new(19_102).expect("valid PID"),
+            reason: None,
+            message_ref: MessageRef::new("ORDRSP-1"),
+        };
+        assert_eq!(
+            abgelehnt.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(19_102),
+                message_ref: Some("ORDRSP-1".to_owned()),
+            })
+        );
+        let geliefert = DatenabrufEvent::DatenGeliefert {
+            message_ref: MessageRef::new("MSCONS-1"),
+        };
+        assert_eq!(
+            geliefert.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: None,
+                message_ref: Some("MSCONS-1".to_owned()),
+            })
+        );
+        let expired = DatenabrufEvent::DeadlineExpired {
+            deadline_id: DeadlineId::new(),
+            label: ANTWORT_WINDOW_LABEL.into(),
+        };
+        assert_eq!(expired.verlauf(), None);
     }
 }

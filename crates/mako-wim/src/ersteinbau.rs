@@ -51,6 +51,7 @@
 
 use std::collections::HashMap;
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     envelope::EventEnvelope,
     error::WorkflowError,
@@ -92,6 +93,11 @@ pub const ANTWORT_WINDOW_LABEL: &str = "wim-ersteinbau-antwort-frist";
 /// The Entscheidungsbaum every answer in this Use-Case resolves against.
 pub const ERSTEINBAU_EBD: &str = mako_pruefung::codes::EBD_ERSTEINBAU_IMS;
 
+/// `E_0233` `A02` „Selbsteinbau eines iMS oder einer mME geplant" — the
+/// answer after which the wMSB fits the device itself, and the only one a
+/// Scheitermeldung 21027 can follow (WiM Teil 1 Kap. 3.5.2 Nr. 6).
+pub const SELBSTEINBAU_CODE: &str = "A02";
+
 // ── Domain events ─────────────────────────────────────────────────────────────
 
 /// Events emitted by the Ersteinbau workflow.
@@ -124,12 +130,23 @@ pub enum ErsteinbauEvent {
         /// Reference of the outbound IFTSTA.
         message_ref: MessageRef,
     },
-    /// The wMSB's answer went out or came back.
+    /// This party is the wMSB and its `E_0233` answer went out to the gMSB
+    /// (WiM Teil 1 Kap. 3.5.2 Nr. 2: „Das Ergebnis der Prüfung teilt der MSB
+    /// dem gMSB mit").
     AntwortGesendet {
         /// 21030 (Zustimmung) or 21031 (Ablehnung).
         pruefidentifikator: Pruefidentifikator,
         /// `E_0233` `A01`–`A04`.
         antwort_code: String,
+    },
+    /// This party is the gMSB and the wMSB's `E_0233` answer arrived.
+    AntwortErhalten {
+        /// 21030 (Zustimmung) or 21031 (Ablehnung), as the IFTSTA carried it.
+        pruefidentifikator: Pruefidentifikator,
+        /// `E_0233` `A01`–`A04`.
+        antwort_code: String,
+        /// Reference of the inbound IFTSTA.
+        message_ref: MessageRef,
     },
     /// The rollout failed on site (21027, Kap. 3.5.2 Nr. 6).
     ScheiternGemeldet {
@@ -156,18 +173,77 @@ impl EventPayload for ErsteinbauEvent {
             Self::VorabinformationEmpfangen { .. } => "WimErsteinbauVorabinformationEmpfangen",
             Self::VorabinformationGesendet { .. } => "WimErsteinbauVorabinformationGesendet",
             Self::AntwortGesendet { .. } => "WimErsteinbauAntwortGesendet",
+            Self::AntwortErhalten { .. } => "WimErsteinbauAntwortErhalten",
             Self::ScheiternGemeldet { .. } => "WimErsteinbauScheiternGemeldet",
             Self::Rejected { .. } => "WimErsteinbauRejected",
             Self::DeadlineExpired { .. } => "WimErsteinbauDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::VorabinformationEmpfangen { message_ref, .. } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: None,
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::VorabinformationGesendet { message_ref, .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            // The 21027 Scheitermeldung: `MeldeScheitern` always enqueues it
+            // to the gMSB, so it leaves this party.
+            Self::ScheiternGemeldet { .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            // Only `DispatchAntwort` emits it, and only on the wMSB side: the
+            // answer leaves this party. The event carries no reference of its
+            // own — the outbound IFTSTA's is assigned at rendering.
+            Self::AntwortGesendet {
+                pruefidentifikator, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: None,
+            }),
+            // Only `ReceiveAntwort` emits it, on the gMSB side.
+            Self::AntwortErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::Rejected { .. } | Self::DeadlineExpired { .. } => None,
         }
     }
 }
 
 // ── Domain state ──────────────────────────────────────────────────────────────
 
+/// Which of the two Messstellenbetreiber this party is in the Vorgang.
+///
+/// Fixed by the event that opened it, and the only thing that tells a
+/// 21030/21031 the wMSB owes (WiM Teil 1 Kap. 3.5.2 Nr. 2) from one the gMSB
+/// receives: the same `Angekuendigt` state is held on both sides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Seite {
+    /// This party sent the Vorabinformation and awaits the answer.
+    Gmsb,
+    /// This party received the Vorabinformation and owes the answer.
+    Wmsb,
+}
+
 /// Business data carried from the first event onwards.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ErsteinbauData {
+    /// Which side of the Vorgang this party is on.
+    pub seite: Seite,
     /// The Messlokation.
     pub melo_id: MeLo,
     /// The grundzuständiger MSB — sender on the inbound branch, this party on
@@ -184,16 +260,19 @@ pub struct ErsteinbauData {
 /// State of an Ersteinbau process.
 ///
 /// ```text
-/// New ─┬─ VorabinformationEmpfangen ─▶ Angekündigt ─┬─ Zugestimmt
-///      │  (inbound, we are the wMSB)                ├─ Abgelehnt
-///      │                                            └─ Gescheitert
+/// New ─┬─ VorabinformationEmpfangen ─▶ Angekündigt ─┬─ Zugestimmt (A03)
+///      │  (inbound, we are the wMSB)                ├─ Eigenausbau (A02) ─▶ Gescheitert
+///      │                                            └─ Abgelehnt (A01, A04)
 ///      └─ VorabinformationGesendet ──▶ Angekündigt
 ///         (outbound, we are the gMSB)
 /// ```
 ///
 /// Both branches share `Angekündigt` because the three-Werktage window is the
 /// same fact from either side: the wMSB owes the answer, the gMSB awaits it,
-/// and neither may roll out until it arrives.
+/// and neither may roll out until it arrives. [`ErsteinbauData::seite`] keeps
+/// the two apart: the wMSB answers with `DispatchAntwort` (`AntwortGesendet`,
+/// outbound), the gMSB records the answer with `ReceiveAntwort`
+/// (`AntwortErhalten`, inbound).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 #[serde(tag = "status", content = "data")]
 pub enum ErsteinbauState {
@@ -204,14 +283,18 @@ pub enum ErsteinbauState {
     Angekuendigt(ErsteinbauData),
     /// `A03` — the wMSB waived its Selbsteinbau; the gMSB may fit the iMS.
     Zugestimmt(ErsteinbauData),
-    /// `A01`, `A02` or `A04`. The gMSB may **not** fit the iMS.
+    /// `A02` — the wMSB plans its own Selbsteinbau. The gMSB may **not** fit
+    /// the iMS; the wMSB reports its change by Stammdatenänderung (WiM Teil 1
+    /// Kap. 3.5.2 Nr. 5) or its failure by 21027 (Nr. 6).
+    Eigenausbau(ErsteinbauData),
+    /// `A01` or `A04`. The gMSB may **not** fit the iMS.
     Abgelehnt {
         /// The `E_0233` code, or `None` when no code was stated.
         antwort_code: Option<String>,
         /// Why, for the operator queue.
         reason: String,
     },
-    /// The rollout was consented to and then failed on site (21027).
+    /// The wMSB's own Selbsteinbau failed (21027, WiM Teil 1 Kap. 3.5.2 Nr. 6).
     Gescheitert {
         /// Why.
         reason: String,
@@ -244,6 +327,7 @@ impl ErsteinbauState {
             Self::New => "New",
             Self::Angekuendigt(_) => "Angekuendigt",
             Self::Zugestimmt(_) => "Zugestimmt",
+            Self::Eigenausbau(_) => "Eigenausbau",
             Self::Abgelehnt { .. } => "Abgelehnt",
             Self::Gescheitert { .. } => "Gescheitert",
             Self::Rejected { .. } => "Rejected",
@@ -318,12 +402,24 @@ pub enum ErsteinbauCommand {
         /// EDIFACT message reference.
         message_ref: MessageRef,
     },
-    /// Send or record the `E_0233` answer.
+    /// Send the wMSB's `E_0233` answer to the gMSB — this party is the wMSB.
     ///
     /// The code's **cluster** picks 21030 or 21031 — never a boolean beside it.
     DispatchAntwort {
         /// `E_0233` `A01`–`A04`.
         antwort_code: String,
+    },
+    /// Inbound IFTSTA 21030/21031 from the wMSB — this party is the gMSB.
+    ///
+    /// Records the answer and sends nothing: the gMSB is the answer's
+    /// recipient (WiM Teil 1 Kap. 3.5.2 Nr. 2).
+    ReceiveAntwort {
+        /// [`ZUSTIMMUNG_PID`] or [`ABLEHNUNG_PID`], as the IFTSTA carried it.
+        pid: Pruefidentifikator,
+        /// `E_0233` `A01`–`A04`.
+        antwort_code: String,
+        /// EDIFACT message reference.
+        message_ref: MessageRef,
     },
     /// The rollout failed on site — IFTSTA 21027 (Kap. 3.5.2 Nr. 6).
     MeldeScheitern {
@@ -345,6 +441,28 @@ impl CommandPayload for ErsteinbauCommand {}
 
 /// The WiM Ersteinbau workflow (IFTSTA 21029 → 21030 / 21031).
 pub struct WimErsteinbauWorkflow;
+
+/// Resolve an `E_0233` code and the answer PID its cluster puts it on.
+fn antwort_pid(
+    antwort_code: &str,
+) -> Result<(&'static mako_pruefung::codes::AntwortCode, u32), WorkflowError> {
+    let code = mako_pruefung::codes::lookup(ERSTEINBAU_EBD, antwort_code).ok_or_else(|| {
+        WorkflowError::rejected(format!(
+            "Antwortcode {antwort_code:?} is not published in {ERSTEINBAU_EBD}"
+        ))
+    })?;
+    let zustimmung = code.ist_zustimmung().ok_or_else(|| {
+        WorkflowError::rejected(format!("{} sits off the agreement axis", code.code))
+    })?;
+    Ok((
+        code,
+        if zustimmung {
+            ZUSTIMMUNG_PID
+        } else {
+            ABLEHNUNG_PID
+        },
+    ))
+}
 
 /// The one guard a fired deadline passes: is the window `label` names still
 /// open in `state`?
@@ -386,14 +504,22 @@ impl Workflow for WimErsteinbauWorkflow {
                 wmsb,
                 umstellungszeitpunkt,
                 message_ref,
-            }
-            | ErsteinbauEvent::VorabinformationGesendet {
+            } => ErsteinbauState::Angekuendigt(ErsteinbauData {
+                seite: Seite::Wmsb,
+                melo_id: melo_id.clone(),
+                gmsb: gmsb.clone(),
+                wmsb: wmsb.clone(),
+                umstellungszeitpunkt: umstellungszeitpunkt.clone(),
+                message_ref: message_ref.clone(),
+            }),
+            ErsteinbauEvent::VorabinformationGesendet {
                 melo_id,
                 wmsb,
                 umstellungszeitpunkt,
                 message_ref,
                 gmsb,
             } => ErsteinbauState::Angekuendigt(ErsteinbauData {
+                seite: Seite::Gmsb,
                 melo_id: melo_id.clone(),
                 gmsb: gmsb.clone(),
                 wmsb: wmsb.clone(),
@@ -403,10 +529,17 @@ impl Workflow for WimErsteinbauWorkflow {
             ErsteinbauEvent::AntwortGesendet {
                 pruefidentifikator,
                 antwort_code,
+            }
+            | ErsteinbauEvent::AntwortErhalten {
+                pruefidentifikator,
+                antwort_code,
+                ..
             } => match state {
                 ErsteinbauState::Angekuendigt(d) => {
                     if pruefidentifikator.as_u32() == ZUSTIMMUNG_PID {
                         ErsteinbauState::Zugestimmt(d)
+                    } else if antwort_code == SELBSTEINBAU_CODE {
+                        ErsteinbauState::Eigenausbau(d)
                     } else {
                         ErsteinbauState::Abgelehnt {
                             antwort_code: Some(antwort_code.clone()),
@@ -515,21 +648,15 @@ impl Workflow for WimErsteinbauWorkflow {
                 let ErsteinbauState::Angekuendigt(data) = state else {
                     return Err(WorkflowError::invalid_state("Angekuendigt", state.label()));
                 };
-                let code = mako_pruefung::codes::lookup(ERSTEINBAU_EBD, &antwort_code).ok_or_else(
-                    || {
-                        WorkflowError::rejected(format!(
-                            "Antwortcode {antwort_code:?} is not published in {ERSTEINBAU_EBD}"
-                        ))
-                    },
-                )?;
-                let zustimmung = code.ist_zustimmung().ok_or_else(|| {
-                    WorkflowError::rejected(format!("{} sits off the agreement axis", code.code))
-                })?;
-                let antwort_pid = if zustimmung {
-                    ZUSTIMMUNG_PID
-                } else {
-                    ABLEHNUNG_PID
-                };
+                // The answer is the wMSB's to give and goes to the gMSB; a
+                // gMSB sending it would address its own MP-ID.
+                if data.seite != Seite::Wmsb {
+                    return Err(WorkflowError::rejected(
+                        "the E_0233 answer is the wMSB's (WiM Teil 1 Kap. 3.5.2 Nr. 2); \
+                         the gMSB records the one it receives with ReceiveAntwort",
+                    ));
+                }
+                let (code, antwort_pid) = antwort_pid(&antwort_code)?;
                 let payload = serde_json::json!({
                     "pid":              antwort_pid,
                     "sender":           data.wmsb.as_str(),
@@ -549,13 +676,53 @@ impl Workflow for WimErsteinbauWorkflow {
                 ))
             }
 
-            ErsteinbauCommand::MeldeScheitern { reason } => {
-                // Kap. 3.5.2 Nr. 6 puts the Scheitermeldung after the rollout
-                // was consented to. A Vorgang that never got a `A03` has no
-                // rollout to fail.
-                let ErsteinbauState::Zugestimmt(data) = state else {
-                    return Err(WorkflowError::invalid_state("Zugestimmt", state.label()));
+            ErsteinbauCommand::ReceiveAntwort {
+                pid,
+                antwort_code,
+                message_ref,
+            } => {
+                let ErsteinbauState::Angekuendigt(data) = state else {
+                    return Err(WorkflowError::invalid_state("Angekuendigt", state.label()));
                 };
+                if data.seite != Seite::Gmsb {
+                    return Err(WorkflowError::rejected(
+                        "an inbound 21030/21031 answers a Vorabinformation this party sent; \
+                         this Vorgang was opened by one it received",
+                    ));
+                }
+                let (code, cluster_pid) = antwort_pid(&antwort_code)?;
+                // IFTSTA AHB 2.1 Kap. 6.7 pins each code to its Anwendungsfall's
+                // cluster; a 21030 carrying an Ablehnungscode says two things.
+                if pid.as_u32() != cluster_pid {
+                    return Err(WorkflowError::rejected(format!(
+                        "E_0233 {} rides {cluster_pid}, not {}",
+                        code.code,
+                        pid.as_u32()
+                    )));
+                }
+                Ok(vec![ErsteinbauEvent::AntwortErhalten {
+                    pruefidentifikator: pid,
+                    antwort_code: code.code.to_owned(),
+                    message_ref,
+                }]
+                .into())
+            }
+
+            ErsteinbauCommand::MeldeScheitern { reason } => {
+                // Kap. 3.5.2 Nr. 6: „Der MSB teilt das Scheitern seines
+                // Gerätewechsels auf ein iMS mit" — the wMSB's own Selbsteinbau,
+                // announced by `A02`. After `A03` the wMSB waived it and has no
+                // change of its own to fail.
+                let ErsteinbauState::Eigenausbau(data) = state else {
+                    return Err(WorkflowError::invalid_state("Eigenausbau", state.label()));
+                };
+                // Nr. 6: „Der MSB teilt das Scheitern seines Gerätewechsels …
+                // mit" — the wMSB, to the gMSB.
+                if data.seite != Seite::Wmsb {
+                    return Err(WorkflowError::rejected(
+                        "the Scheitermeldung 21027 is the wMSB's (WiM Teil 1 Kap. 3.5.2 Nr. 6)",
+                    ));
+                }
                 let payload = serde_json::json!({
                     "pid":      SCHEITERN_PID,
                     "sender":   data.wmsb.as_str(),
@@ -623,10 +790,17 @@ impl Projection for ErsteinbauProjection {
             ErsteinbauEvent::AntwortGesendet {
                 pruefidentifikator,
                 antwort_code,
+            }
+            | ErsteinbauEvent::AntwortErhalten {
+                pruefidentifikator,
+                antwort_code,
+                ..
             } => {
                 let zustimmung = pruefidentifikator.as_u32() == ZUSTIMMUNG_PID;
                 record.status = if zustimmung {
                     "Zugestimmt"
+                } else if antwort_code == SELBSTEINBAU_CODE {
+                    "Eigenausbau"
                 } else {
                     "Abgelehnt"
                 };
@@ -774,6 +948,114 @@ mod tests {
         );
     }
 
+    /// The gMSB side: the Vorgang this party opened with its own 21029.
+    fn gmsb_angekuendigt() -> ErsteinbauState {
+        let out = WimErsteinbauWorkflow::handle(
+            &ErsteinbauState::New,
+            ErsteinbauCommand::SendVorabinformation {
+                gmsb: mp("9900000000001"),
+                wmsb: mp("9900000000003"),
+                melo_id: melo(),
+                umstellungszeitpunkt: "20261201".to_owned(),
+                message_ref: MessageRef::new("OUT-1"),
+            },
+        )
+        .expect("accepted");
+        out.events
+            .iter()
+            .fold(ErsteinbauState::New, WimErsteinbauWorkflow::apply)
+    }
+
+    /// The gMSB is the recipient of the answer (Kap. 3.5.2 Nr. 2): recording
+    /// an inbound 21030 sends nothing — least of all an IFTSTA to its own MP-ID.
+    #[test]
+    fn a_gmsb_receiving_21030_records_it_and_sends_nothing() {
+        let out = WimErsteinbauWorkflow::handle(
+            &gmsb_angekuendigt(),
+            ErsteinbauCommand::ReceiveAntwort {
+                pid: Pruefidentifikator::new(ZUSTIMMUNG_PID).expect("valid PID"),
+                antwort_code: "A03".to_owned(),
+                message_ref: MessageRef::new("IN-21030"),
+            },
+        )
+        .expect("the gMSB records the wMSB's answer");
+        assert!(out.outbox.is_empty(), "nothing is sent: {:?}", out.outbox);
+        assert!(matches!(
+            &out.events[0],
+            ErsteinbauEvent::AntwortErhalten { message_ref, .. } if message_ref.as_str() == "IN-21030"
+        ));
+        let state = out
+            .events
+            .iter()
+            .fold(gmsb_angekuendigt(), WimErsteinbauWorkflow::apply);
+        assert!(state.rollout_freigegeben());
+    }
+
+    #[test]
+    fn a_gmsb_receiving_21031_is_blocked() {
+        let out = WimErsteinbauWorkflow::handle(
+            &gmsb_angekuendigt(),
+            ErsteinbauCommand::ReceiveAntwort {
+                pid: Pruefidentifikator::new(ABLEHNUNG_PID).expect("valid PID"),
+                antwort_code: "A04".to_owned(),
+                message_ref: MessageRef::new("IN-21031"),
+            },
+        )
+        .expect("recorded");
+        let state = out
+            .events
+            .iter()
+            .fold(gmsb_angekuendigt(), WimErsteinbauWorkflow::apply);
+        assert!(matches!(state, ErsteinbauState::Abgelehnt { .. }));
+    }
+
+    /// The `E_0233` answer is the wMSB's: on the gMSB side `DispatchAntwort`
+    /// would address an IFTSTA to this party's own MP-ID.
+    #[test]
+    fn a_gmsb_cannot_send_the_wmsb_answer() {
+        assert!(
+            WimErsteinbauWorkflow::handle(
+                &gmsb_angekuendigt(),
+                ErsteinbauCommand::DispatchAntwort {
+                    antwort_code: "A03".to_owned(),
+                },
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_wmsb_cannot_receive_an_answer() {
+        assert!(
+            WimErsteinbauWorkflow::handle(
+                &angekuendigt(),
+                ErsteinbauCommand::ReceiveAntwort {
+                    pid: Pruefidentifikator::new(ZUSTIMMUNG_PID).expect("valid PID"),
+                    antwort_code: "A03".to_owned(),
+                    message_ref: MessageRef::new("IN-1"),
+                },
+            )
+            .is_err()
+        );
+    }
+
+    /// IFTSTA AHB 2.1 Kap. 6.7 Bedingungen `[47]`/`[48]`: a 21030 carries only
+    /// Zustimmungscodes, a 21031 only Ablehnungscodes.
+    #[test]
+    fn an_answer_whose_code_contradicts_its_pid_is_refused() {
+        assert!(
+            WimErsteinbauWorkflow::handle(
+                &gmsb_angekuendigt(),
+                ErsteinbauCommand::ReceiveAntwort {
+                    pid: Pruefidentifikator::new(ZUSTIMMUNG_PID).expect("valid PID"),
+                    antwort_code: "A04".to_owned(),
+                    message_ref: MessageRef::new("IN-1"),
+                },
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn a_code_from_another_tree_is_refused() {
         // `E15` is the WiM MSB-Wechsel Zustimmung and has no meaning in E_0233.
@@ -789,17 +1071,34 @@ mod tests {
     }
 
     #[test]
-    fn a_scheitermeldung_needs_a_consented_rollout() {
+    fn a_scheitermeldung_follows_only_the_wmsbs_own_selbsteinbau() {
+        let melde = || ErsteinbauCommand::MeldeScheitern {
+            reason: "kein Zugang".to_owned(),
+        };
         assert!(
-            WimErsteinbauWorkflow::handle(
-                &angekuendigt(),
-                ErsteinbauCommand::MeldeScheitern {
-                    reason: "kein Zugang".to_owned(),
+            WimErsteinbauWorkflow::handle(&angekuendigt(), melde()).is_err(),
+            "no answer yet: no Selbsteinbau to fail"
+        );
+        let nach = |code: &str| {
+            let pid = if code == "A03" {
+                ZUSTIMMUNG_PID
+            } else {
+                ABLEHNUNG_PID
+            };
+            WimErsteinbauWorkflow::apply(
+                angekuendigt(),
+                &ErsteinbauEvent::AntwortGesendet {
+                    pruefidentifikator: Pruefidentifikator::new(pid).expect("pid"),
+                    antwort_code: code.to_owned(),
                 },
             )
-            .is_err(),
-            "a rollout that was never consented to cannot fail"
-        );
+        };
+        // `A03` waives the Selbsteinbau: the wMSB has no change of its own.
+        assert!(WimErsteinbauWorkflow::handle(&nach("A03"), melde()).is_err());
+        // `A02` announces it: its failure is the wMSB's to report, by 21027.
+        let gescheitert =
+            WimErsteinbauWorkflow::handle(&nach("A02"), melde()).expect("A02 then 21027");
+        assert_eq!(gescheitert.outbox[0].payload["pid"], SCHEITERN_PID);
     }
 
     #[test]
@@ -830,5 +1129,70 @@ mod tests {
         let via_lookup = mako_fristen::antwort::antwort_obligation(VORABINFORMATION_PID)
             .expect("21029 is discoverable by PID");
         assert_eq!(via_lookup.family.as_str(), "wim");
+    }
+}
+
+#[cfg(test)]
+mod verlauf_tests {
+    use super::*;
+    use mako_engine::types::{MessageRef, Pruefidentifikator};
+
+    fn pid(p: u32) -> Pruefidentifikator {
+        Pruefidentifikator::new(p).expect("valid PID")
+    }
+
+    fn stated(richtung: Richtung, pid: Option<u32>, message_ref: Option<&str>) -> Verlauf {
+        Verlauf {
+            richtung,
+            pid,
+            message_ref: message_ref.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_only_the_messages() {
+        let empfangen = ErsteinbauEvent::VorabinformationEmpfangen {
+            melo_id: MeLo::new("DE0000000001234567890000000000001"),
+            gmsb: MarktpartnerCode::new("9900000000001"),
+            wmsb: MarktpartnerCode::new("9900000000002"),
+            umstellungszeitpunkt: "20270101".into(),
+            message_ref: MessageRef::new("IFT-1"),
+        };
+        assert_eq!(
+            empfangen.verlauf(),
+            Some(stated(Richtung::Eingang, None, Some("IFT-1")))
+        );
+        let scheitern = ErsteinbauEvent::ScheiternGemeldet { reason: "x".into() };
+        assert_eq!(
+            scheitern.verlauf(),
+            Some(stated(Richtung::Ausgang, None, None))
+        );
+        // The wMSB's own answer leaves this party …
+        let gesendet = ErsteinbauEvent::AntwortGesendet {
+            pruefidentifikator: pid(ZUSTIMMUNG_PID),
+            antwort_code: "A03".into(),
+        };
+        assert_eq!(
+            gesendet.verlauf(),
+            Some(stated(Richtung::Ausgang, Some(ZUSTIMMUNG_PID), None))
+        );
+        // … and the one a gMSB receives arrives.
+        let erhalten = ErsteinbauEvent::AntwortErhalten {
+            pruefidentifikator: pid(ABLEHNUNG_PID),
+            antwort_code: "A04".into(),
+            message_ref: MessageRef::new("IFT-2"),
+        };
+        assert_eq!(
+            erhalten.verlauf(),
+            Some(stated(
+                Richtung::Eingang,
+                Some(ABLEHNUNG_PID),
+                Some("IFT-2")
+            ))
+        );
+        assert_eq!(
+            ErsteinbauEvent::Rejected { reason: "x".into() }.verlauf(),
+            None
+        );
     }
 }

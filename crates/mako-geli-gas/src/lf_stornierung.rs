@@ -51,6 +51,7 @@
 //! - **APERAK AHB 1.1 § 2.3.1** — Gas: nächster Werktag 12:00 (Folgeprozess),
 //!   3 Werktage (Initialprozess). A separate clock.
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -151,6 +152,28 @@ impl EventPayload for LfStornierungEvent {
             Self::Initiated { .. } => "LfStornierungInitiated",
             Self::AntwortReceived { .. } => "LfStornierungAntwortReceived",
             Self::DeadlineExpired { .. } => "LfStornierungDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::Initiated {
+                pruefidentifikator, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: None,
+            }),
+            Self::AntwortReceived {
+                response_pid,
+                response_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: Some(response_ref.as_str().to_owned()),
+            }),
+            Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -516,6 +539,44 @@ mod tests {
     #[test]
     fn workflow_name_is_stable() {
         assert_eq!(WORKFLOW_NAME, "geli-gas-stornierung-lf");
+    }
+
+    #[test]
+    fn verlauf_states_the_messages() {
+        let anfrage = LfStornierungEvent::Initiated {
+            pruefidentifikator: pid(44022),
+            sender: lf_mp_id(),
+            receiver: gnb_gln(),
+            malo: vorgang(),
+            bgm_qualifier: "E01".to_owned(),
+        };
+        assert_eq!(
+            anfrage.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(44022),
+                message_ref: None,
+            })
+        );
+        let antwort = LfStornierungEvent::AntwortReceived {
+            response_pid: pid(44024),
+            accepted: false,
+            reason: None,
+            response_ref: make_ref(),
+        };
+        assert_eq!(
+            antwort.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(44024),
+                message_ref: Some("MSG-0001".to_owned()),
+            })
+        );
+        let lapsed = LfStornierungEvent::DeadlineExpired {
+            deadline_id: DeadlineId::new(),
+            label: GNB_RESPONSE_WINDOW_LABEL.into(),
+        };
+        assert_eq!(lapsed.verlauf(), None);
     }
 
     #[test]

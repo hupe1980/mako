@@ -11,6 +11,7 @@
 //! - **BK7-24-01-009** (GeLi Gas 3.0) — Gas metered value requests
 //! - **BDEW GeLi Gas AHB** — ORDERS/ORDRSP for Gas Datenabruf
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     types::{MarktpartnerCode, MessageRef, Pruefidentifikator},
@@ -58,6 +59,18 @@ pub const ANTWORT_WINDOW_LABEL: &str = "geli-gas-datenabruf-antwort";
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum GeliGasDatenabrufEvent {
+    /// ORDERS data request sent: `InitiateAnfrage` queues the outbound
+    /// ORDERS beside this event.
+    AnfrageGesendet {
+        /// BDEW Prüfidentifikator of the ORDERS sent (17103 or 17104).
+        pid: Pruefidentifikator,
+        /// Sender (our own LF or MSB Gas).
+        sender: MarktpartnerCode,
+        /// Receiver (NB or MSB Strom).
+        receiver: MarktpartnerCode,
+        /// EDIFACT message reference of the ORDERS sent.
+        message_ref: MessageRef,
+    },
     /// ORDERS data request received.
     AnfrageErhalten {
         /// BDEW Prüfidentifikator (17103 or 17104).
@@ -96,10 +109,38 @@ pub enum GeliGasDatenabrufEvent {
 impl EventPayload for GeliGasDatenabrufEvent {
     fn event_type(&self) -> &'static str {
         match self {
+            Self::AnfrageGesendet { .. } => "GeliGasDatenabrufAnfrageGesendet",
             Self::AnfrageErhalten { .. } => "GeliGasDatenabrufAnfrageErhalten",
             Self::AbgelehntErhalten { .. } => "GeliGasDatenabrufAbgelehnt",
             Self::DatenGeliefert => "GeliGasDatenabrufDatenGeliefert",
             Self::DeadlineExpired { .. } => "GeliGasDatenabrufDeadlineExpired",
+        }
+    }
+
+    /// The ORDERS out or in and the ORDRSP Ablehnung in are messages.
+    /// `DatenGeliefert` is the adapter's signal that an MSCONS arrived; it
+    /// carries neither PID nor reference, and the MSCONS itself is recorded
+    /// by the process that received it.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AnfrageGesendet {
+                pid, message_ref, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AnfrageErhalten {
+                pid, message_ref, ..
+            }
+            | Self::AbgelehntErhalten {
+                pid, message_ref, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::DatenGeliefert | Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -261,7 +302,8 @@ impl Workflow for GeliGasDatenabrufWorkflow {
             other => other,
         };
         match event {
-            GeliGasDatenabrufEvent::AnfrageErhalten { pid, sender, .. } => {
+            GeliGasDatenabrufEvent::AnfrageGesendet { pid, sender, .. }
+            | GeliGasDatenabrufEvent::AnfrageErhalten { pid, sender, .. } => {
                 if matches!(state, GeliGasDatenabrufState::New) {
                     GeliGasDatenabrufState::AnfrageGesendet {
                         pid: *pid,
@@ -309,7 +351,7 @@ impl Workflow for GeliGasDatenabrufWorkflow {
                 if !matches!(state, GeliGasDatenabrufState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
                 }
-                let event = GeliGasDatenabrufEvent::AnfrageErhalten {
+                let event = GeliGasDatenabrufEvent::AnfrageGesendet {
                     pid,
                     sender: sender.clone(),
                     receiver: receiver.clone(),
@@ -390,5 +432,86 @@ impl Workflow for GeliGasDatenabrufWorkflow {
                 Ok(vec![GeliGasDatenabrufEvent::DeadlineExpired { deadline_id, label }].into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pid(n: u32) -> Pruefidentifikator {
+        Pruefidentifikator::new(n).unwrap()
+    }
+
+    #[test]
+    fn verlauf_states_the_orders_sent_and_the_ordrsp_received() {
+        let out = GeliGasDatenabrufWorkflow::handle(
+            &GeliGasDatenabrufState::New,
+            GeliGasDatenabrufCommand::InitiateAnfrage {
+                pid: pid(17_103),
+                sender: MarktpartnerCode::new("9800000000004"),
+                receiver: MarktpartnerCode::new("9800000000011"),
+                message_ref: MessageRef::new("ORD-1"),
+                zeitspanne_bis: time::Date::from_calendar_date(2026, time::Month::October, 31)
+                    .unwrap(),
+            },
+        )
+        .unwrap();
+        assert_eq!(out.outbox[0].payload["pid"], 17_103);
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(17_103),
+                message_ref: Some("ORD-1".to_owned()),
+            }),
+            "InitiateAnfrage queues the ORDERS: it is sent, not received"
+        );
+        let state = out.events.iter().fold(
+            GeliGasDatenabrufState::New,
+            GeliGasDatenabrufWorkflow::apply,
+        );
+        assert!(matches!(
+            state,
+            GeliGasDatenabrufState::AnfrageGesendet { .. }
+        ));
+
+        let out = GeliGasDatenabrufWorkflow::handle(
+            &state,
+            GeliGasDatenabrufCommand::ReceiveAblehnung {
+                pid: pid(19_103),
+                sender: MarktpartnerCode::new("9800000000011"),
+                message_ref: MessageRef::new("RSP-1"),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(19_103),
+                message_ref: Some("RSP-1".to_owned()),
+            })
+        );
+
+        let out = GeliGasDatenabrufWorkflow::handle(
+            &GeliGasDatenabrufState::New,
+            GeliGasDatenabrufCommand::ReceiveAnfrage {
+                pid: pid(17_104),
+                sender: MarktpartnerCode::new("9800000000004"),
+                receiver: MarktpartnerCode::new("9900357000004"),
+                message_ref: MessageRef::new("ORD-2"),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(17_104),
+                message_ref: Some("ORD-2".to_owned()),
+            })
+        );
+        assert_eq!(GeliGasDatenabrufEvent::DatenGeliefert.verlauf(), None);
     }
 }

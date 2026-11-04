@@ -24,6 +24,32 @@ use crate::version::WorkflowId;
 
 // ── NewEvent ──────────────────────────────────────────────────────────────────
 
+/// What an event says about the market message it is — for a reader's
+/// history of a process, never for deciding anything.
+///
+/// Stated by [`EventPayload::verlauf`](crate::workflow::EventPayload::verlauf)
+/// and stamped on the envelope at append, so a history read needs no
+/// workflow's types. An event that is no message states nothing.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Verlauf {
+    /// Whether the message arrived or was sent.
+    pub richtung: Richtung,
+    /// The message's Prüfidentifikator, where it carries one.
+    pub pid: Option<u32>,
+    /// The message's document number (`BGM` C106), where known.
+    pub message_ref: Option<String>,
+}
+
+/// The direction of a market message, as the operator's side sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Richtung {
+    /// Received from a counterparty.
+    Eingang,
+    /// Sent to a counterparty.
+    Ausgang,
+}
+
 /// A pending event ready to be appended to a stream.
 ///
 /// The caller constructs a `NewEvent` for each domain event produced by a
@@ -70,6 +96,8 @@ pub struct NewEvent {
     pub schema_version: u32,
     /// The domain event payload, serialized as JSON.
     pub payload: Value,
+    /// The market message this event is, if it is one.
+    pub verlauf: Option<Verlauf>,
 }
 
 impl NewEvent {
@@ -106,7 +134,15 @@ impl NewEvent {
             event_type: event_type.into(),
             schema_version,
             payload,
+            verlauf: None,
         }
+    }
+
+    /// The market message this event is.
+    #[must_use]
+    pub fn with_verlauf(mut self, verlauf: Verlauf) -> Self {
+        self.verlauf = Some(verlauf);
+        self
     }
 }
 
@@ -179,6 +215,11 @@ pub struct EventEnvelope {
 
     /// The domain event payload, serialized as JSON.
     pub payload: Value,
+
+    /// The market message this event is, if it is one — what a history
+    /// shows. Absent on an event that is no message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verlauf: Option<Verlauf>,
 }
 
 impl EventEnvelope {
@@ -235,6 +276,7 @@ impl EventEnvelope {
             event_type: new.event_type,
             schema_version: new.schema_version,
             payload: new.payload,
+            verlauf: new.verlauf,
         }
     }
 }

@@ -109,6 +109,31 @@ where
     }
 }
 
+impl<T> Bo4e<T>
+where
+    T: Bo4eTyped + rubo4e::json::Bo4eExtensions,
+{
+    /// Refuse a key BO4E does not define, at any depth.
+    ///
+    /// The gate keeps an undefined key under `_additional`, which is right for
+    /// a document a counterparty sends: a sender one BO4E release ahead is to
+    /// be read, not refused. A document an operator enters for mako to hold is
+    /// the other case — an undefined key there is a misspelling, the field it
+    /// was meant to fill reads back absent, and the write would succeed.
+    ///
+    /// # Errors
+    ///
+    /// [`Bo4eRejection::UnknownField`] naming every path.
+    pub fn ensure_no_undefined_fields(&self) -> Result<(), super::Bo4eRejection> {
+        self.0
+            .ensure_no_extension_data()
+            .map_err(|e| super::Bo4eRejection::UnknownField {
+                typ: T::TYP_WIRE,
+                paths: e.paths,
+            })
+    }
+}
+
 impl<T> Deref for Bo4e<T> {
     type Target = T;
 
@@ -192,6 +217,28 @@ mod tests {
     #[derive(Debug, serde::Deserialize)]
     struct Req {
         geschaeftspartner: Bo4e<Geschaeftspartner>,
+    }
+
+    /// The gate keeps a misspelt key; `ensure_no_undefined_fields` refuses it
+    /// and names its path, and lets a document without one through.
+    #[test]
+    fn an_undefined_key_survives_the_gate_and_is_refused_on_request() {
+        let typo: Bo4e<Geschaeftspartner> = serde_json::from_value(serde_json::json!({
+            "organisationsnam": "Demo Energie GmbH"
+        }))
+        .expect("the gate keeps an undefined key");
+        assert_eq!(typo.organisationsname, None, "the meant field reads absent");
+        match typo.ensure_no_undefined_fields() {
+            Err(crate::bo4e::Bo4eRejection::UnknownField { paths, .. }) => {
+                assert_eq!(paths, vec!["organisationsnam".to_owned()]);
+            }
+            other => panic!("expected UnknownField, got {other:?}"),
+        }
+        let clean: Bo4e<Geschaeftspartner> = serde_json::from_value(serde_json::json!({
+            "organisationsname": "Demo Energie GmbH"
+        }))
+        .expect("valid");
+        assert!(clean.ensure_no_undefined_fields().is_ok());
     }
 
     /// The happy path: a request struct carrying a `Bo4e<T>` deserialises, and

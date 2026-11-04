@@ -5834,9 +5834,56 @@ pub fn lookup(ebd: &str, code: &str) -> Option<&'static AntwortCode> {
         .and_then(|(_, codes)| codes.iter().find(|c| c.code == code))
 }
 
+/// Every code `ebd` publishes in `cluster`, in the catalogue's order.
+///
+/// What an operator may answer with: a refusal draws from the tree's
+/// Ablehnungs-Cluster, a confirmation from its Zustimmungs-Cluster (the AHB
+/// restricts each answer PID to one cluster — see the module docs). Empty when
+/// the tree is not in [`CODELISTEN`] or publishes nothing in that cluster —
+/// `E_0622` has no Zustimmung; ask [`zustimmung_tree_of`] for the tree that has.
+pub fn codes_im_cluster(
+    ebd: &str,
+    cluster: Cluster,
+) -> impl Iterator<Item = &'static AntwortCode> + use<> {
+    CODELISTEN
+        .iter()
+        .find(|(id, _)| *id == ebd)
+        .map_or(&[][..], |(_, codes)| *codes)
+        .iter()
+        .filter(move |c| c.cluster == cluster)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `codes_im_cluster` answers exactly the tree's codes of that cluster,
+    /// and nothing from a tree that shares a spelling.
+    #[test]
+    fn codes_im_cluster_is_the_trees_own_partition() {
+        for (ebd, codes) in CODELISTEN {
+            for cluster in [Cluster::Zustimmung, Cluster::Ablehnung] {
+                let got: Vec<&str> = codes_im_cluster(ebd, cluster).map(|c| c.code).collect();
+                let want: Vec<&str> = codes
+                    .iter()
+                    .filter(|c| c.cluster == cluster)
+                    .map(|c| c.code)
+                    .collect();
+                assert_eq!(got, want, "{ebd} / {cluster:?}");
+                for code in &got {
+                    assert_eq!(lookup(ebd, code).map(|c| c.cluster), Some(cluster));
+                }
+            }
+        }
+        // `E_0622` is a Vorprüfung: Ablehnungen only, the Zustimmung lives in
+        // `E_0623` (`VORPRUEFUNG_TREES`; EBD 4.3 Kap. 6.6.1).
+        assert_eq!(
+            codes_im_cluster(EBD_ANMELDUNG_DIREKT_ABLEHNBAR, Cluster::Zustimmung).count(),
+            0
+        );
+        assert!(codes_im_cluster(EBD_ANMELDUNG_DIREKT_ABLEHNBAR, Cluster::Ablehnung).count() > 0);
+        assert_eq!(codes_im_cluster("E_9999", Cluster::Ablehnung).count(), 0);
+    }
 
     /// `codes_verfuegbar` must be derived from the catalogue, not asserted
     /// beside it.

@@ -22,6 +22,7 @@
 //! - **BDEW GeLi Gas AHB** — metered gas data formats and PID definitions
 //! - **MSCONS G1.x** — EDI@Energy metered gas data format
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     outbox::PendingOutbox,
@@ -149,6 +150,24 @@ impl EventPayload for GasMsconsDatenEvent {
             Self::MsconsDatenErhalten { .. } => "GasMsconsDatenErhalten",
             Self::ValidationPassed { .. } => "GasMsconsDatenValidationPassed",
             Self::ValidationFailed { .. } => "GasMsconsDatenValidationFailed",
+        }
+    }
+
+    /// The inbound MSCONS is the one market message. `ValidationPassed`
+    /// queues the `ProcessCompleted` ERP notification, not a market message,
+    /// and `ValidationFailed` queues nothing.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::MsconsDatenErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::ValidationPassed { .. } | Self::ValidationFailed { .. } => None,
         }
     }
 }
@@ -395,5 +414,50 @@ impl Workflow for GeliGasMsconsWorkflow {
                 Ok(WorkflowOutput::with_outbox(events, outbox))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verlauf_states_the_inbound_mscons() {
+        let out = GeliGasMsconsWorkflow::handle(
+            &GasMsconsDatenState::New,
+            GasMsconsDatenCommand::ReceiveMscons {
+                pid: Pruefidentifikator::new(13_002).unwrap(),
+                sender: MarktpartnerCode::new("9800000000004"),
+                location_id: MaLo::new("51238696012"),
+                message_ref: MessageRef::new("MSC-1"),
+                reads: vec![],
+                validation_passed: true,
+                validation_errors: vec![],
+                brennwert_kwh_per_m3: None,
+                zustandszahl: None,
+                gasqualitaet: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(13_002),
+                message_ref: Some("MSC-1".to_owned()),
+            })
+        );
+        assert_eq!(
+            out.events[1].verlauf(),
+            None,
+            "the ProcessCompleted notification is no market message"
+        );
+        assert_eq!(
+            GasMsconsDatenEvent::ValidationFailed {
+                reason: "x".to_owned()
+            }
+            .verlauf(),
+            None
+        );
     }
 }

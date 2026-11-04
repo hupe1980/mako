@@ -83,6 +83,7 @@ no_residual_rules![
     rubo4e::current::Fremdkosten,
     rubo4e::current::Geraet,
     rubo4e::current::Geschaeftspartner,
+    rubo4e::current::Konfigurationsprodukt,
     rubo4e::current::Kosten,
     rubo4e::current::Lastgang,
     rubo4e::current::LastvariablePreisposition,

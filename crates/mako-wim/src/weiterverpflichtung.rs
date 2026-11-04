@@ -34,6 +34,7 @@
 
 use std::collections::HashMap;
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     envelope::EventEnvelope,
     error::WorkflowError,
@@ -123,6 +124,24 @@ impl EventPayload for WeiterverpflichtungEvent {
             Self::AntwortGesendet { .. } => "WimWeiterverpflichtungAntwortGesendet",
             Self::Rejected { .. } => "WimWeiterverpflichtungRejected",
             Self::DeadlineExpired { .. } => "WimWeiterverpflichtungDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AuftragEmpfangen { message_ref, .. } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: None,
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AntwortGesendet {
+                pruefidentifikator, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: None,
+            }),
+            Self::Rejected { .. } | Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -659,5 +678,40 @@ mod tests {
         assert_eq!(o.frist, FristShape::EndOfWerktag(1));
         assert_eq!(o.antwort_pids, ANTWORT_PIDS);
         assert_eq!(o.ebd, Some(mako_pruefung::codes::EBD_WEITERVERPFLICHTUNG));
+    }
+}
+
+#[cfg(test)]
+mod verlauf_tests {
+    use super::*;
+    use mako_engine::types::Pruefidentifikator;
+
+    fn pid(p: u32) -> Pruefidentifikator {
+        Pruefidentifikator::new(p).expect("valid PID")
+    }
+
+    fn stated(richtung: Richtung, pid: Option<u32>, message_ref: Option<&str>) -> Verlauf {
+        Verlauf {
+            richtung,
+            pid,
+            message_ref: message_ref.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_only_the_messages() {
+        let antwort = WeiterverpflichtungEvent::AntwortGesendet {
+            pruefidentifikator: pid(19_003),
+            antwort_code: "Z13".into(),
+            abweichender_termin: None,
+        };
+        assert_eq!(
+            antwort.verlauf(),
+            Some(stated(Richtung::Ausgang, Some(19_003), None))
+        );
+        assert_eq!(
+            WeiterverpflichtungEvent::Rejected { reason: "x".into() }.verlauf(),
+            None
+        );
     }
 }

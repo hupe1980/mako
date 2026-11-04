@@ -34,6 +34,7 @@
 //!   RLM Anwendungsfall for Zeiträume from 1.10.2015
 
 use mako_engine::{
+    envelope::{Richtung, Verlauf},
     error::WorkflowError,
     outbox::PendingOutbox,
     types::MessageRef,
@@ -162,6 +163,20 @@ impl EventPayload for MehrMindermengenEvent {
             Self::MehrMindermengenGemeldet(_) => "GaBiGasMehrMindermengenGemeldet",
             Self::MehrMindermengenGesendet(_) => "GaBiGasMehrMindermengenGesendet",
         }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        // Both variants are a SSQNOT; the DVGW Prüfidentifikator is the one
+        // the message carries.
+        let (richtung, data) = match self {
+            Self::MehrMindermengenGemeldet(data) => (Richtung::Eingang, data),
+            Self::MehrMindermengenGesendet(data) => (Richtung::Ausgang, data),
+        };
+        Some(Verlauf {
+            richtung,
+            pid: Some(data.pruefidentifikator),
+            message_ref: Some(data.message_ref.as_str().to_owned()),
+        })
     }
 }
 
@@ -316,6 +331,28 @@ mod tests {
             mindermenge_kwh: Decimal::from(minder),
             message_ref: MessageRef::new("1"),
         }
+    }
+
+    /// Both variants are a SSQNOT; neither may fall back to the default `None`.
+    #[test]
+    fn verlauf_states_the_ssqnot() {
+        let data = report(70095, MmmVerfahren::Slp, date!(2026 - 03 - 01), 120, 6782);
+        assert_eq!(
+            MehrMindermengenEvent::MehrMindermengenGemeldet(data.clone()).verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(70095),
+                message_ref: Some("1".to_owned()),
+            })
+        );
+        assert_eq!(
+            MehrMindermengenEvent::MehrMindermengenGesendet(data).verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(70095),
+                message_ref: Some("1".to_owned()),
+            })
+        );
     }
 
     /// Pinned to the DVGW catalogue: a drifted copy stops routing a published

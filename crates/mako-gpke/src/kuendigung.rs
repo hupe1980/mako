@@ -25,6 +25,7 @@
 //! - **EBD 4.3 Kap. 6.2.1** — `E_0614` „Kündigung Vertrag prüfen"
 //! - **APERAK AHB 1.1 § 2.4.1** — the separate 45-minute technical window
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
@@ -124,6 +125,35 @@ impl EventPayload for KuendigungEvent {
             Self::Beendet => "KuendigungBeendet",
             Self::Rejected { .. } => "KuendigungRejected",
             Self::DeadlineExpired { .. } => "KuendigungDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::KuendigungErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AntwortGesendet { response_pid, .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: None,
+            }),
+            Self::Beendet | Self::DeadlineExpired { .. } => None,
+            // `ValidationPassed` is emitted only beside the APERAK 312
+            // Anerkennungsmeldung `handle` queues for it, `Rejected` only beside
+            // the APERAK 313 Verarbeitbarkeitsfehlermeldung; an APERAK carries
+            // no Prüfidentifikator.
+            Self::ValidationPassed { .. } | Self::Rejected { .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
         }
     }
 }
@@ -590,6 +620,66 @@ mod tests {
 
     fn apply_all(init: KuendigungState, events: &[KuendigungEvent]) -> KuendigungState {
         events.iter().fold(init, GpkeKuendigungWorkflow::apply)
+    }
+
+    #[test]
+    fn verlauf_states_the_inbound_55016_and_the_outbound_answer() {
+        assert_eq!(
+            KuendigungEvent::Rejected {
+                reason: "x".to_owned(),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            "the APERAK 313 queued beside the rejection"
+        );
+        let out = GpkeKuendigungWorkflow::handle(&KuendigungState::New, anfrage_cmd(true)).unwrap();
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(55_016),
+                message_ref: Some("BEEND-001".to_owned()),
+            })
+        );
+        assert_eq!(
+            out.events[1].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            "the APERAK 312 queued beside ValidationPassed"
+        );
+        assert!(
+            out.outbox
+                .iter()
+                .any(|o| &*o.message_type == "APERAK" && o.caused_by_event_index == 1),
+            "the APERAK 312 is caused by ValidationPassed"
+        );
+        let state = apply_all(KuendigungState::New, &out.events);
+        let out = GpkeKuendigungWorkflow::handle(
+            &state,
+            KuendigungCommand::SendAntwort {
+                antwort: crate::lf_antwort::LfAntwort::zustimmung("A36", "E_0624"),
+            },
+        )
+        .unwrap();
+        let KuendigungEvent::AntwortGesendet { response_pid, .. } = &out.events[0] else {
+            panic!("expected AntwortGesendet, got {:?}", out.events[0]);
+        };
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: None,
+            })
+        );
+        assert_eq!(KuendigungEvent::Beendet.verlauf(), None);
     }
 
     #[test]

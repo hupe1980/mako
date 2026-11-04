@@ -40,6 +40,7 @@
 //!
 //! Both emit a `ProcessInitiated` CloudEvent on spawn.
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
@@ -145,6 +146,28 @@ impl EventPayload for GeliGasLfAnmeldungEvent {
             Self::AntwortReceived { .. } => "GeliGasLfAnmeldungAntwortReceived",
             Self::Activated => "GeliGasLfAnmeldungActivated",
             Self::DeadlineExpired { .. } => "GeliGasLfAnmeldungDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::Initiated {
+                pruefidentifikator, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: None,
+            }),
+            Self::AntwortReceived {
+                response_pid,
+                response_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: Some(response_ref.as_str().to_owned()),
+            }),
+            Self::Activated | Self::DeadlineExpired { .. } => None,
         }
     }
 }

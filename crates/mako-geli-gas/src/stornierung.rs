@@ -17,40 +17,50 @@
 //! **This module is the GNB-side perspective.** For the LFN/LFA perspective (LF initiates
 //! outbound 44022, awaits 44023/44024), see [`crate::lf_stornierung`].
 //!
-//! A market participant (LFN / LFA / GNB) may request cancellation of a previously
-//! submitted Anmeldung, Abmeldung, or Kündigung by sending a UTILMD G message with
-//! PID 44022 (Anfrage nach Stornierung) to the GNB. The GNB must respond within
-//! an answer (no Festlegung states a window — see
-//! [`STORNIERUNG_RESPONSE_WINDOW_LABEL`]) of either:
-//! - PID 44023 (Bestätigung Stornierung) — cancellation accepted; original process cancelled.
-//! - PID 44024 (Ablehnung Stornierung) — cancellation rejected; original process continues.
+//! „Die Anfrage wird an den Empfänger des zu stornierenden Vorgangs gesendet"
+//! and both answers go „zurück an den Absender" — as **UTILMD**, never as an
+//! APERAK (UTILMD AHB Gas 1.2 Kap. 5.2 „Anwendungsübersicht
+//! Stornierungsmeldung", S. 25–28). The GNB answers within no window of its own
+//! (see [`STORNIERUNG_RESPONSE_WINDOW_LABEL`]) with either:
+//! - 44023 „Bestätigung Anfrage Stornierung" — `SG4 STS+E01` from Codeliste
+//!   `G_0004`, whose only code is `E15` „Zustimmung ohne Korrekturen";
+//! - 44024 „Ablehnung Anfrage Stornierung" — `SG4 STS+E01` from Codeliste
+//!   `G_0003`: `E14` „Ablehnung Sonstiges" (with `FTX+ACB`), `Z14` „Ablehnung
+//!   (Doppelmeldung)", `ZE1` „Ablehnung – zu stornierender Vorgang wurde schon
+//!   beantwortet" (Entscheidungsbaum-Diagramme und Codelisten 4.3 Kap. 13.2.1 /
+//!   13.2.2, S. 714).
+//!
+//! Note the order: in Gas the **Ablehnung** list is `G_0003` and the
+//! Bestätigung `G_0004`.
 //!
 //! # Process flow
 //!
 //! ```text
 //! LFN/LFA ──── 44022 Anfrage nach Stornierung ────►
-//!         ◄─── 44023 Bestätigung (EBD G_0004)     ── GNB
-//!          or ◄─ 44024 Ablehnung   (EBD G_0003)   ── GNB
+//!         ◄─── UTILMD 44023 Bestätigung (G_0004)  ── GNB
+//!          or ◄─ UTILMD 44024 Ablehnung (G_0003)  ── GNB
 //! ```
+//!
+//! No APERAK accompanies a processable 44022: in the Sparte Gas the APERAK
+//! reports only a Verarbeitbarkeitsfehler (APERAK AHB 1.1 § 2.3).
 //!
 //! # BGM qualifier semantics
 //!
-//! The BGM 1001 qualifier in PID 44022 encodes the **type of the original message**
-//! being cancelled, not the Stornierung action itself:
-//! - `E01` — cancelling an Anmeldung (Lieferbeginn Gas)
-//! - `E02` — cancelling an Abmeldung (Lieferende Gas)
-//! - `E35` — cancelling a Kündigung Lieferbeginn Gas
-//!
-//! The Stornierung action is indicated by `STS+7+E05` (Transaktionsgrund = Stornierung).
+//! `BGM` DE 1001 names the **category of the cancelled message** — „Code ist
+//! gemäß der Kategorie der zu stornierenden Meldung zu wählen" (Bedingung
+//! `[500]`, Muss in all three columns): `E01` Anmeldungen, `E02` Abmeldungen,
+//! `E35` Kündigung. The answer therefore repeats the 44022's code. The
+//! Stornierung itself is `SG4 STS+7++E05`, in the Anfrage and both answers.
 //!
 //! # Regulatory basis
 //!
-//! - **BDEW UTILMD AHB Gas 1.1 / 1.2** — AHB rules for PIDs 44022–44024
+//! - **BDEW UTILMD AHB Gas 1.2 Kap. 5.2** — the three Anwendungsfälle 44022–44024
 //! - **BNetzA BK7-24-01-009** — Geschäftsprozesse Lieferantenwechsel Gas 3.0 (eff. 2025-09-24)
 //! - **APERAK**: Gas knows only the Verarbeitbarkeitsfehlermeldung — nächster
 //!   Werktag 12:00 Uhr for a Folgeprozess, 3 Werktage for an Initialprozess
 //!   (APERAK AHB 1.1 §2.3.1). 44022 is `ZG-T26`, hence a Folgeprozess.
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -78,9 +88,69 @@ pub const STORNIERUNG_RESPONSE_WINDOW_LABEL: &str = "geli-gas-stornierung-respon
 /// PIDs handled by the GeLi Gas Stornierung workflow (UTILMD G).
 ///
 /// - 44022: Anfrage nach Stornierung (initiator → GNB) — **inbound on GNB side**
-/// - 44023: Bestätigung Stornierung  (GNB response — accepted) — outbound from GNB
-/// - 44024: Ablehnung Stornierung    (GNB response — rejected) — outbound from GNB
+/// - 44023: Bestätigung Anfrage Stornierung (GNB → initiator) — outbound UTILMD
+/// - 44024: Ablehnung Anfrage Stornierung (GNB → initiator) — outbound UTILMD
 pub const STORNIERUNG_PIDS: &[u32] = &[44022, 44023, 44024];
+
+/// 44023 „Bestätigung Anfrage Stornierung" (UTILMD AHB Gas 1.2 Kap. 5.2).
+pub const BESTAETIGUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(44023);
+
+/// 44024 „Ablehnung Anfrage Stornierung" (UTILMD AHB Gas 1.2 Kap. 5.2).
+pub const ABLEHNUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(44024);
+
+/// Codeliste of the 44023's `SG4 STS+E01` DE 1131 (UTILMD AHB Gas 1.2 Kap. 5.2).
+pub const BESTAETIGUNG_CODELISTE: &str = "G_0004";
+
+/// Codeliste of the 44024's `SG4 STS+E01` DE 1131 (UTILMD AHB Gas 1.2 Kap. 5.2).
+pub const ABLEHNUNG_CODELISTE: &str = "G_0003";
+
+/// `E15` „Zustimmung ohne Korrekturen" — the only code of `G_0004`
+/// (Entscheidungsbaum-Diagramme und Codelisten 4.3 Kap. 13.2.2, S. 714).
+pub const ZUSTIMMUNG_CODE: &str = "E15";
+
+/// Why the GNB refuses a Stornierung — the three codes of Codeliste `G_0003`
+/// (Entscheidungsbaum-Diagramme und Codelisten 4.3 Kap. 13.2.1, S. 714).
+///
+/// A closed set, so a code the Codeliste does not publish cannot ride a 44024.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "code")]
+pub enum StornoAblehnung {
+    /// `E14` „Ablehnung Sonstiges" — „Bei Verwendung von E14 muss in FTX+ACB,
+    /// C108 als Freitext eine Erläuterung eingefügt werden"; the 44024 column
+    /// makes `SG4 FTX` Muss under the same condition (Bedingung `[48]`).
+    #[serde(rename = "E14")]
+    Sonstiges {
+        /// The `FTX+ACB` Erläuterung.
+        bemerkung: String,
+    },
+    /// `Z14` „Ablehnung (Doppelmeldung)" — „Die Meldung liegt schon vor."
+    #[serde(rename = "Z14")]
+    Doppelmeldung,
+    /// `ZE1` „Ablehnung – zu stornierender Vorgang wurde schon beantwortet".
+    #[serde(rename = "ZE1")]
+    SchonBeantwortet,
+}
+
+impl StornoAblehnung {
+    /// The `SG4 STS+E01` DE 9013 code.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Sonstiges { .. } => "E14",
+            Self::Doppelmeldung => "Z14",
+            Self::SchonBeantwortet => "ZE1",
+        }
+    }
+
+    /// The `FTX+ACB` Erläuterung, present exactly on `E14`.
+    #[must_use]
+    pub fn bemerkung(&self) -> Option<&str> {
+        match self {
+            Self::Sonstiges { bemerkung } => Some(bemerkung),
+            Self::Doppelmeldung | Self::SchonBeantwortet => None,
+        }
+    }
+}
 
 /// Inbound PID for the GNB-side workflow.
 ///
@@ -103,8 +173,13 @@ pub enum GeliGasStornierungEvent {
         sender: MarktpartnerCode,
         /// GLN of the GNB receiving the request.
         receiver: MarktpartnerCode,
-        /// Vorgangsnummer from IDE+24 (identifies the original process being cancelled).
+        /// The 44022's own Vorgangsnummer (`SG4 IDE+24` DE 7402) — the answer
+        /// carries it back in `SG4 SG6 RFF+TN`. The cancelled Vorgang is named
+        /// by the 44022's `RFF+ACW`, not here.
         vorgang_id: MaLo,
+        /// `BGM` DE 1001 of the 44022 — the category of the cancelled message
+        /// (`E01` / `E02` / `E35`), which the answer repeats.
+        document_code: String,
         /// EDIFACT document date string (YYYYMMDDHHMMZZZ from DTM+137+303).
         document_date: String,
         /// EDIFACT message reference (UNH 0062).
@@ -115,20 +190,20 @@ pub enum GeliGasStornierungEvent {
         /// Reference of the validated message.
         message_ref: MessageRef,
     },
-    /// AHB profile validation failed — message rejected without an APERAK.
+    /// AHB profile validation failed — answered with APERAK 29001.
     ValidationFailed {
         /// Human-readable list of validation issue strings.
         errors: Vec<String>,
     },
-    /// GNB dispatched a positive or negative APERAK response.
+    /// The GNB's UTILMD answer to the 44022 was queued.
     ///
-    /// Positive → process moves to `Completed`.
-    /// Negative → process moves to `Rejected`.
-    AperakDispatched {
-        /// `true` = positive APERAK (PID 44023), `false` = negative (PID 44024).
-        positive: bool,
-        /// Rejection reason code or text (only meaningful when `positive = false`).
-        reason: Option<String>,
+    /// Bestätigung → `Completed`, Ablehnung → `Rejected`.
+    AntwortGesendet {
+        /// 44023 (Bestätigung) or 44024 (Ablehnung) — derived from `ablehnung`,
+        /// never chosen beside it.
+        response_pid: Pruefidentifikator,
+        /// The `G_0003` ground of a 44024; `None` on a 44023.
+        ablehnung: Option<StornoAblehnung>,
     },
     /// Process terminated because the answer window expired.
     DeadlineExpired {
@@ -145,8 +220,30 @@ impl EventPayload for GeliGasStornierungEvent {
             Self::StornierungReceived { .. } => "GeliGasStornierungReceived",
             Self::ValidationPassed { .. } => "GeliGasStornierungValidationPassed",
             Self::ValidationFailed { .. } => "GeliGasStornierungValidationFailed",
-            Self::AperakDispatched { .. } => "GeliGasStornierungAperakDispatched",
+            Self::AntwortGesendet { .. } => "GeliGasStornierungAntwortGesendet",
             Self::DeadlineExpired { .. } => "GeliGasStornierungDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::StornierungReceived {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AntwortGesendet { response_pid, .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: None,
+            }),
+            Self::ValidationPassed { .. }
+            | Self::ValidationFailed { .. }
+            | Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -162,8 +259,11 @@ pub struct GeliGasStornierungData {
     pub sender: MarktpartnerCode,
     /// GLN of the GNB receiving the request.
     pub receiver: MarktpartnerCode,
-    /// Vorgangsnummer (IDE+24) identifying the original process to be cancelled.
+    /// The 44022's own Vorgangsnummer (`SG4 IDE+24` DE 7402), returned in the
+    /// answer's `SG4 SG6 RFF+TN` „Referenz Vorgangsnummer (aus Anfragenachricht)".
     pub vorgang_id: MaLo,
+    /// `BGM` DE 1001 of the 44022, repeated on the answer (Bedingung `[500]`).
+    pub document_code: String,
     /// EDIFACT document date from DTM+137.
     pub document_date: String,
     /// EDIFACT message reference from the 44022 message.
@@ -177,8 +277,8 @@ pub struct GeliGasStornierungData {
 /// # Lifecycle
 ///
 /// ```text
-/// New → Initiated → ValidationPassed → AperakSent → Completed
-///                                    ↘ Rejected
+/// New → Initiated → ValidationPassed → Completed   (44023 sent)
+///                                    ↘ Rejected    (44024 sent)
 ///     ↘ ValidationFailed → Rejected
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -192,11 +292,10 @@ pub enum GeliGasStornierungState {
     Initiated(GeliGasStornierungData),
     /// AHB validation passed; the GNB owes an answer.
     ValidationPassed(GeliGasStornierungData),
-    /// Positive APERAK (44023) dispatched; cancellation accepted.
-    AperakSent(GeliGasStornierungData),
-    /// Cancellation fully completed (positive APERAK sent, original process cancelled).
+    /// 44023 Bestätigung sent; „Der stornierte Vorgang wird nicht mehr
+    /// beantwortet" (UTILMD AHB Gas 1.2 Kap. 5.2).
     Completed(GeliGasStornierungData),
-    /// Process rejected — validation failure or Ablehnung.
+    /// Process rejected — validation failure or 44024 Ablehnung.
     Rejected {
         /// Human-readable reason for the rejection.
         reason: String,
@@ -224,7 +323,6 @@ impl GeliGasStornierungState {
             Self::New => "New",
             Self::Initiated(_) => "Initiated",
             Self::ValidationPassed(_) => "ValidationPassed",
-            Self::AperakSent(_) => "AperakSent",
             Self::Completed(_) => "Completed",
             Self::Rejected { .. } => "Rejected",
             Self::FristAbgelaufen { .. } => "FristAbgelaufen",
@@ -257,8 +355,10 @@ pub enum GeliGasStornierungCommand {
         sender: MarktpartnerCode,
         /// GLN of the receiver (GNB).
         receiver: MarktpartnerCode,
-        /// Vorgangsnummer from IDE+24.
+        /// The 44022's own Vorgangsnummer, `SG4 IDE+24` DE 7402.
         vorgang_id: MaLo,
+        /// `BGM` DE 1001 of the 44022 (`E01` / `E02` / `E35`).
+        document_code: String,
         /// EDIFACT document date from DTM+137.
         document_date: String,
         /// EDIFACT message reference from UNH.
@@ -268,15 +368,11 @@ pub enum GeliGasStornierungCommand {
         /// Human-readable validation error strings (empty when `validation_passed = true`).
         validation_errors: Vec<String>,
     },
-    /// GNB dispatches a positive (44023) or negative (44024) APERAK response.
-    ///
-    /// Answers the 44022; the codes come from `G_0004` (Bestätigung) resp.
-    /// `G_0003` (Ablehnung).
-    DispatchAperak {
-        /// `true` for Bestätigung (44023), `false` for Ablehnung (44024).
-        positive: bool,
-        /// Rejection reason — required when `positive = false`.
-        reason: Option<String>,
+    /// The GNB answers the 44022 with UTILMD 44023 (`ablehnung: None`) or
+    /// 44024 (`Some`); the codes come from `G_0004` resp. `G_0003`.
+    SendAntwort {
+        /// The `G_0003` ground of an Ablehnung; `None` confirms with `E15`.
+        ablehnung: Option<StornoAblehnung>,
     },
     /// The answer window expired.
     TimeoutExpired {
@@ -289,13 +385,47 @@ pub enum GeliGasStornierungCommand {
 
 impl CommandPayload for GeliGasStornierungCommand {}
 
+/// The UTILMD 44023 / 44024 outbox entry answering the 44022 in `data`.
+///
+/// Every field is a column of UTILMD AHB Gas 1.2 Kap. 5.2: `BGM` repeats the
+/// 44022's category, `STS+7++E05` the Transaktionsgrund, `STS+E01` the code
+/// with its Codeliste, `RFF+TN` the 44022's Vorgangsnummer. The column carries
+/// no `SG5 LOC` and no `SG4 DTM`, so the payload names neither.
+fn antwort_outbox(
+    data: &GeliGasStornierungData,
+    ablehnung: Option<&StornoAblehnung>,
+) -> PendingOutbox {
+    let (pid, code, codeliste) = match ablehnung {
+        None => (BESTAETIGUNG_PID, ZUSTIMMUNG_CODE, BESTAETIGUNG_CODELISTE),
+        Some(a) => (ABLEHNUNG_PID, a.code(), ABLEHNUNG_CODELISTE),
+    };
+    PendingOutbox::typed(
+        data.sender.as_str(),
+        &mako_engine::payload::UtilmdPayload {
+            pid: pid.as_u32(),
+            // The answer travels back the way the request came.
+            sender: data.receiver.as_str().to_owned(),
+            receiver: Some(data.sender.as_str().to_owned()),
+            document_code: Some(data.document_code.clone()),
+            transaktionsgrund: Some("E05".to_owned()),
+            antwort_code: Some(code.to_owned()),
+            antwort_codeliste: Some(codeliste.to_owned()),
+            bemerkung: ablehnung
+                .and_then(StornoAblehnung::bemerkung)
+                .map(str::to_owned),
+            referenz_vorgangsnummer: Some(data.vorgang_id.as_str().to_owned()),
+            ..Default::default()
+        },
+    )
+}
+
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
 /// GeLi Gas Stornierung workflow (PIDs 44022–44024).
 ///
 /// The GNB (Gasnetzbetreiber) is the process owner. The inbound message is PID 44022
-/// (Anfrage nach Stornierung). The GNB responds with PID 44023 (Bestätigung) or
-/// PID 44024 (Ablehnung).
+/// (Anfrage nach Stornierung). The GNB responds with UTILMD 44023 (Bestätigung)
+/// or 44024 (Ablehnung).
 pub struct GeliGasStornierungWorkflow;
 
 /// The one guard a fired deadline passes: is the window `label` names still
@@ -341,6 +471,7 @@ impl Workflow for GeliGasStornierungWorkflow {
                 sender,
                 receiver,
                 vorgang_id,
+                document_code,
                 document_date,
                 message_ref,
             } => GeliGasStornierungState::Initiated(GeliGasStornierungData {
@@ -348,6 +479,7 @@ impl Workflow for GeliGasStornierungWorkflow {
                 sender: sender.clone(),
                 receiver: receiver.clone(),
                 vorgang_id: vorgang_id.clone(),
+                document_code: document_code.clone(),
                 document_date: document_date.clone(),
                 message_ref: message_ref.clone(),
             }),
@@ -366,18 +498,13 @@ impl Workflow for GeliGasStornierungWorkflow {
                 }
             }
 
-            GeliGasStornierungEvent::AperakDispatched { positive, reason } => match state {
-                GeliGasStornierungState::ValidationPassed(data) => {
-                    if *positive {
-                        GeliGasStornierungState::Completed(data)
-                    } else {
-                        GeliGasStornierungState::Rejected {
-                            reason: reason
-                                .clone()
-                                .unwrap_or_else(|| "negative APERAK".to_owned()),
-                        }
-                    }
-                }
+            GeliGasStornierungEvent::AntwortGesendet { ablehnung, .. } => match state {
+                GeliGasStornierungState::ValidationPassed(data) => match ablehnung {
+                    None => GeliGasStornierungState::Completed(data),
+                    Some(a) => GeliGasStornierungState::Rejected {
+                        reason: format!("Ablehnung Anfrage Stornierung ({})", a.code()),
+                    },
+                },
                 _ => state,
             },
 
@@ -408,6 +535,7 @@ impl Workflow for GeliGasStornierungWorkflow {
                 sender,
                 receiver,
                 vorgang_id,
+                document_code,
                 document_date,
                 message_ref,
                 validation_passed,
@@ -429,6 +557,7 @@ impl Workflow for GeliGasStornierungWorkflow {
                     sender,
                     receiver,
                     vorgang_id,
+                    document_code,
                     document_date,
                     message_ref: message_ref.clone(),
                 }];
@@ -436,6 +565,9 @@ impl Workflow for GeliGasStornierungWorkflow {
                     events.push(GeliGasStornierungEvent::ValidationPassed {
                         message_ref: message_ref.clone(),
                     });
+                    // No APERAK: Gas reports only a Verarbeitbarkeitsfehler
+                    // (APERAK AHB 1.1 § 2.3). The answer is the 44023/44024
+                    // that `SendAntwort` queues.
                     Ok(WorkflowOutput::events(events))
                 } else {
                     let reason = validation_errors.join("; ");
@@ -443,10 +575,9 @@ impl Workflow for GeliGasStornierungWorkflow {
                         errors: validation_errors,
                     });
                     // APERAK BGM+313 — mandatory per APERAK AHB 1.1 §2.1.1.
-                    // APERAK Frist (Gas Folgeprozess): nächster Werktag 12 Uhr (APERAK AHB 1.1 §2.3.1).
-                    // Note: this is the process answer window (an operating
-                    // convention — see STORNIERUNG_RESPONSE_WINDOW_LABEL), not
-                    // the APERAK sending deadline, which is a separate clock.
+                    // APERAK Frist (Gas Folgeprozess): nächster Werktag 12 Uhr
+                    // (APERAK AHB 1.1 §2.3.1) — a clock separate from the
+                    // answer window STORNIERUNG_RESPONSE_WINDOW_LABEL carries.
                     let outbox = vec![
                         PendingOutbox::aperak_fehler(
                             receiver_gln.as_str(),
@@ -461,7 +592,7 @@ impl Workflow for GeliGasStornierungWorkflow {
                 }
             }
 
-            GeliGasStornierungCommand::DispatchAperak { positive, reason } => {
+            GeliGasStornierungCommand::SendAntwort { ablehnung } => {
                 let data = match state {
                     GeliGasStornierungState::ValidationPassed(d) => d,
                     _ => {
@@ -471,40 +602,29 @@ impl Workflow for GeliGasStornierungWorkflow {
                         ));
                     }
                 };
-                // One APERAK outbox entry, typed. Gas has no Anerkennungsmeldung
-                // (APERAK AHB 1.1 §2.3): a positive decision is recorded for the
-                // ERP and kept off the wire; a negative one is a 29001
-                // Verarbeitbarkeitsfehlermeldung naming the 44022 it answers.
-                let from = data.receiver.as_str(); // GNB = sender of the APERAK
-                let to = data.sender.as_str();
-                let orig = data.message_ref.as_str();
-                let aperak = match &reason {
-                    None if positive => {
-                        mako_engine::payload::AperakPayload::anerkennung(from, to, orig)
-                            .off_the_wire()
-                    }
-                    Some(r) if !positive => mako_engine::payload::AperakPayload::fehler(
-                        from,
-                        to,
-                        orig,
-                        mako_engine::erc::codes::Z29,
-                        r.clone(),
-                    ),
-                    Some(_) => {
-                        return Err(WorkflowError::validation(
-                            "a positive decision carries no reason",
-                        ));
-                    }
-                    None => {
-                        return Err(WorkflowError::validation(
-                            "a negative decision needs its reason (FTX+ABO)",
-                        ));
-                    }
+                if let Some(StornoAblehnung::Sonstiges { bemerkung }) = &ablehnung
+                    && bemerkung.trim().is_empty()
+                {
+                    return Err(WorkflowError::validation(
+                        "E14 „Ablehnung Sonstiges\" needs its FTX+ACB Erläuterung \
+                         (Codeliste G_0003)",
+                    ));
+                }
+                let response_pid = if ablehnung.is_some() {
+                    ABLEHNUNG_PID
+                } else {
+                    BESTAETIGUNG_PID
                 };
-                let outbox_entry = PendingOutbox::typed(to, &aperak).caused_by(0);
+                // The outbox entry *is* the answer: without it the event log
+                // records the Stornierung as answered while the sender sees
+                // nothing.
+                let outbox = vec![antwort_outbox(data, ablehnung.as_ref()).caused_by(0)];
                 Ok(WorkflowOutput::with_outbox(
-                    vec![GeliGasStornierungEvent::AperakDispatched { positive, reason }],
-                    vec![outbox_entry],
+                    vec![GeliGasStornierungEvent::AntwortGesendet {
+                        response_pid,
+                        ablehnung,
+                    }],
+                    outbox,
                 ))
             }
 
@@ -538,6 +658,7 @@ mod tests {
             sender: MarktpartnerCode::new("4012345000023"),
             receiver: MarktpartnerCode::new("9907317000007"),
             vorgang_id: MaLo::new("STORNO0000A"),
+            document_code: "E01".to_owned(),
             document_date: "20251001000000+00".to_owned(),
             message_ref: MessageRef::new("00001"),
             validation_passed,
@@ -547,6 +668,129 @@ mod tests {
                 vec!["missing DTM".to_owned()]
             },
         }
+    }
+
+    #[test]
+    fn verlauf_states_the_messages() {
+        let output = GeliGasStornierungWorkflow::handle(
+            &GeliGasStornierungState::New,
+            stornierung_cmd(44022, true),
+        )
+        .unwrap();
+        assert_eq!(
+            output.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(44022),
+                message_ref: Some("00001".to_owned()),
+            })
+        );
+        assert_eq!(output.events[1].verlauf(), None, "ValidationPassed");
+        for (ablehnung, expected) in [
+            (None, 44_023),
+            (Some(StornoAblehnung::Doppelmeldung), 44_024),
+        ] {
+            let out = GeliGasStornierungWorkflow::handle(
+                &validated(),
+                GeliGasStornierungCommand::SendAntwort { ablehnung },
+            )
+            .unwrap();
+            assert_eq!(
+                out.events[0].verlauf(),
+                Some(Verlauf {
+                    richtung: Richtung::Ausgang,
+                    pid: Some(expected),
+                    message_ref: None,
+                })
+            );
+        }
+    }
+
+    fn validated() -> GeliGasStornierungState {
+        GeliGasStornierungWorkflow::handle(
+            &GeliGasStornierungState::New,
+            stornierung_cmd(44022, true),
+        )
+        .unwrap()
+        .events
+        .iter()
+        .fold(
+            GeliGasStornierungState::New,
+            GeliGasStornierungWorkflow::apply,
+        )
+    }
+
+    /// A processable 44022 puts nothing on the wire: Gas has no
+    /// Anerkennungsmeldung (APERAK AHB 1.1 § 2.3).
+    #[test]
+    fn a_processable_44022_sends_no_aperak() {
+        let out = GeliGasStornierungWorkflow::handle(
+            &GeliGasStornierungState::New,
+            stornierung_cmd(44022, true),
+        )
+        .unwrap();
+        assert!(out.outbox.is_empty(), "{:?}", out.outbox);
+    }
+
+    /// The Bestätigung is a UTILMD 44023, not an APERAK: UTILMD AHB Gas 1.2
+    /// Kap. 5.2 answers „zurück an den Absender" with `STS+E01` code `E15` from
+    /// Codeliste `G_0004`, `BGM` repeating the 44022's category and `RFF+TN`
+    /// its Vorgangsnummer.
+    #[test]
+    fn a_bestaetigung_queues_utilmd_44023() {
+        let out = GeliGasStornierungWorkflow::handle(
+            &validated(),
+            GeliGasStornierungCommand::SendAntwort { ablehnung: None },
+        )
+        .unwrap();
+        assert_eq!(out.outbox.len(), 1);
+        let entry = &out.outbox[0];
+        assert_eq!(entry.message_type.as_ref(), "UTILMD");
+        assert_eq!(entry.recipient.as_ref(), "4012345000023");
+        let p = &entry.payload;
+        assert_eq!(p["pid"], 44_023);
+        assert_eq!(p["sender"], "9907317000007");
+        assert_eq!(p["receiver"], "4012345000023");
+        assert_eq!(p["document_code"], "E01");
+        assert_eq!(p["transaktionsgrund"], "E05");
+        assert_eq!(p["antwort_code"], "E15");
+        assert_eq!(p["antwort_codeliste"], "G_0004");
+        assert_eq!(p["referenz_vorgangsnummer"], "STORNO0000A");
+    }
+
+    /// The Ablehnung is a UTILMD 44024 with a `G_0003` code — the Gas lists
+    /// run the other way round from Strom's `S_0086`/`S_0087`.
+    #[test]
+    fn an_ablehnung_queues_utilmd_44024() {
+        let out = GeliGasStornierungWorkflow::handle(
+            &validated(),
+            GeliGasStornierungCommand::SendAntwort {
+                ablehnung: Some(StornoAblehnung::Sonstiges {
+                    bemerkung: "Vorgang bereits in Bearbeitung".to_owned(),
+                }),
+            },
+        )
+        .unwrap();
+        let p = &out.outbox[0].payload;
+        assert_eq!(out.outbox[0].message_type.as_ref(), "UTILMD");
+        assert_eq!(p["pid"], 44_024);
+        assert_eq!(p["antwort_code"], "E14");
+        assert_eq!(p["antwort_codeliste"], "G_0003");
+        assert_eq!(p["bemerkung"], "Vorgang bereits in Bearbeitung");
+    }
+
+    /// `E14` without its Erläuterung is refused before the wire.
+    #[test]
+    fn an_e14_without_erlaeuterung_is_refused() {
+        let err = GeliGasStornierungWorkflow::handle(
+            &validated(),
+            GeliGasStornierungCommand::SendAntwort {
+                ablehnung: Some(StornoAblehnung::Sonstiges {
+                    bemerkung: String::new(),
+                }),
+            },
+        );
+        assert!(err.is_err());
     }
 
     #[test]
@@ -597,7 +841,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_positive_aperak_completes_process() {
+    fn a_bestaetigung_completes_the_process() {
         let state = GeliGasStornierungState::New;
         let output =
             GeliGasStornierungWorkflow::handle(&state, stornierung_cmd(44022, true)).unwrap();
@@ -612,10 +856,7 @@ mod tests {
 
         let output = GeliGasStornierungWorkflow::handle(
             &state,
-            GeliGasStornierungCommand::DispatchAperak {
-                positive: true,
-                reason: None,
-            },
+            GeliGasStornierungCommand::SendAntwort { ablehnung: None },
         )
         .unwrap();
         let state = output
@@ -624,12 +865,12 @@ mod tests {
             .fold(state, GeliGasStornierungWorkflow::apply);
         assert!(
             matches!(state, GeliGasStornierungState::Completed(_)),
-            "positive APERAK must complete stornierung; got: {state:?}"
+            "a 44023 must complete the Stornierung; got: {state:?}"
         );
     }
 
     #[test]
-    fn dispatch_negative_aperak_rejects_process() {
+    fn an_ablehnung_rejects_the_process() {
         let state = GeliGasStornierungState::New;
         let output =
             GeliGasStornierungWorkflow::handle(&state, stornierung_cmd(44022, true)).unwrap();
@@ -640,9 +881,8 @@ mod tests {
 
         let output = GeliGasStornierungWorkflow::handle(
             &state,
-            GeliGasStornierungCommand::DispatchAperak {
-                positive: false,
-                reason: Some("Vorgang nicht stornierbar".to_owned()),
+            GeliGasStornierungCommand::SendAntwort {
+                ablehnung: Some(StornoAblehnung::SchonBeantwortet),
             },
         )
         .unwrap();
@@ -696,6 +936,7 @@ mod tests {
             sender: MarktpartnerCode::new("4012345000023"),
             receiver: MarktpartnerCode::new("9907317000007"),
             vorgang_id: MaLo::new("STORNO0000A"),
+            document_code: "E01".to_owned(),
             document_date: "20251001000000+00".to_owned(),
             message_ref: MessageRef::new("00001"),
         };

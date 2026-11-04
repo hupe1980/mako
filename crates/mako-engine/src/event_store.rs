@@ -860,6 +860,7 @@ mod tests {
             event_type: "TestEvent".into(),
             schema_version: 1,
             payload: serde_json::json!({"test": true}),
+            verlauf: None,
         }
     }
 

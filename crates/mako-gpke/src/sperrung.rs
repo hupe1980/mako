@@ -30,6 +30,7 @@
 //!   separate clock from the business answer below.
 //! - **IFTSTA 21039** — Auftragsstatus dispatched by NB after execution (outbound)
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -165,6 +166,39 @@ impl EventPayload for SperrungEvent {
             Self::MsbAntwortErhalten { .. } => "SperrungMsbAntwortErhalten",
             Self::Rejected { .. } => "SperrungRejected",
             Self::DeadlineExpired { .. } => "SperrungDeadlineExpired",
+        }
+    }
+
+    /// The ORDERS, ORDCHG and ORDRSP received are messages. `ValidationPassed`
+    /// is built only beside the APERAK 312 it queues and `Rejected` only
+    /// beside the APERAK 313; `AusfuehrungBestaetigt` queues nothing.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AnweisungErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            }
+            | Self::StornierungErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            }
+            | Self::MsbAntwortErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::ValidationPassed { .. } | Self::Rejected { .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            Self::AusfuehrungBestaetigt { .. } | Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -607,5 +641,70 @@ impl Workflow for GpkeSperrungWorkflow {
                 .into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn receive(validation_passed: bool) -> WorkflowOutput<SperrungEvent> {
+        GpkeSperrungWorkflow::handle(
+            &SperrungState::New,
+            SperrungCommand::ReceiveSperrung {
+                pid: Pruefidentifikator::new(17_115).unwrap(),
+                sender: MarktpartnerCode::new("9900357000004"),
+                receiver: MarktpartnerCode::new("9900000000001"),
+                location_id: MaLo::new("51238696012"),
+                document_date: "20260101".to_owned(),
+                message_ref: MessageRef::new("ORD-1"),
+                validation_passed,
+                validation_errors: if validation_passed {
+                    vec![]
+                } else {
+                    vec!["bad".to_owned()]
+                },
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn verlauf_states_the_inbound_orders_and_both_aperaks() {
+        let aperak = Some(Verlauf {
+            richtung: Richtung::Ausgang,
+            pid: None,
+            message_ref: None,
+        });
+        let out = receive(true);
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(17_115),
+                message_ref: Some("ORD-1".to_owned()),
+            })
+        );
+        assert_eq!(out.outbox.len(), 1, "the APERAK 312");
+        assert_eq!(
+            out.events[1].verlauf(),
+            aperak,
+            "the APERAK 312 queued beside ValidationPassed"
+        );
+        let out = receive(false);
+        assert_eq!(out.outbox.len(), 1, "the APERAK 313");
+        assert_eq!(
+            out.events[1].verlauf(),
+            aperak,
+            "the APERAK 313 queued beside the rejection"
+        );
+        assert_eq!(
+            SperrungEvent::AusfuehrungBestaetigt {
+                durchgefuehrt: true,
+                reason: None,
+            }
+            .verlauf(),
+            None
+        );
     }
 }

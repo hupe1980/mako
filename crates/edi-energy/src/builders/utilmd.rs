@@ -73,6 +73,9 @@ struct UtilmdTransactionSpec {
     /// the party-identification slot states a Marktpartner code that does not
     /// exist.
     named_nads: Vec<(String, Vec<String>, String)>,
+    /// `SG12` segments the typed fields do not cover — each `(tag, data
+    /// elements)`, written after every other `SG12` in the order given.
+    sg12_segmente: Vec<(String, Vec<Vec<String>>)>,
 }
 
 /// An `SG12 NAD` with an address: `NAD+Z04+++Name:::::Z01+Straße+Ort++PLZ+DE`.
@@ -113,6 +116,11 @@ enum Sg8Item {
     },
     /// `RFF+<Qualifier>:<Referenz>`
     Rff { qualifier: String, referenz: String },
+    /// Any segment of the block, as its tag and data elements.
+    Segment {
+        tag: String,
+        elemente: Vec<Vec<String>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -455,9 +463,24 @@ fn emit_sg8_block<W: std::io::Write>(w: &mut Writer<W>, block: &Sg8Block) -> Res
                 qualifier,
                 referenz,
             } => emit_comp!(w, "RFF", [qualifier, referenz]),
+            Sg8Item::Segment { tag, elemente } => write_elements(w, tag, elemente)?,
         }
     }
     Ok(())
+}
+
+/// Write `tag` with its data elements, each a list of components.
+fn write_elements<W: std::io::Write>(
+    w: &mut Writer<W>,
+    tag: &str,
+    elemente: &[Vec<String>],
+) -> Result<(), Error> {
+    let owned: Vec<Vec<&str>> = elemente
+        .iter()
+        .map(|e| e.iter().map(String::as_str).collect())
+        .collect();
+    let slices: Vec<&[&str]> = owned.iter().map(Vec::as_slice).collect();
+    w.write_composites(tag, &slices).map_err(Error::Parse)
 }
 
 /// The rank of every `SEQ` code in the MIG's list of `SG8` places, so blocks
@@ -742,6 +765,9 @@ fn emit_sg12<W: std::io::Write>(
             [nad_q],
             [nad_id, "", super::agency_for(None, nad_id)]
         );
+    }
+    for (tag, elemente) in &tx.sg12_segmente {
+        write_elements(w, tag, elemente)?;
     }
     Ok(())
 }
@@ -1287,6 +1313,17 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
         self
     }
 
+    /// Add an `SG12` segment the typed methods do not cover — `tag` with its
+    /// data elements, each a list of components (`NAD+Z63++++Straße 1+Ort++PLZ+DE`
+    /// is `["Z63"], [""], [""], [""], ["Straße 1"], ["Ort"], [""], ["PLZ"], ["DE"]`).
+    ///
+    /// Written after every typed `SG12` segment, in the order added. Which
+    /// segment goes where is the caller's; the profile's validation checks it.
+    pub fn sg12_segment(mut self, tag: impl Into<String>, elemente: Vec<Vec<String>>) -> Self {
+        self.spec.sg12_segmente.push((tag.into(), elemente));
+        self
+    }
+
     /// Finalize this Vorgang and return to the parent [`UtilmdBuilder`].
     pub fn done(mut self) -> UtilmdBuilder<S, R> {
         self.parent.inner.transactions.push(self.spec);
@@ -1451,6 +1488,20 @@ impl<S, R> Sg8Builder<S, R> {
         self.block.items.push(Sg8Item::Rff {
             qualifier: qualifier.into(),
             referenz: referenz.into(),
+        });
+        self
+    }
+
+    /// Any segment of the block — `tag` with its data elements, each a list of
+    /// components (`PIA+5+9991000002082:SRW` is `["5"], ["9991000002082", "SRW"]`).
+    ///
+    /// For the Stammdaten a Vorgang carries whole, such as the answer to a
+    /// Geschäftsdatenanfrage: written in the order added, and the profile's
+    /// validation checks the result.
+    pub fn segment(mut self, tag: impl Into<String>, elemente: Vec<Vec<String>>) -> Self {
+        self.block.items.push(Sg8Item::Segment {
+            tag: tag.into(),
+            elemente,
         });
         self
     }

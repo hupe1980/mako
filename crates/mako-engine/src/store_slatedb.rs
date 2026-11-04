@@ -2885,6 +2885,7 @@ mod tests {
             event_type: format!("TestEvent{seq_hint}").into(),
             schema_version: 1,
             payload: serde_json::json!({ "n": seq_hint }),
+            verlauf: None,
         }
     }
 

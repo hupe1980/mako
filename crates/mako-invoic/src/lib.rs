@@ -56,6 +56,7 @@ use rust_decimal::RoundingStrategy;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     envelope::EventEnvelope,
@@ -394,10 +395,20 @@ pub enum InvoicEvent {
         /// Invoice reference, so a consumer need not re-read the receive event.
         invoice_ref: MessageRef,
     },
-    /// The invoice was accepted and settled.
-    InvoiceSettled,
-    /// The invoice was disputed.
+    /// The invoice was accepted and settled — the REMADV Zahlungsavis went
+    /// out.
+    InvoiceSettled {
+        /// The Prüfidentifikator the queued REMADV carries (33001).
+        pid: u32,
+        /// Belegnummer of the queued REMADV.
+        message_ref: MessageRef,
+    },
+    /// The invoice was disputed — the REMADV Nicht-Zahlungsavis went out.
     InvoiceDisputed {
+        /// The Prüfidentifikator the queued REMADV carries (33002–33004).
+        pid: u32,
+        /// Belegnummer of the queued REMADV.
+        message_ref: MessageRef,
         /// Human-readable dispute reason.
         reason: String,
     },
@@ -449,13 +460,61 @@ impl EventPayload for InvoicEvent {
         match self {
             Self::InvoicReceived { .. } => "InvoicReceived",
             Self::ValidationPassed { .. } => "InvoicValidationPassed",
-            Self::InvoiceSettled => "InvoiceSettled",
+            Self::InvoiceSettled { .. } => "InvoiceSettled",
             Self::InvoiceDisputed { .. } => "InvoiceDisputed",
             Self::Rejected { .. } => "InvoicRejected",
             Self::DeadlineExpired { .. } => "InvoicDeadlineExpired",
             Self::InvoicSent { .. } => "InvoicSent",
             Self::RemadvReceived { .. } => "RemadvReceived",
             Self::ComdisAbLehnungReceived { .. } => "ComdisAblehnungReceived",
+        }
+    }
+
+    /// `InvoiceSettled` and `InvoiceDisputed` are the outbound REMADV the
+    /// handler queues beside them.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::InvoicReceived {
+                invoice_ref,
+                pruefidentifikator,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(invoice_ref.as_str().to_owned()),
+            }),
+            Self::InvoicSent {
+                pruefidentifikator,
+                invoice_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(invoice_ref.as_str().to_owned()),
+            }),
+            Self::RemadvReceived {
+                pid, remadv_ref, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pid.as_u32()),
+                message_ref: Some(remadv_ref.as_str().to_owned()),
+            }),
+            Self::ComdisAbLehnungReceived { comdis_ref } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: None,
+                message_ref: Some(comdis_ref.as_str().to_owned()),
+            }),
+            Self::InvoiceSettled { pid, message_ref }
+            | Self::InvoiceDisputed {
+                pid, message_ref, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(*pid),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::ValidationPassed { .. }
+            | Self::Rejected { .. }
+            | Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -628,7 +687,7 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                 other => other,
             },
 
-            InvoicEvent::InvoiceSettled => match state {
+            InvoicEvent::InvoiceSettled { .. } => match state {
                 // The **second round**. WiM Teil 2 Kap. 4.5.2 Nr. 4 has the
                 // payer answer again after the issuer's COMDIS, and this time
                 // conceding: the invoice stands and is paid.
@@ -637,7 +696,7 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                 other => other,
             },
 
-            InvoicEvent::InvoiceDisputed { reason } => match state {
+            InvoicEvent::InvoiceDisputed { reason, .. } => match state {
                 // The second round, refusing again — `E_0266` `A25`, „der MSB
                 // konnte nicht alle Einwände entkräften". A third round is not
                 // published: „kommt es zu einer erneuten Ablehnung durch den
@@ -802,12 +861,16 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                         state.label(),
                     ));
                 }
+                let outbox = vec![
+                    remadv_outbox(state, ZAHLUNGSAVIS_PID, &message_ref, None, None),
+                    completion_outbox::<F>(state, "settled", None),
+                ];
                 Ok(WorkflowOutput::with_outbox(
-                    vec![InvoicEvent::InvoiceSettled],
-                    vec![
-                        remadv_outbox(state, ZAHLUNGSAVIS_PID, &message_ref, None, None),
-                        completion_outbox::<F>(state, "settled", None),
-                    ],
+                    vec![InvoicEvent::InvoiceSettled {
+                        pid: ZAHLUNGSAVIS_PID,
+                        message_ref,
+                    }],
+                    outbox,
                 ))
             }
 
@@ -834,7 +897,11 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                     completion_outbox::<F>(state, "disputed", Some(&reason)),
                 ];
                 Ok(WorkflowOutput::with_outbox(
-                    vec![InvoicEvent::InvoiceDisputed { reason }],
+                    vec![InvoicEvent::InvoiceDisputed {
+                        pid,
+                        message_ref,
+                        reason,
+                    }],
                     outbox,
                 ))
             }
@@ -1142,7 +1209,7 @@ impl Projection for InvoicProjection {
                 record.pruefidentifikator = Some(pruefidentifikator);
             }
             InvoicEvent::ValidationPassed { .. } => record.status = "ValidationPassed",
-            InvoicEvent::InvoiceSettled => record.status = "Settled",
+            InvoicEvent::InvoiceSettled { .. } => record.status = "Settled",
             InvoicEvent::InvoiceDisputed { .. } => record.status = "Disputed",
             InvoicEvent::Rejected { .. } => record.status = "Rejected",
             InvoicEvent::DeadlineExpired { .. } => record.status = "FristAbgelaufen",
@@ -1169,5 +1236,75 @@ impl Projection for InvoicProjection {
         } else {
             Some(self.last_seq)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verlauf_states_the_messages_and_nothing_else() {
+        assert_eq!(
+            InvoicEvent::RemadvReceived {
+                pid: Pruefidentifikator::const_new(33001),
+                remadv_ref: MessageRef::new("REM-1"),
+                sender: MarktpartnerCode::new("9900987654321"),
+                is_confirmed: true,
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(33001),
+                message_ref: Some("REM-1".to_owned()),
+            })
+        );
+        assert_eq!(
+            InvoicEvent::InvoicSent {
+                pruefidentifikator: Pruefidentifikator::const_new(31009),
+                sender: MarktpartnerCode::new("9900123456789"),
+                recipient: MarktpartnerCode::new("9900987654321"),
+                document_date: "20261101".to_owned(),
+                invoice_ref: MessageRef::new("INV-1"),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(31009),
+                message_ref: Some("INV-1".to_owned()),
+            })
+        );
+        assert_eq!(
+            InvoicEvent::InvoiceSettled {
+                pid: ZAHLUNGSAVIS_PID,
+                message_ref: MessageRef::new("RA-1"),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(33001),
+                message_ref: Some("RA-1".to_owned()),
+            })
+        );
+        assert_eq!(
+            InvoicEvent::InvoiceDisputed {
+                pid: 33002,
+                message_ref: MessageRef::new("RA-2"),
+                reason: "x".to_owned(),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(33002),
+                message_ref: Some("RA-2".to_owned()),
+            })
+        );
+        assert_eq!(
+            InvoicEvent::ValidationPassed {
+                invoice_ref: MessageRef::new("INV-1"),
+            }
+            .verlauf(),
+            None
+        );
     }
 }

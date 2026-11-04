@@ -65,6 +65,7 @@
 //!                      └─ (no defect found)   ─→ Erfasst          (terminal)
 //! ```
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     outbox::PendingOutbox,
@@ -244,6 +245,30 @@ impl EventPayload for ProfilEvent {
             Self::Erfasst { .. } => "MabisProfileErfasst",
             Self::ReklamationGesendet { .. } => "MabisProfilReklamationGesendet",
             Self::ValidationFailed { .. } => "MabisProfilValidationFailed",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::ProfileErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::ReklamationGesendet {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::Erfasst { .. } | Self::ValidationFailed { .. } => None,
         }
     }
 }
@@ -566,6 +591,30 @@ mod tests {
         events
             .iter()
             .fold(ProfilState::default(), MabisProfilWorkflow::apply)
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_nothing_else() {
+        assert_eq!(
+            ProfilEvent::ReklamationGesendet {
+                pruefidentifikator: Pruefidentifikator::const_new(17211),
+                maengel: "x".to_owned(),
+                message_ref: MessageRef::new("ORDERS-1"),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(17211),
+                message_ref: Some("ORDERS-1".to_owned()),
+            })
+        );
+        assert_eq!(
+            ProfilEvent::Erfasst {
+                message_ref: MessageRef::new("MSCONS-1"),
+            }
+            .verlauf(),
+            None
+        );
     }
 
     #[test]

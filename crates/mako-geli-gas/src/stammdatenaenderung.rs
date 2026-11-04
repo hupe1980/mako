@@ -40,6 +40,7 @@
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
+    envelope::{Richtung, Verlauf},
     error::WorkflowError,
     ids::DeadlineId,
     outbox::PendingOutbox,
@@ -305,6 +306,52 @@ impl EventPayload for GasStammdatenEvent {
             Self::AnfrageBeantwortet { .. } => "GasStammdatenAnfrageBeantwortet",
             Self::Rejected { .. } => "GasStammdatenRejected",
             Self::DeadlineExpired { .. } => "GasStammdatenDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AenderungErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AntwortGesendet { response_pid, .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: None,
+            }),
+            Self::AenderungGesendet {
+                pruefidentifikator, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: None,
+            }),
+            Self::AntwortErhalten { response_pid, .. } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: None,
+            }),
+            // `handle` queues the data-return UTILMD with this event; the
+            // message it states is that outbound Antwort.
+            Self::AnfrageBeantwortet { antwort_pid, .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(antwort_pid.as_u32()),
+                message_ref: None,
+            }),
+            Self::ValidationPassed { .. } | Self::DeadlineExpired { .. } => None,
+            // Emitted only beside the APERAK 313 Verarbeitbarkeitsfehlermeldung
+            // `handle` queues for it; an APERAK carries no Prüfidentifikator.
+            Self::Rejected { .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
         }
     }
 }
@@ -973,6 +1020,65 @@ mod tests {
     }
     fn now() -> time::OffsetDateTime {
         time::macros::datetime!(2026-07-01 10:00:00 UTC)
+    }
+
+    #[test]
+    fn verlauf_states_the_messages() {
+        let aenderung = GasStammdatenEvent::AenderungErhalten {
+            location_id: malo("51238696012"),
+            sender: mcod("9800357000004"),
+            receiver: mcod("9800357000011"),
+            pruefidentifikator: pid(44112),
+            bilanzierungsrelevant: false,
+            aenderungsdatum: "20260801".to_owned(),
+            patch: serde_json::json!({}),
+            message_ref: mref("GSD-001"),
+        };
+        assert_eq!(
+            aenderung.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(44112),
+                message_ref: Some("GSD-001".to_owned()),
+            })
+        );
+        let antwort = GasStammdatenEvent::AntwortGesendet {
+            response_pid: pid(44115),
+            antwort: GasAntwort::Zustimmung,
+        };
+        assert_eq!(
+            antwort.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(44115),
+                message_ref: None,
+            })
+        );
+        let data_return = GasStammdatenEvent::AnfrageBeantwortet {
+            location_id: malo("51238696012"),
+            anfrage_pid: pid(44139),
+            antwort_pid: pid(44142),
+        };
+        assert_eq!(
+            data_return.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(44142),
+                message_ref: None,
+            })
+        );
+        // The APERAK 313 queued beside the rejection.
+        let rejected = GasStammdatenEvent::Rejected {
+            reason: "x".to_owned(),
+        };
+        assert_eq!(
+            rejected.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            })
+        );
     }
 
     fn receive_cmd(aenderung_pid: u32, datum: &str, ok: bool) -> GasStammdatenCommand {

@@ -35,6 +35,7 @@
 //! downstream billing and reconciliation. No explicit application-level APERAK is
 //! required for MSCONS in GPKE Teil 2/4.
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -132,6 +133,24 @@ impl EventPayload for MesswerteLieferungEvent {
             Self::MsconsDatenErhalten { .. } => "MesswerteLieferungErhalten",
             Self::ValidationPassed { .. } => "MesswerteLieferungValidationPassed",
             Self::ValidationFailed { .. } => "MesswerteLieferungValidationFailed",
+        }
+    }
+
+    /// The inbound MSCONS is the one market message. `ValidationPassed` queues
+    /// the `ProcessCompleted` ERP notification, not a market message, and
+    /// `ValidationFailed` queues nothing.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::MsconsDatenErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::ValidationPassed { .. } | Self::ValidationFailed { .. } => None,
         }
     }
 }
@@ -369,5 +388,45 @@ impl Workflow for GpkeMesswerteLieferungWorkflow {
                 Ok(WorkflowOutput::with_outbox(events, outbox))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verlauf_states_the_inbound_mscons() {
+        let erhalten = MesswerteLieferungEvent::MsconsDatenErhalten {
+            pruefidentifikator: Pruefidentifikator::new(13_025).unwrap(),
+            sender: MarktpartnerCode::new("9900357000004"),
+            location_id: MaLo::new("51238696012"),
+            document_date: "20260101".to_owned(),
+            reads: vec![],
+            message_ref: MessageRef::new("MSC-1"),
+        };
+        assert_eq!(
+            erhalten.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(13_025),
+                message_ref: Some("MSC-1".to_owned()),
+            })
+        );
+        assert_eq!(
+            MesswerteLieferungEvent::ValidationPassed {
+                message_ref: MessageRef::new("MSC-1"),
+            }
+            .verlauf(),
+            None
+        );
+        assert_eq!(
+            MesswerteLieferungEvent::ValidationFailed {
+                reason: "x".to_owned(),
+            }
+            .verlauf(),
+            None,
+            "a failed validation queues no APERAK here"
+        );
     }
 }

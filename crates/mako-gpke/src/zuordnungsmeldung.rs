@@ -62,6 +62,7 @@
 //! - **UTILMD AHB Strom 2.1 / 2.2** Kap. 8.11
 //! - **APERAK AHB 1.1 § 2.4.1** — 45 Minuten (Sonntag 12:00 on a Saturday), a separate clock
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -333,6 +334,28 @@ impl EventPayload for ZuordnungsmeldungEvent {
         match self {
             Self::Gesendet { .. } => "ZuordnungsmeldungGesendet",
             Self::Empfangen { .. } => "ZuordnungsmeldungEmpfangen",
+        }
+    }
+
+    /// Both variants are the Meldung itself, sent or received.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::Gesendet {
+                pruefidentifikator, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: None,
+            }),
+            Self::Empfangen {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
         }
     }
 }
@@ -973,6 +996,37 @@ mod tests {
         assert!(
             !kinds.contains(&"UTILMD"),
             "a Meldung has no Antwortnachricht"
+        );
+    }
+
+    #[test]
+    fn verlauf_states_the_sent_and_the_received_meldung() {
+        let out = run(senden(Zuordnungsmeldung::Beendigung));
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(BEENDIGUNG_PID),
+                message_ref: None,
+            })
+        );
+        let out = run(ZuordnungsmeldungCommand::Empfangen {
+            pid: Pruefidentifikator::new(BEENDIGUNG_PID).expect("valid"),
+            sender: mp("9900357000004"),
+            receiver: mp("9900123456789"),
+            location_id: malo(),
+            transaktionsgrund: grund::BEENDIGUNG_ZUORDNUNG.to_owned(),
+            message_ref: MessageRef::new("MSG-1".to_owned()),
+            validation_passed: true,
+            validation_errors: vec![],
+        });
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(BEENDIGUNG_PID),
+                message_ref: Some("MSG-1".to_owned()),
+            })
         );
     }
 

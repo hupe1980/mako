@@ -54,6 +54,7 @@
 //!   which GPKE Teil 2 states as a wall-clock instant on the 1. Werktag nach
 //!   dem ÜT.
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
@@ -164,6 +165,8 @@ pub enum BeendigungZuordnungEvent {
     /// **NB side.** The Anfrage zur Beendigung der Zuordnung (55010) was
     /// rendered and queued for the LFA.
     AnfrageGesendet {
+        /// The Prüfidentifikator the queued UTILMD carries (55010).
+        pid: u32,
         /// Marktlokation or Tranche the Anfrage is about.
         location_id: MaLo,
         /// The NB.
@@ -210,6 +213,48 @@ impl EventPayload for BeendigungZuordnungEvent {
             Self::DeadlineExpired { .. } => "BeendigungZuordnungDeadlineExpired",
             Self::AnfrageGesendet { .. } => "BeendigungZuordnungAnfrageGesendet",
             Self::LfaAntwortErhalten { .. } => "BeendigungZuordnungLfaAntwortErhalten",
+        }
+    }
+
+    /// A `LfaAntwortErhalten` without a `response_pid` is the lapsed window
+    /// the Festlegung answers for the LFA — no message arrived, so it states
+    /// none.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AnfrageErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AntwortGesendet { response_pid, .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: None,
+            }),
+            Self::AnfrageGesendet { pid, .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(*pid),
+                message_ref: None,
+            }),
+            Self::LfaAntwortErhalten { response_pid, .. } => response_pid.map(|p| Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(p.as_u32()),
+                message_ref: None,
+            }),
+            Self::Beendet | Self::DeadlineExpired { .. } => None,
+            // `ValidationPassed` is emitted only beside the APERAK 312
+            // Anerkennungsmeldung `handle` queues for it, `Rejected` only beside
+            // the APERAK 313 Verarbeitbarkeitsfehlermeldung; an APERAK carries
+            // no Prüfidentifikator.
+            Self::ValidationPassed { .. } | Self::Rejected { .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
         }
     }
 }
@@ -558,6 +603,7 @@ impl Workflow for GpkeBeendigungZuordnungWorkflow {
                 process_date,
                 vorgangsnummer,
                 anmeldung_process_id,
+                ..
             } => BeendigungZuordnungState::AnfrageGesendet {
                 data: BeendigungZuordnungData {
                     location_id: location_id.clone(),
@@ -792,6 +838,7 @@ impl Workflow for GpkeBeendigungZuordnungWorkflow {
                 let outbox = vec![PendingOutbox::new("UTILMD", receiver.as_str(), payload)];
                 Ok(WorkflowOutput::with_outbox(
                     vec![BeendigungZuordnungEvent::AnfrageGesendet {
+                        pid: ANFRAGE_PID,
                         location_id,
                         sender,
                         receiver,
@@ -988,6 +1035,92 @@ mod tests {
         events
             .iter()
             .fold(init, GpkeBeendigungZuordnungWorkflow::apply)
+    }
+
+    #[test]
+    fn verlauf_states_each_side_and_not_the_lapsed_window() {
+        assert_eq!(
+            BeendigungZuordnungEvent::Rejected {
+                reason: "x".to_owned(),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            "the APERAK 313 queued beside the rejection"
+        );
+        let out = GpkeBeendigungZuordnungWorkflow::handle(
+            &BeendigungZuordnungState::New,
+            anfrage_cmd(true),
+        )
+        .unwrap();
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(55_010),
+                message_ref: Some("BEEND-001".to_owned()),
+            })
+        );
+        assert_eq!(
+            out.events[1].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            "the APERAK 312 queued beside ValidationPassed"
+        );
+        assert!(
+            out.outbox
+                .iter()
+                .any(|o| &*o.message_type == "APERAK" && o.caused_by_event_index == 1),
+            "the APERAK 312 is caused by ValidationPassed"
+        );
+        let antwort = BeendigungZuordnungEvent::LfaAntwortErhalten {
+            response_pid: Some(pid(55_012)),
+            antwortcode: Some("A01".to_owned()),
+            zustimmung: false,
+            grund: None,
+            zuordnungsende: None,
+            fristablauf: false,
+        };
+        assert_eq!(
+            antwort.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(55_012),
+                message_ref: None,
+            })
+        );
+        let lapsed = BeendigungZuordnungEvent::LfaAntwortErhalten {
+            response_pid: None,
+            antwortcode: None,
+            zustimmung: true,
+            grund: None,
+            zuordnungsende: None,
+            fristablauf: true,
+        };
+        assert_eq!(lapsed.verlauf(), None, "silence is no message");
+        let anfrage = BeendigungZuordnungEvent::AnfrageGesendet {
+            pid: 55010,
+            location_id: malo("51238696012"),
+            sender: mcod("9900357000004"),
+            receiver: mcod("4012345000023"),
+            process_date: "20260101".to_owned(),
+            vorgangsnummer: "V1".to_owned(),
+            anmeldung_process_id: "p".to_owned(),
+        };
+        assert_eq!(
+            anfrage.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(55010),
+                message_ref: None,
+            })
+        );
     }
 
     #[test]

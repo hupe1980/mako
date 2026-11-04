@@ -20,6 +20,7 @@
 //! A separate workflow struct per process is defined below so that workflow
 //! names, BDEW references, and deadline labels remain distinct.
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     deadline::Deadline,
     error::WorkflowError,
@@ -184,6 +185,29 @@ impl EventPayload for AckForwardEvent {
             Self::DeadlineExpired { .. } => "AckForwardDeadlineExpired",
         }
     }
+
+    /// Redispatch 2.0 documents are XML and carry no Prüfidentifikator; the
+    /// document's MRID is its reference.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::Received { mrid, .. } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: None,
+                message_ref: Some(mrid.clone()),
+            }),
+            Self::Acknowledged { ack_mrid } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: Some(ack_mrid.clone()),
+            }),
+            Self::Forwarded { upstream_mrid } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: Some(upstream_mrid.clone()),
+            }),
+            Self::DeadlineExpired { .. } => None,
+        }
+    }
 }
 
 // ── Per-workflow event newtypes ────────────────────────────────────────────────
@@ -231,6 +255,10 @@ macro_rules! define_workflow_event {
                         concat!($prefix, "DeadlineExpired")
                     }
                 }
+            }
+
+            fn verlauf(&self) -> Option<Verlauf> {
+                self.0.verlauf()
             }
         }
     };
@@ -563,6 +591,45 @@ pub mod kostenblatt {
 mod tests {
     use super::*;
     use mako_engine::workflow::EventPayload;
+
+    #[test]
+    fn verlauf_states_the_messages_and_nothing_else() {
+        let received = AckForwardEvent::Received {
+            mrid: "m1".into(),
+            doc_type: "Unavailability".into(),
+            sender: "s".into(),
+            receiver: "r".into(),
+            received_at: "2025-10-15T10:00:00Z".into(),
+        };
+        let eingang = Some(Verlauf {
+            richtung: Richtung::Eingang,
+            pid: None,
+            message_ref: Some("m1".to_owned()),
+        });
+        assert_eq!(received.verlauf(), eingang);
+        // The workflows store the per-family newtype, so it must state the
+        // same thread as the event it wraps.
+        assert_eq!(KaskadeEvent(received).verlauf(), eingang);
+        assert_eq!(
+            AckForwardEvent::Acknowledged {
+                ack_mrid: "a1".into(),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: Some("a1".to_owned()),
+            })
+        );
+        assert_eq!(
+            AckForwardEvent::DeadlineExpired {
+                deadline_id: DeadlineId::new(),
+                label: "x".into(),
+            }
+            .verlauf(),
+            None
+        );
+    }
 
     #[test]
     fn verfuegbarkeit_receive_to_acknowledged() {

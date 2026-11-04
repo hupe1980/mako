@@ -45,6 +45,7 @@ pub mod headers;
 pub mod health;
 pub mod http;
 pub mod json;
+pub mod mcp_snapshot;
 pub mod outbox;
 pub mod policy;
 pub mod schema_check;

@@ -1051,12 +1051,14 @@ pub const WIM: &[AntwortObligation] = &[
     AntwortObligation {
         trigger_pid: 17_132,
         name: "Geschäftsdatenanfrage (Anfrage Stammdaten Strom)",
-        answered_by: "NB · MSB",
-        antwort_pids: (17_133, 19_132),
+        answered_by: "NB",
+        // UTILMD 55035 to a LF (55095 for an erz. MaLo, 55060 to a MSB) or the
+        // ORDRSP 19101 — Anwendungsübersicht 4.0 lfd. Nr. 25590–25640 (S. 55).
+        antwort_pids: (55_035, 19_101),
         ebd: None,
         frist: FristShape::EndOfWerktag(GESCHAEFTSDATENANFRAGE_WERKTAGE),
         family: Family::Gpke,
-        source: "GPKE Teil 4 § 3.2 Nr. 2 — spätester ÜZ ist 1 WT nach dem ÜZ der Anfrage",
+        source: "GPKE Teil 4 Kap. 3.2 Nr. 2 — spätester ÜZ ist 1 WT nach dem ÜZ der Anfrage",
     },
     AntwortObligation {
         trigger_pid: 35_005,

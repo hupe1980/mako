@@ -64,6 +64,7 @@
 //! *`ActivationDocument`* FB 1.1f and *`AcknowledgementDocument`* FB 1.0g for the
 //! wire format and the acknowledgement Frist.
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     deadline::Deadline,
     error::WorkflowError,
@@ -349,6 +350,40 @@ impl EventPayload for AktivierungEvent {
             Self::MarketMessageReceived { .. } => "AktivierungMarketMessageReceived",
             Self::IftstaReceived { .. } => "AktivierungIftstaReceived",
             Self::DeadlineExpired { .. } => "AktivierungDeadlineExpired",
+        }
+    }
+
+    /// The XML documents carry no Prüfidentifikator and are referenced by
+    /// MRID; only the EDIFACT variants state a `pid`.
+    fn verlauf(&self) -> Option<Verlauf> {
+        let xml = |richtung, mrid: &str| {
+            Some(Verlauf {
+                richtung,
+                pid: None,
+                message_ref: Some(mrid.to_owned()),
+            })
+        };
+        match self {
+            Self::AcoReceived { mrid, .. } => xml(Richtung::Eingang, mrid),
+            Self::AcoCascaded { child_mrid, .. } => xml(Richtung::Ausgang, child_mrid),
+            Self::AcrSent { acr_mrid, .. } => xml(Richtung::Ausgang, acr_mrid),
+            Self::AarSent { aar_mrid, .. } => xml(Richtung::Ausgang, aar_mrid),
+            Self::AnbResponseReceived { response_mrid, .. } => {
+                xml(Richtung::Eingang, response_mrid)
+            }
+            Self::ResponseForwarded { upstream_mrid, .. } => xml(Richtung::Ausgang, upstream_mrid),
+            Self::AckReceived { ack_mrid, .. } => xml(Richtung::Eingang, ack_mrid),
+            Self::MarketMessageReceived {
+                pid, message_ref, ..
+            }
+            | Self::IftstaReceived {
+                pid, message_ref, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(*pid),
+                message_ref: Some(message_ref.clone()),
+            }),
+            Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -943,6 +978,44 @@ mod tests {
             receiver: "4012345000002".into(),
             received_at: "2025-10-15T09:58:00Z".into(),
         }
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_nothing_else() {
+        assert_eq!(
+            AktivierungEvent::IftstaReceived {
+                pid: 21037,
+                sender: "s".into(),
+                receiver: "r".into(),
+                message_ref: "IFTSTA-1".into(),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(21037),
+                message_ref: Some("IFTSTA-1".to_owned()),
+            })
+        );
+        assert_eq!(
+            AktivierungEvent::AcrSent {
+                acr_mrid: "acr-1".into(),
+                activated_mw: 1.0,
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: Some("acr-1".to_owned()),
+            })
+        );
+        assert_eq!(
+            AktivierungEvent::DeadlineExpired {
+                deadline_id: DeadlineId::new(),
+                label: "x".into(),
+            }
+            .verlauf(),
+            None
+        );
     }
 
     #[test]

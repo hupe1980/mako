@@ -51,6 +51,7 @@
 //! - EDI@Energy Anwendungsübersicht der Prüfidentifikatoren 4.0, Lfd. Nr.
 //!   19000 / 19010 / 19020 / 19030 / 19050 / 19060
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     deadline::Deadline,
     error::WorkflowError,
@@ -385,6 +386,35 @@ impl EventPayload for ModellwechselEvent {
             Self::AntwortErhalten { .. } => "EmobAntwortErhalten",
             Self::FristAbgelaufen { .. } => "EmobFristAbgelaufen",
             Self::Abgewiesen { .. } => "EmobAbgewiesen",
+        }
+    }
+
+    /// The request carries its own Prüfidentifikator; the answer variants
+    /// carry none, so their `pid` stays `None` rather than being derived from
+    /// the leg.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AnfrageGesendet { data } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(data.pruefidentifikator.as_u32()),
+                message_ref: None,
+            }),
+            Self::AnfrageErhalten { data, message_ref } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(data.pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AntwortGesendet { .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            Self::AntwortErhalten { .. } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: None,
+                message_ref: None,
+            }),
+            Self::FristAbgelaufen { .. } | Self::Abgewiesen { .. } => None,
         }
     }
 }
@@ -812,6 +842,51 @@ mod tests {
         )
         .expect("accepted");
         out.events.iter().fold(ModellwechselState::New, apply)
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_nothing_else() {
+        assert_eq!(
+            ModellwechselEvent::AnfrageErhalten {
+                data: Box::new(daten(55238)),
+                message_ref: MessageRef::new("MSG1"),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(55238),
+                message_ref: Some("MSG1".to_owned()),
+            })
+        );
+        assert_eq!(
+            ModellwechselEvent::AnfrageGesendet {
+                data: Box::new(daten(55242)),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(55242),
+                message_ref: None,
+            })
+        );
+        assert_eq!(
+            ModellwechselEvent::AntwortGesendet {
+                antwort: Box::new(EmobAntwort::zustimmung("A01", "E_0511")),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            })
+        );
+        assert_eq!(
+            ModellwechselEvent::FristAbgelaufen {
+                label: ANMELDUNG_WINDOW_LABEL.to_owned(),
+            }
+            .verlauf(),
+            None
+        );
     }
 
     #[test]

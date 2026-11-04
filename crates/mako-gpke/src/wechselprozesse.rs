@@ -80,6 +80,7 @@
 
 use std::collections::HashMap;
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
@@ -281,6 +282,44 @@ impl EventPayload for SupplierChangeEvent {
             Self::Rejected { .. } => "SupplierChangeRejected",
             Self::DeadlineExpired { .. } => "SupplierChangeDeadlineExpired",
             Self::VollzugsmeldungReceived { .. } => "SupplierChangeVollzugsmeldungReceived",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::Initiated {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            // `handle` queues the UTILMD answer only when `response_pid_for`
+            // names one; without a PID nothing was sent.
+            Self::AntwortGesendet { response_pid, .. } => response_pid.map(|pid| Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pid.as_u32()),
+                message_ref: None,
+            }),
+            Self::VollzugsmeldungReceived {
+                pid, message_ref, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::Activated | Self::DeadlineExpired { .. } => None,
+            // `ValidationPassed` is emitted only beside the APERAK 312
+            // Anerkennungsmeldung `handle` queues for it, `Rejected` only beside
+            // the APERAK 313 Verarbeitbarkeitsfehlermeldung; an APERAK carries
+            // no Prüfidentifikator.
+            Self::ValidationPassed { .. } | Self::Rejected { .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
         }
     }
     // schema_version defaults to 1; increment and add an upcast arm on next
@@ -1374,5 +1413,60 @@ impl Projection for SupplierChangeProjection {
         } else {
             Some(self.last_seq)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verlauf_states_the_aperak_queued_beside_a_rejection() {
+        assert_eq!(
+            SupplierChangeEvent::Rejected {
+                reason: "x".to_owned(),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            })
+        );
+        assert_eq!(
+            SupplierChangeEvent::ValidationPassed {
+                message_ref: MessageRef::new("REF-1"),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            "the APERAK 312 queued beside ValidationPassed"
+        );
+    }
+
+    #[test]
+    fn verlauf_states_no_answer_where_none_was_queued() {
+        let sent = SupplierChangeEvent::AntwortGesendet {
+            response_pid: Some(Pruefidentifikator::new(55_002).unwrap()),
+            accepted: true,
+            reason: None,
+        };
+        assert_eq!(
+            sent.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(55_002),
+                message_ref: None,
+            })
+        );
+        let unsent = SupplierChangeEvent::AntwortGesendet {
+            response_pid: None,
+            accepted: true,
+            reason: None,
+        };
+        assert_eq!(unsent.verlauf(), None, "no PID, no UTILMD queued");
     }
 }

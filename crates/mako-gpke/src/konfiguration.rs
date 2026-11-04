@@ -51,7 +51,7 @@
 use std::collections::HashMap;
 
 use mako_engine::{
-    envelope::EventEnvelope,
+    envelope::{EventEnvelope, Richtung, Verlauf},
     error::WorkflowError,
     ids::DeadlineId,
     outbox::PendingOutbox,
@@ -141,6 +141,34 @@ impl EventPayload for KonfigurationEvent {
             Self::BestaetigungErhalten { .. } => "KonfigurationBestaetigungErhalten",
             Self::AblehungErhalten { .. } => "KonfigurationAblehungErhalten",
             Self::DeadlineExpired { .. } => "KonfigurationDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::BeauftragungGesendet {
+                orders_pid,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(orders_pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::BestaetigungErhalten {
+                response_pid,
+                message_ref,
+            }
+            | Self::AblehungErhalten {
+                response_pid,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -529,5 +557,51 @@ impl Projection for KonfigurationProjection {
         } else {
             Some(self.last_seq)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pid(code: u32) -> Pruefidentifikator {
+        Pruefidentifikator::new(code).expect("valid PID")
+    }
+
+    #[test]
+    fn verlauf_states_orders_out_and_ordrsp_in() {
+        let gesendet = KonfigurationEvent::BeauftragungGesendet {
+            orders_pid: pid(17_134),
+            msb_mp_id: MarktpartnerCode::new("9900357000004"),
+            malo: MaLo::new("51238696012"),
+            new_supplier: MarktpartnerCode::new("9900357000011"),
+            message_ref: MessageRef::new("ORD-1"),
+        };
+        assert_eq!(
+            gesendet.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(17_134),
+                message_ref: Some("ORD-1".to_owned()),
+            })
+        );
+        let abgelehnt = KonfigurationEvent::AblehungErhalten {
+            response_pid: pid(19_002),
+            reason: "x".to_owned(),
+            message_ref: MessageRef::new("RSP-1"),
+        };
+        assert_eq!(
+            abgelehnt.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(19_002),
+                message_ref: Some("RSP-1".to_owned()),
+            })
+        );
+        let expired = KonfigurationEvent::DeadlineExpired {
+            deadline_id: DeadlineId::new(),
+            label: "x".into(),
+        };
+        assert_eq!(expired.verlauf(), None);
     }
 }

@@ -77,6 +77,7 @@
 //! - **UTILMD AHB Strom S2.1/S2.2 Kap. 8.6**, **EBD E_0615**
 //! - **APERAK AHB 1.1 §2.4.1** — Strom UTILMD 45-min APERAK Frist
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
@@ -316,6 +317,50 @@ impl EventPayload for EogEvent {
             Self::AntwortGesendet { .. } => "EogAntwortGesendet",
             Self::Rejected { .. } => "EogRejected",
             Self::DeadlineExpired { .. } => "EogDeadlineExpired",
+        }
+    }
+
+    /// Both perspectives: the NB sends the 55013 (`Angemeldet`) and takes the
+    /// answer back (`AntwortErhalten`); the E/G receives the 55013
+    /// (`AnmeldungErhalten`) and answers it (`AntwortGesendet`).
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::Angemeldet {
+                pruefidentifikator, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: None,
+            }),
+            Self::AntwortErhalten { response_pid, .. } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: None,
+            }),
+            Self::AnmeldungErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AntwortGesendet { response_pid, .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: None,
+            }),
+            Self::ZugeordnetOhneAntwort { .. } | Self::DeadlineExpired { .. } => None,
+            // `ValidationPassed` is emitted only beside the APERAK 312
+            // Anerkennungsmeldung `handle` queues for it, `Rejected` only beside
+            // the APERAK 313 Verarbeitbarkeitsfehlermeldung; an APERAK carries
+            // no Prüfidentifikator.
+            Self::ValidationPassed { .. } | Self::Rejected { .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
         }
     }
 }
@@ -1119,6 +1164,68 @@ mod tests {
     }
 
     // ── NB initiator ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn verlauf_states_both_perspectives() {
+        assert_eq!(
+            EogEvent::Rejected {
+                reason: "x".to_owned(),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            "the APERAK 313 queued beside the rejection"
+        );
+        let out = GpkeEogWorkflow::handle(&EogState::New, anmelden_cmd()).unwrap();
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(55_013),
+                message_ref: None,
+            })
+        );
+        let out = GpkeEogWorkflow::handle(&EogState::New, receive_anmeldung_cmd(true)).unwrap();
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(55_013),
+                message_ref: Some("EOG-001".to_owned()),
+            })
+        );
+        assert_eq!(
+            out.events[1].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            "the APERAK 312 queued beside ValidationPassed"
+        );
+        let antwort = EogEvent::AntwortErhalten {
+            response_pid: pid(55_015),
+            accepted: false,
+            versorgungsart: None,
+            bilanzkreis: None,
+            reason: Some("A02".to_owned()),
+        };
+        assert_eq!(
+            antwort.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(55_015),
+                message_ref: None,
+            })
+        );
+        let ohne = EogEvent::ZugeordnetOhneAntwort {
+            deadline_id: DeadlineId::new(),
+        };
+        assert_eq!(ohne.verlauf(), None, "silence is no message");
+    }
 
     #[test]
     fn initiator_happy_path_zugeordnet() {

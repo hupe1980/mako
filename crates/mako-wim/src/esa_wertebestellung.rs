@@ -30,6 +30,7 @@
 //! ESA ◀─ORDRSP 19011 / 19012──────────── 2 WT nach ÜT der Abbestellung ─ MSB
 //! ```
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
@@ -256,6 +257,34 @@ impl EventPayload for EsaWertebestellungEvent {
             Self::BeendetDurchMsb { .. } => "EsaWertebestellungBeendetDurchMsb",
             Self::FristVersaeumt { .. } => "EsaWertebestellungFristVersaeumt",
         }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        let (richtung, message_ref) = match self {
+            Self::AnfrageGesendet { message_ref, .. }
+            | Self::BestellungGesendet { message_ref }
+            | Self::StornierungGesendet { message_ref }
+            | Self::AbbestellungGesendet { message_ref, .. } => (Richtung::Ausgang, message_ref),
+            Self::AngebotErhalten { message_ref, .. }
+            | Self::AnfrageAbgelehnt { message_ref, .. }
+            | Self::BestellungBestaetigt { message_ref, .. }
+            | Self::BestellungAbgelehnt { message_ref, .. }
+            | Self::StornierungBestaetigt { message_ref, .. }
+            | Self::StornierungAbgelehnt { message_ref, .. }
+            | Self::AbbestellungBestaetigt { message_ref, .. }
+            | Self::AbbestellungAbgelehnt { message_ref, .. }
+            | Self::BeendetDurchMsb { message_ref, .. } => (Richtung::Eingang, message_ref),
+            // `AntwortWidersprichtSich` annotates an inbound ORDRSP whose own
+            // event follows it; stating it too would show the message twice.
+            Self::LieferungBegonnen
+            | Self::FristVersaeumt { .. }
+            | Self::AntwortWidersprichtSich { .. } => return None,
+        };
+        Some(Verlauf {
+            richtung,
+            pid: None,
+            message_ref: Some(message_ref.as_str().to_owned()),
+        })
     }
 }
 
@@ -1424,5 +1453,39 @@ impl Workflow for EsaWertebestellungWorkflow {
                 }]))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod verlauf_tests {
+    use super::*;
+    use mako_engine::types::MessageRef;
+
+    fn stated(richtung: Richtung, pid: Option<u32>, message_ref: Option<&str>) -> Verlauf {
+        Verlauf {
+            richtung,
+            pid,
+            message_ref: message_ref.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_only_the_messages() {
+        let gesendet = EsaWertebestellungEvent::BestellungGesendet {
+            message_ref: MessageRef::new("ORD-1"),
+        };
+        assert_eq!(
+            gesendet.verlauf(),
+            Some(stated(Richtung::Ausgang, None, Some("ORD-1")))
+        );
+        let bestaetigt = EsaWertebestellungEvent::StornierungBestaetigt {
+            message_ref: MessageRef::new("RSP-1"),
+            antwort: None,
+        };
+        assert_eq!(
+            bestaetigt.verlauf(),
+            Some(stated(Richtung::Eingang, None, Some("RSP-1")))
+        );
+        assert_eq!(EsaWertebestellungEvent::LieferungBegonnen.verlauf(), None);
     }
 }

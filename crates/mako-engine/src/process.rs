@@ -1353,6 +1353,7 @@ mod tests {
             event_type: "Tagged".into(),
             schema_version: 1, // ← schema_version 1 (old format)
             payload: v1_payload,
+            verlauf: None,
         };
         store
             .append(AppendBatch::new(

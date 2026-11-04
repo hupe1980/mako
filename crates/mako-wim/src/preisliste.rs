@@ -20,6 +20,7 @@
 //! - **PRICAT AHB 2.1** — EDI@Energy message format
 //! - No APERAK response required (informational publish, not a two-way exchange)
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     types::{MarktpartnerCode, MessageRef, Pruefidentifikator},
@@ -78,6 +79,23 @@ impl EventPayload for PreislisteEvent {
             Self::ValidationPassed { .. } => "PreislisteValidationPassed",
             Self::Aufgezeichnet => "PreislisteAufgezeichnet",
             Self::Rejected { .. } => "PreislisteRejected",
+        }
+    }
+
+    /// The inbound PRICAT is the one message; `handle` queues nothing beside
+    /// `Rejected` or any other event.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::PreislisteErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::ValidationPassed { .. } | Self::Aufgezeichnet | Self::Rejected { .. } => None,
         }
     }
 }
@@ -306,5 +324,32 @@ mod tests {
             },
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn verlauf_states_the_inbound_pricat() {
+        let out = WimPreislisteWorkflow::handle(
+            &PreislisteState::New,
+            PreislisteCommand::ReceivePricat {
+                pid: pid(27002),
+                sender: mcod("9900357000004"),
+                receiver: mcod("4012345000023"),
+                message_ref: mref("PRICAT-001"),
+                validation_passed: false,
+                validation_errors: vec!["bad".to_owned()],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(27_002),
+                message_ref: Some("PRICAT-001".to_owned()),
+            })
+        );
+        assert!(out.outbox.is_empty());
+        assert_eq!(out.events[1].verlauf(), None, "Rejected queues nothing");
+        assert_eq!(PreislisteEvent::Aufgezeichnet.verlauf(), None);
     }
 }

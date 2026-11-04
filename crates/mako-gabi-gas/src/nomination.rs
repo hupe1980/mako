@@ -52,6 +52,7 @@
 //! - **DVGW NOMINT 4.6 FK** / **NOMRES 4.7 FK** — message format (valid from 2026-02-01)
 
 use mako_engine::{
+    envelope::{Richtung, Verlauf},
     error::WorkflowError,
     ids::DeadlineId,
     outbox::PendingOutbox,
@@ -485,6 +486,48 @@ impl EventPayload for NominationEvent {
             Self::PartiallyAccepted { .. } => "GaBiGasNominationPartiallyAccepted",
             Self::Rejected { .. } => "GaBiGasNominationRejected",
             Self::DeadlineExpired { .. } => "GaBiGasNominationDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::NominationSent {
+                pruefidentifikator,
+                nomination_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(*pruefidentifikator),
+                message_ref: Some(nomination_ref.as_str().to_owned()),
+            }),
+            Self::NominationReceived {
+                pruefidentifikator,
+                nomination_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(*pruefidentifikator),
+                message_ref: Some(nomination_ref.as_str().to_owned()),
+            }),
+            Self::NomresSent {
+                pruefidentifikator,
+                nomres_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(*pruefidentifikator),
+                message_ref: Some(nomres_ref.as_str().to_owned()),
+            }),
+            // Each records the inbound NOMRES (`ReceiveNomres`); the variants
+            // carry no Prüfidentifikator, so none is stated.
+            Self::Accepted { nomres_ref, .. }
+            | Self::PartiallyAccepted { nomres_ref, .. }
+            | Self::Rejected { nomres_ref, .. } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: None,
+                message_ref: Some(nomres_ref.as_str().to_owned()),
+            }),
+            Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -1141,5 +1184,59 @@ mod pid_catalogue_conformance {
                 "PID {pid} routes here but has no counterparty"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod verlauf {
+    use mako_engine::{
+        envelope::{Richtung, Verlauf},
+        ids::DeadlineId,
+        types::MessageRef,
+        workflow::EventPayload,
+    };
+
+    use super::{NOMRES_DEADLINE_LABEL, NominationCounterparty, NominationEvent};
+    use crate::domain::GasDay;
+
+    #[test]
+    fn nomint_and_nomres_are_stated_and_a_lapse_is_no_message() {
+        let gas_day = GasDay::new(time::macros::date!(2026 - 10 - 01));
+        let sent = NominationEvent::NominationSent {
+            pruefidentifikator: 70030,
+            counterparty: NominationCounterparty::Fnb,
+            sender_eic: "sender".to_owned(),
+            receiver_eic: "receiver".to_owned(),
+            gas_day,
+            nomination_ref: MessageRef::new("NOM-1"),
+            nominated_kwh: None,
+            positions: Vec::new(),
+            corrects: None,
+        };
+        assert_eq!(
+            sent.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(70030),
+                message_ref: Some("NOM-1".to_owned()),
+            })
+        );
+        let accepted = NominationEvent::Accepted {
+            nomres_ref: MessageRef::new("RES-1"),
+            gas_day,
+        };
+        assert_eq!(
+            accepted.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: None,
+                message_ref: Some("RES-1".to_owned()),
+            })
+        );
+        let lapsed = NominationEvent::DeadlineExpired {
+            deadline_id: DeadlineId::new(),
+            label: NOMRES_DEADLINE_LABEL.to_owned(),
+        };
+        assert_eq!(lapsed.verlauf(), None);
     }
 }

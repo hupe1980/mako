@@ -266,10 +266,76 @@ pub struct UtilmdPayload {
     /// `DTM+157` Bilanzierungsmonat, `CCYYMM`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub billing_period: Option<String>,
+    /// `SG4 SG6 RFF+AAV` „Nummer der Anfrage" — the `BGM` DE 1004 of the
+    /// ORDERS a Stammdaten-Antwort answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anfrage_referenz: Option<String>,
+    /// Stammdaten the sender supplies whole — the answer to a
+    /// Geschäftsdatenanfrage. Empty everywhere else.
+    #[serde(default, skip_serializing_if = "Stammdaten::is_empty")]
+    pub stammdaten: Stammdaten,
 }
 
 impl OutboundPayload for UtilmdPayload {
     const MESSAGE_TYPE: &'static str = "UTILMD";
+}
+
+/// Stammdaten a Vorgang carries whole: every `SG5 LOC`, `SG8` block and
+/// `SG12` segment, as the sender holds them.
+///
+/// A Stammdaten-Antwort is the Netzbetreiber's master data of a Lokation —
+/// UTILMD AHB Strom 2.2 Kap. 9.5 gives 55035, 55095 and 55060 several dozen
+/// groups each — and its content is the sender's record, not something a
+/// workflow derives. It is carried segment by segment and the AHB profile
+/// checks what renders.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Stammdaten {
+    /// `SG5 LOC` — `(DE 3227 qualifier, DE 3225 ID)`, in the MIG's order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lokationen: Vec<StammdatenLokation>,
+    /// `SG8` blocks, each opened by its `SEQ`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bloecke: Vec<StammdatenBlock>,
+    /// `SG12` segments — each `NAD` and the segments of its group.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sg12: Vec<StammdatenSegment>,
+}
+
+impl Stammdaten {
+    /// `true` when nothing is carried.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.lokationen.is_empty() && self.bloecke.is_empty() && self.sg12.is_empty()
+    }
+}
+
+/// One `SG5 LOC`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StammdatenLokation {
+    /// DE 3227 — `Z16` Marktlokation, `Z17` Messlokation, `Z18` Netzlokation, …
+    pub qualifier: String,
+    /// DE 3225 — the Lokations-ID.
+    pub id: String,
+}
+
+/// One `SG8` block: its `SEQ` DE 1229 and the segments under it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StammdatenBlock {
+    /// `SEQ` DE 1229 — `ZD5`, `Z98`, `ZE1`, …
+    pub seq: String,
+    /// The block's `RFF`, `PIA`, `SG9 QTY`, `SG10 CCI`/`CAV`, in order.
+    #[serde(default)]
+    pub segmente: Vec<StammdatenSegment>,
+}
+
+/// One segment: its tag and its data elements, each a list of components.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StammdatenSegment {
+    /// Segment tag.
+    pub tag: String,
+    /// Data elements in position order, each its components in order.
+    #[serde(default)]
+    pub elemente: Vec<Vec<String>>,
 }
 
 /// The Tranchengröße: a bare string is the prozentuale Aufteilung; the object

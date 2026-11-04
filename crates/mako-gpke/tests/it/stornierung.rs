@@ -1,19 +1,18 @@
 //! Integration tests for the GPKE Stornierung workflow (PIDs 55022–55024).
 //!
-//! The NB receives a Stornierungsanfrage (UTILMD 55022) from the LFN requesting
+//! The NB receives a Stornierungsanfrage (UTILMD 55022) from the LF requesting
 //! cancellation of a previously submitted Anmeldung, Abmeldung, or Kündigung.
-//! The NB must respond with a positive (55023) or negative (55024) APERAK
-//! before it answers the *original* message — GPKE Teil 4 Kap. 5 makes the
-//! Stornierung admissible only while that message is unanswered, and publishes
-//! no window of its own.
+//! The NB answers with UTILMD 55023 (Bestätigung) or 55024 (Ablehnung) —
+//! UTILMD AHB Strom 2.2 Kap. 9.6 — before it answers the *original* message:
+//! GPKE Teil 4 Kap. 5 makes the Stornierung admissible only while that message
+//! is unanswered, and publishes no window of its own.
 //!
 //! # State machine
 //!
 //! ```text
-//! New → Initiated → ValidationPassed → AperakSent → Completed  [terminal]
-//!                                    ↘ Rejected                  [terminal]
-//!     ↘ ValidationFailed → Rejected                             [terminal]
-//!                             ↘ TimeoutExpired → Rejected       [terminal]
+//! New → Initiated → ValidationPassed → Completed   (55023)  [terminal]
+//!                                    ↘ Rejected    (55024)  [terminal]
+//!     ↘ ValidationFailed → Rejected                          [terminal]
 //! ```
 //!
 //! # Regulatory basis
@@ -31,7 +30,7 @@ use mako_engine::{
 };
 use mako_gpke::{
     GpkeStornierungCommand, GpkeStornierungState, GpkeStornierungWorkflow,
-    STORNIERUNG_GPKE_ANTWORT_WINDOW_LABEL,
+    STORNIERUNG_GPKE_ANTWORT_WINDOW_LABEL, StornoAblehnung,
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -53,7 +52,7 @@ fn nb_mp_id() -> MarktpartnerCode {
 }
 
 fn vorgang() -> MaLo {
-    // Vorgangsnummer from SG4 IDE+24 DE 7402 (the process being cancelled)
+    // The 55022's own Vorgangsnummer, SG4 IDE+24 DE 7402
     MaLo::new("DE00123456789012345678901234567890")
 }
 
@@ -67,6 +66,7 @@ fn receive_stornierung_cmd(validation_passed: bool) -> GpkeStornierungCommand {
         sender: lf_mp_id(),
         receiver: nb_mp_id(),
         vorgang_id: vorgang(),
+        document_code: "E01".to_owned(),
         document_date: "20250601".to_owned(),
         message_ref: msg("MSG-STORNO-001"),
         validation_passed,
@@ -119,9 +119,9 @@ async fn receive_invalid_stornierung_transitions_to_rejected() {
     );
 }
 
-/// Happy path: positive APERAK dispatched → Completed (terminal).
+/// Happy path: UTILMD 55023 Bestätigung sent → Completed (terminal).
 #[tokio::test]
-async fn happy_path_positive_aperak_completes_process() {
+async fn happy_path_bestaetigung_completes_process() {
     let p = make_process();
 
     p.run(receive_stornierung_cmd(true), RunOptions::new())
@@ -129,28 +129,22 @@ async fn happy_path_positive_aperak_completes_process() {
         .expect("receive");
 
     p.run(
-        GpkeStornierungCommand::DispatchAperak {
-            positive: true,
-            reason: None,
-        },
+        GpkeStornierungCommand::SendAntwort { ablehnung: None },
         RunOptions::new(),
     )
     .await
-    .expect("DispatchAperak (positive) must succeed from ValidationPassed");
+    .expect("SendAntwort (Bestätigung) must succeed from ValidationPassed");
 
     let state = p.state().await.expect("state");
     assert!(
-        matches!(
-            state,
-            GpkeStornierungState::Completed(_) | GpkeStornierungState::AperakSent(_)
-        ),
-        "expected Completed or AperakSent after positive APERAK, got: {state:?}",
+        matches!(state, GpkeStornierungState::Completed(_)),
+        "expected Completed after the 55023, got: {state:?}",
     );
 }
 
-/// NB dispatches negative APERAK (55024) → Rejected (terminal).
+/// NB sends UTILMD 55024 Ablehnung → Rejected (terminal).
 #[tokio::test]
-async fn negative_aperak_transitions_to_rejected() {
+async fn ablehnung_transitions_to_rejected() {
     let p = make_process();
 
     p.run(receive_stornierung_cmd(true), RunOptions::new())
@@ -158,19 +152,18 @@ async fn negative_aperak_transitions_to_rejected() {
         .expect("receive");
 
     p.run(
-        GpkeStornierungCommand::DispatchAperak {
-            positive: false,
-            reason: Some("Stornierungsfrist bereits abgelaufen".to_owned()),
+        GpkeStornierungCommand::SendAntwort {
+            ablehnung: Some(StornoAblehnung::SchonBeantwortet),
         },
         RunOptions::new(),
     )
     .await
-    .expect("DispatchAperak (negative) must succeed from ValidationPassed");
+    .expect("SendAntwort (Ablehnung) must succeed from ValidationPassed");
 
     let state = p.state().await.expect("state");
     assert!(
         matches!(state, GpkeStornierungState::Rejected { .. }),
-        "expected Rejected after negative APERAK, got: {state:?}",
+        "expected Rejected after the 55024, got: {state:?}",
     );
     assert!(
         matches!(state, GpkeStornierungState::Rejected { .. }),
@@ -219,6 +212,7 @@ async fn domain_data_preserved_in_validation_passed() {
             sender: sender.clone(),
             receiver: nb_mp_id(),
             vorgang_id: vorgangsnr.clone(),
+            document_code: "E02".to_owned(),
             document_date: "20250601".to_owned(),
             message_ref: msg("MSG-STORNO-DATA"),
             validation_passed: true,
@@ -235,6 +229,10 @@ async fn domain_data_preserved_in_validation_passed() {
             assert_eq!(data.sender, sender, "sender preserved");
             assert_eq!(data.vorgang_id, vorgangsnr, "vorgang_id preserved");
             assert_eq!(data.document_date, "20250601", "document_date preserved");
+            assert_eq!(
+                data.document_code, "E02",
+                "BGM category preserved for the answer"
+            );
         }
         other => panic!("unexpected state: {other:?}"),
     }
@@ -264,6 +262,7 @@ fn terminal_states_are_terminal() {
             sender: lf_mp_id(),
             receiver: nb_mp_id(),
             vorgang_id: vorgang(),
+            document_code: "E01".to_owned(),
             document_date: "20250601".to_owned(),
             message_ref: msg("x"),
         }),

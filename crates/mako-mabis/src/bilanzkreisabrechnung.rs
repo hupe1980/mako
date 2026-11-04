@@ -78,6 +78,7 @@
 
 use std::collections::HashMap;
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     envelope::EventEnvelope,
@@ -532,6 +533,8 @@ pub struct VersionRecord {
 pub enum BillingEvent {
     /// A version of the Summenzeitreihe arrived (MSCONS 13003).
     SummenzeitreiheReceived {
+        /// MSCONS PID it arrived on (13003, 13020 or 13023).
+        pid: Pruefidentifikator,
         /// Which Summenzeitreihe of Tabelle 1 this stream settles.
         zeitreihe: Zeitreihe,
         /// The MaBiS-Zählpunkt the series is filed against.
@@ -564,6 +567,8 @@ pub enum BillingEvent {
     /// The BIKO rejected a Prüfmitteilung (IFTSTA 21002); it was never
     /// forwarded to the responsible party.
     PruefmitteilungAbgewiesen {
+        /// IFTSTA PID it arrived on (21002).
+        pid: Pruefidentifikator,
         /// Version the rejected check referred to.
         version: SzrVersion,
         /// Rejection reason from the BIKO.
@@ -598,6 +603,36 @@ impl EventPayload for BillingEvent {
             Self::PruefmitteilungAbgewiesen { .. } => "MabisPruefmitteilungAbgewiesen",
             Self::DatenstatusReceived { .. } => "MabisDatenstatusReceived",
             Self::ClearingGeschlossen { .. } => "MabisClearingGeschlossen",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::SummenzeitreiheReceived {
+                pid, message_ref, ..
+            }
+            | Self::PruefmitteilungAbgewiesen {
+                pid, message_ref, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::PruefmitteilungSent {
+                pid, message_ref, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::DatenstatusReceived {
+                pid, message_ref, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::ClearingGeschlossen { .. } => None,
         }
     }
 }
@@ -954,6 +989,7 @@ impl Workflow for MabisBillingWorkflow {
                     .into_iter()
                     .collect();
                 let events = vec![BillingEvent::SummenzeitreiheReceived {
+                    pid,
                     zeitreihe,
                     mabis_zp,
                     bilanzierungsmonat,
@@ -1046,6 +1082,7 @@ impl Workflow for MabisBillingWorkflow {
                         )
                     })?;
                     return Ok(vec![BillingEvent::PruefmitteilungAbgewiesen {
+                        pid,
                         version,
                         grund,
                         message_ref,
@@ -1235,6 +1272,41 @@ mod tests {
 
     fn zp() -> MabisZaehlpunktId {
         MabisZaehlpunktId::new("DE0001111222233334444555566667777").expect("33 chars")
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_nothing_else() {
+        assert_eq!(
+            BillingEvent::PruefmitteilungAbgewiesen {
+                pid: Pruefidentifikator::new(IFTSTA_ABWEISUNG_PID).expect("valid"),
+                version: v(1),
+                grund: "x".to_owned(),
+                message_ref: MessageRef::new("IFTSTA-1"),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(21_002),
+                message_ref: Some("IFTSTA-1".to_owned()),
+            })
+        );
+        let empfangen = MabisBillingWorkflow::handle(&BillingState::New, receive(1, true))
+            .expect("command accepted");
+        assert_eq!(
+            empfangen.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(SUMMENZEITREIHE_PID),
+                message_ref: Some("MSCONS-1".to_owned()),
+            })
+        );
+        assert_eq!(
+            BillingEvent::ClearingGeschlossen {
+                lauf: crate::fristen::Abrechnungslauf::Bka,
+            }
+            .verlauf(),
+            None
+        );
     }
 
     fn receive(version: u32, im_erstaufschlag: bool) -> BillingCommand {

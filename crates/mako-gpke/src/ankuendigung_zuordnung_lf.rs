@@ -66,6 +66,7 @@
 //! - **APERAK AHB 1.1 § 2.4.1** — the separate technical acknowledgement,
 //!   45 minutes on every day but Samstag (Sonntag 12:00 for a Saturday arrival)
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
@@ -162,6 +163,35 @@ impl EventPayload for AnkuendigungZuordnungLfEvent {
             Self::Zugeordnet => "AnkuendigungZuordnungLfZugeordnet",
             Self::Rejected { .. } => "AnkuendigungZuordnungLfRejected",
             Self::DeadlineExpired { .. } => "AnkuendigungZuordnungLfDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AnkuendigungErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AntwortGesendet { response_pid, .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: None,
+            }),
+            Self::Zugeordnet | Self::DeadlineExpired { .. } => None,
+            // `ValidationPassed` is emitted only beside the APERAK 312
+            // Anerkennungsmeldung `handle` queues for it, `Rejected` only beside
+            // the APERAK 313 Verarbeitbarkeitsfehlermeldung; an APERAK carries
+            // no Prüfidentifikator.
+            Self::ValidationPassed { .. } | Self::Rejected { .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
         }
     }
 }
@@ -660,6 +690,64 @@ mod tests {
         events
             .iter()
             .fold(init, GpkeAnkuendigungZuordnungLfWorkflow::apply)
+    }
+
+    #[test]
+    fn verlauf_states_the_inbound_55607_and_the_outbound_answer() {
+        assert_eq!(
+            AnkuendigungZuordnungLfEvent::Rejected {
+                reason: "x".to_owned(),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            "the APERAK 313 queued beside the rejection"
+        );
+        let out = GpkeAnkuendigungZuordnungLfWorkflow::handle(
+            &AnkuendigungZuordnungLfState::New,
+            ankuendigung_cmd(true),
+        )
+        .unwrap();
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(55_607),
+                message_ref: Some("ZUORD-001".to_owned()),
+            })
+        );
+        assert_eq!(
+            out.events[1].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            "the APERAK 312 queued beside ValidationPassed"
+        );
+        assert!(
+            out.outbox
+                .iter()
+                .any(|o| &*o.message_type == "APERAK" && o.caused_by_event_index == 1),
+            "the APERAK 312 is caused by ValidationPassed"
+        );
+        let gesendet = AnkuendigungZuordnungLfEvent::AntwortGesendet {
+            response_pid: pid(55_609),
+            accepted: false,
+            antwort: crate::lf_antwort::LfAntwort::ablehnung("A99", "x"),
+        };
+        assert_eq!(
+            gesendet.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(55_609),
+                message_ref: None,
+            })
+        );
+        assert_eq!(AnkuendigungZuordnungLfEvent::Zugeordnet.verlauf(), None);
     }
 
     #[test]

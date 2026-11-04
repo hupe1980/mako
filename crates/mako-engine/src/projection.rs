@@ -594,6 +594,7 @@ mod tests {
             event_type: "TestEvent".into(),
             schema_version: 1,
             payload: json!({}),
+            verlauf: None,
         }
     }
 

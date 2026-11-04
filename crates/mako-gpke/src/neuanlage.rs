@@ -36,6 +36,7 @@
 //!   which GPKE Teil 2 states as a wall-clock instant on the 1. Werktag nach
 //!   dem ÜT.
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
@@ -172,6 +173,37 @@ impl EventPayload for NeuanlageEvent {
             Self::Aktiviert => "NeuanlageAktiviert",
             Self::Rejected { .. } => "NeuanlageRejected",
             Self::DeadlineExpired { .. } => "NeuanlageDeadlineExpired",
+        }
+    }
+
+    /// An `AntwortGesendet` without a `response_pid` rendered no UTILMD —
+    /// `handle` queues the answer only for a resolved PID — so it states none.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AnmeldungErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AntwortGesendet { response_pid, .. } => response_pid.map(|p| Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(p.as_u32()),
+                message_ref: None,
+            }),
+            Self::Aktiviert | Self::DeadlineExpired { .. } => None,
+            // `ValidationPassed` is emitted only beside the APERAK 312
+            // Anerkennungsmeldung `handle` queues for it, `Rejected` only beside
+            // the APERAK 313 Verarbeitbarkeitsfehlermeldung; an APERAK carries
+            // no Prüfidentifikator.
+            Self::ValidationPassed { .. } | Self::Rejected { .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
         }
     }
 }
@@ -642,6 +674,72 @@ mod tests {
                 vec!["missing mandatory segment".to_owned()]
             },
         }
+    }
+
+    #[test]
+    fn verlauf_states_the_inbound_anmeldung_and_the_outbound_answer() {
+        assert_eq!(
+            NeuanlageEvent::Rejected {
+                reason: "x".to_owned(),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            "the APERAK 313 queued beside the rejection"
+        );
+        let out = GpkeNeuanlageWorkflow::handle(&NeuanlageState::New, anmeldung_cmd(55600, true))
+            .unwrap();
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(55_600),
+                message_ref: Some("NEUA-001".to_owned()),
+            })
+        );
+        assert_eq!(
+            out.events[1].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            "the APERAK 312 queued beside ValidationPassed"
+        );
+        assert!(
+            out.outbox
+                .iter()
+                .any(|o| &*o.message_type == "APERAK" && o.caused_by_event_index == 1),
+            "the APERAK 312 is caused by ValidationPassed"
+        );
+        let state = out.events.iter().fold(NeuanlageState::New, |s, e| {
+            GpkeNeuanlageWorkflow::apply(s, e)
+        });
+        let out = GpkeNeuanlageWorkflow::handle(
+            &state,
+            NeuanlageCommand::SendAntwort {
+                antwort: crate::LfAntwort::zustimmung("A09", "E_0608"),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(55_602),
+                message_ref: None,
+            })
+        );
+        let unrendered = NeuanlageEvent::AntwortGesendet {
+            response_pid: None,
+            accepted: true,
+            reason: None,
+        };
+        assert_eq!(unrendered.verlauf(), None, "no PID, no UTILMD rendered");
+        assert_eq!(NeuanlageEvent::Aktiviert.verlauf(), None);
     }
 
     #[test]

@@ -89,6 +89,7 @@
 //! until the list arrives would model a deadline BK6-24-174 does not define for
 //! these codes.
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     outbox::PendingOutbox,
@@ -349,6 +350,33 @@ impl EventPayload for AnforderungEvent {
             Self::AnforderungErhalten { .. } => "MabisAnforderungErhalten",
             Self::AnforderungAbgelehnt { .. } => "MabisAnforderungAbgelehnt",
             Self::ValidationFailed { .. } => "MabisAnforderungValidationFailed",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AnforderungGesendet {
+                pruefidentifikator, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: None,
+            }),
+            Self::AnforderungErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            }
+            | Self::AnforderungAbgelehnt {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::ValidationFailed { .. } => None,
         }
     }
 }
@@ -669,6 +697,31 @@ mod tests {
         events.iter().fold(AnforderungState::default(), |s, e| {
             MabisAnforderungWorkflow::apply(s, e)
         })
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_nothing_else() {
+        assert_eq!(
+            AnforderungEvent::AnforderungAbgelehnt {
+                pruefidentifikator: Pruefidentifikator::const_new(ABLEHNUNG_PID),
+                ebd: "E_0003".to_owned(),
+                code: "A01".to_owned(),
+                message_ref: MessageRef::new("ORDRSP-1"),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(19204),
+                message_ref: Some("ORDRSP-1".to_owned()),
+            })
+        );
+        assert_eq!(
+            AnforderungEvent::ValidationFailed {
+                reason: "x".to_owned(),
+            }
+            .verlauf(),
+            None
+        );
     }
 
     #[test]

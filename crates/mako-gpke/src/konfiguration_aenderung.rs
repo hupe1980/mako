@@ -33,6 +33,7 @@
 //! - Response window: per Use-Case (GPKE Teil 3 Kap. 1.2–1.3); the one this
 //!   workflow resolves is the Mitteilung on a 17120, 1 WT (see `antwortfrist`)
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
@@ -182,6 +183,39 @@ impl EventPayload for KonfigurationAenderungEvent {
             Self::AntwortErhalten { .. } => "KonfigAenderungAntwortErhalten",
             Self::ZwischenstandErhalten { .. } => "KonfigAenderungZwischenstandErhalten",
             Self::DeadlineExpired { .. } => "KonfigAenderungDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AnfrageGesendet {
+                orders_pid,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(orders_pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AntwortErhalten {
+                ordrsp_pid,
+                message_ref,
+                ..
+            }
+            | Self::ZwischenstandErhalten {
+                ordrsp_pid,
+                message_ref,
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(ordrsp_pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::IftstaErhalten { pid, message_ref } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -655,5 +689,50 @@ mod tests {
                 "a PID appears in two direction lists: {flat:?}"
             );
         }
+    }
+
+    #[test]
+    fn verlauf_states_orders_out_and_ordrsp_and_iftsta_in() {
+        use super::{KonfigurationAenderungEvent, Richtung, Verlauf};
+        use mako_engine::{ids::DeadlineId, workflow::EventPayload as _};
+
+        let sent = time::macros::datetime!(2026-10-07 10:00 UTC);
+        let out = GpkeKonfigurationAenderungWorkflow::handle(
+            &KonfigurationAenderungState::default(),
+            KonfigurationAenderungCommand::SendAnfrage {
+                orders_pid: Pruefidentifikator::new(17_120).expect("valid PID"),
+                recipient: MarktpartnerCode::new("9900000000003"),
+                malo: MaLo::new("51238696012"),
+                message_ref: MessageRef::new("ORDERS-1"),
+                payload: serde_json::json!({}),
+                gesendet_am: sent,
+            },
+        )
+        .expect("accepted");
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(17_120),
+                message_ref: Some("ORDERS-1".to_owned()),
+            })
+        );
+        let iftsta = KonfigurationAenderungEvent::IftstaErhalten {
+            pid: Pruefidentifikator::new(21_043).expect("valid PID"),
+            message_ref: MessageRef::new("IFTSTA-1"),
+        };
+        assert_eq!(
+            iftsta.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(21_043),
+                message_ref: Some("IFTSTA-1".to_owned()),
+            })
+        );
+        let expired = KonfigurationAenderungEvent::DeadlineExpired {
+            deadline_id: DeadlineId::new(),
+            label: ANTWORT_WINDOW_LABEL.into(),
+        };
+        assert_eq!(expired.verlauf(), None);
     }
 }

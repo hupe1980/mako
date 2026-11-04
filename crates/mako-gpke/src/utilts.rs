@@ -27,6 +27,7 @@
 //! - **WiM Strom Teil 2 / AWH NBW** — Berechnungsformel
 //! - **UTILTS S1.x** — EDI@Energy utility time series format
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -103,6 +104,22 @@ impl EventPayload for UtiltsKonfigEvent {
             Self::UtiltsErhalten { .. } => "UtiltsKonfigErhalten",
             Self::ValidationPassed { .. } => "UtiltsKonfigValidationPassed",
             Self::ValidationFailed { .. } => "UtiltsKonfigValidationFailed",
+        }
+    }
+
+    /// The inbound UTILTS is the one message; neither validation outcome queues anything.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::UtiltsErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::ValidationPassed { .. } | Self::ValidationFailed { .. } => None,
         }
     }
 }
@@ -241,5 +258,43 @@ impl Workflow for GpkeUtiltsWorkflow {
                 Ok(events.into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verlauf_states_the_inbound_utilts() {
+        let erhalten = UtiltsKonfigEvent::UtiltsErhalten {
+            pruefidentifikator: Pruefidentifikator::new(25_001).unwrap(),
+            sender: MarktpartnerCode::new("9900357000004"),
+            document_date: "20260101".to_owned(),
+            message_ref: MessageRef::new("UTILTS-1"),
+        };
+        assert_eq!(
+            erhalten.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(25_001),
+                message_ref: Some("UTILTS-1".to_owned()),
+            })
+        );
+        assert_eq!(
+            UtiltsKonfigEvent::ValidationPassed {
+                message_ref: MessageRef::new("UTILTS-1"),
+            }
+            .verlauf(),
+            None
+        );
+        assert_eq!(
+            UtiltsKonfigEvent::ValidationFailed {
+                reason: "x".to_owned(),
+            }
+            .verlauf(),
+            None,
+            "a failed validation queues no APERAK here"
+        );
     }
 }

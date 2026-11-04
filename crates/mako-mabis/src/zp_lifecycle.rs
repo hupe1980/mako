@@ -163,6 +163,7 @@
 //! message that settles a Bilanzkreisabrechnung is worse than an absent one.
 //!
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     outbox::PendingOutbox,
@@ -870,6 +871,51 @@ impl EventPayload for ZpLifecycleEvent {
             Self::AntwortGesendet { .. } => "MabisZpAntwortGesendet",
             Self::WeiterleitungGesendet { .. } => "MabisZpWeiterleitungGesendet",
             Self::ValidationFailed { .. } => "MabisZpValidationFailed",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AnfrageErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AnfrageGesendet {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AntwortErhalten {
+                antwort_pid,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(antwort_pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AntwortGesendet { antwort_pid, .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(antwort_pid.as_u32()),
+                message_ref: None,
+            }),
+            Self::WeiterleitungGesendet {
+                weiterleitung_pid, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(weiterleitung_pid.as_u32()),
+                message_ref: None,
+            }),
+            Self::Erfasst { .. } | Self::ValidationFailed { .. } => None,
         }
     }
 }
@@ -1669,6 +1715,31 @@ mod tests {
     }
 
     // ── Table integrity ─────────────────────────────────────────────────────
+
+    #[test]
+    fn verlauf_states_the_messages_and_nothing_else() {
+        assert_eq!(
+            ZpLifecycleEvent::AntwortGesendet {
+                antwort_pid: Pruefidentifikator::const_new(55064),
+                ebd: "E_0001".to_owned(),
+                bestaetigt: true,
+                grund: None,
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(55064),
+                message_ref: None,
+            })
+        );
+        assert_eq!(
+            ZpLifecycleEvent::Erfasst {
+                message_ref: MessageRef::new("UTILMD-1"),
+            }
+            .verlauf(),
+            None
+        );
+    }
 
     #[test]
     fn every_series_has_exactly_one_row_per_vorgang() {

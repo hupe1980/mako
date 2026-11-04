@@ -43,6 +43,7 @@
 //! - **UTILMD AHB Gas 1.1 / 1.2** Kap. 5.8
 //! - **APERAK AHB 1.1 § 2.3.1** — the Gas APERAK windows, a separate clock
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -231,6 +232,29 @@ impl EventPayload for ZuordnungsmeldungEvent {
         match self {
             Self::Gesendet { .. } => "GasZuordnungsmeldungGesendet",
             Self::Empfangen { .. } => "GasZuordnungsmeldungEmpfangen",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            // `referenz_vorgangsnummer` is the triggering Anmeldung's
+            // Vorgangsnummer, not this Meldung's own reference.
+            Self::Gesendet {
+                pruefidentifikator, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: None,
+            }),
+            Self::Empfangen {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
         }
     }
 }
@@ -640,6 +664,36 @@ mod tests {
     fn run(cmd: ZuordnungsmeldungCommand) -> WorkflowOutput<ZuordnungsmeldungEvent> {
         GeliGasZuordnungsmeldungWorkflow::handle(&ZuordnungsmeldungState::New, cmd)
             .expect("command accepted")
+    }
+
+    /// Both variants are messages; neither may fall back to the default `None`.
+    #[test]
+    fn verlauf_states_the_messages() {
+        let gesendet = &run(senden(Zuordnungsmeldung::Information)).events[0];
+        assert_eq!(
+            gesendet.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(44036),
+                message_ref: None,
+            })
+        );
+        let empfangen = ZuordnungsmeldungEvent::Empfangen {
+            pruefidentifikator: Pruefidentifikator::new(44037).expect("valid PID"),
+            location_id: malo(),
+            sender: mp("9870123456789"),
+            receiver: mp("9871234567897"),
+            transaktionsgrund: grund::BEENDIGUNG_ZUORDNUNG.to_owned(),
+            message_ref: MessageRef::new("ZM-1"),
+        };
+        assert_eq!(
+            empfangen.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(44037),
+                message_ref: Some("ZM-1".to_owned()),
+            })
+        );
     }
 
     /// All three Gas Meldungen are `BGM+E44`, and all three name a Meldepunkt —

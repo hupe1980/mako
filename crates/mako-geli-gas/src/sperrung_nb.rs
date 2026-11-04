@@ -44,6 +44,7 @@
 //! - Saturdays, Sundays and gesetzliche Feiertage are not Werktage
 //!   (GeLi Gas 3.0 Kap. 2.6); arithmetic runs in gesetzlicher deutscher Zeit.
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -173,6 +174,42 @@ impl EventPayload for GasSperrungNbEvent {
             Self::MsbAntwortErhalten { .. } => "GasSperrungNbMsbAntwortErhalten",
             Self::Rejected { .. } => "GasSperrungNbRejected",
             Self::DeadlineExpired { .. } => "GasSperrungNbDeadlineExpired",
+        }
+    }
+
+    /// The ORDERS, ORDCHG and ORDRSP received are messages; `Rejected` is
+    /// built only beside the APERAK 313 it queues. Gas sends no
+    /// Anerkennungsmeldung, so `ValidationPassed` queues nothing, and
+    /// `AusfuehrungBestaetigt` queues nothing either.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AnweisungErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            }
+            | Self::StornierungErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            }
+            | Self::MsbAntwortErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::Rejected { .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            Self::ValidationPassed { .. }
+            | Self::AusfuehrungBestaetigt { .. }
+            | Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -734,5 +771,49 @@ mod tests {
             },
         );
         assert!(matches!(s3, GasSperrungNbState::Ausgefuehrt(_)));
+    }
+
+    #[test]
+    fn verlauf_states_the_inbound_orders_and_the_aperak_313() {
+        let out = GeliGasSperrungNbWorkflow::handle(
+            &GasSperrungNbState::New,
+            GasSperrungNbCommand::ReceiveSperrung {
+                pid: pid(17115),
+                sender: mp_id("9900000000001"),
+                receiver: mp_id("9900357000004"),
+                location_id: malo("51238696012"),
+                document_date: "20260101".into(),
+                message_ref: make_ref("REF001"),
+                validation_passed: false,
+                validation_errors: vec!["bad".to_owned()],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(17_115),
+                message_ref: Some("REF001".to_owned()),
+            })
+        );
+        assert_eq!(out.outbox.len(), 1, "the APERAK 313");
+        assert_eq!(
+            out.events[1].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            "the APERAK 313 queued beside the rejection"
+        );
+        assert_eq!(
+            GasSperrungNbEvent::ValidationPassed {
+                message_ref: make_ref("REF001"),
+            }
+            .verlauf(),
+            None,
+            "Gas sends no Anerkennungsmeldung"
+        );
     }
 }

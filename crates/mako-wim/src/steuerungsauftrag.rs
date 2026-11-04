@@ -45,6 +45,7 @@
 //! | `wim.steuerungsauftrag.bestaetigen` | `MSB` | Send final positive response |
 //! | `wim.steuerungsauftrag.ablehnen`    | `MSB` | Send final negative response |
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
@@ -217,6 +218,24 @@ impl EventPayload for SteuerungsauftragEvent {
             Self::EndantwortNegativ { .. } => "WimSteuerungsauftragEndantwortNegativ",
             Self::DeadlineExpired { .. } => "WimSteuerungsauftragDeadlineExpired",
         }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        // API-Webdienste calls: no Prüfidentifikator and no BGM document
+        // number. `tx_id` and `reference_id` are transaction identifiers, not
+        // a message reference.
+        let richtung = match self {
+            Self::KonfigurationReceived { .. } | Self::InitialZustandReceived { .. } => {
+                Richtung::Eingang
+            }
+            Self::EndantwortPositiv { .. } | Self::EndantwortNegativ { .. } => Richtung::Ausgang,
+            Self::DeadlineExpired { .. } => return None,
+        };
+        Some(Verlauf {
+            richtung,
+            pid: None,
+            message_ref: None,
+        })
     }
 }
 
@@ -579,5 +598,39 @@ impl Workflow for WimSteuerungsauftragWorkflow {
                 Ok(vec![SteuerungsauftragEvent::DeadlineExpired { deadline_id, label }].into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod verlauf_tests {
+    use super::*;
+
+    fn stated(richtung: Richtung, pid: Option<u32>, message_ref: Option<&str>) -> Verlauf {
+        Verlauf {
+            richtung,
+            pid,
+            message_ref: message_ref.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_only_the_messages() {
+        let reset = SteuerungsauftragEvent::InitialZustandReceived {
+            tx_id: "tx-1".into(),
+            sender_mp_id: MarktpartnerCode::new("9900000000001"),
+            location_id: LocationId::Sr(SrId::new("C0000000003").expect("valid SrId")),
+            execution_time_from: "2026-11-04T00:00:00Z".into(),
+        };
+        assert_eq!(reset.verlauf(), Some(stated(Richtung::Eingang, None, None)));
+        let negativ = SteuerungsauftragEvent::EndantwortNegativ { reason: None };
+        assert_eq!(
+            negativ.verlauf(),
+            Some(stated(Richtung::Ausgang, None, None))
+        );
+        let abgelaufen = SteuerungsauftragEvent::DeadlineExpired {
+            deadline_id: mako_engine::ids::DeadlineId::new(),
+            label: "x".into(),
+        };
+        assert_eq!(abgelaufen.verlauf(), None);
     }
 }

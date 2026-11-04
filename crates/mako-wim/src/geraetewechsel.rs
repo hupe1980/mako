@@ -30,6 +30,7 @@
 
 use std::collections::HashMap;
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::payload::AperakPayload;
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -725,6 +726,82 @@ impl EventPayload for DeviceChangeEvent {
             Self::Rejected { .. } => "WimDeviceChangeRejected",
             Self::DeadlineExpired { .. } => "WimDeviceChangeDeadlineExpired",
             Self::InformationEmpfangen { .. } => "WimDeviceChangeInformationEmpfangen",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::Initiated {
+                pruefidentifikator,
+                message_ref,
+                ..
+            }
+            | Self::InformationEmpfangen {
+                pid: pruefidentifikator,
+                message_ref,
+                ..
+            }
+            | Self::AntwortEmpfangen {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AuftragGesendet {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AntwortGesendet {
+                pruefidentifikator, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: None,
+            }),
+            // The APERAK names no Prüfidentifikator of its own.
+            Self::AperakDispatched { .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            Self::GesamtvorgangGemeldet {
+                outbound,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: if *outbound {
+                    Richtung::Ausgang
+                } else {
+                    Richtung::Eingang
+                },
+                pid: None,
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::ZuordnungEntschieden {
+                pruefidentifikator,
+                outbound,
+                ..
+            } => Some(Verlauf {
+                richtung: if *outbound {
+                    Richtung::Ausgang
+                } else {
+                    Richtung::Eingang
+                },
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: None,
+            }),
+            Self::ValidationPassed { .. }
+            | Self::Completed { .. }
+            | Self::Rejected { .. }
+            | Self::DeadlineExpired { .. } => None,
         }
     }
     // schema_version defaults to 1; increment and add an upcast arm on next
@@ -3081,5 +3158,65 @@ mod tests {
         )
         .expect_err("should reject dispatch in wrong state");
         assert!(err.to_string().contains("ValidationPassed"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod verlauf_tests {
+    use super::*;
+    use mako_engine::types::{MessageRef, Pruefidentifikator};
+
+    fn pid(p: u32) -> Pruefidentifikator {
+        Pruefidentifikator::new(p).expect("valid PID")
+    }
+
+    fn stated(richtung: Richtung, pid: Option<u32>, message_ref: Option<&str>) -> Verlauf {
+        Verlauf {
+            richtung,
+            pid,
+            message_ref: message_ref.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_only_the_messages() {
+        let empfangen = DeviceChangeEvent::AntwortEmpfangen {
+            pruefidentifikator: pid(55_043),
+            sender: MarktpartnerCode::new("9900000000001"),
+            message_ref: MessageRef::new("UTILMD-1"),
+            is_confirmed: true,
+            reason: None,
+            bestaetigter_termin: None,
+        };
+        assert_eq!(
+            empfangen.verlauf(),
+            Some(stated(Richtung::Eingang, Some(55_043), Some("UTILMD-1")))
+        );
+        let zuordnung = |outbound| DeviceChangeEvent::ZuordnungEntschieden {
+            pruefidentifikator: pid(21_012),
+            zugeordnet: true,
+            zuordnungsbeginn: None,
+            outbound,
+        };
+        assert_eq!(
+            zuordnung(true).verlauf(),
+            Some(stated(Richtung::Ausgang, Some(21_012), None))
+        );
+        assert_eq!(
+            zuordnung(false).verlauf(),
+            Some(stated(Richtung::Eingang, Some(21_012), None))
+        );
+        let aperak = DeviceChangeEvent::AperakDispatched {
+            positive: true,
+            reason: None,
+        };
+        assert_eq!(
+            aperak.verlauf(),
+            Some(stated(Richtung::Ausgang, None, None))
+        );
+        assert_eq!(
+            DeviceChangeEvent::Rejected { reason: "x".into() }.verlauf(),
+            None
+        );
     }
 }

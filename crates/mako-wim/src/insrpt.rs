@@ -61,6 +61,7 @@
 //! - **AWH WiM Gas 2.0 Kap. 4.3** (gültig ab 01.10.2026)
 //! - **INSRPT AHB 1.1g / MIG 1.1a** — EDI@Energy inspection report format
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -267,6 +268,51 @@ impl EventPayload for StoerungsmeldungEvent {
             Self::Informationsmeldung { .. } => "InsrptInformationsmeldung",
             Self::DeadlineExpired { .. } => "InsrptDeadlineExpired",
         }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        let (richtung, pid, message_ref) = match self {
+            Self::StoerungsmeldungGesendet(data) => (
+                Richtung::Ausgang,
+                Some(data.pruefidentifikator),
+                &data.message_ref,
+            ),
+            Self::StoerungsmeldungEmpfangen(data) => (
+                Richtung::Eingang,
+                Some(data.pruefidentifikator),
+                &data.message_ref,
+            ),
+            Self::AntwortGesendet {
+                pruefidentifikator,
+                message_ref,
+            } => (Richtung::Ausgang, Some(*pruefidentifikator), message_ref),
+            Self::AntwortErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => (Richtung::Eingang, Some(*pruefidentifikator), message_ref),
+            Self::ErgebnisberichtGesendet { message_ref } => (Richtung::Ausgang, None, message_ref),
+            Self::Informationsmeldung {
+                pruefidentifikator,
+                message_ref,
+                outbound,
+                ..
+            } => (
+                if *outbound {
+                    Richtung::Ausgang
+                } else {
+                    Richtung::Eingang
+                },
+                Some(*pruefidentifikator),
+                message_ref,
+            ),
+            Self::DeadlineExpired { .. } => return None,
+        };
+        Some(Verlauf {
+            richtung,
+            pid: pid.map(Pruefidentifikator::as_u32),
+            message_ref: Some(message_ref.as_str().to_owned()),
+        })
     }
 }
 
@@ -1181,5 +1227,50 @@ mod tests {
             ergebnis_werktage(Sparte::Strom, Messtechnik::RlmOderImsMsHs),
             2
         );
+    }
+}
+
+#[cfg(test)]
+mod verlauf_tests {
+    use super::*;
+    use mako_engine::types::{MessageRef, Pruefidentifikator};
+
+    fn pid(p: u32) -> Pruefidentifikator {
+        Pruefidentifikator::new(p).expect("valid PID")
+    }
+
+    fn stated(richtung: Richtung, pid: Option<u32>, message_ref: Option<&str>) -> Verlauf {
+        Verlauf {
+            richtung,
+            pid,
+            message_ref: message_ref.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_only_the_messages() {
+        let antwort = StoerungsmeldungEvent::AntwortGesendet {
+            pruefidentifikator: pid(23_004),
+            message_ref: MessageRef::new("INS-1"),
+        };
+        assert_eq!(
+            antwort.verlauf(),
+            Some(stated(Richtung::Ausgang, Some(23_004), Some("INS-1")))
+        );
+        let information = StoerungsmeldungEvent::Informationsmeldung {
+            pruefidentifikator: pid(23_005),
+            counterparty: MarktpartnerCode::new("9900000000001"),
+            message_ref: MessageRef::new("INS-2"),
+            outbound: false,
+        };
+        assert_eq!(
+            information.verlauf(),
+            Some(stated(Richtung::Eingang, Some(23_005), Some("INS-2")))
+        );
+        let abgelaufen = StoerungsmeldungEvent::DeadlineExpired {
+            deadline_id: DeadlineId::new(),
+            label: "x".into(),
+        };
+        assert_eq!(abgelaufen.verlauf(), None);
     }
 }

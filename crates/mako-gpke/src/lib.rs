@@ -56,11 +56,15 @@
 //!
 //! #### Stornierung — routed to `gpke-stornierung`
 //!
-//! | PID   | Process name (AHB)                      |
-//! |-------|-----------------------------------------|
-//! | 55022 | Anfrage nach Stornierung (LFN → NB)     |
-//! | 55023 | Bestätigung Stornierung (NB → LFN)      |
-//! | 55024 | Ablehnung Stornierung (NB → LFN)        |
+//! UTILMD AHB Strom 2.2 Kap. 9.6: the Anfrage goes from a party of the
+//! Ursprungsnachricht to its receiver, both answers „zurück an den Absender" as
+//! UTILMD — the NB here, answering the LF.
+//!
+//! | PID   | Process name (AHB)                       |
+//! |-------|------------------------------------------|
+//! | 55022 | Anfrage nach Stornierung (LF → NB)       |
+//! | 55023 | Bestätigung Anfrage Stornierung (NB → LF) |
+//! | 55024 | Ablehnung Anfrage Stornierung (NB → LF)   |
 //!
 //! ### Neuanlage — routed to `gpke-neuanlage`
 //!
@@ -217,6 +221,7 @@ pub mod antwortfrist;
 pub mod beendigung_zuordnung;
 pub mod datenabruf;
 pub mod eog;
+pub mod geschaeftsdatenanfrage;
 pub mod konfiguration;
 pub mod konfiguration_aenderung;
 pub mod kuendigung;
@@ -282,6 +287,12 @@ pub use eog::{
     EogEvent, EogState, GpkeEogWorkflow, Versorgungsart, WORKFLOW_NAME as EOG_WORKFLOW_NAME,
     eog_antwort_due_at, eog_response_pid,
 };
+pub use geschaeftsdatenanfrage::{
+    ABLEHNUNG_PID as GDA_ABLEHNUNG_PID, ANFRAGE_PID as GDA_ANFRAGE_PID,
+    ANTWORT_PIDS as GDA_ANTWORT_PIDS, ANTWORT_WINDOW_LABEL as GDA_ANTWORT_WINDOW_LABEL, GDA_PIDS,
+    GdaAnfrage, GdaCommand, GdaEvent, GdaState, GpkeGeschaeftsdatenanfrageWorkflow,
+    WORKFLOW_NAME as GDA_WORKFLOW_NAME,
+};
 pub use konfiguration::{
     BeauftragungData, GpkeKonfigurationWorkflow, KONFIGURATION_WINDOW_LABEL, KonfigurationCommand,
     KonfigurationEvent, KonfigurationProjection, KonfigurationRecord, KonfigurationState,
@@ -345,7 +356,8 @@ pub use stornierung::{
     GpkeStornierungCommand, GpkeStornierungData, GpkeStornierungEvent, GpkeStornierungState,
     GpkeStornierungWorkflow,
     STORNIERUNG_ANTWORT_WINDOW_LABEL as STORNIERUNG_GPKE_ANTWORT_WINDOW_LABEL,
-    STORNIERUNG_PIDS as STORNIERUNG_GPKE_PIDS, WORKFLOW_NAME as STORNIERUNG_GPKE_WORKFLOW_NAME,
+    STORNIERUNG_PIDS as STORNIERUNG_GPKE_PIDS, StornoAblehnung,
+    WORKFLOW_NAME as STORNIERUNG_GPKE_WORKFLOW_NAME,
 };
 pub use utilts::{
     GpkeUtiltsWorkflow, UTILTS_PIDS, UtiltsKonfigCommand, UtiltsKonfigData, UtiltsKonfigEvent,
@@ -378,6 +390,8 @@ pub use zuordnungsmeldung::{
 /// - PIDs 31001, 31002, 31005, 31006 (billing, INVOIC) → `"gpke-abrechnung"`
 ///   _(31003 → `mako-wim`; 31004 = Sparte-neutral universal Storno, checked by `invoicd`)_
 /// - PIDs 19001, 19002 (inbound ORDRSP, NB role only) → `"gpke-konfiguration"`
+/// - PID 17132 (Geschäftsdatenanfrage, ORDERS), its UTILMD answers 55035/55095/55060
+///   and the ORDRSP 19101 → `"gpke-geschaeftsdatenanfrage"`
 ///
 /// **Role-conditional PIDs (ORDRSP 19001/19002):**
 ///
@@ -472,6 +486,9 @@ impl mako_engine::builder::EngineModule for GpkeModule {
                 konfiguration_aenderung::WORKFLOW_NAME,
             ),
             WorkflowDriver::of::<datenabruf::GpkeDatenabrufWorkflow>(datenabruf::WORKFLOW_NAME),
+            WorkflowDriver::of::<geschaeftsdatenanfrage::GpkeGeschaeftsdatenanfrageWorkflow>(
+                geschaeftsdatenanfrage::WORKFLOW_NAME,
+            ),
             WorkflowDriver::of::<allokationsliste::GpkeAllokationslisteWorkflow>(
                 allokationsliste::WORKFLOW_NAME,
             ),
@@ -566,30 +583,40 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // Per BDEW PID overview: "AWH Sperrprozesse" applies to both Strom and Gas.
         // Direction: LF → NB (17115 Sperrauftrag, 17117 Entsperrauftrag);
         //            NB → MSB (17116 Anfrage Sperrung).
+        //
+        // Every Sperrung PID is also registered Sparte-qualified: GeLi Gas
+        // carries the same ORDERS/ORDRSP/ORDCHG PIDs, and the Sparte-agnostic
+        // table is last-wins, so a Strom+Gas deployment would hand every
+        // Sperrung of both Sparten to whichever module registered second. The
+        // recipient MP-ID (UNB DE 0010) names the Sparte (BDEW §2.13).
+        let sperrung_pid = |router: &mut mako_engine::pid_router::PidRouter, pid, wf: &str| {
+            router.register(pid, wf);
+            router.register_with_sparte(pid, mako_engine::types::Sparte::Strom, wf.to_owned());
+        };
         for &pid in SPERRUNG_PIDS {
-            router.register(pid, sperrung::WORKFLOW_NAME);
+            sperrung_pid(router, pid, sperrung::WORKFLOW_NAME);
         }
 
         // ORDCHG 39000/39001 (Stornierung Sperr-/Entsperrauftrag).
         // 39000: LF → NB (LF cancels a pending Sperrauftrag).
         // 39001: NB → MSB (Weiterleitung der Stornierung — NB forwards LF cancellation to MSB).
         for &pid in ORDCHG_STORNIERUNG_PIDS {
-            router.register(pid, sperrung::WORKFLOW_NAME);
+            sperrung_pid(router, pid, sperrung::WORKFLOW_NAME);
         }
 
         // ORDRSP 19118/19119 (MSB → NB: MSB's response to Anfrage Sperrung 17116).
         // Only relevant when running in NB role (NB sends Anfrage to MSB and waits).
         for &pid in MSB_ANTWORT_PIDS {
-            router.register(pid, sperrung::WORKFLOW_NAME);
+            sperrung_pid(router, pid, sperrung::WORKFLOW_NAME);
         }
 
         // ORDRSP 19116/19117/19128/19129 (NB → LF: NB's response to Sperrauftrag/Stornierung).
         // Registered for the LF-role `gpke-sperrung-lf` workflow so LF receives NB's answer.
         for &pid in ORDRSP_SPERRUNG_PIDS {
-            router.register(pid, sperrung_lf::WORKFLOW_NAME);
+            sperrung_pid(router, pid, sperrung_lf::WORKFLOW_NAME);
         }
         for &pid in ORDRSP_STORNO_PIDS {
-            router.register(pid, sperrung_lf::WORKFLOW_NAME);
+            sperrung_pid(router, pid, sperrung_lf::WORKFLOW_NAME);
         }
 
         // IFTSTA 21039 (Auftragsstatus Sperren, NB → LF).
@@ -731,12 +758,21 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // GPKE Datenabruf — LF-initiated data-value requests and reclamations.
         //
         // LF sends ORDERS 17102/17113 (Anfrage/Reklamation von Werten) to NB/MSB.
-        // NB/MSB rejects with ORDRSP 19101/19102/19114 (positive response via MSCONS).
+        // NB/MSB rejects with ORDRSP 19102/19114 (positive response via MSCONS).
         for &pid in datenabruf::ORDERS_ANFRAGE_PIDS {
             router.register(pid, datenabruf::WORKFLOW_NAME);
         }
         for &pid in datenabruf::ORDRSP_ABLEHNUNG_PIDS {
             router.register(pid, datenabruf::WORKFLOW_NAME);
+        }
+
+        // GPKE Teil 4 Kap. 3 Geschäftsdatenanfrage — ORDERS 17132 (LF · MSB → NB),
+        // answered by UTILMD 55035/55095/55060 or refused by ORDRSP 19101
+        // (ORDERS AHB 1.1b Kap. 4.1.1; Anwendungsübersicht 4.0 lfd. Nr.
+        // 25540–25640). Receipt implies the side: a 17132 arrives at the NB,
+        // the answers at the Anfragender, so no role gate is needed.
+        for &pid in geschaeftsdatenanfrage::GDA_PIDS {
+            router.register(pid, geschaeftsdatenanfrage::WORKFLOW_NAME);
         }
 
         // GPKE Allokationsliste — LF requests allocation lists (MMM Strom/Gas).

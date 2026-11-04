@@ -41,6 +41,7 @@
 
 use mako_engine::{
     deadline::Deadline,
+    envelope::{Richtung, Verlauf},
     error::WorkflowError,
     ids::DeadlineId,
     outbox::PendingOutbox,
@@ -233,6 +234,22 @@ impl EventPayload for AllocationEvent {
         match self {
             Self::AllocationReceived { .. } => "GaBiGasAllocationReceived",
             Self::FinalAllocationOverdue { .. } => "GaBiGasFinalAllocationOverdue",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            // The DVGW Prüfidentifikator from `RFF+Z13`, as the message carried it.
+            Self::AllocationReceived {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(*pruefidentifikator),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::FinalAllocationOverdue { .. } => None,
         }
     }
 }
@@ -558,5 +575,48 @@ mod pid_catalogue_conformance {
             };
             assert_eq!(derived, expected, "PID {} direction disagrees", info.pid);
         }
+    }
+}
+
+#[cfg(test)]
+mod verlauf {
+    use mako_engine::{
+        envelope::{Richtung, Verlauf},
+        ids::DeadlineId,
+        types::MessageRef,
+        workflow::EventPayload,
+    };
+
+    use super::{AllocationEvent, AllocationType, AllocationVersion, FINAL_ALOCAT_DEADLINE_LABEL};
+    use crate::domain::GasDay;
+
+    #[test]
+    fn an_alocat_is_inbound_and_an_overdue_window_is_no_message() {
+        let gas_day = GasDay::new(time::macros::date!(2026 - 10 - 01));
+        let received = AllocationEvent::AllocationReceived {
+            pruefidentifikator: 70001,
+            allocation_type: AllocationType::from_pid(70001).expect("catalogued PID"),
+            sender_eic: "sender".to_owned(),
+            receiver_eic: "receiver".to_owned(),
+            gas_day,
+            version: AllocationVersion::Initial,
+            allocated_quantity: None,
+            clearing_number: None,
+            message_ref: MessageRef::new("ALO-1"),
+        };
+        assert_eq!(
+            received.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(70001),
+                message_ref: Some("ALO-1".to_owned()),
+            })
+        );
+        let overdue = AllocationEvent::FinalAllocationOverdue {
+            gas_day,
+            deadline_id: DeadlineId::new(),
+            label: FINAL_ALOCAT_DEADLINE_LABEL.into(),
+        };
+        assert_eq!(overdue.verlauf(), None);
     }
 }

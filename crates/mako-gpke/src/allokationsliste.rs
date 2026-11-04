@@ -28,6 +28,7 @@
 //!   it — BK6-22-024 covers GPKE Teil 4 and BK6-24-174 the rest, and neither
 //!   mentions Allokationslisten.
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     outbox::PendingOutbox,
@@ -108,6 +109,36 @@ impl EventPayload for AllokationslisteEvent {
             Self::AnforderungGesendet { .. } => "AllokationslisteAnforderungGesendet",
             Self::AnforderungAbgelehnt { .. } => "AllokationslisteAnforderungAbgelehnt",
             Self::DatenGeliefert { .. } => "AllokationslisteDatenGeliefert",
+        }
+    }
+
+    /// Every variant is a message: the outbound ORDERS, the inbound ORDRSP
+    /// Ablehnung and the inbound MSCONS. `DatenGeliefert` carries no PID.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AnforderungGesendet {
+                orders_pid,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(orders_pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::AnforderungAbgelehnt {
+                ordrsp_pid,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(ordrsp_pid.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::DatenGeliefert { message_ref } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: None,
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
         }
     }
 }
@@ -336,5 +367,56 @@ impl Workflow for GpkeAllokationslisteWorkflow {
                 Ok(vec![AllokationslisteEvent::DatenGeliefert { message_ref }].into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pid(code: u32) -> Pruefidentifikator {
+        Pruefidentifikator::new(code).expect("valid PID")
+    }
+
+    #[test]
+    fn verlauf_states_orders_out_and_ordrsp_and_mscons_in() {
+        let gesendet = AllokationslisteEvent::AnforderungGesendet {
+            orders_pid: pid(17_114),
+            nb_mp_id: MarktpartnerCode::new("9900357000004"),
+            malo: None,
+            message_ref: MessageRef::new("ORD-1"),
+        };
+        assert_eq!(
+            gesendet.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(17_114),
+                message_ref: Some("ORD-1".to_owned()),
+            })
+        );
+        let abgelehnt = AllokationslisteEvent::AnforderungAbgelehnt {
+            ordrsp_pid: pid(19_115),
+            reason: None,
+            message_ref: MessageRef::new("RSP-1"),
+        };
+        assert_eq!(
+            abgelehnt.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(19_115),
+                message_ref: Some("RSP-1".to_owned()),
+            })
+        );
+        let geliefert = AllokationslisteEvent::DatenGeliefert {
+            message_ref: MessageRef::new("MSC-1"),
+        };
+        assert_eq!(
+            geliefert.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: None,
+                message_ref: Some("MSC-1".to_owned()),
+            })
+        );
     }
 }

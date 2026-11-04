@@ -46,6 +46,7 @@
 //! | Antwort auf Stornierung | 2 WT nach ÜT der Stornierung |
 //! | Antwort auf Beendigung | 2 WT nach ÜT der Beendigung |
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
@@ -398,6 +399,37 @@ impl EventPayload for WertebestellungEvent {
             Self::FristVersaeumt { .. } => "WertebestellungFristVersaeumt",
             Self::AngebotVerfallen => "WertebestellungAngebotVerfallen",
         }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        let (richtung, message_ref) = match self {
+            Self::AnfrageEingegangen { message_ref, .. }
+            | Self::BestellungEingegangen { message_ref, .. }
+            | Self::StornierungEingegangen { message_ref, .. }
+            | Self::AbbestellungEingegangen { message_ref, .. } => {
+                (Richtung::Eingang, Some(message_ref))
+            }
+            Self::AngebotAbgegeben { message_ref, .. }
+            | Self::BestellungBestaetigt { message_ref }
+            | Self::StornierungBestaetigt { message_ref }
+            | Self::AbbestellungBestaetigt { message_ref }
+            | Self::BeendetDurchMsb { message_ref, .. }
+            | Self::WerteUebermittelt { message_ref, .. } => (Richtung::Ausgang, Some(message_ref)),
+            // Each refusal enqueues the QUOTES / ORDRSP answer to the ESA; the
+            // event carries no reference of its own.
+            Self::AnfrageAbgelehnt { .. }
+            | Self::BestellungAbgelehnt { .. }
+            | Self::StornierungAbgelehnt { .. }
+            | Self::AbbestellungAbgelehnt { .. } => (Richtung::Ausgang, None),
+            Self::LieferungBegonnen | Self::FristVersaeumt { .. } | Self::AngebotVerfallen => {
+                return None;
+            }
+        };
+        Some(Verlauf {
+            richtung,
+            pid: None,
+            message_ref: message_ref.map(|r| r.as_str().to_owned()),
+        })
     }
 }
 
@@ -1935,5 +1967,36 @@ impl Workflow for WimWertebestellungWorkflow {
                 .into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod verlauf_tests {
+    use super::*;
+    use mako_engine::types::MessageRef;
+
+    fn stated(richtung: Richtung, pid: Option<u32>, message_ref: Option<&str>) -> Verlauf {
+        Verlauf {
+            richtung,
+            pid,
+            message_ref: message_ref.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn verlauf_states_the_messages_and_only_the_messages() {
+        let bestaetigt = WertebestellungEvent::BestellungBestaetigt {
+            message_ref: MessageRef::new("RSP-1"),
+        };
+        assert_eq!(
+            bestaetigt.verlauf(),
+            Some(stated(Richtung::Ausgang, None, Some("RSP-1")))
+        );
+        let abgelehnt = WertebestellungEvent::BestellungAbgelehnt { reason: "x".into() };
+        assert_eq!(
+            abgelehnt.verlauf(),
+            Some(stated(Richtung::Ausgang, None, None))
+        );
+        assert_eq!(WertebestellungEvent::AngebotVerfallen.verlauf(), None);
     }
 }

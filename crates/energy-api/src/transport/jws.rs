@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn sign_verify_roundtrip() {
-        let secret = SecretKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+        let secret = SecretKey::from_slice(&[0x11; 32]).expect("a valid P-256 scalar");
         let sk = SigningKey::from(&secret);
         let vk = VerifyingKey::from(&sk);
         let rec = sample_record();
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn tampered_record_fails_verification() {
-        let secret = SecretKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+        let secret = SecretKey::from_slice(&[0x11; 32]).expect("a valid P-256 scalar");
         let sk = SigningKey::from(&secret);
         let vk = VerifyingKey::from(&sk);
         let rec = sample_record();

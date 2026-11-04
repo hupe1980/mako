@@ -51,7 +51,7 @@ use mako_engine::lf_vorgang::LfVorgangsdaten;
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
-    envelope::EventEnvelope,
+    envelope::{EventEnvelope, Richtung, Verlauf},
     error::WorkflowError,
     ids::DeadlineId,
     outbox::PendingOutbox,
@@ -285,6 +285,9 @@ pub enum GasSupplierChangeEvent {
     },
     /// Local party sent the outbound UTILMD G Antwort.
     AntwortGesendet {
+        /// The Prüfidentifikator the queued UTILMD G carries — the Antwort PID,
+        /// or the Anfrage PID on a one-way process that has none.
+        pid: u32,
         /// Derived Antwort PID (None for one-way processes).
         response_pid: Option<Pruefidentifikator>,
         /// `true` = Bestätigung, `false` = Ablehnung.
@@ -366,6 +369,51 @@ impl EventPayload for GasSupplierChangeEvent {
             Self::SchweigenWirksam { .. } => "GasSupplierChangeSchweigenWirksam",
             Self::Rejected { .. } => "GasSupplierChangeRejected",
             Self::DeadlineExpired { .. } => "GasSupplierChangeDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::Initiated {
+                message_ref,
+                pruefidentifikator,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            // `handle` queues the UTILMD G Antwort in the same output.
+            Self::AntwortGesendet { pid, .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(*pid),
+                message_ref: None,
+            }),
+            Self::GnbProcessInitiated {
+                message_ref,
+                pruefidentifikator,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::GnbAntwortErhalten { response_pid, .. } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: None,
+            }),
+            Self::ValidationPassed { .. }
+            | Self::Activated
+            | Self::SchweigenWirksam { .. }
+            | Self::DeadlineExpired { .. } => None,
+            // Emitted only beside the APERAK 313 Verarbeitbarkeitsfehlermeldung
+            // `handle` queues for it; an APERAK carries no Prüfidentifikator.
+            Self::Rejected { .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
         }
     }
 }
@@ -752,6 +800,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 response_pid,
                 accepted,
                 reason,
+                ..
             } => match state {
                 GasSupplierChangeState::ValidationPassed(data) => {
                     if *accepted {
@@ -1012,6 +1061,9 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 };
                 let anfrage_pid = data.pruefidentifikator.as_u32();
                 let response_pid = response_pid_for(anfrage_pid, accepted);
+                // The answer PID is what goes on the wire; `anfrage_pid` is
+                // kept for correlation and audit.
+                let wire_pid = response_pid.map_or(anfrage_pid, |p| p.as_u32());
 
                 // Keys follow the `render_utilmd` contract — `pid`, `sender`,
                 // `malo`, `process_date` — because this entry is dispatched as a
@@ -1019,9 +1071,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 // not a hard error: the AS4 sender falls back to putting the
                 // raw domain JSON on the wire, which the peer cannot parse.
                 let mut outbox_payload = serde_json::json!({
-                    // The answer PID is what goes on the wire; `anfrage_pid` is
-                    // kept for correlation and audit.
-                    "pid":           response_pid.map_or(anfrage_pid, |p| p.as_u32()),
+                    "pid":           wire_pid,
                     "anfrage_pid":   anfrage_pid,
                     "accepted":      accepted,
                     "malo":          data.malo_id.as_str(),
@@ -1056,6 +1106,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 }
 
                 let event = GasSupplierChangeEvent::AntwortGesendet {
+                    pid: wire_pid,
                     response_pid,
                     accepted,
                     reason: bemerkung,
@@ -1410,6 +1461,81 @@ mod tests {
     }
     fn receiver() -> MarktpartnerCode {
         MarktpartnerCode::new("9900357000004")
+    }
+
+    #[test]
+    fn verlauf_states_the_messages() {
+        let anfrage = GasSupplierChangeEvent::Initiated {
+            variant: GasProcessVariant::LieferbeginnGas,
+            sender: sender(),
+            receiver: receiver(),
+            malo_id: malo(),
+            document_date: "20250115".to_owned(),
+            process_date: "20250301".to_owned(),
+            message_ref: MessageRef::new("MSG-GELI-001"),
+            pruefidentifikator: pid(44001),
+        };
+        assert_eq!(
+            anfrage.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(44001),
+                message_ref: Some("MSG-GELI-001".to_owned()),
+            })
+        );
+        let antwort = GasSupplierChangeEvent::AntwortGesendet {
+            pid: 44002,
+            response_pid: Some(pid(44002)),
+            accepted: true,
+            reason: None,
+        };
+        assert_eq!(
+            antwort.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(44002),
+                message_ref: None,
+            })
+        );
+        // A one-way process has no Antwort PID; the UTILMD G it sends carries
+        // the Anfrage PID, and that is what the thread states.
+        let einweg = GasSupplierChangeEvent::AntwortGesendet {
+            pid: 44019,
+            response_pid: None,
+            accepted: true,
+            reason: None,
+        };
+        assert_eq!(einweg.verlauf().and_then(|v| v.pid), Some(44019));
+        // The APERAK 313 queued beside a validation failure.
+        let rejected = GasSupplierChangeEvent::Rejected {
+            reason: "x".to_owned(),
+        };
+        assert_eq!(
+            rejected.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            })
+        );
+        let gnb_antwort = GasSupplierChangeEvent::GnbAntwortErhalten {
+            response_pid: pid(44015),
+            accepted: false,
+            reason: None,
+        };
+        assert_eq!(
+            gnb_antwort.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(44015),
+                message_ref: None,
+            })
+        );
+        assert_eq!(GasSupplierChangeEvent::Activated.verlauf(), None);
+        let passed = GasSupplierChangeEvent::ValidationPassed {
+            message_ref: MessageRef::new("MSG-GELI-001"),
+        };
+        assert_eq!(passed.verlauf(), None);
     }
 
     /// A fixed receipt instant, so the published-deadline comparison is exact.

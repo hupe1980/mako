@@ -664,6 +664,27 @@ pub fn berlin_date(instant: OffsetDateTime) -> Date {
     instant.to_timezone(timezones::db::europe::BERLIN).date()
 }
 
+/// `instant` on the German wall clock — the same instant, carrying the
+/// Europe/Berlin offset in force then (CET or CEST).
+///
+/// For rendering an instant the way a German reader states it — „05.11.2026,
+/// 11:00 Uhr" for `2026-11-05T10:00:00Z` — and for comparing such a statement
+/// with the instant a service returned.
+///
+/// ```rust
+/// use mako_fristen::in_berlin;
+/// use time::macros::datetime;
+///
+/// let berlin = in_berlin(datetime!(2026-11-05 10:00 UTC));
+/// assert_eq!((berlin.hour(), berlin.minute()), (11, 0));
+/// let summer = in_berlin(datetime!(2026-07-01 10:00 UTC));
+/// assert_eq!(summer.hour(), 12);
+/// ```
+#[must_use]
+pub fn in_berlin(instant: OffsetDateTime) -> OffsetDateTime {
+    instant.to_timezone(timezones::db::europe::BERLIN)
+}
+
 /// Now, expressed in the Europe/Berlin offset.
 ///
 /// The same instant `OffsetDateTime::now_utc()` returns, carrying the German

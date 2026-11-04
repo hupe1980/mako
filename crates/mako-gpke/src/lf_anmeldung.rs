@@ -44,6 +44,7 @@
 //!   Teil-2 Zuordnungsprozesse, and no 24-hour window anywhere.
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -200,6 +201,28 @@ impl EventPayload for LfAnmeldungEvent {
             Self::AntwortReceived { .. } => "LfAnmeldungAntwortReceived",
             Self::Activated => "LfAnmeldungActivated",
             Self::DeadlineExpired { .. } => "LfAnmeldungDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::Initiated {
+                pruefidentifikator, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: None,
+            }),
+            Self::AntwortReceived {
+                response_pid,
+                response_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: Some(response_ref.as_str().to_owned()),
+            }),
+            Self::Activated | Self::DeadlineExpired { .. } => None,
         }
     }
 }

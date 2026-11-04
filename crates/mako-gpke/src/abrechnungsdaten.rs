@@ -29,6 +29,7 @@
 //! - BK6-24-174 GPKE Teil 2 Kap. 3.1.1 / 3.1.2 / 3.1.3
 //! - Entscheidungsbaum-Diagramme und Codelisten 4.3, Kap. 6.17.1 (`E_0595`)
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::{
     deadline::Deadline,
     error::WorkflowError,
@@ -83,6 +84,8 @@ pub enum AbrechnungsdatenEvent {
     },
     /// The IFTSTA 21047 Bearbeitungsstandsmeldung went out.
     BearbeitungsstandGesendet {
+        /// The Prüfidentifikator the queued IFTSTA carries (21047).
+        pid: u32,
         /// The `E_0595` code it states.
         antwort_code: String,
         /// `true` when a Stammdatenänderung follows — the code's own cluster.
@@ -111,6 +114,26 @@ impl EventPayload for AbrechnungsdatenEvent {
             Self::BearbeitungsstandGesendet { .. } => "AbrechnungsdatenBearbeitungsstandGesendet",
             Self::Abgebrochen { .. } => "AbrechnungsdatenAbgebrochen",
             Self::DeadlineExpired { .. } => "AbrechnungsdatenDeadlineExpired",
+        }
+    }
+
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::RueckmeldungErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::BearbeitungsstandGesendet { pid, .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(*pid),
+                message_ref: None,
+            }),
+            Self::Abgebrochen { .. } | Self::DeadlineExpired { .. } => None,
         }
     }
 }
@@ -329,6 +352,7 @@ impl Workflow for GpkeAbrechnungsdatenWorkflow {
                     return Err(WorkflowError::invalid_state("Eingegangen", state.label()));
                 };
                 let events = vec![AbrechnungsdatenEvent::BearbeitungsstandGesendet {
+                    pid: BEARBEITUNGSSTAND_PID,
                     antwort_code: antwort_code.clone(),
                     sendet_stammdatenaenderung,
                     bemerkung: bemerkung.clone(),
@@ -467,6 +491,41 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn verlauf_states_the_inbound_rueckmeldung_and_the_outbound_iftsta() {
+        let out = GpkeAbrechnungsdatenWorkflow::handle(
+            &AbrechnungsdatenState::default(),
+            receive(55_220),
+        )
+        .expect("accepted");
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(55_220),
+                message_ref: Some("ABR-001".to_owned()),
+            })
+        );
+        let gesendet = AbrechnungsdatenEvent::BearbeitungsstandGesendet {
+            pid: BEARBEITUNGSSTAND_PID,
+            antwort_code: "A01".to_owned(),
+            sendet_stammdatenaenderung: false,
+            bemerkung: None,
+        };
+        assert_eq!(
+            gesendet.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(21_047),
+                message_ref: None,
+            })
+        );
+        let abgebrochen = AbrechnungsdatenEvent::Abgebrochen {
+            reason: "x".to_owned(),
+        };
+        assert_eq!(abgebrochen.verlauf(), None);
     }
 
     /// The answer is an IFTSTA 21047 carrying its `E_0595` code — an event with

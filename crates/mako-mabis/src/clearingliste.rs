@@ -56,6 +56,7 @@
 //!                           └─── (ValidationFailed) ──→ ValidationFailed (terminal)
 //! ```
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -196,6 +197,23 @@ impl EventPayload for ClearinglisteEvent {
             Self::ClearinglisteErhalten { .. } => "MabisClearinglisteErhalten",
             Self::ValidationPassed { .. } => "MabisClearinglisteValidationPassed",
             Self::ValidationFailed { .. } => "MabisClearinglisteValidationFailed",
+        }
+    }
+
+    /// The inbound Clearingliste UTILMD is the one message; neither validation
+    /// outcome queues anything.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::ClearinglisteErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::ValidationPassed { .. } | Self::ValidationFailed { .. } => None,
         }
     }
 }
@@ -391,5 +409,46 @@ impl Workflow for MabisClearinglisteWorkflow {
                 Ok(events.into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verlauf_states_the_inbound_clearingliste() {
+        let erhalten = ClearinglisteEvent::ClearinglisteErhalten {
+            pruefidentifikator: Pruefidentifikator::new(55_067).unwrap(),
+            kind: ClearinglisteKind::Bilanzkreiszuordnungsliste,
+            sender: MarktpartnerCode::new("9900357000004"),
+            receiver: MarktpartnerCode::new("9900000000001"),
+            billing_period: BillingPeriod::new("2026-01"),
+            document_date: "20260101".to_owned(),
+            message_ref: MessageRef::new("CL-1"),
+        };
+        assert_eq!(
+            erhalten.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(55_067),
+                message_ref: Some("CL-1".to_owned()),
+            })
+        );
+        assert_eq!(
+            ClearinglisteEvent::ValidationPassed {
+                message_ref: MessageRef::new("CL-1"),
+            }
+            .verlauf(),
+            None
+        );
+        assert_eq!(
+            ClearinglisteEvent::ValidationFailed {
+                reason: "x".to_owned(),
+            }
+            .verlauf(),
+            None,
+            "a failed validation queues no APERAK here"
+        );
     }
 }

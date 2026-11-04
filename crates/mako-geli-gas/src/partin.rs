@@ -41,6 +41,7 @@
 //! - **PARTIN 1.x** — EDI@Energy party information format
 //! - **BDEW PARTIN AHB 1.0f** — PIDs 37008–37014, GeLi Gas process family
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
@@ -120,6 +121,22 @@ impl EventPayload for GasKommunikationsdatenEvent {
             Self::PartinErhalten { .. } => "GasKommunikationsdatenPartinErhalten",
             Self::ValidationPassed { .. } => "GasKommunikationsdatenValidationPassed",
             Self::ValidationFailed { .. } => "GasKommunikationsdatenValidationFailed",
+        }
+    }
+
+    /// The inbound PARTIN is the one message; neither validation outcome queues anything.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::PartinErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::ValidationPassed { .. } | Self::ValidationFailed { .. } => None,
         }
     }
 }
@@ -268,5 +285,43 @@ impl Workflow for GeliGasPartinWorkflow {
                 Ok(events.into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verlauf_states_the_inbound_partin() {
+        let erhalten = GasKommunikationsdatenEvent::PartinErhalten {
+            pruefidentifikator: Pruefidentifikator::new(37_008).unwrap(),
+            sender: MarktpartnerCode::new("9800000000004"),
+            document_date: "20260101".to_owned(),
+            message_ref: MessageRef::new("PARTIN-1"),
+        };
+        assert_eq!(
+            erhalten.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(37_008),
+                message_ref: Some("PARTIN-1".to_owned()),
+            })
+        );
+        assert_eq!(
+            GasKommunikationsdatenEvent::ValidationPassed {
+                message_ref: MessageRef::new("PARTIN-1"),
+            }
+            .verlauf(),
+            None
+        );
+        assert_eq!(
+            GasKommunikationsdatenEvent::ValidationFailed {
+                reason: "x".to_owned(),
+            }
+            .verlauf(),
+            None,
+            "a failed validation queues no APERAK here"
+        );
     }
 }

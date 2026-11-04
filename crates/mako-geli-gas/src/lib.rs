@@ -226,7 +226,7 @@ pub use sperrung_nb::{
 pub use stornierung::{
     GeliGasStornierungCommand, GeliGasStornierungData, GeliGasStornierungEvent,
     GeliGasStornierungState, GeliGasStornierungWorkflow, STORNIERUNG_PIDS,
-    STORNIERUNG_RESPONSE_WINDOW_LABEL, WORKFLOW_NAME as STORNIERUNG_WORKFLOW_NAME,
+    STORNIERUNG_RESPONSE_WINDOW_LABEL, StornoAblehnung, WORKFLOW_NAME as STORNIERUNG_WORKFLOW_NAME,
 };
 
 pub use gas_quality::normalize_gasqualitaet;
@@ -375,31 +375,36 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
 
         // Gas Sperrung / Entsperrung (LF-side) — PIDs 17115/17117 outbound (LF → GNB),
         // inbound ORDRSP 19116/19117 (Bestätigung/Ablehnung), Storno ORDRSP 19128/19129.
-        // PIDs 19116/19117 are shared with GPKE Sperrung Strom; process context is
-        // resolved by correlation ID at runtime in mixed Strom+Gas deployments.
+        // PIDs 19116/19117 are shared with GPKE Sperrung Strom, so every Sperrung
+        // PID is also registered Sparte-qualified (Gas): the Sparte-agnostic
+        // table is last-wins, and the recipient MP-ID names the Sparte.
         // Regulatory basis: BK7-24-01-009 (GeLi Gas 3.0).
         // Business answer window: per-PID via `mako_fristen::antwort`. APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.1 §2.3.1).
+        let sperrung_pid = |router: &mut mako_engine::pid_router::PidRouter, pid, wf: &str| {
+            router.register(pid, wf);
+            router.register_with_sparte(pid, mako_engine::types::Sparte::Gas, wf.to_owned());
+        };
         for &pid in sperrung_lf::ORDRSP_SPERRUNG_PIDS {
-            router.register(pid, sperrung_lf::WORKFLOW_NAME);
+            sperrung_pid(router, pid, sperrung_lf::WORKFLOW_NAME);
         }
         for &pid in sperrung_lf::ORDRSP_STORNO_PIDS {
-            router.register(pid, sperrung_lf::WORKFLOW_NAME);
+            sperrung_pid(router, pid, sperrung_lf::WORKFLOW_NAME);
         }
 
         // Gas Sperrung / Entsperrung (GNB-side / NB-role) — inbound ORDERS 17115/17117
         // from LF, plus ORDCHG 39000/39001 (Stornierung) and ORDRSP 19118/19119 from gMSB.
-        // PIDs 17115/17116/17117 are shared with GPKE Sperrung Strom (NB-role); process
-        // context is resolved by commodity (Gas vs. Strom) at runtime.
+        // PIDs 17115/17116/17117 are shared with GPKE Sperrung Strom (NB-role) and
+        // resolve by the recipient's Sparte (registered Gas-qualified above).
         // Regulatory basis: BK7-24-01-009 (AWH Sperrprozesse Gas).
         // Business answer window: per-PID via `mako_fristen::antwort`. APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.1 §2.3.1).
         for &pid in sperrung_nb::SPERRUNG_PIDS {
-            router.register(pid, sperrung_nb::WORKFLOW_NAME);
+            sperrung_pid(router, pid, sperrung_nb::WORKFLOW_NAME);
         }
         for &pid in sperrung_nb::ORDCHG_STORNIERUNG_PIDS {
-            router.register(pid, sperrung_nb::WORKFLOW_NAME);
+            sperrung_pid(router, pid, sperrung_nb::WORKFLOW_NAME);
         }
         for &pid in sperrung_nb::MSB_ANTWORT_PIDS {
-            router.register(pid, sperrung_nb::WORKFLOW_NAME);
+            sperrung_pid(router, pid, sperrung_nb::WORKFLOW_NAME);
         }
 
         // INVOIC 31011 — Rechnung sonstige Leistung / AWH Sperrprozesse Gas (VNB → LFN/LFA).

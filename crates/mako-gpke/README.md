@@ -45,7 +45,8 @@ command through `Process::run`; `makod` is that host.
 | `stammdatenaenderung`       | `gpke-stammdatenaenderung`       | GPKE Teil 4 Stammdatenänderung 55615–55694, 55109/55110 — inbound MaLo change → apply to marktd + Rückmeldung A01/A02 (quality feedback, tacit acceptance after 2 WT) |
 | `neuanlage`                 | `gpke-neuanlage`                 | PIDs 55600/55601 (Neuanlage MaLo, LF → NB) + 55602–55605 derived   |
 | `messwerte`                 | `gpke-messwerte`                 | MSCONS PIDs 13005/13006/13015–13019/13025/13027 (Messwerte NB/MSB → LF) |
-| `datenabruf`                | `gpke-datenabruf`                | ORDERS 17004/17102/17113 (Anfrage) + ORDRSP 19101/19102/19114 (Ablehnung) |
+| `datenabruf`                | `gpke-datenabruf`                | ORDERS 17004/17102/17113 (Anfrage) + ORDRSP 19102/19114 (Ablehnung) |
+| `geschaeftsdatenanfrage`    | `gpke-geschaeftsdatenanfrage`    | ORDERS 17132 (Anfrage Stammdaten, LF · MSB → NB) → UTILMD 55035/55095/55060 or ORDRSP 19101; both sides, 1 WT |
 | `allokationsliste`          | `gpke-allokationsliste`          | ORDERS 17110/17114 + ORDRSP 19110/19115 + MSCONS 13014 (Allokationsliste Strom) |
 | `anfrage_bestellung`        | `gpke-anfrage-bestellung`        | PID 55555 (Anfrage Daten der individuellen Bestellung, GPKE Teil 4)  |
 | `abrechnung`                | `gpke-abrechnung`                | PIDs 31001/31002/31005/31006 (INVOIC Netznutzungsabrechnung)        |

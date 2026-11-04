@@ -64,6 +64,7 @@
 //!   01.10.2026) E_0408/E_0409/E_0410/E_0412/E_0415/… (Rückmeldung A01/A02)
 //! - **APERAK AHB 1.1 §2.4.1** — Strom UTILMD 45-min APERAK Frist
 
+use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
@@ -329,6 +330,49 @@ impl EventPayload for StammdatenEvent {
             Self::RueckmeldungErhalten { .. } => "StammdatenRueckmeldungErhalten",
             Self::StillschweigendAngenommen { .. } => "StammdatenStillschweigendAngenommen",
             Self::Rejected { .. } => "StammdatenRejected",
+        }
+    }
+
+    /// Both roles: the Berechtigter receives the Änderung and sends the
+    /// Rückmeldung; the Verantwortlicher sends the Änderung and receives it.
+    fn verlauf(&self) -> Option<Verlauf> {
+        match self {
+            Self::AenderungErhalten {
+                pruefidentifikator,
+                message_ref,
+                ..
+            } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: Some(message_ref.as_str().to_owned()),
+            }),
+            Self::RueckmeldungGesendet { response_pid, .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: None,
+            }),
+            Self::AenderungGesendet {
+                pruefidentifikator, ..
+            } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(pruefidentifikator.as_u32()),
+                message_ref: None,
+            }),
+            Self::RueckmeldungErhalten { response_pid, .. } => Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(response_pid.as_u32()),
+                message_ref: None,
+            }),
+            Self::StillschweigendAngenommen { .. } => None,
+            // `ValidationPassed` is emitted only beside the APERAK 312
+            // Anerkennungsmeldung `handle` queues for it, `Rejected` only beside
+            // the APERAK 313 Verarbeitbarkeitsfehlermeldung; an APERAK carries
+            // no Prüfidentifikator.
+            Self::ValidationPassed { .. } | Self::Rejected { .. } => Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
         }
     }
 }
@@ -889,6 +933,72 @@ mod tests {
         events
             .iter()
             .fold(init, GpkeStammdatenaenderungWorkflow::apply)
+    }
+
+    #[test]
+    fn verlauf_states_both_roles_and_not_tacit_acceptance() {
+        assert_eq!(
+            StammdatenEvent::Rejected {
+                reason: "x".to_owned(),
+            }
+            .verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            "the APERAK 313 queued beside the rejection"
+        );
+        let out = GpkeStammdatenaenderungWorkflow::handle(
+            &StammdatenState::New,
+            receive_malo_cmd(serde_json::json!({}), true),
+        )
+        .unwrap();
+        assert_eq!(
+            out.events[0].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(55_616),
+                message_ref: Some("SD-001".to_owned()),
+            })
+        );
+        assert_eq!(
+            out.events[1].verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: None,
+                message_ref: None,
+            }),
+            "the APERAK 312 queued beside ValidationPassed"
+        );
+        let rueck = StammdatenEvent::RueckmeldungErhalten {
+            response_pid: pid(55_137),
+            qualitaet: Qualitaet::Uebernommen,
+        };
+        assert_eq!(
+            rueck.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Eingang,
+                pid: Some(55_137),
+                message_ref: None,
+            })
+        );
+        let gesendet = StammdatenEvent::RueckmeldungGesendet {
+            response_pid: pid(55_622),
+            qualitaet: Qualitaet::Uebernommen,
+        };
+        assert_eq!(
+            gesendet.verlauf(),
+            Some(Verlauf {
+                richtung: Richtung::Ausgang,
+                pid: Some(55_622),
+                message_ref: None,
+            })
+        );
+        let tacit = StammdatenEvent::StillschweigendAngenommen {
+            deadline_id: DeadlineId::new(),
+        };
+        assert_eq!(tacit.verlauf(), None, "silence is no message");
     }
 
     // ── Classification ─────────────────────────────────────────────────────────
