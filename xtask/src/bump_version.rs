@@ -125,6 +125,30 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         }
     }
 
+    // The Desk ships as the `mako-desk` image of the same release, so it
+    // carries the workspace version; npm moves `package.json` and both root
+    // entries of its lockfile together. `check-desk` refuses a drift.
+    let desk = std::path::Path::new(workspace_root).join("desk");
+    if desk.join("package.json").exists() {
+        match std::process::Command::new("npm")
+            .args([
+                "version",
+                new_version,
+                "--no-git-tag-version",
+                "--allow-same-version",
+            ])
+            .current_dir(&desk)
+            .stdout(std::process::Stdio::null())
+            .status()
+        {
+            Ok(st) if st.success() => println!("  desk/package.json version = \"{new_version}\""),
+            _ => eprintln!(
+                "warning: could not set the Desk's version — run `npm version {new_version} \
+                 --no-git-tag-version` in desk/ before committing"
+            ),
+        }
+    }
+
     // CHANGELOG.md's top section is the release being worked on. Opening the
     // next version here keeps the file and the workspace version in step: an
     // entry written after the bump lands under the version it ships in.

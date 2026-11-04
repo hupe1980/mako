@@ -17,7 +17,7 @@
 # CI (per-platform, native runner):
 #   docker buildx bake \
 #     --set "*.platform=linux/amd64" \
-#     --set "*.cache-from=type=registry,ref=ghcr.io/hupe1980/mako-builder:linux-amd64" \
+#     --set "*.cache-from=type=registry,ref=ghcr.io/hupe1980/mako-builder:cache-linux-amd64" \
 #     --metadata-file /tmp/bake-meta.json \
 #     --push
 

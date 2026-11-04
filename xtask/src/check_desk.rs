@@ -13,6 +13,11 @@
 //! text — no source builds or parses a date or a number. A second
 //! implementation of a rule in TypeScript, disagreeing with the service on the
 //! one screen a person acts from, is the failure this prevents.
+//!
+//! **The Desk's version is the workspace's.** It ships as the `mako-desk`
+//! image beside the service images of one release, so `desk/package.json` and
+//! its lockfile's root entries carry `[workspace.package] version`;
+//! `bump-version` moves all three.
 
 use std::path::Path;
 
@@ -64,6 +69,10 @@ pub fn run(root: &Path) -> bool {
     });
 
     let mut ok = true;
+    for v in version_drift(root) {
+        eprintln!("check-desk: {v}");
+        ok = false;
+    }
     if packages < MIN_PACKAGES || sources < MIN_SOURCES {
         eprintln!(
             "check-desk: read {packages} packages and {sources} sources — below the floor \
@@ -91,6 +100,48 @@ pub fn run(root: &Path) -> bool {
         );
     }
     ok
+}
+
+/// Where the Desk's version differs from the workspace's.
+fn version_drift(root: &Path) -> Vec<String> {
+    let read = |p: &str| std::fs::read_to_string(root.join(p)).unwrap_or_default();
+    let workspace = read("Cargo.toml")
+        .split("[workspace.package]")
+        .nth(1)
+        .and_then(|t| {
+            t.lines()
+                .find(|l| l.trim_start().starts_with("version"))
+                .and_then(|l| l.split('"').nth(1))
+                .map(str::to_owned)
+        });
+    let Some(workspace) = workspace else {
+        return vec!["no [workspace.package] version in Cargo.toml".to_owned()];
+    };
+    desk_versions(&read("desk/package.json"), &read("desk/package-lock.json"))
+        .into_iter()
+        .filter(|(_, v)| v.as_deref() != Some(workspace.as_str()))
+        .map(|(where_, v)| {
+            format!(
+                "{where_} is {} but the workspace is {workspace} — `cargo xtask bump-version` moves both",
+                v.as_deref().unwrap_or("unversioned")
+            )
+        })
+        .collect()
+}
+
+/// The Desk's version in `package.json` and in both root entries of its lockfile.
+fn desk_versions(package: &str, lock: &str) -> Vec<(&'static str, Option<String>)> {
+    let field = |v: &serde_json::Value| v["version"].as_str().map(str::to_owned);
+    let package: serde_json::Value = serde_json::from_str(package).unwrap_or_default();
+    let lock: serde_json::Value = serde_json::from_str(lock).unwrap_or_default();
+    vec![
+        ("desk/package.json", field(&package)),
+        ("desk/package-lock.json", field(&lock)),
+        (
+            "desk/package-lock.json packages[\"\"]",
+            field(&lock["packages"][""]),
+        ),
+    ]
 }
 
 fn allowed_licences(root: &Path) -> Result<Vec<String>, String> {
@@ -244,6 +295,21 @@ mod tests {
         ["MIT", "Apache-2.0", "ISC", "Apache-2.0 WITH LLVM-exception"]
             .map(String::from)
             .to_vec()
+    }
+
+    #[test]
+    fn a_desk_version_off_the_workspace_is_named() {
+        let package = r#"{"name":"mako-desk","version":"0.24.0"}"#;
+        let lock = r#"{"version":"0.24.1","packages":{"":{"version":"0.24.1"}}}"#;
+        let found = desk_versions(package, lock);
+        assert_eq!(found[0].1.as_deref(), Some("0.24.0"));
+        assert_eq!(found[1].1.as_deref(), Some("0.24.1"));
+        assert_eq!(found[2].1.as_deref(), Some("0.24.1"));
+        assert_eq!(
+            desk_versions("{}", "{}")[0].1,
+            None,
+            "an unversioned Desk is named too"
+        );
     }
 
     #[test]

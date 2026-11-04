@@ -707,28 +707,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Pushed (not `push: false`) so the bake jobs restore the compiled stage
-      # with cache-from=type=registry even when the GHA cache is evicted.
-      - name: Build and push the ${{ matrix.stage }} stage
+      # The compiled stage reaches the bake jobs as a registry cache manifest.
+      # Not the GHA cache: its 10 GB per repository is shared with CI's
+      # rust-cache, which evicts this stage within minutes, and the bake then
+      # recompiles every service until it times out. Nor a pushed image: an
+      # image carries no cache for `cache-from=type=registry` to restore.
+      - name: Build the ${{ matrix.stage }} stage into the registry cache
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           target: ${{ matrix.stage }}
           platforms: ${{ matrix.platform }}
-          push: true
-          tags: ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.stage }}:${{ matrix.tag }}
+          push: false
           build-args: |
             OCI_REVISION=${{ github.sha }}
             OCI_CREATED=${{ github.event.head_commit.timestamp }}
-          cache-from: type=gha,scope=mako-${{ matrix.stage }}-${{ matrix.platform }}
-          cache-to:   type=gha,scope=mako-${{ matrix.stage }}-${{ matrix.platform }},mode=max
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.stage }}:cache-${{ matrix.tag }}
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.stage }}:cache-${{ matrix.tag }},mode=max,image-manifest=true,oci-mediatypes=true
 
   # One bake invocation per platform builds every service image from one build
   # graph, sharing the builder stages. Digests are exported for manifest merging.
   docker-bake:
     name: Docker — bake ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     needs: [docker-builder, publish, guards]    # publish provides the semver version tag
     permissions:
       contents: read
@@ -766,7 +768,8 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      # cache-from=type=registry restores from the pushed builder images.
+      # cache-from restores both compiled stages from the docker-builder jobs'
+      # registry caches.
       - name: Bake all service images (${{ matrix.platform }})
         uses: docker/bake-action@5be5f02ff8819ecd3092ea6b2e6261c31774f2b4 # v6.10.0
         id: bake
@@ -775,10 +778,8 @@ jobs:
           push: true
           set: |
             *.platform=${{ matrix.platform }}
-            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/mako-builder:${{ matrix.tag }}
-            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/mako-demo-builder:${{ matrix.tag }}
-            *.cache-from=type=gha,scope=mako-builder-${{ matrix.platform }}
-            *.cache-from=type=gha,scope=mako-demo-builder-${{ matrix.platform }}
+            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/mako-builder:cache-${{ matrix.tag }}
+            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/mako-demo-builder:cache-${{ matrix.tag }}
             *.cache-to=
           # SLSA build provenance and an SBOM per image — Cyber Resilience Act
           # Annex I Part II(1), which market surveillance may ask for from

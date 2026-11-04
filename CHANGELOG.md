@@ -9,6 +9,24 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.24.1] — 2026-11-04
+
+### Fixed
+
+- The release's Docker images build again: the `builder` and `demo-builder`
+  stages reach the bake jobs as registry cache manifests
+  (`mako-<stage>:cache-<arch>`) instead of the GHA cache, which CI's
+  rust-cache evicted, so the bake recompiled every service until it timed
+  out. The bake job's limit is 60 minutes. v0.24.0's images, `mako-desk`
+  included, ship with this release.
+- `cargo xtask bump-version` sets the Desk's version, and `check-desk`
+  refuses a Desk version other than the workspace's.
+
+### Changed
+
+- Dependencies refreshed; `thrift` 0.23 fixes RUSTSEC-2026-0435, so its
+  exception and VEX statement are gone.
+
 ## [0.24.0] — 2026-11-04
 
 ### Added
