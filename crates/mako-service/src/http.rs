@@ -334,7 +334,17 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             if let Ok((mut stream, _)) = listener.accept().await {
-                use tokio::io::AsyncWriteExt as _;
+                use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+                // Read the request first: a socket closed with unread bytes
+                // sends a reset that can beat the response to the client.
+                let mut request = Vec::new();
+                let mut buf = [0_u8; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match stream.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => request.extend_from_slice(&buf[..n]),
+                    }
+                }
                 // Redirect to a link-local metadata address.
                 let _ = stream
                     .write_all(

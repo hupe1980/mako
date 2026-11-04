@@ -2003,6 +2003,11 @@ mod tests {
     }
 
     /// Serve one request with `status`, then return the bound base URL.
+    ///
+    /// The request is read to the end of its headers before the answer goes
+    /// out: closing a socket with unread bytes in its receive buffer sends a
+    /// TCP reset, which can reach the client before the status line and turn
+    /// the 404 under test into a connection error.
     async fn one_shot_server(status: &'static str) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -2010,7 +2015,15 @@ mod tests {
         let addr = listener.local_addr().expect("addr");
         tokio::spawn(async move {
             if let Ok((mut sock, _)) = listener.accept().await {
-                use tokio::io::AsyncWriteExt as _;
+                use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+                let mut request = Vec::new();
+                let mut buf = [0_u8; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => request.extend_from_slice(&buf[..n]),
+                    }
+                }
                 let _ = sock
                     .write_all(
                         format!(
@@ -2034,7 +2047,7 @@ mod tests {
     async fn partner_known_reports_absent_on_404() {
         let base = one_shot_server("404 Not Found").await;
         let r = client_for(&base).partner_known("9900000000001").await;
-        assert!(matches!(r, Ok(false)));
+        assert!(matches!(r, Ok(false)), "{r:?}");
     }
 
     /// A 5xx means marktd is failing, not that the partner is missing. Callers

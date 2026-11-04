@@ -465,13 +465,6 @@ ignore = [
     { id = "RUSTSEC-2026-0195", reason = "quick-xml NsReader memory-exhaustion DoS; same version constraint and same usage analysis as RUSTSEC-2026-0194." },
     # Drops out with a jsonwebtoken on elliptic-curve 0.14.
     { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.5 timing; the signing path (energy-api JWS) is on patched 0.7.10 — 0.5.5 remains only under jsonwebtoken's public-key verification and the unshipped bedrock feature" },
-    # RUSTSEC-2026-0435: thrift < 0.23 allocates an attacker-chosen length in
-    # read_bytes/read_string. parquet 58 decodes Parquet footers with it, under
-    # DataFusion 53 (held by iceberg-datafusion 0.10.1). The footers are the
-    # ones meterstore wrote into the operator's own warehouse; edmd's Iceberg
-    # catalog is a read facade behind Cedar `read-archive-olap`, so no outside
-    # party can plant a file edmd parses. Resolution: parquet 60 drops thrift.
-    { id = "RUSTSEC-2026-0435", reason = "thrift 0.17 unbounded allocation; reached only by parquet decoding footers meterstore wrote into the operator's own warehouse — no peer-supplied Thrift input" },
     # RUSTSEC-2025-0134: rustls-pemfile unmaintained (every version; the PEM
     # parser lives on in rustls-pki-types). Pulled by testcontainers → bollard.
     # Dev-only dependency (integration tests only); not present in any production
@@ -752,8 +745,8 @@ reason  = "governor 0.6 (mako-service rate-limit) pins dashmap 5; asx-rs/datafus
 
 [[bans.skip]]
 name    = "object"
-version = "0.37"
-reason  = "backtrace 0.3.76 (miette/cedar chain) pins object 0.37; the newer cedar → ar_archive_writer chain uses object 0.39 (canonical). Resolve when backtrace bumps object."
+version = "0.39"
+reason  = "ar_archive_writer 0.5 (build dependency of psm, via stacker → cedar) pins object 0.39; backtrace 0.3.77 (miette/cedar chain) uses object 0.40 (canonical). Resolve when ar_archive_writer bumps object."
 
 # ── ordered-float 4.x (three-way: 2 / 4 / 5) ────────────────────────────────────
 # 2 is skipped above (petgraph 0.7).

@@ -236,24 +236,6 @@
       "status": "not_affected",
       "justification": "vulnerable_code_not_in_execute_path",
       "impact_statement": "Secret-dependent timing in crypto-bigint arithmetic leaks a secret only through operations on one. mako's one signing path with an elliptic-curve secret, energy-api's JWS for the API-Webdienste, runs on p256 0.14 and crypto-bigint 0.7.10, which is patched. crypto-bigint 0.5.5 remains under jsonwebtoken, which verifies OIDC tokens against public keys, and under aws-config's login DPoP signer, reached only through agentd's bedrock feature, which no released image enables."
-    },
-    {
-      "vulnerability": {
-        "name": "RUSTSEC-2026-0435"
-      },
-      "products": [
-        {
-          "@id": "pkg:github/hupe1980/mako",
-          "subcomponents": [
-            {
-              "@id": "pkg:cargo/thrift@0.17.0"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
-      "impact_statement": "The unbounded allocation needs attacker-controlled Thrift binary input. thrift is reached only through parquet decoding Parquet footers in edmd's cold tier, and those files are written by meterstore into the operator's own warehouse; edmd's Iceberg REST catalog is a read facade behind the Cedar action read-archive-olap and accepts no table commits, so no outside party supplies a file it parses."
     }
   ]
 }
